@@ -4,6 +4,14 @@
 
 This document describes the high-level architecture for a security agent benchmarking system designed to evaluate agentic workflows in the cybersecurity domain. The system employs a distributed server-client architecture where security domains are hosted as dedicated servers, and customer agents operate as independent clients.
 
+### Package Management
+
+This package is managed by uv for its python environments, use
+```
+uv run
+```
+whenever executing anything in python.
+
 ## System Architecture
 
 ### Core Design Principles
@@ -21,9 +29,18 @@ This document describes the high-level architecture for a security agent benchma
 
 #### DomainServer
 The central orchestrator for each security domain, responsible for:
-- Managing client connections and enforcing single-client constraint
-- Coordinating between all server-side components
+- Hosting the SessionManager as the unified client endpoint
 - Providing domain-specific information and capabilities
+
+#### SessionManager
+Unified endpoint for all client interactions:
+- **Session Lifecycle**: Creates, tracks, and manages client sessions
+- **Single-Client Enforcement**: Ensures only one client per domain server (MVP)
+- **Unified API**: Coordinates all client requests across server components
+- **Task Orchestration**: Delegates to TaskManager for workflow management
+- **Tool Execution**: Delegates to MCPServer for all tool operations
+- **Policy Retrieval**: Delegates to PolicyManager for domain guidelines
+- **Action Logging**: Delegates to EvaluationManager for performance tracking
 
 #### TaskManager
 Handles complex multi-step security tasks:
@@ -33,14 +50,14 @@ Handles complex multi-step security tasks:
 - **State Continuity**: Ensures agents can build upon previous subtask results
 
 #### MCPServer (FastMCP Integration)
-Exposes domain capabilities via Model Context Protocol:
-- **Tool Endpoints**: Security tools (malware analysis, threat intel, forensics)
-- **Policy Endpoint**: Domain-specific guidelines and context
-- **Task Endpoint**: Available tasks and subtasks
-- **Resource Management**: Handles tool execution and result delivery
+Complete tool execution layer:
+- **Tool Registry**: Contains and manages all domain-specific security tools
+- **Tool Execution**: Handles all tool operations with context awareness
+- **MCP Endpoints**: Can expose standard MCP protocol for development/testing
+- **Internal Service**: Used internally by SessionManager, not directly accessed by clients
 
 #### ToolRegistry
-Domain-specific security tool management:
+Domain-specific security tool management (contained within MCPServer):
 - **SecurityTool**: Individual tools with validation and execution logic
 - **Tool Categories**: Organized by security function (analysis, intel, forensics)
 - **Extensible Executors**: Plugin architecture for different tool implementations
@@ -62,20 +79,20 @@ Manages domain-specific operational context:
 
 #### AgentClient
 Main client orchestrator that:
-- Establishes and maintains server connections
+- Establishes and maintains session connection to SessionManager
 - Manages task execution lifecycle
-- Handles server-client communication protocol
+- Handles unified communication protocol
 
 #### SecurityAgent
 Customer-provided agent implementation featuring:
 - **LLM Provider**: Configurable interface for any LLM service
-- **MCPClient**: Communicates with server tools via MCP protocol
+- **SessionClient**: Communicates with SessionManager unified API for all operations
 - **ReasoningEngine**: Agent's decision-making and planning capabilities
-- **Tool Integration**: Seamless access to domain-specific security tools
+- **Unified Integration**: Access to tasks, tools, and policies through single endpoint
 
 #### Communication Layer
 Real-time bidirectional communication:
-- **HTTP/SSE**: Server-Sent Events for real-time updates
+- **HTTP/SSE**: Server-Sent Events for real-time updates via SessionManager
 - **Structured Messages**: Type-safe protocol for different interaction types
 - **Session Management**: Maintains connection state and handles failures
 
@@ -92,20 +109,20 @@ Persistent storage for evaluation data:
 
 ### Message Types
 
-1. **TaskAssignment**: Server assigns subtask to client
-2. **ToolCallRequest**: Client requests tool execution
-3. **ToolCallResponse**: Server returns tool results
-4. **SubTaskCompletion**: Client reports subtask completion
+1. **TaskAssignment**: SessionManager assigns subtask to client
+2. **ToolCallRequest**: Client requests tool execution via SessionManager
+3. **ToolCallResponse**: SessionManager returns tool results from MCPServer
+4. **SubTaskCompletion**: Client reports subtask completion to SessionManager
 5. **ContextUpdate**: State synchronization between subtasks
 
 ### Connection Flow
 
-1. Client connects to domain server via HTTP
-2. Server creates ClientSession and TaskSession
+1. Client connects to SessionManager via HTTP
+2. SessionManager creates ClientSession and delegates TaskSession creation to TaskManager
 3. Establishes SSE connection for real-time communication
-4. Server assigns initial subtask with context
-5. Client executes subtask using MCP tools
-6. Results logged and next subtask assigned
+4. SessionManager coordinates with TaskManager to assign initial subtask with context
+5. Client executes subtask using tools via SessionManager unified API
+6. Results logged via EvaluationManager and next subtask assigned via TaskManager
 7. Process continues until task completion
 
 ## Security Domains
@@ -177,21 +194,28 @@ Persistent storage for evaluation data:
 
 ## API Specifications
 
-### MCP Endpoints
+### SessionManager Unified API
+```
+POST /session/start - Initialize client session
+GET /session/events - SSE event stream
+POST /session/message - Send message to server
+DELETE /session/end - Terminate session
+
+GET /session/current-task - Get current or next task
+POST /session/complete-task - Report task completion
+POST /session/execute-tool - Execute tool with context
+GET /session/list-tools - List available tools
+GET /session/policy - Get domain policy document
+GET /session/context - Get current task context
+```
+
+### Optional MCP Endpoints (Development/Testing)
 ```
 GET /mcp/tools - List available tools
 POST /mcp/tools/{tool_name}/execute - Execute tool
 GET /mcp/policy - Get domain policy document
 GET /mcp/tasks - List available tasks
 GET /mcp/tasks/{task_id}/subtasks - Get task subtasks
-```
-
-### HTTP/SSE Endpoints
-```
-POST /session/start - Initialize client session
-GET /session/events - SSE event stream
-POST /session/message - Send message to server
-DELETE /session/end - Terminate session
 ```
 
 ## Configuration

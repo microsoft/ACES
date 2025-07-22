@@ -25,12 +25,7 @@ package "Server Side" {
 
         class DomainServer {
             +domain_name: str
-            +policy_manager: PolicyManager
-            +task_manager: TaskManager
-            +tool_registry: ToolRegistry
-            +evaluation_manager: EvaluationManager
             +session_manager: SessionManager
-            +mcp_server: MCPServer
             --
             +start_server(): void
             +shutdown(): void
@@ -40,15 +35,15 @@ package "Server Side" {
 
         class MCPServer {
             +fastmcp_app: FastMCP
+            +tool_registry: ToolRegistry
             +exposed_tools: List[Tool]
-            +policy_endpoint: PolicyEndpoint
-            +task_endpoint: TaskEndpoint
             --
             +initialize_endpoints(): void
             +register_tool(): void
-            +expose_policy(): PolicyDocument
-            +expose_tasks(): List[SubTask]
+            +execute_tool(): ToolResult
+            +list_tools(): List[Tool]
             +handle_tool_call(): ToolResult
+            ' Contains ToolRegistry - handles all tool operations
         }
 
         class PolicyManager {
@@ -199,11 +194,24 @@ package "Server Side" {
         class SessionManager {
             +active_sessions: Dict[str, ClientSession]
             +session_lock: Lock
+            +task_manager: TaskManager
+            +mcp_server: MCPServer
+            +policy_manager: PolicyManager
+            +evaluation_manager: EvaluationManager
             --
             +create_session(): ClientSession
             +get_session(): ClientSession
             +end_session(): void
             +is_domain_available(): bool
+            --
+            ' Unified Client API
+            +get_current_task(): SubTask
+            +get_next_task(): SubTask
+            +report_task_completion(): NextAction
+            +execute_tool(): ToolResult
+            +list_available_tools(): List[Tool]
+            +get_policy(): PolicyDocument
+            +get_task_context(): Dict[str, Any]
         }
 
         class ClientSession {
@@ -219,6 +227,7 @@ package "Server Side" {
             +receive_message(): ClientMessage
             +is_active(): bool
             +cleanup(): void
+            ' All client interactions go through unified API
         }
     }
 
@@ -277,36 +286,42 @@ package "Client Side" {
         +client_id: str
         +domain: str
         +agent: SecurityAgent
-        +server_connection: ServerConnection
-        +session_manager: ClientSessionManager
+        +session_connection: SessionConnection
         --
         +connect_to_domain(): void
         +start_task(): TaskExecution
         +disconnect(): void
-        +handle_server_messages(): void
+        +handle_session_messages(): void
+        ' Single connection to SessionManager unified endpoint
     }
 
-    class ServerConnection {
-        +server_url: str
+    class SessionConnection {
+        +session_manager_url: str
         +sse_client: SSEClient
         +http_client: HTTPClient
+        +current_session: str
         --
-        +establish_connection(): void
-        +send_request(): Response
-        +listen_for_updates(): void
-        +close_connection(): void
+        +establish_session(): str
+        +send_unified_request(): Response
+        +get_current_task(): SubTask
+        +execute_tool(): ToolResult
+        +list_tools(): List[Tool]
+        +get_policy(): PolicyDocument
+        +report_completion(): NextAction
+        +close_session(): void
     }
 
     class SecurityAgent {
         +agent_id: str
         +llm_provider: LLMProvider
-        +tool_client: MCPClient
+        +session_client: SessionClient
         +reasoning_engine: ReasoningEngine
         --
         +execute_subtask(): SubTaskResult
         +make_tool_call(): ToolResult
         +reason_about_task(): str
         +plan_actions(): List[str]
+        ' Uses SessionClient to communicate with SessionManager
     }
 
     class LLMProvider {
@@ -319,15 +334,21 @@ package "Client Side" {
         +set_system_prompt(): void
     }
 
-    class MCPClient {
-        +server_endpoint: str
+    class SessionClient {
+        +session_manager_endpoint: str
+        +session_id: str
         +available_tools: List[Tool]
         +policy_doc: PolicyDocument
         --
-        +initialize_connection(): void
-        +call_tool(): ToolResult
-        +get_available_tools(): List[Tool]
+        +establish_session(): str
+        +get_current_task(): SubTask
+        +get_next_task(): SubTask
+        +execute_tool(): ToolResult
+        +list_available_tools(): List[Tool]
         +get_policy(): PolicyDocument
+        +report_completion(): NextAction
+        +get_task_context(): Dict[str, Any]
+        +close_session(): void
     }
 
     class ReasoningEngine {
@@ -341,13 +362,15 @@ package "Client Side" {
     }
 
     class ClientSessionManager {
-        +current_session: ClientSessionInfo
+        +current_session_id: str
         +task_state: TaskState
+        +session_connection: SessionConnection
         --
         +start_session(): void
         +end_session(): void
         +update_task_state(): void
         +get_session_info(): ClientSessionInfo
+        ' Client-side session state management
     }
 
     class TaskExecution {
@@ -440,12 +463,17 @@ package "Communication Protocol" {
 ' Relationships
 
 ' Server Internal
-DomainServer *-- PolicyManager
-DomainServer *-- TaskManager
-DomainServer *-- ToolRegistry
-DomainServer *-- EvaluationManager
 DomainServer *-- SessionManager
-DomainServer *-- MCPServer
+
+' SessionManager delegates to all other components
+SessionManager *-- TaskManager
+SessionManager *-- MCPServer
+SessionManager *-- PolicyManager
+SessionManager *-- EvaluationManager
+SessionManager *-- ClientSession
+
+' MCPServer contains ToolRegistry for all tool operations
+MCPServer *-- ToolRegistry
 
 TaskManager *-- DomainTask
 TaskManager *-- TaskSession
@@ -464,23 +492,20 @@ StorageBackend <|-- FileSystemBackend
 StorageBackend <|-- DatabaseBackend
 TrajectoryStore *-- Trajectory
 
-SessionManager *-- ClientSession
-ClientSession *-- TaskSession
-
 PolicyManager *-- PolicyDocument
 
 ' Client Internal
 AgentClient *-- SecurityAgent
-AgentClient *-- ServerConnection
+AgentClient *-- SessionConnection
 AgentClient *-- ClientSessionManager
 SecurityAgent *-- LLMProvider
-SecurityAgent *-- MCPClient
+SecurityAgent *-- SessionClient
 SecurityAgent *-- ReasoningEngine
 ClientSessionManager *-- TaskExecution
 TaskExecution ..> ExecutionState
 
 ' Communication
-ServerConnection *-- SSEConnection
+SessionConnection *-- SSEConnection
 Message <|-- ClientMessage
 Message <|-- ServerMessage
 MessageContent <|-- TaskAssignment
@@ -491,25 +516,44 @@ ClientMessage *-- MessageContent
 ServerMessage *-- MessageContent
 
 ' Cross-boundary relationships
-AgentClient ..> DomainServer : "HTTP/SSE"
-MCPClient ..> MCPServer : "MCP Protocol"
+AgentClient ..> SessionManager : "Unified API via HTTP/SSE"
+SessionClient ..> SessionManager : "All requests (tasks, tools, policy)"
 
 note top of DomainServer
 Core server hosting one security domain.
-Enforces single-client constraint via
-SessionManager lock mechanism.
+SessionManager provides unified endpoint
+for all client interactions.
+end note
+
+note top of SessionManager
+UNIFIED ENDPOINT for all client requests:
+- Task orchestration (delegates to TaskManager)
+- Tool execution (delegates to MCPServer)
+- Policy retrieval (delegates to PolicyManager)
+- Action logging (delegates to EvaluationManager)
+Enforces single-client constraint.
+end note
+
+note top of MCPServer
+Complete tool execution layer:
+- Contains ToolRegistry
+- Handles all tool operations
+- Can expose standard MCP endpoints
+- Used internally by SessionManager
 end note
 
 note top of SecurityAgent
 Customer-provided agent implementation.
 Configurable with any LLM provider.
-Uses MCP to interact with server tools.
+Uses SessionClient for unified API access
+to all server capabilities.
 end note
 
 note top of TaskManager
 Manages complex multi-step security tasks.
 Maintains state between subtasks.
 Provides context continuity.
+Called by SessionManager for orchestration.
 end note
 
 note top of EvaluationManager
