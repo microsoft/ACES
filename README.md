@@ -10,6 +10,60 @@ A distributed system for benchmarking agentic workflows in cybersecurity domains
 - **MCP Integration**: Model Context Protocol support for tool exposure
 - **Evaluation Framework**: Action tracking and trajectory analysis for agent benchmarking
 
+## Task Manager Architecture
+
+The SABER TaskManager provides a robust framework for managing complex multi-step security tasks. Tasks are defined in YAML files and executed through stateful sessions that maintain context between subtasks.
+
+### Directory Structure
+
+```
+src/saber/server/tasks/
+├── __init__.py              # Task management exports
+├── task_manager.py          # Main TaskManager orchestrator
+├── domain_task.py           # High-level security task representation
+├── subtask.py               # Individual task steps with dependencies
+├── task_session.py          # Stateful session management
+├── enums.py                 # Task and session state enums
+└── exceptions.py            # Task management exceptions
+```
+
+### Example Task Definition
+
+```yaml
+domain: "malware_classification"
+tasks:
+  - task_id: "malware_family_analysis"
+    title: "Malware Family Classification and Analysis"
+    description: "Analyze malware sample to determine family, capabilities, and threat level"
+    initial_context:
+      sample_path: "/data/samples/unknown_sample.exe"
+      analysis_timeout: 300
+    subtasks:
+      - subtask_id: "static_analysis"
+        title: "Static Analysis"
+        description: "Perform static analysis of the malware sample"
+        objective: "Extract basic file properties, strings, and structural information"
+        required_tools: ["file_analyzer", "string_extractor", "pe_parser"]
+        success_criteria:
+          - "File type and architecture identified"
+          - "Suspicious strings extracted"
+          - "PE structure analyzed (if applicable)"
+        context_dependencies: []
+        depends_on: []
+      
+      - subtask_id: "dynamic_analysis"
+        title: "Dynamic Analysis"
+        description: "Execute sample in sandboxed environment"
+        objective: "Observe runtime behavior and system interactions"
+        required_tools: ["sandbox_executor", "behavior_monitor", "network_monitor"]
+        success_criteria:
+          - "Sample executed successfully"
+          - "System calls captured"
+          - "Network activity logged"
+        context_dependencies: ["static_analysis.file_type"]
+        depends_on: ["static_analysis"]
+```
+
 ## Getting Started
 
 ### Prerequisites

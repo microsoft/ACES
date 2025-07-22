@@ -2,15 +2,17 @@
 
 import uuid
 from datetime import datetime
+from logging import getLogger
 from typing import TYPE_CHECKING, Any, Dict, Optional, Set
 
 from .enums import SessionState
 from .exceptions import SessionStateException, SubTaskNotFoundException
 
-# Avoid circular imports
 if TYPE_CHECKING:
     from .subtask import SubTask
     from .task_manager import TaskManager
+
+logger = getLogger(__name__)
 
 
 class TaskSession:
@@ -46,6 +48,9 @@ class TaskSession:
         self.current_subtask_id: Optional[str] = None
         self.created_at = datetime.utcnow()
         self.last_activity = datetime.utcnow()
+
+        logger.info(f"Created task session '{self.session_id}' for client '{client_id}' with task '{task_id}'")
+        logger.debug(f"Initial context keys: {list(self.context.keys()) if self.context else 'none'}")
 
     def advance_to_next(self, task_manager: "TaskManager") -> Optional["SubTask"]:
         """
@@ -133,9 +138,12 @@ class TaskSession:
         """
         if subtask_id != self.current_subtask_id:
             # Allow completing any subtask for flexibility
-            pass
+            logger.debug(f"Completing subtask '{subtask_id}' (not current subtask '{self.current_subtask_id}')")
+        else:
+            logger.info(f"Completing current subtask '{subtask_id}' for session '{self.session_id}'")
 
         self.completed_subtasks.add(subtask_id)
+        logger.debug(f"Session '{self.session_id}' completed subtasks: {list(self.completed_subtasks)}")
         self._update_activity()
 
     def pause(self) -> None:
@@ -167,9 +175,7 @@ class TaskSession:
         self.state = SessionState.TIMEOUT
         self._update_activity()
 
-    def get_context_for_subtask(
-        self, subtask_id: str, task_manager: "TaskManager"
-    ) -> Dict[str, Any]:
+    def get_context_for_subtask(self, subtask_id: str, task_manager: "TaskManager") -> Dict[str, Any]:
         """
         Get context specific to a subtask.
 
