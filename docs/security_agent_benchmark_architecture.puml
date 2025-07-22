@@ -1,0 +1,527 @@
+@startuml Security Agent Benchmark Architecture
+
+!theme plain
+title Security Agent Benchmarking System - High-Level Architecture
+
+skinparam class {
+    BackgroundColor lightblue
+    BorderColor black
+    ArrowColor black
+    FontSize 10
+}
+
+skinparam stereotype {
+    ABackgroundColor lightgreen
+    IBackgroundColor lightyellow
+    EBackgroundColor lightcoral
+    CBackgroundColor lightpink
+}
+
+skinparam maxMessageSize 120
+
+package "Server Side" {
+
+    package "Domain Server" {
+
+        class DomainServer {
+            +domain_name: str
+            +policy_manager: PolicyManager
+            +task_manager: TaskManager
+            +tool_registry: ToolRegistry
+            +evaluation_manager: EvaluationManager
+            +session_manager: SessionManager
+            +mcp_server: MCPServer
+            --
+            +start_server(): void
+            +shutdown(): void
+            +handle_client_connection(): ClientSession
+            +get_domain_info(): DomainInfo
+        }
+
+        class MCPServer {
+            +fastmcp_app: FastMCP
+            +exposed_tools: List[Tool]
+            +policy_endpoint: PolicyEndpoint
+            +task_endpoint: TaskEndpoint
+            --
+            +initialize_endpoints(): void
+            +register_tool(): void
+            +expose_policy(): PolicyDocument
+            +expose_tasks(): List[SubTask]
+            +handle_tool_call(): ToolResult
+        }
+
+        class PolicyManager {
+            +domain_policy: PolicyDocument
+            --
+            +get_policy(): PolicyDocument
+            +validate_action(): bool
+            +get_context_hints(): List[str]
+        }
+
+        class PolicyDocument {
+            +domain: str
+            +description: str
+            +available_tools: List[ToolDescription]
+            +guidelines: str
+            +constraints: List[str]
+            +context_info: str
+            --
+            +to_mcp_resource(): MCPResource
+        }
+
+        class TaskManager {
+            +domain_tasks: Dict[str, DomainTask]
+            +active_sessions: Dict[str, TaskSession]
+            --
+            +get_task(): DomainTask
+            +get_subtask(): SubTask
+            +create_task_session(): TaskSession
+            +advance_subtask(): SubTask?
+            +complete_task(): TaskResult
+        }
+
+        class DomainTask {
+            +task_id: str
+            +domain: str
+            +title: str
+            +description: str
+            +subtasks: List[SubTask]
+            +initial_context: Dict[str, Any]
+            --
+            +get_subtask_by_id(): SubTask
+            +get_next_subtask(): SubTask?
+            +is_complete(): bool
+        }
+
+        class SubTask {
+            +subtask_id: str
+            +task_id: str
+            +title: str
+            +description: str
+            +objective: str
+            +required_tools: List[str]
+            +success_criteria: List[str]
+            +context_dependencies: List[str]
+            --
+            +is_dependent_on(): bool
+            +get_context(): Dict[str, Any]
+        }
+
+        class TaskSession {
+            +session_id: str
+            +task_id: str
+            +current_subtask_id: str
+            +client_id: str
+            +state: SessionState
+            +context: Dict[str, Any]
+            +created_at: datetime
+            +last_activity: datetime
+            --
+            +advance_to_next(): SubTask?
+            +update_context(): void
+            +get_current_subtask(): SubTask
+            +is_active(): bool
+        }
+
+        enum SessionState {
+            PENDING
+            ACTIVE
+            PAUSED
+            COMPLETED
+            FAILED
+        }
+
+        class ToolRegistry {
+            +domain_tools: Dict[str, SecurityTool]
+            +tool_categories: Dict[str, List[str]]
+            --
+            +register_tool(): void
+            +get_tool(): SecurityTool
+            +get_tools_for_category(): List[SecurityTool]
+            +execute_tool(): ToolResult
+        }
+
+        class SecurityTool {
+            +name: str
+            +category: str
+            +description: str
+            +parameters: Dict[str, Parameter]
+            +executor: ToolExecutor
+            --
+            +execute(): ToolResult
+            +validate_params(): bool
+            +to_mcp_tool(): MCPTool
+        }
+
+        abstract class ToolExecutor {
+            {abstract} +execute(): ToolResult
+            {abstract} +validate(): bool
+        }
+
+        class AbstractSecurityTool {
+            --
+            +execute(): ToolResult
+            +validate(): bool
+        }
+
+        class EvaluationManager {
+            +trajectory_store: TrajectoryStore
+            +action_tracker: ActionTracker
+            --
+            +start_evaluation(): EvaluationSession
+            +log_action(): void
+            +calculate_score(): float
+            +get_trajectory(): List[ActionRecord]
+            +end_evaluation(): EvaluationResult
+        }
+
+        class ActionTracker {
+            +session_actions: Dict[str, List[ActionRecord]]
+            --
+            +record_action(): void
+            +get_session_actions(): List[ActionRecord]
+            +analyze_trajectory(): TrajectoryAnalysis
+        }
+
+        class ActionRecord {
+            +session_id: str
+            +subtask_id: str
+            +tool_name: str
+            +parameters: Dict[str, Any]
+            +result: ToolResult
+            +timestamp: datetime
+            +sequence_number: int
+            --
+            +to_dict(): Dict[str, Any]
+        }
+
+        class SessionManager {
+            +active_sessions: Dict[str, ClientSession]
+            +session_lock: Lock
+            --
+            +create_session(): ClientSession
+            +get_session(): ClientSession
+            +end_session(): void
+            +is_domain_available(): bool
+        }
+
+        class ClientSession {
+            +session_id: str
+            +client_id: str
+            +domain: str
+            +task_session: TaskSession
+            +sse_connection: SSEConnection
+            +created_at: datetime
+            +last_heartbeat: datetime
+            --
+            +send_message(): void
+            +receive_message(): ClientMessage
+            +is_active(): bool
+            +cleanup(): void
+        }
+    }
+
+    package "Data Layer" {
+
+        class TrajectoryStore {
+            +storage_backend: StorageBackend
+            --
+            +save_trajectory(): void
+            +load_trajectory(): List[ActionRecord]
+            +query_trajectories(): List[Trajectory]
+            +archive_old_data(): void
+        }
+
+        abstract class StorageBackend {
+            {abstract} +save(): void
+            {abstract} +load(): Any
+            {abstract} +query(): List[Any]
+        }
+
+        class FileSystemBackend {
+            +base_path: str
+            --
+            +save(): void
+            +load(): Any
+            +query(): List[Any]
+        }
+
+        class DatabaseBackend {
+            +connection: DBConnection
+            --
+            +save(): void
+            +load(): Any
+            +query(): List[Any]
+        }
+
+        class Trajectory {
+            +session_id: str
+            +task_id: str
+            +client_id: str
+            +actions: List[ActionRecord]
+            +start_time: datetime
+            +end_time: datetime
+            +final_score: float?
+            --
+            +add_action(): void
+            +calculate_duration(): timedelta
+            +export_to_json(): str
+        }
+    }
+}
+
+package "Client Side" {
+
+    class AgentClient {
+        +client_id: str
+        +domain: str
+        +agent: SecurityAgent
+        +server_connection: ServerConnection
+        +session_manager: ClientSessionManager
+        --
+        +connect_to_domain(): void
+        +start_task(): TaskExecution
+        +disconnect(): void
+        +handle_server_messages(): void
+    }
+
+    class ServerConnection {
+        +server_url: str
+        +sse_client: SSEClient
+        +http_client: HTTPClient
+        --
+        +establish_connection(): void
+        +send_request(): Response
+        +listen_for_updates(): void
+        +close_connection(): void
+    }
+
+    class SecurityAgent {
+        +agent_id: str
+        +llm_provider: LLMProvider
+        +tool_client: MCPClient
+        +reasoning_engine: ReasoningEngine
+        --
+        +execute_subtask(): SubTaskResult
+        +make_tool_call(): ToolResult
+        +reason_about_task(): str
+        +plan_actions(): List[str]
+    }
+
+    class LLMProvider {
+        +provider_name: str
+        +model_name: str
+        +api_config: Dict[str, Any]
+        --
+        +generate_response(): str
+        +generate_with_tools(): LLMResponse
+        +set_system_prompt(): void
+    }
+
+    class MCPClient {
+        +server_endpoint: str
+        +available_tools: List[Tool]
+        +policy_doc: PolicyDocument
+        --
+        +initialize_connection(): void
+        +call_tool(): ToolResult
+        +get_available_tools(): List[Tool]
+        +get_policy(): PolicyDocument
+    }
+
+    class ReasoningEngine {
+        +current_context: Dict[str, Any]
+        +task_history: List[SubTaskResult]
+        --
+        +analyze_subtask(): TaskAnalysis
+        +select_tools(): List[str]
+        +generate_plan(): ActionPlan
+        +update_context(): void
+    }
+
+    class ClientSessionManager {
+        +current_session: ClientSessionInfo
+        +task_state: TaskState
+        --
+        +start_session(): void
+        +end_session(): void
+        +update_task_state(): void
+        +get_session_info(): ClientSessionInfo
+    }
+
+    class TaskExecution {
+        +task_id: str
+        +current_subtask: SubTask
+        +execution_state: ExecutionState
+        +results: List[SubTaskResult]
+        --
+        +execute_current_subtask(): SubTaskResult
+        +advance_to_next(): bool
+        +complete_task(): TaskResult
+    }
+
+    enum ExecutionState {
+        INITIALIZING
+        EXECUTING
+        WAITING
+        COMPLETED
+        FAILED
+    }
+}
+
+package "Communication Protocol" {
+
+    class SSEConnection {
+        +endpoint: str
+        +client_id: str
+        +event_handlers: Dict[str, Callable]
+        --
+        +connect(): void
+        +send_event(): void
+        +listen(): void
+        +close(): void
+    }
+
+    abstract class Message {
+        +message_id: str
+        +timestamp: datetime
+        +source: str
+        +destination: str
+        --
+        +serialize(): str
+        +deserialize(): Message
+    }
+
+    class ClientMessage {
+        +client_id: str
+        +session_id: str
+        +content: MessageContent
+        --
+        +validate(): bool
+    }
+
+    class ServerMessage {
+        +server_id: str
+        +session_id: str
+        +content: MessageContent
+        --
+        +validate(): bool
+    }
+
+    abstract class MessageContent {
+        +message_type: str
+    }
+
+    class TaskAssignment {
+        +task_id: str
+        +subtask_id: str
+        +context: Dict[str, Any]
+    }
+
+    class ToolCallRequest {
+        +tool_name: str
+        +parameters: Dict[str, Any]
+    }
+
+    class ToolCallResponse {
+        +success: bool
+        +result: Any
+        +error_message: str?
+    }
+
+    class SubTaskCompletion {
+        +subtask_id: str
+        +success: bool
+        +next_subtask_id: str?
+    }
+}
+
+' Relationships
+
+' Server Internal
+DomainServer *-- PolicyManager
+DomainServer *-- TaskManager
+DomainServer *-- ToolRegistry
+DomainServer *-- EvaluationManager
+DomainServer *-- SessionManager
+DomainServer *-- MCPServer
+
+TaskManager *-- DomainTask
+TaskManager *-- TaskSession
+DomainTask *-- SubTask
+TaskSession ..> SessionState
+
+ToolRegistry *-- SecurityTool
+SecurityTool *-- ToolExecutor
+ToolExecutor <|-- AbstractSecurityTool
+
+EvaluationManager *-- TrajectoryStore
+EvaluationManager *-- ActionTracker
+ActionTracker *-- ActionRecord
+TrajectoryStore *-- StorageBackend
+StorageBackend <|-- FileSystemBackend
+StorageBackend <|-- DatabaseBackend
+TrajectoryStore *-- Trajectory
+
+SessionManager *-- ClientSession
+ClientSession *-- TaskSession
+
+PolicyManager *-- PolicyDocument
+
+' Client Internal
+AgentClient *-- SecurityAgent
+AgentClient *-- ServerConnection
+AgentClient *-- ClientSessionManager
+SecurityAgent *-- LLMProvider
+SecurityAgent *-- MCPClient
+SecurityAgent *-- ReasoningEngine
+ClientSessionManager *-- TaskExecution
+TaskExecution ..> ExecutionState
+
+' Communication
+ServerConnection *-- SSEConnection
+Message <|-- ClientMessage
+Message <|-- ServerMessage
+MessageContent <|-- TaskAssignment
+MessageContent <|-- ToolCallRequest
+MessageContent <|-- ToolCallResponse
+MessageContent <|-- SubTaskCompletion
+ClientMessage *-- MessageContent
+ServerMessage *-- MessageContent
+
+' Cross-boundary relationships
+AgentClient ..> DomainServer : "HTTP/SSE"
+MCPClient ..> MCPServer : "MCP Protocol"
+
+note top of DomainServer
+Core server hosting one security domain.
+Enforces single-client constraint via
+SessionManager lock mechanism.
+end note
+
+note top of SecurityAgent
+Customer-provided agent implementation.
+Configurable with any LLM provider.
+Uses MCP to interact with server tools.
+end note
+
+note top of TaskManager
+Manages complex multi-step security tasks.
+Maintains state between subtasks.
+Provides context continuity.
+end note
+
+note top of EvaluationManager
+MVP: Tracks action sequences per subtask.
+Future: Rich trajectory analysis and
+automated scoring capabilities.
+end note
+
+note top of TrajectoryStore
+Persistent storage for all agent
+trajectories and evaluation data.
+Pluggable backend architecture.
+end note
+
+@enduml
