@@ -36,6 +36,9 @@ build/
 # Ignore environment variable files
 .env
 
+# Ignore linting cache
+**/.mypy_cache
+
 # Ignore data folders to not track large raw files
 **/data/
 
