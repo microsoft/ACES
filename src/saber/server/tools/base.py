@@ -184,12 +184,10 @@ class SecurityTool:
     name: str
     domain: str
     description: str
-    version: str
     author: str
     parameters: Dict[str, Parameter]
     executor: Any  # Will be validated as ToolExecutor in validate()
     enabled: bool = True
-    tags: List[str] = field(default_factory=list)
 
     def validate(self) -> ValidationResult:
         """
@@ -207,8 +205,6 @@ class SecurityTool:
             result.add_error("Tool domain cannot be empty")
         if not self.description:
             result.add_error("Tool description cannot be empty")
-        if not self.version:
-            result.add_error("Tool version cannot be empty")
         if not self.author:
             result.add_error("Tool author cannot be empty")
 
@@ -260,7 +256,7 @@ class SecurityTool:
 
         return {
             "name": self.name,
-            "description": f"{self.description} (Domain: {self.domain}, Version: {self.version})",
+            "description": f"{self.description} (Domain: {self.domain})",
             "inputSchema": {"type": "object", "properties": mcp_parameters, "required": required_params},
         }
 
@@ -336,9 +332,7 @@ def security_tool(
     domain: str,
     name: str,
     description: str,
-    version: str = "1.0.0",
     author: str = "Unknown",
-    tags: Optional[List[str]] = None,
 ) -> Callable[[Type], Type]:
     """
     Decorator to mark a ToolExecutor class as a security tool.
@@ -347,9 +341,7 @@ def security_tool(
         domain: Security domain (malware, threat_investigation, forensics)
         name: Tool name
         description: Tool description
-        version: Tool version
         author: Tool author
-        tags: Optional tags for categorization
     """
 
     def decorator(cls: Type) -> Type:
@@ -358,9 +350,7 @@ def security_tool(
             "domain": domain,
             "name": name,
             "description": description,
-            "version": version,
             "author": author,
-            "tags": tags or [],
         }
         return cls
 

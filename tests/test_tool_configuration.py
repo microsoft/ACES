@@ -25,9 +25,7 @@ class TestEchoTool(CommandLineToolExecutor):
         "domain": "malware",
         "name": "test_echo_tool",
         "description": "Test echo tool for configuration testing",
-        "version": "1.0.0",
-        "author": "Test Suite",
-        "tags": ["test", "echo"]
+        "author": "Test Suite"
     }
 
     def __init__(self):
@@ -55,9 +53,7 @@ class TestDangerousTool(CommandLineToolExecutor):
         "domain": "malware",
         "name": "test_dangerous_tool",
         "description": "Dangerous tool for security testing",
-        "version": "1.0.0",
-        "author": "Test Suite",
-        "tags": ["test", "dangerous"]
+        "author": "Test Suite"
     }
 
     def __init__(self):
@@ -198,7 +194,6 @@ class TestToolRegistryConfiguration:
             name="test_echo_tool",
             domain="malware",
             description="Test echo tool",
-            version="1.0.0",
             author="Test",
             parameters=echo_tool_executor.get_parameters(),
             executor=echo_tool_executor,
@@ -270,7 +265,6 @@ class TestToolRegistryConfiguration:
             name="test_echo_tool",
             domain="malware",
             description="Test echo tool",
-            version="1.0.0",
             author="Test",
             parameters=echo_tool_executor.get_parameters(),
             executor=echo_tool_executor,

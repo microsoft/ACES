@@ -146,8 +146,7 @@ class FileAnalyzer(CommandLineToolExecutor):
         "name": "file_analyzer",
         "description": "Analyze file type and properties",
         "version": "1.0.0",
-        "author": "SABER Team",
-        "tags": ["static", "analysis"]
+        "author": "SABER Team"
     }
     
     def __init__(self):

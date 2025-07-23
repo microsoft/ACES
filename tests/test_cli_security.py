@@ -164,7 +164,6 @@ class TestCommandLineSecurityValidation:
             name="test_tool",
             domain="test",
             description="Test tool",
-            version="1.0.0",
             author="Test",
             parameters={
                 "text": Parameter(
@@ -319,7 +318,6 @@ class TestCommandLineSecurityValidation:
                 name="timeout_test",
                 domain="test",
                 description="Test timeout",
-                version="1.0.0",
                 author="Test",
                 parameters={"text": Parameter("text", ParameterType.STRING, "test", True)},
                 executor=executor

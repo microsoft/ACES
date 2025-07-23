@@ -206,11 +206,9 @@ class ToolRegistry:
                         name=metadata["name"],
                         domain=metadata["domain"],
                         description=metadata["description"],
-                        version=metadata["version"],
                         author=metadata["author"],
                         parameters=parameters,
                         executor=executor,
-                        tags=metadata["tags"],
                     )
 
                     self.register_tool(tool)
@@ -383,28 +381,6 @@ class ToolRegistry:
                 "disabled": len(self._disabled_tools),
             }
 
-    def get_tools_by_tags(self, tags: List[str], match_all: bool = False) -> List[SecurityTool]:
-        """
-        Get tools that match specified tags.
-
-        Args:
-            tags: List of tags to match
-            match_all: If True, tool must have all tags; if False, any tag
-
-        Returns:
-            List of matching SecurityTool instances
-        """
-        with self._lock:
-            matching_tools = []
-            for tool in self._tools.values():
-                if match_all:
-                    if all(tag in tool.tags for tag in tags):
-                        matching_tools.append(tool)
-                else:
-                    if any(tag in tool.tags for tag in tags):
-                        matching_tools.append(tool)
-            return matching_tools
-
     def to_mcp_tools(self) -> List[Dict[str, Any]]:
         """
         Convert all enabled tools to MCP format.
@@ -466,7 +442,6 @@ class ToolRegistry:
                 "disabled_tools": len(self._disabled_tools),
                 "domains": {},
                 "authors": {},
-                "versions": {},
             }
 
             # Count by domain
@@ -476,9 +451,6 @@ class ToolRegistry:
 
                 author = tool.author
                 stats["authors"][author] = stats["authors"].get(author, 0) + 1
-
-                version = tool.version
-                stats["versions"][version] = stats["versions"].get(version, 0) + 1
 
             return stats
 
