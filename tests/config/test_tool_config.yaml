@@ -1,0 +1,56 @@
+# Test Tool Configuration for ToolRegistry Testing
+# This configuration tests the enhanced configuration system
+
+tools:
+  # Domains to load
+  domains:
+    - malware
+    - threat_investigation
+
+  # Execution settings
+  execution:
+    timeout: 120                    # Shorter timeout for testing
+    max_concurrent: 5               # Lower concurrency for testing
+
+  # Tool-specific configuration
+  enabled:
+    - test_echo_tool
+    - test_ls_tool
+    - test_cat_tool
+
+  disabled:
+    - test_dangerous_tool
+
+# Security configuration
+security:
+  allowed_commands:                 # Whitelist approach for testing
+    - "echo"
+    - "ls"
+    - "cat"
+    - "head"
+    - "tail"
+  sandbox_path: "/tmp/test_sandbox" # Test sandbox path
+  max_command_length: 1000          # Shorter limit for testing
+
+# Test-specific settings
+test_settings:
+  mock_execution: true              # Enable mock execution for tests
+  validate_only: false              # Set to true to only validate without executing
+  log_commands: true                # Log all command executions
+
+# Logging configuration for tests
+logging:
+  level: DEBUG
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# Domain-specific tool settings
+domain_settings:
+  malware:
+    default_timeout: 60
+    allowed_extensions: [".exe", ".dll", ".bin", ".suspicious"]
+    quarantine_path: "/tmp/quarantine"
+
+  threat_investigation:
+    default_timeout: 180
+    api_rate_limit: 100
+    cache_duration: 3600

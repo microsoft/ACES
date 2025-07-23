@@ -36,24 +36,35 @@ class ToolRegistry:
     of security tools organized by domain (malware, threat_investigation, forensics).
     """
 
-    def __init__(self, domain: Optional[str] = None, config: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self, domain: Optional[str] = None, config: Optional[Dict[str, Any]] = None, config_file: Optional[str] = None
+    ):
         """
         Initialize the ToolRegistry.
 
         Args:
             domain: Optional domain filter for tools
             config: Optional configuration dictionary
+            config_file: Optional path to YAML configuration file
         """
         self._tools: Dict[str, SecurityTool] = {}
         self._domain_filter = domain
-        self._config = config or {}
+
+        # Load configuration from file if provided, otherwise use provided config or empty dict
+        if config_file:
+            self._config = self._load_config_from_file(config_file)
+        else:
+            self._config = config or {}
+
         self._lock = threading.RLock()
         self._enabled_tools: Set[str] = set()
         self._disabled_tools: Set[str] = set()
 
-        # Execution settings
-        self._default_timeout = self._config.get("execution", {}).get("timeout", 300.0)
-        self._max_concurrent = self._config.get("execution", {}).get("max_concurrent", 10)
+        # Execution settings from configuration
+        tools_config = self._config.get("tools", {})
+        execution_config = tools_config.get("execution", {})
+        self._default_timeout = execution_config.get("timeout", 300.0)
+        self._max_concurrent = execution_config.get("max_concurrent", 10)
         self._semaphore = asyncio.Semaphore(self._max_concurrent)
 
         logger.info(f"ToolRegistry initialized for domain: {domain or 'all'}")
@@ -470,6 +481,35 @@ class ToolRegistry:
                 stats["versions"][version] = stats["versions"].get(version, 0) + 1
 
             return stats
+
+    def _load_config_from_file(self, config_file: str) -> Dict[str, Any]:
+        """
+        Load configuration from a YAML file.
+
+        Args:
+            config_file: Path to YAML configuration file
+
+        Returns:
+            Configuration dictionary
+
+        Raises:
+            FileNotFoundError: If config file doesn't exist
+            yaml.YAMLError: If config file is invalid YAML
+        """
+        from pathlib import Path
+
+        config_path = Path(config_file)
+        if not config_path.exists():
+            raise FileNotFoundError(f"Configuration file not found: {config_file}")
+
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = yaml.safe_load(f)
+                logger.info(f"Loaded configuration from {config_file}")
+                return config or {}
+        except yaml.YAMLError as e:
+            logger.error(f"Error parsing configuration file {config_file}: {e}")
+            raise
 
     def __len__(self) -> int:
         """Return the number of registered tools."""
