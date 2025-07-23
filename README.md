@@ -12,160 +12,29 @@ A distributed system for benchmarking agentic workflows in cybersecurity domains
 - **MCP Integration**: Model Context Protocol support for tool exposure
 - **Evaluation Framework**: Action tracking and trajectory analysis for agent benchmarking
 
-## Task Manager Architecture
+## Architecture Overview
 
-The SABER TaskManager provides a robust framework for managing complex multi-step security tasks. Tasks are defined in YAML files and executed through stateful sessions that maintain context between subtasks.
+SABER implements a distributed server-client architecture designed for security domain benchmarking:
 
-### Directory Structure
+- **Server Side**: Domain servers host security capabilities, tasks, and tools
+- **Client Side**: Security agents connect to execute multi-step security workflows  
+- **Communication**: Real-time bidirectional communication via HTTP/SSE
+- **Evaluation**: Comprehensive action tracking and trajectory analysis
 
-```
-src/saber/server/tasks/
-├── __init__.py              # Task management exports
-├── task_manager.py          # Main TaskManager orchestrator
-├── domain_task.py           # High-level security task representation
-├── subtask.py               # Individual task steps with dependencies
-├── task_session.py          # Stateful session management
-├── enums.py                 # Task and session state enums
-└── exceptions.py            # Task management exceptions
-```
+### Key Components
 
-### Example Task Definition
+- **SessionManager**: Unified endpoint for all client interactions
+- **TaskManager**: Handles complex multi-step security workflows
+- **Tool Registry**: Secure execution of domain-specific security tools
+- **Evaluation Framework**: Action tracking and performance analysis
 
-```yaml
-domain: "malware_classification"
-tasks:
-  - task_id: "malware_family_analysis"
-    title: "Malware Family Classification and Analysis"
-    description: "Analyze malware sample to determine family, capabilities, and threat level"
-    initial_context:
-      sample_path: "/data/samples/unknown_sample.exe"
-      analysis_timeout: 300
-    subtasks:
-      - subtask_id: "static_analysis"
-        title: "Static Analysis"
-        description: "Perform static analysis of the malware sample"
-        objective: "Extract basic file properties, strings, and structural information"
-        required_tools: ["file_analyzer", "string_extractor", "pe_parser"]
-        success_criteria:
-          - "File type and architecture identified"
-          - "Suspicious strings extracted"
-          - "PE structure analyzed (if applicable)"
-        context_dependencies: []
-        depends_on: []
-      
-      - subtask_id: "dynamic_analysis"
-        title: "Dynamic Analysis"
-        description: "Execute sample in sandboxed environment"
-        objective: "Observe runtime behavior and system interactions"
-        required_tools: ["sandbox_executor", "behavior_monitor", "network_monitor"]
-        success_criteria:
-          - "Sample executed successfully"
-          - "System calls captured"
-          - "Network activity logged"
-        context_dependencies: ["static_analysis.file_type"]
-        depends_on: ["static_analysis"]
-```
+For detailed architecture documentation, see [docs/README.md](docs/README.md).
 
-## Tool Registry and Security Framework
+## Module Documentation
 
-SABER includes a robust tool execution framework built around security-first principles, designed to safely execute command-line tools while preventing security vulnerabilities.
-
-### Tool Registry Architecture
-
-The ToolRegistry provides a comprehensive system for managing and executing security tools:
-
-```
-src/saber/server/
-├── mcp/
-│   └── tool_registry.py     # Main ToolRegistry class with thread-safe operations
-├── tools/
-│   ├── base.py             # SecurityTool and ToolExecutor abstractions
-│   ├── security_constants.py # Security validation patterns and limits
-│   ├── executors/          # Tool execution frameworks
-│   │   └── base_executors.py # CommandLineToolExecutor with security validation
-│   ├── utils/              # Security utilities
-│   │   └── security_validator.py # Comprehensive security validation
-│   └── domains/            # Domain-organized tools
-│       ├── malware/        # Malware analysis tools
-│       └── threat_investigation/ # Threat intel tools
-```
-
-### Security Features
-
-- **Command Validation**: Whitelist-based command execution with dangerous pattern detection
-- **Sandboxed Execution**: Optional path-based sandboxing for tool isolation
-- **Resource Limits**: Configurable timeouts, memory limits, and output size restrictions
-- **Input Sanitization**: Protection against command injection and shell metacharacter attacks
-- **Audit Logging**: Complete logging of all tool executions with security metadata
-
-### Configuration-Driven Tool Management
-
-Tools and security policies are managed through YAML configuration:
-
-```yaml
-# Tool execution configuration
-tools:
-  domains:
-    - malware
-    - threat_investigation
-  execution:
-    timeout: 300
-    max_concurrent: 10
-
-# Security configuration
-security:
-  allowed_commands:
-    - "echo"
-    - "ls"
-    - "cat"
-    - "file"
-  sandbox_path: "/tmp/sandbox"
-  max_command_length: 4096
-
-# Domain-specific settings
-domain_settings:
-  malware:
-    default_timeout: 60
-    quarantine_path: "/tmp/quarantine"
-```
-
-### Tool Development Workflow
-
-1. **Create Tool Executor**: Extend `CommandLineToolExecutor` with security validation
-2. **Define Metadata**: Add tool metadata for auto-discovery
-3. **Register Tool**: Use ToolRegistry API or auto-discovery
-4. **Configure Security**: Set allowed commands and sandbox restrictions
-5. **Test Execution**: Comprehensive test suite validates security controls
-
-Example tool implementation:
-
-```python
-class FileAnalyzer(CommandLineToolExecutor):
-    _security_tool_metadata = {
-        "domain": "malware",
-        "name": "file_analyzer",
-        "description": "Analyze file type and properties",
-        "version": "1.0.0",
-        "author": "SABER Team"
-    }
-    
-    def __init__(self):
-        super().__init__(command="file", allowed_commands=["file"])
-        self.add_parameter(Parameter(
-            name="file_path",
-            type=ParameterType.STRING,
-            description="Path to file to analyze",
-            required=True
-        ))
-    
-    def build_command(self, parameters, context):
-        return ["file", "-b", parameters["file_path"]]
-    
-    def parse_output(self, stdout, stderr, return_code):
-        if return_code != 0:
-            return ToolResult.error_result(f"Analysis failed: {stderr}")
-        return ToolResult.success_result({"file_type": stdout.strip()})
-```
+- **[Task Management](src/saber/server/tasks/README.md)**: Multi-step security task orchestration
+- **[Tool Registry](src/saber/server/tools/README.md)**: Secure tool execution framework
+- **[System Architecture](docs/README.md)**: Detailed architecture documentation
 
 ## Getting Started
 
@@ -280,7 +149,3 @@ We welcome contributions! Please follow these steps:
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Architecture
-
-For detailed architecture documentation, see [docs/README.md](docs/README.md) and the implementation plan at [docs/TASK_MANAGER_IMPLEMENTATION_PLAN.md](docs/TASK_MANAGER_IMPLEMENTATION_PLAN.md).

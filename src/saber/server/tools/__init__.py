@@ -17,6 +17,7 @@ from .base import (
     ValidationResult,
     security_tool,
 )
+from .tool_registry import ToolRegistry
 
 __all__ = [
     "SecurityTool",
@@ -32,4 +33,5 @@ __all__ = [
     "DuplicateToolError",
     "DomainNotFoundError",
     "security_tool",
+    "ToolRegistry",
 ]

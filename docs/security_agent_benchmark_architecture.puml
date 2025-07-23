@@ -128,36 +128,61 @@ package "Server Side" {
         }
 
         class ToolRegistry {
-            +domain_tools: Dict[str, SecurityTool]
-            +tool_categories: Dict[str, List[str]]
+            ' Factored into modular components:
+            ' - ToolRegistrar (registration & analytics)
+            ' - ToolDiscoverer (auto-discovery)
+            ' - ToolExecutionManager (execution coordination)
+            ' - RegistryConfiguration (config management)
             --
             +register_tool(): void
+            +register_tools(): void
+            +unregister_tool(): void
             +get_tool(): SecurityTool
-            +get_tools_for_category(): List[SecurityTool]
+            +get_tools_by_domain(): List[SecurityTool]
+            +list_tools(): List[SecurityTool]
+            +get_available_domains(): List[str]
+            +auto_discover_domain_tools(): void
             +execute_tool(): ToolResult
+            +validate_tool(): ValidationResult
         }
 
         class SecurityTool {
             +name: str
-            +category: str
+            +domain: str
             +description: str
+            +author: str
             +parameters: Dict[str, Parameter]
             +executor: ToolExecutor
+            +enabled: bool
             --
+            +validate(): ValidationResult
+            +to_mcp_tool(): Dict[str, Any]
             +execute(): ToolResult
-            +validate_params(): bool
-            +to_mcp_tool(): MCPTool
         }
 
         abstract class ToolExecutor {
             {abstract} +execute(): ToolResult
-            {abstract} +validate(): bool
+            {abstract} +validate_parameters(): ValidationResult
+            +get_timeout(): Optional[float]
         }
 
-        class AbstractSecurityTool {
+        class Parameter {
+            +name: str
+            +type: ParameterType
+            +description: str
+            +required: bool
+            +default: Any
             --
-            +execute(): ToolResult
-            +validate(): bool
+            +validate_value(): tuple[bool, str]
+        }
+
+        enum ParameterType {
+            STRING
+            INTEGER
+            BOOLEAN
+            ARRAY
+            OBJECT
+            NUMBER
         }
 
         class EvaluationManager {
@@ -482,7 +507,8 @@ TaskSession ..> SessionState
 
 ToolRegistry *-- SecurityTool
 SecurityTool *-- ToolExecutor
-ToolExecutor <|-- AbstractSecurityTool
+SecurityTool *-- Parameter
+Parameter ..> ParameterType
 
 EvaluationManager *-- TrajectoryStore
 EvaluationManager *-- ActionTracker
@@ -535,9 +561,9 @@ Enforces single-client constraint.
 end note
 
 note top of MCPServer
-Complete tool execution layer:
-- Contains ToolRegistry
-- Handles all tool operations
+Tool execution layer with security:
+- Contains ToolRegistry for tool management
+- Security validation and sandboxing
 - Can expose standard MCP endpoints
 - Used internally by SessionManager
 end note

@@ -12,6 +12,43 @@ uv run
 ```
 whenever executing anything in python.
 
+## Security-First Tool Execution
+
+### Enhanced Security Framework
+SABER implements a comprehensive security framework for tool execution, addressing the unique security challenges of running arbitrary security tools in a benchmarking environment.
+
+#### Key Security Features
+- **Command Whitelisting**: Only explicitly allowed commands can be executed
+- **Pattern Detection**: Advanced regex-based detection of dangerous shell constructs
+- **Argument Validation**: Comprehensive validation of all tool arguments
+- **Path Restrictions**: Sandbox-based path limitation to prevent directory traversal
+- **Resource Limits**: CPU, memory, file size, and process count restrictions
+- **Shell Injection Prevention**: Multi-layer protection against command injection attacks
+
+#### Security Configuration Example
+```yaml
+security:
+  allowed_commands:
+    - "file"
+    - "strings" 
+    - "hexdump"
+    - "python3"
+  sandbox_path: "/tmp/saber_sandbox"
+  max_command_length: 10000
+  
+tools:
+  execution:
+    timeout: 300
+    max_concurrent: 10
+```
+
+#### SecurityValidator Components
+- **Base Command Validation**: Ensures only whitelisted commands are used
+- **Pattern Detection**: Identifies dangerous shell metacharacters and constructs
+- **Argument Sanitization**: Validates and sanitizes all command arguments
+- **Path Safety**: Prevents directory traversal and unauthorized file access
+- **Resource Monitoring**: Enforces execution limits and prevents resource exhaustion
+
 ## System Architecture
 
 ### Core Design Principles
@@ -57,10 +94,25 @@ Complete tool execution layer:
 - **Internal Service**: Used internally by SessionManager, not directly accessed by clients
 
 #### ToolRegistry
-Domain-specific security tool management (contained within MCPServer):
-- **SecurityTool**: Individual tools with validation and execution logic
+Security-first domain tool management (contained within MCPServer):
+- **SecurityTool**: Individual tools with comprehensive validation and execution logic
+- **Security Executors**: CommandLineToolExecutor with security validation and sandboxing
+- **Parameter Validation**: Enhanced parameter system with type, range, and pattern validation
 - **Tool Categories**: Organized by security function (analysis, intel, forensics)
-- **Extensible Executors**: Plugin architecture for different tool implementations
+- **Thread Safety**: Thread-safe registration with RLock for concurrent access
+- **Auto-Discovery**: Metadata-based tool discovery with module scanning
+- **Security Validation**: Comprehensive command security with pattern detection
+- **Concurrency Control**: Semaphore-based execution limiting
+- **Configuration**: YAML-based tool and security configuration
+
+#### Security Framework
+Comprehensive security controls for tool execution:
+- **SecurityValidator**: Pattern detection, argument validation, path safety
+- **Command Whitelisting**: Only allowed commands can be executed
+- **Sandbox Restrictions**: Optional path-based sandboxing for tool execution
+- **Shell Injection Prevention**: Pattern matching for dangerous shell constructs
+- **Resource Limits**: CPU, memory, file size, and process limits
+- **Security Constants**: Extensive lists of dangerous patterns and blocked commands
 
 #### EvaluationManager
 Tracks and evaluates agent performance:
@@ -159,11 +211,16 @@ Persistent storage for evaluation data:
 ### Scalability
 - **Horizontal Scaling**: Multiple domain server instances
 - **Load Balancing**: Client distribution across server instances
-- **Resource Management**: Tool execution isolation and resource limits
+- **Resource Management**: Tool execution isolation and comprehensive resource limits
+- **Concurrency Control**: Thread-safe operations with configurable execution limits
 
 ### Security
 - **Authentication**: Client verification and authorization
-- **Tool Sandboxing**: Isolated execution environments
+- **Tool Sandboxing**: Isolated execution environments with comprehensive security validation
+- **Command Security**: Whitelist-based command control with pattern detection
+- **Shell Injection Prevention**: Comprehensive protection against command injection attacks
+- **Resource Limits**: CPU, memory, file size, and process restrictions
+- **Path Restrictions**: Sandbox-based path limitation for tool operations
 - **Data Protection**: Secure storage and transmission of sensitive data
 
 ### Monitoring
@@ -173,24 +230,42 @@ Persistent storage for evaluation data:
 
 ## Implementation Roadmap
 
-### Phase 1 (MVP)
-- Core server-client architecture
-- Basic task and subtask management
-- MCP tool exposure
-- Simple action tracking
-- Single domain implementation (malware classification)
+### Phase 1 (MVP) - ✅ COMPLETED
+- ✅ Core server-client architecture design
+- ✅ Security-first tool registry with comprehensive validation
+- ✅ CommandLineToolExecutor with security framework
+- ✅ Parameter validation system with type checking
+- ✅ Thread-safe tool registration and management
+- ✅ Configuration-based security controls
+- ✅ Auto-discovery of domain tools
+- ✅ Basic task and subtask management framework
+- ✅ Comprehensive security testing suite
+- ✅ MCP tool conversion capability
+- ✅ Simple action tracking foundation
 
-### Phase 2 (Enhancement)
+### Phase 2 (Current) - 🔄 IN PROGRESS
+- 🔄 Complete MCP server integration with FastMCP
+- 🔄 Implement actual domain tools (beyond placeholders)
+- 🔄 SessionManager unified API implementation
+- 🔄 TaskManager integration with ToolRegistry
+- 🔄 Client-side SecurityAgent implementation
+- 🔄 Communication protocol implementation
+- 🔄 Single domain implementation (malware classification)
+
+### Phase 3 (Enhancement)
 - Multiple domain support
-- Advanced evaluation metrics
-- Performance optimization
+- Advanced evaluation metrics and trajectory analysis
+- Performance optimization and caching
 - Enhanced monitoring and logging
-
-### Phase 3 (Scale)
-- Concurrent client support
+- Cross-domain tool dependencies
 - Advanced analytics and reporting
+
+### Phase 4 (Scale)
+- Concurrent client support
 - Integration with external security platforms
-- Production hardening and security features
+- Production hardening and additional security features
+- Real-time performance monitoring
+- Advanced benchmarking capabilities
 
 ## API Specifications
 
@@ -218,13 +293,44 @@ GET /mcp/tasks - List available tasks
 GET /mcp/tasks/{task_id}/subtasks - Get task subtasks
 ```
 
+## Testing and Quality Assurance
+
+### Comprehensive Security Testing
+SABER includes extensive security testing to validate the robustness of the security framework:
+
+- **Command Security Validation**: Tests for dangerous command patterns and shell injection attempts
+- **Parameter Validation**: Comprehensive testing of parameter type checking and constraint validation
+- **Tool Registration**: Thread-safety and duplicate detection testing
+- **Configuration Management**: YAML configuration loading and validation
+- **Sandbox Restrictions**: Path traversal and directory access limitation testing
+- **Resource Limits**: CPU, memory, and process limit enforcement testing
+
+### Test Coverage
+- 400+ lines of security-focused test code
+- Unit tests for each security component
+- Integration tests for tool execution pipeline
+- Mock tool execution with security validation
+- Configuration-based testing scenarios
+
+### Test Structure
+```
+tests/
+├── test_cli_security.py          # Command-line security validation tests
+├── test_tool_configuration.py    # Configuration and tool management tests  
+├── test_task_manager.py          # Task management functionality tests
+└── config/
+    └── test_tool_config.yaml     # Test configuration files
+```
+
 ## Configuration
 
 ### Server Configuration
-- Domain-specific tool configurations
+- Domain-specific tool configurations with security controls
 - Policy document specifications
 - Storage backend settings
 - Concurrency and resource limits
+- Security validation settings (whitelists, sandbox paths, limits)
+- Tool timeout and execution constraints
 
 ### Client Configuration
 - LLM provider settings

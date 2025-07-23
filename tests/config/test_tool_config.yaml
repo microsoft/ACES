@@ -2,33 +2,25 @@
 # This configuration tests the enhanced configuration system
 
 tools:
-  # Domains to load
+  # Domains to load (loads all tools in these domains)
   domains:
     - malware
     - threat_investigation
+
+  # Specific tools to load (loads only these individual tools)
+  specific_tools:
+    - "malware.static_analysis.File"
+    - "malware.static_analysis.Strings"
 
   # Execution settings
   execution:
     timeout: 120                    # Shorter timeout for testing
     max_concurrent: 5               # Lower concurrency for testing
 
-  # Tool-specific configuration
-  enabled:
-    - test_echo_tool
-    - test_ls_tool
-    - test_cat_tool
-
-  disabled:
-    - test_dangerous_tool
+  # Tool-specific configuration settings can be added here as needed
 
 # Security configuration
 security:
-  allowed_commands:                 # Whitelist approach for testing
-    - "echo"
-    - "ls"
-    - "cat"
-    - "head"
-    - "tail"
   sandbox_path: "/tmp/test_sandbox" # Test sandbox path
   max_command_length: 1000          # Shorter limit for testing
 

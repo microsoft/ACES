@@ -40,7 +40,8 @@ class SecurityValidator:
         Initialize security validator.
 
         Args:
-            allowed_commands: List of allowed base commands (whitelist)
+            allowed_commands: Commands that this specific tool is allowed to use
+                             (typically passed by the tool itself, not from config)
             sandbox_path: Optional sandbox directory to restrict operations
         """
         self._allowed_commands = set(allowed_commands) if allowed_commands else set()

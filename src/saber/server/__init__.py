@@ -1,5 +1,5 @@
 """SABER server components."""
 
-from . import tasks
+from . import mcp, tasks, tools
 
-__all__ = ["tasks"]
+__all__ = ["mcp", "tasks", "tools"]
