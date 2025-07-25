@@ -17,33 +17,82 @@ skinparam stereotype {
     CBackgroundColor lightpink
 }
 
-package "Tool Execution Framework" {
+package "Execution Management" {
 
-    abstract class ToolExecutor {
-        {abstract} +execute(): ToolResult
-        {abstract} +validate_parameters(): ValidationResult
-        +get_timeout(): Optional[float]
+    class ExecutionManager {
+        +_configuration: CLIConfiguration
+        +_cli_tool: CLIExecutor
+        +_security_validator: SecurityValidator
+        +_semaphore: Semaphore
+        --
+        +execute_command(): ToolResult
+        +validate_command(): ValidationResult
+        +get_security_info(): Dict[str, Any]
+        +to_mcp_tools(): List[Dict[str, Any]]
+        +get_execution_stats(): Dict[str, Any]
+        +list_tools(): List[str]
+        +get_tool_count(): Dict[str, int]
+        +load_configuration(): void
+        +get_configuration(): CLIConfiguration
     }
 
-    class BaseToolExecutor {
+    class ToolExecutor {
         +timeout: Optional[float]
         +parameters: Dict[str, Parameter]
         --
+        {abstract} +execute(): ToolResult
         +get_timeout(): Optional[float]
         +get_parameters(): Dict[str, Parameter]
         +add_parameter(): void
         +validate_parameters(): ValidationResult
+        +to_mcp_schema(): Dict[str, Any]
     }
 
-    class CommandLineToolExecutor {
-        +command: str
-        +sandbox_path: Optional[Path]
-        +security_validator: SecurityValidator
+    class CLIExecutor {
+        +_security_tool_metadata: Dict
+        +_command: str
         --
-        {abstract} +build_command(): List[str]
-        {abstract} +parse_output(): ToolResult
+        +__init__(cli_config): void
+        +build_command(): List[str]
+        +parse_output(): ToolResult
         +execute(): ToolResult
+        +validate_parameters(): ValidationResult
         +get_security_info(): Dict[str, Any]
+        +_setup_security_restrictions(): void
+    }
+
+    class CLIConfiguration {
+        +_config: Dict[str, Any]
+        --
+        +load_configuration(): void
+        +get_execution_config(): Dict[str, Any]
+        +get_security_config(): Dict[str, Any]
+        +get_cli_config(): Dict[str, Any]
+        +get_execution_timeout(): float
+        +get_max_concurrent(): int
+        +get_allowed_commands(): List[str]
+        +get_max_command_length(): int
+    }
+
+    class SecurityValidator {
+        +allowed_commands: Set[str]
+        --
+        +validate_base_command(): void
+        +validate_command_string(): ValidationResult
+        +validate_arguments(): ValidationResult
+        +validate_full_command(): ValidationResult
+        +is_safe_path(): bool
+        +get_security_info(): Dict[str, Any]
+    }
+
+    class SecurityConstants <<static>> {
+        +BLOCKED_COMMANDS: Set[str]
+        +DANGEROUS_PATTERNS: List[str]
+        +SHELL_METACHARACTERS_PATTERN: str
+        +SENSITIVE_DIRECTORIES: List[str]
+        +SUSPICIOUS_EXTENSIONS: List[str]
+        +DEFAULT_SECURITY_LIMITS: Dict[str, Any]
+        +RESTRICTED_ENVIRONMENT: Dict[str, str]
     }
 
     class Parameter {
@@ -92,163 +141,16 @@ package "Tool Execution Framework" {
     }
 }
 
-package "Tool Registry System" {
-
-    class ToolRegistry {
-        +registrar: ToolRegistrar
-        +discoverer: ToolDiscoverer
-        +execution_manager: ToolExecutionManager
-        +configuration: RegistryConfiguration
-        --
-        +register_tool(): void
-        +register_tools(): void
-        +unregister_tool(): void
-        +get_tool(): SecurityTool
-        +get_tools_by_domain(): List[SecurityTool]
-        +list_tools(): List[SecurityTool]
-        +auto_discover_domain_tools(): void
-        +execute_tool(): ToolResult
-        +validate_tool(): ValidationResult
-    }
-
-    class ToolRegistrar {
-        +tools: Dict[str, SecurityTool]
-        +domain_filter: Optional[str]
-        +lock: RLock
-        --
-        +register_tool(): void
-        +register_tools(): void
-        +unregister_tool(): void
-        +get_tool(): SecurityTool
-        +get_tools_by_domain(): List[SecurityTool]
-        +list_tools(): List[SecurityTool]
-        +validate_tool(): ValidationResult
-        +get_registry_stats(): Dict[str, Any]
-        +to_mcp_tools(): List[Dict[str, Any]]
-    }
-
-    class ToolDiscoverer {
-        +registrar: ToolRegistrar
-        --
-        +auto_discover_domain_tools(): void
-        +auto_discover_specific_tools(): void
-        +discover_tool_by_path(): void
-        +_resolve_tool_path(): tuple[str, str, str]
-        +_create_tool_from_class(): void
-        +_discover_tools_in_domain(): void
-        +_extract_tools_from_module(): void
-    }
-
-    class ToolExecutionManager {
-        +registrar: ToolRegistrar
-        +default_timeout: float
-        +max_concurrent: int
-        +semaphore: Semaphore
-        --
-        +execute_tool(): ToolResult
-        +update_execution_settings(): void
-        +get_execution_stats(): Dict[str, Any]
-    }
-
-    class RegistryConfiguration {
-        +config: Dict[str, Any]
-        --
-        +load_configuration(): void
-        +get_tools_config(): Dict[str, Any]
-        +get_execution_config(): Dict[str, Any]
-        +get_security_config(): Dict[str, Any]
-        +get_domain_settings(): Dict[str, Any]
-        +get_domains_to_load(): List[str]
-        +get_specific_tools_to_load(): List[str]
-        +get_execution_timeout(): float
-        +get_max_concurrent(): int
-    }
-
-    class SecurityTool {
-        +name: str
-        +domain: str
-        +description: str
-        +author: str
-        +parameters: Dict[str, Parameter]
-        +executor: ToolExecutor
-        --
-        +validate(): ValidationResult
-        +to_mcp_tool(): Dict[str, Any]
-        +execute(): ToolResult
-    }
-}
-
-package "Security Framework" {
-
-    class SecurityValidator {
-        +allowed_commands: Set[str]
-        +sandbox_path: Optional[Path]
-        --
-        +validate_base_command(): void
-        +validate_command_string(): ValidationResult
-        +validate_arguments(): ValidationResult
-        +validate_full_command(): ValidationResult
-        +is_safe_path(): bool
-        +get_security_info(): Dict[str, Any]
-    }
-
-    class SecurityConstants <<static>> {
-        +BLOCKED_COMMANDS: Set[str]
-        +DANGEROUS_PATTERNS: List[str]
-        +SHELL_METACHARACTERS_PATTERN: str
-        +SENSITIVE_DIRECTORIES: List[str]
-        +SUSPICIOUS_EXTENSIONS: List[str]
-        +DEFAULT_SECURITY_LIMITS: Dict[str, Any]
-        +RESTRICTED_ENVIRONMENT: Dict[str, str]
-    }
-}
-
-package "Domain Tool Examples" {
-
-    class FileAnalyzer {
-        _security_tool_metadata: Dict
-        --
-        +build_command(): List[str]
-        +parse_output(): ToolResult
-    }
-
-    class StringExtractor {
-        _security_tool_metadata: Dict
-        --
-        +build_command(): List[str]
-        +parse_output(): ToolResult
-    }
-
-    class HashCalculator {
-        _security_tool_metadata: Dict
-        --
-        +build_command(): List[str]
-        +parse_output(): ToolResult
-    }
-}
-
 ' Inheritance relationships
-ToolExecutor <|-- BaseToolExecutor
-BaseToolExecutor <|-- CommandLineToolExecutor
-CommandLineToolExecutor <|-- FileAnalyzer
-CommandLineToolExecutor <|-- StringExtractor
-CommandLineToolExecutor <|-- HashCalculator
+ToolExecutor <|-- CLIExecutor
 
-' ToolRegistry composition relationships
-ToolRegistry *-- ToolRegistrar
-ToolRegistry *-- ToolDiscoverer
-ToolRegistry *-- ToolExecutionManager
-ToolRegistry *-- RegistryConfiguration
+' Execution Manager composition relationships
+ExecutionManager *-- CLIExecutor
+ExecutionManager *-- CLIConfiguration
+ExecutionManager *-- SecurityValidator
 
 ' Component relationships
-ToolDiscoverer ..> ToolRegistrar : "registers discovered tools"
-ToolExecutionManager ..> ToolRegistrar : "retrieves tools for execution"
-ToolRegistrar *-- SecurityTool
-
-' Existing composition relationships
-CommandLineToolExecutor *-- SecurityValidator
-BaseToolExecutor *-- Parameter
-SecurityTool *-- ToolExecutor
+ToolExecutor *-- Parameter
 Parameter ..> ParameterType
 SecurityValidator ..> SecurityConstants
 
@@ -256,89 +158,44 @@ SecurityValidator ..> SecurityConstants
 ToolExecutor ..> ToolResult
 ToolExecutor ..> ValidationResult
 
+note top of ExecutionManager
+**Unified Execution Manager**
+Central hub for all tool execution components including:
+- CLIExecutor tool execution with centralized security validation
+- Configuration management and security enforcement
+- Security validation performed before tool execution
+- MCP schema generation and tool conversion
+- Execution monitoring and concurrency control
+- All tool execution framework unified under single manager
+end note
+
 note top of ToolExecutor
-Abstract base for all tool executors.
-Defines the contract for tool execution
-and parameter validation.
+Base tool execution framework:
+- Parameter management and validation
+- MCP schema generation
+- Abstract execute method for tool-specific implementation
 end note
 
-note top of BaseToolExecutor
-Base implementation with common functionality:
-- Parameter management
-- Timeout handling
-- Basic validation
+note bottom of CLIExecutor
+Consolidated CLI tool implementation inheriting directly from ToolExecutor.
+Provides command execution with integrated security restrictions.
+Single flexible interface replacing multiple domain-specific tools.
+Accepts CLI configuration for parameter defaults.
+Security validation handled at ExecutionManager level before execution.
 end note
 
-note top of CommandLineToolExecutor
-Secure command-line tool execution:
-- Comprehensive security validation
-- Sandbox path restrictions
-- Resource limits and monitoring
-- Shell injection prevention
-end note
-
-note top of ToolRegistry
-Orchestration layer for security tools.
-Coordinates specialized components:
-- ToolRegistrar: Registration and analytics
-- ToolDiscoverer: Auto-discovery of tools
-- ToolExecutionManager: Execution coordination
-- RegistryConfiguration: Configuration management
-end note
-
-note top of ToolRegistrar
-Manages tool registration and storage:
-- Thread-safe tool registration
-- Domain filtering and validation
-- Analytics and MCP conversion
-- Tool retrieval and listing
-end note
-
-note top of ToolDiscoverer
-Handles tool auto-discovery:
-- Domain package scanning
-- Specific tool path discovery
-- Tool class instantiation
-- Integration with ToolRegistrar
-end note
-
-note top of ToolExecutionManager
-Coordinates tool execution:
-- Concurrency control with semaphore
-- Timeout management
-- Execution context handling
-- Resource limit enforcement
-end note
-
-note top of RegistryConfiguration
-Manages configuration loading:
-- YAML configuration parsing
-- Domain and execution settings
-- Tool discovery specifications
-- Security configuration
-end note
-
-note top of SecurityValidator
-Multi-layer security validation:
+note right of SecurityValidator
+Multi-layer security validation (used by ExecutionManager):
 - Command whitelisting
 - Pattern detection for dangerous constructs
 - Argument sanitization
-- Path traversal prevention
+- Path safety validation
 end note
 
-note top of SecurityConstants
-Security configuration constants:
-- Blocked commands and patterns
-- Resource limits
-- Restricted environment variables
-- File system restrictions
-end note
-
-note bottom of "Domain Tool Examples"
-Concrete implementations of security tools
-for specific domains (malware, threat intel, etc.)
-Each tool extends CommandLineToolExecutor
-with domain-specific logic.
+note left of Parameter
+Core parameter and result types supporting
+tool execution and MCP schema generation.
+All data models unified under execution manager.
 end note
 
 @enduml

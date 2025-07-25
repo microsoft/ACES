@@ -1,0 +1,295 @@
+@startuml SABER Server Architecture - Detailed
+
+!theme plain
+title Security Agent Benchmarking System - Detailed Server Architecture
+
+skinparam class {
+    BackgroundColor lightblue
+    BorderColor black
+    ArrowColor black
+    FontSize 10
+}
+
+package "Domain Server Core" {
+
+    class DomainServer {
+        +domain_name: str
+        +session_manager: SessionManager
+        --
+        +start_server(): void
+        +handle_client_connection(): ClientSession
+        +shutdown(): void
+    }
+
+    class SessionManager {
+        +active_sessions: Dict[str, ClientSession]
+        +task_manager: TaskManager
+        +mcp_server: MCPServer
+        +policy_manager: PolicyManager
+        +evaluation_manager: EvaluationManager
+        --
+        +create_session(): ClientSession
+        +execute_tool(): ToolResult
+        +get_current_task(): SubTask
+        +get_policy(): PolicyDocument
+    }
+
+    class ClientSession {
+        +session_id: str
+        +client_id: str
+        +task_session: TaskSession
+        +sse_connection: SSEConnection
+        --
+        +send_message(): void
+        +is_active(): bool
+        +cleanup(): void
+    }
+}
+
+package "Task Management" {
+
+    class TaskManager {
+        +domain_tasks: Dict[str, DomainTask]
+        +active_sessions: Dict[str, TaskSession]
+        --
+        +get_task(): DomainTask
+        +create_task_session(): TaskSession
+        +advance_subtask(): SubTask?
+    }
+
+    class DomainTask {
+        +task_id: str
+        +domain: str
+        +subtasks: List[SubTask]
+        +initial_context: Dict[str, Any]
+        --
+        +get_next_subtask(): SubTask?
+        +is_complete(): bool
+    }
+
+    class SubTask {
+        +subtask_id: str
+        +task_id: str
+        +description: str
+        +required_tools: List[str]
+        +success_criteria: List[str]
+        --
+        +get_context(): Dict[str, Any]
+    }
+
+    class TaskSession {
+        +session_id: str
+        +task_id: str
+        +current_subtask_id: str
+        +state: SessionState
+        +context: Dict[str, Any]
+        --
+        +advance_to_next(): SubTask?
+        +get_current_subtask(): SubTask
+    }
+
+    enum SessionState {
+        PENDING
+        ACTIVE
+        COMPLETED
+        FAILED
+    }
+}
+
+package "Tool Execution Framework" {
+
+    class MCPServer {
+        +execution_manager: ExecutionManager
+        --
+        +execute_tool(): ToolResult
+        +list_tools(): List[Tool]
+        +handle_tool_call(): ToolResult
+        +to_mcp_tools(): List[Dict[str, Any]]
+    }
+
+    class ExecutionManager {
+        +_configuration: CLIConfiguration
+        +_cli_tool: CLIExecutor
+        +_security_validator: SecurityValidator
+        +_semaphore: Semaphore
+        --
+        +execute_command(): ToolResult
+        +validate_command(): ValidationResult
+        +get_security_info(): Dict[str, Any]
+        +to_mcp_tools(): List[Dict[str, Any]]
+        +get_execution_stats(): Dict[str, Any]
+        +load_configuration(): void
+        +get_configuration(): CLIConfiguration
+    }
+
+    class CLIConfiguration {
+        +_config: Dict[str, Any]
+        --
+        +load_configuration(): void
+        +get_execution_config(): Dict[str, Any]
+        +get_security_config(): Dict[str, Any]
+        +get_cli_config(): Dict[str, Any]
+        +get_execution_timeout(): float
+        +get_max_concurrent(): int
+        +get_allowed_commands(): List[str]
+        +get_max_command_length(): int
+    }
+
+    class CLIExecutor {
+        +_security_tool_metadata: Dict
+        +_command: str
+        --
+        +__init__(cli_config): void
+        +build_command(): List[str]
+        +parse_output(): ToolResult
+        +execute(): ToolResult
+        +validate_parameters(): ValidationResult
+        +to_mcp_schema(): Dict[str, Any]
+        +get_security_info(): Dict[str, Any]
+        +_setup_security_restrictions(): void
+    }
+
+    class ToolExecutor {
+        +timeout: Optional[float]
+        +parameters: Dict[str, Parameter]
+        --
+        {abstract} +execute(): ToolResult
+        +get_timeout(): Optional[float]
+        +get_parameters(): Dict[str, Parameter]
+        +add_parameter(): void
+        +validate_parameters(): ValidationResult
+        +to_mcp_schema(): Dict[str, Any]
+    }
+
+    class SecurityValidator {
+        +allowed_commands: Set[str]
+        --
+        +validate_base_command(): void
+        +validate_command_string(): ValidationResult
+        +validate_arguments(): ValidationResult
+        +validate_full_command(): ValidationResult
+        +is_safe_path(): bool
+        +get_security_info(): Dict[str, Any]
+    }
+
+    class Parameter {
+        +name: str
+        +type: ParameterType
+        +required: bool
+        +default: Any
+        +description: str
+        --
+        +validate_value(): tuple[bool, str]
+    }
+
+    enum ParameterType {
+        STRING
+        INTEGER
+        BOOLEAN
+        ARRAY
+        OBJECT
+        NUMBER
+    }
+}
+
+package "Policy and Evaluation" {
+
+    class PolicyManager {
+        +domain_policy: PolicyDocument
+        --
+        +get_policy(): PolicyDocument
+        +validate_action(): bool
+    }
+
+    class PolicyDocument {
+        +domain: str
+        +available_tools: List[ToolDescription]
+        +guidelines: str
+        +constraints: List[str]
+        --
+        +to_mcp_resource(): MCPResource
+    }
+
+    class EvaluationManager {
+        +trajectory_store: TrajectoryStore
+        +action_tracker: ActionTracker
+        --
+        +log_action(): void
+        +get_trajectory(): List[ActionRecord]
+    }
+
+    class ActionTracker {
+        +session_actions: Dict[str, List[ActionRecord]]
+        --
+        +record_action(): void
+        +get_session_actions(): List[ActionRecord]
+    }
+
+    class ActionRecord {
+        +session_id: str
+        +subtask_id: str
+        +tool_name: str
+        +parameters: Dict[str, Any]
+        +result: ToolResult
+        +timestamp: datetime
+        --
+        +to_dict(): Dict[str, Any]
+    }
+
+    class TrajectoryStore {
+        +storage_backend: StorageBackend
+        --
+        +save_trajectory(): void
+        +load_trajectory(): List[ActionRecord]
+    }
+}
+
+' Relationships
+DomainServer *-- SessionManager
+SessionManager *-- ClientSession
+SessionManager *-- TaskManager
+SessionManager *-- MCPServer
+SessionManager *-- PolicyManager
+SessionManager *-- EvaluationManager
+
+TaskManager *-- DomainTask
+TaskManager *-- TaskSession
+DomainTask *-- SubTask
+TaskSession ..> SessionState
+
+MCPServer *-- ExecutionManager
+ExecutionManager *-- CLIConfiguration
+ExecutionManager *-- CLIExecutor
+ExecutionManager *-- SecurityValidator
+ToolExecutor <|-- CLIExecutor
+ToolExecutor *-- Parameter
+Parameter ..> ParameterType
+
+PolicyManager *-- PolicyDocument
+EvaluationManager *-- TrajectoryStore
+EvaluationManager *-- ActionTracker
+ActionTracker *-- ActionRecord
+
+note top of MCPServer
+**Tool Execution Hub**
+Delegates to ExecutionManager for CLI tool execution.
+Provides MCP integration layer.
+Simplified architecture for MVP.
+end note
+
+note top of ExecutionManager
+**CLI-Only Execution Manager**
+Single CLIExecutor tool with comprehensive security validation.
+Security validation performed before command execution.
+Built-in concurrency control and MCP schema generation.
+end note
+
+note bottom of CLIExecutor
+**Consolidated CLI Tool**
+Directly inherits from ToolExecutor (simplified architecture).
+Integrated command building, parsing, and security restrictions.
+Configurable parameter defaults from CLI configuration.
+Generates own MCP-compatible parameter schema.
+end note
+
+@enduml

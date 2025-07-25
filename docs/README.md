@@ -18,10 +18,9 @@ whenever executing anything in python.
 SABER implements a comprehensive security framework for tool execution, addressing the unique security challenges of running arbitrary security tools in a benchmarking environment.
 
 #### Key Security Features
-- **Command Whitelisting**: Only explicitly allowed commands can be executed
+- **Command Whitelisting**: Optional whitelist to override blocked commands for specific use cases
 - **Pattern Detection**: Advanced regex-based detection of dangerous shell constructs
 - **Argument Validation**: Comprehensive validation of all tool arguments
-- **Path Restrictions**: Sandbox-based path limitation to prevent directory traversal
 - **Resource Limits**: CPU, memory, file size, and process count restrictions
 - **Shell Injection Prevention**: Multi-layer protection against command injection attacks
 
@@ -33,20 +32,20 @@ security:
     - "strings" 
     - "hexdump"
     - "python3"
-  sandbox_path: "/tmp/saber_sandbox"
   max_command_length: 10000
-  
-tools:
-  execution:
-    timeout: 300
-    max_concurrent: 10
+
+execution:
+  timeout: 300
+  max_concurrent: 10
+
+cli:
+  default_shell_mode: false
 ```
 
 #### SecurityValidator Components
-- **Base Command Validation**: Ensures only whitelisted commands are used
+- **Base Command Validation**: Validates commands against blocked lists with optional whitelist override
 - **Pattern Detection**: Identifies dangerous shell metacharacters and constructs
 - **Argument Sanitization**: Validates and sanitizes all command arguments
-- **Path Safety**: Prevents directory traversal and unauthorized file access
 - **Resource Monitoring**: Enforces execution limits and prevents resource exhaustion
 
 ## System Architecture
@@ -93,23 +92,24 @@ Complete tool execution layer:
 - **MCP Endpoints**: Can expose standard MCP protocol for development/testing
 - **Internal Service**: Used internally by SessionManager, not directly accessed by clients
 
-#### ToolRegistry
-Security-first domain tool management (contained within MCPServer):
-- **SecurityTool**: Individual tools with comprehensive validation and execution logic
-- **Security Executors**: CommandLineToolExecutor with security validation and sandboxing
-- **Parameter Validation**: Enhanced parameter system with type, range, and pattern validation
-- **Tool Categories**: Organized by security function (analysis, intel, forensics)
-- **Thread Safety**: Thread-safe registration with RLock for concurrent access
-- **Auto-Discovery**: Metadata-based tool discovery with module scanning
-- **Security Validation**: Comprehensive command security with pattern detection
-- **Concurrency Control**: Semaphore-based execution limiting
-- **Configuration**: YAML-based tool and security configuration
+#### ExecutionManager
+CLI-only execution manager for MCP integration:
+- **Single CLI Tool**: Contains one CLI tool instance with comprehensive security validation  
+- **CLIConfiguration**: Configuration management for execution, security, and CLI-specific settings
+- **Direct Command Execution**: execute_command() method for direct CLI tool execution via parameters
+- **Security Integration**: Built-in SecurityValidator with configurable allowed commands
+- **Concurrency Control**: Semaphore-based execution limiting with configurable max_concurrent
+- **MCP Tool Conversion**: to_mcp_tools() generates MCP-compatible tool definitions from CLI tool metadata
+- **Configuration Management**: YAML-based configuration with dynamic CLI parameter defaults
+- **Parameter Schema Generation**: CLI tool generates its own MCP-compatible parameter schemas
+- **Security Info Access**: get_security_info() exposes SecurityValidator configuration
+- **Command Validation**: validate_command() for pre-execution security checks
+- **Execution Statistics**: get_execution_stats() provides runtime metrics and configuration status
 
 #### Security Framework
 Comprehensive security controls for tool execution:
-- **SecurityValidator**: Pattern detection, argument validation, path safety
-- **Command Whitelisting**: Only allowed commands can be executed
-- **Sandbox Restrictions**: Optional path-based sandboxing for tool execution
+- **SecurityValidator**: Pattern detection, argument validation
+- **Command Whitelisting**: Optional whitelist to override blocked command restrictions
 - **Shell Injection Prevention**: Pattern matching for dangerous shell constructs
 - **Resource Limits**: CPU, memory, file size, and process limits
 - **Security Constants**: Extensive lists of dangerous patterns and blocked commands
@@ -216,11 +216,10 @@ Persistent storage for evaluation data:
 
 ### Security
 - **Authentication**: Client verification and authorization
-- **Tool Sandboxing**: Isolated execution environments with comprehensive security validation
-- **Command Security**: Whitelist-based command control with pattern detection
+- **Tool Security**: Isolated execution environments with comprehensive security validation
+- **Command Security**: Blocked command lists with optional whitelist override
 - **Shell Injection Prevention**: Comprehensive protection against command injection attacks
 - **Resource Limits**: CPU, memory, file size, and process restrictions
-- **Path Restrictions**: Sandbox-based path limitation for tool operations
 - **Data Protection**: Secure storage and transmission of sensitive data
 
 ### Monitoring
@@ -232,22 +231,23 @@ Persistent storage for evaluation data:
 
 ### Phase 1 (MVP) - ✅ COMPLETED
 - ✅ Core server-client architecture design
-- ✅ Security-first tool registry with comprehensive validation
-- ✅ CommandLineToolExecutor with security framework
-- ✅ Parameter validation system with type checking
-- ✅ Thread-safe tool registration and management
-- ✅ Configuration-based security controls
-- ✅ Auto-discovery of domain tools
+- ✅ CLI-only execution manager with comprehensive security validation
+- ✅ CommandLineToolExecutor framework with security integration
+- ✅ ToolExecutor base class with parameter management and MCP schema generation
+- ✅ CLI tool with configurable parameter defaults
+- ✅ SecurityValidator with command whitelisting and pattern detection
+- ✅ CLIConfiguration with YAML-based configuration management
+- ✅ Parameter validation system with type, range, and pattern constraints
+- ✅ Comprehensive security testing suite (142 tests)
+- ✅ MCP tool conversion with tool-generated schemas
+- ✅ Concurrency control with semaphore-based execution limiting
 - ✅ Basic task and subtask management framework
-- ✅ Comprehensive security testing suite
-- ✅ MCP tool conversion capability
-- ✅ Simple action tracking foundation
 
 ### Phase 2 (Current) - 🔄 IN PROGRESS
 - 🔄 Complete MCP server integration with FastMCP
 - 🔄 Implement actual domain tools (beyond placeholders)
 - 🔄 SessionManager unified API implementation
-- 🔄 TaskManager integration with ToolRegistry
+- 🔄 TaskManager integration with ExecutionManager
 - 🔄 Client-side SecurityAgent implementation
 - 🔄 Communication protocol implementation
 - 🔄 Single domain implementation (malware classification)
@@ -302,24 +302,28 @@ SABER includes extensive security testing to validate the robustness of the secu
 - **Parameter Validation**: Comprehensive testing of parameter type checking and constraint validation
 - **Tool Registration**: Thread-safety and duplicate detection testing
 - **Configuration Management**: YAML configuration loading and validation
-- **Sandbox Restrictions**: Path traversal and directory access limitation testing
 - **Resource Limits**: CPU, memory, and process limit enforcement testing
 
 ### Test Coverage
-- 400+ lines of security-focused test code
-- Unit tests for each security component
-- Integration tests for tool execution pipeline
-- Mock tool execution with security validation
-- Configuration-based testing scenarios
+- 142 tool framework tests across 6 test files
+- Comprehensive security validation testing
+- CLI tool execution and parameter validation
+- SecurityValidator pattern detection and command validation
+- ExecutionManager configuration management and MCP schema generation
+- Integration tests for complete tool execution pipeline
+- Mock execution environments with security validation
 
 ### Test Structure
 ```
-tests/
-├── test_cli_security.py          # Command-line security validation tests
-├── test_tool_configuration.py    # Configuration and tool management tests  
-├── test_task_manager.py          # Task management functionality tests
+tests/tools/
+├── test_cli_executor.py              # CLI tool execution tests (23 tests)
+├── test_command_line_executor.py     # Base executor tests (15 tests)  
+├── test_security_validator.py        # Security validation tests (32 tests)
+├── test_security_constants.py        # Security constants tests (21 tests)
+├── test_execution_manager.py         # Execution manager and configuration tests (39 tests)
+├── test_integration.py               # Integration tests (15 tests)
 └── config/
-    └── test_tool_config.yaml     # Test configuration files
+    └── test_tool_config.yaml         # Test configuration files
 ```
 
 ## Configuration
@@ -329,7 +333,7 @@ tests/
 - Policy document specifications
 - Storage backend settings
 - Concurrency and resource limits
-- Security validation settings (whitelists, sandbox paths, limits)
+- Security validation settings (whitelists, limits)
 - Tool timeout and execution constraints
 
 ### Client Configuration

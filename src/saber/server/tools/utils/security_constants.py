@@ -48,12 +48,6 @@ DANGEROUS_PATTERNS = [
 
 # Commands that should never be allowed
 BLOCKED_COMMANDS = {
-    "sh",
-    "bash",
-    "zsh",
-    "csh",
-    "tcsh",
-    "ksh",  # Shells
     "sudo",
     "su",
     "doas",  # Privilege escalation

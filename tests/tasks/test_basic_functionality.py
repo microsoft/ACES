@@ -11,7 +11,7 @@ def test_task_manager_basic_functionality():
     """Test basic TaskManager functionality with the malware classification tasks."""
 
     # Get path to test YAML file
-    yaml_path = Path(__file__).parent / "data" / "malware_classification" / "tasks.yaml"
+    yaml_path = Path(__file__).parent.parent / "data" / "malware_classification" / "tasks.yaml"
 
     # Initialize TaskManager
     manager = TaskManager("malware_classification", str(yaml_path))
@@ -48,17 +48,6 @@ def test_task_manager_basic_functionality():
 
         next_subtask = manager.advance_subtask(session.session_id)
         print(f"Next subtask: {next_subtask.subtask_id if next_subtask else 'None'}")
-        if next_subtask:
-            print(f"  Dependencies: {next_subtask.depends_on}")
-            print(f"  Context dependencies: {next_subtask.context_dependencies}")
-
-    # Test session info
-    session_info = manager.get_session_info(session.session_id)
-    print(f"\nSession progress:")
-    print(f"  Completed: {session_info['completed_subtasks']}")
-    print(f"  Progress: {session_info['completion_percentage']:.1%}")
-
-    print("\n✅ Basic functionality test completed successfully!")
 
 
 if __name__ == "__main__":

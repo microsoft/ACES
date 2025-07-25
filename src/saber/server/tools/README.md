@@ -1,110 +1,65 @@
-# SABER Tool Registry and Security Framework
+# SABER Execution Manager and Security Framework
 
-This module provides a comprehensive system for managing and executing security tools with a security-first approach, designed to safely execute command-line tools while preventing security vulnerabilities.
+This module provides a CLI-only tool execution system with comprehensive security validation, designed to safely execute command-line tools through MCP integration while preventing security vulnerabilities.
 
 ## Architecture
 
 ```
 src/saber/server/tools/
-├── tool_registry.py        # Main orchestration layer for tool management
-├── base.py                 # SecurityTool and ToolExecutor abstractions
-├── security_constants.py   # Security validation patterns and limits
-├── registry/               # Modular registry components
-│   ├── registrar.py        # Tool registration and analytics
-│   ├── discoverer.py       # Auto-discovery of tools from domains
-│   ├── execution_manager.py # Secure tool execution coordination
-│   └── configuration.py    # YAML configuration management
+├── execution_manager.py       # Main ExecutionManager with CLIConfiguration
+├── base.py                 # result types
+├── exceptions.py           # Tool related exceptions
 ├── executors/              # Tool execution frameworks
-│   └── base_executors.py   # CommandLineToolExecutor with security validation
-├── utils/                  # Security utilities
-│   └── security_validator.py # Comprehensive security validation
-└── domains/                # Domain-organized tools
-    ├── malware/            # Malware analysis tools
-    └── threat_investigation/ # Threat intel tools
+│   ├── base_executors.py   # ToolExecutor
+│   └── cli.py              # CLIExecutor tool implementation
+└── utils/                  # Security utilities
+    └── security_validator.py # Comprehensive security validation
+    └── security_constants.py # Security validation patterns and limits
 ```
 
 ## Key Components
 
-### ToolRegistry (`tool_registry.py`)
-Main orchestration layer that coordinates specialized components for managing security tools:
-- **Modular Architecture**: Delegates to focused components for separation of concerns
-- **Unified Interface**: Provides single entry point for all tool operations
-- **Configuration-Driven**: YAML-based initialization with auto-loading
-- **Component Access**: Exposes individual components for advanced usage
+### ExecutionManager (`execution_manager.py`)
+Main execution manager for CLI tool execution with MCP integration:
+- **Single CLI Tool**: Manages one CLIExecutor instance for flexible command execution
+- **Security Validation**: Performs security validation at execution manager level before execution
+- **Concurrency Control**: Built-in semaphore for limiting concurrent executions
+- **MCP Integration**: Direct conversion to Model Context Protocol format
+- **Configuration Management**: Uses CLIConfiguration for settings management
 
-#### Core Components:
+### CLIConfiguration
+Configuration management for CLI tool execution:
+- **YAML Support**: Load configuration from YAML files
+- **Execution Settings**: Timeout and concurrency configuration
+- **Security Settings**: Allowed commands and validation limits
+- **CLI Options**: CLI-specific configuration options
 
-**ToolRegistrar** (`registry/registrar.py`):
-- Tool registration and removal with validation
-- Registry analytics and statistics
-- Thread-safe tool storage with domain filtering
-- Tool discovery coordination
-
-**ToolDiscoverer** (`registry/discoverer.py`):
-- Auto-discovery of tools from domain packages
-- Metadata extraction from tool classes
-- Recursive domain scanning with error handling
-- Integration with registrar for seamless loading
-
-**ToolExecutionManager** (`registry/execution_manager.py`):
-- Secure tool execution with concurrency control
-- Timeout management and resource limiting
-- Background execution support with progress tracking
-- Security validation integration
-
-**RegistryConfiguration** (`registry/configuration.py`):
-- YAML configuration file management
-- Thread-safe configuration access
-- Domain-specific settings
-- Security and execution policy configuration
-
-#### Architecture Benefits:
-
-**Separation of Concerns**: Each component has a single, well-defined responsibility
-- Registration logic isolated in ToolRegistrar
-- Discovery logic separated in ToolDiscoverer  
-- Execution coordination centralized in ToolExecutionManager
-- Configuration management abstracted in RegistryConfiguration
-
-**Extensibility**: Components can be extended or replaced independently
-- Custom registrars for specialized storage backends
-- Alternative discovery mechanisms for different tool formats
-- Pluggable execution managers for different security models
-- Multiple configuration sources (YAML, JSON, database)
-
-**Testability**: Each component can be unit tested in isolation
-- Mock dependencies easily for focused testing
-- Component interfaces clearly defined
-- Independent component lifecycle management
-
-**Maintainability**: Smaller, focused codebases are easier to understand and modify
-- Each component under 200 lines vs. original 592-line monolith
-- Clear interfaces between components
-- Reduced coupling and increased cohesion
-
-### SecurityTool (`base.py`)
-Represents a security tool with metadata and executor:
-- **Validation**: Comprehensive tool configuration validation
-- **MCP Integration**: Convert to Model Context Protocol format
-- **Parameter Management**: Rich parameter system with validation
+### CLIExecutor Tool (`executors/cli.py`)
+Secure command-line interface directly inheriting from ToolExecutor:
+- **Command Building**: Parses command strings into safe execution arguments
+- **Parameter Support**: Accepts command string and shell mode parameters
+- **Configuration Integration**: Accepts CLI configuration for parameter defaults
+- **Output Parsing**: Structured parsing of command output and errors
+- **Security Restrictions**: Built-in subprocess security restrictions and resource limits
+- **MCP Schema Generation**: Generates own parameter schema for MCP integration
 
 ### ToolExecutor Hierarchy
-- **ToolExecutor**: Abstract base class defining execution contract
-- **BaseToolExecutor**: Common functionality and parameter management
-- **CommandLineToolExecutor**: Secure command-line tool execution
+- **ToolExecutor**: Base class with common functionality, parameter management, and MCP schema generation
+- **CLIExecutor**: Consolidated command-line tool implementation with integrated security features
 
 ## Security Features
 
-### Command Validation
-- **Tool-declared commands**: Each tool explicitly declares what commands it needs
+### Command Validation (ExecutionManager Level)
+- **Pre-execution validation**: SecurityValidator validates commands before CLIExecutor execution
 - **Global command blacklist**: Dangerous commands are blocked system-wide
+- **Optional whitelist override**: Configuration-based `allowed_commands` can override blocked commands
 - **Pattern detection**: Advanced regex-based detection of dangerous constructs
-- **Argument sanitization**: Protection against injection attacks
+- **Argument sanitization**: Protection against injection attacks using shlex parsing
 
-### Sandboxed Execution
-- **Path restrictions**: Optional sandbox directory limitations
-- **Resource limits**: CPU, memory, file size, and process constraints
+### Sandboxed Execution (CLIExecutor Level)
+- **Resource limits**: CPU, memory, file size, and process constraints applied during execution
 - **Environment isolation**: Restricted environment variables
+- **Working directory**: Execution in controlled sandbox directory
 
 ### Input Sanitization
 - **Shell metacharacter detection**: Prevent command injection
@@ -113,160 +68,131 @@ Represents a security tool with metadata and executor:
 
 ## Configuration
 
-Tools and security policies are managed through YAML configuration:
+CLI tool execution is managed through YAML configuration:
 
 ```yaml
-# Tool execution configuration
-tools:
-  # Load entire domains (all tools in these domains)
-  domains:
-    - malware
-    - threat_investigation
-  
-  # Load specific tools only (individual tool selection)
-  specific_tools:
-    - "malware.static_analysis.File"
-    - "malware.static_analysis.Strings"
-  
-  execution:
-    timeout: 300
-    max_concurrent: 10
+# Execution settings for CLI tool
+execution:
+  timeout: 300                    # Default timeout for commands (seconds)
+  max_concurrent: 10              # Maximum concurrent CLI executions
 
 # Security configuration
 security:
-  sandbox_path: "/tmp/sandbox"
-  max_command_length: 4096
+  max_command_length: 4096        # Maximum command string length
+  allowed_commands:      # Optional whitelist for command execution
+    - "file"                      # Overrides blocked commands when specified
+    - "strings"
+    - "hexdump"
+    - "python3"
 
-# Domain-specific settings
-domain_settings:
-  malware:
-    default_timeout: 60
-    quarantine_path: "/tmp/quarantine"
+# CLI-specific settings
+cli:
+  default_shell_mode: false       # Default shell mode for CLI tool
+  max_output_size: 1048576        # Maximum output size (1MB)
 ```
 
-## Tool Development Workflow
+## Usage Workflow
 
-### 1. Create Tool Executor
+### 1. Initialize ExecutionManager
 
-Extend `CommandLineToolExecutor` with security validation:
+Create an ExecutionManager instance with configuration:
 
 ```python
-class FileAnalyzer(CommandLineToolExecutor):
-    _security_tool_metadata = {
-        "domain": "malware",
-        "name": "file_analyzer",
-        "description": "Analyze file type and properties",
-        "version": "1.0.0",
-        "author": "SABER Team"
+from saber.server.tools.execution_manager import ExecutionManager
+
+# Initialize with configuration file
+registry = ExecutionManager(config_file="config.yaml")
+
+# Or initialize with configuration dict
+config = {
+    "execution": {"timeout": 300, "max_concurrent": 10},
+    "security": {"allowed_commands": ["ls", "cat", "grep"]},
+    "cli": {"default_shell_mode": False}
+}
+registry = ExecutionManager(config=config)
+```
+
+### 2. Execute Commands
+
+Execute shell commands through the CLI tool:
+
+```python
+# Execute a simple command
+result = await registry.execute_command({
+    "command": "ls -la /tmp",
+    "shell": False
+})
+
+# Execute with shell features
+result = await registry.execute_command({
+    "command": "ls -la | grep .txt",
+    "shell": True
+})
+
+if result.success:
+    print("Command output:", result.data["stdout"])
+else:
+    print("Command failed:", result.error)
+```
+
+### 3. Validate Commands
+
+Validate commands before execution:
+
+```python
+validation = registry.validate_command("rm -rf /")
+if not validation.valid:
+    print("Command blocked:", validation.errors)
+```
+
+### 4. MCP Integration
+
+Convert to MCP format for language model integration:
+
+```python
+mcp_tools = registry.to_mcp_tools()
+# Returns list with single CLI tool definition
+```
+
+## CLI Tool Parameters
+
+The CLI tool accepts the following parameters:
+
+```python
+{
+    "command": {
+        "type": "string",
+        "description": "Command string to execute (will be validated for security)",
+        "required": True
+    },
+    "shell": {
+        "type": "boolean", 
+        "description": "Whether to execute command through shell (enables pipes, redirections, etc.)",
+        "required": False,
+        "default": False  # Configurable via cli.default_shell_mode in configuration
     }
-    
-    def __init__(self):
-        super().__init__(command="file", allowed_commands=["file"])
-        self.add_parameter(Parameter(
-            name="file_path",
-            type=ParameterType.STRING,
-            description="Path to file to analyze",
-            required=True
-        ))
-    
-    def build_command(self, parameters, context):
-        return ["file", "-b", parameters["file_path"]]
-    
-    def parse_output(self, stdout, stderr, return_code):
-        if return_code != 0:
-            return ToolResult.error_result(f"Analysis failed: {stderr}")
-        return ToolResult.success_result({"file_type": stdout.strip()})
+}
 ```
 
-### 2. Define Metadata
-
-Add `_security_tool_metadata` to your executor class for auto-discovery.
-
-### 3. Register Tool
-
-Use ToolRegistry API or place in appropriate domain directory for auto-discovery:
+### Parameter Usage Examples
 
 ```python
-from saber.server.tools.tool_registry import ToolRegistry
+# Simple command without shell
+await registry.execute_command({
+    "command": "ls -la"
+})
 
-registry = ToolRegistry(domain="malware")
-registry.register_tool(SecurityTool(
-    name="file_analyzer",
-    domain="malware",
-    description="Analyze file type and properties",
-    author="SABER Team",
-    parameters={"file_path": Parameter(...)},
-    executor=FileAnalyzer()
-))
-```
+# Complex command with shell features
+await registry.execute_command({
+    "command": "ps aux | grep python | wc -l",
+    "shell": True
+})
 
-#### Advanced Component Access
-
-Access individual components for specialized operations:
-
-```python
-# Access the registrar for direct tool management
-registrar = registry.get_registrar()
-registrar.add_tool(tool)
-stats = registrar.get_tool_statistics()
-
-# Access the discoverer for custom tool discovery
-discoverer = registry.get_discoverer()
-discovered_tools = discoverer.discover_tools_in_domain("custom_domain")
-
-# Access the execution manager for advanced execution control
-exec_manager = registry.get_execution_manager()
-exec_manager.update_execution_settings(timeout=60, max_concurrent=5)
-
-# Access configuration for runtime settings
-config = registry.get_configuration()
-security_settings = config.get_security_config()
-domain_settings = config.get_domain_settings("malware")
-```
-
-### 4. Configure Security
-
-Tools automatically declare their required commands. No additional configuration needed for command permissions.
-
-Set sandbox restrictions and limits in your configuration file:
-
-```yaml
-security:
-  sandbox_path: "/tmp/sandbox"
-  max_command_length: 4096
-```
-
-### 5. Test Execution
-
-Use the comprehensive test suite to validate security controls:
-
-```bash
-uv run pytest tests/test_cli_security.py
-uv run pytest tests/test_tool_configuration.py
-```
-
-## Parameter System
-
-Rich parameter validation with type checking and constraints:
-
-```python
-Parameter(
-    name="file_path",
-    type=ParameterType.STRING,
-    description="Path to file to analyze",
-    required=True,
-    pattern=r"^[a-zA-Z0-9/_.-]+$"  # Path validation regex
-)
-
-Parameter(
-    name="timeout",
-    type=ParameterType.INTEGER,
-    description="Analysis timeout in seconds",
-    required=False,
-    default=60,
-    min_value=1,
-    max_value=300
-)
+# File operations
+await registry.execute_command({
+    "command": "cat /etc/passwd | head -5",
+    "shell": True
+})
 ```
 
 ## Security Validation
@@ -274,10 +200,10 @@ Parameter(
 The security framework includes multiple layers of protection:
 
 ### SecurityValidator
-- **Base command validation**: Ensures only whitelisted commands
+- **Base command validation**: Validates commands against blocked lists with optional whitelist override
 - **Pattern detection**: Identifies dangerous shell constructs
-- **Argument sanitization**: Validates all command arguments
-- **Path safety**: Prevents directory traversal attacks
+- **Argument sanitization**: Validates all command arguments using shlex parsing
+- **Full command validation**: Comprehensive validation of complete command structures
 
 ### SecurityConstants
 Comprehensive security configuration:
@@ -288,29 +214,44 @@ Comprehensive security configuration:
 
 ## Testing
 
-The module includes extensive testing for the modular architecture:
+The module includes comprehensive testing for the CLI-only architecture:
 
 ```bash
 # Run all tool-related tests
-uv run pytest tests/ -v
+uv run pytest tests/tools/ -v
 
 # Run specific test suites
-uv run pytest tests/test_tool_configuration.py -v  # Registry components
-uv run pytest tests/test_cli_security.py -v       # Security validation
+uv run pytest tests/tools/test_execution_manager.py -v        # Execution manager and configuration  
+uv run pytest tests/tools/test_security_validator.py -v  # Security validation
+uv run pytest tests/tools/test_cli_executor.py -v        # CLIExecutor tool execution
+uv run pytest tests/tools/test_integration.py -v         # Integration tests
 
-# Test individual components
-uv run pytest tests/test_tool_configuration.py::test_tool_registrar -v
-uv run pytest tests/test_tool_configuration.py::test_tool_discoverer -v
-uv run pytest tests/test_tool_configuration.py::test_execution_manager -v
+# Test coverage: 143+ tests across 6 test files
 ```
 
 ## Integration with MCP
 
-Tools are automatically converted to Model Context Protocol format:
+The CLIExecutor tool automatically generates its MCP schema from its parameter definitions:
 
 ```python
-mcp_tool = security_tool.to_mcp_tool()
-# Returns MCP-compatible tool definition with schema
+mcp_tools = registry.to_mcp_tools()
+# ExecutionManager delegates to CLIExecutor's to_mcp_schema() method
+# Uses CLIExecutor metadata and parameter definitions
+# Returns:
+# [{
+#     "name": "cli",
+#     "description": "Execute validated shell commands in a secure environment",
+#     "inputSchema": {
+#         "type": "object",
+#         "properties": {
+#             "command": {"type": "string", "description": "..."},
+#             "shell": {"type": "boolean", "description": "...", "default": false}
+#         },
+#         "required": ["command"]
+#     }
+# }]
 ```
 
-This enables seamless integration with MCP-compatible language models and agents.
+The default value for the `shell` parameter comes from the CLI configuration's `default_shell_mode` setting.
+
+This enables seamless integration with MCP-compatible language models and agents for secure command execution.

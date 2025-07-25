@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..base import ValidationResult
-from ..security_constants import (
+from .security_constants import (
     ALLOWED_CONTROL_CHARS,
     BLOCKED_COMMANDS,
     DANGEROUS_PATTERNS,
@@ -35,17 +35,15 @@ class SecurityValidator:
     including pattern detection, argument validation, and path safety checks.
     """
 
-    def __init__(self, allowed_commands: Optional[List[str]] = None, sandbox_path: Optional[str] = None):
+    def __init__(self, allowed_commands: Optional[List[str]] = None):
         """
         Initialize security validator.
 
         Args:
             allowed_commands: Commands that this specific tool is allowed to use
                              (typically passed by the tool itself, not from config)
-            sandbox_path: Optional sandbox directory to restrict operations
         """
         self._allowed_commands = set(allowed_commands) if allowed_commands else set()
-        self._sandbox_path = Path(sandbox_path) if sandbox_path else None
 
     def validate_base_command(self, command: str) -> None:
         """
@@ -63,13 +61,13 @@ class SecurityValidator:
 
         base_cmd = Path(command_parts[0]).name
 
-        # Check against blocked commands
+        # Check against blocked commands first
         if base_cmd in BLOCKED_COMMANDS:
-            raise ValueError(f"Command '{base_cmd}' is not allowed for security reasons")
+            # If command is blocked, check if it's explicitly allowed by whitelist
+            if not self._allowed_commands or base_cmd not in self._allowed_commands:
+                raise ValueError(f"Command '{base_cmd}' is not allowed for security reasons")
 
-        # If whitelist is defined, command must be in it
-        if self._allowed_commands and base_cmd not in self._allowed_commands:
-            raise ValueError(f"Command '{base_cmd}' not in allowed commands list")
+        # If command is not in blocked list, it's allowed regardless of whitelist
 
     def validate_command_string(self, command_str: str) -> ValidationResult:
         """
@@ -139,7 +137,7 @@ class SecurityValidator:
 
     def is_safe_path(self, path_str: str) -> bool:
         """
-        Check if a path is safe (within sandbox if defined).
+        Check if a path is safe.
 
         Args:
             path_str: Path string to check
@@ -154,20 +152,13 @@ class SecurityValidator:
 
             path = Path(path_str).resolve()
 
-            # If sandbox is defined, path must be within it
-            if self._sandbox_path:
-                try:
-                    path.relative_to(self._sandbox_path.resolve())
-                except ValueError:
-                    return False
-
             # Block access to sensitive directories
             for sensitive in SENSITIVE_DIRECTORIES:
                 if str(path).startswith(sensitive):
                     return False
 
-            # Block absolute paths to system directories if no sandbox
-            if not self._sandbox_path and path.is_absolute():
+            # Block absolute paths to system directories
+            if path.is_absolute():
                 # Allow only certain safe absolute paths
                 safe_prefixes = ["/tmp", "/var/tmp", "/home"]
                 if not any(str(path).startswith(prefix) for prefix in safe_prefixes):
@@ -224,7 +215,6 @@ class SecurityValidator:
         """
         return {
             "allowed_commands": list(self._allowed_commands) if self._allowed_commands else None,
-            "sandbox_path": str(self._sandbox_path) if self._sandbox_path else None,
             "dangerous_patterns_count": len(DANGEROUS_PATTERNS),
             "blocked_commands_count": len(BLOCKED_COMMANDS),
             "security_limits": DEFAULT_SECURITY_LIMITS.copy(),

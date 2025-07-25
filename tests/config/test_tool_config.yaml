@@ -1,48 +1,30 @@
-# Test Tool Configuration for ToolRegistry Testing
-# This configuration tests the enhanced configuration system
+# Tool Configuration for CLI-Only Registry
 
-tools:
-  # Domains to load (loads all tools in these domains)
-  domains:
-    - malware
-    - threat_investigation
-
-  # Specific tools to load (loads only these individual tools)
-  specific_tools:
-    - "malware.static_analysis.File"
-    - "malware.static_analysis.Strings"
-
-  # Execution settings
-  execution:
-    timeout: 120                    # Shorter timeout for testing
-    max_concurrent: 5               # Lower concurrency for testing
-
-  # Tool-specific configuration settings can be added here as needed
+# Execution settings for the single CLI tool
+execution:
+  timeout: 120                    # Shorter timeout for testing
+  max_concurrent: 5               # Lower concurrency for testing
 
 # Security configuration
 security:
-  sandbox_path: "/tmp/test_sandbox" # Test sandbox path
   max_command_length: 1000          # Shorter limit for testing
+  allowed_commands:                 # Global whitelist of allowed commands
+    - "file"
+    - "strings"
+    - "echo"
+    - "cat"
+    - "ls"
+
+# CLI-specific settings
+cli:
+  default_shell_mode: false        # Default shell mode for CLI tool
 
 # Test-specific settings
 test_settings:
   mock_execution: true              # Enable mock execution for tests
   validate_only: false              # Set to true to only validate without executing
-  log_commands: true                # Log all command executions
 
 # Logging configuration for tests
 logging:
   level: DEBUG
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-
-# Domain-specific tool settings
-domain_settings:
-  malware:
-    default_timeout: 60
-    allowed_extensions: [".exe", ".dll", ".bin", ".suspicious"]
-    quarantine_path: "/tmp/quarantine"
-
-  threat_investigation:
-    default_timeout: 180
-    api_rate_limit: 100
-    cache_duration: 3600

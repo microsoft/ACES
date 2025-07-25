@@ -15,7 +15,7 @@ from saber.server.tasks import (
 @pytest.fixture
 def task_manager():
     """Create a TaskManager instance for testing."""
-    yaml_path = Path(__file__).parent / "data" / "malware_classification" / "tasks.yaml"
+    yaml_path = Path(__file__).parent.parent / "data" / "malware_classification" / "tasks.yaml"
     return TaskManager("malware_classification", str(yaml_path))
 
 
