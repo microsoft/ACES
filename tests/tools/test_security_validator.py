@@ -14,7 +14,7 @@ from saber.server.tools.utils.security_validator import SecurityValidator
 from saber.server.tools.utils.security_constants import (
     BLOCKED_COMMANDS,
     DANGEROUS_PATTERNS,
-    DEFAULT_SECURITY_LIMITS,
+    DEFAULT_SECURITY_SETTINGS,
     SENSITIVE_DIRECTORIES
 )
 
@@ -119,7 +119,7 @@ class TestSecurityValidator:
 
     def test_validate_command_string_excessive_length(self, validator):
         """Test detection of excessively long commands."""
-        long_cmd = "a" * (DEFAULT_SECURITY_LIMITS["max_command_length"] + 1)
+        long_cmd = "a" * (DEFAULT_SECURITY_SETTINGS["max_command_length"] + 1)
 
         result = validator.validate_command_string(long_cmd)
 

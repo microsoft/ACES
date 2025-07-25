@@ -1,8 +1,8 @@
 """
 Tests for ExecutionManager.
 
-This module tests the CLI-only execution manager that provides secure command execution
-with MCP integration and comprehensive security validation.
+This module tests the Docker-based execution manager that provides secure command execution
+with MCP integration and comprehensive security validation in Docker containers.
 """
 
 import asyncio
@@ -11,27 +11,32 @@ from unittest.mock import AsyncMock, MagicMock, patch, mock_open
 from pathlib import Path
 
 from saber.server.tools.base import ToolResult, ValidationResult
-from saber.server.tools.execution_manager import ExecutionManager, CLIConfiguration
-from saber.server.tools.executors.cli import CLIExecutor
+from saber.server.tools.execution_manager import ExecutionManager, ExecutionConfiguration
+from saber.server.tools.executors.cli import DockerCLIExecutor
 from saber.server.tools.utils.security_validator import SecurityValidator
+from saber.server.tools.exceptions import ExecutionManagerError
+from saber.server.tools.sandbox.sandbox_manager import SandboxManager
+from saber.server.tools.utils.security_validator import SecurityValidator
+from saber.server.tools.exceptions import ExecutionManagerError
 
 
-class TestCLIConfiguration:
-    """Test cases for CLIConfiguration."""
+class TestExecutionConfiguration:
+    """Test cases for ExecutionConfiguration."""
 
     def test_initialization_empty(self):
         """Test initialization with no configuration."""
-        config = CLIConfiguration()
+        config = ExecutionConfiguration()
         assert config._config == {}
 
     def test_initialization_with_dict(self):
         """Test initialization with configuration dictionary."""
         config_dict = {
             "execution": {"timeout": 60.0, "max_concurrent": 5},
-            "security": {"allowed_commands": ["file", "strings"]}
+            "security": {"allowed_commands": ["file", "strings"]},
+            "sandbox": {"enabled": True, "image": "saber/base-sandbox:latest"}
         }
 
-        config = CLIConfiguration(config=config_dict)
+        config = ExecutionConfiguration(config=config_dict)
         assert config._config == config_dict
 
     @patch("builtins.open", new_callable=mock_open, read_data="""
@@ -46,6 +51,10 @@ security:
   max_command_length: 8000
 cli:
   default_shell_mode: true
+sandbox:
+  enabled: true
+  image: saber/base-sandbox:latest
+  network_mode: none
 """)
     @patch("yaml.safe_load")
     def test_initialization_with_file(self, mock_yaml_load, mock_file):
@@ -57,7 +66,7 @@ cli:
         }
         mock_yaml_load.return_value = expected_config
 
-        config = CLIConfiguration(config_file="test_config.yaml")
+        config = ExecutionConfiguration(config_file="test_config.yaml")
 
         mock_file.assert_called_once_with("test_config.yaml", 'r')
         assert config._config == expected_config
@@ -65,7 +74,7 @@ cli:
     @patch("builtins.open", side_effect=FileNotFoundError("File not found"))
     def test_initialization_file_not_found(self, mock_file):
         """Test initialization when config file doesn't exist."""
-        config = CLIConfiguration(config_file="nonexistent.yaml")
+        config = ExecutionConfiguration(config_file="nonexistent.yaml")
         assert config._config == {}
 
     def test_load_configuration_success(self):
@@ -74,7 +83,7 @@ cli:
 
         with patch("builtins.open", mock_open(read_data="test: data")):
             with patch("yaml.safe_load", return_value=config_data):
-                config = CLIConfiguration()
+                config = ExecutionConfiguration()
                 config.load_configuration("test.yaml")
 
                 assert config._config == config_data
@@ -83,7 +92,7 @@ cli:
         """Test configuration loading with YAML parsing error."""
         with patch("builtins.open", mock_open(read_data="invalid: yaml: content:")):
             with patch("yaml.safe_load", side_effect=Exception("YAML error")):
-                config = CLIConfiguration()
+                config = ExecutionConfiguration()
 
                 with pytest.raises(Exception, match="YAML error"):
                     config.load_configuration("test.yaml")
@@ -91,21 +100,21 @@ cli:
     def test_get_execution_config(self):
         """Test getting execution configuration."""
         config_dict = {"execution": {"timeout": 60.0, "max_concurrent": 5}}
-        config = CLIConfiguration(config=config_dict)
+        config = ExecutionConfiguration(config=config_dict)
 
         exec_config = config.get_execution_config()
         assert exec_config == {"timeout": 60.0, "max_concurrent": 5}
 
     def test_get_execution_config_missing(self):
         """Test getting execution config when not present."""
-        config = CLIConfiguration()
+        config = ExecutionConfiguration()
         exec_config = config.get_execution_config()
         assert exec_config == {}
 
     def test_get_security_config(self):
         """Test getting security configuration."""
         config_dict = {"security": {"allowed_commands": ["file"]}}
-        config = CLIConfiguration(config=config_dict)
+        config = ExecutionConfiguration(config=config_dict)
 
         sec_config = config.get_security_config()
         assert sec_config == {"allowed_commands": ["file"]}
@@ -113,54 +122,78 @@ cli:
     def test_get_cli_config(self):
         """Test getting CLI configuration."""
         config_dict = {"cli": {"default_shell_mode": True}}
-        config = CLIConfiguration(config=config_dict)
+        config = ExecutionConfiguration(config=config_dict)
 
         cli_config = config.get_cli_config()
         assert cli_config == {"default_shell_mode": True}
 
     def test_get_execution_timeout_default(self):
         """Test getting default execution timeout."""
-        config = CLIConfiguration()
+        config = ExecutionConfiguration()
         assert config.get_execution_timeout() == 300.0
 
     def test_get_execution_timeout_custom(self):
         """Test getting custom execution timeout."""
         config_dict = {"execution": {"timeout": 120.0}}
-        config = CLIConfiguration(config=config_dict)
+        config = ExecutionConfiguration(config=config_dict)
         assert config.get_execution_timeout() == 120.0
 
     def test_get_max_concurrent_default(self):
         """Test getting default max concurrent."""
-        config = CLIConfiguration()
+        config = ExecutionConfiguration()
         assert config.get_max_concurrent() == 10
 
     def test_get_max_concurrent_custom(self):
         """Test getting custom max concurrent."""
         config_dict = {"execution": {"max_concurrent": 20}}
-        config = CLIConfiguration(config=config_dict)
+        config = ExecutionConfiguration(config=config_dict)
         assert config.get_max_concurrent() == 20
 
     def test_get_allowed_commands_default(self):
         """Test getting default allowed commands."""
-        config = CLIConfiguration()
+        config = ExecutionConfiguration()
         assert config.get_allowed_commands() == []
 
     def test_get_allowed_commands_custom(self):
         """Test getting custom allowed commands."""
         config_dict = {"security": {"allowed_commands": ["file", "strings"]}}
-        config = CLIConfiguration(config=config_dict)
+        config = ExecutionConfiguration(config=config_dict)
         assert config.get_allowed_commands() == ["file", "strings"]
 
     def test_get_max_command_length_default(self):
         """Test getting default max command length."""
-        config = CLIConfiguration()
+        config = ExecutionConfiguration()
         assert config.get_max_command_length() == 10000
 
     def test_get_max_command_length_custom(self):
         """Test getting custom max command length."""
         config_dict = {"security": {"max_command_length": 5000}}
-        config = CLIConfiguration(config=config_dict)
+        config = ExecutionConfiguration(config=config_dict)
         assert config.get_max_command_length() == 5000
+
+    def test_get_sandbox_config(self):
+        """Test getting sandbox configuration."""
+        config_dict = {
+            "sandbox": {
+                "enabled": True,
+                "image": "saber/base-sandbox:latest",
+                "network_mode": "none"
+            }
+        }
+        config = ExecutionConfiguration(config=config_dict)
+
+        sandbox_config = config.get_sandbox_config()
+        assert sandbox_config == {
+            "enabled": True,
+            "image": "saber/base-sandbox:latest",
+            "network_mode": "none"
+        }
+
+    def test_get_sandbox_config_missing(self):
+        """Test getting sandbox config when not present."""
+        config = ExecutionConfiguration()
+        sandbox_config = config.get_sandbox_config()
+        assert sandbox_config == {}
 
 
 class TestExecutionManager:
@@ -172,22 +205,46 @@ class TestExecutionManager:
         return {
             "execution": {"timeout": 60.0, "max_concurrent": 5},
             "security": {"allowed_commands": ["file", "strings"]},
-            "cli": {"default_shell_mode": False}
+            "cli": {"default_shell_mode": False},
+            "sandbox": {
+                "enabled": True,
+                "image": "saber/base-sandbox:latest",
+                "network_mode": "none",
+                "read_only_root": True,
+                "user": "tooluser:tooluser"
+            }
         }
 
     @pytest.fixture
     def registry(self, sample_config):
         """Create an ExecutionManager instance for testing."""
-        return ExecutionManager(config=sample_config)
+        with patch("saber.server.tools.sandbox.sandbox_manager.SandboxManager"):
+            return ExecutionManager(config=sample_config)
 
     def test_initialization_default(self):
-        """Test default initialization."""
-        registry = ExecutionManager()
+        """Test that default initialization fails without sandbox config."""
+        # Default configuration doesn't include sandbox.enabled=True
+        with pytest.raises(ExecutionManagerError, match="Sandbox execution is required but not enabled"):
+            ExecutionManager()
 
-        assert isinstance(registry._configuration, CLIConfiguration)
+    def test_initialization_with_valid_config(self, sample_config):
+        """Test initialization with valid sandbox configuration."""
+        registry = ExecutionManager(config=sample_config)
+
+        assert isinstance(registry._configuration, ExecutionConfiguration)
         assert isinstance(registry._security_validator, SecurityValidator)
-        assert isinstance(registry._cli_tool, CLIExecutor)
+        assert isinstance(registry._cli_tool, DockerCLIExecutor)
+        assert isinstance(registry._sandbox_manager, SandboxManager)
         assert isinstance(registry._semaphore, asyncio.Semaphore)
+
+    def test_initialization_sandbox_disabled(self):
+        """Test that initialization fails when sandbox is explicitly disabled."""
+        config = {
+            "sandbox": {"enabled": False}
+        }
+
+        with pytest.raises(ExecutionManagerError, match="Sandbox execution is required but not enabled"):
+            ExecutionManager(config=config)
 
     def test_initialization_with_config(self, sample_config):
         """Test initialization with configuration."""
@@ -197,7 +254,12 @@ class TestExecutionManager:
         assert registry._configuration.get_max_concurrent() == 5
         assert "file" in registry._configuration.get_allowed_commands()
 
-    @patch("saber.server.tools.execution_manager.CLIConfiguration")
+        # Test sandbox configuration
+        sandbox_config = registry._configuration.get_sandbox_config()
+        assert sandbox_config["enabled"] is True
+        assert sandbox_config["image"] == "saber/base-sandbox:latest"
+
+    @patch("saber.server.tools.execution_manager.ExecutionConfiguration")
     def test_initialization_with_config_file(self, mock_cli_config):
         """Test initialization with configuration file."""
         mock_instance = MagicMock()
@@ -303,8 +365,8 @@ class TestExecutionManager:
         assert len(mcp_tools) == 1
         tool = mcp_tools[0]
 
-        assert tool["name"] == "cli"
-        assert tool["description"] == "Execute validated shell commands in a secure environment"
+        assert tool["name"] == "docker_cli"
+        assert tool["description"] == "Execute validated shell commands in Docker containers"
         assert "inputSchema" in tool
         assert "properties" in tool["inputSchema"]
         assert "command" in tool["inputSchema"]["properties"]
@@ -314,7 +376,9 @@ class TestExecutionManager:
     def test_to_mcp_tools_with_cli_config(self, sample_config):
         """Test MCP tools conversion with CLI configuration."""
         sample_config["cli"]["default_shell_mode"] = True
-        registry = ExecutionManager(config=sample_config)
+
+        with patch("saber.server.tools.sandbox.sandbox_manager.SandboxManager"):
+            registry = ExecutionManager(config=sample_config)
 
         mcp_tools = registry.to_mcp_tools()
         tool = mcp_tools[0]
@@ -348,7 +412,7 @@ class TestExecutionManager:
     def test_get_configuration(self, registry):
         """Test getting configuration manager."""
         config = registry.get_configuration()
-        assert isinstance(config, CLIConfiguration)
+        assert isinstance(config, ExecutionConfiguration)
         assert config == registry._configuration
 
     @pytest.mark.asyncio

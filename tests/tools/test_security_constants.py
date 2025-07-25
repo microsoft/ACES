@@ -11,13 +11,11 @@ from saber.server.tools.utils.security_constants import (
     DANGEROUS_PATTERNS,
     SENSITIVE_DIRECTORIES,
     SUSPICIOUS_EXTENSIONS,
-    DEFAULT_SECURITY_LIMITS,
+    DEFAULT_SECURITY_SETTINGS,
     ALLOWED_CONTROL_CHARS,
     SHELL_METACHARACTERS_PATTERN,
     MIN_CONTROL_CHAR_CODE,
     NULL_BYTE,
-    DEFAULT_SANDBOX_CWD,
-    RESTRICTED_ENVIRONMENT,
 )
 
 
@@ -101,23 +99,15 @@ class TestSecurityConstants:
         required_limits = [
             "timeout",
             "max_command_length",
-            "max_output_size",
-            "max_memory",
-            "max_cpu_time",
-            "max_file_size",
-            "max_file_descriptors",
-            "max_processes",
-            "subprocess_output_limit",
-            "process_terminate_wait",
         ]
 
         for limit in required_limits:
-            assert limit in DEFAULT_SECURITY_LIMITS, \
+            assert limit in DEFAULT_SECURITY_SETTINGS, \
                 f"Required security limit '{limit}' is missing"
 
     def test_default_security_limits_values(self):
         """Test that security limits have reasonable values."""
-        limits = DEFAULT_SECURITY_LIMITS
+        limits = DEFAULT_SECURITY_SETTINGS
 
         # Test types and reasonable ranges
         assert isinstance(limits["timeout"], (int, float))
@@ -127,14 +117,6 @@ class TestSecurityConstants:
         assert isinstance(limits["max_command_length"], int)
         assert limits["max_command_length"] > 0
         assert limits["max_command_length"] <= 10240  # Reasonable command length
-
-        assert isinstance(limits["max_memory"], int)
-        assert limits["max_memory"] > 0
-        assert limits["max_memory"] <= 1024 * 1024 * 1024  # Max 1GB
-
-        assert isinstance(limits["max_processes"], int)
-        assert limits["max_processes"] > 0
-        assert limits["max_processes"] <= 100  # Reasonable process limit
 
     def test_allowed_control_chars(self):
         """Test that allowed control characters include necessary whitespace."""
@@ -165,28 +147,6 @@ class TestSecurityConstants:
         """Test that null byte constant is correct."""
         assert NULL_BYTE == "\x00"
         assert ord(NULL_BYTE) == 0
-
-    def test_default_sandbox_cwd(self):
-        """Test that default sandbox working directory is safe."""
-        assert DEFAULT_SANDBOX_CWD == "/tmp"
-        assert DEFAULT_SANDBOX_CWD not in SENSITIVE_DIRECTORIES
-
-    def test_restricted_environment_security(self):
-        """Test that restricted environment variables are secure."""
-        env = RESTRICTED_ENVIRONMENT
-
-        # Test critical security settings
-        assert env["PATH"] == "/usr/local/bin:/usr/bin:/bin"  # Restricted PATH
-        assert env["HOME"] == "/tmp"  # Safe home directory
-        assert env["SHELL"] == "/bin/false"  # No shell access
-        assert env["USER"] == "nobody"  # Non-privileged user
-        assert env["LOGNAME"] == "nobody"  # Consistent user identity
-
-    def test_restricted_environment_type(self):
-        """Test that restricted environment is a dictionary."""
-        assert isinstance(RESTRICTED_ENVIRONMENT, dict)
-        assert all(isinstance(k, str) and isinstance(v, str)
-                  for k, v in RESTRICTED_ENVIRONMENT.items())
 
     def test_patterns_regex_validity(self):
         """Test that all dangerous patterns are valid regex."""
@@ -219,19 +179,14 @@ class TestSecurityConstants:
 
     def test_security_limits_consistency(self):
         """Test that security limits are internally consistent."""
-        limits = DEFAULT_SECURITY_LIMITS
+        limits = DEFAULT_SECURITY_SETTINGS
 
-        # CPU time should be reasonable relative to timeout
-        assert limits["max_cpu_time"] <= limits["timeout"] * 2
+        # Timeout should be a positive number
+        assert limits["timeout"] > 0
 
-        # File descriptor limit should be reasonable
-        assert limits["max_file_descriptors"] >= 10  # Minimum needed for basic operations
-
-        # Process limit should allow for basic operations
-        assert limits["max_processes"] >= 1  # At least one process needed
-
-        # Output limits should be reasonable
-        assert limits["max_output_size"] <= limits["subprocess_output_limit"]
+        # Command length should be reasonable relative to timeout
+        # (longer timeouts might allow longer commands)
+        assert limits["max_command_length"] > 0
 
     def test_constants_immutability_awareness(self):
         """Test awareness that constants should not be modified."""
