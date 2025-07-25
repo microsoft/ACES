@@ -114,18 +114,10 @@ SENSITIVE_DIRECTORIES = ["/etc", "/root", "/home/root", "/var/lib", "/sys", "/pr
 # Suspicious file extensions that should trigger warnings
 SUSPICIOUS_EXTENSIONS = [".sh", ".py", ".pl", ".rb", ".exe", ".bat"]
 
-# Default security limits
-DEFAULT_SECURITY_LIMITS = {
-    "timeout": 30.0,  # Default timeout in seconds
+# Default security settings (still used by SecurityValidator)
+DEFAULT_SECURITY_SETTINGS = {
+    "timeout": 30.0,  # Default timeout in seconds (fallback)
     "max_command_length": 4096,  # Maximum command string length
-    "max_output_size": 10240,  # Maximum output size in bytes (10KB)
-    "max_memory": 128 * 1024 * 1024,  # Maximum memory usage (128MB)
-    "max_cpu_time": 30,  # Maximum CPU time in seconds
-    "max_file_size": 10 * 1024 * 1024,  # Maximum file size (10MB)
-    "max_file_descriptors": 64,  # Maximum file descriptors
-    "max_processes": 10,  # Maximum processes
-    "subprocess_output_limit": 1024 * 1024,  # 1MB subprocess output limit
-    "process_terminate_wait": 0.1,  # Wait time before killing process (seconds)
 }
 
 # Control characters that are allowed in commands
@@ -139,21 +131,3 @@ MIN_CONTROL_CHAR_CODE = 32
 
 # Null byte character for security validation
 NULL_BYTE = "\x00"
-
-# Default sandbox working directory
-DEFAULT_SANDBOX_CWD = "/tmp"
-
-# Null byte character (used for bypassing filters)
-NULL_BYTE = "\x00"
-
-# Default working directory for sandboxed execution
-DEFAULT_SANDBOX_CWD = "/tmp"
-
-# Restricted environment variables for subprocess execution
-RESTRICTED_ENVIRONMENT = {
-    "PATH": "/usr/local/bin:/usr/bin:/bin",  # Restricted PATH
-    "HOME": "/tmp",  # Restricted HOME
-    "SHELL": "/bin/false",  # No shell
-    "USER": "nobody",  # Non-privileged user
-    "LOGNAME": "nobody",
-}

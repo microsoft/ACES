@@ -39,3 +39,21 @@ class DomainNotFoundError(ExecutionManagerError):
     """Raised when a requested domain is not found."""
 
     pass
+
+
+class SandboxExecutionError(ToolExecutionError):
+    """Raised when sandbox execution fails."""
+
+    pass
+
+
+class ContainerCreationError(SandboxExecutionError):
+    """Raised when container cannot be created."""
+
+    pass
+
+
+class ContainerCommunicationError(SandboxExecutionError):
+    """Raised when communication with container fails."""
+
+    pass

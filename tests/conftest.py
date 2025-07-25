@@ -16,7 +16,7 @@ from unittest.mock import patch, Mock
 
 from saber.server.tools.base import ToolResult, Parameter, ParameterType
 from saber.server.tools.executors.base_executors import ToolExecutor
-from saber.server.tools.executors.cli import CLIExecutor
+from saber.server.tools.executors.cli import DockerCLIExecutor
 from saber.server.tools.utils.security_validator import SecurityValidator
 from saber.server.tools.execution_manager import ExecutionManager
 
@@ -71,8 +71,8 @@ class MockExecutor(ToolExecutor):
             return ToolResult.success_result(self._mock_response or {"status": "success", "parameters": parameters})
 
 
-class TestCommandLineExecutor(CLIExecutor):
-    """Test implementation of CLIExecutor for security testing."""
+class TestCommandLineExecutor(DockerCLIExecutor):
+    """Test implementation of DockerCLIExecutor for security testing."""
 
     def __init__(self, command="echo", **kwargs):
         super().__init__(**kwargs)
@@ -90,7 +90,7 @@ class TestCommandLineExecutor(CLIExecutor):
         return ToolResult.success_result({"output": stdout.strip()})
 
 
-class TestEchoTool(CLIExecutor):
+class TestEchoTool(DockerCLIExecutor):
     """Test tool for configuration testing."""
 
     _security_tool_metadata = {
@@ -118,7 +118,7 @@ class TestEchoTool(CLIExecutor):
         return ToolResult.success_result({"output": stdout.strip()})
 
 
-class TestDangerousTool(CLIExecutor):
+class TestDangerousTool(DockerCLIExecutor):
     """Test tool that should be blocked by security configuration."""
 
     _security_tool_metadata = {

@@ -1,7 +1,7 @@
 @startuml Tool Execution Architecture
 
 !theme plain
-title SABER Tool Execution Framework - Detailed Architecture
+title SABER Docker Sandbox Tool Execution Framework - Detailed Architecture
 
 skinparam class {
     BackgroundColor lightblue
@@ -15,14 +15,16 @@ skinparam stereotype {
     IBackgroundColor lightyellow
     EBackgroundColor lightcoral
     CBackgroundColor lightpink
+    SBackgroundColor lightcyan
 }
 
 package "Execution Management" {
 
     class ExecutionManager {
-        +_configuration: CLIConfiguration
-        +_cli_tool: CLIExecutor
+        +_configuration: ExecutionConfiguration
+        +_cli_tool: DockerCLIExecutor
         +_security_validator: SecurityValidator
+        +_sandbox_manager: SandboxManager
         +_semaphore: Semaphore
         --
         +execute_command(): ToolResult
@@ -33,7 +35,7 @@ package "Execution Management" {
         +list_tools(): List[str]
         +get_tool_count(): Dict[str, int]
         +load_configuration(): void
-        +get_configuration(): CLIConfiguration
+        +get_configuration(): ExecutionConfiguration
     }
 
     class ToolExecutor {
@@ -48,26 +50,26 @@ package "Execution Management" {
         +to_mcp_schema(): Dict[str, Any]
     }
 
-    class CLIExecutor {
+    class DockerCLIExecutor {
         +_security_tool_metadata: Dict
-        +_command: str
+        +_sandbox_manager: SandboxManager
         --
-        +__init__(cli_config): void
+        +__init__(sandbox_manager, cli_config): void
         +build_command(): List[str]
         +parse_output(): ToolResult
         +execute(): ToolResult
         +validate_parameters(): ValidationResult
         +get_security_info(): Dict[str, Any]
-        +_setup_security_restrictions(): void
     }
 
-    class CLIConfiguration {
+    class ExecutionConfiguration {
         +_config: Dict[str, Any]
         --
         +load_configuration(): void
         +get_execution_config(): Dict[str, Any]
         +get_security_config(): Dict[str, Any]
         +get_cli_config(): Dict[str, Any]
+        +get_sandbox_config(): Dict[str, Any]
         +get_execution_timeout(): float
         +get_max_concurrent(): int
         +get_allowed_commands(): List[str]
@@ -91,8 +93,7 @@ package "Execution Management" {
         +SHELL_METACHARACTERS_PATTERN: str
         +SENSITIVE_DIRECTORIES: List[str]
         +SUSPICIOUS_EXTENSIONS: List[str]
-        +DEFAULT_SECURITY_LIMITS: Dict[str, Any]
-        +RESTRICTED_ENVIRONMENT: Dict[str, str]
+        +DEFAULT_SECURITY_SETTINGS: Dict[str, Any]
     }
 
     class Parameter {
@@ -141,13 +142,57 @@ package "Execution Management" {
     }
 }
 
+package "Docker Sandbox" <<stereototype S>> {
+
+    class SandboxManager {
+        +sandbox_config: Dict[str, Any]
+        +active_sessions: Dict[str, DockerExecutionEnvironment]
+        --
+        +create_session_environment(): DockerExecutionEnvironment
+        +get_session_environment(): Optional[DockerExecutionEnvironment]
+        +cleanup_session(): void
+        +cleanup_all_sessions(): void
+        +list_active_sessions(): List[str]
+        +get_session_count(): int
+        +get_sandbox_config(): Dict[str, Any]
+    }
+
+    class DockerExecutionEnvironment {
+        +session_id: str
+        +sandbox_config: Dict[str, Any]
+        +container: Container
+        +docker_client: DockerClient
+        --
+        +start(): void
+        +stop(): void
+        +execute_command(): CommandResult
+        +copy_to_container(): void
+        +copy_from_container(): void
+        +get_container_id(): str
+        +is_healthy(): bool
+    }
+
+    class CommandResult <<stereototype C>> {
+        +exit_code: int
+        +stdout: str
+        +stderr: str
+        +execution_time: float
+    }
+}
+
 ' Inheritance relationships
-ToolExecutor <|-- CLIExecutor
+ToolExecutor <|-- DockerCLIExecutor
 
 ' Execution Manager composition relationships
-ExecutionManager *-- CLIExecutor
-ExecutionManager *-- CLIConfiguration
+ExecutionManager *-- DockerCLIExecutor
+ExecutionManager *-- ExecutionConfiguration
+ExecutionManager *-- SandboxManager
 ExecutionManager *-- SecurityValidator
+
+' Sandbox relationships
+SandboxManager *-- DockerExecutionEnvironment
+DockerCLIExecutor *-- SandboxManager
+DockerExecutionEnvironment ..> CommandResult
 
 ' Component relationships
 ToolExecutor *-- Parameter
@@ -159,11 +204,12 @@ ToolExecutor ..> ToolResult
 ToolExecutor ..> ValidationResult
 
 note top of ExecutionManager
-**Unified Execution Manager**
+**Docker Sandbox Execution Manager**
 Central hub for all tool execution components including:
-- CLIExecutor tool execution with centralized security validation
+- DockerCLIExecutor tool execution with Docker container isolation
 - Configuration management and security enforcement
 - Security validation performed before tool execution
+- Sandbox manager for Docker container lifecycle management
 - MCP schema generation and tool conversion
 - Execution monitoring and concurrency control
 - All tool execution framework unified under single manager
@@ -176,15 +222,15 @@ Base tool execution framework:
 - Abstract execute method for tool-specific implementation
 end note
 
-note bottom of CLIExecutor
-Consolidated CLI tool implementation inheriting directly from ToolExecutor.
-Provides command execution with integrated security restrictions.
-Single flexible interface replacing multiple domain-specific tools.
-Accepts CLI configuration for parameter defaults.
+note bottom of DockerCLIExecutor
+Docker-based CLI tool implementation inheriting from ToolExecutor.
+Provides command execution in isolated Docker containers.
+Requires SandboxManager for container management.
 Security validation handled at ExecutionManager level before execution.
+Session-based container isolation with automatic cleanup.
 end note
 
-note right of SecurityValidator
+note left of SecurityValidator
 Multi-layer security validation (used by ExecutionManager):
 - Command whitelisting
 - Pattern detection for dangerous constructs
@@ -192,7 +238,15 @@ Multi-layer security validation (used by ExecutionManager):
 - Path safety validation
 end note
 
-note left of Parameter
+note right of SandboxManager
+Docker container lifecycle management:
+- Session-based container creation and management
+- Container health monitoring
+- Automatic cleanup on session end
+- Docker environment configuration
+end note
+
+note top of Parameter
 Core parameter and result types supporting
 tool execution and MCP schema generation.
 All data models unified under execution manager.

@@ -108,9 +108,10 @@ package "Tool Execution Framework" {
     }
 
     class ExecutionManager {
-        +_configuration: CLIConfiguration
-        +_cli_tool: CLIExecutor
+        +_configuration: ExecutionConfiguration
+        +_cli_tool: DockerCLIExecutor
         +_security_validator: SecurityValidator
+        +_sandbox_manager: SandboxManager
         +_semaphore: Semaphore
         --
         +execute_command(): ToolResult
@@ -119,34 +120,56 @@ package "Tool Execution Framework" {
         +to_mcp_tools(): List[Dict[str, Any]]
         +get_execution_stats(): Dict[str, Any]
         +load_configuration(): void
-        +get_configuration(): CLIConfiguration
+        +get_configuration(): ExecutionConfiguration
     }
 
-    class CLIConfiguration {
+    class ExecutionConfiguration {
         +_config: Dict[str, Any]
         --
         +load_configuration(): void
         +get_execution_config(): Dict[str, Any]
         +get_security_config(): Dict[str, Any]
         +get_cli_config(): Dict[str, Any]
+        +get_sandbox_config(): Dict[str, Any]
         +get_execution_timeout(): float
         +get_max_concurrent(): int
         +get_allowed_commands(): List[str]
         +get_max_command_length(): int
     }
 
-    class CLIExecutor {
+    class DockerCLIExecutor {
         +_security_tool_metadata: Dict
-        +_command: str
+        +_sandbox_manager: SandboxManager
         --
-        +__init__(cli_config): void
+        +__init__(sandbox_manager, cli_config): void
         +build_command(): List[str]
         +parse_output(): ToolResult
         +execute(): ToolResult
         +validate_parameters(): ValidationResult
         +to_mcp_schema(): Dict[str, Any]
         +get_security_info(): Dict[str, Any]
-        +_setup_security_restrictions(): void
+    }
+
+    class SandboxManager {
+        +sandbox_config: Dict[str, Any]
+        +active_sessions: Dict[str, DockerExecutionEnvironment]
+        --
+        +create_session_environment(): DockerExecutionEnvironment
+        +get_session_environment(): Optional[DockerExecutionEnvironment]
+        +cleanup_session(): void
+        +cleanup_all_sessions(): void
+        +list_active_sessions(): List[str]
+    }
+
+    class DockerExecutionEnvironment {
+        +session_id: str
+        +container: Container
+        +docker_client: DockerClient
+        --
+        +start(): void
+        +stop(): void
+        +execute_command(): CommandResult
+        +is_healthy(): bool
     }
 
     class ToolExecutor {
@@ -258,10 +281,12 @@ DomainTask *-- SubTask
 TaskSession ..> SessionState
 
 MCPServer *-- ExecutionManager
-ExecutionManager *-- CLIConfiguration
-ExecutionManager *-- CLIExecutor
+ExecutionManager *-- ExecutionConfiguration
+ExecutionManager *-- DockerCLIExecutor
 ExecutionManager *-- SecurityValidator
-ToolExecutor <|-- CLIExecutor
+ExecutionManager *-- SandboxManager
+SandboxManager *-- DockerExecutionEnvironment
+ToolExecutor <|-- DockerCLIExecutor
 ToolExecutor *-- Parameter
 Parameter ..> ParameterType
 
@@ -272,24 +297,35 @@ ActionTracker *-- ActionRecord
 
 note top of MCPServer
 **Tool Execution Hub**
-Delegates to ExecutionManager for CLI tool execution.
+Delegates to ExecutionManager for Docker CLI tool execution.
 Provides MCP integration layer.
 Simplified architecture for MVP.
 end note
 
 note top of ExecutionManager
-**CLI-Only Execution Manager**
-Single CLIExecutor tool with comprehensive security validation.
+**Docker Sandbox Execution Manager**
+Single DockerCLIExecutor tool with comprehensive security validation.
+Docker container isolation for all command execution.
 Security validation performed before command execution.
 Built-in concurrency control and MCP schema generation.
+Session-based container management via SandboxManager.
 end note
 
-note bottom of CLIExecutor
-**Consolidated CLI Tool**
+note top of DockerCLIExecutor
+**Docker-based CLI Tool**
 Directly inherits from ToolExecutor (simplified architecture).
-Integrated command building, parsing, and security restrictions.
-Configurable parameter defaults from CLI configuration.
-Generates own MCP-compatible parameter schema.
+All commands executed in isolated Docker containers.
+Requires SandboxManager for container lifecycle management.
+Session-based container isolation with automatic cleanup.
+Security validation handled at ExecutionManager level.
+end note
+
+note bottom of SandboxManager
+**Docker Container Manager**
+Manages Docker container lifecycle for sessions.
+Creates and destroys containers per session.
+Health monitoring and automatic cleanup.
+Configurable container security settings.
 end note
 
 @enduml

@@ -1,56 +1,68 @@
 """
-Command Line Interface tool for executing validated shell commands.
+Docker-based Command Line Interface tool for executing validated shell commands.
 
 This module provides a secure CLI tool that accepts command strings over the MCP protocol
-and executes them in a controlled environment. Security validation is performed at the
+and executes them in Docker containers. Security validation is performed at the
 ExecutionManager level before execution reaches this class.
 """
 
-import asyncio
 import logging
 import shlex
 from typing import Any, Dict, List, Optional
 
 from ..base import Parameter, ParameterType, ToolResult
-from ..utils.security_constants import DEFAULT_SANDBOX_CWD, DEFAULT_SECURITY_LIMITS, RESTRICTED_ENVIRONMENT
+from ..exceptions import SandboxExecutionError
+from ..sandbox.sandbox_manager import SandboxManager
 from .base_executors import ToolExecutor
 
 logger = logging.getLogger(__name__)
 
 
-class CLIExecutor(ToolExecutor):
+class DockerCLIExecutor(ToolExecutor):
     """
-    Consolidated CLI tool for flexible command execution.
+    Docker-based CLI tool for secure command execution in containers.
 
     This tool provides a unified interface for executing shell commands
-    with comprehensive security validation and configurable parameters.
-
-    Security Features (handled at ExecutionManager level):
-    - Command validation before execution
-    - Allowed commands checking
-    - Shell injection prevention
-    - Argument sanitization
+    in isolated Docker containers with comprehensive security validation.
 
     Execution Features:
+    - Docker container isolation
     - Timeout enforcement
     - Shell/direct execution modes
     - Working directory specification
-    - Environment variable control
+    - Session-based container management
     """
 
     _security_tool_metadata = {
         "domain": "general",
-        "name": "cli",
-        "description": "Execute validated shell commands in a secure environment",
+        "name": "docker_cli",
+        "description": "Execute validated shell commands in Docker containers",
         "author": "SABER Team",
         "security_level": "high",
         "requires_validation": True,
     }
 
-    def __init__(self, cli_config: Optional[Dict[str, Any]] = None, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        self._command = "sh"  # Base command for CLI execution
+    def __init__(
+        self, sandbox_manager: SandboxManager, cli_config: Optional[Dict[str, Any]] = None, **kwargs: Any
+    ) -> None:
+        """
+        Initialize Docker CLI executor.
 
+        Args:
+            sandbox_manager: Required sandbox manager for Docker execution
+            cli_config: Optional CLI configuration dictionary
+            **kwargs: Additional arguments passed to parent
+
+        Raises:
+            SandboxExecutionError: If sandbox_manager is None or invalid
+        """
+        super().__init__(**kwargs)
+
+        # Require sandbox manager - no fallback to local execution
+        if sandbox_manager is None:
+            raise SandboxExecutionError("sandbox_manager is required for Docker execution")
+
+        self._sandbox_manager = sandbox_manager
         cli_config = cli_config or {}
 
         # Add parameter for the command string
@@ -58,7 +70,7 @@ class CLIExecutor(ToolExecutor):
             Parameter(
                 name="command",
                 type=ParameterType.STRING,
-                description="Command string to execute (will be validated for security)",
+                description="Command string to execute in Docker container (will be validated for security)",
                 required=True,
             )
         )
@@ -87,7 +99,7 @@ class CLIExecutor(ToolExecutor):
             context: Execution context
 
         Returns:
-            List of command arguments ready for subprocess execution
+            List of command arguments ready for Docker execution
 
         Raises:
             ValueError: If command string is invalid or empty
@@ -140,7 +152,8 @@ class CLIExecutor(ToolExecutor):
 
         # Add metadata about execution
         metadata = {
-            "command_type": "cli",
+            "command_type": "docker_cli",
+            "execution_environment": "docker_container",
             "exit_code": return_code,
             "has_stdout": bool(stdout.strip()),
             "has_stderr": bool(stderr.strip()),
@@ -161,108 +174,84 @@ class CLIExecutor(ToolExecutor):
 
     async def execute(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> ToolResult:
         """
-        Execute the command-line tool.
+        Execute the command-line tool in Docker container.
 
         Args:
             parameters: Tool parameters
-            context: Execution context
+            context: Execution context including session_id
 
         Returns:
             ToolResult with execution results
 
         Note:
-            Security validation is now performed at the ExecutionManager level
-            before this method is called.
+            Security validation is performed at the ExecutionManager level
+            before this method is called. All execution happens in Docker containers.
         """
         try:
+            # Extract session ID from context
+            session_id = context.get("session_id")
+            if not session_id:
+                raise SandboxExecutionError("session_id required in context for Docker execution")
+
+            # Get or create Docker environment for session
+            environment = self._sandbox_manager.get_session_environment(session_id)
+            if not environment:
+                environment = self._sandbox_manager.create_session_environment(session_id)
+
             # Build command
             command_args = self.build_command(parameters, context)
 
-            # Additional runtime safety measures
-            env = RESTRICTED_ENVIRONMENT.copy()
-
-            # Execute command with restrictions
-            process = await asyncio.create_subprocess_exec(
-                *command_args,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env,
-                cwd=DEFAULT_SANDBOX_CWD,
-                preexec_fn=self._setup_security_restrictions,
-                limit=int(DEFAULT_SECURITY_LIMITS["subprocess_output_limit"]),
-            )
-
-            # Wait with timeout
-            timeout = self.get_timeout() or DEFAULT_SECURITY_LIMITS["timeout"]
-            try:
-                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
-            except asyncio.TimeoutError:
-                process.terminate()
-                await asyncio.sleep(DEFAULT_SECURITY_LIMITS["process_terminate_wait"])
-                if process.returncode is None:
-                    process.kill()
-                return ToolResult.error_result(f"Command timed out after {timeout} seconds")
-
-            # Parse output with size limits
-            max_output = int(DEFAULT_SECURITY_LIMITS["max_output_size"])
-            stdout_str = stdout.decode("utf-8", errors="replace")[:max_output]
-            stderr_str = stderr.decode("utf-8", errors="replace")[:max_output]
+            # Execute command in Docker container
+            result = await environment.execute_command(command=command_args, working_dir="/workspace")
 
             # Parse output
-            result = self.parse_output(
-                stdout_str, stderr_str, process.returncode if process.returncode is not None else -1
-            )
+            tool_result = self.parse_output(result.stdout, result.stderr, result.exit_code)
 
             # Add execution metadata
-            result.metadata.update(
+            tool_result.metadata.update(
                 {
-                    "command": command_args[0],
-                    "return_code": process.returncode if process.returncode is not None else -1,
+                    "container_id": environment.get_container_id()[:12],
+                    "session_id": session_id,
+                    "execution_time": result.execution_time,
                 }
             )
 
-            return result
+            return tool_result
 
         except Exception as e:
-            logger.error(f"Command execution error: {e}")
-            return ToolResult.error_result(f"Command execution failed: {str(e)}")
-
-    def _setup_security_restrictions(self) -> None:
-        """Set up additional security restrictions for the subprocess."""
-        import os
-        import resource
-
-        try:
-            # Set resource limits using security constants
-            limits = DEFAULT_SECURITY_LIMITS
-            resource.setrlimit(resource.RLIMIT_CPU, (int(limits["max_cpu_time"]), int(limits["max_cpu_time"])))
-            resource.setrlimit(resource.RLIMIT_AS, (int(limits["max_memory"]), int(limits["max_memory"])))
-            resource.setrlimit(resource.RLIMIT_FSIZE, (int(limits["max_file_size"]), int(limits["max_file_size"])))
-            resource.setrlimit(
-                resource.RLIMIT_NOFILE, (int(limits["max_file_descriptors"]), int(limits["max_file_descriptors"]))
-            )
-            resource.setrlimit(resource.RLIMIT_NPROC, (int(limits["max_processes"]), int(limits["max_processes"])))
-
-            # Drop to nobody user if running as root (requires appropriate setup)
-            if os.getuid() == 0:
-                import pwd
-
-                nobody = pwd.getpwnam("nobody")
-                os.setgid(nobody.pw_gid)
-                os.setuid(nobody.pw_uid)
-
-        except (ImportError, OSError, KeyError) as e:
-            # Log but don't fail - restrictions are best effort
-            logger.warning(f"Could not set all security restrictions: {e}")
+            logger.error(f"Docker command execution error: {e}")
+            return ToolResult.error_result(f"Docker command execution failed: {str(e)}")
 
     def get_security_info(self) -> Dict[str, Any]:
         """
-        Get information about security settings.
+        Get information about security settings including sandbox info.
 
         Returns:
             Dictionary with security configuration
         """
-        return {
-            "base_command": self._command,
+        base_info: Dict[str, Any] = {
+            "execution_environment": "docker_container",
+            "sandbox_manager": "enabled",
             "timeout": self.get_timeout(),
         }
+
+        try:
+            sandbox_config = self._sandbox_manager.get_sandbox_config()
+            sandbox_info: Dict[str, Any] = {}
+
+            if sandbox_config.get("image"):
+                sandbox_info["image"] = str(sandbox_config["image"])
+            if sandbox_config.get("network_mode"):
+                sandbox_info["network_mode"] = str(sandbox_config["network_mode"])
+            if sandbox_config.get("read_only_root") is not None:
+                sandbox_info["read_only_root"] = bool(sandbox_config["read_only_root"])
+            if sandbox_config.get("user"):
+                sandbox_info["user"] = str(sandbox_config["user"])
+            if sandbox_config.get("resource_limits"):
+                sandbox_info["resource_limits"] = dict(sandbox_config["resource_limits"])
+
+            base_info["sandbox_config"] = sandbox_info
+        except Exception as e:
+            logger.warning(f"Could not retrieve sandbox config: {e}")
+
+        return base_info

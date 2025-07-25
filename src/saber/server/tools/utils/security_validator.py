@@ -16,7 +16,7 @@ from .security_constants import (
     ALLOWED_CONTROL_CHARS,
     BLOCKED_COMMANDS,
     DANGEROUS_PATTERNS,
-    DEFAULT_SECURITY_LIMITS,
+    DEFAULT_SECURITY_SETTINGS,
     MIN_CONTROL_CHAR_CODE,
     NULL_BYTE,
     SENSITIVE_DIRECTORIES,
@@ -91,9 +91,9 @@ class SecurityValidator:
             result.add_error("Null bytes not allowed in commands")
 
         # Check for excessive length (potential buffer overflow)
-        if len(command_str) > DEFAULT_SECURITY_LIMITS["max_command_length"]:
+        if len(command_str) > DEFAULT_SECURITY_SETTINGS["max_command_length"]:
             result.add_error(
-                f"Command string too long (max {DEFAULT_SECURITY_LIMITS['max_command_length']} characters)"
+                f"Command string too long (max {DEFAULT_SECURITY_SETTINGS['max_command_length']} characters)"
             )
 
         # Check for unicode control characters
@@ -217,5 +217,5 @@ class SecurityValidator:
             "allowed_commands": list(self._allowed_commands) if self._allowed_commands else None,
             "dangerous_patterns_count": len(DANGEROUS_PATTERNS),
             "blocked_commands_count": len(BLOCKED_COMMANDS),
-            "security_limits": DEFAULT_SECURITY_LIMITS.copy(),
+            "security_limits": DEFAULT_SECURITY_SETTINGS.copy(),
         }

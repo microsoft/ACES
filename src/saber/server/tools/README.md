@@ -1,65 +1,95 @@
-# SABER Execution Manager and Security Framework
+# SABER Docker Sandbox Execution Manager and Security Framework
 
-This module provides a CLI-only tool execution system with comprehensive security validation, designed to safely execute command-line tools through MCP integration while preventing security vulnerabilities.
+This module provides a Docker container-based tool execution system with comprehensive security validation, designed to safely execute command-line tools through MCP integration while providing complete isolation and preventing security vulnerabilities.
 
 ## Architecture
 
 ```
 src/saber/server/tools/
-├── execution_manager.py       # Main ExecutionManager with CLIConfiguration
-├── base.py                 # result types
-├── exceptions.py           # Tool related exceptions
-├── executors/              # Tool execution frameworks
-│   ├── base_executors.py   # ToolExecutor
-│   └── cli.py              # CLIExecutor tool implementation
-└── utils/                  # Security utilities
-    └── security_validator.py # Comprehensive security validation
-    └── security_constants.py # Security validation patterns and limits
+├── execution_manager.py       # Main ExecutionManager with ExecutionConfiguration
+├── base.py                    # result types
+├── exceptions.py              # Tool related exceptions
+├── executors/                 # Tool execution frameworks
+│   ├── base_executors.py      # ToolExecutor
+│   └── cli.py                 # DockerCLIExecutor tool implementation
+├── sandbox/                   # Docker container management
+│   ├── sandbox_manager.py     # SandboxManager for container lifecycle
+│   └── docker_environment.py  # DockerExecutionEnvironment implementation
+└── utils/                     # Security utilities
+    ├── security_validator.py  # Comprehensive security validation
+    └── security_constants.py  # Security validation patterns and limits
 ```
 
 ## Key Components
 
 ### ExecutionManager (`execution_manager.py`)
-Main execution manager for CLI tool execution with MCP integration:
-- **Single CLI Tool**: Manages one CLIExecutor instance for flexible command execution
+Main execution manager for Docker-based CLI tool execution with MCP integration:
+- **Single Docker CLI Tool**: Manages one DockerCLIExecutor instance for containerized command execution
+- **Sandbox Manager**: Integrates SandboxManager for Docker container lifecycle management
 - **Security Validation**: Performs security validation at execution manager level before execution
 - **Concurrency Control**: Built-in semaphore for limiting concurrent executions
 - **MCP Integration**: Direct conversion to Model Context Protocol format
-- **Configuration Management**: Uses CLIConfiguration for settings management
+- **Configuration Management**: Uses ExecutionConfiguration for settings management including sandbox config
 
-### CLIConfiguration
-Configuration management for CLI tool execution:
+### ExecutionConfiguration
+Configuration management for Docker-based CLI tool execution:
 - **YAML Support**: Load configuration from YAML files
 - **Execution Settings**: Timeout and concurrency configuration
 - **Security Settings**: Allowed commands and validation limits
 - **CLI Options**: CLI-specific configuration options
+- **Sandbox Configuration**: Docker container settings and security options
 
-### CLIExecutor Tool (`executors/cli.py`)
-Secure command-line interface directly inheriting from ToolExecutor:
+### DockerCLIExecutor Tool (`executors/cli.py`)
+Secure command-line interface executing in Docker containers:
+- **Docker Container Execution**: All commands executed in isolated Docker containers
+- **Session-based Containers**: Each session gets dedicated container environment
 - **Command Building**: Parses command strings into safe execution arguments
 - **Parameter Support**: Accepts command string and shell mode parameters
 - **Configuration Integration**: Accepts CLI configuration for parameter defaults
 - **Output Parsing**: Structured parsing of command output and errors
-- **Security Restrictions**: Built-in subprocess security restrictions and resource limits
 - **MCP Schema Generation**: Generates own parameter schema for MCP integration
+- **Sandbox Manager Integration**: Requires SandboxManager for container management
+
+### SandboxManager (`sandbox/sandbox_manager.py`)
+Docker container lifecycle management:
+- **Session-based Containers**: Creates and manages containers per session
+- **Container Health Monitoring**: Tracks container status and health
+- **Automatic Cleanup**: Handles container destruction when sessions end
+- **Configuration Management**: Manages Docker container security settings
+
+### DockerExecutionEnvironment (`sandbox/docker_environment.py`)
+Individual Docker container management:
+- **Container Lifecycle**: Start, stop, and manage individual containers
+- **Command Execution**: Execute commands within container with result capture
+- **File Operations**: Copy files to/from containers
+- **Health Checks**: Monitor container health and availability
 
 ### ToolExecutor Hierarchy
 - **ToolExecutor**: Base class with common functionality, parameter management, and MCP schema generation
-- **CLIExecutor**: Consolidated command-line tool implementation with integrated security features
+- **DockerCLIExecutor**: Docker-based command-line tool implementation with container isolation
 
 ## Security Features
 
+### Docker Container Isolation
+- **Complete Environment Isolation**: All commands execute in isolated Docker containers
+- **Session-based Containers**: Each session gets its own dedicated container environment
+- **Network Isolation**: Containers run with restricted network access (configurable)
+- **Read-only Root Filesystem**: Container root filesystem is read-only by default
+- **Non-root User**: Commands execute as non-privileged user within container
+- **Resource Limits**: Container-level CPU, memory, and process constraints
+
 ### Command Validation (ExecutionManager Level)
-- **Pre-execution validation**: SecurityValidator validates commands before CLIExecutor execution
+- **Pre-execution validation**: SecurityValidator validates commands before DockerCLIExecutor execution
 - **Global command blacklist**: Dangerous commands are blocked system-wide
 - **Optional whitelist override**: Configuration-based `allowed_commands` can override blocked commands
 - **Pattern detection**: Advanced regex-based detection of dangerous constructs
 - **Argument sanitization**: Protection against injection attacks using shlex parsing
 
-### Sandboxed Execution (CLIExecutor Level)
-- **Resource limits**: CPU, memory, file size, and process constraints applied during execution
-- **Environment isolation**: Restricted environment variables
-- **Working directory**: Execution in controlled sandbox directory
+### Container Security (SandboxManager Level)
+- **Container lifecycle management**: Automatic container creation, monitoring, and cleanup
+- **Health monitoring**: Continuous health checks on container environments
+- **Session isolation**: Each session's container is completely isolated from others
+- **Automatic cleanup**: Containers are destroyed when sessions end
 
 ### Input Sanitization
 - **Shell metacharacter detection**: Prevent command injection
@@ -68,13 +98,20 @@ Secure command-line interface directly inheriting from ToolExecutor:
 
 ## Configuration
 
-CLI tool execution is managed through YAML configuration:
+Docker-based CLI tool execution is managed through YAML configuration:
 
 ```yaml
 # Execution settings for CLI tool
 execution:
   timeout: 300                    # Default timeout for commands (seconds)
   max_concurrent: 10              # Maximum concurrent CLI executions
+
+# Docker sandbox configuration
+sandbox:
+  image: "saber/base-sandbox:latest"  # Docker image for command execution
+  network_mode: "none"                # Container network isolation
+  read_only_root: true                # Read-only root filesystem
+  user: "tooluser"                    # Non-root user for command execution
 
 # Security configuration
 security:
@@ -223,7 +260,7 @@ uv run pytest tests/tools/ -v
 # Run specific test suites
 uv run pytest tests/tools/test_execution_manager.py -v        # Execution manager and configuration  
 uv run pytest tests/tools/test_security_validator.py -v  # Security validation
-uv run pytest tests/tools/test_cli_executor.py -v        # CLIExecutor tool execution
+uv run pytest tests/tools/test_cli_executor.py -v        # DockerCLIExecutor tool execution
 uv run pytest tests/tools/test_integration.py -v         # Integration tests
 
 # Test coverage: 143+ tests across 6 test files
@@ -231,12 +268,12 @@ uv run pytest tests/tools/test_integration.py -v         # Integration tests
 
 ## Integration with MCP
 
-The CLIExecutor tool automatically generates its MCP schema from its parameter definitions:
+The DockerCLIExecutor tool automatically generates its MCP schema from its parameter definitions:
 
 ```python
 mcp_tools = registry.to_mcp_tools()
-# ExecutionManager delegates to CLIExecutor's to_mcp_schema() method
-# Uses CLIExecutor metadata and parameter definitions
+# ExecutionManager delegates to DockerCLIExecutor's to_mcp_schema() method
+# Uses DockerCLIExecutor metadata and parameter definitions
 # Returns:
 # [{
 #     "name": "cli",

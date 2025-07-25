@@ -3,6 +3,6 @@ Base executor implementations for tool development.
 """
 
 from .base_executors import ToolExecutor
-from .cli import CLIExecutor
+from .cli import DockerCLIExecutor
 
-__all__ = ["ToolExecutor", "CLIExecutor"]
+__all__ = ["ToolExecutor", "DockerCLIExecutor"]

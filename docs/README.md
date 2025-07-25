@@ -12,16 +12,19 @@ uv run
 ```
 whenever executing anything in python.
 
-## Security-First Tool Execution
+## Docker Sandbox Tool Execution
 
-### Enhanced Security Framework
-SABER implements a comprehensive security framework for tool execution, addressing the unique security challenges of running arbitrary security tools in a benchmarking environment.
+### Enhanced Security Framework with Container Isolation
+SABER implements a comprehensive security framework for tool execution using Docker container isolation, addressing the unique security challenges of running arbitrary security tools in a benchmarking environment.
 
 #### Key Security Features
+- **Docker Container Isolation**: All tool execution happens in isolated Docker containers
+- **Session-based Container Management**: Each session gets its own dedicated container environment
 - **Command Whitelisting**: Optional whitelist to override blocked commands for specific use cases
 - **Pattern Detection**: Advanced regex-based detection of dangerous shell constructs
 - **Argument Validation**: Comprehensive validation of all tool arguments
-- **Resource Limits**: CPU, memory, file size, and process count restrictions
+- **Resource Limits**: Container-level CPU, memory, and process restrictions
+- **Network Isolation**: Containers run with restricted network access
 - **Shell Injection Prevention**: Multi-layer protection against command injection attacks
 
 #### Security Configuration Example
@@ -38,6 +41,12 @@ execution:
   timeout: 300
   max_concurrent: 10
 
+sandbox:
+  image: "saber/base-sandbox:latest"
+  network_mode: "none"
+  read_only_root: true
+  user: "tooluser"
+
 cli:
   default_shell_mode: false
 ```
@@ -46,7 +55,7 @@ cli:
 - **Base Command Validation**: Validates commands against blocked lists with optional whitelist override
 - **Pattern Detection**: Identifies dangerous shell metacharacters and constructs
 - **Argument Sanitization**: Validates and sanitizes all command arguments
-- **Resource Monitoring**: Enforces execution limits and prevents resource exhaustion
+- **Container Isolation**: All execution happens in isolated Docker environments
 
 ## System Architecture
 
@@ -93,18 +102,20 @@ Complete tool execution layer:
 - **Internal Service**: Used internally by SessionManager, not directly accessed by clients
 
 #### ExecutionManager
-CLI-only execution manager for MCP integration:
-- **Single CLI Tool**: Contains one CLI tool instance with comprehensive security validation  
-- **CLIConfiguration**: Configuration management for execution, security, and CLI-specific settings
-- **Direct Command Execution**: execute_command() method for direct CLI tool execution via parameters
+Docker sandbox execution manager for MCP integration:
+- **Single Docker CLI Tool**: Contains one DockerCLIExecutor tool instance with comprehensive security validation  
+- **ExecutionConfiguration**: Configuration management for execution, security, CLI-specific settings, and sandbox configuration
+- **Docker Container Execution**: execute_command() method for CLI tool execution in isolated Docker containers
+- **SandboxManager Integration**: Built-in container lifecycle management with session-based isolation
 - **Security Integration**: Built-in SecurityValidator with configurable allowed commands
 - **Concurrency Control**: Semaphore-based execution limiting with configurable max_concurrent
 - **MCP Tool Conversion**: to_mcp_tools() generates MCP-compatible tool definitions from CLI tool metadata
-- **Configuration Management**: YAML-based configuration with dynamic CLI parameter defaults
+- **Configuration Management**: YAML-based configuration with dynamic CLI parameter defaults and sandbox settings
 - **Parameter Schema Generation**: CLI tool generates its own MCP-compatible parameter schemas
-- **Security Info Access**: get_security_info() exposes SecurityValidator configuration
+- **Security Info Access**: get_security_info() exposes SecurityValidator and sandbox configuration
 - **Command Validation**: validate_command() for pre-execution security checks
 - **Execution Statistics**: get_execution_stats() provides runtime metrics and configuration status
+- **Session Management**: Automatic Docker container creation and cleanup per session
 
 #### Security Framework
 Comprehensive security controls for tool execution:

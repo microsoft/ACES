@@ -64,9 +64,10 @@ package "SABER Server Side" {
     }
 
     class ExecutionManager {
-        +_configuration: CLIConfiguration
-        +_cli_tool: CLIExecutor
+        +_configuration: ExecutionConfiguration
+        +_cli_tool: DockerCLIExecutor
         +_security_validator: SecurityValidator
+        +_sandbox_manager: SandboxManager
         +_semaphore: Semaphore
         --
         +execute_command(): ToolResult
@@ -76,20 +77,21 @@ package "SABER Server Side" {
         +get_execution_stats(): Dict[str, Any]
     }
 
-    class CLIConfiguration {
+    class ExecutionConfiguration {
         +_config: Dict[str, Any]
         --
         +get_execution_config(): Dict[str, Any]
         +get_security_config(): Dict[str, Any]
         +get_cli_config(): Dict[str, Any]
+        +get_sandbox_config(): Dict[str, Any]
         +get_execution_timeout(): float
         +get_max_concurrent(): int
         +get_allowed_commands(): List[str]
     }
 
-    class CLIExecutor {
+    class DockerCLIExecutor {
         +_security_tool_metadata: Dict
-        +_command: str
+        +_sandbox_manager: SandboxManager
         --
         +build_command(): List[str]
         +parse_output(): ToolResult
@@ -97,6 +99,16 @@ package "SABER Server Side" {
         +validate_parameters(): ValidationResult
         +to_mcp_schema(): Dict[str, Any]
         +get_security_info(): Dict[str, Any]
+    }
+
+    class SandboxManager {
+        +sandbox_config: Dict[str, Any]
+        +active_sessions: Dict[str, DockerExecutionEnvironment]
+        --
+        +create_session_environment(): DockerExecutionEnvironment
+        +get_session_environment(): Optional[DockerExecutionEnvironment]
+        +cleanup_session(): void
+        +cleanup_all_sessions(): void
     }
 
     class SecurityValidator {
@@ -209,9 +221,10 @@ SessionManager *-- MCPServer
 SessionManager *-- PolicyManager
 SessionManager *-- EvaluationManager
 MCPServer *-- ExecutionManager
-ExecutionManager *-- CLIConfiguration
-ExecutionManager *-- CLIExecutor
+ExecutionManager *-- ExecutionConfiguration
+ExecutionManager *-- DockerCLIExecutor
 ExecutionManager *-- SecurityValidator
+ExecutionManager *-- SandboxManager
 
 ' Client Internal Relationships
 AgentClient *-- SecurityAgent
@@ -245,9 +258,11 @@ note top of SessionManager
 end note
 
 note top of MCPServer
-**Tool Execution Layer**
-- Contains CLI-only ExecutionManager
-- Direct command execution with security validation
+**Docker Sandbox Tool Execution Layer**
+- Contains Docker-based ExecutionManager
+- All commands executed in isolated Docker containers
+- Session-based container management via SandboxManager
+- Security validation with Docker container isolation
 - Provides MCP-compatible interface
 - Built-in concurrency control and parameter validation
 end note

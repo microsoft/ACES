@@ -13,18 +13,21 @@ from typing import Any, Dict, List, Optional
 import yaml
 
 from .base import ToolResult, ValidationResult
-from .executors.cli import CLIExecutor
+from .exceptions import ExecutionManagerError
+from .executors.cli import DockerCLIExecutor
+from .sandbox.sandbox_manager import SandboxManager
 from .utils.security_validator import SecurityValidator
 
 logger = logging.getLogger(__name__)
 
 
-class CLIConfiguration:
+class ExecutionConfiguration:
     """
-    Configuration management for CLI-only execution manager.
+    Configuration management for execution manager.
 
     Handles YAML configuration files and provides structured access to
-    execution and security settings.
+    execution, security, and sandbox settings. Renamed from CLIConfiguration
+    to reflect broader scope beyond just CLI tools.
     """
 
     def __init__(self, config: Optional[Dict[str, Any]] = None, config_file: Optional[str] = None):
@@ -91,6 +94,11 @@ class CLIConfiguration:
         length = self.get_security_config().get("max_command_length", 10000)
         return int(length)
 
+    def get_sandbox_config(self) -> Dict[str, Any]:
+        """Get sandbox configuration."""
+        config = self._config.get("sandbox", {})
+        return dict(config) if config else {}
+
 
 class ExecutionManager:
     """
@@ -105,15 +113,23 @@ class ExecutionManager:
             config: Optional configuration dictionary
             config_file: Optional path to YAML configuration file
         """
-        self._configuration = CLIConfiguration(config, config_file)
+        self._configuration = ExecutionConfiguration(config, config_file)
 
         allowed_commands = self._configuration.get_allowed_commands()
         self._security_validator = SecurityValidator(
             allowed_commands=allowed_commands if allowed_commands else None,
         )
 
+        # Initialize sandbox manager (required for Docker execution)
+        sandbox_config = self._configuration.get_sandbox_config()
+        if not sandbox_config.get("enabled", False):
+            raise ExecutionManagerError("Sandbox execution is required but not enabled in configuration")
+
+        self._sandbox_manager = SandboxManager(sandbox_config)
+
         cli_config = self._configuration.get_cli_config()
-        self._cli_tool = CLIExecutor(
+        self._cli_tool = DockerCLIExecutor(
+            sandbox_manager=self._sandbox_manager,
             cli_config=cli_config,
             timeout=self._configuration.get_execution_timeout(),
         )
@@ -240,8 +256,16 @@ class ExecutionManager:
             allowed_commands=allowed_commands if allowed_commands else None,
         )
 
+        # Recreate sandbox manager with new configuration
+        sandbox_config = self._configuration.get_sandbox_config()
+        if not sandbox_config.get("enabled", False):
+            raise ExecutionManagerError("Sandbox execution is required but not enabled in configuration")
+
+        self._sandbox_manager = SandboxManager(sandbox_config)
+
         cli_config = self._configuration.get_cli_config()
-        self._cli_tool = CLIExecutor(
+        self._cli_tool = DockerCLIExecutor(
+            sandbox_manager=self._sandbox_manager,
             cli_config=cli_config,
             timeout=self._configuration.get_execution_timeout(),
         )
@@ -251,11 +275,11 @@ class ExecutionManager:
 
         logger.info("Configuration updated successfully")
 
-    def get_configuration(self) -> CLIConfiguration:
+    def get_configuration(self) -> ExecutionConfiguration:
         """
         Get the configuration manager.
 
         Returns:
-            CLIConfiguration instance
+            ExecutionConfiguration instance
         """
         return self._configuration
