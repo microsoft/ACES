@@ -46,12 +46,15 @@ package "SABER Server Side" {
     }
 
     class TaskManager {
-        +domain_tasks: Dict[str, DomainTask]
-        +active_sessions: Dict[str, TaskSession]
+        +tasks: Dict[str, Task]
+        +episode_manager: EpisodeManager
         --
-        +get_task(): DomainTask
-        +create_task_session(): TaskSession
-        +advance_subtask(): SubTask?
+        +get_task(): Task
+        +step(): StepResult
+        +reset(): Episode
+        +record_episode_step(): void
+        +start_episode(): Episode
+        +end_episode(): EpisodeResult
     }
 
     class MCPServer {

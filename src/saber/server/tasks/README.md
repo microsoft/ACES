@@ -1,6 +1,6 @@
 # SABER Task Management System
 
-The SABER TaskManager provides a robust framework for managing complex multi-step security tasks. Tasks are defined in YAML files and executed through stateful sessions that maintain context between subtasks.
+The SABER TaskManager provides a robust framework for managing complex multi-step security tasks with RL-friendly episode-based execution. Tasks are defined in YAML files and executed through stateful episodes that track complete action-response sequences.
 
 ## Architecture
 
@@ -8,10 +8,12 @@ The SABER TaskManager provides a robust framework for managing complex multi-ste
 src/saber/server/tasks/
 ├── __init__.py              # Task management exports
 ├── task_manager.py          # Main TaskManager orchestrator
-├── domain_task.py           # High-level security task representation
-├── subtask.py               # Individual task steps with dependencies
+├── task.py                  # High-level security task representation (renamed from domain_task.py)
+├── subtask.py               # Internal checkpoints with automatic progression
 ├── task_session.py          # Stateful session management
-├── enums.py                 # Task and session state enums
+├── episode.py               # RL episode data structures
+├── episode_manager.py       # RL episode lifecycle management
+├── enums.py                 # Task, session, and episode state enums
 └── exceptions.py            # Task management exceptions
 ```
 
@@ -21,30 +23,36 @@ src/saber/server/tasks/
 Main orchestrator for task execution:
 - **Task Management**: Load and manage domain-specific tasks
 - **Session Creation**: Create and track task execution sessions
-- **Subtask Orchestration**: Handle subtask dependencies and progression
-- **Context Management**: Maintain state between subtasks
+- **Episode Management**: RL-style episode lifecycle with gym compatibility
+- **Automatic Progression**: Handle checkpoint progression based on command execution
 
-### DomainTask
+### Task (formerly DomainTask)
 High-level security task representation:
 - **Task Definition**: YAML-based task specifications
-- **Subtask Organization**: Ordered list of subtasks with dependencies
-- **Initial Context**: Starting context for task execution
+- **Checkpoint Organization**: Subtasks used as internal checkpoints
+- **Progression Logic**: Automatic checkpoint advancement based on episode state
 
-### SubTask
-Individual task steps with specific objectives:
-- **Requirements**: Required tools and success criteria
-- **Dependencies**: Task dependencies and context requirements
-- **Validation**: Success criteria and completion checking
+### SubTask (Refactored for Checkpoints)
+Internal checkpoints with automatic progression:
+- **Completion Conditions**: Exact commands that must be executed
+- **Entry/Exit Criteria**: Dependency-based checkpoint validation
+- **Command Matching**: Template-based command execution tracking
 
-### TaskSession
-Stateful session management:
-- **Session State**: Track execution progress and status
-- **Context Propagation**: Maintain context between subtasks
-- **Progress Tracking**: Monitor subtask completion and results
+### EpisodeManager
+RL-friendly episode management:
+- **Episode Lifecycle**: Start, step, end, reset operations
+- **Action-Response Tracking**: Complete history of agent interactions
+- **Replay Capability**: Episode replay for analysis and training
+
+### Episode
+Complete task attempt representation:
+- **Action History**: Full sequence of actions and responses
+- **State Tracking**: Checkpoint progression and completion status
+- **Metadata**: Episode timing, attempt numbers, and context
 
 ## Task Definition Format
 
-Tasks are defined in YAML files with the following structure:
+Tasks are defined in YAML files with the new checkpoint-based format:
 
 ```yaml
 domain: "malware_classification"
@@ -60,60 +68,57 @@ tasks:
         title: "Static Analysis"
         description: "Perform static analysis of the malware sample"
         objective: "Extract basic file properties, strings, and structural information"
-        required_tools: ["file_analyzer", "string_extractor", "pe_parser"]
-        success_criteria:
-          - "File type and architecture identified"
-          - "Suspicious strings extracted"
-          - "PE structure analyzed (if applicable)"
-        context_dependencies: []
-        depends_on: []
+        completion_conditions:  # New: exact commands that must be executed
+          - "file ${sample_path}"
+          - "strings ${sample_path}"
+          - "objdump -h ${sample_path}"
+        depends_on: []  # No dependencies - entry point
       
       - subtask_id: "dynamic_analysis"
         title: "Dynamic Analysis"
         description: "Execute sample in sandboxed environment"
         objective: "Observe runtime behavior and system interactions"
-        required_tools: ["sandbox_executor", "behavior_monitor", "network_monitor"]
-        success_criteria:
-          - "Sample executed successfully"
-          - "System calls captured"
-          - "Network activity logged"
-        context_dependencies: ["static_analysis.file_type"]
-        depends_on: ["static_analysis"]
+        completion_conditions:  # New: exact commands for completion
+          - "sandbox_execute ${sample_path}"
+          - "monitor_behavior ${sample_path}"
+          - "capture_network ${sample_path}"
+        depends_on: ["static_analysis"]  # Must complete static_analysis first
 ```
 
-## Session States
+## Episode States
 
-Task sessions progress through defined states:
+Episodes progress through RL-compatible states:
 
 ```python
-class SessionState(Enum):
-    PENDING = "pending"       # Session created, not started
+class EpisodeState(Enum):
+    CREATED = "created"       # Episode created, not started
     ACTIVE = "active"         # Currently executing
-    PAUSED = "paused"         # Temporarily paused
-    COMPLETED = "completed"   # All subtasks completed
-    FAILED = "failed"         # Execution failed
+    COMPLETED = "completed"   # Episode completed successfully
+    FAILED = "failed"         # Episode failed
+    TIMEOUT = "timeout"       # Episode timed out
+    RESET = "reset"           # Episode was reset
 ```
 
-## Task Execution Flow
+## RL Episode Execution Flow
 
-1. **Task Loading**: Load task definition from YAML
-2. **Session Creation**: Create new TaskSession for client
-3. **Initial Subtask**: Assign first subtask to client
-4. **Subtask Execution**: Client executes subtask using required tools
-5. **Context Update**: Update session context with results
-6. **Dependency Check**: Verify dependencies for next subtask
-7. **Progress**: Continue until all subtasks completed
+1. **Episode Start**: Create new Episode for task attempt
+2. **Action Execution**: Agent executes actions (tool calls)
+3. **Step Recording**: Record action-response pairs as Steps
+4. **Checkpoint Progression**: Automatically advance checkpoints based on command execution
+5. **Episode End**: Complete episode when all checkpoints satisfied or failure occurs
+6. **Episode Reset**: Optionally reset for new attempt
 
-## Context Management
+## Automatic Checkpoint Progression
 
-Context is maintained throughout task execution:
+Checkpoints advance automatically based on command execution:
 
 ```python
-# Initial context from task definition
-initial_context = {
-    "sample_path": "/data/samples/unknown_sample.exe",
-    "analysis_timeout": 300
-}
+# Example: static_analysis checkpoint completes when these commands are executed:
+completion_conditions = [
+    "file ${sample_path}",      # File type identification
+    "strings ${sample_path}",   # String extraction  
+    "objdump -h ${sample_path}" # PE header analysis
+]
 
 # Context updated after each subtask
 updated_context = {

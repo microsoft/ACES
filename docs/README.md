@@ -88,11 +88,12 @@ Unified endpoint for all client interactions:
 - **Action Logging**: Delegates to EvaluationManager for performance tracking
 
 #### TaskManager
-Handles complex multi-step security tasks:
-- **DomainTask**: High-level security scenarios (e.g., "Investigate APT campaign")
-- **SubTask**: Individual steps with specific objectives and success criteria
-- **TaskSession**: Maintains state and context between subtasks for a client session
-- **State Continuity**: Ensures agents can build upon previous subtask results
+Handles complex multi-step security tasks with RL-friendly episode management:
+- **Task**: High-level security scenarios (e.g., "Investigate APT campaign") - renamed from DomainTask
+- **SubTask**: Internal checkpoints with automatic progression based on command execution
+- **Episode**: Complete task attempts with action-response tracking for RL training
+- **EpisodeManager**: RL gym-compatible interfaces for episode lifecycle management
+- **State Continuity**: Ensures agents can build upon previous checkpoint results
 
 #### MCPServer (FastMCP Integration)
 Complete tool execution layer:

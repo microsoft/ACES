@@ -1,33 +1,39 @@
 """Task management system for SABER security benchmarking."""
 
-from .domain_task import DomainTask
-from .enums import SessionState, TaskStatus
+from .base import EpisodeState, TaskStatus
+from .core import SubTask, Task
+from .episodes import Action, Episode, EpisodeManager, EpisodeResult, Step, StepResult
 from .exceptions import (
     DependencyNotMetException,
+    EpisodeNotFoundException,
+    EpisodeStateException,
+    InvalidProgressionException,
     InvalidTaskDefinitionException,
-    SessionNotFoundException,
-    SessionStateException,
     SubTaskNotFoundException,
     TaskManagerException,
     TaskNotFoundException,
 )
-from .subtask import SubTask
 from .task_manager import TaskManager, TaskResult
-from .task_session import TaskSession
 
 __all__ = [
     "TaskManager",
     "TaskResult",
-    "DomainTask",
+    "Task",
     "SubTask",
-    "TaskSession",
-    "SessionState",
+    "EpisodeManager",
+    "Episode",
+    "Action",
+    "Step",
+    "StepResult",
+    "EpisodeResult",
     "TaskStatus",
+    "EpisodeState",
     "TaskManagerException",
     "TaskNotFoundException",
     "SubTaskNotFoundException",
     "DependencyNotMetException",
     "InvalidTaskDefinitionException",
-    "SessionNotFoundException",
-    "SessionStateException",
+    "EpisodeNotFoundException",
+    "EpisodeStateException",
+    "InvalidProgressionException",
 ]

@@ -37,7 +37,7 @@ package "Domain Server Core" {
     class ClientSession {
         +session_id: str
         +client_id: str
-        +task_session: TaskSession
+        +current_episode_id: str?
         +sse_connection: SSEConnection
         --
         +send_message(): void
@@ -49,21 +49,25 @@ package "Domain Server Core" {
 package "Task Management" {
 
     class TaskManager {
-        +domain_tasks: Dict[str, DomainTask]
-        +active_sessions: Dict[str, TaskSession]
+        +tasks: Dict[str, Task]
+        +episode_manager: EpisodeManager
         --
-        +get_task(): DomainTask
-        +create_task_session(): TaskSession
-        +advance_subtask(): SubTask?
+        +get_task(): Task
+        +step(): StepResult
+        +reset(): Episode
+        +record_episode_step(): void
+        +start_episode(): Episode
+        +end_episode(): EpisodeResult
     }
 
-    class DomainTask {
+    class Task {
         +task_id: str
         +domain: str
         +subtasks: List[SubTask]
         +initial_context: Dict[str, Any]
         --
-        +get_next_subtask(): SubTask?
+        +check_progression_criteria(): SubTask?
+        +get_current_checkpoint(): SubTask?
         +is_complete(): bool
     }
 
@@ -71,28 +75,62 @@ package "Task Management" {
         +subtask_id: str
         +task_id: str
         +description: str
-        +required_tools: List[str]
-        +success_criteria: List[str]
+        +completion_conditions: List[str]
+        +depends_on: List[str]
         --
-        +get_context(): Dict[str, Any]
+        +check_entry_conditions(): bool
+        +check_exit_conditions(): bool
     }
 
-    class TaskSession {
-        +session_id: str
+    class EpisodeManager {
+        +active_episodes: Dict[str, Episode]
+        +episode_history: Dict[str, List[Episode]]
+        --
+        +start_episode(): Episode
+        +step(): StepResult
+        +end_episode(): EpisodeResult
+        +reset_episode(): Episode
+        +get_current_episode(): Episode?
+        +create_step(): Step
+    }
+
+    class Episode {
+        +episode_id: str
         +task_id: str
-        +current_subtask_id: str
-        +state: SessionState
+        +session_id: str
+        +attempt_number: int
+        +state: EpisodeState
+        +steps: List[Step]
         +context: Dict[str, Any]
         --
-        +advance_to_next(): SubTask?
-        +get_current_subtask(): SubTask
+        +add_step(): void
+        +get_executed_commands(): List[str]
     }
 
-    enum SessionState {
-        PENDING
+    class Step {
+        +step_number: int
+        +action: Action
+        +response: Dict[str, Any]
+        +current_subtask: str?
+        +completed_subtasks: Set[str]
+        +reward: float?
+        +done: bool
+    }
+
+    class Action {
+        +tool_name: str
+        +parameters: Dict[str, Any]
+        +command: str?
+        +timestamp: datetime
+    }
+
+    enum EpisodeState {
+        CREATED
         ACTIVE
         COMPLETED
         FAILED
+        TIMEOUT
+        RESET
     }
 }
 
@@ -275,10 +313,13 @@ SessionManager *-- MCPServer
 SessionManager *-- PolicyManager
 SessionManager *-- EvaluationManager
 
-TaskManager *-- DomainTask
-TaskManager *-- TaskSession
-DomainTask *-- SubTask
-TaskSession ..> SessionState
+TaskManager *-- Task
+TaskManager *-- EpisodeManager
+Task *-- SubTask
+EpisodeManager *-- Episode
+Episode *-- Step
+Step *-- Action
+Episode ..> EpisodeState
 
 MCPServer *-- ExecutionManager
 ExecutionManager *-- ExecutionConfiguration

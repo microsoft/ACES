@@ -7,16 +7,11 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
-from .domain_task import DomainTask
-from .enums import SessionState
-from .exceptions import (
-    InvalidTaskDefinitionException,
-    SessionNotFoundException,
-    SubTaskNotFoundException,
-    TaskNotFoundException,
-)
-from .subtask import SubTask
-from .task_session import TaskSession
+from .core.subtask import SubTask
+from .core.task import Task
+from .episodes.episode import Action, Episode, EpisodeResult
+from .episodes.episode_manager import EpisodeManager
+from .exceptions import InvalidTaskDefinitionException, SubTaskNotFoundException, TaskNotFoundException
 
 logger = getLogger(__name__)
 
@@ -59,8 +54,8 @@ class TaskManager:
         """
         self.domain = domain
         self.tasks_file_path = Path(tasks_file_path)
-        self.tasks: Dict[str, DomainTask] = {}
-        self.active_sessions: Dict[str, TaskSession] = {}
+        self.tasks: Dict[str, Task] = {}
+        self.episode_manager = EpisodeManager()
 
         logger.info(f"Initializing TaskManager for domain '{domain}' with tasks file: {tasks_file_path}")
 
@@ -69,7 +64,7 @@ class TaskManager:
 
     def load_tasks_from_yaml(self) -> None:
         """
-        Load and parse YAML task definitions into DomainTask objects.
+        Load and parse YAML task definitions into Task objects.
 
         Raises:
             InvalidTaskDefinitionException: If YAML is invalid or malformed
@@ -111,11 +106,9 @@ class TaskManager:
 
             for i, task_data in enumerate(tasks_data):
                 logger.debug(f"Parsing task {i+1}/{len(tasks_data)}")
-                domain_task = self._parse_domain_task(task_data)
-                self.tasks[domain_task.task_id] = domain_task
-                logger.info(
-                    f"Successfully loaded task '{domain_task.task_id}' " f"with {len(domain_task.subtasks)} subtasks"
-                )
+                task = self._parse_task(task_data)
+                self.tasks[task.task_id] = task
+                logger.info(f"Successfully loaded task '{task.task_id}' " f"with {len(task.subtasks)} subtasks")
 
             # Validate all task dependencies
             logger.info("Validating task dependencies")
@@ -133,15 +126,15 @@ class TaskManager:
             logger.error(f"Unexpected error loading tasks: {e}")
             raise InvalidTaskDefinitionException(f"Error loading tasks: {e}", str(self.tasks_file_path))
 
-    def _parse_domain_task(self, task_data: Dict[str, Any]) -> DomainTask:
+    def _parse_task(self, task_data: Dict[str, Any]) -> Task:
         """
-        Parse a single domain task from YAML data.
+        Parse a single task from YAML data.
 
         Args:
             task_data: Dictionary containing task definition
 
         Returns:
-            DomainTask instance
+            Task instance
         """
         required_fields = ["task_id", "title", "description"]
         for field in required_fields:
@@ -154,7 +147,7 @@ class TaskManager:
         description = task_data["description"]
         initial_context = task_data.get("initial_context", {})
 
-        logger.debug(f"Parsing domain task '{task_id}': {title}")
+        logger.debug(f"Parsing task '{task_id}': {title}")
 
         # Parse subtasks
         subtasks_data = task_data.get("subtasks", [])
@@ -167,7 +160,7 @@ class TaskManager:
             subtasks.append(subtask)
             logger.debug(f"Successfully parsed subtask '{subtask.subtask_id}'")
 
-        domain_task = DomainTask(
+        task = Task(
             task_id=task_id,
             domain=self.domain,
             title=title,
@@ -176,8 +169,8 @@ class TaskManager:
             initial_context=initial_context,
         )
 
-        logger.debug(f"Created domain task '{task_id}' with {len(subtasks)} subtasks")
-        return domain_task
+        logger.debug(f"Created task '{task_id}' with {len(subtasks)} subtasks")
+        return task
 
     def _parse_subtask(self, subtask_data: Dict[str, Any], task_id: str) -> SubTask:
         """
@@ -201,9 +194,7 @@ class TaskManager:
             title=subtask_data["title"],
             description=subtask_data["description"],
             objective=subtask_data["objective"],
-            required_tools=subtask_data.get("required_tools", []),
-            success_criteria=subtask_data.get("success_criteria", []),
-            context_dependencies=subtask_data.get("context_dependencies", []),
+            completion_conditions=subtask_data.get("completion_conditions", []),  # New field
             depends_on=subtask_data.get("depends_on", []),
         )
 
@@ -225,15 +216,15 @@ class TaskManager:
                 f"Dependency validation errors: {'; '.join(all_errors)}", str(self.tasks_file_path)
             )
 
-    def get_task(self, task_id: str) -> DomainTask:
+    def get_task(self, task_id: str) -> Task:
         """
-        Get a domain task by ID.
+        Get a task by ID.
 
         Args:
             task_id: ID of the task to retrieve
 
         Returns:
-            DomainTask instance
+            Task instance
 
         Raises:
             TaskNotFoundException: If task is not found
@@ -265,118 +256,109 @@ class TaskManager:
 
         return subtask
 
-    def create_task_session(self, client_id: str, task_id: str) -> TaskSession:
+    def start_episode(self, session_id: str, task_id: str) -> "Episode":
         """
-        Create a new task session for a client.
+        Start a new episode for a session.
 
         Args:
-            client_id: ID of the client starting the task
+            session_id: ID of the session starting the episode
             task_id: ID of the task to execute
 
         Returns:
-            TaskSession instance
+            Episode instance
 
         Raises:
             TaskNotFoundException: If task is not found
         """
-        logger.info(f"Creating task session for client '{client_id}' with task '{task_id}'")
+        logger.info(f"Starting new episode for session '{session_id}' with task '{task_id}'")
 
         # Validate task exists
         task = self.get_task(task_id)
 
-        # Create session with initial context
-        session = TaskSession(task_id=task_id, client_id=client_id, initial_context=task.initial_context.copy())
+        # Start episode with initial context
+        episode = self.episode_manager.start_episode(
+            session_id=session_id, task_id=task_id, initial_context=task.initial_context.copy()
+        )
 
-        # Store session
-        self.active_sessions[session.session_id] = session
+        logger.info(f"Started episode '{episode.episode_id}' for session '{session_id}' with task '{task_id}'")
+        return episode
 
-        logger.info(f"Created task session '{session.session_id}' for client '{client_id}' with task '{task_id}'")
-        logger.debug(f"Active sessions count: {len(self.active_sessions)}")
-
-        return session
-
-    def get_session(self, session_id: str) -> TaskSession:
+    def get_current_episode(self, session_id: str) -> Optional[Episode]:
         """
-        Get an active task session.
+        Get the current active episode for a session.
 
         Args:
             session_id: ID of the session
 
         Returns:
-            TaskSession instance
-
-        Raises:
-            SessionNotFoundException: If session is not found
+            Episode instance if active, None otherwise
         """
-        if session_id not in self.active_sessions:
-            raise SessionNotFoundException(session_id)
-        return self.active_sessions[session_id]
+        return self.episode_manager.get_current_episode(session_id)
 
-    def advance_subtask(self, session_id: str) -> Optional[SubTask]:
+    def record_episode_step(self, session_id: str, action: "Action", response: Dict[str, Any]) -> None:
         """
-        Advance a session to the next available subtask.
+        Record an episode step after tool execution.
 
         Args:
-            session_id: ID of the session to advance
-
-        Returns:
-            Next subtask to execute, or None if task is complete
-
-        Raises:
-            SessionNotFoundException: If session is not found
+            session_id: ID of the session
+            action: Action that was taken
+            response: Tool execution response
         """
-        logger.debug(f"Advancing subtask for session '{session_id}'")
-        session = self.get_session(session_id)
-        next_subtask = session.advance_to_next(self)
+        episode = self.episode_manager.get_current_episode(session_id)
+        if episode:
+            step = self.episode_manager.create_step(episode, action, response)
+            self.episode_manager.update_episode_state(episode, step)
 
-        if next_subtask:
-            logger.info(f"Session '{session_id}' advanced to subtask '{next_subtask.subtask_id}'")
-        else:
-            logger.info(f"Session '{session_id}' has completed all subtasks")
+            # Check for automatic subtask progression
+            self._check_subtask_progression(episode)
 
-        return next_subtask
-
-    def complete_task(self, session_id: str) -> TaskResult:
+    def _check_subtask_progression(self, episode: Episode) -> None:
         """
-        Complete a task and return the results.
+        Check and handle automatic subtask progression.
 
         Args:
-            session_id: ID of the session to complete
+            episode: Episode to check for progression
+        """
+        task = self.get_task(episode.task_id)
+        progressed_subtask = task.check_progression_criteria(episode)
+
+        if progressed_subtask:
+            logger.info(f"Episode '{episode.episode_id}' progressed subtask '{progressed_subtask.subtask_id}'")
+            # Update episode subtask state based on progression
+            # This would be implemented based on specific progression logic
+
+    def end_episode(self, session_id: str, reason: str) -> "EpisodeResult":
+        """
+        End the current episode for a session.
+
+        Args:
+            session_id: ID of the session
+            reason: Reason for ending the episode
 
         Returns:
-            TaskResult with completion information
+            EpisodeResult with completion information
 
         Raises:
-            SessionNotFoundException: If session is not found
+            SessionNotFoundException: If session has no active episode
         """
-        logger.info(f"Completing task for session '{session_id}'")
-        session = self.get_session(session_id)
+        logger.info(f"Ending episode for session '{session_id}': {reason}")
+        return self.episode_manager.end_episode(session_id, reason)
 
-        # Mark session as completed if not already
-        if session.state != SessionState.COMPLETED:
-            session.state = SessionState.COMPLETED
+    def reset_episode(self, session_id: str) -> Episode:
+        """
+        Reset the current episode (start a new attempt).
 
-        # Create result
-        result = TaskResult(
-            session_id=session.session_id,
-            task_id=session.task_id,
-            success=session.state == SessionState.COMPLETED,
-            completion_time=datetime.utcnow(),
-            context=session.context.copy(),
-            completed_subtasks=list(session.completed_subtasks),
-        )
+        Args:
+            session_id: ID of the session
 
-        # Remove from active sessions
-        if session_id in self.active_sessions:
-            del self.active_sessions[session_id]
-            logger.info(f"Removed completed session '{session_id}' from active sessions")
-            logger.debug(f"Active sessions count: {len(self.active_sessions)}")
+        Returns:
+            New Episode instance
 
-        logger.info(
-            f"Task completion result for session '{session_id}': success={result.success}, \
-                completed_subtasks={len(result.completed_subtasks)}"
-        )
-        return result
+        Raises:
+            SessionNotFoundException: If session has no active episode
+        """
+        logger.info(f"Resetting episode for session '{session_id}'")
+        return self.episode_manager.reset_episode(session_id)
 
     def list_tasks(self) -> List[Dict[str, Any]]:
         """
@@ -395,15 +377,17 @@ class TaskManager:
             for task in self.tasks.values()
         ]
 
-    def get_session_info(self, session_id: str) -> Dict[str, Any]:
+    def get_episode_info(self, session_id: str) -> Dict[str, Any]:
         """
-        Get information about a session.
+        Get information about the current episode for a session.
 
         Args:
             session_id: ID of the session
 
         Returns:
-            Dictionary with session information
+            Dictionary with episode information
         """
-        session = self.get_session(session_id)
-        return session.get_progress_info(self)
+        episode = self.episode_manager.get_current_episode(session_id)
+        if episode:
+            return self.episode_manager._get_episode_progress_info(episode)
+        return {"error": "No active episode for session"}

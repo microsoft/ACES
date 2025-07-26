@@ -1,17 +1,19 @@
-"""DomainTask implementation for task management system."""
+"""Task implementation for task management system."""
 
 from typing import Any, Dict, List, Optional, Set
 
-from .exceptions import SubTaskNotFoundException
+from ..episodes.episode import Episode
+from ..exceptions import SubTaskNotFoundException
 from .subtask import SubTask
 
 
-class DomainTask:
+class Task:
     """
     Represents a high-level security scenario composed of multiple subtasks.
 
-    A domain task maintains a collection of subtasks and provides methods
-    to navigate and manage the subtask execution flow.
+    A task maintains a collection of subtasks and provides methods
+    to manage checkpoint progression during episode execution.
+    Note: Renamed from DomainTask for clarity.
     """
 
     def __init__(
@@ -24,14 +26,14 @@ class DomainTask:
         initial_context: Optional[Dict[str, Any]] = None,
     ):
         """
-        Initialize a domain task.
+        Initialize a task.
 
         Args:
             task_id: Unique identifier for the task
             domain: Security domain this task belongs to
             title: Human-readable title
             description: Detailed description of the task
-            subtasks: List of subtasks that comprise this task
+            subtasks: List of subtasks that comprise this task (used as checkpoints)
             initial_context: Initial context provided when the task starts
         """
         self.task_id = task_id
@@ -46,7 +48,7 @@ class DomainTask:
 
     def add_subtask(self, subtask: SubTask) -> None:
         """
-        Add a subtask to this domain task.
+        Add a subtask to this task.
 
         Args:
             subtask: The subtask to add
@@ -67,55 +69,51 @@ class DomainTask:
         """
         return self._subtask_map.get(subtask_id)
 
-    def get_next_subtask(self, current_id: str) -> Optional[SubTask]:
+    def check_progression_criteria(self, episode: "Episode") -> Optional[SubTask]:
         """
-        Get the next subtask that can be executed after the current one.
+        Check if any subtask can be progressed based on episode state.
 
-        This considers dependency relationships and finds the next subtask
-        that has all its dependencies satisfied.
+        This replaces agent-facing methods like get_next_subtask() with
+        automatic checkpoint progression logic.
 
         Args:
-            current_id: ID of the currently completed subtask
+            episode: Current episode state
 
         Returns:
-            The next available subtask, or None if no subtasks are available
+            Next subtask that should be activated, or None if no progression
         """
-        # For simplicity in MVP, we'll use the order in the subtasks list
-        # In a more advanced implementation, this could use topological sorting
-        # based on dependencies
+        # Check if any in-progress subtasks can be completed
+        for subtask_id in episode.in_progress_subtasks:
+            subtask = self.get_subtask_by_id(subtask_id)
+            if subtask and subtask.check_exit_conditions(episode):
+                # This subtask should be marked as completed
+                return subtask
 
-        try:
-            current_index = next(
-                i for i, st in enumerate(self.subtasks) if st.subtask_id == current_id
-            )
-            if current_index + 1 < len(self.subtasks):
-                return self.subtasks[current_index + 1]
-        except StopIteration:
-            pass
+        # Check if any not-visited subtasks can be started
+        for subtask in self.subtasks:
+            if subtask.subtask_id in episode.not_visited_subtasks and subtask.check_entry_conditions(episode):
+                # This subtask can now be started
+                return subtask
 
         return None
 
-    def get_available_subtasks(self, completed_subtasks: Set[str]) -> List[SubTask]:
+    def get_current_checkpoint(self, episode: "Episode") -> Optional[SubTask]:
         """
-        Get all subtasks that can currently be executed.
+        Get the current active checkpoint (subtask) for an episode.
 
         Args:
-            completed_subtasks: Set of subtask IDs that have been completed
+            episode: Current episode state
 
         Returns:
-            List of subtasks that have all dependencies satisfied
+            Current active subtask, or None if no active checkpoint
         """
-        available = []
-        for subtask in self.subtasks:
-            if subtask.subtask_id not in completed_subtasks and subtask.can_execute(
-                completed_subtasks
-            ):
-                available.append(subtask)
-        return available
+        if episode.current_subtask:
+            return self.get_subtask_by_id(episode.current_subtask)
+        return None
 
     def is_complete(self, completed_subtasks: Set[str]) -> bool:
         """
-        Check if all subtasks in this domain task have been completed.
+        Check if all subtasks in this task have been completed.
 
         Args:
             completed_subtasks: Set of subtask IDs that have been completed
@@ -177,10 +175,17 @@ class DomainTask:
         for subtask in self.subtasks:
             for dep_id in subtask.depends_on:
                 if dep_id not in subtask_ids:
-                    errors.append(
-                        f"SubTask '{subtask.subtask_id}' depends on unknown subtask '{dep_id}'"
-                    )
+                    errors.append(f"SubTask '{subtask.subtask_id}' depends on unknown subtask '{dep_id}'")
 
         # TODO: Add circular dependency detection
 
         return errors
+
+    def get_all_subtask_ids(self) -> Set[str]:
+        """
+        Get all subtask IDs for this task.
+
+        Returns:
+            Set of all subtask IDs
+        """
+        return {subtask.subtask_id for subtask in self.subtasks}
