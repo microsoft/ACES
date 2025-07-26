@@ -358,3 +358,42 @@ class EpisodeManager:
             episodes.append(self.active_episodes[session_id])
 
         return episodes
+
+    def build_observation(self, episode: Episode, task_subtask_count: int) -> Dict[str, Any]:
+        """
+        Build RL observation for current episode state.
+
+        Args:
+            episode: Episode to build observation for
+            task_subtask_count: Total number of subtasks in the task
+
+        Returns:
+            Observation dictionary
+        """
+        return {
+            "task_id": episode.task_id,
+            "episode_id": episode.episode_id,
+            "current_subtask": episode.current_subtask,
+            "completed_subtasks": list(episode.completed_subtasks),
+            "in_progress_subtasks": list(episode.in_progress_subtasks),
+            "not_visited_subtasks": list(episode.not_visited_subtasks),
+            "total_subtasks": task_subtask_count,
+            "completion_percentage": (
+                len(episode.completed_subtasks) / task_subtask_count if task_subtask_count > 0 else 1.0
+            ),
+            "total_steps": len(episode.steps),
+            "context": episode.context.copy(),
+        }
+
+    def is_episode_complete(self, episode: Episode, all_subtask_ids: set) -> bool:
+        """
+        Check if episode is complete (all subtasks completed).
+
+        Args:
+            episode: Episode to check
+            all_subtask_ids: Set of all subtask IDs in the task
+
+        Returns:
+            True if episode is complete
+        """
+        return episode.completed_subtasks >= all_subtask_ids

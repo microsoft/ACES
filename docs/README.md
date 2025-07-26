@@ -88,12 +88,30 @@ Unified endpoint for all client interactions:
 - **Action Logging**: Delegates to EvaluationManager for performance tracking
 
 #### TaskManager
-Handles complex multi-step security tasks with RL-friendly episode management:
-- **Task**: High-level security scenarios (e.g., "Investigate APT campaign") - renamed from DomainTask
+Simplified orchestrator for task management with specialized components:
+- **Core Responsibilities**: Task storage/retrieval, episode lifecycle coordination, RL gym-style interfaces
+- **TaskConfigLoader**: Handles YAML parsing and task definition loading (extracted for maintainability)
+- **SubTaskProgressionEngine**: Manages DAG-based progression logic and subtask state transitions (extracted)
+- **Enhanced EpisodeManager**: Handles episode lifecycle, state management, and observation building
+- **Task**: High-level security scenarios (renamed from DomainTask for clarity)
 - **SubTask**: Internal checkpoints with automatic progression based on command execution
 - **Episode**: Complete task attempts with action-response tracking for RL training
-- **EpisodeManager**: RL gym-compatible interfaces for episode lifecycle management
-- **State Continuity**: Ensures agents can build upon previous checkpoint results
+- **RL Compatibility**: Gym-style step() and reset() methods for reinforcement learning
+- **Reduced Complexity**: Refactored from 655 to 308 lines for better maintainability
+
+##### TaskConfigLoader
+Specialized YAML configuration management:
+
+##### SubTaskProgressionEngine
+DAG-based progression logic management:
+
+##### EpisodeManager
+Extended episode management with state operations:
+- **Episode Lifecycle**: Start, step, end, reset operations (original functionality)
+- **State Management**: Build observations and track episode completion (added)
+- **Command Extraction**: Extract commands from actions for completion matching (added)
+- **RL Integration**: Provides gym-compatible interfaces and reward calculation hooks
+- **Single Source of Truth**: All episode-related operations centralized here
 
 #### MCPServer (FastMCP Integration)
 Complete tool execution layer:
@@ -256,6 +274,10 @@ Persistent storage for evaluation data:
 - ✅ Basic task and subtask management framework
 
 ### Phase 2 (Current) - 🔄 IN PROGRESS
+- ✅ **TaskManager Refactoring**: Extracted TaskConfigLoader, SubTaskProgressionEngine, enhanced EpisodeManager
+- ✅ **RL Gym Integration**: Implemented step() and reset() methods for reinforcement learning compatibility
+- ✅ **DAG Progression Logic**: Automated subtask progression based on command execution and dependencies
+- ✅ **Architecture Cleanup**: Reduced TaskManager from 655 to 308 lines with single responsibility principle
 - 🔄 Complete MCP server integration with FastMCP
 - 🔄 Implement actual domain tools (beyond placeholders)
 - 🔄 SessionManager unified API implementation

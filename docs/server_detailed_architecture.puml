@@ -49,37 +49,75 @@ package "Domain Server Core" {
 package "Task Management" {
 
     class TaskManager {
+        +domain: str
         +tasks: Dict[str, Task]
+        +config_loader: TaskConfigLoader
+        +progression_engine: SubTaskProgressionEngine
         +episode_manager: EpisodeManager
         --
         +get_task(): Task
+        +get_subtask(): SubTask
+        +start_episode(): Episode
+        +get_current_episode(): Episode?
         +step(): StepResult
         +reset(): Episode
         +record_episode_step(): void
-        +start_episode(): Episode
         +end_episode(): EpisodeResult
+        +reset_episode(): Episode
+        +list_tasks(): List[Dict]
+        +get_episode_info(): Dict
+    }
+
+    class TaskConfigLoader {
+        +domain: str
+        --
+        +load_tasks_from_file(): Dict[str, Task]
+        +_parse_task(): Task
+        +_parse_subtask(): SubTask
+        +_validate_all_dependencies(): void
+    }
+
+    class SubTaskProgressionEngine {
+        --
+        +check_subtask_progression(): void
+        +initialize_episode_subtasks(): void
+        +_update_step_subtask_state(): void
+        +_check_completed_subtasks(): set
+        +_check_available_subtasks(): set
     }
 
     class Task {
         +task_id: str
         +domain: str
+        +title: str
+        +description: str
         +subtasks: List[SubTask]
         +initial_context: Dict[str, Any]
         --
+        +add_subtask(): void
+        +get_subtask_by_id(): SubTask?
         +check_progression_criteria(): SubTask?
         +get_current_checkpoint(): SubTask?
         +is_complete(): bool
+        +get_first_subtask(): SubTask
+        +get_completion_percentage(): float
+        +validate_dependencies(): List[str]
+        +get_all_subtask_ids(): Set[str]
     }
 
     class SubTask {
         +subtask_id: str
         +task_id: str
+        +title: str
         +description: str
+        +objective: str
         +completion_conditions: List[str]
         +depends_on: List[str]
         --
         +check_entry_conditions(): bool
         +check_exit_conditions(): bool
+        +is_dependent_on(): bool
+        +_command_was_executed(): bool
     }
 
     class EpisodeManager {
@@ -90,8 +128,17 @@ package "Task Management" {
         +step(): StepResult
         +end_episode(): EpisodeResult
         +reset_episode(): Episode
+        +get_episode_state(): EpisodeState?
+        +replay_episode(): Episode?
         +get_current_episode(): Episode?
         +create_step(): Step
+        +update_episode_state(): void
+        +build_observation(): Dict[str, Any]
+        +is_episode_complete(): bool
+        +_extract_command_from_action(): str?
+        +_get_episode_progress_info(): Dict[str, Any]
+        +cleanup_session(): void
+        +get_session_episodes(): List[Episode]
     }
 
     class Episode {
@@ -313,8 +360,14 @@ SessionManager *-- MCPServer
 SessionManager *-- PolicyManager
 SessionManager *-- EvaluationManager
 
-TaskManager *-- Task
+TaskManager *-- TaskConfigLoader
+TaskManager *-- SubTaskProgressionEngine
 TaskManager *-- EpisodeManager
+TaskManager *-- Task
+TaskConfigLoader ..> Task : creates
+TaskConfigLoader ..> SubTask : creates
+SubTaskProgressionEngine ..> Task : uses
+SubTaskProgressionEngine ..> Episode : modifies
 Task *-- SubTask
 EpisodeManager *-- Episode
 Episode *-- Step
@@ -335,6 +388,40 @@ PolicyManager *-- PolicyDocument
 EvaluationManager *-- TrajectoryStore
 EvaluationManager *-- ActionTracker
 ActionTracker *-- ActionRecord
+
+note top of TaskManager
+**Refactored Task Orchestrator**
+Simplified to focus on coordination between specialized components.
+Delegates YAML parsing to TaskConfigLoader.
+Delegates DAG progression to SubTaskProgressionEngine.
+Delegates episode state management to enhanced EpisodeManager.
+Provides RL gym-style interfaces (step, reset).
+Reduced from 655 to 308 lines for better maintainability.
+end note
+
+note top of TaskConfigLoader
+**YAML Configuration Loader**
+Handles all YAML parsing and task definition loading.
+Creates Task and SubTask objects from configuration.
+Validates task dependencies and structure.
+Single responsibility: configuration management only.
+end note
+
+note top of SubTaskProgressionEngine
+**DAG Progression Logic**
+Manages subtask state transitions and dependency validation.
+Handles automatic progression based on command execution.
+Updates episode subtask states (completed/in_progress/not_visited).
+Encapsulates all DAG-based progression logic.
+end note
+
+note top of EpisodeManager
+**Enhanced Episode Manager**
+Original episode lifecycle management plus episode state operations.
+Now includes observation building and completion detection.
+Command extraction for subtask completion matching.
+Single source of truth for all episode-related operations.
+end note
 
 note top of MCPServer
 **Tool Execution Hub**
