@@ -35,7 +35,6 @@ class Step(BaseModel):
     in_progress_subtasks: Set[str] = Field(default_factory=set, description="Set of subtasks currently in progress")
     not_visited_subtasks: Set[str] = Field(default_factory=set, description="Set of subtasks not yet started")
     context_snapshot: Dict[str, Any] = Field(default_factory=dict, description="Context state at this step")
-    reward: Optional[float] = Field(None, description="RL reward for this step")
     done: bool = Field(False, description="Whether the episode ended after this step")
 
     class Config:
@@ -50,7 +49,6 @@ class Episode(BaseModel):
     episode_id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="Unique episode identifier")
     task_id: str = Field(..., description="ID of the task being attempted")
     session_id: str = Field(..., description="ID of the session this episode belongs to")
-    attempt_number: int = Field(1, description="Attempt number for this task (for retries)")
     start_time: datetime = Field(default_factory=datetime.utcnow, description="When the episode started")
     end_time: Optional[datetime] = Field(None, description="When the episode ended")
     state: EpisodeState = Field(default=EpisodeState.CREATED, description="Current episode state")
@@ -121,7 +119,6 @@ class StepResult(BaseModel):
     """Result returned from an RL-style step operation."""
 
     observation: Dict[str, Any] = Field(..., description="Current state observation")
-    reward: float = Field(0.0, description="Reward for the action taken")
     done: bool = Field(False, description="Whether the episode is complete")
     info: Dict[str, Any] = Field(default_factory=dict, description="Additional information")
 

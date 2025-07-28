@@ -3,7 +3,10 @@
 from datetime import datetime
 from logging import getLogger
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from ..tools.base import ToolResult
 
 from .core.subtask import SubTask
 from .core.subtask_progression_engine import SubTaskProgressionEngine
@@ -11,7 +14,7 @@ from .core.task import Task
 from .core.task_config_loader import TaskConfigLoader
 from .episodes.episode import Action, Episode, EpisodeResult, StepResult
 from .episodes.episode_manager import EpisodeManager
-from .exceptions import SubTaskNotFoundException, TaskNotFoundException
+from .exceptions import EpisodeNotFoundException, SubTaskNotFoundException, TaskNotFoundException
 
 logger = getLogger(__name__)
 
@@ -155,42 +158,43 @@ class TaskManager:
         """
         return self.episode_manager.get_current_episode(session_id)
 
-    def step(self, session_id: str, action: Action) -> StepResult:
+    def step(self, session_id: str, action: Action, tool_result: Optional[ToolResult] = None) -> StepResult:
         """
-        RL gym-style step function for executing actions and returning observations.
+        RL gym-style step function that records episode steps and returns observations.
+
+        This unified method handles both:
+        1. Recording tool execution results (when tool_result provided)
+        2. Querying current RL state (when tool_result is None)
 
         Args:
             session_id: ID of the session
-            action: Action to execute
+            action: Action that was taken
+            tool_result: ToolResult from tool execution (optional)
 
         Returns:
-            StepResult with observation, reward, done, and info
+            StepResult with observation, done, and info
 
         Raises:
             EpisodeNotFoundException: If session has no active episode
         """
         episode = self.episode_manager.get_current_episode(session_id)
         if not episode:
-            # Create a custom exception for session without episode
-            raise RuntimeError(f"No active episode found for session '{session_id}'")
-
-        logger.debug(f"Executing RL step for session '{session_id}', action: {action.tool_name}")
-
-        # This method expects the action execution to be handled externally
-        # (by SessionManager) and then the result to be recorded via record_episode_step
-        # For now, we return the current episode state as observation
+            raise EpisodeNotFoundException(f"No active episode found for session '{session_id}'")
 
         task = self.get_task(episode.task_id)
-        observation = self.episode_manager.build_observation(episode, len(task.subtasks))
-        reward = 0.0  # Will be calculated after action execution
-        done = self.episode_manager.is_episode_complete(episode, task.get_all_subtask_ids())
-        info = {
-            "episode_id": episode.episode_id,
-            "current_subtask": episode.current_subtask,
-            "total_steps": len(episode.steps),
-        }
+        logger.debug(f"Executing step for session '{session_id}', action: {action.tool_name}")
 
-        return StepResult(observation=observation, reward=reward, done=done, info=info)
+        return self.episode_manager.step(
+            session_id=session_id,
+            action=action,
+            tool_result=tool_result,
+            task_subtask_count=len(task.subtasks),
+            task_description=task.description,
+            current_objective=self._get_current_objective(task, episode),
+            all_subtask_ids=task.get_all_subtask_ids(),
+            task=task,
+            progression_engine=self.progression_engine,
+        )
 
     def reset(self, session_id: str, task_id: str) -> Episode:
         """
@@ -221,27 +225,6 @@ class TaskManager:
         self.progression_engine.initialize_episode_subtasks(task, episode)
 
         return episode
-
-    def record_episode_step(self, session_id: str, action: Action, response: Dict[str, Any]) -> None:
-        """
-        Record an episode step after tool execution.
-
-        Args:
-            session_id: ID of the session
-            action: Action that was taken
-            response: Tool execution response
-        """
-        episode = self.episode_manager.get_current_episode(session_id)
-        if episode:
-            step = self.episode_manager.create_step(episode, action, response)
-            self.episode_manager.update_episode_state(episode, step)
-
-            # Check for automatic subtask progression using progression engine
-            task = self.get_task(episode.task_id)
-            self.progression_engine.check_subtask_progression(task, episode, step)
-
-            # Set done flag based on episode completion
-            step.done = self.episode_manager.is_episode_complete(episode, task.get_all_subtask_ids())
 
     def end_episode(self, session_id: str, reason: str) -> EpisodeResult:
         """
@@ -301,3 +284,29 @@ class TaskManager:
         if episode:
             return self.episode_manager._get_episode_progress_info(episode)
         return {"error": "No active episode for session"}
+
+    def _get_current_objective(self, task: Task, episode: Episode) -> Optional[str]:
+        """
+        Get the current objective for the episode based on active subtasks.
+
+        Args:
+            task: Task definition
+            episode: Current episode
+
+        Returns:
+            Current objective string or None
+        """
+        # Get the first in-progress subtask's objective
+        for subtask_id in episode.in_progress_subtasks:
+            subtask = task.get_subtask_by_id(subtask_id)
+            if subtask:
+                return subtask.objective
+
+        # If no in-progress subtasks, get the first available subtask
+        for subtask_id in episode.not_visited_subtasks:
+            subtask = task.get_subtask_by_id(subtask_id)
+            if subtask and subtask.check_entry_conditions(episode):
+                return subtask.objective
+
+        # Default to task description if no specific objective
+        return task.description

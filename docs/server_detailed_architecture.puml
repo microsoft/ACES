@@ -59,13 +59,12 @@ package "Task Management" {
         +get_subtask(): SubTask
         +start_episode(): Episode
         +get_current_episode(): Episode?
-        +step(): StepResult
+        +step(action, tool_result?): StepResult
         +reset(): Episode
-        +record_episode_step(): void
         +end_episode(): EpisodeResult
-        +reset_episode(): Episode
         +list_tasks(): List[Dict]
         +get_episode_info(): Dict
+        +_get_current_objective(): str?
     }
 
     class TaskConfigLoader {
@@ -122,30 +121,26 @@ package "Task Management" {
 
     class EpisodeManager {
         +active_episodes: Dict[str, Episode]
-        +episode_history: Dict[str, List[Episode]]
         --
         +start_episode(): Episode
         +step(): StepResult
         +end_episode(): EpisodeResult
         +reset_episode(): Episode
         +get_episode_state(): EpisodeState?
-        +replay_episode(): Episode?
         +get_current_episode(): Episode?
-        +create_step(): Step
+        +create_step(tool_result?): Step
         +update_episode_state(): void
-        +build_observation(): Dict[str, Any]
+        +build_observation(): Observation
         +is_episode_complete(): bool
         +_extract_command_from_action(): str?
         +_get_episode_progress_info(): Dict[str, Any]
         +cleanup_session(): void
-        +get_session_episodes(): List[Episode]
     }
 
     class Episode {
         +episode_id: str
         +task_id: str
         +session_id: str
-        +attempt_number: int
         +state: EpisodeState
         +steps: List[Step]
         +context: Dict[str, Any]
@@ -169,6 +164,19 @@ package "Task Management" {
         +parameters: Dict[str, Any]
         +command: str?
         +timestamp: datetime
+    }
+
+    class Observation {
+        +episode_id: str
+        +task_id: str
+        +current_step: int
+        +current_subtask_id: str?
+        +current_objective: str?
+        +subtask_states: Dict[str, SubTaskState]
+        +executed_commands: List[str]
+        +context: Dict[str, Any]
+        +is_complete: bool
+        +current_state: EpisodeState
     }
 
     enum EpisodeState {
@@ -373,6 +381,7 @@ EpisodeManager *-- Episode
 Episode *-- Step
 Step *-- Action
 Episode ..> EpisodeState
+EpisodeManager ..> Observation : creates
 
 MCPServer *-- ExecutionManager
 ExecutionManager *-- ExecutionConfiguration

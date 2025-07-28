@@ -1,0 +1,116 @@
+@startuml Episode Management Workflow
+!theme plain
+title SABER Episode Management Workflow
+SM -> TM: step(session_id, action, tool_result)
+TM -> EM: get_current_episode(session_id)
+EM --> TM: episode
+TM -> TM: convert ToolResult to dict
+TM -> EM: create_step(episode, action, response_dict)
+EM -> EM: extract command from action
+EM -> EM: create Step object
+EM -> EM: add step to episode
+EM --> TM: step
+TM -> EM: update_episode_state(episode, step)
+TM -> TM: get_task(episode.task_id)
+TM -> SPE: check_subtask_progression(task, episode, step)
+
+actor Client
+participant "SessionManager" as SM
+participant "TaskManager" as TM
+participant "EpisodeManager" as EM
+participant "SubTaskProgressionEngine" as SPE
+participant "MCPServer" as MCP
+
+== Episode Initialization ==
+
+Client -> SM: start_task_episode(session_id, task_id)
+SM -> TM: reset(session_id, task_id)
+TM -> EM: get_current_episode(session_id)
+EM --> TM: None (no active episode)
+TM -> EM: end_episode(session_id, "reset") [if exists]
+TM -> TM: get_task(task_id)
+TM -> TM: start_episode(session_id, task_id)
+TM -> EM: start_episode(session_id, task_id, initial_context)
+EM -> EM: create Episode object
+EM -> EM: store in active_episodes[session_id]
+EM --> TM: episode
+TM -> SPE: initialize_episode_subtasks(task, episode)
+SPE -> SPE: set entry subtasks to in_progress
+SPE -> SPE: set other subtasks to not_visited
+TM --> SM: episode
+SM --> Client: episode_info
+
+== Tool Execution & RL Step ==
+
+Client -> SM: execute_tool(session_id, tool_name, parameters)
+SM -> SM: create Action(tool_name, parameters)
+SM -> MCP: execute_tool(tool_name, parameters)
+MCP --> SM: ToolResult
+
+note right of SM
+  Integration Point:
+  Action + ToolResult
+end note
+
+SM -> TM: record_episode_step(session_id, action, tool_result)
+TM -> EM: get_current_episode(session_id)
+EM --> TM: episode
+TM -> TM: convert ToolResult to dict
+TM -> EM: create_step(episode, action, response_dict)
+EM -> EM: extract command from action
+EM -> EM: create Step object
+EM -> EM: add step to episode
+EM --> TM: step
+TM -> EM: update_episode_state(episode, step)
+TM -> TM: get_task(episode.task_id)
+TM -> SPE: check_subtask_progression(task, episode, step)
+
+== Subtask Progression Logic ==
+
+SPE -> SPE: _update_step_subtask_state(episode, step)
+SPE -> SPE: _check_completed_subtasks(task, episode)
+loop for each in_progress subtask
+    SPE -> SPE: subtask.check_exit_conditions(episode)
+    note right of SPE
+      Checks if required commands
+      were executed in episode
+    end note
+end
+SPE -> SPE: _check_available_subtasks(task, episode)
+loop for each not_visited subtask
+    SPE -> SPE: subtask.check_entry_conditions(episode)
+    note right of SPE
+      Checks if dependencies
+      are completed
+    end note
+end
+SPE -> SPE: update step subtask states
+SPE -> SPE: log progression changes
+
+TM -> EM: is_episode_complete(episode, all_subtask_ids)
+EM --> TM: done (boolean)
+TM -> TM: set step.done = done
+TM -> TM: build observation, reward, info
+TM --> SM: StepResult(observation, reward, done, info)
+SM --> Client: ToolResult
+
+== Episode Completion ==
+
+note over SM, EM
+  When episode is complete (all subtasks done)
+end note
+
+Client -> SM: end_session(session_id)
+SM -> TM: end_episode(session_id, "session_ended")
+TM -> EM: get_current_episode(session_id)
+EM --> TM: episode
+TM -> EM: end_episode(session_id, "session_ended")
+EM -> EM: episode.end_time = now()
+EM -> EM: episode.state = COMPLETED/FAILED
+EM -> EM: calculate final_reward
+EM -> EM: create EpisodeResult
+EM -> EM: delete from active_episodes
+EM --> TM: episode_result
+TM --> SM: episode_result
+
+@enduml

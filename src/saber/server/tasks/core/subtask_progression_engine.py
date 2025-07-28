@@ -91,7 +91,6 @@ class SubTaskProgressionEngine:
                 in_progress_subtasks=entry_subtasks.copy(),
                 not_visited_subtasks=all_subtask_ids - entry_subtasks,
                 context_snapshot=episode.context.copy(),
-                reward=0.0,
                 done=False,
             )
 

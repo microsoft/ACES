@@ -67,6 +67,9 @@ class SubTask(BaseModel):
         """
         Check if a required command was executed, supporting template variables.
 
+        Enhanced implementation for Task 2.2 with better template matching
+        and command pattern recognition.
+
         Args:
             required_command: Command that should have been executed
             executed_commands: List of commands that were actually executed
@@ -74,10 +77,33 @@ class SubTask(BaseModel):
         Returns:
             True if the required command was executed
         """
-        # Simple implementation - could be enhanced for template matching
-        # For now, check if the base command (before first space) was used
-        base_command = required_command.split()[0].replace("${", "").replace("}", "")
-        return any(base_command in cmd for cmd in executed_commands)
+        # Handle template variables (e.g., "${sample_path}")
+        if "${" in required_command:
+            # Extract base command before variables
+            base_command = required_command.split()[0].replace("${", "").replace("}", "")
+
+            # Check if any executed command starts with the base command
+            for executed_cmd in executed_commands:
+                if executed_cmd and base_command in executed_cmd:
+                    return True
+            return False
+
+        # Direct command matching
+        if required_command in executed_commands:
+            return True
+
+        # Partial matching - check if the base command was used
+        base_required = required_command.split()[0]
+        for executed_cmd in executed_commands:
+            if executed_cmd:
+                # Check if executed command starts with required base command
+                if executed_cmd.startswith(base_required):
+                    return True
+                # Check if base command appears anywhere in executed command
+                if base_required in executed_cmd.split():
+                    return True
+
+        return False
 
     def is_dependent_on(self, subtask_id: str) -> bool:
         """

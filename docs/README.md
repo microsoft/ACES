@@ -106,12 +106,12 @@ Specialized YAML configuration management:
 DAG-based progression logic management:
 
 ##### EpisodeManager
-Extended episode management with state operations:
-- **Episode Lifecycle**: Start, step, end, reset operations (original functionality)
-- **State Management**: Build observations and track episode completion (added)
-- **Command Extraction**: Extract commands from actions for completion matching (added)
-- **RL Integration**: Provides gym-compatible interfaces and reward calculation hooks
-- **Single Source of Truth**: All episode-related operations centralized here
+Simplified episode management for RL workflows:
+- **Episode Lifecycle**: Start, step, end operations
+- **State Management**: Build observations and track episode completion
+- **Command Extraction**: Extract commands from DockerCLIExecutor for completion matching
+- **RL Integration**: Provides gym-compatible interfaces and reward calculation
+- **Active Episodes Only**: No history tracking for simplified operation
 
 #### MCPServer (FastMCP Integration)
 Complete tool execution layer:

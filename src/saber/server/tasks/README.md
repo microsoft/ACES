@@ -48,13 +48,12 @@ src/saber/server/tasks/
 - **State Management**: Updates completed/in_progress/not_visited subtask sets
 - **Dependency Resolution**: Ensures DAG constraints are respected during progression
 
-### Enhanced EpisodeManager
-**Extended episode management** (~400 lines):
-- **Episode Lifecycle**: Start, step, end, reset operations (original functionality)
-- **State Management**: Build observations and track episode completion (added)
-- **Command Extraction**: Extract commands from actions for completion matching (added)
+### EpisodeManager
+Simplified episode management for RL workflows:
+- **Episode Lifecycle**: Start, step, end operations
+- **Command Extraction**: Extract commands from DockerCLIExecutor for completion matching
 - **RL Integration**: Provides gym-compatible interfaces and state building
-- **Session-based Management**: Handles multiple concurrent episodes per session
+- **Active Episodes Only**: No history tracking for simplified operation
 
 ### Task (formerly DomainTask)
 High-level security task representation:
@@ -68,17 +67,11 @@ Internal checkpoints with automatic progression:
 - **Entry/Exit Criteria**: Dependency-based checkpoint validation
 - **Command Matching**: Template-based command execution tracking
 
-### EpisodeManager
-RL-friendly episode management:
-- **Episode Lifecycle**: Start, step, end, reset operations
-- **Action-Response Tracking**: Complete history of agent interactions
-- **Replay Capability**: Episode replay for analysis and training
-
 ### Episode
 Complete task attempt representation:
 - **Action History**: Full sequence of actions and responses
 - **State Tracking**: Checkpoint progression and completion status
-- **Metadata**: Episode timing, attempt numbers, and context
+- **Current Episode Only**: Simplified to active episode per session
 
 ## Task Definition Format
 
@@ -214,8 +207,8 @@ task_manager = session_manager.task_manager
 episode = task_manager.start_episode(session_id="client_001", task_id="malware_analysis")
 
 # Record tool execution as episode step
-action = Action(tool_name="strings", parameters={"file": "/sample.exe"})
-response = session_manager.execute_tool("strings", {"file": "/sample.exe"})
+action = Action(tool_name="docker_cli_executor", parameters={"command": "strings /sample.exe"})
+response = session_manager.execute_tool("docker_cli_executor", {"command": "strings /sample.exe"})
 task_manager.record_episode_step(session_id="client_001", action=action, response=response)
 ```
 
@@ -260,10 +253,10 @@ print(f"Started episode: {episode.episode_id}")
 
 # Execute actions in RL gym style
 while not episode.is_complete:
-    # Create action
+    # Create action for DockerCLIExecutor
     action = Action(
-        tool_name="file",
-        parameters={"path": "/data/samples/unknown_sample.exe"}
+        tool_name="docker_cli_executor",
+        parameters={"command": "file /data/samples/unknown_sample.exe"}
     )
     
     # Execute step (tool execution handled by SessionManager)
