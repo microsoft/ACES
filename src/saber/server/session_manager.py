@@ -95,28 +95,24 @@ class SessionManager:
         episode = self.task_manager.reset(session_id, task_id)
         return {"episode_id": episode.episode_id, "task_id": task_id, "state": episode.state.value}
 
-    def get_current_step_result(self, session_id: str) -> Optional[Dict[str, Any]]:
+    def get_current_episode_info(self, session_id: str) -> Optional[Dict[str, Any]]:
         """
-        Get current RL-style step result for the session.
+        Get current episode information for the session.
 
         Args:
             session_id: ID of the session
 
         Returns:
-            Step result information or None
+            Episode information or None
         """
         try:
-            # Create a status query action (no tool result)
-            action = Action(tool_name="status_check", parameters={}, command=None)
-            step_result = self.task_manager.step(session_id, action)
-
-            return {
-                "observation": step_result.observation,
-                "done": step_result.done,
-                "info": step_result.info,
-            }
+            episode_info = self.task_manager.get_episode_info(session_id)
+            if "error" not in episode_info:
+                return episode_info
+            else:
+                return None
         except Exception as e:
-            logger.error(f"Failed to get step result: {e}")
+            logger.error(f"Failed to get episode info: {e}")
             return None
 
     def end_session(self, session_id: str) -> None:

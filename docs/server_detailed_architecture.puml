@@ -123,7 +123,7 @@ package "Task Management" {
         +active_episodes: Dict[str, Episode]
         --
         +start_episode(): Episode
-        +step(): StepResult
+        +step(session_id, action, tool_result?, task_info, task?, progression_engine?): StepResult
         +end_episode(): EpisodeResult
         +reset_episode(): Episode
         +get_episode_state(): EpisodeState?
@@ -399,13 +399,12 @@ EvaluationManager *-- ActionTracker
 ActionTracker *-- ActionRecord
 
 note top of TaskManager
-**Refactored Task Orchestrator**
+**Task Orchestrator**
 Simplified to focus on coordination between specialized components.
 Delegates YAML parsing to TaskConfigLoader.
 Delegates DAG progression to SubTaskProgressionEngine.
 Delegates episode state management to enhanced EpisodeManager.
 Provides RL gym-style interfaces (step, reset).
-Reduced from 655 to 308 lines for better maintainability.
 end note
 
 note top of TaskConfigLoader

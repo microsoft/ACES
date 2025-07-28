@@ -1,18 +1,6 @@
 @startuml Episode Management Workflow
 !theme plain
 title SABER Episode Management Workflow
-SM -> TM: step(session_id, action, tool_result)
-TM -> EM: get_current_episode(session_id)
-EM --> TM: episode
-TM -> TM: convert ToolResult to dict
-TM -> EM: create_step(episode, action, response_dict)
-EM -> EM: extract command from action
-EM -> EM: create Step object
-EM -> EM: add step to episode
-EM --> TM: step
-TM -> EM: update_episode_state(episode, step)
-TM -> TM: get_task(episode.task_id)
-TM -> SPE: check_subtask_progression(task, episode, step)
 
 actor Client
 participant "SessionManager" as SM
@@ -52,18 +40,21 @@ note right of SM
   Action + ToolResult
 end note
 
-SM -> TM: record_episode_step(session_id, action, tool_result)
+SM -> TM: step(session_id, action, tool_result)
 TM -> EM: get_current_episode(session_id)
 EM --> TM: episode
-TM -> TM: convert ToolResult to dict
-TM -> EM: create_step(episode, action, response_dict)
+TM -> TM: get_task(episode.task_id)
+TM -> EM: step(session_id, action, tool_result, task_info, task, progression_engine)
+
+== EpisodeManager Step Processing ==
+
+EM -> EM: get_current_episode(session_id)
+EM -> EM: create_step(episode, action, tool_result)
 EM -> EM: extract command from action
 EM -> EM: create Step object
 EM -> EM: add step to episode
-EM --> TM: step
-TM -> EM: update_episode_state(episode, step)
-TM -> TM: get_task(episode.task_id)
-TM -> SPE: check_subtask_progression(task, episode, step)
+EM -> EM: update_episode_state(episode, step)
+EM -> SPE: check_subtask_progression(task, episode, step)
 
 == Subtask Progression Logic ==
 
@@ -87,12 +78,12 @@ end
 SPE -> SPE: update step subtask states
 SPE -> SPE: log progression changes
 
-TM -> EM: is_episode_complete(episode, all_subtask_ids)
-EM --> TM: done (boolean)
-TM -> TM: set step.done = done
-TM -> TM: build observation, reward, info
-TM --> SM: StepResult(observation, reward, done, info)
-SM --> Client: ToolResult
+EM -> EM: build_observation(episode, task_info)
+EM -> EM: is_episode_complete(episode, all_subtask_ids)
+EM -> EM: build StepResult(observation, done, info)
+EM --> TM: StepResult
+TM --> SM: StepResult
+SM --> Client: ToolResult + StepResult
 
 == Episode Completion ==
 

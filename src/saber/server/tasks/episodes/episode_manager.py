@@ -59,7 +59,7 @@ class EpisodeManager:
         self,
         session_id: str,
         action: Action,
-        tool_result: Optional[ToolResult] = None,
+        tool_result: ToolResult,
         task_subtask_count: int = 0,
         task_description: str = "",
         current_objective: Optional[str] = None,
@@ -73,7 +73,7 @@ class EpisodeManager:
         Args:
             session_id: ID of the session
             action: Action to execute
-            tool_result: ToolResult from tool execution (optional)
+            tool_result: ToolResult from tool execution
             task_subtask_count: Total number of subtasks in the task
             task_description: Description of the current task
             current_objective: Current objective based on active subtasks
@@ -93,14 +93,13 @@ class EpisodeManager:
 
         logger.debug(f"Executing step {len(episode.steps) + 1} for episode '{episode.episode_id}'")
 
-        # Record tool execution if tool_result provided
-        if tool_result is not None:
-            step = self.create_step(episode, action, tool_result)
-            self.update_episode_state(episode, step)
+        # Record tool execution and create step
+        step = self.create_step(episode, action, tool_result)
+        self.update_episode_state(episode, step)
 
-            # Run progression logic if both task and progression_engine provided
-            if task and progression_engine:
-                progression_engine.check_subtask_progression(task, episode, step)
+        # Run progression logic if both task and progression_engine provided
+        if task and progression_engine:
+            progression_engine.check_subtask_progression(task, episode, step)
 
         # Build observation
         observation = self.build_observation(

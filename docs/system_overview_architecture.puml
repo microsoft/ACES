@@ -55,9 +55,8 @@ package "SABER Server Side" {
         +get_task(): Task
         +get_subtask(): SubTask
         +start_episode(): Episode
-        +step(): StepResult
+        +step(session_id, action, tool_result?): StepResult
         +reset(): Episode
-        +record_episode_step(): void
         +end_episode(): EpisodeResult
         +list_tasks(): List[Dict]
     }

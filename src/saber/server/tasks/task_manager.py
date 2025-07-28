@@ -158,18 +158,14 @@ class TaskManager:
         """
         return self.episode_manager.get_current_episode(session_id)
 
-    def step(self, session_id: str, action: Action, tool_result: Optional[ToolResult] = None) -> StepResult:
+    def step(self, session_id: str, action: Action, tool_result: ToolResult) -> StepResult:
         """
         RL gym-style step function that records episode steps and returns observations.
-
-        This unified method handles both:
-        1. Recording tool execution results (when tool_result provided)
-        2. Querying current RL state (when tool_result is None)
 
         Args:
             session_id: ID of the session
             action: Action that was taken
-            tool_result: ToolResult from tool execution (optional)
+            tool_result: ToolResult from tool execution
 
         Returns:
             StepResult with observation, done, and info

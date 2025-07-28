@@ -8,7 +8,7 @@ The SABER TaskManager provides a robust framework for managing complex multi-ste
 src/saber/server/tasks/
 ├── __init__.py                      # Task management exports
 ├── task_manager.py                  # Simplified orchestrator (308 lines, down from 655)
-├── base.py                          # Task and episode state enums
+├── base.py                          # Task and episode state enums, Observation class
 ├── exceptions.py                    # Task management exceptions
 ├── core/                            # Core task definitions and specialized components
 │   ├── __init__.py                  # Core exports
@@ -49,11 +49,11 @@ src/saber/server/tasks/
 - **Dependency Resolution**: Ensures DAG constraints are respected during progression
 
 ### EpisodeManager
-Simplified episode management for RL workflows:
-- **Episode Lifecycle**: Start, step, end operations
+Enhanced episode management for RL workflows:
+- **Episode Lifecycle**: Start, step, end operations with unified step() method
 - **Command Extraction**: Extract commands from DockerCLIExecutor for completion matching
-- **RL Integration**: Provides gym-compatible interfaces and state building
-- **Active Episodes Only**: No history tracking for simplified operation
+- **RL Integration**: Provides gym-compatible interfaces and Observation building
+- **Simplified Operation**: No episode history tracking, focus on current state
 
 ### Task (formerly DomainTask)
 High-level security task representation:
@@ -187,11 +187,12 @@ episode = task_manager.reset(session_id="agent_001", task_id="malware_analysis")
 
 # Execute actions and get observations
 action = Action(tool_name="file", parameters={"path": "/sample.exe"})
-step_result = task_manager.step(session_id="agent_001", action=action)
+tool_result = execute_tool_somehow()  # Tool execution happens first
+step_result = task_manager.step(session_id="agent_001", action=action, tool_result=tool_result)
 
 # Check if episode is complete
 if step_result.done:
-    print(f"Episode completed with reward: {step_result.reward}")
+    print(f"Episode completed!")
 ```
 
 ## Integration with SessionManager
@@ -206,10 +207,10 @@ task_manager = session_manager.task_manager
 # Start new episode
 episode = task_manager.start_episode(session_id="client_001", task_id="malware_analysis")
 
-# Record tool execution as episode step
+# Execute tool and record as episode step
 action = Action(tool_name="docker_cli_executor", parameters={"command": "strings /sample.exe"})
-response = session_manager.execute_tool("docker_cli_executor", {"command": "strings /sample.exe"})
-task_manager.record_episode_step(session_id="client_001", action=action, response=response)
+tool_result = session_manager.execute_tool("docker_cli_executor", {"command": "strings /sample.exe"})
+step_result = task_manager.step(session_id="client_001", action=action, tool_result=tool_result)
 ```
 
 ## Testing
@@ -259,16 +260,14 @@ while not episode.is_complete:
         parameters={"command": "file /data/samples/unknown_sample.exe"}
     )
     
-    # Execute step (tool execution handled by SessionManager)
-    step_result = task_manager.step(session_id=session_id, action=action)
-    
-    # Record the actual tool execution result
-    tool_response = {"file_type": "PE32 executable", "size": 1024}
-    task_manager.record_episode_step(session_id, action, tool_response)
+    # Execute tool (handled by SessionManager) and record step
+    tool_result = session_manager.execute_tool("docker_cli_executor", 
+                                             {"command": "file /data/samples/unknown_sample.exe"})
+    step_result = task_manager.step(session_id=session_id, action=action, tool_result=tool_result)
     
     # Check completion
     if step_result.done:
-        print(f"Episode completed! Final reward: {step_result.reward}")
+        print(f"Episode completed!")
         break
 
 # Traditional task management usage
