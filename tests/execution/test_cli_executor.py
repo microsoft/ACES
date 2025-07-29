@@ -9,11 +9,11 @@ in isolated Docker containers.
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
-from saber.server.tools.base import ParameterType, ValidationResult
-from saber.server.tools.executors.cli import DockerCLIExecutor
-from saber.server.tools.utils.security_validator import SecurityValidator
-from saber.server.tools.sandbox.sandbox_manager import SandboxManager
-from saber.server.tools.exceptions import SandboxExecutionError
+from saber.server.execution.base import ParameterType, ValidationResult
+from saber.server.execution.executors.cli import DockerCLIExecutor
+from saber.server.execution.utils.security_validator import SecurityValidator
+from saber.server.execution.sandbox.sandbox_manager import SandboxManager
+from saber.server.execution.exceptions import SandboxExecutionError
 
 
 class TestDockerCLI:
@@ -73,9 +73,9 @@ class TestDockerCLI:
         with pytest.raises(SandboxExecutionError, match="sandbox_manager is required"):
             DockerCLIExecutor(sandbox_manager=None, timeout=60.0)
 
-    def test_security_tool_metadata(self, docker_cli_tool):
-        """Test that security tool metadata is properly set."""
-        metadata = docker_cli_tool._security_tool_metadata
+    def test_security_command_metadata(self, docker_cli_tool):
+        """Test that security command metadata is properly set."""
+        metadata = docker_cli_tool._security_command_metadata
 
         assert metadata["domain"] == "general"
         assert metadata["name"] == "docker_cli"
@@ -314,7 +314,7 @@ class TestDockerCLIExecutorIntegration:
     @pytest.fixture
     def mock_docker_environment(self):
         """Create a mock Docker execution environment."""
-        from saber.server.tools.sandbox.docker_environment import CommandResult
+        from saber.server.execution.sandbox.docker_environment import CommandResult
 
         env = MagicMock()
         env.get_container_id.return_value = "container123456789"
@@ -343,7 +343,7 @@ class TestDockerCLIExecutorIntegration:
     @pytest.mark.asyncio
     async def test_execute_docker_integration_success(self, docker_cli_tool_with_env, mock_sandbox_manager_with_env):
         """Test successful Docker command execution."""
-        from saber.server.tools.sandbox.docker_environment import CommandResult
+        from saber.server.execution.sandbox.docker_environment import CommandResult
 
         # Set up mock command result
         command_result = CommandResult(
@@ -377,7 +377,7 @@ class TestDockerCLIExecutorIntegration:
     @pytest.mark.asyncio
     async def test_execute_docker_integration_shell_mode(self, docker_cli_tool_with_env, mock_sandbox_manager_with_env):
         """Test Docker command execution in shell mode."""
-        from saber.server.tools.sandbox.docker_environment import CommandResult
+        from saber.server.execution.sandbox.docker_environment import CommandResult
 
         command_result = CommandResult(
             exit_code=0,
@@ -406,7 +406,7 @@ class TestDockerCLIExecutorIntegration:
     @pytest.mark.asyncio
     async def test_execute_docker_integration_failure(self, docker_cli_tool_with_env, mock_sandbox_manager_with_env):
         """Test Docker command execution failure."""
-        from saber.server.tools.sandbox.docker_environment import CommandResult
+        from saber.server.execution.sandbox.docker_environment import CommandResult
 
         command_result = CommandResult(
             exit_code=127,
@@ -442,7 +442,7 @@ class TestDockerCLIExecutorIntegration:
     @pytest.mark.asyncio
     async def test_execute_create_new_environment(self, docker_cli_tool_with_env, mock_sandbox_manager_with_env):
         """Test that new environment is created when none exists for session."""
-        from saber.server.tools.sandbox.docker_environment import CommandResult
+        from saber.server.execution.sandbox.docker_environment import CommandResult
 
         # First call returns None (no existing environment), second call returns new environment
         mock_sandbox_manager_with_env.get_session_environment.return_value = None

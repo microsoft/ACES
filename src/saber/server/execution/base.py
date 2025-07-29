@@ -2,7 +2,7 @@
 Base classes and data models for the ExecutionManager system.
 
 This module provides core abstractions, parameter types, result types,
-and data models used throughout the ExecutionManager system.
+and data models used throughout the ExecutionManager command execution system.
 """
 
 from dataclasses import dataclass, field
@@ -11,7 +11,7 @@ from typing import Any, Callable, Dict, List, Optional, Type, Union
 
 
 class ParameterType(str, Enum):
-    """Supported parameter types for tool parameters."""
+    """Supported parameter types for command parameters."""
 
     STRING = "string"
     INTEGER = "integer"
@@ -23,7 +23,7 @@ class ParameterType(str, Enum):
 
 @dataclass
 class Parameter:
-    """Represents a tool parameter with validation rules."""
+    """Represents a command parameter with validation rules."""
 
     name: str
     type: ParameterType
@@ -83,8 +83,8 @@ class Parameter:
 
 
 @dataclass
-class ToolResult:
-    """Result of tool execution."""
+class CommandResult:
+    """Result of command execution."""
 
     success: bool
     data: Any = None
@@ -95,15 +95,15 @@ class ToolResult:
     @classmethod
     def success_result(
         cls, data: Any, execution_time: Optional[float] = None, metadata: Optional[Dict[str, Any]] = None
-    ) -> "ToolResult":
-        """Create a successful tool result."""
+    ) -> "CommandResult":
+        """Create a successful command result."""
         return cls(success=True, data=data, execution_time=execution_time, metadata=metadata or {})
 
     @classmethod
     def error_result(
         cls, error: str, execution_time: Optional[float] = None, metadata: Optional[Dict[str, Any]] = None
-    ) -> "ToolResult":
-        """Create an error tool result."""
+    ) -> "CommandResult":
+        """Create an error command result."""
         return cls(success=False, error=error, execution_time=execution_time, metadata=metadata or {})
 
 
@@ -135,26 +135,26 @@ class ValidationResult:
         self.warnings.append(warning)
 
 
-# Decorator for marking security tools
-def security_tool(
+# Decorator for marking security commands
+def security_command(
     domain: str,
     name: str,
     description: str,
     author: str = "Unknown",
 ) -> Callable[[Type], Type]:
     """
-    Decorator to mark a ToolExecutor class as a security tool.
+    Decorator to mark a CommandExecutor class as a security command.
 
     Args:
         domain: Security domain (malware, threat_investigation, forensics)
-        name: Tool name
-        description: Tool description
-        author: Tool author
+        name: Command name
+        description: Command description
+        author: Command author
     """
 
     def decorator(cls: Type) -> Type:
         # Store metadata on the class
-        cls._security_tool_metadata = {
+        cls._security_command_metadata = {
             "domain": domain,
             "name": name,
             "description": description,

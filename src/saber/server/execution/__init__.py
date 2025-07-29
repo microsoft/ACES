@@ -1,8 +1,8 @@
 """
-Security tools and executors for SABER.
+Command execution and validators for SABER.
 """
 
-from .base import Parameter, ParameterType, ToolResult, ValidationResult, security_tool
+from .base import CommandResult, Parameter, ParameterType, ValidationResult
 from .exceptions import (
     DomainNotFoundError,
     DuplicateToolError,
@@ -14,7 +14,7 @@ from .exceptions import (
 from .execution_manager import ExecutionManager
 
 __all__ = [
-    "ToolResult",
+    "CommandResult",
     "ValidationResult",
     "Parameter",
     "ParameterType",

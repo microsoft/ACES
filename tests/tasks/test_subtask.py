@@ -9,7 +9,7 @@ from datetime import datetime
 from unittest.mock import Mock
 
 from saber.server.tasks.core.subtask import SubTask
-from saber.server.tasks.episodes.episode import Episode, Step, Action
+from saber.server.tasks.episodes import Episode, Step, Action
 from saber.server.tasks.episodes.episode_manager import EpisodeState
 
 

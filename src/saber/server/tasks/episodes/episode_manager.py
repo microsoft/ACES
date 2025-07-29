@@ -5,7 +5,7 @@ from datetime import datetime
 from logging import getLogger
 from typing import Any, Dict, Optional
 
-from ...tools.base import ToolResult
+from ...execution.base import CommandResult
 from ..base import Action, EpisodeState, Step
 from ..exceptions import EpisodeNotFoundException
 from .episode import Episode
@@ -60,7 +60,7 @@ class EpisodeManager:
         self,
         session_id: str,
         action: Action,
-        tool_result: ToolResult,
+        command_result: CommandResult,
         current_objective: Optional[str] = None,
     ) -> Step:
         """
@@ -69,7 +69,7 @@ class EpisodeManager:
         Args:
             session_id: ID of the session
             action: Action to execute
-            tool_result: ToolResult from tool execution
+            command_result: CommandResult from command execution
             current_objective: Current objective based on active subtasks
 
         Returns:
@@ -85,7 +85,7 @@ class EpisodeManager:
         logger.debug(f"Executing step {len(episode.steps) + 1} for episode '{episode.episode_id}'")
 
         # Record tool execution and create step
-        step = self.create_step(episode, action, tool_result)
+        step = self.create_step(episode, action, command_result)
 
         # Update episode state
         self.update_episode_state(episode, step)
@@ -175,7 +175,7 @@ class EpisodeManager:
         episode = self.get_current_episode(session_id)
         return episode.state if episode else None
 
-    def create_step(self, episode: Episode, action: Action, response: ToolResult) -> Step:
+    def create_step(self, episode: Episode, action: Action, response: CommandResult) -> Step:
         """
         Create a step from an action and response.
 
@@ -187,7 +187,7 @@ class EpisodeManager:
         Returns:
             Created Step instance (not yet added to episode)
         """
-        # Convert ToolResult to dictionary using dataclass asdict
+        # Convert CommandResult to dictionary using dataclass asdict
         response_dict = asdict(response)
 
         # Extract command from action for completion matching

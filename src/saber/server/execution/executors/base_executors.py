@@ -1,26 +1,26 @@
 """
-Base executor implementations for common tool patterns.
+Base executor implementations for common command patterns.
 
-This module provides the base ToolExecutor class for implementing custom tools.
+This module provides the base CommandExecutor class for implementing custom command executors.
 """
 
 import logging
 from abc import abstractmethod
 from typing import Any, Dict, List, Optional
 
-from ..base import Parameter, ToolResult, ValidationResult
+from ..base import CommandResult, Parameter, ValidationResult
 
 logger = logging.getLogger(__name__)
 
 
-class ToolExecutor:
+class CommandExecutor:
     """
-    Base implementation for tool executors with common functionality.
+    Base implementation for command executors with common functionality.
     """
 
     def __init__(self, timeout: Optional[float] = None, *args: Any, **kwargs: Any) -> None:
         """
-        Initialize tool executor.
+        Initialize command executor.
 
         Args:
             timeout: Execution timeout in seconds
@@ -31,22 +31,22 @@ class ToolExecutor:
         self._parameters: Dict[str, Parameter] = {}
 
     @abstractmethod
-    async def execute(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> ToolResult:
+    async def execute(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> CommandResult:
         """
-        Execute the tool with given parameters and context.
+        Execute the command with given parameters and context.
 
         Args:
-            parameters: Tool-specific parameters
+            parameters: Command-specific parameters
             context: Execution context (session_id, task_id, etc.)
 
         Returns:
-            ToolResult containing execution results
+            CommandResult containing execution results
         """
         pass
 
     def get_timeout(self) -> Optional[float]:
         """
-        Get the execution timeout for this tool in seconds.
+        Get the execution timeout for this command in seconds.
 
         Returns:
             Timeout in seconds, or None for no timeout
@@ -54,16 +54,16 @@ class ToolExecutor:
         return self._timeout or 300.0  # Default 5 minutes
 
     def get_parameters(self) -> Dict[str, Parameter]:
-        """Get the tool parameters."""
+        """Get the command parameters."""
         return self._parameters.copy()
 
     def add_parameter(self, parameter: Parameter) -> None:
-        """Add a parameter to the tool."""
+        """Add a parameter to the command."""
         self._parameters[parameter.name] = parameter
 
     def validate_parameters(self, parameters: Dict[str, Any]) -> ValidationResult:
         """
-        Validate parameters against the tool's parameter definitions.
+        Validate parameters against the command's parameter definitions.
 
         Args:
             parameters: Parameters to validate

@@ -10,14 +10,14 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch, mock_open
 from pathlib import Path
 
-from saber.server.tools.base import ToolResult, ValidationResult
-from saber.server.tools.execution_manager import ExecutionManager, ExecutionConfiguration
-from saber.server.tools.executors.cli import DockerCLIExecutor
-from saber.server.tools.utils.security_validator import SecurityValidator
-from saber.server.tools.exceptions import ExecutionManagerError
-from saber.server.tools.sandbox.sandbox_manager import SandboxManager
-from saber.server.tools.utils.security_validator import SecurityValidator
-from saber.server.tools.exceptions import ExecutionManagerError
+from saber.server.execution.base import CommandResult, ValidationResult
+from saber.server.execution.execution_manager import ExecutionManager, ExecutionConfiguration
+from saber.server.execution.executors.cli import DockerCLIExecutor
+from saber.server.execution.utils.security_validator import SecurityValidator
+from saber.server.execution.exceptions import ExecutionManagerError
+from saber.server.execution.sandbox.sandbox_manager import SandboxManager
+from saber.server.execution.utils.security_validator import SecurityValidator
+from saber.server.execution.exceptions import ExecutionManagerError
 
 
 class TestExecutionConfiguration:
@@ -218,7 +218,7 @@ class TestExecutionManager:
     @pytest.fixture
     def registry(self, sample_config):
         """Create an ExecutionManager instance for testing."""
-        with patch("saber.server.tools.sandbox.sandbox_manager.SandboxManager"):
+        with patch("saber.server.execution.sandbox.sandbox_manager.SandboxManager"):
             return ExecutionManager(config=sample_config)
 
     def test_initialization_default(self):
@@ -259,7 +259,7 @@ class TestExecutionManager:
         assert sandbox_config["enabled"] is True
         assert sandbox_config["image"] == "saber/base-sandbox:latest"
 
-    @patch("saber.server.tools.execution_manager.ExecutionConfiguration")
+    @patch("saber.server.execution.execution_manager.ExecutionConfiguration")
     def test_initialization_with_config_file(self, mock_cli_config):
         """Test initialization with configuration file."""
         mock_instance = MagicMock()
@@ -278,7 +278,7 @@ class TestExecutionManager:
         parameters = {"command": "echo test", "shell": False}
         context = {"session_id": "test123"}
 
-        expected_result = ToolResult.success_result(
+        expected_result = CommandResult.success_result(
             data={"stdout": "test\n", "stderr": "", "return_code": 0}
         )
 
@@ -324,7 +324,7 @@ class TestExecutionManager:
         # Mock the CLI tool to simulate slow execution
         async def slow_execute(*args, **kwargs):
             await asyncio.sleep(0.1)
-            return ToolResult.success_result(data="done")
+            return CommandResult.success_result(data="done")
 
         with patch.object(registry._cli_tool, 'validate_parameters', return_value=ValidationResult.success()):
             with patch.object(registry._cli_tool, 'execute', side_effect=slow_execute):
@@ -377,7 +377,7 @@ class TestExecutionManager:
         """Test MCP tools conversion with CLI configuration."""
         sample_config["cli"]["default_shell_mode"] = True
 
-        with patch("saber.server.tools.sandbox.sandbox_manager.SandboxManager"):
+        with patch("saber.server.execution.sandbox.sandbox_manager.SandboxManager"):
             registry = ExecutionManager(config=sample_config)
 
         mcp_tools = registry.to_mcp_tools()
@@ -420,7 +420,7 @@ class TestExecutionManager:
         """Test execute_command with default context when none provided."""
         parameters = {"command": "echo test"}
 
-        expected_result = ToolResult.success_result(data="test")
+        expected_result = CommandResult.success_result(data="test")
 
         with patch.object(registry._cli_tool, 'validate_parameters', return_value=ValidationResult.success()):
             with patch.object(registry._cli_tool, 'execute', return_value=expected_result) as mock_execute:

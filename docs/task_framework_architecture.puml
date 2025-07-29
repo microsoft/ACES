@@ -22,7 +22,7 @@ package "Task Framework Core" {
         +get_subtask(): SubTask
         +start_episode(): Episode
         +get_current_episode(): Episode?
-        +step(action, tool_result?): Step
+        +step(action, command_result?): Step
         +reset(): Episode
         +end_episode(): Episode
         +list_tasks(): List[Dict]
@@ -84,12 +84,12 @@ package "Episode Management" {
         +active_episodes: Dict[str, Episode]
         --
         +start_episode(): Episode
-        +step(session_id, action, tool_result?, task, current_objective?): Step
+        +step(session_id, action, command_result?, task, current_objective?): Step
         +end_episode(): Episode
         +reset_episode(): Episode
         +get_episode_state(): EpisodeState?
         +get_current_episode(): Episode?
-        +create_step(tool_result?): Step
+        +create_step(command_result?): Step
         +update_episode_state(): void
         +_extract_command_from_action(): str?
         +_get_episode_progress_info(): Dict[str, Any]
@@ -132,7 +132,7 @@ package "Episode Management" {
     }
 
     class Action {
-        +tool_name: str
+        +command_name: str
         +parameters: Dict[str, Any]
         +command: Optional[str]
         +timestamp: datetime

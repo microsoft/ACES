@@ -9,11 +9,11 @@ from datetime import datetime
 from unittest.mock import Mock, patch
 
 from saber.server.tasks.episodes.episode_manager import EpisodeManager, EpisodeState
-from saber.server.tasks.episodes.episode import Episode, Step, Action
+from saber.server.tasks.episodes import Episode, Step, Action
 from saber.server.tasks.core.task import Task
 from saber.server.tasks.core.subtask import SubTask
 from saber.server.tasks.exceptions import EpisodeNotFoundException
-from saber.server.tools.base import ToolResult
+from saber.server.execution.base import CommandResult
 
 
 class TestEpisodeManager:
@@ -94,7 +94,7 @@ class TestEpisodeManager:
         current = manager.get_current_episode("nonexistent_session")
         assert current is None
 
-    def test_step_success(self, sample_tool_result):
+    def test_step_success(self, sample_command_result):
         """Test successful episode step execution."""
         manager = EpisodeManager()
 
@@ -115,18 +115,18 @@ class TestEpisodeManager:
         step = manager.step(
             session_id="test_session",
             action=action,
-            tool_result=sample_tool_result,
+            command_result=sample_command_result,
             current_objective="Test objective"
         )
 
         assert isinstance(step, Step)
         assert step.action == action
-        assert step.response["success"] == sample_tool_result.success
-        assert step.response["data"] == sample_tool_result.data
+        assert step.response["success"] == sample_command_result.success
+        assert step.response["data"] == sample_command_result.data
         assert step.step_number == 0
         assert len(episode.steps) == 1
 
-    def test_step_no_active_episode(self, sample_tool_result):
+    def test_step_no_active_episode(self, sample_command_result):
         """Test step execution when no active episode exists."""
         manager = EpisodeManager()
 
@@ -136,12 +136,12 @@ class TestEpisodeManager:
             manager.step(
                 session_id="nonexistent_session",
                 action=action,
-                tool_result=sample_tool_result
+                command_result=sample_command_result
             )
 
         assert "nonexistent_session" in str(exc_info.value)
 
-    def test_step_command_extraction(self, sample_tool_result):
+    def test_step_command_extraction(self, sample_command_result):
         """Test command extraction during step execution."""
         manager = EpisodeManager()
 
@@ -159,12 +159,12 @@ class TestEpisodeManager:
         step = manager.step(
             session_id="test_session",
             action=action,
-            tool_result=sample_tool_result
+            command_result=sample_command_result
         )
 
         assert action.command == "strings sample.exe"
 
-    def test_step_other_tool_command_extraction(self, sample_tool_result):
+    def test_step_other_tool_command_extraction(self, sample_command_result):
         """Test command extraction for non-CLI tools."""
         manager = EpisodeManager()
 
@@ -181,12 +181,12 @@ class TestEpisodeManager:
         step = manager.step(
             session_id="test_session",
             action=action,
-            tool_result=sample_tool_result
+            command_result=sample_command_result
         )
 
         assert action.command == "other_tool"
 
-    def test_step_episode_completion(self, sample_tool_result):
+    def test_step_episode_completion(self, sample_command_result):
         """Test that steps are created with done=False since EpisodeManager no longer handles completion."""
         manager = EpisodeManager()
 
@@ -200,7 +200,7 @@ class TestEpisodeManager:
         step = manager.step(
             session_id="test_session",
             action=action,
-            tool_result=sample_tool_result
+            command_result=sample_command_result
         )
 
         # EpisodeManager no longer determines completion, so done should always be False
@@ -302,7 +302,7 @@ class TestEpisodeManager:
         state = manager.get_episode_state("nonexistent_session")
         assert state is None
 
-    def test_create_step(self, sample_tool_result):
+    def test_create_step(self, sample_command_result):
         """Test step creation from action and tool result."""
         manager = EpisodeManager()
 
@@ -317,19 +317,19 @@ class TestEpisodeManager:
             parameters={"command": "file sample.exe"}
         )
 
-        step = manager.create_step(episode, action, sample_tool_result)
+        step = manager.create_step(episode, action, sample_command_result)
 
         assert step.step_number == 0  # First step
         assert step.action == action
-        assert step.response["success"] == sample_tool_result.success
-        assert step.response["data"] == sample_tool_result.data
-        assert step.response["error"] == sample_tool_result.error
-        assert step.response["execution_time"] == sample_tool_result.execution_time
-        assert step.response["metadata"] == sample_tool_result.metadata
+        assert step.response["success"] == sample_command_result.success
+        assert step.response["data"] == sample_command_result.data
+        assert step.response["error"] == sample_command_result.error
+        assert step.response["execution_time"] == sample_command_result.execution_time
+        assert step.response["metadata"] == sample_command_result.metadata
         assert step.context_snapshot == episode.context
         assert action.command == "file sample.exe"
 
-    def test_create_step_with_existing_steps(self, sample_tool_result):
+    def test_create_step_with_existing_steps(self, sample_command_result):
         """Test step creation when episode already has steps."""
         manager = EpisodeManager()
 
@@ -345,11 +345,11 @@ class TestEpisodeManager:
         episode.steps = [existing_step]
 
         action = Action(tool_name="new_tool", parameters={})
-        step = manager.create_step(episode, action, sample_tool_result)
+        step = manager.create_step(episode, action, sample_command_result)
 
         assert step.step_number == 1  # Second step
 
-    def test_update_episode_state(self, sample_tool_result):
+    def test_update_episode_state(self, sample_command_result):
         """Test updating episode state after a step."""
         manager = EpisodeManager()
 
@@ -376,7 +376,7 @@ class TestEpisodeManager:
         assert episode.context["new_key"] == "new_value"
         assert episode.state == EpisodeState.ACTIVE  # Should remain active
 
-    def test_update_episode_state_done(self, sample_tool_result):
+    def test_update_episode_state_done(self, sample_command_result):
         """Test updating episode state when step indicates completion."""
         manager = EpisodeManager()
 
@@ -520,7 +520,7 @@ class TestEpisodeManager:
 
         assert manager.active_episodes == {}
 
-    def test_multiple_sessions_isolation(self, sample_tool_result):
+    def test_multiple_sessions_isolation(self, sample_command_result):
         """Test that multiple sessions are properly isolated."""
         manager = EpisodeManager()
 

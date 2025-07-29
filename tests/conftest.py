@@ -14,11 +14,11 @@ from typing import Any, Dict, Optional
 import logging
 from unittest.mock import patch, Mock
 
-from saber.server.tools.base import ToolResult, Parameter, ParameterType
-from saber.server.tools.executors.base_executors import ToolExecutor
-from saber.server.tools.executors.cli import DockerCLIExecutor
-from saber.server.tools.utils.security_validator import SecurityValidator
-from saber.server.tools.execution_manager import ExecutionManager
+from saber.server.execution.base import CommandResult, Parameter, ParameterType
+from saber.server.execution.executors.base_executors import CommandExecutor
+from saber.server.execution.executors.cli import DockerCLIExecutor
+from saber.server.execution.utils.security_validator import SecurityValidator
+from saber.server.execution.execution_manager import ExecutionManager
 
 logger = logging.getLogger(__name__)
 
@@ -31,13 +31,13 @@ def test_config_path():
     test_file_path = Path(__file__).parent
 
     # Check if we're in a subdirectory and adjust accordingly
-    if (test_file_path / "tools" / "config" / "test_tool_config.yaml").exists():
-        return test_file_path / "tools" / "config" / "test_tool_config.yaml"
-    elif (test_file_path / "config" / "test_tool_config.yaml").exists():
-        return test_file_path / "config" / "test_tool_config.yaml"
+    if (test_file_path / "execution" / "config" / "test_command_config.yaml").exists():
+        return test_file_path / "execution" / "config" / "test_command_config.yaml"
+    elif (test_file_path / "config" / "test_command_config.yaml").exists():
+        return test_file_path / "config" / "test_command_config.yaml"
     else:
-        # Fallback to original location
-        return test_file_path / "config" / "test_tool_config.yaml"
+        # Create a default path for the config file
+        return test_file_path / "config" / "test_command_config.yaml"
 
 
 @pytest.fixture
@@ -121,7 +121,7 @@ def sample_subtask_data():
 @pytest.fixture
 def sample_action():
     """Sample action for episode testing."""
-    from saber.server.tasks.episodes.episode import Action
+    from saber.server.tasks.episodes import Action
     return Action(
         tool_name="docker_cli_executor",
         parameters={"command": "file sample.exe"},
@@ -130,9 +130,9 @@ def sample_action():
 
 
 @pytest.fixture
-def sample_tool_result():
-    """Sample tool result for testing."""
-    return ToolResult.success_result({
+def sample_command_result():
+    """Sample command result for testing."""
+    return CommandResult.success_result({
         "output": "sample.exe: PE32 executable",
         "file_type": "PE32"
     })

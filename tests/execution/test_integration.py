@@ -9,11 +9,11 @@ import asyncio
 import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
 
-from saber.server.tools.execution_manager import ExecutionManager, ExecutionConfiguration
-from saber.server.tools.base import ToolResult, ValidationResult
-from saber.server.tools.utils.security_validator import SecurityValidator
-from saber.server.tools.executors.cli import DockerCLIExecutor
-from saber.server.tools.sandbox.sandbox_manager import SandboxManager
+from saber.server.execution.execution_manager import ExecutionManager, ExecutionConfiguration
+from saber.server.execution.base import CommandResult, ValidationResult
+from saber.server.execution.utils.security_validator import SecurityValidator
+from saber.server.execution.executors.cli import DockerCLIExecutor
+from saber.server.execution.sandbox.sandbox_manager import SandboxManager
 
 
 class TestToolsIntegration:
@@ -46,13 +46,13 @@ class TestToolsIntegration:
     @pytest.fixture
     def registry(self, test_config):
         """Create ExecutionManager for integration testing."""
-        with patch("saber.server.tools.sandbox.sandbox_manager.SandboxManager"):
+        with patch("saber.server.execution.sandbox.sandbox_manager.SandboxManager"):
             return ExecutionManager(config=test_config)
 
     @pytest.mark.asyncio
     async def test_end_to_end_safe_command_execution(self, registry):
         """Test complete flow for safe command execution in Docker."""
-        from saber.server.tools.sandbox.docker_environment import CommandResult
+        from saber.server.execution.sandbox.docker_environment import CommandResult
 
         parameters = {"command": "echo hello world"}
         context = {"session_id": "integration_test_001"}
@@ -93,7 +93,7 @@ class TestToolsIntegration:
     @pytest.mark.asyncio
     async def test_end_to_end_whitelisted_command_execution(self, registry):
         """Test execution of allowed command in Docker container."""
-        from saber.server.tools.sandbox.docker_environment import CommandResult
+        from saber.server.execution.sandbox.docker_environment import CommandResult
 
         parameters = {"command": "echo test"}  # Safe command from allowed list
         context = {"session_id": "integration_test_003"}
@@ -118,7 +118,7 @@ class TestToolsIntegration:
     @pytest.mark.asyncio
     async def test_concurrent_command_execution(self, registry):
         """Test concurrent execution with semaphore control in Docker."""
-        from saber.server.tools.sandbox.docker_environment import CommandResult
+        from saber.server.execution.sandbox.docker_environment import CommandResult
 
         parameters_list = [
             {"command": f"echo test{i}"}
@@ -157,7 +157,7 @@ class TestToolsIntegration:
     @pytest.mark.asyncio
     async def test_shell_mode_integration(self, registry):
         """Test shell mode with complex commands in Docker."""
-        from saber.server.tools.sandbox.docker_environment import CommandResult
+        from saber.server.execution.sandbox.docker_environment import CommandResult
 
         # Use a command that would benefit from shell mode but isn't dangerous
         parameters = {"command": "echo 'hello world'", "shell": True}
@@ -233,7 +233,7 @@ class TestToolsIntegration:
     @pytest.mark.asyncio
     async def test_session_isolation_integration(self, registry):
         """Test that different sessions are properly isolated."""
-        from saber.server.tools.sandbox.docker_environment import CommandResult
+        from saber.server.execution.sandbox.docker_environment import CommandResult
 
         parameters1 = {"command": "echo session1"}
         parameters2 = {"command": "echo session2"}
@@ -279,7 +279,7 @@ class TestToolsIntegration:
     @pytest.mark.asyncio
     async def test_error_handling_integration(self, registry):
         """Test error handling throughout the Docker system."""
-        from saber.server.tools.sandbox.docker_environment import CommandResult
+        from saber.server.execution.sandbox.docker_environment import CommandResult
 
         parameters = {"command": "nonexistent_command_xyz"}
         context = {"session_id": "error_test_session"}
@@ -355,7 +355,7 @@ sandbox:
 
     def test_component_initialization_integration(self, test_config):
         """Test that all components are properly initialized together."""
-        with patch("saber.server.tools.sandbox.sandbox_manager.SandboxManager"):
+        with patch("saber.server.execution.sandbox.sandbox_manager.SandboxManager"):
             registry = ExecutionManager(config=test_config)
 
         # Verify all components exist and are correct types
@@ -374,7 +374,7 @@ sandbox:
     @pytest.mark.asyncio
     async def test_realistic_malware_analysis_scenario(self, registry):
         """Test realistic malware analysis commands in Docker environment."""
-        from saber.server.tools.sandbox.docker_environment import CommandResult
+        from saber.server.execution.sandbox.docker_environment import CommandResult
 
         # Simulate commands that might be used in malware analysis
         analysis_commands = [

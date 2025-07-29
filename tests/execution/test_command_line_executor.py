@@ -9,11 +9,11 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch, call
 
-from saber.server.tools.base import ToolResult, ValidationResult
-from saber.server.tools.executors.cli import DockerCLIExecutor
-from saber.server.tools.utils.security_validator import SecurityValidator
-from saber.server.tools.sandbox.sandbox_manager import SandboxManager
-from saber.server.tools.exceptions import SandboxExecutionError
+from saber.server.execution.base import CommandResult, ValidationResult
+from saber.server.execution.executors.cli import DockerCLIExecutor
+from saber.server.execution.utils.security_validator import SecurityValidator
+from saber.server.execution.sandbox.sandbox_manager import SandboxManager
+from saber.server.execution.exceptions import SandboxExecutionError
 
 
 class MockDockerCLIExecutor(DockerCLIExecutor):
@@ -30,12 +30,12 @@ class MockDockerCLIExecutor(DockerCLIExecutor):
     def parse_output(self, stdout, stderr, return_code):
         """Simple parse_output implementation for testing."""
         if return_code == 0:
-            return ToolResult.success_result(
+            return CommandResult.success_result(
                 data={"stdout": stdout, "stderr": stderr},
                 metadata={"return_code": return_code}
             )
         else:
-            return ToolResult.error_result(
+            return CommandResult.error_result(
                 error=f"Command failed: {stderr}",
                 metadata={"return_code": return_code}
             )
@@ -103,7 +103,7 @@ class TestDockerCLIExecutor:
     @pytest.mark.asyncio
     async def test_execute_success(self, executor, mock_sandbox_manager):
         """Test successful command execution in Docker environment."""
-        from saber.server.tools.sandbox.docker_environment import CommandResult
+        from saber.server.execution.sandbox.docker_environment import CommandResult
 
         parameters = {"arg1": "hello", "arg2": "world"}
         context = {"session_id": "test123"}
@@ -145,7 +145,7 @@ class TestDockerCLIExecutor:
     @pytest.mark.asyncio
     async def test_execute_command_failure(self, executor, mock_sandbox_manager):
         """Test execution when command returns non-zero exit code."""
-        from saber.server.tools.sandbox.docker_environment import CommandResult
+        from saber.server.execution.sandbox.docker_environment import CommandResult
 
         parameters = {"arg": "invalid"}
         context = {"session_id": "test123"}
@@ -204,7 +204,7 @@ class TestDockerCLIExecutor:
     @pytest.mark.asyncio
     async def test_execute_create_session_environment(self, executor, mock_sandbox_manager):
         """Test that new session environment is created when needed."""
-        from saber.server.tools.sandbox.docker_environment import CommandResult
+        from saber.server.execution.sandbox.docker_environment import CommandResult
 
         parameters = {"arg": "test"}
         context = {"session_id": "new_session"}

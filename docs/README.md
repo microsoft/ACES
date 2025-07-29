@@ -11,7 +11,7 @@ The SABER system architecture is documented in several PlantUML diagrams:
 - **[System Overview](system_overview_architecture.puml)**: High-level system components and relationships
 - **[Server Detailed Architecture](server_detailed_architecture.puml)**: Main server architecture with simplified framework views
 - **[Task Framework Architecture](task_framework_architecture.puml)**: Detailed Task Management system design
-- **[Tool Execution Architecture](tool_execution_architecture.puml)**: Detailed Tool Execution framework design
+- **[Command Execution Architecture](tool_execution_architecture.puml)**: Detailed Command Execution framework design
 - **[Episode Workflow Sequence](episode_workflow_sequence.puml)**: Episode lifecycle and RL workflow
 
 ### Package Management
@@ -22,17 +22,17 @@ uv run
 ```
 whenever executing anything in python.
 
-## Docker Sandbox Tool Execution
+## Docker Sandbox Command Execution
 
 ### Enhanced Security Framework with Container Isolation
-SABER implements a comprehensive security framework for tool execution using Docker container isolation, addressing the unique security challenges of running arbitrary security tools in a benchmarking environment.
+SABER implements a comprehensive security framework for command execution using Docker container isolation, addressing the unique security challenges of running arbitrary security commands in a benchmarking environment.
 
 #### Key Security Features
-- **Docker Container Isolation**: All tool execution happens in isolated Docker containers
+- **Docker Container Isolation**: All command execution happens in isolated Docker containers
 - **Session-based Container Management**: Each session gets its own dedicated container environment
 - **Command Whitelisting**: Optional whitelist to override blocked commands for specific use cases
 - **Pattern Detection**: Advanced regex-based detection of dangerous shell constructs
-- **Argument Validation**: Comprehensive validation of all tool arguments
+- **Argument Validation**: Comprehensive validation of all command arguments
 - **Resource Limits**: Container-level CPU, memory, and process restrictions
 - **Network Isolation**: Containers run with restricted network access
 - **Shell Injection Prevention**: Multi-layer protection against command injection attacks
@@ -74,7 +74,7 @@ cli:
 1. **Domain Isolation**: Each security domain (malware classification, threat investigation, etc.) runs as a separate server instance
 2. **Client Autonomy**: Customer agents run independently with their choice of LLM provider
 3. **Stateful Task Execution**: Complex security tasks maintain context across multiple subtasks
-4. **MCP-Based Tool Exposure**: All domain tools and resources exposed via Model Context Protocol
+4. **MCP-Based Command Exposure**: All domain commands and resources exposed via Model Context Protocol
 5. **Single-Client Constraint**: Only one client can interact with a domain server at a time (MVP)
 6. **Persistent Evaluation**: All agent trajectories are logged for analysis and scoring
 
@@ -93,7 +93,7 @@ Unified endpoint for all client interactions:
 - **Single-Client Enforcement**: Ensures only one client per domain server (MVP)
 - **Unified API**: Coordinates all client requests across server components
 - **Task Orchestration**: Delegates to TaskManager for workflow management
-- **Tool Execution**: Delegates to MCPServer for all tool operations
+- **Command Execution**: Delegates to MCPServer for all command operations
 - **Policy Retrieval**: Delegates to PolicyManager for domain guidelines
 - **Action Logging**: Delegates to EvaluationManager for performance tracking
 
@@ -123,30 +123,30 @@ Simplified episode management for RL workflows:
 - **Active Episodes Only**: No history tracking for simplified operation
 
 #### MCPServer (FastMCP Integration)
-Complete tool execution layer:
-- **Tool Registry**: Contains and manages all domain-specific security tools
-- **Tool Execution**: Handles all tool operations with context awareness
+Complete command execution layer:
+- **Command Registry**: Contains and manages all domain-specific security commands
+- **Command Execution**: Handles all command operations with context awareness
 - **MCP Endpoints**: Can expose standard MCP protocol for development/testing
 - **Internal Service**: Used internally by SessionManager, not directly accessed by clients
 
 #### ExecutionManager
 Docker sandbox execution manager for MCP integration:
-- **Single Docker CLI Tool**: Contains one DockerCLIExecutor tool instance with comprehensive security validation  
+- **Single Docker CLI Command**: Contains one DockerCLIExecutor command instance with comprehensive security validation  
 - **ExecutionConfiguration**: Configuration management for execution, security, CLI-specific settings, and sandbox configuration
-- **Docker Container Execution**: execute_command() method for CLI tool execution in isolated Docker containers
+- **Docker Container Execution**: execute_command() method for CLI command execution in isolated Docker containers
 - **SandboxManager Integration**: Built-in container lifecycle management with session-based isolation
 - **Security Integration**: Built-in SecurityValidator with configurable allowed commands
 - **Concurrency Control**: Semaphore-based execution limiting with configurable max_concurrent
-- **MCP Tool Conversion**: to_mcp_tools() generates MCP-compatible tool definitions from CLI tool metadata
+- **MCP Command Conversion**: to_mcp_commands() generates MCP-compatible command definitions from CLI command metadata
 - **Configuration Management**: YAML-based configuration with dynamic CLI parameter defaults and sandbox settings
-- **Parameter Schema Generation**: CLI tool generates its own MCP-compatible parameter schemas
+- **Parameter Schema Generation**: CLI command generates its own MCP-compatible parameter schemas
 - **Security Info Access**: get_security_info() exposes SecurityValidator and sandbox configuration
 - **Command Validation**: validate_command() for pre-execution security checks
 - **Execution Statistics**: get_execution_stats() provides runtime metrics and configuration status
 - **Session Management**: Automatic Docker container creation and cleanup per session
 
 #### Security Framework
-Comprehensive security controls for tool execution:
+Comprehensive security controls for command execution:
 - **SecurityValidator**: Pattern detection, argument validation
 - **Command Whitelisting**: Optional whitelist to override blocked command restrictions
 - **Shell Injection Prevention**: Pattern matching for dangerous shell constructs
@@ -155,7 +155,7 @@ Comprehensive security controls for tool execution:
 
 #### EvaluationManager
 Tracks and evaluates agent performance:
-- **ActionTracker**: Records all tool calls and decisions
+- **ActionTracker**: Records all command calls and decisions
 - **TrajectoryStore**: Persistent storage for evaluation data
 - **Scoring Engine**: MVP focuses on action sequence tracking
 - **Future Extensions**: Rich trajectory analysis and automated scoring
@@ -179,7 +179,7 @@ Customer-provided agent implementation featuring:
 - **LLM Provider**: Configurable interface for any LLM service
 - **SessionClient**: Communicates with SessionManager unified API for all operations
 - **ReasoningEngine**: Agent's decision-making and planning capabilities
-- **Unified Integration**: Access to tasks, tools, and policies through single endpoint
+- **Unified Integration**: Access to tasks, commands, and policies through single endpoint
 
 #### Communication Layer
 Real-time bidirectional communication:
@@ -201,8 +201,8 @@ Persistent storage for evaluation data:
 ### Message Types
 
 1. **TaskAssignment**: SessionManager assigns subtask to client
-2. **ToolCallRequest**: Client requests tool execution via SessionManager
-3. **ToolCallResponse**: SessionManager returns tool results from MCPServer
+2. **CommandCallRequest**: Client requests command execution via SessionManager
+3. **CommandCallResponse**: SessionManager returns command results from MCPServer
 4. **SubTaskCompletion**: Client reports subtask completion to SessionManager
 5. **ContextUpdate**: State synchronization between subtasks
 
@@ -212,33 +212,33 @@ Persistent storage for evaluation data:
 2. SessionManager creates ClientSession and delegates TaskSession creation to TaskManager
 3. Establishes SSE connection for real-time communication
 4. SessionManager coordinates with TaskManager to assign initial subtask with context
-5. Client executes subtask using tools via SessionManager unified API
+5. Client executes subtask using commands via SessionManager unified API
 6. Results logged via EvaluationManager and next subtask assigned via TaskManager
 7. Process continues until task completion
 
 ## Security Domains
 
 ### Malware Classification
-- **Tools**: Static analysis, dynamic analysis, ML classifiers
+- **Commands**: Static analysis, dynamic analysis, ML classifiers
 - **Tasks**: Family identification, behavior analysis, threat attribution
 - **Context**: Sample metadata, analysis environments, reputation data
 
 ### Threat Investigation
-- **Tools**: OSINT collection, IOC analysis, timeline construction
+- **Commands**: OSINT collection, IOC analysis, timeline construction
 - **Tasks**: Campaign tracking, actor attribution, impact assessment
 - **Context**: Threat intelligence feeds, historical data, correlation engines
 
 ### Digital Forensics
-- **Tools**: Evidence collection, artifact analysis, timeline reconstruction
+- **Commands**: Evidence collection, artifact analysis, timeline reconstruction
 - **Tasks**: Incident response, data recovery, chain of custody
 - **Context**: System images, log files, network captures
 
 ## Evaluation Framework
 
 ### MVP Capabilities
-- **Action Sequence Tracking**: Record all tool calls and parameters
+- **Action Sequence Tracking**: Record all command calls and parameters
 - **Trajectory Storage**: Persistent logging of agent decisions
-- **Basic Metrics**: Task completion rates, tool usage patterns
+- **Basic Metrics**: Task completion rates, command usage patterns
 
 ### Future Enhancements
 - **Automated Scoring**: ML-based evaluation of agent effectiveness
@@ -250,12 +250,12 @@ Persistent storage for evaluation data:
 ### Scalability
 - **Horizontal Scaling**: Multiple domain server instances
 - **Load Balancing**: Client distribution across server instances
-- **Resource Management**: Tool execution isolation and comprehensive resource limits
+- **Resource Management**: Command execution isolation and comprehensive resource limits
 - **Concurrency Control**: Thread-safe operations with configurable execution limits
 
 ### Security
 - **Authentication**: Client verification and authorization
-- **Tool Security**: Isolated execution environments with comprehensive security validation
+- **Command Security**: Isolated execution environments with comprehensive security validation
 - **Command Security**: Blocked command lists with optional whitelist override
 - **Shell Injection Prevention**: Comprehensive protection against command injection attacks
 - **Resource Limits**: CPU, memory, file size, and process restrictions
@@ -271,14 +271,14 @@ Persistent storage for evaluation data:
 ### Phase 1 (MVP) - ✅ COMPLETED
 - ✅ Core server-client architecture design
 - ✅ CLI-only execution manager with comprehensive security validation
-- ✅ CommandLineToolExecutor framework with security integration
-- ✅ ToolExecutor base class with parameter management and MCP schema generation
-- ✅ CLI tool with configurable parameter defaults
+- ✅ CommandLineExecutor framework with security integration
+- ✅ CommandExecutor base class with parameter management and MCP schema generation
+- ✅ CLI command with configurable parameter defaults
 - ✅ SecurityValidator with command whitelisting and pattern detection
 - ✅ CLIConfiguration with YAML-based configuration management
 - ✅ Parameter validation system with type, range, and pattern constraints
 - ✅ Comprehensive security testing suite (142 tests)
-- ✅ MCP tool conversion with tool-generated schemas
+- ✅ MCP command conversion with command-generated schemas
 - ✅ Concurrency control with semaphore-based execution limiting
 - ✅ Basic task and subtask management framework
 
@@ -288,7 +288,7 @@ Persistent storage for evaluation data:
 - ✅ **DAG Progression Logic**: Automated subtask progression based on command execution and dependencies
 - ✅ **Architecture Cleanup**: Reduced TaskManager from 655 to 308 lines with single responsibility principle
 - 🔄 Complete MCP server integration with FastMCP
-- 🔄 Implement actual domain tools (beyond placeholders)
+- 🔄 Implement actual domain commands (beyond placeholders)
 - 🔄 SessionManager unified API implementation
 - 🔄 TaskManager integration with ExecutionManager
 - 🔄 Client-side SecurityAgent implementation
@@ -300,7 +300,7 @@ Persistent storage for evaluation data:
 - Advanced evaluation metrics and trajectory analysis
 - Performance optimization and caching
 - Enhanced monitoring and logging
-- Cross-domain tool dependencies
+- Cross-domain command dependencies
 - Advanced analytics and reporting
 
 ### Phase 4 (Scale)
@@ -321,16 +321,16 @@ DELETE /session/end - Terminate session
 
 GET /session/current-task - Get current or next task
 POST /session/complete-task - Report task completion
-POST /session/execute-tool - Execute tool with context
-GET /session/list-tools - List available tools
+POST /session/execute-command - Execute command with context
+GET /session/list-commands - List available commands
 GET /session/policy - Get domain policy document
 GET /session/context - Get current task context
 ```
 
 ### Optional MCP Endpoints (Development/Testing)
 ```
-GET /mcp/tools - List available tools
-POST /mcp/tools/{tool_name}/execute - Execute tool
+GET /mcp/commands - List available commands
+POST /mcp/commands/{command_name}/execute - Execute command
 GET /mcp/policy - Get domain policy document
 GET /mcp/tasks - List available tasks
 GET /mcp/tasks/{task_id}/subtasks - Get task subtasks
@@ -343,41 +343,41 @@ SABER includes extensive security testing to validate the robustness of the secu
 
 - **Command Security Validation**: Tests for dangerous command patterns and shell injection attempts
 - **Parameter Validation**: Comprehensive testing of parameter type checking and constraint validation
-- **Tool Registration**: Thread-safety and duplicate detection testing
+- **Command Registration**: Thread-safety and duplicate detection testing
 - **Configuration Management**: YAML configuration loading and validation
 - **Resource Limits**: CPU, memory, and process limit enforcement testing
 
 ### Test Coverage
-- 142 tool framework tests across 6 test files
+- 142 command framework tests across 6 test files
 - Comprehensive security validation testing
-- CLI tool execution and parameter validation
+- CLI command execution and parameter validation
 - SecurityValidator pattern detection and command validation
 - ExecutionManager configuration management and MCP schema generation
-- Integration tests for complete tool execution pipeline
+- Integration tests for complete command execution pipeline
 - Mock execution environments with security validation
 
 ### Test Structure
 ```
-tests/tools/
-├── test_cli_executor.py              # CLI tool execution tests (23 tests)
+tests/execution/
+├── test_cli_executor.py              # CLI command execution tests (23 tests)
 ├── test_command_line_executor.py     # Base executor tests (15 tests)  
 ├── test_security_validator.py        # Security validation tests (32 tests)
 ├── test_security_constants.py        # Security constants tests (21 tests)
 ├── test_execution_manager.py         # Execution manager and configuration tests (39 tests)
 ├── test_integration.py               # Integration tests (15 tests)
 └── config/
-    └── test_tool_config.yaml         # Test configuration files
+    └── test_command_config.yaml       # Test configuration files
 ```
 
 ## Configuration
 
 ### Server Configuration
-- Domain-specific tool configurations with security controls
+- Domain-specific command configurations with security controls
 - Policy document specifications
 - Storage backend settings
 - Concurrency and resource limits
 - Security validation settings (whitelists, limits)
-- Tool timeout and execution constraints
+- Command timeout and execution constraints
 
 ### Client Configuration
 - LLM provider settings

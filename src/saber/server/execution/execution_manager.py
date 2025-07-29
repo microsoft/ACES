@@ -1,8 +1,8 @@
 """
-ExecutionManager implementation for CLI-only usage.
+ExecutionManager implementation for command execution.
 
-This version provides access to CLI tool to execute MCP
-the same security validation capabilities.
+This version provides access to CLI commands with comprehensive
+security validation capabilities.
 """
 
 import asyncio
@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
-from .base import ToolResult, ValidationResult
+from .base import CommandResult, ValidationResult
 from .exceptions import ExecutionManagerError
 from .executors.cli import DockerCLIExecutor
 from .sandbox.sandbox_manager import SandboxManager
@@ -102,7 +102,7 @@ class ExecutionConfiguration:
 
 class ExecutionManager:
     """
-    Execution manager containing only a CLI tool with security validation.
+    Execution manager containing only a CLI executor with security validation.
     """
 
     def __init__(self, config: Optional[Dict[str, Any]] = None, config_file: Optional[str] = None):
@@ -140,16 +140,18 @@ class ExecutionManager:
 
         logger.info(f"ExecutionManager initialized with max_concurrent={max_concurrent}")
 
-    async def execute_command(self, parameters: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> ToolResult:
+    async def execute_command(
+        self, parameters: Dict[str, Any], context: Optional[Dict[str, Any]] = None
+    ) -> CommandResult:
         """
-        Execute the CLI tool with the given parameters.
+        Execute the CLI command with the given parameters.
 
         Args:
-            parameters: CLI tool parameters (must include 'command')
+            parameters: CLI command parameters (must include 'command')
             context: Optional execution context
 
         Returns:
-            ToolResult with execution results
+            CommandResult with execution results
         """
 
         async with self._semaphore:
@@ -157,7 +159,7 @@ class ExecutionManager:
                 # Validate parameters first
                 validation_result = self._cli_tool.validate_parameters(parameters)
                 if not validation_result.valid:
-                    return ToolResult.error_result(
+                    return CommandResult.error_result(
                         error=f"Parameter validation failed: {', '.join(validation_result.errors)}"
                     )
 
@@ -172,7 +174,7 @@ class ExecutionManager:
                             # Validate the full command using security validator
                             security_validation = self._security_validator.validate_full_command(command_args)
                             if not security_validation.valid:
-                                return ToolResult.error_result(
+                                return CommandResult.error_result(
                                     error=f"Command security validation failed: {', '.join(security_validation.errors)}"
                                 )
 
@@ -180,14 +182,14 @@ class ExecutionManager:
                             if security_validation.warnings:
                                 logger.warning(f"Command security warnings: {', '.join(security_validation.warnings)}")
                     except ValueError as e:
-                        return ToolResult.error_result(error=f"Failed to parse command: {str(e)}")
+                        return CommandResult.error_result(error=f"Failed to parse command: {str(e)}")
 
-                # Execute the CLI tool
+                # Execute the CLI command
                 return await self._cli_tool.execute(parameters, context or {})
 
             except Exception as e:
                 logger.error(f"CLI execution failed: {e}")
-                return ToolResult.error_result(error=str(e))
+                return CommandResult.error_result(error=str(e))
 
     def validate_command(self, command: str) -> ValidationResult:
         """
@@ -212,13 +214,13 @@ class ExecutionManager:
 
     def to_mcp_tools(self) -> List[Dict[str, Any]]:
         """
-        Convert the CLI tool to MCP format.
+        Convert the CLI command to MCP format.
 
         Returns:
             List containing single MCP tool definition
         """
-        # Get tool metadata and schema from the CLI tool itself
-        metadata = self._cli_tool._security_tool_metadata
+        # Get command metadata and schema from the CLI executor itself
+        metadata = self._cli_tool._security_command_metadata
 
         return [
             {

@@ -29,7 +29,7 @@ package "Domain Server Core" {
         +evaluation_manager: EvaluationManager
         --
         +create_session(): ClientSession
-        +execute_tool(): ToolResult
+        +execute_command(): CommandResult
         +get_current_task(): SubTask
         +get_policy(): PolicyDocument
     }
@@ -56,7 +56,7 @@ package "Task Management" {
         --
         +get_task(): Task
         +start_episode(): Episode
-        +step(action, tool_result?): Step
+        +step(action, command_result?): Step
         +reset(): Episode
         +end_episode(): Episode
         +list_tasks(): List[Dict]
@@ -105,22 +105,22 @@ package "Task Management" {
     }
 }
 
-package "Tool Execution Framework" {
+package "Command Execution Framework" {
 
     class MCPServer {
         +execution_manager: ExecutionManager
         --
-        +execute_tool(): ToolResult
-        +list_tools(): List[Tool]
-        +to_mcp_tools(): List[Dict[str, Any]]
+        +execute_command(): CommandResult
+        +list_commands(): List[Command]
+        +to_mcp_commands(): List[Dict[str, Any]]
     }
 
     class ExecutionManager {
-        +_cli_tool: DockerCLIExecutor
+        +_cli_command: DockerCLIExecutor
         +_security_validator: SecurityValidator
         +_sandbox_manager: SandboxManager
         --
-        +execute_command(): ToolResult
+        +execute_command(): CommandResult
         +validate_command(): ValidationResult
         +get_security_info(): Dict[str, Any]
     }
@@ -128,7 +128,7 @@ package "Tool Execution Framework" {
     class DockerCLIExecutor {
         +_sandbox_manager: SandboxManager
         --
-        +execute(): ToolResult
+        +execute(): CommandResult
         +validate_parameters(): ValidationResult
         +to_mcp_schema(): Dict[str, Any]
     }
@@ -153,7 +153,7 @@ package "Policy and Evaluation" {
 
     class PolicyDocument {
         +domain: str
-        +available_tools: List[ToolDescription]
+        +available_commands: List[CommandDescription]
         +guidelines: str
         +constraints: List[str]
         --
@@ -178,9 +178,9 @@ package "Policy and Evaluation" {
     class ActionRecord {
         +session_id: str
         +subtask_id: str
-        +tool_name: str
+        +command_name: str
         +parameters: Dict[str, Any]
-        +result: ToolResult
+        +result: CommandResult
         +timestamp: datetime
         --
         +to_dict(): Dict[str, Any]
@@ -239,17 +239,17 @@ Manages RL-compatible episode state transitions.
 end note
 
 note top of MCPServer
-**Tool Execution Hub**
-Delegates to ExecutionManager for Docker CLI tool execution.
-Provides MCP integration layer for tool access.
-See tool_execution_architecture.puml for detailed Tool framework.
+**Command Execution Hub**
+Delegates to ExecutionManager for Docker CLI command execution.
+Provides MCP integration layer for command access.
+See tool_execution_architecture.puml for detailed Command framework.
 end note
 
 note top of ExecutionManager
 **Docker Sandbox Execution Manager**
-Manages Docker-based tool execution with security validation.
+Manages Docker-based command execution with security validation.
 Coordinates between CLI executor and sandbox management.
-See tool_execution_architecture.puml for complete Tool design.
+See tool_execution_architecture.puml for complete Command design.
 end note
 
 @enduml

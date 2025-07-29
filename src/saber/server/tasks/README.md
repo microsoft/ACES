@@ -185,7 +185,7 @@ episode = task_manager.reset(session_id="agent_001", task_id="malware_analysis")
 
 # Execute actions and get steps
 action = Action(tool_name="file", parameters={"path": "/sample.exe"})
-tool_result = execute_tool_somehow()  # Tool execution happens first
+command_result = execute_command_somehow()  # Command execution happens first
 step = task_manager.step(session_id="agent_001", action=action, tool_result=tool_result)
 
 # Check if episode is complete

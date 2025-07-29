@@ -7,16 +7,16 @@ A distributed system for benchmarking agentic workflows in cybersecurity domains
 - **Domain-Specific Tasks**: Complex multi-step security workflows (malware analysis, threat investigation, etc.)
 - **Task Management**: YAML-driven task definitions with dependency management and context propagation
 - **Session Management**: Stateful execution tracking with progress monitoring
-- **Secure Tool Execution**: Security-first tool registry with command validation and sandboxing
-- **Flexible Configuration**: YAML-based configuration for tools, security policies, and execution limits
-- **MCP Integration**: Model Context Protocol support for tool exposure
+- **Secure Command Execution**: Security-first command registry with command validation and sandboxing
+- **Flexible Configuration**: YAML-based configuration for commands, security policies, and execution limits
+- **MCP Integration**: Model Context Protocol support for command exposure
 - **Evaluation Framework**: Action tracking and trajectory analysis for agent benchmarking
 
 ## Architecture Overview
 
 SABER implements a distributed server-client architecture designed for security domain benchmarking:
 
-- **Server Side**: Domain servers host security capabilities, tasks, and tools
+- **Server Side**: Domain servers host security capabilities, tasks, and commands
 - **Client Side**: Security agents connect to execute multi-step security workflows  
 - **Communication**: Real-time bidirectional communication via HTTP/SSE
 - **Evaluation**: Comprehensive action tracking and trajectory analysis
@@ -25,7 +25,7 @@ SABER implements a distributed server-client architecture designed for security 
 
 - **SessionManager**: Unified endpoint for all client interactions
 - **TaskManager**: Handles complex multi-step security workflows
-- **Tool Registry**: Secure execution of domain-specific security tools
+- **Command Registry**: Secure execution of domain-specific security commands
 - **Evaluation Framework**: Action tracking and performance analysis
 
 For detailed architecture documentation, see [docs/README.md](docs/README.md).
@@ -33,7 +33,7 @@ For detailed architecture documentation, see [docs/README.md](docs/README.md).
 ## Module Documentation
 
 - **[Task Management](src/saber/server/tasks/README.md)**: Multi-step security task orchestration
-- **[Tool Registry](src/saber/server/tools/README.md)**: Secure tool execution framework
+- **[Command Registry](src/saber/server/execution/README.md)**: Secure command execution framework
 - **[System Architecture](docs/README.md)**: Detailed architecture documentation
 
 ## Getting Started
@@ -86,8 +86,8 @@ For detailed architecture documentation, see [docs/README.md](docs/README.md).
 # Run all tests
 uv run pytest
 
-# Run tool configuration tests specifically
-uv run pytest tests/test_tool_configuration.py
+# Run command configuration tests specifically
+uv run pytest tests/test_command_configuration.py
 
 # Run security validation tests
 uv run pytest tests/test_cli_security.py

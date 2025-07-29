@@ -10,7 +10,7 @@ from dataclasses import asdict
 from datetime import datetime
 from unittest.mock import Mock
 
-from saber.server.tasks.episodes.episode import Episode, Step, Action
+from saber.server.tasks.episodes import Episode, Step, Action
 from saber.server.tasks.episodes.episode_manager import EpisodeState
 
 
@@ -468,7 +468,7 @@ class TestEpisode:
         assert episode.task_id == "test_task"
         assert episode.session_id == "test_session"
 
-    def test_episode_with_complex_steps_and_properties(self, sample_action, sample_tool_result):
+    def test_episode_with_complex_steps_and_properties(self, sample_action, sample_command_result):
         """Test episode with complex step structure and property access."""
         episode = Episode(
             task_id="complex_task",
@@ -479,7 +479,7 @@ class TestEpisode:
         step1 = Step(
             step_number=1,
             action=sample_action,
-            response=asdict(sample_tool_result),
+            response=asdict(sample_command_result),
             current_subtask="subtask1",
             completed_subtasks=set(),
             in_progress_subtasks={"subtask1"},
@@ -489,7 +489,7 @@ class TestEpisode:
         step2 = Step(
             step_number=2,
             action=sample_action,
-            response=asdict(sample_tool_result),
+            response=asdict(sample_command_result),
             current_subtask="subtask2",
             completed_subtasks={"subtask1"},
             in_progress_subtasks={"subtask2"},

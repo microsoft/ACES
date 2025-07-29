@@ -28,28 +28,28 @@ T -> T: set other subtasks to not_visited
 TM --> SM: episode
 SM --> Client: episode_info
 
-== Tool Execution & RL Step ==
+== Command Execution & RL Step ==
 
-Client -> SM: execute_tool(session_id, tool_name, parameters)
-SM -> SM: create Action(tool_name, parameters)
-SM -> MCP: execute_tool(tool_name, parameters)
-MCP --> SM: ToolResult
+Client -> SM: execute_command(session_id, command_name, parameters)
+SM -> SM: create Action(command_name, parameters)
+SM -> MCP: execute_command(command_name, parameters)
+MCP --> SM: CommandResult
 
 note right of SM
   Integration Point:
-  Action + ToolResult
+  Action + CommandResult
 end note
 
-SM -> TM: step(session_id, action, tool_result)
+SM -> TM: step(session_id, action, command_result)
 TM -> EM: get_current_episode(session_id)
 EM --> TM: episode
 TM -> TM: get_task(episode.task_id)
-TM -> EM: step(session_id, action, tool_result, current_objective)
+TM -> EM: step(session_id, action, command_result, current_objective)
 
 == EpisodeManager Step Processing ==
 
 EM -> EM: get_current_episode(session_id)
-EM -> EM: create_step(episode, action, tool_result)
+EM -> EM: create_step(episode, action, command_result)
 EM -> EM: extract command from action
 EM -> EM: create Step object
 EM -> EM: add step to episode
@@ -81,7 +81,7 @@ T -> T: log progression changes
 TM -> TM: check if episode is complete
 TM -> TM: set step.done = completion_status
 TM --> SM: Step
-SM --> Client: ToolResult + Step
+SM --> Client: CommandResult + Step
 
 == Episode Completion ==
 

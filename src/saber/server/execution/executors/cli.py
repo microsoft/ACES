@@ -1,7 +1,7 @@
 """
-Docker-based Command Line Interface tool for executing validated shell commands.
+Docker-based Command Line Interface executor for executing validated shell commands.
 
-This module provides a secure CLI tool that accepts command strings over the MCP protocol
+This module provides a secure CLI executor that accepts command strings over the MCP protocol
 and executes them in Docker containers. Security validation is performed at the
 ExecutionManager level before execution reaches this class.
 """
@@ -10,19 +10,19 @@ import logging
 import shlex
 from typing import Any, Dict, List, Optional
 
-from ..base import Parameter, ParameterType, ToolResult
+from ..base import CommandResult, Parameter, ParameterType
 from ..exceptions import SandboxExecutionError
 from ..sandbox.sandbox_manager import SandboxManager
-from .base_executors import ToolExecutor
+from .base_executors import CommandExecutor
 
 logger = logging.getLogger(__name__)
 
 
-class DockerCLIExecutor(ToolExecutor):
+class DockerCLIExecutor(CommandExecutor):
     """
-    Docker-based CLI tool for secure command execution in containers.
+    Docker-based CLI executor for secure command execution in containers.
 
-    This tool provides a unified interface for executing shell commands
+    This executor provides a unified interface for executing shell commands
     in isolated Docker containers with comprehensive security validation.
 
     Execution Features:
@@ -33,7 +33,7 @@ class DockerCLIExecutor(ToolExecutor):
     - Session-based container management
     """
 
-    _security_tool_metadata = {
+    _security_command_metadata = {
         "domain": "general",
         "name": "docker_cli",
         "description": "Execute validated shell commands in Docker containers",
@@ -126,7 +126,7 @@ class DockerCLIExecutor(ToolExecutor):
         except ValueError as e:
             raise ValueError(f"Failed to parse command string: {e}")
 
-    def parse_output(self, stdout: str, stderr: str, return_code: int) -> ToolResult:
+    def parse_output(self, stdout: str, stderr: str, return_code: int) -> CommandResult:
         """
         Parse command output into a structured result.
 
@@ -136,7 +136,7 @@ class DockerCLIExecutor(ToolExecutor):
             return_code: Process exit code
 
         Returns:
-            ToolResult with structured output data
+            CommandResult with structured output data
         """
         # Determine if command was successful
         success = return_code == 0
@@ -161,7 +161,7 @@ class DockerCLIExecutor(ToolExecutor):
         }
 
         if success:
-            return ToolResult.success_result(data=result_data, metadata=metadata)
+            return CommandResult.success_result(data=result_data, metadata=metadata)
         else:
             # For failed commands, include both stdout and stderr in error message
             error_msg = f"Command failed with exit code {return_code}"
@@ -170,9 +170,9 @@ class DockerCLIExecutor(ToolExecutor):
             elif stdout.strip():
                 error_msg += f". Output: {stdout.strip()}"
 
-            return ToolResult.error_result(error=error_msg, metadata={**metadata, "raw_data": result_data})
+            return CommandResult.error_result(error=error_msg, metadata={**metadata, "raw_data": result_data})
 
-    async def execute(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> ToolResult:
+    async def execute(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> CommandResult:
         """
         Execute the command-line tool in Docker container.
 
@@ -181,7 +181,7 @@ class DockerCLIExecutor(ToolExecutor):
             context: Execution context including session_id
 
         Returns:
-            ToolResult with execution results
+            CommandResult with execution results
 
         Note:
             Security validation is performed at the ExecutionManager level
@@ -220,7 +220,7 @@ class DockerCLIExecutor(ToolExecutor):
 
         except Exception as e:
             logger.error(f"Docker command execution error: {e}")
-            return ToolResult.error_result(f"Docker command execution failed: {str(e)}")
+            return CommandResult.error_result(f"Docker command execution failed: {str(e)}")
 
     def get_security_info(self) -> Dict[str, Any]:
         """

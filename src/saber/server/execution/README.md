@@ -1,6 +1,6 @@
 # SABER Docker Sandbox Execution Manager and Security Framework
 
-This module provides a Docker container-based tool execution system with comprehensive security validation, designed to safely execute command-line tools through MCP integration while providing complete isolation and preventing security vulnerabilities.
+This module provides a Docker container-based command execution system with comprehensive security validation, designed to safely execute command-line commands through MCP integration while providing complete isolation and preventing security vulnerabilities.
 
 ## Architecture
 
@@ -9,7 +9,7 @@ src/saber/server/tools/
 ├── execution_manager.py       # Main ExecutionManager with ExecutionConfiguration
 ├── base.py                    # result types
 ├── exceptions.py              # Tool related exceptions
-├── executors/                 # Tool execution frameworks
+├── executors/                 # Command execution frameworks
 │   ├── base_executors.py      # ToolExecutor
 │   └── cli.py                 # DockerCLIExecutor tool implementation
 ├── sandbox/                   # Docker container management
@@ -23,7 +23,7 @@ src/saber/server/tools/
 ## Key Components
 
 ### ExecutionManager (`execution_manager.py`)
-Main execution manager for Docker-based CLI tool execution with MCP integration:
+Main execution manager for Docker-based CLI command execution with MCP integration:
 - **Single Docker CLI Tool**: Manages one DockerCLIExecutor instance for containerized command execution
 - **Sandbox Manager**: Integrates SandboxManager for Docker container lifecycle management
 - **Security Validation**: Performs security validation at execution manager level before execution
@@ -32,7 +32,7 @@ Main execution manager for Docker-based CLI tool execution with MCP integration:
 - **Configuration Management**: Uses ExecutionConfiguration for settings management including sandbox config
 
 ### ExecutionConfiguration
-Configuration management for Docker-based CLI tool execution:
+Configuration management for Docker-based CLI command execution:
 - **YAML Support**: Load configuration from YAML files
 - **Execution Settings**: Timeout and concurrency configuration
 - **Security Settings**: Allowed commands and validation limits
@@ -98,7 +98,7 @@ Individual Docker container management:
 
 ## Configuration
 
-Docker-based CLI tool execution is managed through YAML configuration:
+Docker-based CLI command execution is managed through YAML configuration:
 
 ```yaml
 # Execution settings for CLI tool
@@ -260,7 +260,7 @@ uv run pytest tests/tools/ -v
 # Run specific test suites
 uv run pytest tests/tools/test_execution_manager.py -v        # Execution manager and configuration  
 uv run pytest tests/tools/test_security_validator.py -v  # Security validation
-uv run pytest tests/tools/test_cli_executor.py -v        # DockerCLIExecutor tool execution
+uv run pytest tests/execution/test_cli_executor.py -v        # DockerCLIExecutor command execution
 uv run pytest tests/tools/test_integration.py -v         # Integration tests
 
 # Test coverage: 143+ tests across 6 test files

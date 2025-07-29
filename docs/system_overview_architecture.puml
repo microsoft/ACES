@@ -40,7 +40,7 @@ package "SABER Server Side" {
         +evaluation_manager: EvaluationManager
         --
         +create_session(): ClientSession
-        +execute_tool(): ToolResult
+        +execute_command(): CommandResult
         +get_current_task(): SubTask
         +get_policy(): PolicyDocument
     }
@@ -54,7 +54,7 @@ package "SABER Server Side" {
         +get_task(): Task
         +get_subtask(): SubTask
         +start_episode(): Episode
-        +step(session_id, action, tool_result?): Step
+        +step(session_id, action, command_result?): Step
         +reset(): Episode
         +end_episode(): Episode
         +list_tasks(): List[Dict]
@@ -63,22 +63,22 @@ package "SABER Server Side" {
     class MCPServer {
         +execution_manager: ExecutionManager
         --
-        +execute_tool(): ToolResult
-        +list_tools(): List[Tool]
-        +handle_tool_call(): ToolResult
-        +to_mcp_tools(): List[Dict[str, Any]]
+        +execute_command(): CommandResult
+        +list_commands(): List[Command]
+        +handle_command_call(): CommandResult
+        +to_mcp_commands(): List[Dict[str, Any]]
     }
 
     class ExecutionManager {
         +_configuration: ExecutionConfiguration
-        +_cli_tool: DockerCLIExecutor
+        +_cli_command: DockerCLIExecutor
         +_security_validator: SecurityValidator
         +_sandbox_manager: SandboxManager
         +_semaphore: Semaphore
         --
-        +execute_command(): ToolResult
+        +execute_command(): CommandResult
         +validate_command(): ValidationResult
-        +to_mcp_tools(): List[Dict[str, Any]]
+        +to_mcp_commands(): List[Dict[str, Any]]
         +get_security_info(): Dict[str, Any]
         +get_execution_stats(): Dict[str, Any]
     }
@@ -96,12 +96,12 @@ package "SABER Server Side" {
     }
 
     class DockerCLIExecutor {
-        +_security_tool_metadata: Dict
+        +_security_command_metadata: Dict
         +_sandbox_manager: SandboxManager
         --
         +build_command(): List[str]
-        +parse_output(): ToolResult
-        +execute(): ToolResult
+        +parse_output(): CommandResult
+        +execute(): CommandResult
         +validate_parameters(): ValidationResult
         +to_mcp_schema(): Dict[str, Any]
         +get_security_info(): Dict[str, Any]
@@ -161,7 +161,7 @@ package "SABER Client Side" {
         +reasoning_engine: ReasoningEngine
         --
         +execute_subtask(): SubTaskResult
-        +make_tool_call(): ToolResult
+        +make_command_call(): CommandResult
         +reason_about_task(): str
     }
 
@@ -173,7 +173,7 @@ package "SABER Client Side" {
         +establish_session(): str
         +send_unified_request(): Response
         +get_current_task(): SubTask
-        +execute_tool(): ToolResult
+        +execute_command(): CommandResult
     }
 
     class LLMProvider {
@@ -181,14 +181,14 @@ package "SABER Client Side" {
         +model_name: str
         --
         +generate_response(): str
-        +generate_with_tools(): LLMResponse
+        +generate_with_commands(): LLMResponse
     }
 
     class ReasoningEngine {
         +current_context: Dict[str, Any]
         --
         +analyze_subtask(): TaskAnalysis
-        +select_tools(): List[str]
+        +select_commands(): List[str]
         +generate_plan(): ActionPlan
     }
 }
@@ -202,8 +202,8 @@ package "Communication Layer" {
         +serialize(): str
     }
 
-    class ToolCallRequest {
-        +tool_name: str
+    class CommandCallRequest {
+        +command_name: str
         +parameters: Dict[str, Any]
     }
 
@@ -239,7 +239,7 @@ SecurityAgent *-- LLMProvider
 SecurityAgent *-- ReasoningEngine
 
 ' Communication Relationships
-Message <|-- ToolCallRequest
+Message <|-- CommandCallRequest
 Message <|-- ToolCallResponse
 Message <|-- TaskAssignment
 
@@ -259,7 +259,7 @@ note top of SessionManager
 **Unified Client Endpoint**
 - Single point of access for clients
 - Orchestrates task execution
-- Manages tool execution via MCPServer
+- Manages command execution via MCPServer
 - Enforces single-client constraint
 end note
 

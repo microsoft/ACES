@@ -4,7 +4,7 @@ from logging import getLogger
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ..tools.base import ToolResult
+from ..execution.base import CommandResult
 from .base import Action
 from .core.subtask import SubTask
 from .core.task import Task
@@ -137,14 +137,14 @@ class TaskManager:
         """
         return self.episode_manager.get_current_episode(session_id)
 
-    def step(self, session_id: str, action: Action, tool_result: ToolResult) -> Step:
+    def step(self, session_id: str, action: Action, command_result: CommandResult) -> Step:
         """
         RL gym-style step function that records episode steps and returns observations.
 
         Args:
             session_id: ID of the session
             action: Action that was taken
-            tool_result: ToolResult from tool execution
+            command_result: CommandResult from tool execution
 
         Returns:
             Step object with all step information
@@ -167,7 +167,7 @@ class TaskManager:
         step = self.episode_manager.step(
             session_id=session_id,
             action=action,
-            tool_result=tool_result,
+            command_result=command_result,
             current_objective=current_objective,
         )
 

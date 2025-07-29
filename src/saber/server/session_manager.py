@@ -4,9 +4,9 @@ from datetime import datetime
 from logging import getLogger
 from typing import Any, Dict, Optional
 
-from .tasks.episodes.episode import Action
+from .execution.base import CommandResult
+from .tasks.episodes import Action
 from .tasks.task_manager import TaskManager
-from .tools.base import ToolResult
 
 logger = getLogger(__name__)
 
@@ -15,7 +15,7 @@ class SessionManager:
     """
     Unified endpoint for all client interactions.
 
-    Coordinates session lifecycle, task orchestration, tool execution,
+    Coordinates session lifecycle, task orchestration, command execution,
     and integrates with TaskManager for RL episode management.
     """
 
@@ -44,29 +44,29 @@ class SessionManager:
         logger.info(f"Created session '{session_id}' for client '{client_id}'")
         return session_id
 
-    def execute_tool(self, session_id: str, tool_name: str, parameters: Dict[str, Any]) -> ToolResult:
+    def execute_tool(self, session_id: str, tool_name: str, parameters: Dict[str, Any]) -> CommandResult:
         """
-        Execute tool and record episode step.
+        Execute command and record episode step.
 
         This is the key integration point mentioned in Task 2.1 where
         action-response integration happens.
 
         Args:
             session_id: ID of the session
-            tool_name: Name of the tool to execute
-            parameters: Parameters for tool execution
+            tool_name: Name of the command executor to execute
+            parameters: Parameters for command execution
 
         Returns:
-            ToolResult from tool execution
+            CommandResult from command execution
         """
         # Create action object for episode tracking
         action = Action(
             tool_name=tool_name, parameters=parameters, timestamp=datetime.now(), command=parameters.get("command")
         )
 
-        # Execute via MCP server (this would be the actual tool execution)
+        # Execute via MCP server (this would be the actual command execution)
         # For demonstration, create a mock result for DockerCLIExecutor
-        result = ToolResult.success_result(
+        result = CommandResult.success_result(
             data={"output": f"Docker CLI executed: {parameters.get('command', 'unknown command')}"},
             execution_time=0.1,
             metadata={"tool": tool_name, "command": parameters.get("command")},

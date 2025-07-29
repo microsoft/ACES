@@ -8,13 +8,13 @@ import pytest
 from unittest.mock import Mock, patch
 
 from saber.server.tasks.task_manager import TaskManager
-from saber.server.tasks.episodes.episode import Episode, Step, Action
+from saber.server.tasks.episodes import Episode, Step, Action
 from saber.server.tasks.episodes.episode_manager import EpisodeState
 from saber.server.tasks.exceptions import (
     TaskNotFoundException,
     EpisodeNotFoundException
 )
-from saber.server.tools.base import ToolResult
+from saber.server.execution.base import CommandResult
 
 
 class TestTaskManagerEpisodes:
@@ -63,7 +63,7 @@ class TestTaskManagerEpisodes:
             episode = manager.start_episode("test_session", "malware_family_analysis")
             mock_init.assert_called_once_with(episode)
 
-    def test_step_success(self, temp_tasks_file, sample_tool_result):
+    def test_step_success(self, temp_tasks_file, sample_command_result):
         """Test successful step execution."""
         manager = TaskManager("malware_classification", temp_tasks_file)
 
@@ -78,23 +78,23 @@ class TestTaskManagerEpisodes:
         )
 
         # Execute step
-        step = manager.step("test_session", action, sample_tool_result)
+        step = manager.step("test_session", action, sample_command_result)
 
         assert isinstance(step, Step)
         assert step.action == action
-        assert step.response["success"] == sample_tool_result.success
+        assert step.response["success"] == sample_command_result.success
         assert step.step_number == 1  # After initialization step
 
-    def test_step_no_active_episode(self, temp_tasks_file, sample_tool_result):
+    def test_step_no_active_episode(self, temp_tasks_file, sample_command_result):
         """Test step execution when no active episode exists."""
         manager = TaskManager("malware_classification", temp_tasks_file)
 
         action = Action(tool_name="test_tool", parameters={})
 
         with pytest.raises(EpisodeNotFoundException):
-            manager.step("nonexistent_session", action, sample_tool_result)
+            manager.step("nonexistent_session", action, sample_command_result)
 
-    def test_step_gets_current_objective(self, temp_tasks_file, sample_tool_result):
+    def test_step_gets_current_objective(self, temp_tasks_file, sample_command_result):
         """Test that step execution gets current objective from task."""
         manager = TaskManager("malware_classification", temp_tasks_file)
 
@@ -103,12 +103,12 @@ class TestTaskManagerEpisodes:
 
         # Mock _get_current_objective
         with patch.object(manager, '_get_current_objective', return_value="test objective") as mock_get_obj:
-            step = manager.step("test_session", action, sample_tool_result)
+            step = manager.step("test_session", action, sample_command_result)
 
             task = manager.get_task("malware_family_analysis")
             mock_get_obj.assert_called_once_with(episode, task)
 
-    def test_step_calls_episode_manager_step(self, temp_tasks_file, sample_tool_result):
+    def test_step_calls_episode_manager_step(self, temp_tasks_file, sample_command_result):
         """Test that step execution delegates to episode manager."""
         manager = TaskManager("malware_classification", temp_tasks_file)
 
@@ -118,7 +118,7 @@ class TestTaskManagerEpisodes:
         # Mock episode manager step method
         expected_step = Mock(spec=Step)
         with patch.object(manager.episode_manager, 'step', return_value=expected_step) as mock_step:
-            result_step = manager.step("test_session", action, sample_tool_result)
+            result_step = manager.step("test_session", action, sample_command_result)
 
             assert result_step == expected_step
             mock_step.assert_called_once()
@@ -127,7 +127,7 @@ class TestTaskManagerEpisodes:
             call_args = mock_step.call_args
             assert call_args[1]["session_id"] == "test_session"
             assert call_args[1]["action"] == action
-            assert call_args[1]["tool_result"] == sample_tool_result
+            assert call_args[1]["command_result"] == sample_command_result
 
     def test_reset_success(self, temp_tasks_file):
         """Test successful episode reset."""
@@ -251,7 +251,7 @@ class TestTaskManagerEpisodes:
             assert result == new_episode
             mock_reset.assert_called_once_with("test_session", "malware_family_analysis")
 
-    def test_rl_gym_style_interfaces(self, temp_tasks_file, sample_tool_result):
+    def test_rl_gym_style_interfaces(self, temp_tasks_file, sample_command_result):
         """Test RL gym-style step() and reset() methods work together."""
         manager = TaskManager("malware_classification", temp_tasks_file)
 
@@ -262,7 +262,7 @@ class TestTaskManagerEpisodes:
 
         # Test step() - should return step with observation
         action = Action(tool_name="docker_cli_executor", parameters={"command": "file sample.exe"})
-        step = manager.step("test_session", action, sample_tool_result)
+        step = manager.step("test_session", action, sample_command_result)
         assert isinstance(step, Step)
 
         # Test another reset() - should return new episode
@@ -270,7 +270,7 @@ class TestTaskManagerEpisodes:
         assert episode2 != episode1
         assert episode2.state == EpisodeState.ACTIVE
 
-    def test_episode_progression_integration(self, temp_tasks_file, sample_tool_result):
+    def test_episode_progression_integration(self, temp_tasks_file, sample_command_result):
         """Test integration between TaskManager and task progression logic."""
         manager = TaskManager("malware_classification", temp_tasks_file)
 
@@ -286,12 +286,12 @@ class TestTaskManagerEpisodes:
         # Mock the task's progression logic
         task = manager.get_task("malware_family_analysis")
         with patch.object(task, 'check_episode_progression') as mock_progression:
-            step = manager.step("test_session", action, sample_tool_result)
+            step = manager.step("test_session", action, sample_command_result)
 
             # Task progression should be called
             mock_progression.assert_called_once_with(episode, step)
 
-    def test_multiple_sessions_episode_isolation(self, temp_tasks_file, sample_tool_result):
+    def test_multiple_sessions_episode_isolation(self, temp_tasks_file, sample_command_result):
         """Test that episodes for different sessions are properly isolated."""
         manager = TaskManager("malware_classification", temp_tasks_file)
 
@@ -306,8 +306,8 @@ class TestTaskManagerEpisodes:
         # Execute steps for different sessions
         action = Action(tool_name="test_tool", parameters={})
 
-        step1 = manager.step("session1", action, sample_tool_result)
-        step2 = manager.step("session2", action, sample_tool_result)
+        step1 = manager.step("session1", action, sample_command_result)
+        step2 = manager.step("session2", action, sample_command_result)
 
         assert step1 != step2
         assert len(episode1.steps) == 2  # Init + action step
@@ -330,7 +330,7 @@ class TestTaskManagerEpisodes:
 
         assert episode.context == expected_context
 
-    def test_logging_during_episode_operations(self, temp_tasks_file, sample_tool_result, caplog):
+    def test_logging_during_episode_operations(self, temp_tasks_file, sample_command_result, caplog):
         """Test that episode operations produce appropriate logging."""
         import logging
 
@@ -342,7 +342,7 @@ class TestTaskManagerEpisodes:
 
             # Execute step
             action = Action(tool_name="test_tool", parameters={})
-            manager.step("test_session", action, sample_tool_result)
+            manager.step("test_session", action, sample_command_result)
 
             # Reset
             manager.reset("test_session", "malware_family_analysis")
@@ -357,14 +357,14 @@ class TestTaskManagerEpisodes:
         assert any("RL reset" in msg for msg in log_messages)
         assert any("Ending episode" in msg for msg in log_messages)
 
-    def test_error_handling_during_episode_operations(self, temp_tasks_file, sample_tool_result):
+    def test_error_handling_during_episode_operations(self, temp_tasks_file, sample_command_result):
         """Test error handling during episode operations."""
         manager = TaskManager("malware_classification", temp_tasks_file)
 
         # Test step with no episode
         action = Action(tool_name="test_tool", parameters={})
         with pytest.raises(EpisodeNotFoundException):
-            manager.step("no_episode_session", action, sample_tool_result)
+            manager.step("no_episode_session", action, sample_command_result)
 
         # Test end episode with no episode
         with pytest.raises(EpisodeNotFoundException):
@@ -374,7 +374,7 @@ class TestTaskManagerEpisodes:
         with pytest.raises(EpisodeNotFoundException):
             manager.reset_episode("no_episode_session")
 
-    def test_episode_step_numbering(self, temp_tasks_file, sample_tool_result):
+    def test_episode_step_numbering(self, temp_tasks_file, sample_command_result):
         """Test that episode steps are numbered correctly."""
         manager = TaskManager("malware_classification", temp_tasks_file)
 
@@ -387,13 +387,13 @@ class TestTaskManagerEpisodes:
         # Execute multiple steps
         action = Action(tool_name="test_tool", parameters={})
 
-        step1 = manager.step("test_session", action, sample_tool_result)
+        step1 = manager.step("test_session", action, sample_command_result)
         assert step1.step_number == 1
 
-        step2 = manager.step("test_session", action, sample_tool_result)
+        step2 = manager.step("test_session", action, sample_command_result)
         assert step2.step_number == 2
 
-        step3 = manager.step("test_session", action, sample_tool_result)
+        step3 = manager.step("test_session", action, sample_command_result)
         assert step3.step_number == 3
 
         # Episode should have all steps

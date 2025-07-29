@@ -1,7 +1,7 @@
-@startuml Tool Execution Architecture
+@startuml Command Execution Architecture
 
 !theme plain
-title SABER Docker Sandbox Tool Execution Framework - Detailed Architecture
+title SABER Docker Sandbox Command Execution Framework - Detailed Architecture
 
 skinparam class {
     BackgroundColor lightblue
@@ -22,42 +22,37 @@ package "Execution Management" {
 
     class ExecutionManager {
         +_configuration: ExecutionConfiguration
-        +_cli_tool: DockerCLIExecutor
+                +_cli_command: DockerCLIExecutor
         +_security_validator: SecurityValidator
         +_sandbox_manager: SandboxManager
-        +_semaphore: Semaphore
         --
-        +execute_command(): ToolResult
+        +execute_command(): CommandResult
         +validate_command(): ValidationResult
         +get_security_info(): Dict[str, Any]
-        +to_mcp_tools(): List[Dict[str, Any]]
+        +to_mcp_commands(): List[Dict[str, Any]]
         +get_execution_stats(): Dict[str, Any]
-        +list_tools(): List[str]
-        +get_tool_count(): Dict[str, int]
-        +load_configuration(): void
-        +get_configuration(): ExecutionConfiguration
+        +list_commands(): List[str]
+        +get_command_count(): Dict[str, int]
     }
 
-    class ToolExecutor {
-        +timeout: Optional[float]
-        +parameters: Dict[str, Parameter]
+    class CommandExecutor {
+        +_timeout: float
+        +_parameters: Dict[str, Parameter]
         --
-        {abstract} +execute(): ToolResult
-        +get_timeout(): Optional[float]
-        +get_parameters(): Dict[str, Parameter]
-        +add_parameter(): void
+        {abstract} +execute(): CommandResult
+        +get_timeout(): float
         +validate_parameters(): ValidationResult
         +to_mcp_schema(): Dict[str, Any]
     }
 
     class DockerCLIExecutor {
-        +_security_tool_metadata: Dict
+        +_security_command_metadata: Dict
         +_sandbox_manager: SandboxManager
         --
         +__init__(sandbox_manager, cli_config): void
         +build_command(): List[str]
-        +parse_output(): ToolResult
-        +execute(): ToolResult
+        +parse_output(): CommandResult
+        +execute(): CommandResult
         +validate_parameters(): ValidationResult
         +get_security_info(): Dict[str, Any]
     }
@@ -119,15 +114,15 @@ package "Execution Management" {
         NUMBER
     }
 
-    class ToolResult {
+    class CommandResult {
         +success: bool
         +data: Any
-        +error: Optional[str]
-        +execution_time: Optional[float]
+        +error: str
+        +execution_time: float
         +metadata: Dict[str, Any]
         --
-        +success_result(): ToolResult
-        +error_result(): ToolResult
+        +success_result(): CommandResult
+        +error_result(): CommandResult
     }
 
     class ValidationResult {
@@ -181,7 +176,7 @@ package "Docker Sandbox" <<stereototype S>> {
 }
 
 ' Inheritance relationships
-ToolExecutor <|-- DockerCLIExecutor
+CommandExecutor <|-- DockerCLIExecutor
 
 ' Execution Manager composition relationships
 ExecutionManager *-- DockerCLIExecutor
@@ -195,35 +190,35 @@ DockerCLIExecutor *-- SandboxManager
 DockerExecutionEnvironment ..> CommandResult
 
 ' Component relationships
-ToolExecutor *-- Parameter
+CommandExecutor *-- Parameter
 Parameter ..> ParameterType
 SecurityValidator ..> SecurityConstants
 
 ' Usage relationships
-ToolExecutor ..> ToolResult
-ToolExecutor ..> ValidationResult
+CommandExecutor ..> CommandResult
+CommandExecutor ..> ValidationResult
 
 note top of ExecutionManager
 **Docker Sandbox Execution Manager**
-Central hub for all tool execution components including:
-- DockerCLIExecutor tool execution with Docker container isolation
+Central hub for all command execution components including:
+- DockerCLIExecutor command execution with Docker container isolation
 - Configuration management and security enforcement
-- Security validation performed before tool execution
+- Security validation performed before command execution
 - Sandbox manager for Docker container lifecycle management
-- MCP schema generation and tool conversion
+- MCP schema generation and command conversion
 - Execution monitoring and concurrency control
-- All tool execution framework unified under single manager
+- All command execution framework unified under single manager
 end note
 
-note top of ToolExecutor
-Base tool execution framework:
+note top of CommandExecutor
+Base command execution framework:
 - Parameter management and validation
 - MCP schema generation
-- Abstract execute method for tool-specific implementation
+- Abstract execute method for command-specific implementation
 end note
 
 note bottom of DockerCLIExecutor
-Docker-based CLI tool implementation inheriting from ToolExecutor.
+Docker-based CLI command implementation inheriting from CommandExecutor.
 Provides command execution in isolated Docker containers.
 Requires SandboxManager for container management.
 Security validation handled at ExecutionManager level before execution.
@@ -248,7 +243,7 @@ end note
 
 note top of Parameter
 Core parameter and result types supporting
-tool execution and MCP schema generation.
+command execution and MCP schema generation.
 All data models unified under execution manager.
 end note
 
