@@ -6,7 +6,7 @@ actor Client
 participant "SessionManager" as SM
 participant "TaskManager" as TM
 participant "EpisodeManager" as EM
-participant "SubTaskProgressionEngine" as SPE
+participant "Task" as T
 participant "MCPServer" as MCP
 
 == Episode Initialization ==
@@ -22,9 +22,9 @@ TM -> EM: start_episode(session_id, task_id, initial_context)
 EM -> EM: create Episode object
 EM -> EM: store in active_episodes[session_id]
 EM --> TM: episode
-TM -> SPE: initialize_episode_subtasks(task, episode)
-SPE -> SPE: set entry subtasks to in_progress
-SPE -> SPE: set other subtasks to not_visited
+TM -> T: initialize_episode(episode)
+T -> T: set entry subtasks to in_progress
+T -> T: set other subtasks to not_visited
 TM --> SM: episode
 SM --> Client: episode_info
 
@@ -44,7 +44,7 @@ SM -> TM: step(session_id, action, tool_result)
 TM -> EM: get_current_episode(session_id)
 EM --> TM: episode
 TM -> TM: get_task(episode.task_id)
-TM -> EM: step(session_id, action, tool_result, task_info, task, progression_engine)
+TM -> EM: step(session_id, action, tool_result, task, current_objective)
 
 == EpisodeManager Step Processing ==
 
@@ -54,36 +54,34 @@ EM -> EM: extract command from action
 EM -> EM: create Step object
 EM -> EM: add step to episode
 EM -> EM: update_episode_state(episode, step)
-EM -> SPE: check_subtask_progression(task, episode, step)
+EM -> T: check_episode_progression(episode, step)
 
-== Subtask Progression Logic ==
+== Task Progression Logic ==
 
-SPE -> SPE: _update_step_subtask_state(episode, step)
-SPE -> SPE: _check_completed_subtasks(task, episode)
+T -> T: check subtask progression
+T -> T: update episode subtask states
 loop for each in_progress subtask
-    SPE -> SPE: subtask.check_exit_conditions(episode)
-    note right of SPE
+    T -> T: subtask.check_exit_conditions(episode)
+    note right of T
       Checks if required commands
       were executed in episode
     end note
 end
-SPE -> SPE: _check_available_subtasks(task, episode)
 loop for each not_visited subtask
-    SPE -> SPE: subtask.check_entry_conditions(episode)
-    note right of SPE
+    T -> T: subtask.check_entry_conditions(episode)
+    note right of T
       Checks if dependencies
       are completed
     end note
 end
-SPE -> SPE: update step subtask states
-SPE -> SPE: log progression changes
+T -> T: update step subtask states
+T -> T: log progression changes
 
-EM -> EM: build_observation(episode, task_info)
 EM -> EM: is_episode_complete(episode, all_subtask_ids)
-EM -> EM: build StepResult(observation, done, info)
-EM --> TM: StepResult
-TM --> SM: StepResult
-SM --> Client: ToolResult + StepResult
+EM -> EM: set step.done = completion_status
+EM --> TM: Step
+TM --> SM: Step
+SM --> Client: ToolResult + Step
 
 == Episode Completion ==
 
@@ -98,10 +96,9 @@ EM --> TM: episode
 TM -> EM: end_episode(session_id, "session_ended")
 EM -> EM: episode.end_time = now()
 EM -> EM: episode.state = COMPLETED/FAILED
-EM -> EM: calculate final_reward
-EM -> EM: create EpisodeResult
+EM -> EM: episode.completion_reason = reason
 EM -> EM: delete from active_episodes
-EM --> TM: episode_result
-TM --> SM: episode_result
+EM --> TM: episode
+TM --> SM: episode
 
 @enduml

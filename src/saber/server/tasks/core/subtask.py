@@ -28,7 +28,7 @@ class SubTask(BaseModel):
         default_factory=list, description="Subtask IDs that must be completed before this one"
     )
 
-    def check_entry_conditions(self, episode: "Episode") -> bool:
+    def check_entry_conditions(self, episode: Episode) -> bool:
         """
         Check if all parent subtasks are completed (entry conditions).
 
@@ -40,7 +40,7 @@ class SubTask(BaseModel):
         """
         return all(dep in episode.completed_subtasks for dep in self.depends_on)
 
-    def check_exit_conditions(self, episode: "Episode") -> bool:
+    def check_exit_conditions(self, episode: Episode) -> bool:
         """
         Check if all required commands were executed (exit conditions).
 

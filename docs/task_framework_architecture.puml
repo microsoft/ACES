@@ -1,0 +1,216 @@
+@startuml SABER Task Framework Architecture - Detailed
+
+!theme plain
+title SABER Task Framework - Detailed Architecture
+
+skinparam class {
+    BackgroundColor lightblue
+    BorderColor black
+    ArrowColor black
+    FontSize 10
+}
+
+package "Task Framework Core" {
+
+    class TaskManager {
+        +domain: str
+        +tasks: Dict[str, Task]
+        +config_loader: TaskConfigLoader
+        +episode_manager: EpisodeManager
+        --
+        +get_task(): Task
+        +get_subtask(): SubTask
+        +start_episode(): Episode
+        +get_current_episode(): Episode?
+        +step(action, tool_result?): Step
+        +reset(): Episode
+        +end_episode(): Episode
+        +list_tasks(): List[Dict]
+        +get_episode_info(): Dict
+        +_get_current_objective(): str?
+    }
+
+    class TaskConfigLoader {
+        +domain: str
+        --
+        +load_tasks_from_file(): Dict[str, Task]
+        +_parse_task(): Task
+        +_parse_subtask(): SubTask
+        +_validate_all_dependencies(): void
+    }
+
+    class Task {
+        +task_id: str
+        +domain: str
+        +title: str
+        +description: str
+        +subtasks: List[SubTask]
+        +initial_context: Dict[str, Any]
+        --
+        +add_subtask(): void
+        +get_subtask_by_id(): SubTask?
+        +check_episode_progression(): void
+        +initialize_episode(): void
+        +get_current_subtask(): SubTask?
+        +is_complete(): bool
+        +validate_dependencies(): List[str]
+        +get_all_subtask_ids(): Set[str]
+        +_update_step_subtask_state(): void
+        +_check_completed_subtasks(): Set[str]
+        +_check_available_subtasks(): Set[str]
+    }
+
+    class SubTask {
+        +subtask_id: str
+        +task_id: str
+        +title: str
+        +description: str
+        +objective: str
+        +completion_conditions: List[str]
+        +depends_on: List[str]
+        --
+        +check_entry_conditions(): bool
+        +check_exit_conditions(): bool
+        +is_dependent_on(): bool
+        +_command_was_executed(): bool
+        +_match_command_pattern(): bool
+        +_extract_variables(): Dict[str, str]
+    }
+}
+
+package "Episode Management" {
+
+    class EpisodeManager {
+        +active_episodes: Dict[str, Episode]
+        --
+        +start_episode(): Episode
+        +step(session_id, action, tool_result?, task, current_objective?): Step
+        +end_episode(): Episode
+        +reset_episode(): Episode
+        +get_episode_state(): EpisodeState?
+        +get_current_episode(): Episode?
+        +create_step(tool_result?): Step
+        +update_episode_state(): void
+        +is_episode_complete(): bool
+        +_extract_command_from_action(): str?
+        +_get_episode_progress_info(): Dict[str, Any]
+        +cleanup_session(): void
+    }
+
+    class Episode {
+        +episode_id: str
+        +task_id: str
+        +session_id: str
+        +start_time: datetime
+        +end_time: Optional[datetime]
+        +state: EpisodeState
+        +steps: List[Step]
+        +context: Dict[str, Any]
+        +metadata: Dict[str, Any]
+        +completion_reason: Optional[str]
+        --
+        +add_step(): void
+        +get_executed_commands(): List[str]
+        +current_subtask: str? (property)
+        +completed_subtasks: Set[str] (property)
+        +in_progress_subtasks: Set[str] (property)
+        +not_visited_subtasks: Set[str] (property)
+        +is_complete: bool (property)
+        +duration: Optional[float] (property)
+    }
+
+    class Step {
+        +step_number: int
+        +timestamp: datetime
+        +action: Action
+        +response: Dict[str, Any]
+        +current_subtask: Optional[str]
+        +completed_subtasks: Set[str]
+        +in_progress_subtasks: Set[str]
+        +not_visited_subtasks: Set[str]
+        +context_snapshot: Dict[str, Any]
+        +done: bool
+    }
+
+    class Action {
+        +tool_name: str
+        +parameters: Dict[str, Any]
+        +command: Optional[str]
+        +timestamp: datetime
+    }
+
+    enum EpisodeState {
+        CREATED
+        ACTIVE
+        COMPLETED
+        FAILED
+        TIMEOUT
+        RESET
+    }
+
+    enum SubTaskStatus {
+        NOT_STARTED
+        IN_PROGRESS
+        COMPLETED
+        BLOCKED
+        SKIPPED
+    }
+}
+
+' Relationships
+TaskManager *-- TaskConfigLoader
+TaskManager *-- EpisodeManager
+TaskManager *-- Task
+
+TaskConfigLoader ..> Task : creates
+TaskConfigLoader ..> SubTask : creates
+
+Task *-- SubTask
+Task ..> Episode : modifies
+Task ..> SubTask : manages progression
+
+EpisodeManager *-- Episode
+Episode *-- Step
+Step *-- Action
+Episode ..> EpisodeState
+SubTask ..> SubTaskStatus
+
+note top of TaskManager
+**Task Orchestrator**
+Coordinates task loading, episode management, and RL interfaces.
+Simplified to focus on coordination between specialized components.
+Provides gym-style step() and reset() methods for RL compatibility.
+end note
+
+note top of Task
+**Task with Embedded Progression Logic**
+Tasks now contain progression logic directly for simplified architecture.
+Handles DAG-based subtask progression and dependency validation.
+Encapsulates all progression logic within the task instance.
+end note
+
+note top of EpisodeManager
+**Episode Lifecycle Manager**
+Manages RL-style episodes with gym-compatible interfaces.
+Returns Step objects directly from step() method.
+Handles episode state transitions and completion detection.
+Single source of truth for episode operations.
+end note
+
+note top of TaskConfigLoader
+**YAML Configuration Loader**
+Loads and validates task definitions directly from YAML files.
+Creates Task and SubTask objects from YAML data structures.
+Validates dependencies and ensures acyclic task graphs.
+Single responsibility: YAML parsing and object creation.
+end note
+
+note bottom of Episode
+**RL Episode State**
+Contains complete action-response history for RL training.
+Tracks subtask progression state across all steps.
+Provides properties for current state access.
+Includes completion information and metadata.
+end note
+
+@enduml

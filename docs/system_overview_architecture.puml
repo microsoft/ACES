@@ -49,15 +49,14 @@ package "SABER Server Side" {
         +domain: str
         +tasks: Dict[str, Task]
         +config_loader: TaskConfigLoader
-        +progression_engine: SubTaskProgressionEngine
         +episode_manager: EpisodeManager
         --
         +get_task(): Task
         +get_subtask(): SubTask
         +start_episode(): Episode
-        +step(session_id, action, tool_result?): StepResult
+        +step(session_id, action, tool_result?): Step
         +reset(): Episode
-        +end_episode(): EpisodeResult
+        +end_episode(): Episode
         +list_tasks(): List[Dict]
     }
 

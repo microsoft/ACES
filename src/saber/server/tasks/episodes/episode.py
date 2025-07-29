@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from pydantic import BaseModel, Field
 
-from ..base import EpisodeState
+from .episode_manager import EpisodeState
 
 
 class Action(BaseModel):
@@ -55,6 +55,12 @@ class Episode(BaseModel):
     steps: List[Step] = Field(default_factory=list, description="Complete history of all steps taken")
     context: Dict[str, Any] = Field(default_factory=dict, description="Episode context data")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional episode metadata")
+    completion_reason: Optional[str] = Field(None, description="Reason the episode ended")
+
+    class Config:
+        """Pydantic configuration."""
+
+        json_encoders = {datetime: lambda v: v.isoformat()}
 
     @property
     def current_subtask(self) -> Optional[str]:
@@ -108,38 +114,3 @@ class Episode(BaseModel):
             if step.action.command:
                 commands.append(step.action.command)
         return commands
-
-    class Config:
-        """Pydantic configuration."""
-
-        json_encoders = {datetime: lambda v: v.isoformat()}
-
-
-class StepResult(BaseModel):
-    """Result returned from an RL-style step operation."""
-
-    observation: Dict[str, Any] = Field(..., description="Current state observation")
-    done: bool = Field(False, description="Whether the episode is complete")
-    info: Dict[str, Any] = Field(default_factory=dict, description="Additional information")
-
-    class Config:
-        """Pydantic configuration."""
-
-        pass
-
-
-class EpisodeResult(BaseModel):
-    """Result returned when an episode ends."""
-
-    episode_id: str = Field(..., description="ID of the completed episode")
-    success: bool = Field(..., description="Whether the episode completed successfully")
-    total_steps: int = Field(..., description="Total number of steps taken")
-    duration: Optional[float] = Field(None, description="Episode duration in seconds")
-    final_reward: float = Field(0.0, description="Final cumulative reward")
-    completion_reason: str = Field(..., description="Reason the episode ended")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional result metadata")
-
-    class Config:
-        """Pydantic configuration."""
-
-        pass

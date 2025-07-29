@@ -8,18 +8,16 @@ The SABER TaskManager provides a robust framework for managing complex multi-ste
 src/saber/server/tasks/
 ├── __init__.py                      # Task management exports
 ├── task_manager.py                  # Simplified orchestrator (308 lines, down from 655)
-├── base.py                          # Task and episode state enums, Observation class
 ├── exceptions.py                    # Task management exceptions
 ├── core/                            # Core task definitions and specialized components
 │   ├── __init__.py                  # Core exports
-│   ├── task.py                      # High-level security task representation
+│   ├── task.py                      # High-level security task with embedded progression logic
 │   ├── subtask.py                   # Internal checkpoints with automatic progression
-│   ├── task_config_loader.py        # YAML parsing and task definition loading (NEW)
-│   └── subtask_progression_engine.py # DAG progression logic and state management (NEW)
+│   └── task_config_loader.py        # YAML parsing and task definition loading
 └── episodes/                        # Episode management components
     ├── __init__.py                  # Episode exports
     ├── episode.py                   # RL episode data structures
-    └── episode_manager.py           # Enhanced episode lifecycle management
+    └── episode_manager.py           # Episode lifecycle management and State enum
 ```
 
 ## Refactored Components
@@ -29,10 +27,10 @@ src/saber/server/tasks/
 - **Task Storage & Retrieval**: Core task and subtask access methods
 - **Episode Lifecycle Coordination**: Delegates to EpisodeManager for episode operations
 - **RL Gym Interface**: Provides step() and reset() methods for reinforcement learning
-- **Component Coordination**: Orchestrates TaskConfigLoader, SubTaskProgressionEngine, and EpisodeManager
+- **Component Coordination**: Orchestrates TaskConfigLoader and EpisodeManager, with Task handling progression
 - **Session Management**: Links with SessionManager for client interactions
 
-### TaskConfigLoader (New Component)
+### TaskConfigLoader (Component)
 **Specialized YAML configuration management** (~150 lines):
 - **YAML Parsing**: Loads and validates task definitions from YAML files
 - **Task Creation**: Converts YAML data into Task and SubTask objects
@@ -40,8 +38,8 @@ src/saber/server/tasks/
 - **Domain Consistency**: Validates task definitions match expected domain
 - **Error Handling**: Comprehensive validation with detailed error messages
 
-### SubTaskProgressionEngine (New Component)
-**DAG-based progression logic** (~150 lines):
+### Task with Embedded Progression Logic
+**DAG-based progression logic embedded directly in Task** (~150 lines):
 - **Automatic Progression**: Handles subtask state transitions based on command execution
 - **Entry/Exit Conditions**: Validates when subtasks can be started or completed
 - **Command Matching**: Tracks executed commands against completion conditions
@@ -49,10 +47,10 @@ src/saber/server/tasks/
 - **Dependency Resolution**: Ensures DAG constraints are respected during progression
 
 ### EpisodeManager
-Enhanced episode management for RL workflows:
+Simplified episode management for RL workflows:
 - **Episode Lifecycle**: Start, step, end operations with unified step() method
 - **Command Extraction**: Extract commands from DockerCLIExecutor for completion matching
-- **RL Integration**: Provides gym-compatible interfaces and Observation building
+- **Step Creation**: Returns Step objects directly from step() method
 - **Simplified Operation**: No episode history tracking, focus on current state
 
 ### Task (formerly DomainTask)
@@ -165,13 +163,13 @@ updated_context = {
 
 ### Enhanced Modularity
 - **TaskConfigLoader**: Can be swapped for different configuration sources
-- **SubTaskProgressionEngine**: Progression logic can be enhanced without affecting other components
+- **Task with Embedded Logic**: Progression logic is encapsulated directly within each Task instance
 - **EpisodeManager**: Episode handling is self-contained and feature-complete
 
 ### Better Separation of Concerns
 - **Configuration**: TaskConfigLoader handles all YAML parsing
-- **Business Logic**: SubTaskProgressionEngine manages DAG progression
-- **State Management**: EpisodeManager handles episode lifecycle and observations
+- **Business Logic**: Task instances manage their own DAG progression
+- **State Management**: EpisodeManager handles episode lifecycle and step creation
 - **Orchestration**: TaskManager coordinates between components
 
 ## RL Gym Compatibility
@@ -185,13 +183,13 @@ task_manager = TaskManager(domain="malware_classification", tasks_file="tasks.ya
 # Reset environment for new episode
 episode = task_manager.reset(session_id="agent_001", task_id="malware_analysis")
 
-# Execute actions and get observations
+# Execute actions and get steps
 action = Action(tool_name="file", parameters={"path": "/sample.exe"})
 tool_result = execute_tool_somehow()  # Tool execution happens first
-step_result = task_manager.step(session_id="agent_001", action=action, tool_result=tool_result)
+step = task_manager.step(session_id="agent_001", action=action, tool_result=tool_result)
 
 # Check if episode is complete
-if step_result.done:
+if step.done:
     print(f"Episode completed!")
 ```
 
@@ -282,18 +280,17 @@ all_tasks = task_manager.list_tasks()
 ### Direct Component Usage
 
 ```python
-from saber.server.tasks.core import TaskConfigLoader, SubTaskProgressionEngine
+from saber.server.tasks.core import TaskConfigLoader
 from saber.server.tasks.episodes import EpisodeManager
 
 # Use components independently for testing or specialized needs
 config_loader = TaskConfigLoader(domain="malware_classification")
 tasks = config_loader.load_tasks_from_file("tasks.yaml")
 
-progression_engine = SubTaskProgressionEngine()
 episode_manager = EpisodeManager()
 
-# Manual progression control (advanced usage)
+# Manual episode control (advanced usage)
 task = tasks["malware_analysis"]
-episode = episode_manager.start_episode("session_001", "malware_analysis")
-progression_engine.initialize_episode_subtasks(task, episode)
+episode = episode_manager.start_episode("session_001", task.task_id)
+task.initialize_episode(episode)
 ```

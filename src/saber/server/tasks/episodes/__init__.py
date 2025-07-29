@@ -1,13 +1,12 @@
 """RL episode management."""
 
-from .episode import Action, Episode, EpisodeResult, Step, StepResult
-from .episode_manager import EpisodeManager
+from .episode import Action, Episode, Step
+from .episode_manager import EpisodeManager, EpisodeState
 
 __all__ = [
-    "Action",
-    "Episode",
     "EpisodeManager",
-    "EpisodeResult",
+    "Episode",
+    "EpisodeState",
+    "Action",
     "Step",
-    "StepResult",
 ]

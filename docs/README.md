@@ -4,6 +4,16 @@
 
 This document describes the high-level architecture for a security agent benchmarking system designed to evaluate agentic workflows in the cybersecurity domain. The system employs a distributed server-client architecture where security domains are hosted as dedicated servers, and customer agents operate as independent clients.
 
+## Architecture Diagrams
+
+The SABER system architecture is documented in several PlantUML diagrams:
+
+- **[System Overview](system_overview_architecture.puml)**: High-level system components and relationships
+- **[Server Detailed Architecture](server_detailed_architecture.puml)**: Main server architecture with simplified framework views
+- **[Task Framework Architecture](task_framework_architecture.puml)**: Detailed Task Management system design
+- **[Tool Execution Architecture](tool_execution_architecture.puml)**: Detailed Tool Execution framework design
+- **[Episode Workflow Sequence](episode_workflow_sequence.puml)**: Episode lifecycle and RL workflow
+
 ### Package Management
 
 This package is managed by uv for its python environments, use
@@ -91,26 +101,25 @@ Unified endpoint for all client interactions:
 Simplified orchestrator for task management with specialized components:
 - **Core Responsibilities**: Task storage/retrieval, episode lifecycle coordination, RL gym-style interfaces
 - **TaskConfigLoader**: Handles YAML parsing and task definition loading (extracted for maintainability)
-- **SubTaskProgressionEngine**: Manages DAG-based progression logic and subtask state transitions (extracted)
-- **Enhanced EpisodeManager**: Handles episode lifecycle, state management, and observation building
+- **Task with Embedded Progression**: Tasks contain progression logic directly for simplified architecture
+- **EpisodeManager**: Handles episode lifecycle and returns Step objects directly
 - **Task**: High-level security scenarios (renamed from DomainTask for clarity)
 - **SubTask**: Internal checkpoints with automatic progression based on command execution
 - **Episode**: Complete task attempts with action-response tracking for RL training
 - **RL Compatibility**: Gym-style step() and reset() methods for reinforcement learning
-- **Reduced Complexity**: Refactored from 655 to 308 lines for better maintainability
 
 ##### TaskConfigLoader
 Specialized YAML configuration management:
 
-##### SubTaskProgressionEngine
-DAG-based progression logic management:
+##### Task with Embedded Progression Logic
+Each Task instance contains progression logic directly for simplified architecture and management:
 
 ##### EpisodeManager
 Simplified episode management for RL workflows:
 - **Episode Lifecycle**: Start, step, end operations
-- **State Management**: Build observations and track episode completion
+- **Step Creation**: Returns Step objects directly from step() method
 - **Command Extraction**: Extract commands from DockerCLIExecutor for completion matching
-- **RL Integration**: Provides gym-compatible interfaces and reward calculation
+- **RL Integration**: Provides gym-compatible interfaces
 - **Active Episodes Only**: No history tracking for simplified operation
 
 #### MCPServer (FastMCP Integration)
@@ -274,7 +283,7 @@ Persistent storage for evaluation data:
 - ✅ Basic task and subtask management framework
 
 ### Phase 2 (Current) - 🔄 IN PROGRESS
-- ✅ **TaskManager Refactoring**: Extracted TaskConfigLoader, SubTaskProgressionEngine, enhanced EpisodeManager
+- ✅ **TaskManager Refactoring**: Extracted TaskConfigLoader, embedded progression logic in Task, simplified EpisodeManager
 - ✅ **RL Gym Integration**: Implemented step() and reset() methods for reinforcement learning compatibility
 - ✅ **DAG Progression Logic**: Automated subtask progression based on command execution and dependencies
 - ✅ **Architecture Cleanup**: Reduced TaskManager from 655 to 308 lines with single responsibility principle

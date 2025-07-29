@@ -52,89 +52,36 @@ package "Task Management" {
         +domain: str
         +tasks: Dict[str, Task]
         +config_loader: TaskConfigLoader
-        +progression_engine: SubTaskProgressionEngine
         +episode_manager: EpisodeManager
         --
         +get_task(): Task
-        +get_subtask(): SubTask
         +start_episode(): Episode
-        +get_current_episode(): Episode?
-        +step(action, tool_result?): StepResult
+        +step(action, tool_result?): Step
         +reset(): Episode
-        +end_episode(): EpisodeResult
+        +end_episode(): Episode
         +list_tasks(): List[Dict]
-        +get_episode_info(): Dict
-        +_get_current_objective(): str?
-    }
-
-    class TaskConfigLoader {
-        +domain: str
-        --
-        +load_tasks_from_file(): Dict[str, Task]
-        +_parse_task(): Task
-        +_parse_subtask(): SubTask
-        +_validate_all_dependencies(): void
-    }
-
-    class SubTaskProgressionEngine {
-        --
-        +check_subtask_progression(): void
-        +initialize_episode_subtasks(): void
-        +_update_step_subtask_state(): void
-        +_check_completed_subtasks(): set
-        +_check_available_subtasks(): set
     }
 
     class Task {
         +task_id: str
-        +domain: str
         +title: str
-        +description: str
         +subtasks: List[SubTask]
-        +initial_context: Dict[str, Any]
         --
-        +add_subtask(): void
-        +get_subtask_by_id(): SubTask?
-        +check_progression_criteria(): SubTask?
-        +get_current_checkpoint(): SubTask?
-        +is_complete(): bool
-        +get_first_subtask(): SubTask
-        +get_completion_percentage(): float
-        +validate_dependencies(): List[str]
+        +initialize_episode(): void
+        +check_episode_progression(): void
         +get_all_subtask_ids(): Set[str]
-    }
-
-    class SubTask {
-        +subtask_id: str
-        +task_id: str
-        +title: str
-        +description: str
-        +objective: str
-        +completion_conditions: List[str]
-        +depends_on: List[str]
-        --
-        +check_entry_conditions(): bool
-        +check_exit_conditions(): bool
-        +is_dependent_on(): bool
-        +_command_was_executed(): bool
+        +_update_step_subtask_state(): void
+        +_check_completed_subtasks(): Set[str]
+        +_check_available_subtasks(): Set[str]
     }
 
     class EpisodeManager {
         +active_episodes: Dict[str, Episode]
         --
         +start_episode(): Episode
-        +step(session_id, action, tool_result?, task_info, task?, progression_engine?): StepResult
-        +end_episode(): EpisodeResult
-        +reset_episode(): Episode
-        +get_episode_state(): EpisodeState?
+        +step(): Step
+        +end_episode(): Episode
         +get_current_episode(): Episode?
-        +create_step(tool_result?): Step
-        +update_episode_state(): void
-        +build_observation(): Observation
-        +is_episode_complete(): bool
-        +_extract_command_from_action(): str?
-        +_get_episode_progress_info(): Dict[str, Any]
-        +cleanup_session(): void
     }
 
     class Episode {
@@ -143,40 +90,9 @@ package "Task Management" {
         +session_id: str
         +state: EpisodeState
         +steps: List[Step]
-        +context: Dict[str, Any]
+        +completion_reason: str?
         --
         +add_step(): void
-        +get_executed_commands(): List[str]
-    }
-
-    class Step {
-        +step_number: int
-        +action: Action
-        +response: Dict[str, Any]
-        +current_subtask: str?
-        +completed_subtasks: Set[str]
-        +reward: float?
-        +done: bool
-    }
-
-    class Action {
-        +tool_name: str
-        +parameters: Dict[str, Any]
-        +command: str?
-        +timestamp: datetime
-    }
-
-    class Observation {
-        +episode_id: str
-        +task_id: str
-        +current_step: int
-        +current_subtask_id: str?
-        +current_objective: str?
-        +subtask_states: Dict[str, SubTaskState]
-        +executed_commands: List[str]
-        +context: Dict[str, Any]
-        +is_complete: bool
-        +current_state: EpisodeState
     }
 
     enum EpisodeState {
@@ -196,115 +112,33 @@ package "Tool Execution Framework" {
         --
         +execute_tool(): ToolResult
         +list_tools(): List[Tool]
-        +handle_tool_call(): ToolResult
         +to_mcp_tools(): List[Dict[str, Any]]
     }
 
     class ExecutionManager {
-        +_configuration: ExecutionConfiguration
         +_cli_tool: DockerCLIExecutor
         +_security_validator: SecurityValidator
         +_sandbox_manager: SandboxManager
-        +_semaphore: Semaphore
         --
         +execute_command(): ToolResult
         +validate_command(): ValidationResult
         +get_security_info(): Dict[str, Any]
-        +to_mcp_tools(): List[Dict[str, Any]]
-        +get_execution_stats(): Dict[str, Any]
-        +load_configuration(): void
-        +get_configuration(): ExecutionConfiguration
-    }
-
-    class ExecutionConfiguration {
-        +_config: Dict[str, Any]
-        --
-        +load_configuration(): void
-        +get_execution_config(): Dict[str, Any]
-        +get_security_config(): Dict[str, Any]
-        +get_cli_config(): Dict[str, Any]
-        +get_sandbox_config(): Dict[str, Any]
-        +get_execution_timeout(): float
-        +get_max_concurrent(): int
-        +get_allowed_commands(): List[str]
-        +get_max_command_length(): int
     }
 
     class DockerCLIExecutor {
-        +_security_tool_metadata: Dict
         +_sandbox_manager: SandboxManager
         --
-        +__init__(sandbox_manager, cli_config): void
-        +build_command(): List[str]
-        +parse_output(): ToolResult
         +execute(): ToolResult
         +validate_parameters(): ValidationResult
         +to_mcp_schema(): Dict[str, Any]
-        +get_security_info(): Dict[str, Any]
     }
 
     class SandboxManager {
-        +sandbox_config: Dict[str, Any]
         +active_sessions: Dict[str, DockerExecutionEnvironment]
         --
         +create_session_environment(): DockerExecutionEnvironment
-        +get_session_environment(): Optional[DockerExecutionEnvironment]
         +cleanup_session(): void
         +cleanup_all_sessions(): void
-        +list_active_sessions(): List[str]
-    }
-
-    class DockerExecutionEnvironment {
-        +session_id: str
-        +container: Container
-        +docker_client: DockerClient
-        --
-        +start(): void
-        +stop(): void
-        +execute_command(): CommandResult
-        +is_healthy(): bool
-    }
-
-    class ToolExecutor {
-        +timeout: Optional[float]
-        +parameters: Dict[str, Parameter]
-        --
-        {abstract} +execute(): ToolResult
-        +get_timeout(): Optional[float]
-        +get_parameters(): Dict[str, Parameter]
-        +add_parameter(): void
-        +validate_parameters(): ValidationResult
-        +to_mcp_schema(): Dict[str, Any]
-    }
-
-    class SecurityValidator {
-        +allowed_commands: Set[str]
-        --
-        +validate_base_command(): void
-        +validate_command_string(): ValidationResult
-        +validate_arguments(): ValidationResult
-        +validate_full_command(): ValidationResult
-        +is_safe_path(): bool
-        +get_security_info(): Dict[str, Any]
-    }
-
-    class Parameter {
-        +name: str
-        +type: ParameterType
-        +required: bool
-        +default: Any
-        +description: str
-        --
-        +validate_value(): tuple[bool, str]
-    }
-
-    enum ParameterType {
-        STRING
-        INTEGER
-        BOOLEAN
-        ARRAY
-        OBJECT
-        NUMBER
     }
 }
 
@@ -368,30 +202,14 @@ SessionManager *-- MCPServer
 SessionManager *-- PolicyManager
 SessionManager *-- EvaluationManager
 
-TaskManager *-- TaskConfigLoader
-TaskManager *-- SubTaskProgressionEngine
 TaskManager *-- EpisodeManager
 TaskManager *-- Task
-TaskConfigLoader ..> Task : creates
-TaskConfigLoader ..> SubTask : creates
-SubTaskProgressionEngine ..> Task : uses
-SubTaskProgressionEngine ..> Episode : modifies
-Task *-- SubTask
+Task ..> EpisodeState
 EpisodeManager *-- Episode
-Episode *-- Step
-Step *-- Action
-Episode ..> EpisodeState
-EpisodeManager ..> Observation : creates
 
 MCPServer *-- ExecutionManager
-ExecutionManager *-- ExecutionConfiguration
 ExecutionManager *-- DockerCLIExecutor
-ExecutionManager *-- SecurityValidator
 ExecutionManager *-- SandboxManager
-SandboxManager *-- DockerExecutionEnvironment
-ToolExecutor <|-- DockerCLIExecutor
-ToolExecutor *-- Parameter
-Parameter ..> ParameterType
 
 PolicyManager *-- PolicyDocument
 EvaluationManager *-- TrajectoryStore
@@ -400,68 +218,38 @@ ActionTracker *-- ActionRecord
 
 note top of TaskManager
 **Task Orchestrator**
-Simplified to focus on coordination between specialized components.
-Delegates YAML parsing to TaskConfigLoader.
-Delegates DAG progression to SubTaskProgressionEngine.
-Delegates episode state management to enhanced EpisodeManager.
+Coordinates task loading and episode management.
 Provides RL gym-style interfaces (step, reset).
+Delegates to Task instances for progression logic.
+See task_framework_architecture.puml for detailed Task design.
 end note
 
-note top of TaskConfigLoader
-**YAML Configuration Loader**
-Handles all YAML parsing and task definition loading.
-Creates Task and SubTask objects from configuration.
-Validates task dependencies and structure.
-Single responsibility: configuration management only.
-end note
-
-note top of SubTaskProgressionEngine
-**DAG Progression Logic**
-Manages subtask state transitions and dependency validation.
-Handles automatic progression based on command execution.
-Updates episode subtask states (completed/in_progress/not_visited).
-Encapsulates all DAG-based progression logic.
+note left of Task
+**Task with Embedded Progression Logic**
+Tasks now contain progression logic directly for simplified architecture.
+Handles DAG-based subtask progression automatically.
+See task_framework_architecture.puml for complete Task framework.
 end note
 
 note top of EpisodeManager
-**Enhanced Episode Manager**
-Original episode lifecycle management plus episode state operations.
-Now includes observation building and completion detection.
-Command extraction for subtask completion matching.
-Single source of truth for all episode-related operations.
+**Episode Manager**
+Focuses on episode lifecycle management and step creation.
+Returns Step objects directly from step() method.
+Manages RL-compatible episode state transitions.
 end note
 
 note top of MCPServer
 **Tool Execution Hub**
 Delegates to ExecutionManager for Docker CLI tool execution.
-Provides MCP integration layer.
-Simplified architecture for MVP.
+Provides MCP integration layer for tool access.
+See tool_execution_architecture.puml for detailed Tool framework.
 end note
 
 note top of ExecutionManager
 **Docker Sandbox Execution Manager**
-Single DockerCLIExecutor tool with comprehensive security validation.
-Docker container isolation for all command execution.
-Security validation performed before command execution.
-Built-in concurrency control and MCP schema generation.
-Session-based container management via SandboxManager.
-end note
-
-note top of DockerCLIExecutor
-**Docker-based CLI Tool**
-Directly inherits from ToolExecutor (simplified architecture).
-All commands executed in isolated Docker containers.
-Requires SandboxManager for container lifecycle management.
-Session-based container isolation with automatic cleanup.
-Security validation handled at ExecutionManager level.
-end note
-
-note bottom of SandboxManager
-**Docker Container Manager**
-Manages Docker container lifecycle for sessions.
-Creates and destroys containers per session.
-Health monitoring and automatic cleanup.
-Configurable container security settings.
+Manages Docker-based tool execution with security validation.
+Coordinates between CLI executor and sandbox management.
+See tool_execution_architecture.puml for complete Tool design.
 end note
 
 @enduml
