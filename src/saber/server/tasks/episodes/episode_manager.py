@@ -1,27 +1,16 @@
 """EpisodeManager implementation for RL-friendly task execution."""
 
+from dataclasses import asdict
 from datetime import datetime
-from enum import Enum
 from logging import getLogger
 from typing import Any, Dict, Optional
 
 from ...tools.base import ToolResult
-from ..core.task import Task
+from ..base import Action, EpisodeState, Step
 from ..exceptions import EpisodeNotFoundException
-from .episode import Action, Episode, Step
+from .episode import Episode
 
 logger = getLogger(__name__)
-
-
-class EpisodeState(Enum):
-    """States for RL training episodes."""
-
-    CREATED = "created"
-    ACTIVE = "active"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    TIMEOUT = "timeout"
-    RESET = "reset"
 
 
 class EpisodeManager:
@@ -72,7 +61,6 @@ class EpisodeManager:
         session_id: str,
         action: Action,
         tool_result: ToolResult,
-        task: Task,
         current_objective: Optional[str] = None,
     ) -> Step:
         """
@@ -82,7 +70,6 @@ class EpisodeManager:
             session_id: ID of the session
             action: Action to execute
             tool_result: ToolResult from tool execution
-            task: Task instance for progression logic
             current_objective: Current objective based on active subtasks
 
         Returns:
@@ -105,13 +92,6 @@ class EpisodeManager:
 
         # Add step to episode
         episode.add_step(step)
-
-        # Handle progression through the task
-        task.check_episode_progression(episode, step)
-
-        # Check if episode is complete and update step
-        all_subtask_ids = task.get_all_subtask_ids()
-        step.done = self.is_episode_complete(episode, all_subtask_ids)
 
         return step
 
@@ -207,13 +187,8 @@ class EpisodeManager:
         Returns:
             Created Step instance (not yet added to episode)
         """
-        response_dict = {
-            "success": response.success,
-            "data": response.data,
-            "error": response.error,
-            "execution_time": response.execution_time,
-            "metadata": response.metadata,
-        }
+        # Convert ToolResult to dictionary using dataclass asdict
+        response_dict = asdict(response)
 
         # Extract command from action for completion matching
         command = self._extract_command_from_action(action)
@@ -221,7 +196,7 @@ class EpisodeManager:
 
         # Create step without adding it to episode yet
         step = Step(
-            step_number=len(episode.steps) + 1,
+            step_number=len(episode.steps),
             timestamp=datetime.utcnow(),
             action=action,
             response=response_dict,
@@ -316,16 +291,3 @@ class EpisodeManager:
             Current Episode instance, or None if no active episode
         """
         return self.active_episodes.get(session_id)
-
-    def is_episode_complete(self, episode: Episode, all_subtask_ids: set) -> bool:
-        """
-        Check if episode is complete (all subtasks completed).
-
-        Args:
-            episode: Episode to check
-            all_subtask_ids: Set of all subtask IDs in the task
-
-        Returns:
-            True if episode is complete
-        """
-        return episode.completed_subtasks >= all_subtask_ids

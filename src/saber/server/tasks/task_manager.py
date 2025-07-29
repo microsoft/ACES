@@ -5,10 +5,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..tools.base import ToolResult
+from .base import Action
 from .core.subtask import SubTask
 from .core.task import Task
 from .core.task_config_loader import TaskConfigLoader
-from .episodes.episode import Action, Episode, Step
+from .episodes.episode import Episode, Step
 from .episodes.episode_manager import EpisodeManager
 from .exceptions import EpisodeNotFoundException, SubTaskNotFoundException, TaskNotFoundException
 
@@ -163,13 +164,20 @@ class TaskManager:
 
         logger.debug(f"Executing step for session '{session_id}', action: {action.tool_name}")
 
-        return self.episode_manager.step(
+        step = self.episode_manager.step(
             session_id=session_id,
             action=action,
             tool_result=tool_result,
-            task=task,
             current_objective=current_objective,
         )
+
+        # Handle progression through the task
+        task.check_episode_progression(episode, step)
+
+        # Check if episode is complete and update step
+        all_subtask_ids = task.get_all_subtask_ids()
+        step.done = episode.completed_subtasks >= all_subtask_ids
+        return step
 
     def reset(self, session_id: str, task_id: str) -> Episode:
         """

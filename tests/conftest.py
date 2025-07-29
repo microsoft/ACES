@@ -23,123 +23,6 @@ from saber.server.tools.execution_manager import ExecutionManager
 logger = logging.getLogger(__name__)
 
 
-class MockExecutor(ToolExecutor):
-    """
-    Mock executor for testing and development.
-
-    Returns predefined responses for testing purposes.
-    """
-
-    def __init__(self, mock_response: Any = None, mock_error: Optional[str] = None,
-                 delay: float = 0.0, timeout: Optional[float] = None):
-        """
-        Initialize mock executor.
-
-        Args:
-            mock_response: Response to return on success
-            mock_error: Error message to return on failure
-            delay: Artificial delay in seconds
-            timeout: Execution timeout in seconds
-        """
-        super().__init__(timeout)
-        self._mock_response = mock_response
-        self._mock_error = mock_error
-        self._delay = delay
-
-    async def execute(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> ToolResult:
-        """
-        Execute mock tool.
-
-        Args:
-            parameters: Tool parameters (logged but not used)
-            context: Execution context (logged but not used)
-
-        Returns:
-            ToolResult with mock response
-        """
-        # Add artificial delay if specified
-        if self._delay > 0:
-            await asyncio.sleep(self._delay)
-
-        # Log execution for debugging
-        logger.debug(f"Mock tool executed with parameters: {parameters}")
-
-        # Return error or success based on configuration
-        if self._mock_error:
-            return ToolResult.error_result(self._mock_error)
-        else:
-            return ToolResult.success_result(self._mock_response or {"status": "success", "parameters": parameters})
-
-
-class TestCommandLineExecutor(DockerCLIExecutor):
-    """Test implementation of DockerCLIExecutor for security testing."""
-
-    def __init__(self, command="echo", **kwargs):
-        super().__init__(**kwargs)
-        self._command = command
-
-    def build_command(self, parameters, context):
-        """Simple command builder for testing."""
-        text = parameters.get("text", "hello")
-        return [self._command, text]
-
-    def parse_output(self, stdout, stderr, return_code):
-        """Simple output parser for testing."""
-        if return_code != 0:
-            return ToolResult.error_result(f"Command failed: {stderr}")
-        return ToolResult.success_result({"output": stdout.strip()})
-
-
-class TestEchoTool(DockerCLIExecutor):
-    """Test tool for configuration testing."""
-
-    _security_tool_metadata = {
-        "domain": "malware",
-        "name": "test_echo_tool",
-        "description": "Test echo tool for configuration testing",
-        "author": "Test Suite"
-    }
-
-    def __init__(self):
-        super().__init__(command="echo", allowed_commands=["echo"])
-        self.add_parameter(Parameter(
-            name="text",
-            type=ParameterType.STRING,
-            description="Text to echo",
-            required=True
-        ))
-
-    def build_command(self, parameters, context):
-        return ["echo", parameters["text"]]
-
-    def parse_output(self, stdout, stderr, return_code):
-        if return_code != 0:
-            return ToolResult.error_result(f"Command failed: {stderr}")
-        return ToolResult.success_result({"output": stdout.strip()})
-
-
-class TestDangerousTool(DockerCLIExecutor):
-    """Test tool that should be blocked by security configuration."""
-
-    _security_tool_metadata = {
-        "domain": "malware",
-        "name": "test_dangerous_tool",
-        "description": "Dangerous tool for security testing",
-        "author": "Test Suite"
-    }
-
-    def __init__(self):
-        # This should fail if security is properly configured - rm is blocked and not allowed
-        super().__init__()
-        self._command = "rm"
-
-    def build_command(self, parameters, context):
-        return ["rm", "-rf", "/"]
-
-    def parse_output(self, stdout, stderr, return_code):
-        return ToolResult.success_result({"output": "Should never execute"})
-
-
 # Test fixtures
 @pytest.fixture
 def test_config_path():
@@ -181,3 +64,75 @@ def temp_sandbox_dir():
     """Create a temporary directory for sandbox testing."""
     with tempfile.TemporaryDirectory() as temp_dir:
         yield Path(temp_dir)
+
+
+# Task Framework Test Fixtures
+
+@pytest.fixture
+def sample_task_yaml():
+    """Sample YAML content for task configuration testing."""
+    return """
+domain: "malware_classification"
+tasks:
+  - task_id: "malware_family_analysis"
+    title: "Malware Family Classification and Analysis"
+    description: "Analyze malware sample to determine family, capabilities, and threat level"
+    initial_context:
+      sample_path: "/data/samples/unknown_sample.exe"
+      analysis_timeout: 300
+    subtasks:
+      - subtask_id: "static_analysis"
+        title: "Static Analysis"
+        description: "Perform static analysis of the malware sample"
+        objective: "Extract basic file properties, strings, and structural information"
+        completion_conditions: ["file unknown_sample.exe", "strings unknown_sample.exe"]
+        depends_on: []
+      - subtask_id: "dynamic_analysis"
+        title: "Dynamic Analysis"
+        description: "Execute sample in sandboxed environment"
+        objective: "Observe runtime behavior and system interactions"
+        completion_conditions: ["sandbox_run unknown_sample.exe"]
+        depends_on: ["static_analysis"]
+"""
+
+
+@pytest.fixture
+def temp_tasks_file(tmp_path, sample_task_yaml):
+    """Create a temporary YAML file with task configuration."""
+    tasks_file = tmp_path / "test_tasks.yaml"
+    tasks_file.write_text(sample_task_yaml)
+    return str(tasks_file)
+
+
+@pytest.fixture
+def sample_subtask_data():
+    """Sample subtask data for testing."""
+    return {
+        "subtask_id": "test_subtask",
+        "task_id": "test_task",
+        "title": "Test SubTask",
+        "description": "A test subtask for unit testing",
+        "objective": "Complete the test objectives",
+        "completion_conditions": ["test_command", "another_command"],
+        "depends_on": ["prerequisite_subtask"]
+    }
+
+
+@pytest.fixture
+def sample_action():
+    """Sample action for episode testing."""
+    from saber.server.tasks.episodes.episode import Action
+    return Action(
+        tool_name="docker_cli_executor",
+        parameters={"command": "file sample.exe"},
+        command="file sample.exe"
+    )
+
+
+@pytest.fixture
+def sample_tool_result():
+    """Sample tool result for testing."""
+    return ToolResult.success_result({
+        "output": "sample.exe: PE32 executable",
+        "file_type": "PE32"
+    })

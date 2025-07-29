@@ -91,7 +91,6 @@ package "Episode Management" {
         +get_current_episode(): Episode?
         +create_step(tool_result?): Step
         +update_episode_state(): void
-        +is_episode_complete(): bool
         +_extract_command_from_action(): str?
         +_get_episode_progress_info(): Dict[str, Any]
         +cleanup_session(): void

@@ -3,7 +3,8 @@
 from logging import getLogger
 from typing import Any, Dict, List, Optional, Set
 
-from ..episodes.episode import Action, Episode, Step
+from ..base import Action, Step
+from ..episodes.episode import Episode
 from .subtask import SubTask
 
 logger = getLogger(__name__)

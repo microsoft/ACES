@@ -1,7 +1,8 @@
 """RL episode management."""
 
-from .episode import Action, Episode, Step
-from .episode_manager import EpisodeManager, EpisodeState
+from ..base import Action, EpisodeState, Step
+from .episode import Episode
+from .episode_manager import EpisodeManager
 
 __all__ = [
     "EpisodeManager",
