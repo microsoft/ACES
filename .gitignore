@@ -33,6 +33,9 @@ build/
 # Ignore .gitconfig and other git-related files
 .gitconfig
 
+# Ignore binaries
+bin/
+
 # Ignore environment variable files
 .env
 

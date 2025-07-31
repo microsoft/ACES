@@ -12,23 +12,18 @@ skinparam class {
 
 package "Domain Server Core" {
 
-    class DomainServer {
-        +domain_name: str
-        +session_manager: SessionManager
-        --
-        +start_server(): void
-        +handle_client_connection(): ClientSession
-        +shutdown(): void
-    }
-
     class SessionManager {
+        +domain_name: str
         +active_sessions: Dict[str, ClientSession]
         +task_manager: TaskManager
         +mcp_server: MCPServer
         +policy_manager: PolicyManager
         +evaluation_manager: EvaluationManager
         --
+        +start_server(): void
+        +shutdown(): void
         +create_session(): ClientSession
+        +handle_client_connection(): ClientSession
         +execute_command(): CommandResult
         +get_current_task(): SubTask
         +get_policy(): PolicyDocument
@@ -195,7 +190,6 @@ package "Policy and Evaluation" {
 }
 
 ' Relationships
-DomainServer *-- SessionManager
 SessionManager *-- ClientSession
 SessionManager *-- TaskManager
 SessionManager *-- MCPServer
@@ -216,6 +210,16 @@ EvaluationManager *-- TrajectoryStore
 EvaluationManager *-- ActionTracker
 ActionTracker *-- ActionRecord
 
+note top of SessionManager
+**SABER Domain Server & Session Manager**
+- Hosts one security domain (scalable to multiple instances)
+- Manages multiple concurrent client sessions
+- Single point of access for all client interactions
+- Orchestrates task execution and command processing
+- Handles server lifecycle (start/shutdown)
+- Coordinates all server components
+- Built for horizontal scaling with load balancing
+end note
 note top of TaskManager
 **Task Orchestrator**
 Coordinates task loading and episode management.

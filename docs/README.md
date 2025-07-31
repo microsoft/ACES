@@ -82,15 +82,18 @@ cli:
 
 ### Server Side Architecture
 
-#### DomainServer
+#### SessionManager (SABER Domain Server)
 The central orchestrator for each security domain, responsible for:
-- Hosting the SessionManager as the unified client endpoint
+- Hosting the domain and managing server lifecycle (start/shutdown)
+- Managing multiple concurrent client sessions
 - Providing domain-specific information and capabilities
+- Serving as the unified endpoint for all client interactions
+- Coordinating all server components
+- Built for horizontal scaling with multiple instances behind load balancing
 
-#### SessionManager
-Unified endpoint for all client interactions:
-- **Session Lifecycle**: Creates, tracks, and manages client sessions
-- **Single-Client Enforcement**: Ensures only one client per domain server (MVP)
+**Core Responsibilities:**
+- **Session Lifecycle**: Creates, tracks, and manages multiple client sessions
+- **Multi-Client Support**: Handles concurrent client connections (scalable architecture)
 - **Unified API**: Coordinates all client requests across server components
 - **Task Orchestration**: Delegates to TaskManager for workflow management
 - **Command Execution**: Delegates to MCPServer for all command operations
@@ -248,8 +251,9 @@ Persistent storage for evaluation data:
 ## Deployment Considerations
 
 ### Scalability
-- **Horizontal Scaling**: Multiple domain server instances
-- **Load Balancing**: Client distribution across server instances
+- **Horizontal Scaling**: Multiple SessionManager instances (each handling multiple sessions)
+- **Load Balancing**: Client distribution across SessionManager instances
+- **Session Multiplexing**: Each SessionManager handles multiple concurrent client sessions
 - **Resource Management**: Command execution isolation and comprehensive resource limits
 - **Concurrency Control**: Thread-safe operations with configurable execution limits
 

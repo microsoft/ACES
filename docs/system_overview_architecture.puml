@@ -23,23 +23,18 @@ skinparam note {
 
 package "SABER Server Side" {
 
-    class DomainServer {
-        +domain_name: str
-        +session_manager: SessionManager
-        --
-        +start_server(): void
-        +handle_client_connection(): ClientSession
-        +shutdown(): void
-    }
-
     class SessionManager {
+        +domain_name: str
         +active_sessions: Dict[str, ClientSession]
         +task_manager: TaskManager
         +mcp_server: MCPServer
         +policy_manager: PolicyManager
         +evaluation_manager: EvaluationManager
         --
+        +start_server(): void
+        +shutdown(): void
         +create_session(): ClientSession
+        +handle_client_connection(): ClientSession
         +execute_command(): CommandResult
         +get_current_task(): SubTask
         +get_policy(): PolicyDocument
@@ -209,7 +204,6 @@ package "Communication Layer" {
 }
 
 ' Server Internal Relationships
-DomainServer *-- SessionManager
 SessionManager *-- TaskManager
 SessionManager *-- MCPServer
 SessionManager *-- PolicyManager
@@ -231,21 +225,17 @@ Message <|-- TaskAssignment
 
 ' Cross-boundary Communication
 AgentClient ..> SessionManager : "HTTP/SSE API"
-SessionConnection ..> DomainServer : "Real-time Communication"
-
-note top of DomainServer
-**Core Server Instance**
-- Hosts one security domain
-- Manages client sessions
-- Coordinates all server components
-end note
+SessionConnection ..> SessionManager : "Real-time Communication"
 
 note top of SessionManager
-**Unified Client Endpoint**
-- Single point of access for clients
-- Orchestrates task execution
-- Manages command execution via MCPServer
-- Enforces single-client constraint
+**SABER Domain Server & Session Manager**
+- Hosts one security domain (scalable to multiple instances)
+- Manages multiple concurrent client sessions
+- Single point of access for all client interactions
+- Orchestrates task execution and command processing
+- Handles server lifecycle (start/shutdown)
+- Coordinates all server components
+- Built for horizontal scaling with load balancing
 end note
 
 note top of MCPServer
