@@ -22,16 +22,15 @@ package "Execution Management" {
 
     class ExecutionManager {
         +_configuration: ExecutionConfiguration
-                +_cli_command: DockerCLIExecutor
+        +_cli_command: DockerCLIExecutor
         +_security_validator: SecurityValidator
         +_sandbox_manager: SandboxManager
         --
-        +execute_command(): CommandResult
+        +step(): CommandResult
         +validate_command(): ValidationResult
         +get_security_info(): Dict[str, Any]
-        +to_mcp_commands(): List[Dict[str, Any]]
+        +list_commands(): List[Dict[str, Any]]
         +get_execution_stats(): Dict[str, Any]
-        +list_commands(): List[str]
         +get_command_count(): Dict[str, int]
     }
 
@@ -205,7 +204,7 @@ Central hub for all command execution components including:
 - Configuration management and security enforcement
 - Security validation performed before command execution
 - Sandbox manager for Docker container lifecycle management
-- MCP schema generation and command conversion
+- Command listing for REST API integration
 - Execution monitoring and concurrency control
 - All command execution framework unified under single manager
 end note

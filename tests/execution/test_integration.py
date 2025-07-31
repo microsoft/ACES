@@ -70,7 +70,7 @@ class TestToolsIntegration:
 
         # Mock sandbox manager to return our environment
         with patch.object(registry._sandbox_manager, 'get_session_environment', return_value=mock_env):
-            result = await registry.execute_command(parameters, context)
+            result = await registry.step(parameters, context)
 
         # Verify complete success flow
         assert result.success is True
@@ -84,7 +84,7 @@ class TestToolsIntegration:
         parameters = {"command": "sudo rm -rf /"}
         context = {"session_id": "integration_test_002"}
 
-        result = await registry.execute_command(parameters, context)
+        result = await registry.step(parameters, context)
 
         # Should be blocked by security validation
         assert result.success is False
@@ -110,7 +110,7 @@ class TestToolsIntegration:
         mock_env.get_container_id.return_value = "whitelist_container_456"
 
         with patch.object(registry._sandbox_manager, 'get_session_environment', return_value=mock_env):
-            result = await registry.execute_command(parameters, context)
+            result = await registry.step(parameters, context)
 
         assert result.success is True
         assert result.data["stdout"] == "test\n"
@@ -144,7 +144,7 @@ class TestToolsIntegration:
         with patch.object(registry._sandbox_manager, 'get_session_environment', return_value=mock_env):
             # Execute all commands concurrently
             tasks = [
-                asyncio.create_task(registry.execute_command(params, context))
+                asyncio.create_task(registry.step(params, context))
                 for params, context in zip(parameters_list, contexts_list)
             ]
 
@@ -175,12 +175,12 @@ class TestToolsIntegration:
         mock_env.get_container_id.return_value = "shell_test_container"
 
         with patch.object(registry._sandbox_manager, 'get_session_environment', return_value=mock_env) as mock_get_env:
-            result = await registry.execute_command(parameters, context)
+            result = await registry.step(parameters, context)
 
         assert result.success is True
         assert result.data["stdout"] == "hello world\n"
 
-        # Verify Docker execute_command was called with shell format
+        # Verify Docker step was called with shell format
         mock_env.execute_command.assert_called_once_with(
             command=["/bin/sh", "-c", "echo 'hello world'"],
             working_dir="/workspace"
@@ -221,12 +221,12 @@ class TestToolsIntegration:
     async def test_parameter_validation_integration(self, registry):
         """Test parameter validation integration."""
         # Test missing required parameter
-        result = await registry.execute_command({"shell": True})  # Missing command
+        result = await registry.step({"shell": True})  # Missing command
         assert result.success is False
         assert "Parameter validation failed" in result.error
 
         # Test invalid parameter type
-        result = await registry.execute_command({"command": "echo test", "shell": "invalid"})
+        result = await registry.step({"command": "echo test", "shell": "invalid"})
         assert result.success is False
         assert "must be a boolean" in result.error
 
@@ -264,8 +264,8 @@ class TestToolsIntegration:
             return None
 
         with patch.object(registry._sandbox_manager, 'get_session_environment', side_effect=get_session_env):
-            result1 = await registry.execute_command(parameters1, context1)
-            result2 = await registry.execute_command(parameters2, context2)
+            result1 = await registry.step(parameters1, context1)
+            result2 = await registry.step(parameters2, context2)
 
         # Verify isolation worked
         assert result1.success is True
@@ -296,7 +296,7 @@ class TestToolsIntegration:
         mock_env.get_container_id.return_value = "error_test_container"
 
         with patch.object(registry._sandbox_manager, 'get_session_environment', return_value=mock_env):
-            result = await registry.execute_command(parameters, context)
+            result = await registry.step(parameters, context)
 
         assert result.success is False
         assert "Command failed with exit code 127" in result.error
@@ -348,7 +348,7 @@ sandbox:
 
         for cmd in dangerous_commands:
             parameters = {"command": cmd}
-            result = await registry.execute_command(parameters)
+            result = await registry.step(parameters)
 
             assert result.success is False, f"Dangerous command should be blocked: {cmd}"
             assert "Command security validation failed" in result.error
@@ -402,7 +402,7 @@ sandbox:
             context = {"session_id": f"analysis_session_{i}"}
 
             with patch.object(registry._sandbox_manager, 'get_session_environment', return_value=mock_env):
-                result = await registry.execute_command(params, context)
+                result = await registry.step(params, context)
                 results.append(result)
 
         # All analysis commands should succeed

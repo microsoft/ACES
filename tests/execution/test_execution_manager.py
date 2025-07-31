@@ -273,7 +273,7 @@ class TestExecutionManager:
         mock_cli_config.assert_called_once_with(None, "test_config.yaml")
 
     @pytest.mark.asyncio
-    async def test_execute_command_success(self, registry):
+    async def test_step_success(self, registry):
         """Test successful command execution."""
         parameters = {"command": "echo test", "shell": False}
         context = {"session_id": "test123"}
@@ -284,40 +284,40 @@ class TestExecutionManager:
 
         with patch.object(registry._cli_tool, 'validate_parameters', return_value=ValidationResult.success()):
             with patch.object(registry._cli_tool, 'execute', return_value=expected_result) as mock_execute:
-                result = await registry.execute_command(parameters, context)
+                result = await registry.step(parameters, context)
 
         assert result.success is True
         assert result.data["stdout"] == "test\n"
         mock_execute.assert_called_once_with(parameters, context)
 
     @pytest.mark.asyncio
-    async def test_execute_command_validation_failure(self, registry):
+    async def test_step_validation_failure(self, registry):
         """Test command execution with parameter validation failure."""
         parameters = {"invalid": "params"}
 
         validation_result = ValidationResult.failure(["Missing required parameter 'command'"])
 
         with patch.object(registry._cli_tool, 'validate_parameters', return_value=validation_result):
-            result = await registry.execute_command(parameters)
+            result = await registry.step(parameters)
 
         assert result.success is False
         assert "Parameter validation failed" in result.error
         assert "Missing required parameter 'command'" in result.error
 
     @pytest.mark.asyncio
-    async def test_execute_command_execution_exception(self, registry):
+    async def test_step_execution_exception(self, registry):
         """Test command execution with exception during execution."""
         parameters = {"command": "test"}
 
         with patch.object(registry._cli_tool, 'validate_parameters', return_value=ValidationResult.success()):
             with patch.object(registry._cli_tool, 'execute', side_effect=Exception("Execution failed")):
-                result = await registry.execute_command(parameters)
+                result = await registry.step(parameters)
 
         assert result.success is False
         assert "Execution failed" in result.error
 
     @pytest.mark.asyncio
-    async def test_execute_command_concurrency_control(self, registry):
+    async def test_step_concurrency_control(self, registry):
         """Test that concurrency control works with semaphore."""
         parameters = {"command": "sleep 1"}
 
@@ -330,7 +330,7 @@ class TestExecutionManager:
             with patch.object(registry._cli_tool, 'execute', side_effect=slow_execute):
                 # Start multiple executions
                 tasks = [
-                    asyncio.create_task(registry.execute_command(parameters))
+                    asyncio.create_task(registry.step(parameters))
                     for _ in range(3)
                 ]
 
@@ -416,15 +416,15 @@ class TestExecutionManager:
         assert config == registry._configuration
 
     @pytest.mark.asyncio
-    async def test_execute_command_default_context(self, registry):
-        """Test execute_command with default context when none provided."""
+    async def test_step_default_context(self, registry):
+        """Test step with default context when none provided."""
         parameters = {"command": "echo test"}
 
         expected_result = CommandResult.success_result(data="test")
 
         with patch.object(registry._cli_tool, 'validate_parameters', return_value=ValidationResult.success()):
             with patch.object(registry._cli_tool, 'execute', return_value=expected_result) as mock_execute:
-                result = await registry.execute_command(parameters)
+                result = await registry.step(parameters)
 
         # Should be called with empty context dict
         mock_execute.assert_called_once_with(parameters, {})

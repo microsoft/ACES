@@ -16,7 +16,7 @@ package "Domain Server Core" {
         +domain_name: str
         +active_sessions: Dict[str, ClientSession]
         +task_manager: TaskManager
-        +mcp_server: MCPServer
+        +execution_manager: ExecutionManager
         +policy_manager: PolicyManager
         +evaluation_manager: EvaluationManager
         --
@@ -24,9 +24,15 @@ package "Domain Server Core" {
         +shutdown(): void
         +create_session(): ClientSession
         +handle_client_connection(): ClientSession
+        +step(): CommandResult
         +execute_command(): CommandResult
         +get_current_task(): SubTask
         +get_policy(): PolicyDocument
+        --
+        **REST API Endpoints**
+        +POST /session/{id}/step
+        +GET /session/{id}/current-task
+        +GET /session/{id}/policy
     }
 
     class ClientSession {
@@ -102,22 +108,15 @@ package "Task Management" {
 
 package "Command Execution Framework" {
 
-    class MCPServer {
-        +execution_manager: ExecutionManager
-        --
-        +execute_command(): CommandResult
-        +list_commands(): List[Command]
-        +to_mcp_commands(): List[Dict[str, Any]]
-    }
-
     class ExecutionManager {
         +_cli_command: DockerCLIExecutor
         +_security_validator: SecurityValidator
         +_sandbox_manager: SandboxManager
         --
-        +execute_command(): CommandResult
+        +step(): CommandResult
         +validate_command(): ValidationResult
         +get_security_info(): Dict[str, Any]
+        +list_commands(): List[Dict[str, Any]]
     }
 
     class DockerCLIExecutor {
@@ -192,7 +191,7 @@ package "Policy and Evaluation" {
 ' Relationships
 SessionManager *-- ClientSession
 SessionManager *-- TaskManager
-SessionManager *-- MCPServer
+SessionManager *-- ExecutionManager
 SessionManager *-- PolicyManager
 SessionManager *-- EvaluationManager
 
@@ -201,7 +200,6 @@ TaskManager *-- Task
 Task ..> EpisodeState
 EpisodeManager *-- Episode
 
-MCPServer *-- ExecutionManager
 ExecutionManager *-- DockerCLIExecutor
 ExecutionManager *-- SandboxManager
 
@@ -219,6 +217,7 @@ note top of SessionManager
 - Handles server lifecycle (start/shutdown)
 - Coordinates all server components
 - Built for horizontal scaling with load balancing
+- Provides REST API for command execution and task management
 end note
 note top of TaskManager
 **Task Orchestrator**
@@ -242,17 +241,11 @@ Returns Step objects directly from step() method.
 Manages RL-compatible episode state transitions.
 end note
 
-note top of MCPServer
-**Command Execution Hub**
-Delegates to ExecutionManager for Docker CLI command execution.
-Provides MCP integration layer for command access.
-See tool_execution_architecture.puml for detailed Command framework.
-end note
-
 note top of ExecutionManager
 **Docker Sandbox Execution Manager**
 Manages Docker-based command execution with security validation.
 Coordinates between CLI executor and sandbox management.
+Provides command listing for REST API.
 See tool_execution_architecture.puml for complete Command design.
 end note
 

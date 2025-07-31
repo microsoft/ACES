@@ -27,7 +27,7 @@ package "SABER Server Side" {
         +domain_name: str
         +active_sessions: Dict[str, ClientSession]
         +task_manager: TaskManager
-        +mcp_server: MCPServer
+        +execution_manager: ExecutionManager
         +policy_manager: PolicyManager
         +evaluation_manager: EvaluationManager
         --
@@ -35,6 +35,7 @@ package "SABER Server Side" {
         +shutdown(): void
         +create_session(): ClientSession
         +handle_client_connection(): ClientSession
+        +step(): CommandResult
         +execute_command(): CommandResult
         +get_current_task(): SubTask
         +get_policy(): PolicyDocument
@@ -55,15 +56,6 @@ package "SABER Server Side" {
         +list_tasks(): List[Dict]
     }
 
-    class MCPServer {
-        +execution_manager: ExecutionManager
-        --
-        +execute_command(): CommandResult
-        +list_commands(): List[Command]
-        +handle_command_call(): CommandResult
-        +to_mcp_commands(): List[Dict[str, Any]]
-    }
-
     class ExecutionManager {
         +_configuration: ExecutionConfiguration
         +_cli_command: DockerCLIExecutor
@@ -71,9 +63,9 @@ package "SABER Server Side" {
         +_sandbox_manager: SandboxManager
         +_semaphore: Semaphore
         --
-        +execute_command(): CommandResult
+        +step(): CommandResult
         +validate_command(): ValidationResult
-        +to_mcp_commands(): List[Dict[str, Any]]
+        +list_commands(): List[Dict[str, Any]]
         +get_security_info(): Dict[str, Any]
         +get_execution_stats(): Dict[str, Any]
     }
@@ -151,16 +143,6 @@ package "SABER Client Side" {
     }
 
     class AgentUnderTest {
-        +agent_id: str
-        +current_context: Dict[str, Any]
-        +task_state: Dict[str, Any]
-        --
-        +initialize(task_context, policy, guidelines): void
-        +analyze_situation(): TaskAnalysis
-        +generate_next_command(): CommandRequest
-        +process_command_result(result): void
-        +is_task_complete(): bool
-        +get_current_strategy(): str
     }
     class SessionConnection {
         +session_manager_url: str
@@ -205,10 +187,9 @@ package "Communication Layer" {
 
 ' Server Internal Relationships
 SessionManager *-- TaskManager
-SessionManager *-- MCPServer
+SessionManager *-- ExecutionManager
 SessionManager *-- PolicyManager
 SessionManager *-- EvaluationManager
-MCPServer *-- ExecutionManager
 ExecutionManager *-- ExecutionConfiguration
 ExecutionManager *-- DockerCLIExecutor
 ExecutionManager *-- SecurityValidator
@@ -229,23 +210,23 @@ SessionConnection ..> SessionManager : "Real-time Communication"
 
 note top of SessionManager
 **SABER Domain Server & Session Manager**
-- Hosts one security domain (scalable to multiple instances)
+- Hosts one security domain (horizontally scalable)
 - Manages multiple concurrent client sessions
-- Single point of access for all client interactions
-- Orchestrates task execution and command processing
-- Handles server lifecycle (start/shutdown)
-- Coordinates all server components
+- Single unified entry point for all client interactions
+- Integrates ExecutionManager for Docker sandbox command execution
+- Coordinates task execution and command processing
+- Provides REST API for command execution and task management
 - Built for horizontal scaling with load balancing
 end note
 
-note top of MCPServer
-**Docker Sandbox Tool Execution Layer**
-- Contains Docker-based ExecutionManager
+note top of ExecutionManager
+**Docker Sandbox Command Execution**
+- Contains single Docker-based CLI executor
 - All commands executed in isolated Docker containers
 - Session-based container management via SandboxManager
 - Security validation with Docker container isolation
-- Provides MCP-compatible interface
 - Built-in concurrency control and parameter validation
+- Simplified single command executor architecture
 end note
 
 note left of AgentUnderTest

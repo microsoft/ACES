@@ -140,11 +140,9 @@ class ExecutionManager:
 
         logger.info(f"ExecutionManager initialized with max_concurrent={max_concurrent}")
 
-    async def execute_command(
-        self, parameters: Dict[str, Any], context: Optional[Dict[str, Any]] = None
-    ) -> CommandResult:
+    async def step(self, parameters: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> CommandResult:
         """
-        Execute the CLI command with the given parameters.
+        Execute the CLI command step with the given parameters.
 
         Args:
             parameters: CLI command parameters (must include 'command')

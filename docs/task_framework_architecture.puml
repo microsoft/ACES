@@ -133,9 +133,7 @@ package "Episode Management" {
     }
 
     class Action {
-        +tool_name: str
-        +parameters: Dict[str, Any]
-        +command: Optional[str]
+        +command: str
         +timestamp: datetime
     }
 

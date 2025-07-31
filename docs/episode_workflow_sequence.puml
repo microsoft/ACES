@@ -9,11 +9,11 @@ participant "TaskManager" as TM
 participant "EpisodeManager" as EM
 participant "Task" as T
 participant "PolicyManager" as PM
-participant "MCPServer" as MCP
+participant "ExecutionManager" as EM_EXEC
 
 == Episode Initialization ==
 
-Client -> SM: start_task_episode(session_id, task_id)
+Client -> SM: POST /session/{session_id}/start-episode\n{task_id: "malware_analysis_001"}
 SM -> TM: reset(session_id, task_id)
 TM -> EM: get_current_episode(session_id)
 EM --> TM: None (no active episode)
@@ -48,24 +48,21 @@ note right of SM
   - Context hints
 end note
 
-SM -> Client: episode_info + task_context + policy + guidelines + hints
+SM -> Client: HTTP 200 OK\n{episode_info, task_context, policy, guidelines, hints}
 
 == Agent Initialization ==
 
-Client -> Agent: initialize(task_context, policy, guidelines, hints)
-Agent -> Agent: analyze task requirements
-Agent -> Agent: plan initial approach
-Agent --> Client: ready_for_commands
+Client -> Agent: Prompt(task_context + policy + guidelines + hints)
+Agent --> Client: command_string
 
 == Command Execution & RL Step ==
 
-Agent -> Agent: analyze current state
 Agent -> Agent: generate next command
-Agent -> Client: execute_command(command_name, parameters)
-Client -> SM: execute_command(session_id, command_name, parameters)
-SM -> SM: create Action(command_name, parameters)
-SM -> MCP: execute_command(command_name, parameters)
-MCP --> SM: CommandResult
+Agent -> Client: command_string
+Client -> SM: POST /session/{session_id}/step\n{command: "file malware.exe"}
+SM -> SM: create Action(command_string)
+SM -> EM_EXEC: step(command_string)
+EM_EXEC --> SM: CommandResult
 
 note right of SM
   Integration Point:
@@ -113,7 +110,12 @@ T -> T: log progression changes
 TM -> TM: check if episode is complete
 TM -> TM: set step.done = completion_status
 TM --> SM: Step
-SM -> Client: CommandResult + Step
+
+alt if episode not complete
+    SM -> Client: HTTP 200 OK\n{success: true, data: {output}, step: {done: false, subtask_states}}
+else episode complete
+    SM -> Client: HTTP 200 OK\n{success: true, data: {output}, step: {done: true, episode_complete: true, final_score}}
+end
 
 == Agent Response & Next Command Generation ==
 
@@ -124,35 +126,47 @@ Agent -> Agent: assess task progress
 
 alt if episode not complete
     Agent -> Agent: generate next command
-    Agent -> Client: execute_command(next_command, parameters)
+    Agent -> Client: command_string
     note right of Agent
-      Agent continuously processes
-      results and generates next
-      commands until episode complete
+      Agent continues with next command
+      in the same episode
     end note
-else episode complete
-    Agent -> Agent: finalize task completion
-    Agent -> Client: episode_complete_signal
+else episode complete (step.done = true)
+    Agent -> Agent: finalize episode completion
+    Client -> SM: POST /session/{session_id}/start-episode\n{task_id: "next_task_id"} [optional: start new episode]
+    note right of Client
+      Client can start a new episode
+      in the same session or end session
+    end note
 end
 
-== Episode Completion ==
+== Episode Completion (Automatic) ==
 
 note over SM, EM
-  When episode is complete (all subtasks done)
+  Episode completion is detected automatically
+  when all subtasks are finished and communicated
+  via the step.done flag in command responses
 end note
 
-Client -> SM: end_session(session_id)
-SM -> TM: end_episode(session_id, "session_ended")
+== Session Termination (Client Initiated) ==
+
+note over Client, SM
+  Sessions can contain multiple episodes.
+  Client terminates session when done with all work.
+end note
+
+Client -> SM: DELETE /session/{session_id}
+SM -> TM: end_episode(session_id, "session_ended") [if active episode exists]
 TM -> EM: get_current_episode(session_id)
-EM --> TM: episode
-TM -> EM: end_episode(session_id, "session_ended")
-EM -> EM: episode.end_time = now()
-EM -> EM: episode.state = COMPLETED/FAILED
-EM -> EM: episode.completion_reason = reason
-EM -> EM: delete from active_episodes
-EM --> TM: episode
-TM --> SM: episode
-SM -> Client: session_ended
+EM --> TM: episode [if exists]
+TM -> EM: end_episode(session_id, "session_ended") [if episode exists]
+EM -> EM: episode.end_time = now() [if episode exists]
+EM -> EM: episode.state = COMPLETED/FAILED [if episode exists]
+EM -> EM: episode.completion_reason = "session_ended" [if episode exists]
+EM -> EM: delete from active_episodes [if episode exists]
+EM --> TM: episode [if exists]
+TM --> SM: episode [if exists]
+SM -> Client: HTTP 200 OK\n{message: "Session ended successfully"}
 Client -> Agent: cleanup()
 
 note over Client, Agent
@@ -160,7 +174,9 @@ note over Client, Agent
   - Client handles all server communication
   - AgentUnderTest focuses on task execution
   - Agent receives structured context and generates commands
-  - Client manages session lifecycle
+  - Client manages session lifecycle (multiple episodes per session)
+  - Episode completion signaled via step.done flag in command responses
+  - Sessions can contain multiple sequential episodes
 end note
 
 @enduml

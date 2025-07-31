@@ -96,7 +96,7 @@ The central orchestrator for each security domain, responsible for:
 - **Multi-Client Support**: Handles concurrent client connections (scalable architecture)
 - **Unified API**: Coordinates all client requests across server components
 - **Task Orchestration**: Delegates to TaskManager for workflow management
-- **Command Execution**: Delegates to MCPServer for all command operations
+- **Command Execution**: Integrated ExecutionManager for Docker sandbox command execution
 - **Policy Retrieval**: Delegates to PolicyManager for domain guidelines
 - **Action Logging**: Delegates to EvaluationManager for performance tracking
 
@@ -125,12 +125,21 @@ Simplified episode management for RL workflows:
 - **RL Integration**: Provides gym-compatible interfaces
 - **Active Episodes Only**: No history tracking for simplified operation
 
-#### MCPServer (FastMCP Integration)
-Complete command execution layer:
-- **Command Registry**: Contains and manages all domain-specific security commands
-- **Command Execution**: Handles all command operations with context awareness
-- **MCP Endpoints**: Can expose standard MCP protocol for development/testing
-- **Internal Service**: Used internally by SessionManager, not directly accessed by clients
+#### ExecutionManager Integration
+Direct command execution with Docker sandbox isolation:
+- **Docker CLI Command**: Single DockerCLIExecutor with comprehensive security validation  
+- **ExecutionConfiguration**: Configuration management for execution, security, CLI-specific settings, and sandbox configuration
+- **Docker Container Execution**: execute_command() method for CLI command execution in isolated Docker containers
+- **SandboxManager Integration**: Built-in container lifecycle management with session-based isolation
+- **Security Integration**: Built-in SecurityValidator with configurable allowed commands
+- **Concurrency Control**: Semaphore-based execution limiting with configurable max_concurrent
+- **REST API Integration**: Command listing and execution via SessionManager REST endpoints
+- **Configuration Management**: YAML-based configuration with dynamic CLI parameter defaults and sandbox settings
+- **Parameter Schema Generation**: CLI command generates its own parameter schemas for API documentation
+- **Security Info Access**: get_security_info() exposes SecurityValidator and sandbox configuration
+- **Command Validation**: validate_command() for pre-execution security checks
+- **Execution Statistics**: get_execution_stats() provides runtime metrics and configuration status
+- **Session Management**: Automatic Docker container creation and cleanup per session
 
 #### ExecutionManager
 Docker sandbox execution manager for MCP integration:
@@ -205,7 +214,7 @@ Persistent storage for evaluation data:
 
 1. **TaskAssignment**: SessionManager assigns subtask to client
 2. **CommandCallRequest**: Client requests command execution via SessionManager
-3. **CommandCallResponse**: SessionManager returns command results from MCPServer
+3. **CommandCallResponse**: SessionManager returns command results from ExecutionManager
 4. **SubTaskCompletion**: Client reports subtask completion to SessionManager
 5. **ContextUpdate**: State synchronization between subtasks
 
@@ -291,7 +300,7 @@ Persistent storage for evaluation data:
 - ✅ **RL Gym Integration**: Implemented step() and reset() methods for reinforcement learning compatibility
 - ✅ **DAG Progression Logic**: Automated subtask progression based on command execution and dependencies
 - ✅ **Architecture Cleanup**: Reduced TaskManager from 655 to 308 lines with single responsibility principle
-- 🔄 Complete MCP server integration with FastMCP
+- 🔄 ExecutionManager integration with SessionManager REST API
 - 🔄 Implement actual domain commands (beyond placeholders)
 - 🔄 SessionManager unified API implementation
 - 🔄 TaskManager integration with ExecutionManager
@@ -316,29 +325,35 @@ Persistent storage for evaluation data:
 
 ## API Specifications
 
-### SessionManager Unified API
+### SessionManager REST API
 ```
-POST /session/start - Initialize client session
-GET /session/events - SSE event stream
-POST /session/message - Send message to server
-DELETE /session/end - Terminate session
-
-GET /session/current-task - Get current or next task
-POST /session/complete-task - Report task completion
-POST /session/execute-command - Execute command with context
-GET /session/list-commands - List available commands
-GET /session/policy - Get domain policy document
-GET /session/context - Get current task context
+POST /session/{session_id}/start-episode - Initialize episode for task
+POST /session/{session_id}/step - Execute RL step with command
+GET /session/{session_id}/current-task - Get current task information
+GET /session/{session_id}/policy - Get domain policy document
+DELETE /session/{session_id} - Terminate session
 ```
 
-### Optional MCP Endpoints (Development/Testing)
+### RL Step API
 ```
-GET /mcp/commands - List available commands
-POST /mcp/commands/{command_name}/execute - Execute command
-GET /mcp/policy - Get domain policy document
-GET /mcp/tasks - List available tasks
-GET /mcp/tasks/{task_id}/subtasks - Get task subtasks
+POST /session/{session_id}/step
+Request Body: {
+  "command": "file malware.exe"
+}
+
+Response: {
+  "success": true,
+  "data": {
+    "output": "malware.exe: PE32 executable..."
+  },
+  "step": {
+    "done": false,
+    "subtask_states": {...}
+  }
+}
 ```
+
+
 
 ## Testing and Quality Assurance
 
