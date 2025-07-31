@@ -3,10 +3,12 @@
 title SABER Episode Management Workflow
 
 actor Client
+participant "AgentUnderTest" as Agent
 participant "SessionManager" as SM
 participant "TaskManager" as TM
 participant "EpisodeManager" as EM
 participant "Task" as T
+participant "PolicyManager" as PM
 participant "MCPServer" as MCP
 
 == Episode Initialization ==
@@ -26,10 +28,40 @@ TM -> T: initialize_episode(episode)
 T -> T: set entry subtasks to in_progress
 T -> T: set other subtasks to not_visited
 TM --> SM: episode
-SM --> Client: episode_info
+
+== Task Context & Policy Gathering ==
+
+SM -> TM: get_task(task_id)
+TM --> SM: current_task
+SM -> PM: get_policy()
+PM --> SM: policy_document
+SM -> PM: get_guidelines()
+PM --> SM: guidelines
+SM -> PM: get_hints()
+PM --> SM: context_hints
+
+note right of SM
+  SessionManager gathers:
+  - Current task details
+  - Domain policy document
+  - Agent guidelines
+  - Context hints
+end note
+
+SM -> Client: episode_info + task_context + policy + guidelines + hints
+
+== Agent Initialization ==
+
+Client -> Agent: initialize(task_context, policy, guidelines, hints)
+Agent -> Agent: analyze task requirements
+Agent -> Agent: plan initial approach
+Agent --> Client: ready_for_commands
 
 == Command Execution & RL Step ==
 
+Agent -> Agent: analyze current state
+Agent -> Agent: generate next command
+Agent -> Client: execute_command(command_name, parameters)
 Client -> SM: execute_command(session_id, command_name, parameters)
 SM -> SM: create Action(command_name, parameters)
 SM -> MCP: execute_command(command_name, parameters)
@@ -81,7 +113,27 @@ T -> T: log progression changes
 TM -> TM: check if episode is complete
 TM -> TM: set step.done = completion_status
 TM --> SM: Step
-SM --> Client: CommandResult + Step
+SM -> Client: CommandResult + Step
+
+== Agent Response & Next Command Generation ==
+
+Client -> Agent: command_result + step_info
+Agent -> Agent: analyze command results
+Agent -> Agent: update internal state
+Agent -> Agent: assess task progress
+
+alt if episode not complete
+    Agent -> Agent: generate next command
+    Agent -> Client: execute_command(next_command, parameters)
+    note right of Agent
+      Agent continuously processes
+      results and generates next
+      commands until episode complete
+    end note
+else episode complete
+    Agent -> Agent: finalize task completion
+    Agent -> Client: episode_complete_signal
+end
 
 == Episode Completion ==
 
@@ -100,5 +152,15 @@ EM -> EM: episode.completion_reason = reason
 EM -> EM: delete from active_episodes
 EM --> TM: episode
 TM --> SM: episode
+SM -> Client: session_ended
+Client -> Agent: cleanup()
+
+note over Client, Agent
+  Clear interface boundaries:
+  - Client handles all server communication
+  - AgentUnderTest focuses on task execution
+  - Agent receives structured context and generates commands
+  - Client manages session lifecycle
+end note
 
 @enduml

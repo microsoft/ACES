@@ -18,16 +18,17 @@ package "Task Framework Core" {
         +config_loader: TaskConfigLoader
         +episode_manager: EpisodeManager
         --
-        +get_task(): Task
-        +get_subtask(): SubTask
-        +start_episode(): Episode
-        +get_current_episode(): Episode?
-        +step(action, command_result?): Step
-        +reset(): Episode
-        +end_episode(): Episode
+        +get_task(task_id): Task
+        +get_subtask(task_id, subtask_id): SubTask
+        +start_episode(session_id, task_id): Episode
+        +get_current_episode(session_id): Episode?
+        +step(session_id, action, command_result): Step
+        +reset(session_id, task_id): Episode
+        +end_episode(session_id, reason): Episode
+        +reset_episode(session_id): Episode
         +list_tasks(): List[Dict]
-        +get_episode_info(): Dict
-        +_get_current_objective(): str?
+        +get_episode_info(session_id): Dict
+        +_get_current_objective(session_id): str?
     }
 
     class TaskConfigLoader {
@@ -83,17 +84,17 @@ package "Episode Management" {
     class EpisodeManager {
         +active_episodes: Dict[str, Episode]
         --
-        +start_episode(): Episode
-        +step(session_id, action, command_result?, task, current_objective?): Step
-        +end_episode(): Episode
-        +reset_episode(): Episode
-        +get_episode_state(): EpisodeState?
-        +get_current_episode(): Episode?
-        +create_step(command_result?): Step
-        +update_episode_state(): void
-        +_extract_command_from_action(): str?
-        +_get_episode_progress_info(): Dict[str, Any]
-        +cleanup_session(): void
+        +start_episode(session_id, task_id, initial_context?): Episode
+        +step(session_id, action, command_result, current_objective?): Step
+        +end_episode(session_id, reason): Episode
+        +reset_episode(session_id, task_id): Episode
+        +get_episode_state(session_id): EpisodeState?
+        +get_current_episode(session_id): Episode?
+        +create_step(episode, action, response): Step
+        +update_episode_state(episode, step): void
+        +_extract_command_from_action(action): str?
+        +_get_episode_progress_info(episode): Dict[str, Any]
+        +cleanup_session(session_id): void
     }
 
     class Episode {
@@ -132,7 +133,7 @@ package "Episode Management" {
     }
 
     class Action {
-        +command_name: str
+        +tool_name: str
         +parameters: Dict[str, Any]
         +command: Optional[str]
         +timestamp: datetime

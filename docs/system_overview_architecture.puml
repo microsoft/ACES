@@ -146,25 +146,27 @@ package "SABER Client Side" {
     class AgentClient {
         +client_id: str
         +domain: str
-        +security_agent: SecurityAgent
+        +agent_under_test: AgentUnderTest
         +session_connection: SessionConnection
         --
         +connect_to_domain(): void
         +start_task(): TaskExecution
         +disconnect(): void
+        +forward_to_agent(): Response
     }
 
-    class SecurityAgent {
+    class AgentUnderTest {
         +agent_id: str
-        +llm_provider: LLMProvider
-        +session_client: SessionClient
-        +reasoning_engine: ReasoningEngine
+        +current_context: Dict[str, Any]
+        +task_state: Dict[str, Any]
         --
-        +execute_subtask(): SubTaskResult
-        +make_command_call(): CommandResult
-        +reason_about_task(): str
+        +initialize(task_context, policy, guidelines): void
+        +analyze_situation(): TaskAnalysis
+        +generate_next_command(): CommandRequest
+        +process_command_result(result): void
+        +is_task_complete(): bool
+        +get_current_strategy(): str
     }
-
     class SessionConnection {
         +session_manager_url: str
         +sse_client: SSEClient
@@ -174,22 +176,8 @@ package "SABER Client Side" {
         +send_unified_request(): Response
         +get_current_task(): SubTask
         +execute_command(): CommandResult
-    }
-
-    class LLMProvider {
-        +provider_name: str
-        +model_name: str
-        --
-        +generate_response(): str
-        +generate_with_commands(): LLMResponse
-    }
-
-    class ReasoningEngine {
-        +current_context: Dict[str, Any]
-        --
-        +analyze_subtask(): TaskAnalysis
-        +select_commands(): List[str]
-        +generate_plan(): ActionPlan
+        +forward_task_context(): void
+        +forward_command_result(): void
     }
 }
 
@@ -233,10 +221,8 @@ ExecutionManager *-- SecurityValidator
 ExecutionManager *-- SandboxManager
 
 ' Client Internal Relationships
-AgentClient *-- SecurityAgent
+AgentClient *-- AgentUnderTest
 AgentClient *-- SessionConnection
-SecurityAgent *-- LLMProvider
-SecurityAgent *-- ReasoningEngine
 
 ' Communication Relationships
 Message <|-- CommandCallRequest
@@ -245,7 +231,6 @@ Message <|-- TaskAssignment
 
 ' Cross-boundary Communication
 AgentClient ..> SessionManager : "HTTP/SSE API"
-SecurityAgent ..> MCPServer : "Tool Execution Requests"
 SessionConnection ..> DomainServer : "Real-time Communication"
 
 note top of DomainServer
@@ -273,12 +258,24 @@ note top of MCPServer
 - Built-in concurrency control and parameter validation
 end note
 
-note top of SecurityAgent
-**Customer Agent Implementation**
-- Configurable LLM provider
-- Domain-specific reasoning
-- Uses unified SessionManager API
-- Autonomous task execution
+note left of AgentUnderTest
+**The Agent Being Benchmarked**
+- Customer-provided AI agent implementation
+- Configurable LLM provider (OpenAI, Anthropic, etc.)
+- Domain-specific reasoning and planning
+- Receives task context, policy, and guidelines
+- Generates commands based on analysis
+- Processes results and adapts strategy
+- Isolated from server communication details
+end note
+
+note top of AgentClient
+**Client Infrastructure Layer**
+- Manages server communication
+- Handles session lifecycle
+- Forwards context to AgentUnderTest
+- Executes commands on behalf of agent
+- Provides clean interface separation
 end note
 
 note bottom of "Communication Layer"
