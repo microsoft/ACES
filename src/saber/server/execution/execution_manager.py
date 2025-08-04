@@ -14,7 +14,6 @@ import yaml
 
 from ..tasks.base import Action
 from .base import CommandResult, ValidationResult
-from .exceptions import ExecutionManagerError
 from .executors.cli import DockerCLIExecutor
 from .sandbox.sandbox_manager import SandboxManager
 from .utils.security_validator import SecurityValidator
@@ -121,11 +120,7 @@ class ExecutionManager:
             allowed_commands=allowed_commands if allowed_commands else None,
         )
 
-        # Initialize sandbox manager (required for Docker execution)
         sandbox_config = self._configuration.get_sandbox_config()
-        if not sandbox_config.get("enabled", False):
-            raise ExecutionManagerError("Sandbox execution is required but not enabled in configuration")
-
         self._sandbox_manager = SandboxManager(sandbox_config)
 
         cli_config = self._configuration.get_cli_config()
@@ -193,6 +188,19 @@ class ExecutionManager:
             except Exception as e:
                 logger.error(f"CLI execution failed: {e}")
                 return CommandResult.error_result(error=str(e))
+
+    def cleanup_session(self, session_id: str) -> None:
+        """
+        Clean up execution resources for a session.
+
+        Args:
+            session_id: Session identifier to clean up
+        """
+        try:
+            self._sandbox_manager.cleanup_session(session_id)
+            logger.info(f"Cleaned up execution resources for session {session_id}")
+        except Exception as e:
+            logger.error(f"Error cleaning up execution resources for session {session_id}: {e}")
 
     def validate_command(self, command: str) -> ValidationResult:
         """
@@ -263,9 +271,6 @@ class ExecutionManager:
 
         # Recreate sandbox manager with new configuration
         sandbox_config = self._configuration.get_sandbox_config()
-        if not sandbox_config.get("enabled", False):
-            raise ExecutionManagerError("Sandbox execution is required but not enabled in configuration")
-
         self._sandbox_manager = SandboxManager(sandbox_config)
 
         cli_config = self._configuration.get_cli_config()

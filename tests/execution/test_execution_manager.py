@@ -34,7 +34,7 @@ class TestExecutionConfiguration:
         config_dict = {
             "execution": {"timeout": 60.0, "max_concurrent": 5},
             "security": {"allowed_commands": ["file", "strings"]},
-            "sandbox": {"enabled": True, "image": "saber/base-sandbox:latest"}
+            "sandbox": {"image": "saber/base-sandbox:latest"}
         }
 
         config = ExecutionConfiguration(config=config_dict)
@@ -53,7 +53,6 @@ security:
 cli:
   default_shell_mode: true
 sandbox:
-  enabled: true
   image: saber/base-sandbox:latest
   network_mode: none
 """)
@@ -176,7 +175,6 @@ sandbox:
         """Test getting sandbox configuration."""
         config_dict = {
             "sandbox": {
-                "enabled": True,
                 "image": "saber/base-sandbox:latest",
                 "network_mode": "none"
             }
@@ -185,7 +183,6 @@ sandbox:
 
         sandbox_config = config.get_sandbox_config()
         assert sandbox_config == {
-            "enabled": True,
             "image": "saber/base-sandbox:latest",
             "network_mode": "none"
         }
@@ -208,7 +205,6 @@ class TestExecutionManager:
             "security": {"allowed_commands": ["file", "strings"]},
             "cli": {"default_shell_mode": False},
             "sandbox": {
-                "enabled": True,
                 "image": "saber/base-sandbox:latest",
                 "network_mode": "none",
                 "read_only_root": True,
@@ -219,37 +215,24 @@ class TestExecutionManager:
     @pytest.fixture
     def registry(self, sample_config):
         """Create an ExecutionManager instance for testing."""
-        with patch("saber.server.execution.sandbox.sandbox_manager.SandboxManager"):
+        with patch("saber.server.execution.execution_manager.SandboxManager"):
             return ExecutionManager(config=sample_config)
-
-    def test_initialization_default(self):
-        """Test that default initialization fails without sandbox config."""
-        # Default configuration doesn't include sandbox.enabled=True
-        with pytest.raises(ExecutionManagerError, match="Sandbox execution is required but not enabled"):
-            ExecutionManager()
 
     def test_initialization_with_valid_config(self, sample_config):
         """Test initialization with valid sandbox configuration."""
-        registry = ExecutionManager(config=sample_config)
+        with patch("saber.server.execution.execution_manager.SandboxManager") as mock_sandbox:
+            registry = ExecutionManager(config=sample_config)
 
         assert isinstance(registry._configuration, ExecutionConfiguration)
         assert isinstance(registry._security_validator, SecurityValidator)
         assert isinstance(registry._cli_tool, DockerCLIExecutor)
-        assert isinstance(registry._sandbox_manager, SandboxManager)
+        assert registry._sandbox_manager == mock_sandbox.return_value  # Mock object, not real SandboxManager
         assert isinstance(registry._semaphore, asyncio.Semaphore)
-
-    def test_initialization_sandbox_disabled(self):
-        """Test that initialization fails when sandbox is explicitly disabled."""
-        config = {
-            "sandbox": {"enabled": False}
-        }
-
-        with pytest.raises(ExecutionManagerError, match="Sandbox execution is required but not enabled"):
-            ExecutionManager(config=config)
 
     def test_initialization_with_config(self, sample_config):
         """Test initialization with configuration."""
-        registry = ExecutionManager(config=sample_config)
+        with patch("saber.server.execution.execution_manager.SandboxManager"):
+            registry = ExecutionManager(config=sample_config)
 
         assert registry._configuration.get_execution_timeout() == 60.0
         assert registry._configuration.get_max_concurrent() == 5
@@ -257,11 +240,11 @@ class TestExecutionManager:
 
         # Test sandbox configuration
         sandbox_config = registry._configuration.get_sandbox_config()
-        assert sandbox_config["enabled"] is True
         assert sandbox_config["image"] == "saber/base-sandbox:latest"
 
     @patch("saber.server.execution.execution_manager.ExecutionConfiguration")
-    def test_initialization_with_config_file(self, mock_cli_config):
+    @patch("saber.server.execution.execution_manager.SandboxManager")
+    def test_initialization_with_config_file(self, mock_sandbox, mock_cli_config):
         """Test initialization with configuration file."""
         mock_instance = MagicMock()
         mock_cli_config.return_value = mock_instance
@@ -379,7 +362,7 @@ class TestExecutionManager:
         """Test MCP tools conversion with CLI configuration."""
         sample_config["cli"]["default_shell_mode"] = True
 
-        with patch("saber.server.execution.sandbox.sandbox_manager.SandboxManager"):
+        with patch("saber.server.execution.execution_manager.SandboxManager"):
             registry = ExecutionManager(config=sample_config)
 
         mcp_tools = registry.to_mcp_tools()
@@ -434,7 +417,8 @@ class TestExecutionManager:
 
     def test_security_validator_initialization(self, sample_config):
         """Test that SecurityValidator is initialized with correct allowed commands."""
-        registry = ExecutionManager(config=sample_config)
+        with patch("saber.server.execution.execution_manager.SandboxManager"):
+            registry = ExecutionManager(config=sample_config)
 
         # Verify that allowed commands from config are passed to validator
         allowed_commands = sample_config["security"]["allowed_commands"]

@@ -97,7 +97,6 @@ class TestDockerCLIExecutor:
         info = executor.get_security_info()
 
         assert info["execution_environment"] == "docker_container"
-        assert info["sandbox_manager"] == "enabled"
         assert info["timeout"] == 30.0
 
     @pytest.mark.asyncio
@@ -243,7 +242,6 @@ class TestDockerCLIExecutor:
         info = executor.get_security_info()
 
         assert info["execution_environment"] == "docker_container"
-        assert info["sandbox_manager"] == "enabled"
         assert "sandbox_config" in info
 
         sandbox_config = info["sandbox_config"]

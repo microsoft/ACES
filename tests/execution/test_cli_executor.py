@@ -297,7 +297,6 @@ class TestDockerCLI:
         security_info = docker_cli_tool.get_security_info()
 
         assert security_info["execution_environment"] == "docker_container"
-        assert security_info["sandbox_manager"] == "enabled"
         assert security_info["timeout"] == 30.0
         assert "sandbox_config" in security_info
 

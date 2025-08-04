@@ -35,10 +35,6 @@ class SandboxManager:
         self.sandbox_config = sandbox_config
         self.active_sessions: Dict[str, DockerExecutionEnvironment] = {}
 
-        # Validate required configuration
-        if not sandbox_config.get("enabled", False):
-            raise SandboxExecutionError("Sandbox execution is disabled in configuration")
-
         # Set cleanup behavior
         self.cleanup_on_session_end = sandbox_config.get("cleanup_on_session_end", True)
 

@@ -231,7 +231,6 @@ class DockerCLIExecutor(CommandExecutor):
         """
         base_info: Dict[str, Any] = {
             "execution_environment": "docker_container",
-            "sandbox_manager": "enabled",
             "timeout": self.get_timeout(),
         }
 

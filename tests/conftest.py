@@ -136,3 +136,40 @@ def sample_command_result():
         "output": "sample.exe: PE32 executable",
         "file_type": "PE32"
     })
+
+
+@pytest.fixture(scope="function")
+def docker_cleanup():
+    """
+    Fixture to ensure Docker containers are cleaned up after tests.
+
+    This fixture tracks execution managers and session IDs used during tests
+    and ensures proper cleanup even if tests fail.
+    """
+    execution_managers = []
+    session_ids = []
+
+    def register_execution_manager(execution_manager, session_id=None):
+        """Register an execution manager and optional session ID for cleanup."""
+        execution_managers.append(execution_manager)
+        if session_id:
+            session_ids.append((execution_manager, session_id))
+
+    yield register_execution_manager
+
+    # Cleanup after test
+    for execution_manager, session_id in session_ids:
+        try:
+            execution_manager.cleanup_session(session_id)
+            logger.debug(f"Cleaned up session {session_id}")
+        except Exception as e:
+            logger.warning(f"Failed to cleanup session {session_id}: {e}")
+
+    for execution_manager in execution_managers:
+        try:
+            # Cleanup all sessions if the manager has that capability
+            if hasattr(execution_manager, '_sandbox_manager'):
+                execution_manager._sandbox_manager.cleanup_all_sessions()
+                logger.debug("Cleaned up all sessions from execution manager")
+        except Exception as e:
+            logger.warning(f"Failed to cleanup execution manager: {e}")

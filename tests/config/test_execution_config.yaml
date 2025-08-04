@@ -21,7 +21,6 @@ cli:
 
 # Sandbox configuration (required)
 sandbox:
-  enabled: true                     # MUST be true
   cleanup_on_session_end: true
   image: "saber/base-sandbox:latest"
   working_dir: "/workspace"

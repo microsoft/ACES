@@ -159,6 +159,12 @@ class SessionManager:
         except Exception as e:
             logger.warning(f"Failed to log session end: {e}")
 
+        # Cleanup execution resources (Docker containers)
+        try:
+            self.execution_manager.cleanup_session(session_id)
+        except Exception as e:
+            logger.warning(f"Failed to cleanup execution resources: {e}")
+
         # Remove session from active sessions
         del self.active_sessions[session_id]
 
