@@ -1,7 +1,7 @@
 @startuml SABER Client Architecture
 
 !theme plain
-title Security Agent Benchmarking System - Minimal Client Architecture
+title Security Agent Benchmarking System - Generic Client Architecture
 
 skinparam class {
     BackgroundColor lightgreen
@@ -15,89 +15,110 @@ package "Test Harness Core" {
     class TestHarness {
         +config: TestHarnessConfig
         +server_client: ServerClient
-        +agent: AgentUnderTest
+        +agent: Any
         +session_id: str?
         --
-        +initialize(): void
-        +run_test(): void
+        +initialize(agent: Any): void
+        +run_test(): Dict[str, Any]
         +shutdown(): void
     }
 
     class TestHarnessConfig {
         +server_url: str
-        +domain: str
+        +log_level: str
+        +log_file: Path?
         +agent_config: Dict[str, Any]
-        +timeout_seconds: int
         --
         +validate(): void
-        +from_yaml(): TestHarnessConfig
     }
 }
 
 package "Server Communication" {
 
     class ServerClient {
-        +base_url: str
+        +server_url: str
         +session_id: str?
-        +timeout: int
+        +timeout: float
         --
-        +create_session(): str
+        +create_session(client_id: str): str
         +close_session(): void
-        +start_episode(): EpisodeInfo
+        +start_episode(task_id: str): EpisodeInfo
         +execute_step(command: str): StepResponse
         +get_current_task(): TaskInfo
         +get_policy(): PolicyInfo
-    }
-
-    class StepResponse {
-        +success: bool
-        +output: str
-        +error: str?
-        +done: bool
-        +info: Dict[str, Any]
-    }
-
-    class TaskInfo {
-        +task_id: str
-        +title: str
-        +description: str
-        +current_subtask: str?
-    }
-
-    class EpisodeInfo {
-        +episode_id: str
-        +task_id: str
-        +initial_prompt: str
-    }
-
-    class PolicyInfo {
-        +available_commands: List[str]
-        +guidelines: str
-        +constraints: List[str]
+        +health_check(): Dict[str, Any]
     }
 }
 
-package "Agent Interface" {
+package "Agent Adaptation" {
 
-    interface AgentUnderTest {
+    class AgentWrapper {
+        +agent: Any
+        +process_method: Callable
+        +reset_method: Callable?
+        +is_async: bool
+        --
         +process_prompt(prompt: str): str
         +reset(): void
+        +_detect_process_method(): Callable
+        +_detect_reset_method(): Callable?
+    }
+
+    class AgentLoader {
+        --
+        +load_from_path(path: str, class?: str): AgentWrapper
+        +load_from_module(module: str, class?: str): AgentWrapper
+        +_extract_agent_from_module(): Any
     }
 
     class PromptBuilder {
-        +task_info: TaskInfo
-        +policy_info: PolicyInfo
-        +last_output: str?
         --
         +build_initial_prompt(): str
         +build_step_prompt(): str
+        +build_error_prompt(): str
+        +build_completion_prompt(): str
+    }
+}
+
+package "CLI Interface" {
+
+    class CLI {
+        --
+        +main(): void
+        +run_saber_client(): void
     }
 }
 
 ' Relationships
 TestHarness *-- TestHarnessConfig
 TestHarness *-- ServerClient
-TestHarness *-- AgentUnderTest
+TestHarness ..> AgentWrapper : uses
+AgentLoader ..> AgentWrapper : creates
+CLI ..> AgentLoader : uses
+CLI ..> TestHarness : uses
+
+note top of TestHarness
+**Zero-friction test orchestration**
+Accepts any agent object with callable methods.
+No interface requirements for customers.
+end note
+
+note top of AgentWrapper
+**Generic agent adaptation**
+Automatically detects and adapts to any agent:
+- Sync/async methods
+- Different method names (process, generate, respond, etc.)
+- Different parameter names (prompt, input, message, etc.)
+- Class or function-based agents
+end note
+
+note top of CLI
+**Zero-code-change CLI**
+python -m saber.client --agent <path> --task <id> --episodes <n>
+Works with any existing agent code.
+end note
+
+@enduml
 TestHarness ..> PromptBuilder : uses
 
 ServerClient ..> StepResponse : returns

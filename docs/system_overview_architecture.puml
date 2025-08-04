@@ -131,31 +131,47 @@ package "SABER Server Side" {
 
 package "SABER Client Side" {
 
-    class AgentClient {
-        +client_id: str
-        +domain: str
-        +agent_under_test: AgentUnderTest
-        +session_connection: SessionConnection
+    class TestHarness {
+        +config: TestHarnessConfig
+        +server_client: ServerClient
+        +agent: Any
+        +session_id: str?
         --
-        +connect_to_domain(): void
-        +start_task(): TaskExecution
-        +disconnect(): void
-        +forward_to_agent(): Response
+        +initialize(agent: Any): void
+        +run_test(): Dict[str, Any]
+        +shutdown(): void
     }
 
-    class AgentUnderTest {
-    }
-    class SessionConnection {
-        +session_manager_url: str
-        +sse_client: SSEClient
-        +http_client: HTTPClient
+    class ServerClient {
+        +server_url: str
+        +session_id: str?
         --
-        +establish_session(): str
-        +send_unified_request(): Response
-        +get_current_task(): SubTask
-        +execute_command(): CommandResult
-        +forward_task_context(): void
-        +forward_command_result(): void
+        +create_session(): str
+        +start_episode(): EpisodeInfo
+        +execute_step(): StepResponse
+        +get_current_task(): TaskInfo
+        +get_policy(): PolicyInfo
+        +close_session(): void
+    }
+
+    class AgentWrapper {
+        +agent: Any
+        +process_method: Callable
+        +is_async: bool
+        --
+        +process_prompt(): str
+        +reset(): void
+    }
+
+    class AgentLoader {
+        --
+        +load_from_path(): AgentWrapper
+        +load_from_module(): AgentWrapper
+    }
+
+    class CLI {
+        --
+        +main(): void
     }
 }
 
