@@ -60,8 +60,8 @@ Agent --> Client: command_string
 Agent -> Agent: generate next command
 Agent -> Client: command_string
 Client -> SM: POST /session/{session_id}/step\n{command: "file malware.exe"}
-SM -> SM: create Action(command_string)
-SM -> EM_EXEC: step(command_string)
+SM -> SM: create Action(command, parameters)
+SM -> EM_EXEC: step(action)
 EM_EXEC --> SM: CommandResult
 
 note right of SM

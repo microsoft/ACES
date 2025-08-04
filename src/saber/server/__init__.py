@@ -1,5 +1,6 @@
 """SABER server components."""
 
-from . import execution, mcp, tasks
+from . import execution, tasks
+from .session_manager import SessionManager
 
-__all__ = ["execution", "mcp", "tasks"]
+__all__ = ["execution", "tasks", "SessionManager"]

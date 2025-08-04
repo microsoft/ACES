@@ -30,14 +30,15 @@ package "SABER Server Side" {
         +execution_manager: ExecutionManager
         +policy_manager: PolicyManager
         +evaluation_manager: EvaluationManager
+        +api: SessionAPI
         --
         +start_server(): void
         +shutdown(): void
         +create_session(): ClientSession
-        +handle_client_connection(): ClientSession
-        +step(): CommandResult
-        +execute_command(): CommandResult
-        +get_current_task(): SubTask
+        +terminate_session(): void
+        +start_episode(): Episode
+        +step(): SessionStepResponse
+        +get_current_task(): Dict[str, Any]
         +get_policy(): PolicyDocument
     }
 

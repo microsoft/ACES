@@ -18,6 +18,7 @@ from saber.server.execution.exceptions import ExecutionManagerError
 from saber.server.execution.sandbox.sandbox_manager import SandboxManager
 from saber.server.execution.utils.security_validator import SecurityValidator
 from saber.server.execution.exceptions import ExecutionManagerError
+from saber.server.tasks.base import Action
 
 
 class TestExecutionConfiguration:
@@ -275,7 +276,7 @@ class TestExecutionManager:
     @pytest.mark.asyncio
     async def test_step_success(self, registry):
         """Test successful command execution."""
-        parameters = {"command": "echo test", "shell": False}
+        action = Action(tool_name="cli", command="echo test", parameters={"shell": False})
         context = {"session_id": "test123"}
 
         expected_result = CommandResult.success_result(
@@ -284,21 +285,22 @@ class TestExecutionManager:
 
         with patch.object(registry._cli_tool, 'validate_parameters', return_value=ValidationResult.success()):
             with patch.object(registry._cli_tool, 'execute', return_value=expected_result) as mock_execute:
-                result = await registry.step(parameters, context)
+                result = await registry.step(action, context)
 
         assert result.success is True
         assert result.data["stdout"] == "test\n"
-        mock_execute.assert_called_once_with(parameters, context)
+        expected_params = {"command": "echo test", "shell": False}
+        mock_execute.assert_called_once_with(expected_params, context)
 
     @pytest.mark.asyncio
     async def test_step_validation_failure(self, registry):
         """Test command execution with parameter validation failure."""
-        parameters = {"invalid": "params"}
+        action = Action(tool_name="cli", command="", parameters={"invalid": "params"})
 
         validation_result = ValidationResult.failure(["Missing required parameter 'command'"])
 
         with patch.object(registry._cli_tool, 'validate_parameters', return_value=validation_result):
-            result = await registry.step(parameters)
+            result = await registry.step(action)
 
         assert result.success is False
         assert "Parameter validation failed" in result.error
@@ -307,11 +309,11 @@ class TestExecutionManager:
     @pytest.mark.asyncio
     async def test_step_execution_exception(self, registry):
         """Test command execution with exception during execution."""
-        parameters = {"command": "test"}
+        action = Action(tool_name="cli", command="test")
 
         with patch.object(registry._cli_tool, 'validate_parameters', return_value=ValidationResult.success()):
             with patch.object(registry._cli_tool, 'execute', side_effect=Exception("Execution failed")):
-                result = await registry.step(parameters)
+                result = await registry.step(action)
 
         assert result.success is False
         assert "Execution failed" in result.error
@@ -319,7 +321,7 @@ class TestExecutionManager:
     @pytest.mark.asyncio
     async def test_step_concurrency_control(self, registry):
         """Test that concurrency control works with semaphore."""
-        parameters = {"command": "sleep 1"}
+        action = Action(tool_name="cli", command="sleep 1")
 
         # Mock the CLI tool to simulate slow execution
         async def slow_execute(*args, **kwargs):
@@ -330,7 +332,7 @@ class TestExecutionManager:
             with patch.object(registry._cli_tool, 'execute', side_effect=slow_execute):
                 # Start multiple executions
                 tasks = [
-                    asyncio.create_task(registry.step(parameters))
+                    asyncio.create_task(registry.step(action))
                     for _ in range(3)
                 ]
 
@@ -418,16 +420,17 @@ class TestExecutionManager:
     @pytest.mark.asyncio
     async def test_step_default_context(self, registry):
         """Test step with default context when none provided."""
-        parameters = {"command": "echo test"}
+        action = Action(tool_name="cli", command="echo test")
 
         expected_result = CommandResult.success_result(data="test")
 
         with patch.object(registry._cli_tool, 'validate_parameters', return_value=ValidationResult.success()):
             with patch.object(registry._cli_tool, 'execute', return_value=expected_result) as mock_execute:
-                result = await registry.step(parameters)
+                result = await registry.step(action)
 
         # Should be called with empty context dict
-        mock_execute.assert_called_once_with(parameters, {})
+        expected_params = {"command": "echo test"}
+        mock_execute.assert_called_once_with(expected_params, {})
 
     def test_security_validator_initialization(self, sample_config):
         """Test that SecurityValidator is initialized with correct allowed commands."""

@@ -26,7 +26,7 @@ package "Execution Management" {
         +_security_validator: SecurityValidator
         +_sandbox_manager: SandboxManager
         --
-        +step(): CommandResult
+        +step(action: Action): CommandResult
         +validate_command(): ValidationResult
         +get_security_info(): Dict[str, Any]
         +list_commands(): List[Dict[str, Any]]

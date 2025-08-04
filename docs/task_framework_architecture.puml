@@ -133,8 +133,10 @@ package "Episode Management" {
     }
 
     class Action {
-        +command: str
+        +tool_name: str
+        +parameters: Dict[str, Any]
         +timestamp: datetime
+        +command: Optional[str]
     }
 
     enum EpisodeState {

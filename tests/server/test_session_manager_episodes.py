@@ -1,0 +1,287 @@
+"""
+Unit tests for SessionManager episode management functionality.
+
+Tests episode creation, step execution, and task management integration.
+"""
+
+import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from saber.server.session_manager import SessionManager
+from saber.server.session_api import SessionStepRequest, SessionStepResponse
+from saber.server.tasks.base import Action, Step
+from saber.server.execution.base import CommandResult
+from saber.server.tasks.episodes.episode import Episode
+
+
+class TestSessionManagerEpisodes:
+    """Test SessionManager episode management functionality."""
+
+    @pytest.fixture
+    def mock_episode(self):
+        """Mock episode for testing."""
+        episode = MagicMock(spec=Episode)
+        episode.episode_id = "episode_123"
+        episode.task_id = "task_456"
+        episode.current_subtask = "subtask_1"
+        episode.completed_subtasks = set()
+        episode.in_progress_subtasks = {"subtask_1"}
+        episode.not_visited_subtasks = {"subtask_2", "subtask_3"}
+        return episode
+
+    @pytest.fixture
+    def mock_step(self):
+        """Mock step result for testing."""
+        step = MagicMock(spec=Step)
+        step.step_number = 1
+        step.done = False
+        step.current_subtask = "subtask_1"
+        step.completed_subtasks = set()
+        step.in_progress_subtasks = {"subtask_1"}
+        step.not_visited_subtasks = {"subtask_2", "subtask_3"}
+        return step
+
+    @pytest.fixture
+    def mock_task(self):
+        """Mock task for testing."""
+        task = MagicMock()
+        task.task_id = "task_456"
+        task.title = "Test Task"
+        task.description = "Test task description"
+        return task
+
+    @pytest.fixture
+    def session_manager_with_session(self):
+        """Create SessionManager with mocked dependencies and a session."""
+        mock_task_manager = MagicMock()
+        mock_execution_manager = MagicMock()
+        mock_execution_manager.step = AsyncMock()
+        mock_policy_manager = MagicMock()
+        mock_policy_manager.get_policy = AsyncMock()
+        mock_evaluation_manager = MagicMock()
+        mock_evaluation_manager.log_session_start = AsyncMock()
+        mock_evaluation_manager.log_episode_start = AsyncMock()
+        mock_evaluation_manager.log_episode_end = AsyncMock()
+        mock_evaluation_manager.log_action = AsyncMock()
+
+        with patch('saber.server.session_manager.TaskManager', return_value=mock_task_manager), \
+             patch('saber.server.session_manager.ExecutionManager', return_value=mock_execution_manager), \
+             patch('saber.server.session_manager.PolicyManager', return_value=mock_policy_manager), \
+             patch('saber.server.session_manager.EvaluationManager', return_value=mock_evaluation_manager):
+
+            manager = SessionManager(
+                domain_name="test_domain",
+                tasks_config_path="/tmp/test_tasks.yaml",
+                host="127.0.0.1",
+                port=8002
+            )
+
+            return manager
+
+    @pytest.mark.asyncio
+    async def test_start_episode(self, session_manager_with_session, mock_episode):
+        """Test starting an episode."""
+        manager = session_manager_with_session
+
+        # Create a session first
+        session = await manager.create_session("test_client")
+        session_id = session.session_id
+        task_id = "task_456"
+
+        # Mock task manager to return episode
+        manager.task_manager.start_episode.return_value = mock_episode
+
+        # Start episode
+        episode = await manager.start_episode(session_id, task_id)
+
+        assert episode == mock_episode
+        assert session.current_episode_id == mock_episode.episode_id
+
+        # Verify task manager was called
+        manager.task_manager.start_episode.assert_called_once_with(session_id, task_id)
+
+        # Verify evaluation manager was called
+        manager.evaluation_manager.log_episode_start.assert_called_once_with(
+            session_id, mock_episode.episode_id, task_id
+        )
+
+    @pytest.mark.asyncio
+    async def test_start_episode_invalid_session(self, session_manager_with_session):
+        """Test starting episode with invalid session."""
+        manager = session_manager_with_session
+
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.start_episode("invalid_session", "task_123")
+
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_step_execution_success(self, session_manager_with_session, mock_episode, mock_step):
+        """Test successful step execution."""
+        manager = session_manager_with_session
+
+        # Create session and start episode
+        session = await manager.create_session("test_client")
+        session_id = session.session_id
+        session.current_episode_id = "episode_123"
+
+        # Mock execution and task manager responses
+        command_result = CommandResult(success=True, data={"output": "test output"})
+        manager.execution_manager.step.return_value = command_result
+        manager.task_manager.step.return_value = mock_step
+
+        # Execute step
+        response = await manager.step(session_id, "file test.txt", {"param": "value"})
+
+        assert isinstance(response, SessionStepResponse)
+        assert response.success is True
+        assert response.data == {"output": "test output"}
+        assert response.step["step_number"] == 1
+        assert response.step["done"] is False
+        assert response.error is None
+
+        # Verify execution manager was called with Action object
+        call_args = manager.execution_manager.step.call_args
+        assert call_args is not None
+        action_arg = call_args[0][0]  # First positional argument
+        assert isinstance(action_arg, Action)
+        assert action_arg.command == "file test.txt"
+        assert action_arg.parameters == {"param": "value"}
+        assert action_arg.tool_name == "cli"
+
+        # Verify task manager was called with action
+        call_args = manager.task_manager.step.call_args
+        assert call_args[0][0] == session_id  # session_id
+        assert isinstance(call_args[0][1], Action)  # action
+        assert call_args[0][2] == command_result  # command_result
+
+        # Verify evaluation manager was called
+        manager.evaluation_manager.log_action.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_step_execution_no_active_episode(self, session_manager_with_session):
+        """Test step execution without active episode."""
+        manager = session_manager_with_session
+
+        # Create session without episode
+        session = await manager.create_session("test_client")
+        session_id = session.session_id
+
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.step(session_id, "file test.txt")
+
+        assert exc_info.value.status_code == 400
+        assert "No active episode" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_step_execution_with_completion(self, session_manager_with_session, mock_step):
+        """Test step execution that completes episode."""
+        manager = session_manager_with_session
+
+        # Create session and start episode
+        session = await manager.create_session("test_client")
+        session_id = session.session_id
+        session.current_episode_id = "episode_123"
+
+        # Mock step as completed
+        mock_step.done = True
+
+        # Mock execution and task manager responses
+        command_result = CommandResult(success=True, data={"output": "completed"})
+        manager.execution_manager.step.return_value = command_result
+        manager.task_manager.step.return_value = mock_step
+
+        # Execute step
+        response = await manager.step(session_id, "final command")
+
+        assert response.step["done"] is True
+        assert session.current_episode_id is None  # Episode should be cleared
+
+        # Verify episode was ended
+        manager.task_manager.end_episode.assert_called_once_with(session_id, "completed")
+        manager.evaluation_manager.log_episode_end.assert_called_once_with(session_id, "completed")
+
+    @pytest.mark.asyncio
+    async def test_step_execution_failure(self, session_manager_with_session):
+        """Test step execution with failure."""
+        manager = session_manager_with_session
+
+        # Create session with episode
+        session = await manager.create_session("test_client")
+        session_id = session.session_id
+        session.current_episode_id = "episode_123"
+
+        # Mock execution manager to raise exception
+        manager.execution_manager.step.side_effect = Exception("Execution failed")
+
+        # Execute step
+        response = await manager.step(session_id, "bad command")
+
+        assert response.success is False
+        assert response.error == "Execution failed"
+        assert response.data == {}
+
+    @pytest.mark.asyncio
+    async def test_get_current_task(self, session_manager_with_session, mock_episode, mock_task):
+        """Test getting current task information."""
+        manager = session_manager_with_session
+
+        # Create session with episode
+        session = await manager.create_session("test_client")
+        session_id = session.session_id
+        session.current_episode_id = "episode_123"
+
+        # Mock task manager responses
+        manager.task_manager.get_current_episode.return_value = mock_episode
+        manager.task_manager.get_task.return_value = mock_task
+
+        # Get current task
+        task_info = await manager.get_current_task(session_id)
+
+        assert task_info["task_id"] == "task_456"
+        assert task_info["title"] == "Test Task"
+        assert task_info["description"] == "Test task description"
+        assert task_info["episode_id"] == "episode_123"
+        assert task_info["current_subtask"] == "subtask_1"
+
+        # Verify task manager was called
+        manager.task_manager.get_current_episode.assert_called_once_with(session_id)
+        manager.task_manager.get_task.assert_called_once_with("task_456")
+
+    @pytest.mark.asyncio
+    async def test_get_current_task_no_episode(self, session_manager_with_session):
+        """Test getting current task without active episode."""
+        manager = session_manager_with_session
+
+        # Create session without episode
+        session = await manager.create_session("test_client")
+        session_id = session.session_id
+
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.get_current_task(session_id)
+
+        assert exc_info.value.status_code == 400
+        assert "No active episode" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_get_current_task_episode_not_found(self, session_manager_with_session):
+        """Test getting current task when episode not found."""
+        manager = session_manager_with_session
+
+        # Create session with episode ID but no actual episode
+        session = await manager.create_session("test_client")
+        session_id = session.session_id
+        session.current_episode_id = "episode_123"
+
+        # Mock task manager to return None
+        manager.task_manager.get_current_episode.return_value = None
+
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.get_current_task(session_id)
+
+        assert exc_info.value.status_code == 400
+        assert "No active episode found" in str(exc_info.value.detail)

@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
+from ..tasks.base import Action
 from .base import CommandResult, ValidationResult
 from .exceptions import ExecutionManagerError
 from .executors.cli import DockerCLIExecutor
@@ -140,12 +141,12 @@ class ExecutionManager:
 
         logger.info(f"ExecutionManager initialized with max_concurrent={max_concurrent}")
 
-    async def step(self, parameters: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> CommandResult:
+    async def step(self, action: Action, context: Optional[Dict[str, Any]] = None) -> CommandResult:
         """
-        Execute the CLI command step with the given parameters.
+        Execute the CLI command step with the given action.
 
         Args:
-            parameters: CLI command parameters (must include 'command')
+            action: Action object containing command and parameters
             context: Optional execution context
 
         Returns:
@@ -154,6 +155,10 @@ class ExecutionManager:
 
         async with self._semaphore:
             try:
+                # Extract parameters from action
+                parameters = {"command": action.command}
+                parameters.update(action.parameters)
+
                 # Validate parameters first
                 validation_result = self._cli_tool.validate_parameters(parameters)
                 if not validation_result.valid:
@@ -163,7 +168,7 @@ class ExecutionManager:
 
                 # Security validation before execution
                 # Build the command that would be executed to validate it
-                command = parameters.get("command", "")
+                command = action.command
                 if command:
                     # Parse command string to get command arguments for full validation
                     try:

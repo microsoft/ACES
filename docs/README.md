@@ -11,7 +11,7 @@ The SABER system architecture is documented in several PlantUML diagrams:
 - **[System Overview](system_overview_architecture.puml)**: High-level system components and relationships
 - **[Server Detailed Architecture](server_detailed_architecture.puml)**: Main server architecture with simplified framework views
 - **[Task Framework Architecture](task_framework_architecture.puml)**: Detailed Task Management system design
-- **[Command Execution Architecture](tool_execution_architecture.puml)**: Detailed Command Execution framework design
+- **[Command Execution Architecture](command_execution_architecture.puml)**: Detailed Command Execution framework design
 - **[Episode Workflow Sequence](episode_workflow_sequence.puml)**: Episode lifecycle and RL workflow
 
 ### Package Management
@@ -87,18 +87,24 @@ The central orchestrator for each security domain, responsible for:
 - Hosting the domain and managing server lifecycle (start/shutdown)
 - Managing multiple concurrent client sessions
 - Providing domain-specific information and capabilities
-- Serving as the unified endpoint for all client interactions
 - Coordinating all server components
 - Built for horizontal scaling with multiple instances behind load balancing
 
 **Core Responsibilities:**
 - **Session Lifecycle**: Creates, tracks, and manages multiple client sessions
 - **Multi-Client Support**: Handles concurrent client connections (scalable architecture)
-- **Unified API**: Coordinates all client requests across server components
+- **Business Logic Coordination**: Coordinates all client requests across server components
 - **Task Orchestration**: Delegates to TaskManager for workflow management
 - **Command Execution**: Integrated ExecutionManager for Docker sandbox command execution
 - **Policy Retrieval**: Delegates to PolicyManager for domain guidelines
 - **Action Logging**: Delegates to EvaluationManager for performance tracking
+
+#### SessionAPI
+REST API layer that handles HTTP endpoints and delegates to SessionManager:
+- **HTTP Endpoints**: FastAPI-based REST API for all client interactions
+- **Server-Sent Events**: Real-time streaming updates for session events
+- **Request/Response Handling**: Converts HTTP requests to SessionManager method calls
+- **API Documentation**: Auto-generated OpenAPI/Swagger documentation
 
 #### TaskManager
 Simplified orchestrator for task management with specialized components:
@@ -128,12 +134,13 @@ Simplified episode management for RL workflows:
 #### ExecutionManager Integration
 Direct command execution with Docker sandbox isolation:
 - **Docker CLI Command**: Single DockerCLIExecutor with comprehensive security validation  
+- **Action-Based Interface**: Accepts Action objects containing command and parameters
 - **ExecutionConfiguration**: Configuration management for execution, security, CLI-specific settings, and sandbox configuration
 - **Docker Container Execution**: execute_command() method for CLI command execution in isolated Docker containers
 - **SandboxManager Integration**: Built-in container lifecycle management with session-based isolation
 - **Security Integration**: Built-in SecurityValidator with configurable allowed commands
 - **Concurrency Control**: Semaphore-based execution limiting with configurable max_concurrent
-- **REST API Integration**: Command listing and execution via SessionManager REST endpoints
+- **REST API Integration**: Command listing and execution via SessionAPI REST endpoints
 - **Configuration Management**: YAML-based configuration with dynamic CLI parameter defaults and sandbox settings
 - **Parameter Schema Generation**: CLI command generates its own parameter schemas for API documentation
 - **Security Info Access**: get_security_info() exposes SecurityValidator and sandbox configuration
