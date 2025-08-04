@@ -1,0 +1,133 @@
+@startuml SABER Client Architecture
+
+!theme plain
+title Security Agent Benchmarking System - Minimal Client Architecture
+
+skinparam class {
+    BackgroundColor lightgreen
+    BorderColor black
+    ArrowColor black
+    FontSize 10
+}
+
+package "Test Harness Core" {
+
+    class TestHarness {
+        +config: TestHarnessConfig
+        +server_client: ServerClient
+        +agent: AgentUnderTest
+        +session_id: str?
+        --
+        +initialize(): void
+        +run_test(): void
+        +shutdown(): void
+    }
+
+    class TestHarnessConfig {
+        +server_url: str
+        +domain: str
+        +agent_config: Dict[str, Any]
+        +timeout_seconds: int
+        --
+        +validate(): void
+        +from_yaml(): TestHarnessConfig
+    }
+}
+
+package "Server Communication" {
+
+    class ServerClient {
+        +base_url: str
+        +session_id: str?
+        +timeout: int
+        --
+        +create_session(): str
+        +close_session(): void
+        +start_episode(): EpisodeInfo
+        +execute_step(command: str): StepResponse
+        +get_current_task(): TaskInfo
+        +get_policy(): PolicyInfo
+    }
+
+    class StepResponse {
+        +success: bool
+        +output: str
+        +error: str?
+        +done: bool
+        +info: Dict[str, Any]
+    }
+
+    class TaskInfo {
+        +task_id: str
+        +title: str
+        +description: str
+        +current_subtask: str?
+    }
+
+    class EpisodeInfo {
+        +episode_id: str
+        +task_id: str
+        +initial_prompt: str
+    }
+
+    class PolicyInfo {
+        +available_commands: List[str]
+        +guidelines: str
+        +constraints: List[str]
+    }
+}
+
+package "Agent Interface" {
+
+    interface AgentUnderTest {
+        +process_prompt(prompt: str): str
+        +reset(): void
+    }
+
+    class PromptBuilder {
+        +task_info: TaskInfo
+        +policy_info: PolicyInfo
+        +last_output: str?
+        --
+        +build_initial_prompt(): str
+        +build_step_prompt(): str
+    }
+}
+
+' Relationships
+TestHarness *-- TestHarnessConfig
+TestHarness *-- ServerClient
+TestHarness *-- AgentUnderTest
+TestHarness ..> PromptBuilder : uses
+
+ServerClient ..> StepResponse : returns
+ServerClient ..> TaskInfo : returns
+ServerClient ..> EpisodeInfo : returns
+ServerClient ..> PolicyInfo : returns
+
+PromptBuilder ..> TaskInfo : uses
+PromptBuilder ..> PolicyInfo : uses
+
+note top of TestHarness
+**Minimal Test Harness**
+- Orchestrates test execution
+- Connects agent to server
+- Handles session lifecycle
+- No logging or evaluation
+end note
+
+note top of ServerClient
+**Simple REST Client**
+- Direct API communication
+- Minimal error handling
+- Server handles all logic
+end note
+
+note top of AgentUnderTest
+**Agent Interface**
+- Agent receives prompts
+- Agent returns text responses
+- No knowledge of framework
+end note
+
+@enduml
