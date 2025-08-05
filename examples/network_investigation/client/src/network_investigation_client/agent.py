@@ -77,8 +77,6 @@ class NetworkInvestigationAgent:
             "ss -tulpn",       # Alternative network connections
             "ps aux",          # Running processes
             "lsof -i",         # Network files and processes
-            "file /tmp/*",     # Check suspicious file types
-            "strings /tmp/suspicious.bin"  # Analyze suspicious binaries
         ]
 
         # Select first unused command

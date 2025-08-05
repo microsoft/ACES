@@ -44,9 +44,9 @@ fi
 
 # Create data directories
 echo -e "${YELLOW}📁 Creating data directories...${NC}"
-mkdir -p /workspace/data/samples
-mkdir -p /workspace/data/logs
-mkdir -p /workspace/data/results
+mkdir -p /workspace/src/network_investigation_server/data/samples
+mkdir -p /workspace/src/network_investigation_server/data/logs
+mkdir -p /workspace/src/network_investigation_server/data/results
 
 # Set default values
 export SABER_DOMAIN=${SABER_DOMAIN:-network_investigation}

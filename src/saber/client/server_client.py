@@ -41,6 +41,7 @@ class ServerClient:
             ui_enabled: Enable rich console UI output
         """
         self.server_url = server_url.rstrip("/")
+        self.timeout = timeout
         self.ui_enabled = ui_enabled
         self._client = httpx.AsyncClient(timeout=timeout)
         self.session_id = None

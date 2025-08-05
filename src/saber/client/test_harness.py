@@ -6,13 +6,64 @@ the server client, agent, and prompt builder components.
 """
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 
+from .context_logger import ContextLogger
 from .prompt_builder import PromptBuilder
 from .server_client import ServerClient
+
+
+class StructuredFormatter(logging.Formatter):
+    """JSON-based structured logging formatter for detailed file logs."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        """Format log record as structured JSON."""
+        log_data = {
+            "timestamp": self.formatTime(record),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "module": record.module,
+            "function": record.funcName,
+            "line": record.lineno,
+        }
+
+        # Add exception info if present
+        if record.exc_info:
+            log_data["exception"] = self.formatException(record.exc_info)
+
+        # Add extra fields from log record
+        for key, value in record.__dict__.items():
+            if key not in [
+                "name",
+                "msg",
+                "args",
+                "levelname",
+                "levelno",
+                "pathname",
+                "filename",
+                "module",
+                "exc_info",
+                "exc_text",
+                "stack_info",
+                "lineno",
+                "funcName",
+                "created",
+                "msecs",
+                "relativeCreated",
+                "thread",
+                "threadName",
+                "processName",
+                "process",
+                "getMessage",
+            ]:
+                log_data[key] = value
+
+        return json.dumps(log_data, default=str)
 
 
 @dataclass
@@ -30,6 +81,8 @@ class TestHarnessConfig:
     # Logging
     log_level: str = "INFO"
     log_file: Optional[Path] = None
+    log_format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    log_structured: bool = False  # Enable structured JSON logging to file
 
     # Additional configuration
     agent_config: Dict[str, Any] = field(default_factory=dict)
@@ -57,6 +110,7 @@ class TestHarness:
         self.server_client: Optional[ServerClient] = None
         self.agent: Optional[Any] = None  # Any agent with process_prompt and reset methods
         self.logger = self._setup_logging()
+        self.ctx_logger = ContextLogger(self.logger)  # Context-aware logger wrapper
 
         # Test state
         self.session_id: Optional[str] = None
@@ -65,7 +119,7 @@ class TestHarness:
         self.is_running = False
 
     def _setup_logging(self) -> logging.Logger:
-        """Setup logging configuration."""
+        """Setup logging configuration with enhanced file logging support."""
         logger = logging.getLogger("saber.client")
         logger.setLevel(getattr(logging, self.config.log_level.upper()))
 
@@ -73,19 +127,36 @@ class TestHarness:
         for handler in logger.handlers[:]:
             logger.removeHandler(handler)
 
-        # Console handler
+        # Console handler with standard formatting
         console_handler = logging.StreamHandler()
         console_handler.setLevel(getattr(logging, self.config.log_level.upper()))
-        formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-        console_handler.setFormatter(formatter)
+        console_formatter = logging.Formatter(self.config.log_format)
+        console_handler.setFormatter(console_formatter)
         logger.addHandler(console_handler)
 
         # File handler if specified
         if self.config.log_file:
-            file_handler = logging.FileHandler(self.config.log_file)
-            file_handler.setLevel(getattr(logging, self.config.log_level.upper()))
-            file_handler.setFormatter(formatter)
-            logger.addHandler(file_handler)
+            try:
+                # Ensure log directory exists
+                self.config.log_file.parent.mkdir(parents=True, exist_ok=True)
+
+                file_handler = logging.FileHandler(self.config.log_file)
+                file_handler.setLevel(getattr(logging, self.config.log_level.upper()))
+
+                if self.config.log_structured:
+                    # Use structured JSON formatter for file logging
+                    file_formatter: Union[StructuredFormatter, logging.Formatter] = StructuredFormatter()
+                else:
+                    # Use standard formatter for file logging
+                    file_formatter = logging.Formatter(self.config.log_format)
+
+                file_handler.setFormatter(file_formatter)
+                logger.addHandler(file_handler)
+
+                logger.info(f"File logging enabled: {self.config.log_file}")
+
+            except Exception as e:
+                logger.warning(f"Failed to setup file logging: {e}")
 
         return logger
 
@@ -138,67 +209,63 @@ class TestHarness:
         try:
             # Create session
             self.session_id = await self.server_client.create_session()
-            self.logger.info(f"Created session: {self.session_id}")
+            self.ctx_logger.update_context(session_id=self.session_id)
+            self.ctx_logger.log_session_created(self.session_id)
 
             # Start episode with optional task_id
+            self.ctx_logger.log_episode_starting(task_id)
             if task_id:
-                self.logger.info(f"Starting episode with task_id: {task_id}")
                 episode_info = await self.server_client.start_episode(task_id)
             else:
-                self.logger.info("Starting episode with default task")
                 episode_info = await self.server_client.start_episode()
             self.episode_id = episode_info.episode_id
-            self.logger.info(f"Started episode: {self.episode_id}")
+            self.ctx_logger.log_episode_start(self.episode_id, task_id)
 
             # Get task and policy information
             task_info = await self.server_client.get_current_task()
             policy_info = await self.server_client.get_policy()
 
-            self.logger.info(f"Task: {task_info.title}")
-            self.logger.info(f"Available commands: {policy_info.available_commands}")
-
-            # Build initial prompt
-            initial_prompt = PromptBuilder.build_initial_prompt(task_info, policy_info, episode_info)
+            self.ctx_logger.log_task_info(task_info.title, policy_info.available_commands)
 
             # Execute test loop
+            initial_prompt = PromptBuilder.build_initial_prompt(task_info, policy_info, episode_info)
             current_prompt = initial_prompt
             step_response = None
 
             while self.is_running and self.step_count < self.config.max_steps:
                 self.step_count += 1
-                self.logger.info(f"Step {self.step_count}")
+                self.ctx_logger.log_step_start(self.step_count)
 
                 # Get agent response
                 try:
                     agent_response = await self.agent.process_prompt(current_prompt)
-                    self.logger.info(f"Agent command: {agent_response}")
+                    self.ctx_logger.log_agent_response(agent_response)
 
                     if not agent_response.strip():
-                        self.logger.warning("Agent returned empty response")
+                        self.ctx_logger.log_empty_response()
                         break
 
                 except Exception as e:
-                    self.logger.error(f"Agent error: {e}")
+                    self.ctx_logger.log_agent_error(str(e))
                     break
 
                 # Execute step on server
                 try:
                     step_response = await self.server_client.execute_step(agent_response)
-                    self.logger.info(f"Step success: {step_response.success}")
+                    self.ctx_logger.log_step_response(step_response.success, step_response.done, step_response.output)
 
                     if step_response.error:
-                        self.logger.warning(f"Step error: {step_response.error}")
+                        self.ctx_logger.log_step_error(step_response.error)
 
                 except Exception as e:
-                    self.logger.error(f"Server communication error: {e}")
+                    self.ctx_logger.log_server_error(str(e))
                     break
 
                 # Check if done
                 if step_response.done:
-                    self.logger.info("Episode completed")
+                    self.ctx_logger.log_episode_completed()
                     completion_prompt = PromptBuilder.build_completion_prompt(step_response.output)
-                    self.logger.info("Final result:")
-                    self.logger.info(completion_prompt)
+                    self.ctx_logger.log_final_result(completion_prompt)
                     break
 
                 # Build next prompt
@@ -225,11 +292,11 @@ class TestHarness:
                 "task_info": task_info.model_dump(),
             }
 
-            self.logger.info(f"Test completed: {results}")
+            self.ctx_logger.log_test_completed(results)
             return results
 
         except Exception as e:
-            self.logger.error(f"Test execution failed: {e}")
+            self.ctx_logger.log_test_failed(str(e))
             raise
         finally:
             self.is_running = False

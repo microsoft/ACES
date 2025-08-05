@@ -58,8 +58,20 @@ if [ $timeout -le 0 ]; then
     exit 1
 fi
 
-# Start the SABER client
-echo -e "${GREEN}🎯 Starting SABER client...${NC}"
-exec uv run python -m network_investigation_client \
+# Start the SABER client with log file
+echo -e "${GREEN}🎯 Starting SABER client with log file...${NC}"
+uv run python -m network_investigation_client \
     --server-url "$SABER_SERVER_URL" \
-    --log-level "$SABER_LOG_LEVEL"
+    --log-level "$SABER_LOG_LEVEL" \
+    --log-file "/workspace/src/network_investigation_client/data/logs/investigation.log" \
+    --log-structured
+
+# Keep container alive after test execution
+echo -e "${GREEN}✅ Test execution completed. Keeping container alive...${NC}"
+echo -e "${BLUE}💡 Container will remain running for log inspection and debugging.${NC}"
+echo -e "${YELLOW}📋 Use 'docker-compose exec saber-client /bin/bash' to access the container.${NC}"
+
+# Sleep indefinitely to keep container alive
+while true; do
+    sleep 3600  # Sleep for 1 hour at a time
+done

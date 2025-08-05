@@ -26,6 +26,12 @@ async def main():
     parser.add_argument("--task", default="network_investigation", help="Task to execute")
     parser.add_argument("--episodes", type=int, default=1, help="Number of episodes to run")
     parser.add_argument("--log-level", default="INFO", help="Log level")
+    parser.add_argument("--log-file", help="Optional log file path for detailed logging")
+    parser.add_argument(
+        "--log-structured",
+        action="store_true",
+        help="Enable structured JSON logging to file"
+    )
 
     args = parser.parse_args()
 
@@ -39,13 +45,19 @@ async def main():
     # Configure test harness
     config = TestHarnessConfig(
         server_url=args.server_url,
-        log_level=args.log_level
+        log_level=args.log_level,
+        log_file=Path(args.log_file) if args.log_file else None,
+        log_structured=args.log_structured,
     )
 
     print(f"🔍 Starting SABER Network Investigation Agent")
     print(f"📡 Server: {args.server_url}")
     print(f"🎯 Task: {args.task}")
     print(f"🔁 Episodes: {args.episodes}")
+    if args.log_file:
+        print(f"📝 Log file: {args.log_file}")
+        if args.log_structured:
+            print(f"📋 Structured logging: enabled")
 
     try:
         # Use SABER TestHarness to run the agent

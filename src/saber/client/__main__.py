@@ -28,6 +28,7 @@ async def run_saber_client(
     step_delay: float = 0.0,
     log_level: str = "INFO",
     log_file: Optional[str] = None,
+    log_structured: bool = False,
 ) -> None:
     """
     Run SABER client with customer's agent.
@@ -42,6 +43,7 @@ async def run_saber_client(
         step_delay: Delay between steps (seconds)
         log_level: Logging level
         log_file: Optional log file path
+        log_structured: Enable structured JSON logging
     """
     # Setup logging
     logging.basicConfig(
@@ -86,6 +88,7 @@ async def run_saber_client(
         step_delay=step_delay,
         log_level=log_level,
         log_file=Path(log_file) if log_file else None,
+        log_structured=log_structured,
     )
 
     # Run episodes
@@ -281,6 +284,8 @@ Examples:
 
     parser.add_argument("--log-file", help="Optional log file path")
 
+    parser.add_argument("--log-structured", action="store_true", help="Enable structured JSON logging to file")
+
     args = parser.parse_args()
 
     try:
@@ -293,6 +298,7 @@ Examples:
                 server_url=args.server,
                 log_level=args.log_level,
                 log_file=args.log_file,
+                log_structured=args.log_structured,
             )
         )
     except KeyboardInterrupt:

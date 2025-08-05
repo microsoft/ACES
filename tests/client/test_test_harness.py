@@ -203,3 +203,179 @@ class TestIntegrationScenarios:
             async with TestHarness(config) as harness:
                 await harness.initialize(test_agent)
                 assert harness.agent == test_agent
+
+
+class TestLoggingFeatures:
+    """Test cases for enhanced logging features."""
+
+    @pytest.mark.asyncio
+    async def test_file_logging_setup(self, tmp_path):
+        """Test that file logging is properly configured."""
+        log_file = tmp_path / "test.log"
+
+        config = TestHarnessConfig(
+            server_url="http://test:8000",
+            log_file=log_file,
+            log_level="INFO"
+        )
+
+        harness = TestHarness(config)
+
+        # Check that the logger is properly configured
+        assert hasattr(harness, 'logger')
+        assert len(harness.logger.handlers) >= 2  # Console + File handlers
+
+        # Check that log file is created
+        harness.logger.info("Test log message")
+        assert log_file.exists()
+
+        # Check log content
+        with open(log_file, 'r') as f:
+            content = f.read()
+            assert "Test log message" in content
+
+    @pytest.mark.asyncio
+    async def test_structured_logging_setup(self, tmp_path):
+        """Test that structured JSON logging works correctly."""
+        log_file = tmp_path / "structured.jsonl"
+
+        config = TestHarnessConfig(
+            server_url="http://test:8000",
+            log_file=log_file,
+            log_structured=True,
+            log_level="INFO"
+        )
+
+        harness = TestHarness(config)
+
+        # Log a message with extra data
+        harness.logger.info("Test structured message", extra={
+            "session_id": "test-123",
+            "step_number": 5,
+            "event_type": "test_event"
+        })
+
+        assert log_file.exists()
+
+        # Check that the log content is valid JSON
+        with open(log_file, 'r') as f:
+            lines = f.readlines()
+
+        # Find the structured log entry we're interested in
+        structured_entry = None
+        for line in lines:
+            try:
+                import json
+                log_entry = json.loads(line.strip())
+                if log_entry.get("message") == "Test structured message":
+                    structured_entry = log_entry
+                    break
+            except json.JSONDecodeError:
+                continue
+
+        assert structured_entry is not None, "Structured log entry not found"
+        assert structured_entry["message"] == "Test structured message"
+        assert structured_entry["session_id"] == "test-123"
+        assert structured_entry["step_number"] == 5
+        assert structured_entry["event_type"] == "test_event"
+        assert "timestamp" in structured_entry
+        assert structured_entry["level"] == "INFO"
+
+    @pytest.mark.asyncio
+    async def test_log_directory_creation(self, tmp_path):
+        """Test that log directories are automatically created."""
+        log_file = tmp_path / "subdir" / "nested" / "test.log"
+
+        config = TestHarnessConfig(
+            server_url="http://test:8000",
+            log_file=log_file,
+            log_level="INFO"
+        )
+
+        harness = TestHarness(config)
+        harness.logger.info("Test message")
+
+        # Directory should be created automatically
+        assert log_file.parent.exists()
+        assert log_file.exists()
+
+    @pytest.mark.asyncio
+    async def test_enhanced_step_logging(self, test_agent, tmp_path):
+        """Test that step execution includes structured logging data."""
+        log_file = tmp_path / "step_test.jsonl"
+
+        config = TestHarnessConfig(
+            server_url="http://test:8000",
+            log_file=log_file,
+            log_structured=True,
+            log_level="INFO",
+            max_steps=1
+        )
+
+        # Mock the ServerClient completely
+        with patch('saber.client.test_harness.ServerClient') as MockServerClient:
+            mock_server = AsyncMock()
+            mock_server.create_session = AsyncMock(return_value="test-session")
+            mock_server.start_episode = AsyncMock(return_value=EpisodeInfo(
+                episode_id="episode-123",
+                task_id="task-456",
+                message="Episode started"
+            ))
+            mock_server.get_current_task = AsyncMock(return_value=TaskInfo(
+                task_id="task-456",
+                title="Test Task",
+                description="Test description",
+                current_subtask="subtask-1"
+            ))
+            mock_server.get_policy = AsyncMock(return_value=PolicyInfo(
+                domain="test",
+                available_commands=["ls"],
+                guidelines="Test guidelines",
+                constraints=[]
+            ))
+            mock_server.execute_step = AsyncMock(return_value=StepResponse(
+                success=True,
+                output="test output",
+                done=True,  # Complete after one step
+                error=None,
+                info={}
+            ))
+            mock_server.close_session = AsyncMock()
+            mock_server.health_check = AsyncMock(return_value={"status": "healthy"})
+
+            MockServerClient.return_value = mock_server
+
+            async with TestHarness(config) as harness:
+                await harness.initialize(test_agent)
+                results = await harness.run_test("test_task")
+
+                # Check that we got results
+                assert results["session_id"] == "test-session"
+                assert results["episode_id"] == "episode-123"
+
+                # Check the log file contains structured data
+                assert log_file.exists()
+
+                with open(log_file, 'r') as f:
+                    lines = f.readlines()
+
+                # Find log entries with session context
+                structured_logs = []
+                for line in lines:
+                    try:
+                        import json
+                        log_entry = json.loads(line.strip())
+                        if "session_id" in log_entry:
+                            structured_logs.append(log_entry)
+                    except json.JSONDecodeError:
+                        continue
+
+                # Should have logs with session context
+                assert len(structured_logs) > 0
+
+                # Check that session_id and episode_id are logged
+                session_logs = [log for log in structured_logs if log.get("session_id") == "test-session"]
+                assert len(session_logs) > 0
+
+                episode_logs = [log for log in structured_logs if log.get("episode_id") == "episode-123"]
+                assert len(episode_logs) > 0
