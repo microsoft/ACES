@@ -119,9 +119,12 @@ class TestHarness:
 
         self.logger.info("Test harness initialized successfully")
 
-    async def run_test(self) -> Dict[str, Any]:
+    async def run_test(self, task_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Execute the main test loop.
+
+        Args:
+            task_id: Optional task ID to execute. If None, uses server default.
 
         Returns:
             Dict[str, Any]: Test execution results and metadata
@@ -137,8 +140,13 @@ class TestHarness:
             self.session_id = await self.server_client.create_session()
             self.logger.info(f"Created session: {self.session_id}")
 
-            # Start episode
-            episode_info = await self.server_client.start_episode()
+            # Start episode with optional task_id
+            if task_id:
+                self.logger.info(f"Starting episode with task_id: {task_id}")
+                episode_info = await self.server_client.start_episode(task_id)
+            else:
+                self.logger.info("Starting episode with default task")
+                episode_info = await self.server_client.start_episode()
             self.episode_id = episode_info.episode_id
             self.logger.info(f"Started episode: {self.episode_id}")
 

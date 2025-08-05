@@ -11,7 +11,13 @@ src/saber/client/
 ├── test_harness.py           # Main TestHarness orchestrator
 ├── server_client.py          # REST API client for SABER server
 ├── agent_wrapper.py          # Generic agent adaptation framework
-└── prompt_builder.py         # Prompt formatting utilities
+├── prompt_builder.py         # Prompt formatting utilities
+└── ui/                       # Rich console UI components
+    ├── __init__.py           # UI module exports
+    ├── console.py            # SABER console with theming
+    ├── progress.py           # Progress indicators and spinners
+    ├── panels.py             # Information panels and boxes
+    └── tables.py             # Data tables and formatting
 ```
 
 ## Key Components
@@ -36,6 +42,7 @@ Simple REST API client for SABER server communication:
 - **Session Lifecycle**: Create, manage, and close test sessions
 - **Episode Management**: Start episodes and execute test steps
 - **Task Information**: Retrieve current task and policy details
+- **Rich UI Integration**: Optional rich console output with progress indicators
 - **Error Handling**: Robust error handling and connection management
 - **Async Support**: Full async/await support for non-blocking operations
 
@@ -62,6 +69,14 @@ Formats server data into clear prompts for agents:
 - **Output Formatting**: Presents command results clearly
 - **Error Handling**: Formats error messages for agent understanding
 - **Progress Updates**: Shows completion status and next steps
+
+### UI Components (`ui/`)
+Rich console interface components for enhanced user experience:
+- **SABERConsole**: Themed console output with success, error, and warning messages
+- **ProgressManager**: Progress indicators and spinners for long-running operations
+- **TableFormatter**: Data tables with proper alignment and formatting
+- **PanelFormatter**: Information panels and bordered content boxes
+- **Environment Detection**: Automatic fallback to plain text when rich output unavailable
 
 ## Zero-Friction Design
 

@@ -16,7 +16,7 @@ from saber.api_models import StepResponse, TaskInfo, PolicyInfo, EpisodeInfo
 @pytest.fixture
 def server_client():
     """ServerClient fixture."""
-    return ServerClient("http://test-server:8000")
+    return ServerClient("http://test-server:8000", ui_enabled=False)
 
 
 @pytest.fixture
@@ -148,7 +148,7 @@ class TestServerClient:
             assert step_response.error is None
             mock_client.post.assert_called_once_with(
                 "http://test-server:8000/session/test-session/step",
-                json={"command": "ls -la"}
+                json={"command": "ls -la", "parameters": {}}
             )
 
     @pytest.mark.asyncio
@@ -327,7 +327,7 @@ class TestStepResponseParsing:
     @pytest.mark.asyncio
     async def test_step_response_minimal_data(self):
         """Test parsing step response with minimal data."""
-        client = ServerClient("http://test:8000")
+        client = ServerClient("http://test:8000", ui_enabled=False)
         client.session_id = "test"
 
         mock_response = Mock()
@@ -347,7 +347,7 @@ class TestStepResponseParsing:
     @pytest.mark.asyncio
     async def test_step_response_nested_data(self):
         """Test parsing step response with nested data structure."""
-        client = ServerClient("http://test:8000")
+        client = ServerClient("http://test:8000", ui_enabled=False)
         client.session_id = "test"
 
         mock_response = Mock()

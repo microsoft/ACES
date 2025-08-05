@@ -18,6 +18,7 @@ class StepResponse(BaseModel):
     output: str = Field(description="Command output to show agent")
     error: Optional[str] = Field(None, description="Error message if failed")
     done: bool = Field(description="Episode complete")
+    task_completed: bool = Field(default=False, description="Current task completed")
     info: Dict[str, Any] = Field(default_factory=dict, description="Additional server info")
 
 
@@ -27,11 +28,14 @@ class TaskInfo(BaseModel):
     task_id: str
     title: str
     description: str
+    completed: bool = Field(default=False, description="Task completion status")
     current_subtask: Optional[str] = None
+    current_subtask_id: Optional[str] = None
     episode_id: Optional[str] = None
     completed_subtasks: Optional[List[str]] = None
     in_progress_subtasks: Optional[List[str]] = None
     not_visited_subtasks: Optional[List[str]] = None
+    subtasks: Optional[List[Dict[str, Any]]] = Field(default=None, description="Detailed subtask information")
 
 
 class PolicyInfo(BaseModel):

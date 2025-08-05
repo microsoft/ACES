@@ -222,8 +222,9 @@ class SessionManager:
             # Create action for both execution and task managers
             action = Action(tool_name="cli", parameters=parameters or {}, command=command)
 
-            # Execute command through execution manager
-            command_result = await self.execution_manager.step(action)
+            # Execute command through execution manager with session context
+            context = {"session_id": session_id}
+            command_result = await self.execution_manager.step(action, context)
 
             # Execute step through task manager
             step_result = self.task_manager.step(session_id, action, command_result)
@@ -239,7 +240,7 @@ class SessionManager:
             # Prepare response
             response = SessionStepResponse(
                 success=command_result.success,
-                data=command_result.data,
+                data=command_result.data if command_result.data is not None else {},
                 step={
                     "step_number": step_result.step_number,
                     "done": step_result.done,
