@@ -1,0 +1,144 @@
+domain: "network_investigation"
+tasks:
+  - task_id: "network_investigation"
+    title: "Network Connection Investigation"
+    description: "Investigate suspicious network connections and analyze network traffic patterns"
+    initial_context:
+      investigation_type: "network_forensics"
+      priority: "high"
+      timeout: 600
+    subtasks:
+      - subtask_id: "connection_enumeration"
+        title: "Network Connection Enumeration"
+        description: "Enumerate all active network connections"
+        objective: "Identify all active network connections and listening ports"
+        required_tools: ["netstat", "ss"]
+        success_criteria:
+          - "Active connections enumerated"
+          - "Listening ports identified"
+          - "Process associations mapped"
+        context_dependencies: []
+        depends_on: []
+
+      - subtask_id: "process_mapping"
+        title: "Process to Connection Mapping"
+        description: "Map network connections to running processes"
+        objective: "Identify which processes are responsible for network activity"
+        required_tools: ["lsof", "netstat"]
+        success_criteria:
+          - "Processes mapped to connections"
+          - "Suspicious processes identified"
+          - "Command line arguments captured"
+        context_dependencies: ["connection_enumeration.active_connections"]
+        depends_on: ["connection_enumeration"]
+
+      - subtask_id: "traffic_analysis"
+        title: "Network Traffic Analysis"
+        description: "Analyze network traffic patterns and detect anomalies"
+        objective: "Detect suspicious network patterns and potential threats"
+        required_tools: ["tcpdump", "ss"]
+        success_criteria:
+          - "Traffic patterns analyzed"
+          - "Anomalies detected"
+          - "Threat indicators identified"
+        context_dependencies: ["process_mapping.suspicious_processes"]
+        depends_on: ["process_mapping"]
+
+  - task_id: "file_analysis"
+    title: "Suspicious File Analysis"
+    description: "Analyze suspicious files found during network investigation"
+    initial_context:
+      analysis_type: "static_analysis"
+      timeout: 300
+    subtasks:
+      - subtask_id: "file_identification"
+        title: "File Type Identification"
+        description: "Identify file types and basic properties"
+        objective: "Determine file type, format, and basic characteristics"
+        required_tools: ["file"]
+        success_criteria:
+          - "File type identified"
+          - "File format determined"
+          - "Basic properties extracted"
+        context_dependencies: []
+        depends_on: []
+
+      - subtask_id: "string_extraction"
+        title: "String Extraction"
+        description: "Extract readable strings from binary files"
+        objective: "Find embedded strings that may indicate purpose or origin"
+        required_tools: ["strings"]
+        success_criteria:
+          - "Strings extracted successfully"
+          - "Suspicious patterns identified"
+          - "IOCs discovered"
+        context_dependencies: ["file_identification.file_type"]
+        depends_on: ["file_identification"]
+
+      - subtask_id: "binary_analysis"
+        title: "Binary Content Analysis"
+        description: "Analyze binary content using hex dump"
+        objective: "Examine raw binary content for patterns and signatures"
+        required_tools: ["hexdump"]
+        success_criteria:
+          - "Binary content examined"
+          - "File signatures identified"
+          - "Suspicious patterns detected"
+        context_dependencies: ["string_extraction.suspicious_strings"]
+        depends_on: ["string_extraction"]
+
+  - task_id: "system_forensics"
+    title: "System Forensics Investigation"
+    description: "Perform comprehensive system forensics analysis"
+    initial_context:
+      forensics_type: "live_analysis"
+      scope: "system_wide"
+      timeout: 900
+    subtasks:
+      - subtask_id: "process_enumeration"
+        title: "Process Enumeration"
+        description: "Enumerate all running processes and their properties"
+        objective: "Catalog all active processes and identify suspicious activity"
+        required_tools: ["ps"]
+        success_criteria:
+          - "All processes enumerated"
+          - "Process relationships mapped"
+          - "Suspicious processes flagged"
+        context_dependencies: []
+        depends_on: []
+
+      - subtask_id: "filesystem_analysis"
+        title: "Filesystem Analysis"
+        description: "Analyze filesystem for suspicious files and modifications"
+        objective: "Identify recently modified files and suspicious content"
+        required_tools: ["ls", "find"]
+        success_criteria:
+          - "Filesystem structure analyzed"
+          - "Recent modifications identified"
+          - "Suspicious files located"
+        context_dependencies: ["process_enumeration.suspicious_processes"]
+        depends_on: ["process_enumeration"]
+
+      - subtask_id: "artifact_collection"
+        title: "Digital Artifact Collection"
+        description: "Collect and preserve digital evidence"
+        objective: "Gather artifacts for further analysis and preservation"
+        required_tools: ["find", "file"]
+        success_criteria:
+          - "Artifacts identified"
+          - "Evidence preserved"
+          - "Chain of custody maintained"
+        context_dependencies: ["filesystem_analysis.suspicious_files"]
+        depends_on: ["filesystem_analysis"]
+
+      - subtask_id: "timeline_reconstruction"
+        title: "Timeline Reconstruction"
+        description: "Reconstruct timeline of system events"
+        objective: "Create chronological timeline of suspicious activities"
+        required_tools: ["ls", "find"]
+        success_criteria:
+          - "Timeline created"
+          - "Event sequence established"
+          - "Attack progression mapped"
+        context_dependencies: ["artifact_collection.evidence"]
+        depends_on: ["artifact_collection"]
