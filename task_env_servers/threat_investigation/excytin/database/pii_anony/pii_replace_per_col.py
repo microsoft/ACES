@@ -21,7 +21,7 @@ def extract_ip_from_string(input) -> list:
 def extract_ipv6_from_string(input_string):
     # Updated regular expression for matching valid IPv6 addresses with at least 5 colons and handling "::"
     ipv6_pattern = r'\b(?:[0-9A-Fa-f]{1,4}:){2,7}[0-9A-Fa-f]{1,4}::?(?:[0-9A-Fa-f]{1,4})?\b'
-    
+
     # Find all matches in the input string
     return re.findall(ipv6_pattern, input_string)
 
@@ -33,7 +33,7 @@ def generate_ipv6(original_ipv6):
         index = random.randint(0, len(new_ipv6)-1)
         if new_ipv6[index].isalnum():
             new_ipv6 = new_ipv6[:index] + random.choice('0123456789ABCDEF') + new_ipv6[index+1:]
-    
+
     return new_ipv6
 
 # ee17abf2-35a2-4a16-9850-89ebb4f499d0  generate this type
@@ -112,7 +112,7 @@ def replace_keys_in_file_pandas(input_folder, output_folder, replace_dict, pii_c
     for filename in os.listdir(input_folder):
         input_file_path = os.path.join(input_folder, filename)
         output_file_path = os.path.join(output_folder, filename)
-        
+
         if os.path.isdir(input_file_path):
             replace_keys_in_file_pandas(os.path.join(input_folder, filename), os.path.join(output_folder, filename), replace_dict, pii_columns)
             continue
@@ -127,7 +127,7 @@ def replace_pii_one_csv(filename:str, output_folder:str, input_folder, replace_d
     input_file_path = os.path.join(input_folder, filename)
     if os.path.exists(output_file_path):
         print(f"File {filename} already exists in {output_folder}, skipping...")
-        return 
+        return
 
     print("-" * 50)
     print("-" * 50)
@@ -153,12 +153,12 @@ def replace_pii_one_csv(filename:str, output_folder:str, input_folder, replace_d
         is_dict = False
         for s in sample_list:
             if not is_dict and  "{" in str(s) and "}" in str(s):
-                try: 
+                try:
                     json.loads(str(s))
                     is_dict = True
                 except:
                     pass
-                    
+
             if len(extract_ip_from_string(str(s))) > 0:
                 ip_count += 1
             elif len(extract_uuid_from_string(str(s))) > 0:
@@ -193,7 +193,7 @@ def replace_pii_one_csv(filename:str, output_folder:str, input_folder, replace_d
                 a = tmp_dict[match.group(0)]
                 # print(a)
                 return a
-            
+
             # Apply the multi_replace function to each cell in the column
             df[column] = df[column].apply(lambda x: pattern.sub(multi_replace, x) if isinstance(x, str) else x)
 
@@ -220,7 +220,7 @@ def replace_pii_one_csv(filename:str, output_folder:str, input_folder, replace_d
     df.to_csv(output_file_path, sep=SEPARATOR, index=False, encoding='utf-8')
     print()
     print(f"Processed and saved {filename} to {output_folder} in {time.time() - start_time:.2f} seconds")
-    print("-" * 50) 
+    print("-" * 50)
 
 # Call the function
 import json

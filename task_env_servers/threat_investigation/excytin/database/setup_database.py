@@ -110,7 +110,7 @@ def create_container(
 
                 time.sleep(time_step)
                 time_limit -= time_step
-            
+
             time.sleep(4)  # Wait for the container to be ready
             # if time_limit == 0:
             #     raise Exception(f"Container {container_name} did not start within the time limit.")
@@ -121,8 +121,8 @@ def create_container(
             raise
 
 def create_sql_file_from_csv_folder(
-        csv_folder, 
-        sql_file_path, 
+        csv_folder,
+        sql_file_path,
         database_name,
         skip_tables=["SecurityAlert", "SecurityIncident"],
         verbose=False
@@ -146,15 +146,15 @@ def create_sql_file_from_csv_folder(
 
         #skipping apple metadata stuff
         if file_name.startswith("._"):
-            continue    
-            
-        if file_name.replace(".csv", "").strip() in skip_tables: 
+            continue
+
+        if file_name.replace(".csv", "").strip() in skip_tables:
             if verbose:
                 print(f"Skipping table {file_name}")
             continue
         if file_name.endswith(".csv"):
             table_name = file_name.replace(".csv", "")
-            
+
             # check meta file exists
             if os.path.exists(os.path.join(csv_folder, f"{table_name}.meta")):
                 with open(os.path.join(csv_folder, f"{table_name}.meta"),  'r') as meta_file:
@@ -195,7 +195,7 @@ def create_sql_file_from_csv_folder(
             for i, csv_file in enumerate(csv_files):
                 load_data_sql = generate_load_data_sql(csv_file, table_name, type_map.keys(), json_columns)
                 sql_statements.append(load_data_sql)
-           
+
     # Write all SQL statements to the output file
     with open(sql_file_path, 'w', encoding='utf-8') as sql_file:
         sql_file.write("\n\n".join(sql_statements))
@@ -287,7 +287,7 @@ def debug_tables(args):
             database_name=args.database_name,
             skip_tables=log_list_copy
         )
-        
+
         print(f"Processing table {removed_table}", end="...")
 
         # 2. start a MySQL docker container
@@ -306,10 +306,10 @@ def debug_tables(args):
             print(f"Error with {removed_table}")
         else:
             print(f"Success with {removed_table}")
-        
+
         os.system("docker volume prune -f")
     print("Errors:", error_list)
-    
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Setup a MySQL database from CSV files')
     parser.add_argument('--csv', type=str, help='Folder containing the CSV files')
@@ -330,7 +330,7 @@ if __name__ == "__main__":
         args.container_name = args.container_name+"_alert_only"
     os.makedirs(os.path.dirname(sql_file_path), exist_ok=True)
     print(os.path.dirname(sql_file_path))
-    
+
     if args.debug:
         args.respawn = True
         debug_tables(args)
@@ -409,6 +409,6 @@ if __name__ == "__main__":
         cursor.execute("SHOW TABLES;")
         tables = cursor.fetchall()
         print("Tables in the database:", tables)
-    
+
     print("> 5. Stopping the MySQL container...")
     container.stop()

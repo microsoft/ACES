@@ -23,7 +23,7 @@ PII_identify_prompt = """Given a column name and some examples of the data, dete
 PII stands for Personally Identifiable Information. It is information that can be used to identify an individual. Examples of PII include:
 - Name
 - IP address
-- Email 
+- Email
 
 Please use JSON format for your response:
 {
@@ -79,13 +79,13 @@ def identify_pii(csv_file, save_file):
                     "examples": examples,
                 }
                 continue
-        
+
         if len(df[column].unique()) <= 5:
             examples = df[column].unique().tolist()
 
         # convert all nan to "nan"
         examples = [str(e) if not pd.isnull(e) else "nan" for e in examples]
-            
+
 
         for i in range(5):
             print("-" * 10, "Input Prompt", "-" * 10)
@@ -112,14 +112,14 @@ def identify_pii(csv_file, save_file):
                 continue
 
             break
-                
+
         if response != {}:
             response[column]['examples'] = examples
             examined_columns[column] = response[column]
 
         with open(save_file, "w") as f:
             json.dump(examined_columns, f)
-    
+
 
 # identify_pii(
 #     csv_file="./data/incidents/incident_5/AADManagedIdentitySignInLogs.csv",
@@ -145,7 +145,7 @@ folder = "./data/incidents/incident_5"
 #             csv_file=csv_file,
 #             save_file=save_file
 #         )
-        
+
 # ----------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------
 # Second filter
@@ -201,8 +201,3 @@ for file_name in os.listdir(folder):
             for i in range(min(5, len(u))):
                 print(u[i])
             print("-" * 50)
-
-    
-
-        
-    

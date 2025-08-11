@@ -13,4 +13,3 @@ def start_container(container_name):
         print(f"Restarting stopped container with ID: {container.id}...")
         sleep(10)
         return container
-    

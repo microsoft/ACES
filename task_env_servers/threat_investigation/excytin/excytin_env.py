@@ -103,7 +103,7 @@ class ExcytinEnv(gym.Env):
         if save_file is False:
             print("Warning: No save file provided. Logging will not be saved.")
         else:
-            if isinstance(save_file, bool):            
+            if isinstance(save_file, bool):
                 os.makedirs("results", exist_ok=True)
                 # + datetime.now().strftime("%Y%m%d%H%M%S")
                 curr_time = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -170,13 +170,13 @@ class ExcytinEnv(gym.Env):
         """Get the list of attacks.
         """
         return list(ATTACKS.keys())
-    
+
     def get_table_names(self):
         """Get the table names.
         """
         self.cursor.execute("SHOW TABLES;")
-        return self.cursor.fetchall()   
-    
+        return self.cursor.fetchall()
+
     def get_schema(self, table_name: str) -> List[Dict]:
         """Get the schema of a table.
         """
@@ -193,7 +193,7 @@ class ExcytinEnv(gym.Env):
                 total_query_count += 1
                 if step['info']['query_success']:
                     success_query_count += 1
-        
+
         return {
             "success": self.curr_trajectory[-1]['reward'] == 1,
             "steps": self.step_count,
@@ -203,7 +203,7 @@ class ExcytinEnv(gym.Env):
             "question": self.curr_question,
             "trajectory": self.curr_trajectory,
         }
-    
+
     def save_logging(self):
         if self.save_file:
             with open(self.save_file, "w") as f:
@@ -227,7 +227,7 @@ class ExcytinEnv(gym.Env):
             action (str): The action to take. It should be a SQL query or a string that is the final answer.
             submit (bool, optional): Whether to submit the action. Defaults to False. If set, the final answer should be passed as the action.
             stringify (bool, optional): Whether to stringify the result. Defaults to True.
-        
+
         Returns:
             Tuple[np.ndarray, float, bool, Dict]: The observation, reward, done, and info.
 
@@ -237,12 +237,12 @@ class ExcytinEnv(gym.Env):
         """
         if self.curr_question is None:
             raise ValueError("Cannot step in the environment without resetting first.")
-        
+
         query_success = True
         if submit:
             observation, reward, done, info = self._submit(action)
         elif self.step_count < self.max_steps:
-            try: 
+            try:
                 self.cursor.execute(action)
                 observation = self.cursor.fetchall()
 
@@ -269,9 +269,9 @@ class ExcytinEnv(gym.Env):
             reward = 0
             done = True
             info = {}
-        
+
         self.step_count += 1
-        
+
         info.update({
             "query_success": query_success,
             "submit": submit
@@ -294,7 +294,7 @@ class ExcytinEnv(gym.Env):
 
         Args:
             idx (int, optional): The index of the question to reset to. Defaults to 0
-        
+
         Returns:
             Tuple[str, Dict]: The initial observation and info.
                 - observation (str): The initial observation is the question text.
@@ -320,9 +320,9 @@ class ExcytinEnv(gym.Env):
             "noise_level": self.noise_level,
             "qid": idx
         }
-    
+
         return get_full_question(observation), info
-    
+
     def render(self):
         """Render the environment.
         """
@@ -340,7 +340,7 @@ class ExcytinEnv(gym.Env):
 
         Args:
             answer (str): The answer to the question.
-        
+
         Returns:
             Tuple[np.ndarray, float, bool, Dict]: The observation, reward, done, and info.
         """
@@ -354,7 +354,7 @@ class ExcytinEnv(gym.Env):
         """
         eval_dict = self.evaluator.checking(self.curr_question, answer)
         return eval_dict
-    
+
     def check_layer(self, layer: str) -> None:
         assert layer in ["alert", 'log', 'alert_only'], "Layer should be 'alert', 'log' or 'alert_only'."
 
@@ -377,7 +377,7 @@ class ExcytinEnv(gym.Env):
             assert "SecurityAlert" in tables, "With 'alert_only' level, the table 'SecurityAlert' should be present."
             assert "AADServicePrincipalSignInLogs" not in tables, "With 'alert_only' level, the table 'AADServicePrincipalSignInLogs' should not be present."
             assert "OfficeActivity" not in tables, "With 'alert_only' level, the table 'OfficeActivity' should not be present."
-            
+
 
 
 if __name__ == "__main__":
@@ -394,5 +394,5 @@ WHERE Operation = 'MailItemsAccessed'
 # WHERE AppId = 'bb77fe0b-52af-4f26-9bc7-19aa48854ebf';
 # """
     result, success = env.execute_query(query)
-    
+
     print(result, len(result))

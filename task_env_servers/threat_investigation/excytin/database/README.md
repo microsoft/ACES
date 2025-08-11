@@ -16,4 +16,3 @@ The `alphineskihouse` folder contains logs from Jun 20, 2024 to Jul 23, 2024. Wh
     python process_logs.py
     ```
 5. To anonymize the data, please refer to `secgym/database/pii_anony/README.md` for the anonymization process.
-

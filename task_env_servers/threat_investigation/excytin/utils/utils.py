@@ -19,7 +19,7 @@ def filter_config_list(config_list, model_name):
         raise ValueError(f"model {model_name} not found in the config list, please put 'tags': ['{model_name}'] in the config list to inicate this model")
     return config_list
 
-def msging(msg, role="user"): 
+def msging(msg, role="user"):
     return {"role": role, "content": msg}
 
 def get_full_question(question_dict, add_hint=False):
@@ -67,14 +67,14 @@ def process_entity_identifiers(entities_json_string):
                     ip_range = int(ip_address_fields[1])
                     if ip_range >= 16 and ip_range <= 32:
                         return True
-            
+
             return False
         except:
             return False
 
     def get_identifier_value(entity_dict, identifier_field):
         return str(entity_dict[identifier_field]).lower() if identifier_field in entity_dict else ""
-    
+
     entity_field_delimiter = "__"
     def union_fields(identifier_list):
         str_identifier_list = [str(identifier).lower() for identifier in identifier_list]
@@ -86,7 +86,7 @@ def process_entity_identifiers(entities_json_string):
         if "Type" in entity_dict:
             type_value = entity_dict["Type"].lower()
             node_attributes = {"node_type": type_value}
-            
+
 
             if type_value == "account":
 
@@ -100,12 +100,12 @@ def process_entity_identifiers(entities_json_string):
                 if "Name" in entity_dict and entity_dict["Name"] not in ["root", "system", "guest", "admin", "administrator", "user"] and "UPNSuffix" in entity_dict:
                     node_attributes['identifier_fields'] = "Email"
                     final_entities_list.append([type_value, "Email", entity_dict["Name"] + "@"  + entity_dict['UPNSuffix'], json.dumps(node_attributes.copy())])
-                
+
                 if "Sid" in entity_dict:
                     if entity_dict["Sid"] in ['S-1-5-18']: continue
                     node_attributes['identifier_fields'] = "Sid"
                     final_entities_list.append([type_value, "Sid", entity_dict["Sid"], json.dumps(node_attributes.copy())])
-                
+
                 node_attributes['identifier_fields'] = "AadUserId"
 
             elif type_value == "cloud-application":
@@ -116,7 +116,7 @@ def process_entity_identifiers(entities_json_string):
                 if "Name" in entity_dict and "InstanceName" in entity_dict:
                     node_attributes['identifier_fields'] = "Name__InstanceName"
                     final_entities_list.append([type_value, "Name__InstanceName", union_fields([entity_dict["Name"], entity_dict['InstanceName']]), json.dumps(node_attributes.copy())])
-                
+
                 node_attributes['identifier_fields'] = "AppId"
 
             elif type_value == "file":
@@ -133,7 +133,7 @@ def process_entity_identifiers(entities_json_string):
                 if "Algorithm" in entity_dict and "Value" in entity_dict:
                     node_attributes['identifier_fields'] = "Algorithm__Value"
                     final_entities_list.append([type_value, "Algorithm__Value", union_fields([entity_dict["Algorithm"], entity_dict["Value"]]), json.dumps(node_attributes.copy())])
-                
+
                 continue
 
             elif type_value == "host":
@@ -169,7 +169,7 @@ def process_entity_identifiers(entities_json_string):
                 if identifier_value in ('0.0.0.0', '127.0.0.1', '8.8.8.8'): continue
                 node_attributes['IsLocalIPv4'] = str(is_local_ipv4(identifier_value))
                 #if is_local_ipv4(identifier_value): continue
-            
+
             elif type_value == "mailbox" or type_value == "mailboxconfiguration":
 
                 identifier_field = "MailboxPrimaryAddress"
@@ -181,9 +181,9 @@ def process_entity_identifiers(entities_json_string):
                 if "Source" in entity_dict and "Query" in entity_dict:
                     node_attributes['identifier_fields'] = "Source__Query"
                     final_entities_list.append([type_value, "Source__Query", union_fields([entity_dict["Source"], entity_dict["Query"]]), json.dumps(node_attributes.copy())])
-                
+
                 continue
-            
+
             elif type_value == "mailmessage":
 
                 identifier_field = "Sender"
@@ -201,7 +201,7 @@ def process_entity_identifiers(entities_json_string):
                     copy_node_attributes = node_attributes.copy()
                     copy_node_attributes['IsLocalIPv4'] = str(is_local_ipv4(ip_address))
                     final_entities_list.append([type_value, "SenderIP", ip_address, json.dumps(copy_node_attributes)])
-                
+
                 node_attributes['identifier_fields'] = "Sender"
 
             elif type_value == "oauth-application":
@@ -212,9 +212,9 @@ def process_entity_identifiers(entities_json_string):
                 if "OAuthAppId" in entity_dict:
                     node_attributes['identifier_fields'] = "OAuthAppId"
                     final_entities_list.append([type_value, "OAuthAppId", entity_dict["OAuthAppId"], json.dumps(node_attributes.copy())])
-                
+
                 node_attributes['identifier_fields'] = "OAuthObjectId"
-            
+
             elif type_value == "process":
 
                 if "ProcessId" in entity_dict and "CreatedTimeUtc" in entity_dict and "CommandLine" in entity_dict:
@@ -229,7 +229,7 @@ def process_entity_identifiers(entities_json_string):
                         final_entities_list.append([type_value, "ExtractedFileName", extracted_file, json.dumps(node_attributes.copy())])
 
                 continue
-            
+
             elif type_value == "security-group":
 
                 identifier_field = "ObjectGuid"
@@ -238,7 +238,7 @@ def process_entity_identifiers(entities_json_string):
                 if "SID" in entity_dict:
                     node_attributes['identifier_fields'] = "SID"
                     final_entities_list.append([type_value, "SID", entity_dict["SID"], json.dumps(node_attributes.copy())])
-                
+
                 node_attributes['identifier_fields'] = "ObjectGuid"
 
             elif type_value == "service-principal":
@@ -246,7 +246,7 @@ def process_entity_identifiers(entities_json_string):
                 identifier_field = "ServicePrincipalObjectId"
                 node_attributes['identifier_fields'] = "ServicePrincipalObjectId"
                 identifier_value = get_identifier_value(entity_dict, identifier_field)
-            
+
             elif type_value == "url":
 
                 identifier_field = "Url"
@@ -254,14 +254,14 @@ def process_entity_identifiers(entities_json_string):
                 identifier_value = get_identifier_value(entity_dict, identifier_field)
             #     # TODO: add method to check if url is absolute or not
                 #node_attributes['IsAbsoluteUrl'] = str(is_absolute_url(identifier_value))
-            
+
             elif type_value == "azure-resource":
 
                 identifier_field = "ResourceId"
                 resource_url = str(get_identifier_value(entity_dict, identifier_field)).lower()
                 identifier_value = resource_url
 
-                subscription_match = re.search(r'(?<=subscriptions/)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', resource_url)                
+                subscription_match = re.search(r'(?<=subscriptions/)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', resource_url)
                 if subscription_match:
                     node_attributes['identifier_fields'] = "SubscriptionId"
                     final_entities_list.append([type_value, "SubscriptionId", subscription_match.group(), json.dumps(node_attributes.copy())])
@@ -275,10 +275,10 @@ def process_entity_identifiers(entities_json_string):
 
             else:
                 continue
-            
+
             if identifier_value != "":
                 final_entities_list.append([type_value, identifier_field, identifier_value, json.dumps(node_attributes)])
-    
+
     return final_entities_list
 
 
@@ -292,17 +292,17 @@ def scrap_table_schema(table_name, yaml_filename, save_yaml=True):
         return None
     html_content = response.text
     soup = BeautifulSoup(html_content, 'html.parser')
-    
+
     # Extract the description using regex
     pattern = re.compile(r'</nav><!-- <content> --><p>(.*?)</p>', re.DOTALL)
     try:
-        description = pattern.findall(str(soup))[0] 
+        description = pattern.findall(str(soup))[0]
     except IndexError:
         print(f"Description not found for table: {table_name}")
         description = 'N/A'
     else:
         print(f"Description found for table: {table_name}")
-        
+
     # Extract column details
     columns_table = soup.find('h2', id='columns').find_next('table')
     columns = []
@@ -314,7 +314,7 @@ def scrap_table_schema(table_name, yaml_filename, save_yaml=True):
             'Description': cells[2].text.strip()
         }
         columns.append(column_data)
-    
+
     # Create the result dictionary
     result = {
         'Name': table_name,
@@ -323,10 +323,10 @@ def scrap_table_schema(table_name, yaml_filename, save_yaml=True):
         'Conditions': 'N/A',  # Assuming this is a static value
         'Columns': columns
     }
-    
+
     # Convert the result to JSON
     result_json = json.dumps(result, indent=4)
-    
+
     # save_yaml save the original HTML content to a file
     if save_yaml:
         with open(yaml_filename, 'w', encoding='utf-8') as file:
@@ -354,13 +354,13 @@ def find_most_similar(target, strings):
     """
     most_similar = None
     highest_similarity = float('inf')
-    
+
     for string in strings:
         similarity = Levenshtein.distance(target, string)
         if similarity < highest_similarity:
             highest_similarity = similarity
             most_similar = string
-    
+
     return most_similar
 
 
@@ -377,4 +377,3 @@ if __name__ == '__main__':
         # data = load_yaml(yaml_filename)
         # print(data)
         # print()
-    

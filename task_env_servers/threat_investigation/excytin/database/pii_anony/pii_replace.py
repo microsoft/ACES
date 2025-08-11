@@ -16,7 +16,7 @@ def replace_keys_in_file(input_folder, output_folder, replace_dict):
     files = os.listdir(input_folder)
     random.shuffle(files)
     # randomize order of files
-    
+
     for filename in files:
         # if not any(  in filename): ["SecurityIncident.csv", "SecurityAlert"]
         # if not any([x in filename for x in ["SecurityIncident.csv", "SecurityAlert"]]):
@@ -33,7 +33,7 @@ def replace_keys_in_file(input_folder, output_folder, replace_dict):
             with open("queue.txt", "a") as f:
                 f.write(f"{input_file_path}\n")
 
-        try: 
+        try:
             # If the current path is a directory, recursively process its contents
             if os.path.isdir(input_file_path):
                 replace_keys_in_file(input_file_path, output_file_path, replace_dict)

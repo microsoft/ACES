@@ -26,7 +26,7 @@ def get_count(
         return response.tables[0].rows[0][0]
     else:
         return -1
-    
+
 def calculate_size_per_entry(
         workspace_id: str,
         table_name: str,
@@ -41,7 +41,7 @@ def calculate_size_per_entry(
         return response.statistics['query']['datasetStatistics'][0]['tableSize'] / response.statistics['query']['datasetStatistics'][0]['tableRowCount']
     else:
         return -1
-    
+
 
 def check_segemented_query(
         workspace_id: str,
@@ -53,7 +53,7 @@ def check_segemented_query(
     ) -> Tuple[bool, int]:
     """
     Check if the query need to be segmented or not
-    
+
     Args:
     - workspace_id: Azure Log Analytics workspace id
     - table_name: table name to query
@@ -74,23 +74,23 @@ def check_segemented_query(
     size_per_entry = calculate_size_per_entry(workspace_id, table_name, timespan)
     if total_count == -1 or size_per_entry == -1:
         return True, 0, -1, -1
-    total_size = total_count * size_per_entry 
+    total_size = total_count * size_per_entry
     if total_size < max_size_allowed and total_count < max_count_allowed:
         if verbose:
             print(f"Total count: {total_count}", f"Size per entry: {size_per_entry}", f"Total size: {total_size/1024/1024} MB")
         return False, -1, total_count, total_size
-    
+
     row_per_query = max_count_allowed
     if total_size > max_size_allowed:
-        # get number of row per query 
+        # get number of row per query
         row_per_query = min(row_per_query, max_size_allowed // size_per_entry)
-    
+
     if verbose:
-        print(f"Table: {table_name}", 
-              f"Total count: {total_count}", 
-              f"Size per entry: {size_per_entry} Bytes", 
-              f"Total size: {total_size/1024/1024} MB", 
-              f"Row per query: {row_per_query}", 
+        print(f"Table: {table_name}",
+              f"Total count: {total_count}",
+              f"Size per entry: {size_per_entry} Bytes",
+              f"Total size: {total_size/1024/1024} MB",
+              f"Row per query: {row_per_query}",
               f"Estimate table count: {total_count // row_per_query}",
               sep=", ",
               )
@@ -113,7 +113,7 @@ def save_table(file_path_name, response, need_metadata=False, previous_data=None
     for column in json_columns:
         df[column] = df[column].apply(lambda x: "{}" if x == "" else x)
         df[column] = df[column].apply(lambda x: "{}" if pd.isnull(x) else x)
-    
+
     df.to_csv(file_path_name, index=False, sep="❖", encoding='utf-8')
     return df["TimeGenerated"].min(), df["TimeGenerated"].max()
 
@@ -140,7 +140,7 @@ def query_and_save_data(
     if need_segement:
         updated_file_path = os.path.join(file_path, table_name)
         os.makedirs(updated_file_path, exist_ok=True)
-        
+
         # get total time range in hours, conver to start and end time
         if isinstance(timespan, timedelta):
             timespan = (datetime.utcnow() - timespan, datetime.utcnow())
@@ -149,7 +149,7 @@ def query_and_save_data(
             timespan = (timespan[0], timespan[0] + timespan[1])
         else:
             total_hours = (timespan[1] - timespan[0]).total_seconds() / 3600
-        
+
         # print(type(timespan[0]))
         # get size per hour
         size_per_hour = total_size / total_hours
@@ -163,27 +163,27 @@ def query_and_save_data(
         #     tmp_start_time = datetime(2024, 7, 15, 13, 2, 4, 923788, tzinfo=timezone.utc) + timedelta(milliseconds=1)
         #     chunk_id = 44
         #     print(f"Resuming from chunk 44, {tmp_start_time}")
-        query_template = dedent("""{table_name} 
+        query_template = dedent("""{table_name}
 | order by TimeGenerated asc
 | serialize
-| extend rn = row_number() 
+| extend rn = row_number()
 | where rn <= {end}
-""")        
+""")
         while tmp_start_time < timespan[1]:
             # get data from a time chunk
             tmp_timespan = (tmp_start_time, min(tmp_start_time + timedelta(hours=time_chunk), timespan[1]))
 
             response = client.query_workspace(
-                workspace_id, 
+                workspace_id,
                 query_template.format(table_name=table_name, end=row_per_query),
                 timespan=tmp_timespan
             ) # only return the first row_per_query rows
-    
+
             if response.status != LogsQueryStatus.SUCCESS:
                 error = response.partial_error
                 print(f"Getting error, retry chunk {chunk_id}", error)
                 # update max size allowed and row per query
-                if "'sort' operator" in str(error): 
+                if "'sort' operator" in str(error):
                     time_chunk = int(time_chunk * 0.8)
                     print("Sort operator error, reducing time chunk:", time_chunk)
 
@@ -200,19 +200,19 @@ def query_and_save_data(
                     tmp_start_time = tmp_timespan[1]
                     print(f"No data bewteen {tmp_timespan[0]} - {tmp_timespan[1]}. Moving to next chunk.")
                     # print(response.statistics, response.)
-                else:   
+                else:
                     tmp_start_time = latest.to_pydatetime() + timedelta(milliseconds=1)
                     chunk_id += 1
                     print(f"Chunk {chunk_id}: {earliest} - {latest}")  #Required span: {tmp_timespan} || Actual:
-            
+
     else:
         response = client.query_workspace(workspace_id, f"{table_name}", timespan=timespan)
         if chunk_id != 0:
             print(f"Resuming from chunk {chunk_id}, append 1 file only.")
             earliest, _ = save_table(os.path.join(file_path, table_name, f"{table_name}_{chunk_id}.csv"), response, need_metadata=True)
-        else: 
+        else:
             earliest, _ = save_table(os.path.join(file_path, f"{table_name}.csv"), response, need_metadata=True, previous_data=previous_data)
-        
+
         if earliest == -1:
             print(f"Table {table_name} is empty. Skipping.")
         else:
@@ -298,7 +298,7 @@ def print_file_size(
     total_size = 0
     for table in LIST_TABLES:
         need_segement, row_per_query, total_count, total_size_table = check_segemented_query(workspace_id, table, (start_time, end_time))
-        
+
         if total_count == -1 or total_size_table == -1:
             print(f"Table {table} is failed to get size.")
             continue
@@ -352,7 +352,7 @@ if __name__ == "__main__":
     end_time = datetime(2024, 8, 3, 0, 0, 0, tzinfo=timezone.utc)
     print(start_time-end_time)
     # download_logs(Alpine, LIST_TABLES, start_time, end_time, f"data/alphineskihouse")
-    
+
     # # download logs for each incident
     root_path = os.path.join(os.path.dirname(__file__), "data")
     for a in attacks:

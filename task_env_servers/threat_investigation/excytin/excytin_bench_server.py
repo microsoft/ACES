@@ -18,7 +18,7 @@ mcp = FastMCP("Excytin Bench Threat Investigation Server")
 
 class ExcytinBenchServerContext:
     """Context for Excytin Bench Server"""
-    
+
     def __init__(self,
         attack: Union[str, int],
         evaluator: Evaluator,
@@ -30,8 +30,8 @@ class ExcytinBenchServerContext:
         # Pick question index to start from, default is 0
         q_idx: int = 0
     ):
-        
-        # Initializing environment 
+
+        # Initializing environment
         self.thug_env = ExcytinEnv(
             attack=attack,
             evaluator=evaluator,
@@ -44,7 +44,7 @@ class ExcytinBenchServerContext:
 
         # Resetting environment to start from the specified question index
         self.thug_env.reset(q_idx)
-        
+
         # Store database connection info
         self.db_connection = None
         self.current_attack = attack
@@ -64,7 +64,7 @@ def get_context() -> str:
     """Get the current server context information."""
     if _server_context is None:
         return "No context initialized"
-    
+
     context_info = {
         "current_attack": _server_context.current_attack,
         "current_question_idx": _server_context.current_question_idx,
@@ -78,7 +78,7 @@ def get_context() -> str:
         "layer": getattr(_server_context.thug_env, 'layer', 'unknown'),
         "attack_info": getattr(_server_context.thug_env, 'attack', 'unknown')
     }
-    
+
     return json.dumps(context_info, indent=2)
 
 def get_server_context() -> ExcytinBenchServerContext:
@@ -103,7 +103,7 @@ def initialize_context(
 ) -> str:
     """Initialize the server context with the specified parameters."""
     global _server_context
-    
+
     if eval_type == "llm":
         if evaluator_config:
             evaluator = LLMEvaluator(**evaluator_config)
@@ -113,9 +113,9 @@ def initialize_context(
             eval_config_list = filter_config_list(CONFIG_LIST, eval_model)
             cache_seed = 100 # Default cache seed, can be overridden
             evaluator = LLMEvaluator(
-                config_list=eval_config_list, 
+                config_list=eval_config_list,
                 cache_seed=cache_seed,
-                ans_check_reflection=True, 
+                ans_check_reflection=True,
                 sol_check_reflection=True,
                 step_checking=True,
                 strict_check=False,
@@ -127,7 +127,7 @@ def initialize_context(
             evaluator = StaticEvaluator()
     else:
         raise ValueError(f"Unknown eval_type: {eval_type}")
-    
+
     if not save_env_file:
         #use default save file name and path
         base_dir = "results"
@@ -143,25 +143,25 @@ def initialize_context(
         layer=layer,
         q_idx=q_idx,
     )
-    
+
     return f"Context initialized for attack: {attack}, question index: {q_idx}"
 
 @mcp.tool
 def query_sql_database(query: str) -> dict:
     """Query the SQL database with the provided query string."""
-    
+
     # Get the server context
     context = get_server_context()
-    
+
     print(f"Executing SQL query: {query}")
-    
+
     try:
         # Use the environment's step method (without submit) to maintain proper state
         observation, reward, done, info = context.thug_env.step(query, submit=False)
-        
+
         # Update context step count
         context.step_count = context.thug_env.step_count
-        
+
         return {
             "query": query,
             "observation": observation,
@@ -171,7 +171,7 @@ def query_sql_database(query: str) -> dict:
             "step_count": context.step_count,
             "status": "success"
         }
-        
+
     except Exception as e:
         print(f"Error executing SQL query: {e}")
         return {
@@ -183,16 +183,16 @@ def query_sql_database(query: str) -> dict:
 @mcp.tool
 def submit_answer(answer: str) -> dict:
     """Submit an answer to the current task and receive feedback."""
-    
+
     # Get the server context
     context = get_server_context()
-    
+
     print(f"Submitting answer: {answer}")
-    
+
     try:
         # Use the environment's step method with submit=True
         observation, reward, done, info = context.thug_env.step(answer, submit=True)
-        
+
         return {
             "answer": answer,
             "observation": observation.tolist() if hasattr(observation, 'tolist') else str(observation),
@@ -201,7 +201,7 @@ def submit_answer(answer: str) -> dict:
             "info": info,
             "status": "success"
         }
-            
+
     except Exception as e:
         print(f"Error submitting answer: {e}")
         return {
@@ -213,20 +213,20 @@ def submit_answer(answer: str) -> dict:
 @mcp.tool
 def get_current_question() -> dict:
     """Get the current question from the environment."""
-    
+
     # Get the server context
     context = get_server_context()
-    
+
     try:
         # Get all questions and return the current one
         all_questions = context.thug_env.getAllQuestions()
         current_idx = getattr(context.thug_env, 'question_idx', 0)
-        
+
         if current_idx < len(all_questions):
             current_question = all_questions[current_idx]
         else:
             current_question = "No more questions available"
-        
+
         return {
             "question": current_question,
             "question_idx": current_idx,
@@ -234,7 +234,7 @@ def get_current_question() -> dict:
             "attack": context.current_attack,
             "status": "success"
         }
-        
+
     except Exception as e:
         print(f"Error getting current question: {e}")
         return {
@@ -245,15 +245,15 @@ def get_current_question() -> dict:
 @mcp.tool
 def reset_environment(q_idx: int = 0) -> dict:
     """Reset the environment to a specific question index."""
-    
+
     # Get the server context
     context = get_server_context()
-    
+
     try:
         # Reset the environment
         observation, info = context.thug_env.reset(q_idx)
         context.current_question_idx = q_idx
-        
+
         return {
             "message": f"Environment reset to question index {q_idx}",
             "observation": observation,
@@ -261,7 +261,7 @@ def reset_environment(q_idx: int = 0) -> dict:
             "question_idx": q_idx,
             "status": "success"
         }
-        
+
     except Exception as e:
         print(f"Error resetting environment: {e}")
         return {
@@ -272,10 +272,10 @@ def reset_environment(q_idx: int = 0) -> dict:
 @mcp.tool
 def get_database_schema(table_name: str = None) -> dict:
     """Get the database schema for a specific table or all tables."""
-    
+
     # Get the server context
     context = get_server_context()
-    
+
     try:
         if table_name:
             # Get schema for specific table
@@ -292,7 +292,7 @@ def get_database_schema(table_name: str = None) -> dict:
                 "table_names": table_names,
                 "status": "success"
             }
-        
+
     except Exception as e:
         print(f"Error getting database schema: {e}")
         return {

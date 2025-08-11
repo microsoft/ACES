@@ -42,7 +42,7 @@ def process_csv(csv_folder):
             break
 
 def change_separator_in_csv_folder(
-        csv_folder, 
+        csv_folder,
         separator,
         quotechar,
         new_separator=None,
@@ -52,7 +52,7 @@ def change_separator_in_csv_folder(
     """
     if new_separator is None and new_quotechar is None:
         raise ValueError("Either new_separator or new_quotechar must be provided")
-    
+
     if new_separator is None:
         new_separator = separator
         print("new_separator is None, using separator as new_separator")
@@ -83,7 +83,7 @@ def change_separator_in_csv_folder(
                     df.to_csv(os.path.join(csv_folder, csv_file), sep=new_separator, quotechar=new_quotechar, index=False, encoding='utf-8-sig')
                     print(f"Processed {csv_file} ")
 
-    
+
 
 def convert_double_quotes(input_file, output_file):
     df = pd.read_csv(input_file, sep="❖", encoding='utf-8', on_bad_lines='skip', engine='python')
@@ -101,7 +101,7 @@ def convert_double_quotes_for_one_folder(folder):
             print(file)
             input_file = os.path.join(root, file)
             convert_double_quotes(input_file, input_file)
-    
+
 
 
 SEPARATOR = "❖"

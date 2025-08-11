@@ -37,5 +37,3 @@ We note that a majority of the PII values are ip addresses (156838), with a tota
 ## 3. Anonymize PII
 - File: `pii_replace.py`
 We then go through all tables, read in the csv file and do a global replacement of all the mapped PII values. This is for consistency and to avoid any query errors, for example, when querying the database using ond anonymized ip address.
-
-

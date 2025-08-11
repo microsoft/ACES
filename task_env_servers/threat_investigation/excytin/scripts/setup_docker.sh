@@ -30,7 +30,7 @@ python database/setup_database.py \
     --port 3309 \
     --sql_file sql_files/incident_39.sql \
     --container_name incident_39 \
-    --respawn   
+    --respawn
 
 python database/setup_database.py \
     --csv data_anonymized/incidents/incident_55 \
@@ -59,4 +59,3 @@ python database/setup_database.py \
     --sql_file sql_files/incident_322.sql \
     --container_name incident_322 \
     --respawn
-
