@@ -188,7 +188,7 @@ class TestServerClient:
             "task_id": "task-123",
             "title": "Malware Analysis",
             "description": "Analyze suspicious file",
-            "current_subtask": "file-inspection"
+            "state": "active"
         }
 
         with patch.object(server_client, '_client') as mock_client:
@@ -199,7 +199,7 @@ class TestServerClient:
             assert isinstance(task_info, TaskInfo)
             assert task_info.task_id == "task-123"
             assert task_info.title == "Malware Analysis"
-            assert task_info.current_subtask == "file-inspection"
+            assert task_info.state == "active"
             mock_client.get.assert_called_once_with(
                 "http://test-server:8000/session/test-session/current-task"
             )

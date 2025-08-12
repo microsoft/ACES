@@ -23,22 +23,27 @@ class TestSessionManagerEpisodes:
         episode = MagicMock(spec=Episode)
         episode.episode_id = "episode_123"
         episode.task_id = "task_456"
-        episode.current_subtask = "subtask_1"
-        episode.completed_subtasks = set()
-        episode.in_progress_subtasks = {"subtask_1"}
-        episode.not_visited_subtasks = {"subtask_2", "subtask_3"}
+        episode.state = MagicMock()
+        episode.state.value = "active"
+        episode.steps = []
         return episode
 
     @pytest.fixture
     def mock_step(self):
         """Mock step result for testing."""
+        from datetime import datetime
+
         step = MagicMock(spec=Step)
         step.step_number = 1
         step.done = False
-        step.current_subtask = "subtask_1"
-        step.completed_subtasks = set()
-        step.in_progress_subtasks = {"subtask_1"}
-        step.not_visited_subtasks = {"subtask_2", "subtask_3"}
+        step.timestamp = datetime.utcnow()
+        # Mock action attribute properly
+        mock_action = MagicMock()
+        mock_action.tool_name = "test_tool"
+        mock_action.command = "test command"
+        mock_action.parameters = {}
+        step.action = mock_action
+        step.response = {"output": "test output"}
         return step
 
     @pytest.fixture
@@ -244,7 +249,7 @@ class TestSessionManagerEpisodes:
         assert task_info["title"] == "Test Task"
         assert task_info["description"] == "Test task description"
         assert task_info["episode_id"] == "episode_123"
-        assert task_info["current_subtask"] == "subtask_1"
+        assert task_info["state"] == "active"
 
         # Verify task manager was called
         manager.task_manager.get_current_episode.assert_called_once_with(session_id)

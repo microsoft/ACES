@@ -29,8 +29,8 @@ class TestTaskManagerEpisodes:
         assert isinstance(episode, Episode)
         assert episode.task_id == "malware_family_analysis"
         assert episode.session_id == "test_session"
-        assert episode.state == EpisodeState.ACTIVE
-        assert len(episode.steps) == 1  # Should have initialization step
+        assert episode.state == EpisodeState.ACTIVE  # Episodes are activated when started
+        assert len(episode.steps) == 0  # No initialization step in simplified framework
 
         # Verify episode is tracked by episode manager
         current = manager.episode_manager.get_current_episode("test_session")
@@ -53,16 +53,6 @@ class TestTaskManagerEpisodes:
         task = manager.get_task("malware_family_analysis")
         assert episode.context == task.initial_context
 
-    def test_start_episode_calls_task_initialize(self, temp_tasks_file):
-        """Test that episode initialization calls task.initialize_episode."""
-        manager = TaskManager("malware_classification", temp_tasks_file)
-
-        # Mock the task's initialize_episode method
-        task = manager.get_task("malware_family_analysis")
-        with patch.object(task, 'initialize_episode') as mock_init:
-            episode = manager.start_episode("test_session", "malware_family_analysis")
-            mock_init.assert_called_once_with(episode)
-
     def test_step_success(self, temp_tasks_file, sample_command_result):
         """Test successful step execution."""
         manager = TaskManager("malware_classification", temp_tasks_file)
@@ -83,7 +73,8 @@ class TestTaskManagerEpisodes:
         assert isinstance(step, Step)
         assert step.action == action
         assert step.response["success"] == sample_command_result.success
-        assert step.step_number == 1  # After initialization step
+        assert step.step_number == 0  # First step starts at 0
+        assert step.done is False
 
     def test_step_no_active_episode(self, temp_tasks_file, sample_command_result):
         """Test step execution when no active episode exists."""
@@ -93,20 +84,6 @@ class TestTaskManagerEpisodes:
 
         with pytest.raises(EpisodeNotFoundException):
             manager.step("nonexistent_session", action, sample_command_result)
-
-    def test_step_gets_current_objective(self, temp_tasks_file, sample_command_result):
-        """Test that step execution gets current objective from task."""
-        manager = TaskManager("malware_classification", temp_tasks_file)
-
-        episode = manager.start_episode("test_session", "malware_family_analysis")
-        action = Action(tool_name="test_tool", parameters={})
-
-        # Mock _get_current_objective
-        with patch.object(manager, '_get_current_objective', return_value="test objective") as mock_get_obj:
-            step = manager.step("test_session", action, sample_command_result)
-
-            task = manager.get_task("malware_family_analysis")
-            mock_get_obj.assert_called_once_with(episode, task)
 
     def test_step_calls_episode_manager_step(self, temp_tasks_file, sample_command_result):
         """Test that step execution delegates to episode manager."""
@@ -150,7 +127,7 @@ class TestTaskManagerEpisodes:
         assert new_episode.task_id == "malware_family_analysis"
         assert new_episode.session_id == "test_session"
         assert new_episode.state == EpisodeState.ACTIVE
-        assert len(new_episode.steps) == 1  # Only initialization step
+        assert len(new_episode.steps) == 0  # No initialization step in simplified framework
 
     def test_reset_task_not_found(self, temp_tasks_file):
         """Test reset with nonexistent task."""
@@ -268,28 +245,7 @@ class TestTaskManagerEpisodes:
         # Test another reset() - should return new episode
         episode2 = manager.reset("test_session", "malware_family_analysis")
         assert episode2 != episode1
-        assert episode2.state == EpisodeState.ACTIVE
-
-    def test_episode_progression_integration(self, temp_tasks_file, sample_command_result):
-        """Test integration between TaskManager and task progression logic."""
-        manager = TaskManager("malware_classification", temp_tasks_file)
-
-        episode = manager.start_episode("test_session", "malware_family_analysis")
-
-        # Execute step that should trigger progression
-        action = Action(
-            tool_name="docker_cli_executor",
-            parameters={"command": "file unknown_sample.exe"},
-            command="file unknown_sample.exe"
-        )
-
-        # Mock the task's progression logic
-        task = manager.get_task("malware_family_analysis")
-        with patch.object(task, 'check_episode_progression') as mock_progression:
-            step = manager.step("test_session", action, sample_command_result)
-
-            # Task progression should be called
-            mock_progression.assert_called_once_with(episode, step)
+        assert episode2.state == EpisodeState.ACTIVE  # Episodes are activated when started
 
     def test_multiple_sessions_episode_isolation(self, temp_tasks_file, sample_command_result):
         """Test that episodes for different sessions are properly isolated."""
@@ -310,8 +266,13 @@ class TestTaskManagerEpisodes:
         step2 = manager.step("session2", action, sample_command_result)
 
         assert step1 != step2
-        assert len(episode1.steps) == 2  # Init + action step
-        assert len(episode2.steps) == 2  # Init + action step
+
+        # Refresh episode references to ensure we have the latest state
+        episode1 = manager.get_current_episode("session1")
+        episode2 = manager.get_current_episode("session2")
+
+        assert len(episode1.steps) == 1  # Only action step
+        assert len(episode2.steps) == 1  # Only action step
 
         # End one episode
         manager.end_episode("session1", "completed")
@@ -380,24 +341,23 @@ class TestTaskManagerEpisodes:
 
         episode = manager.start_episode("test_session", "malware_family_analysis")
 
-        # Initial step should be step 0 (system_init)
-        assert len(episode.steps) == 1
-        assert episode.steps[0].step_number == 0
+        # No initial steps in simplified framework
+        assert len(episode.steps) == 0
 
         # Execute multiple steps
         action = Action(tool_name="test_tool", parameters={})
 
         step1 = manager.step("test_session", action, sample_command_result)
-        assert step1.step_number == 1
+        assert step1.step_number == 0
 
         step2 = manager.step("test_session", action, sample_command_result)
-        assert step2.step_number == 2
+        assert step2.step_number == 1
 
         step3 = manager.step("test_session", action, sample_command_result)
-        assert step3.step_number == 3
+        assert step3.step_number == 2
 
         # Episode should have all steps
-        assert len(episode.steps) == 4  # 0 (init) + 1, 2, 3
+        assert len(episode.steps) == 3  # Steps 0, 1, 2
 
     def test_task_manager_episode_manager_integration(self, temp_tasks_file):
         """Test integration between TaskManager and EpisodeManager."""

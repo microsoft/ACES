@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -27,34 +27,6 @@ class Episode(BaseModel):
         """Pydantic configuration."""
 
         json_encoders = {datetime: lambda v: v.isoformat()}
-
-    @property
-    def current_subtask(self) -> Optional[str]:
-        """Get the current active subtask from the latest step."""
-        if self.steps:
-            return self.steps[-1].current_subtask
-        return None
-
-    @property
-    def completed_subtasks(self) -> Set[str]:
-        """Get completed subtasks from the latest step."""
-        if self.steps:
-            return self.steps[-1].completed_subtasks
-        return set()
-
-    @property
-    def in_progress_subtasks(self) -> Set[str]:
-        """Get in-progress subtasks from the latest step."""
-        if self.steps:
-            return self.steps[-1].in_progress_subtasks
-        return set()
-
-    @property
-    def not_visited_subtasks(self) -> Set[str]:
-        """Get not-visited subtasks from the latest step."""
-        if self.steps:
-            return self.steps[-1].not_visited_subtasks
-        return set()
 
     @property
     def is_complete(self) -> bool:

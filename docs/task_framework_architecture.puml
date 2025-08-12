@@ -28,7 +28,6 @@ package "Task Framework Core" {
         +reset_episode(session_id): Episode
         +list_tasks(): List[Dict]
         +get_episode_info(session_id): Dict
-        +_get_current_objective(session_id): str?
     }
 
     class TaskConfigLoader {
@@ -37,7 +36,6 @@ package "Task Framework Core" {
         +load_tasks_from_file(): Dict[str, Task]
         +_parse_task(): Task
         +_parse_subtask(): SubTask
-        +_validate_all_dependencies(): void
     }
 
     class Task {
@@ -50,15 +48,8 @@ package "Task Framework Core" {
         --
         +add_subtask(): void
         +get_subtask_by_id(): SubTask?
-        +check_episode_progression(): void
-        +initialize_episode(): void
-        +get_current_subtask(): SubTask?
         +is_complete(): bool
-        +validate_dependencies(): List[str]
         +get_all_subtask_ids(): Set[str]
-        +_update_step_subtask_state(): void
-        +_check_completed_subtasks(): Set[str]
-        +_check_available_subtasks(): Set[str]
     }
 
     class SubTask {
@@ -67,15 +58,8 @@ package "Task Framework Core" {
         +title: str
         +description: str
         +objective: str
-        +completion_conditions: List[str]
-        +depends_on: List[str]
         --
-        +check_entry_conditions(): bool
-        +check_exit_conditions(): bool
         +is_dependent_on(): bool
-        +_command_was_executed(): bool
-        +_match_command_pattern(): bool
-        +_extract_variables(): Dict[str, str]
     }
 }
 
@@ -85,15 +69,13 @@ package "Episode Management" {
         +active_episodes: Dict[str, Episode]
         --
         +start_episode(session_id, task_id, initial_context?): Episode
-        +step(session_id, action, command_result, current_objective?): Step
+        +step(session_id, action, command_result): Step
         +end_episode(session_id, reason): Episode
         +reset_episode(session_id, task_id): Episode
         +get_episode_state(session_id): EpisodeState?
         +get_current_episode(session_id): Episode?
         +create_step(episode, action, response): Step
         +update_episode_state(episode, step): void
-        +_extract_command_from_action(action): str?
-        +_get_episode_progress_info(episode): Dict[str, Any]
         +cleanup_session(session_id): void
     }
 
@@ -111,10 +93,6 @@ package "Episode Management" {
         --
         +add_step(): void
         +get_executed_commands(): List[str]
-        +current_subtask: str? (property)
-        +completed_subtasks: Set[str] (property)
-        +in_progress_subtasks: Set[str] (property)
-        +not_visited_subtasks: Set[str] (property)
         +is_complete: bool (property)
         +duration: Optional[float] (property)
     }
@@ -124,10 +102,6 @@ package "Episode Management" {
         +timestamp: datetime
         +action: Action
         +response: Dict[str, Any]
-        +current_subtask: Optional[str]
-        +completed_subtasks: Set[str]
-        +in_progress_subtasks: Set[str]
-        +not_visited_subtasks: Set[str]
         +context_snapshot: Dict[str, Any]
         +done: bool
     }
@@ -147,14 +121,6 @@ package "Episode Management" {
         TIMEOUT
         RESET
     }
-
-    enum SubTaskStatus {
-        NOT_STARTED
-        IN_PROGRESS
-        COMPLETED
-        BLOCKED
-        SKIPPED
-    }
 }
 
 ' Relationships
@@ -166,27 +132,25 @@ TaskConfigLoader ..> Task : creates
 TaskConfigLoader ..> SubTask : creates
 
 Task *-- SubTask
-Task ..> Episode : modifies
-Task ..> SubTask : manages progression
 
 EpisodeManager *-- Episode
 Episode *-- Step
 Step *-- Action
 Episode ..> EpisodeState
-SubTask ..> SubTaskStatus
 
 note top of TaskManager
 **Task Orchestrator**
 Coordinates task loading, episode management, and RL interfaces.
 Simplified to focus on coordination between specialized components.
 Provides gym-style step() and reset() methods for RL compatibility.
+Subtasks are retained for informational purposes only.
 end note
 
 note top of Task
-**Task with Embedded Progression Logic**
-Tasks now contain progression logic directly for simplified architecture.
-Handles DAG-based subtask progression and dependency validation.
-Encapsulates all progression logic within the task instance.
+**Simplified Task Definition**
+Tasks contain basic task information and subtasks for reference.
+No progression logic, dependency validation, or state tracking.
+Subtasks are purely informational elements returned at episode start.
 end note
 
 note top of EpisodeManager
@@ -201,14 +165,14 @@ note top of TaskConfigLoader
 **YAML Configuration Loader**
 Loads and validates task definitions directly from YAML files.
 Creates Task and SubTask objects from YAML data structures.
-Validates dependencies and ensures acyclic task graphs.
+No dependency validation or progression logic.
 Single responsibility: YAML parsing and object creation.
 end note
 
 note bottom of Episode
 **RL Episode State**
 Contains complete action-response history for RL training.
-Tracks subtask progression state across all steps.
+No subtask progression tracking or state management.
 Provides properties for current state access.
 Includes completion information and metadata.
 end note

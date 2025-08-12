@@ -88,12 +88,7 @@ package "Task Management" {
         +title: str
         +subtasks: List[SubTask]
         --
-        +initialize_episode(): void
-        +check_episode_progression(): void
         +get_all_subtask_ids(): Set[str]
-        +_update_step_subtask_state(): void
-        +_check_completed_subtasks(): Set[str]
-        +_check_available_subtasks(): Set[str]
     }
 
     class EpisodeManager {
@@ -191,7 +186,6 @@ package "Policy and Evaluation" {
 
     class ActionRecord {
         +session_id: str
-        +subtask_id: str
         +command_name: str
         +parameters: Dict[str, Any]
         +result: CommandResult
@@ -246,14 +240,15 @@ note top of TaskManager
 **Task Orchestrator**
 Coordinates task loading and episode management.
 Provides RL gym-style interfaces (step, reset).
-Delegates to Task instances for progression logic.
+Simplified to focus on coordination between components.
 See task_framework_architecture.puml for detailed Task design.
 end note
 
 note left of Task
-**Task with Embedded Progression Logic**
-Tasks now contain progression logic directly for simplified architecture.
-Handles DAG-based subtask progression automatically.
+**Simplified Task Definition**
+Tasks contain basic task information and subtasks for reference.
+No progression logic, dependency validation, or state tracking.
+Subtasks are purely informational elements returned at episode start.
 See task_framework_architecture.puml for complete Task framework.
 end note
 

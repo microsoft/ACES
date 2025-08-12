@@ -1,14 +1,4 @@
-"""TaskConfigLoader for loading and parsing YAML tas            if not tasks_path.exists():
-    logger.error(f"Tasks file not found: {tasks_path}")
-    raise InvalidTaskDefinitionException(f"Tasks file not found: {tasks_path}", str(tasks_path))
-
-with open(tasks_path, "r", encoding="utf-8") as file:
-    data = yaml.safe_load(file)
-    logger.debug(f"Successfully loaded YAML data from {tasks_path}")
-
-if not isinstance(data, dict):
-    logger.error("YAML root is not a dictionary")
-    raise InvalidTaskDefinitionException("YAML root must be a dictionary", str(tasks_path))ns."""
+"""TaskConfigLoader for loading and parsing YAML task definitions."""
 
 from logging import getLogger
 from pathlib import Path
@@ -26,12 +16,6 @@ logger = getLogger(__name__)
 class TaskConfigLoader:
     """
     Handles loading and parsing YAML task definitions into Task objects.
-
-    Responsible for:
-    - Loading YAML files
-    - Parsing task and subtask definitions
-    - Validating task dependencies
-    - Creating Task and SubTask objects
     """
 
     def __init__(self, domain: str):
@@ -96,9 +80,6 @@ class TaskConfigLoader:
                 tasks[task.task_id] = task
                 logger.info(f"Successfully loaded task '{task.task_id}' " f"with {len(task.subtasks)} subtasks")
 
-            # Validate all task dependencies
-            logger.info("Validating task dependencies")
-            self._validate_all_dependencies(tasks)
             logger.info(f"TaskConfigLoader completed. Loaded {len(tasks)} tasks " f"for domain '{self.domain}'")
 
             return tasks
@@ -180,25 +161,4 @@ class TaskConfigLoader:
             title=subtask_data["title"],
             description=subtask_data["description"],
             objective=subtask_data["objective"],
-            completion_conditions=subtask_data.get("completion_conditions", []),  # New field
-            depends_on=subtask_data.get("depends_on", []),
         )
-
-    def _validate_all_dependencies(self, tasks: Dict[str, Task]) -> None:
-        """
-        Validate dependencies across all tasks.
-
-        Args:
-            tasks: Dictionary of tasks to validate
-
-        Raises:
-            InvalidTaskDefinitionException: If any dependencies are invalid
-        """
-        all_errors = []
-
-        for task in tasks.values():
-            errors = task.validate_dependencies()
-            all_errors.extend(errors)
-
-        if all_errors:
-            raise InvalidTaskDefinitionException(f"Dependency validation errors: {'; '.join(all_errors)}")

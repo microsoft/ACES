@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field
 
@@ -39,10 +39,6 @@ class Step(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.utcnow, description="When the step was completed")
     action: Action = Field(..., description="The action that was taken")
     response: Dict[str, Any] = Field(..., description="Tool execution result")
-    current_subtask: Optional[str] = Field(None, description="Current active subtask ID")
-    completed_subtasks: Set[str] = Field(default_factory=set, description="Set of completed subtask IDs")
-    in_progress_subtasks: Set[str] = Field(default_factory=set, description="Set of subtasks currently in progress")
-    not_visited_subtasks: Set[str] = Field(default_factory=set, description="Set of subtasks not yet started")
     context_snapshot: Dict[str, Any] = Field(default_factory=dict, description="Context state at this step")
     done: bool = Field(False, description="Whether the episode ended after this step")
 

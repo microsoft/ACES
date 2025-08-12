@@ -119,9 +119,6 @@ class TaskManager:
             session_id=session_id, task_id=task_id, initial_context=task.initial_context.copy()
         )
 
-        # Initialize episode with task's subtask structure
-        task.initialize_episode(episode)
-
         logger.info(f"Started episode '{episode.episode_id}' for session '{session_id}' with task '{task_id}'")
         return episode
 
@@ -156,27 +153,14 @@ class TaskManager:
         if not episode:
             raise EpisodeNotFoundException(f"No active episode found for session '{session_id}'")
 
-        # Get the task for this episode
-        task = self.get_task(episode.task_id)
-
-        # Get current objective from the task
-        current_objective = self._get_current_objective(episode, task)
-
         logger.debug(f"Executing step for session '{session_id}', action: {action.tool_name}")
 
         step = self.episode_manager.step(
             session_id=session_id,
             action=action,
             command_result=command_result,
-            current_objective=current_objective,
         )
 
-        # Handle progression through the task
-        task.check_episode_progression(episode, step)
-
-        # Check if episode is complete and update step
-        all_subtask_ids = task.get_all_subtask_ids()
-        step.done = episode.completed_subtasks >= all_subtask_ids
         return step
 
     def reset(self, session_id: str, task_id: str) -> Episode:
@@ -272,29 +256,3 @@ class TaskManager:
         if episode:
             return self.episode_manager._get_episode_progress_info(episode)
         return {"error": "No active episode for session"}
-
-    def _get_current_objective(self, episode: Episode, task: Task) -> Optional[str]:
-        """
-        Get the current objective for the episode based on active subtasks.
-
-        Args:
-            episode: Current episode
-            task: Task definition
-
-        Returns:
-            Current objective string or None
-        """
-        # Get the first in-progress subtask's objective
-        for subtask_id in episode.in_progress_subtasks:
-            subtask = task.get_subtask_by_id(subtask_id)
-            if subtask:
-                return subtask.objective
-
-        # If no in-progress subtasks, get the first available subtask
-        for subtask_id in episode.not_visited_subtasks:
-            subtask = task.get_subtask_by_id(subtask_id)
-            if subtask and subtask.check_entry_conditions(episode):
-                return subtask.objective
-
-        # Default to task description if no specific objective
-        return task.description

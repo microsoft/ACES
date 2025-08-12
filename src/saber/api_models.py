@@ -29,12 +29,10 @@ class TaskInfo(BaseModel):
     title: str
     description: str
     completed: bool = Field(default=False, description="Task completion status")
-    current_subtask: Optional[str] = None
-    current_subtask_id: Optional[str] = None
     episode_id: Optional[str] = None
-    completed_subtasks: Optional[List[str]] = None
-    in_progress_subtasks: Optional[List[str]] = None
-    not_visited_subtasks: Optional[List[str]] = None
+    state: Optional[str] = None
+    step_count: Optional[int] = None
+    duration: Optional[float] = None
     subtasks: Optional[List[Dict[str, Any]]] = Field(default=None, description="Detailed subtask information")
 
 

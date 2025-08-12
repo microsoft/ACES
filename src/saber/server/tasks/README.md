@@ -1,8 +1,8 @@
-# SABER Task Management System (Refactored)
+# SABER Task Management System
 
 The SABER TaskManager provides a robust framework for managing complex multi-step security tasks with RL-friendly episode-based execution. The system has been refactored into specialized components following single responsibility principles for better maintainability and testability.
 
-## Refactored Architecture
+## Architecture
 
 ```
 src/saber/server/tasks/
@@ -23,53 +23,28 @@ src/saber/server/tasks/
 ## Refactored Components
 
 ### TaskManager (Simplified Orchestrator)
-**Reduced from 655 to 308 lines** - now focuses on coordination:
 - **Task Storage & Retrieval**: Core task and subtask access methods
 - **Episode Lifecycle Coordination**: Delegates to EpisodeManager for episode operations
 - **RL Gym Interface**: Provides step() and reset() methods for reinforcement learning
-- **Component Coordination**: Orchestrates TaskConfigLoader and EpisodeManager, with Task handling progression
-- **Session Management**: Links with SessionManager for client interactions
 
 ### TaskConfigLoader (Component)
-**Specialized YAML configuration management** (~150 lines):
 - **YAML Parsing**: Loads and validates task definitions from YAML files
 - **Task Creation**: Converts YAML data into Task and SubTask objects
-- **Dependency Validation**: Ensures all subtask dependencies are valid and acyclic
-- **Domain Consistency**: Validates task definitions match expected domain
-- **Error Handling**: Comprehensive validation with detailed error messages
-
-### Task with Embedded Progression Logic
-**DAG-based progression logic embedded directly in Task** (~150 lines):
-- **Automatic Progression**: Handles subtask state transitions based on command execution
-- **Entry/Exit Conditions**: Validates when subtasks can be started or completed
-- **Command Matching**: Tracks executed commands against completion conditions
-- **State Management**: Updates completed/in_progress/not_visited subtask sets
-- **Dependency Resolution**: Ensures DAG constraints are respected during progression
 
 ### EpisodeManager
-Simplified episode management for RL workflows:
 - **Episode Lifecycle**: Start, step, end operations with unified step() method
-- **Command Extraction**: Extract commands from DockerCLIExecutor for completion matching
 - **Step Creation**: Returns Step objects directly from step() method
-- **Simplified Operation**: No episode history tracking, focus on current state
 
-### Task (formerly DomainTask)
-High-level security task representation:
+### Task
 - **Task Definition**: YAML-based task specifications
-- **Checkpoint Organization**: Subtasks used as internal checkpoints
-- **Progression Logic**: Automatic checkpoint advancement based on episode state
 
-### SubTask (Refactored for Checkpoints)
-Internal checkpoints with automatic progression:
-- **Completion Conditions**: Exact commands that must be executed
-- **Entry/Exit Criteria**: Dependency-based checkpoint validation
-- **Command Matching**: Template-based command execution tracking
+### SubTask
+- **SubTask Definition**: YAML-based task specifications
 
 ### Episode
 Complete task attempt representation:
 - **Action History**: Full sequence of actions and responses
 - **State Tracking**: Checkpoint progression and completion status
-- **Current Episode Only**: Simplified to active episode per session
 
 ## Task Definition Format
 
@@ -125,77 +100,12 @@ class EpisodeState(Enum):
 1. **Episode Start**: Create new Episode for task attempt
 2. **Action Execution**: Agent executes actions (tool calls)
 3. **Step Recording**: Record action-response pairs as Steps
-4. **Checkpoint Progression**: Automatically advance checkpoints based on command execution
 5. **Episode End**: Complete episode when all checkpoints satisfied or failure occurs
 6. **Episode Reset**: Optionally reset for new attempt
 
-## Automatic Checkpoint Progression
-
-Checkpoints advance automatically based on command execution:
-
-```python
-# Example: static_analysis checkpoint completes when these commands are executed:
-completion_conditions = [
-    "file ${sample_path}",      # File type identification
-    "strings ${sample_path}",   # String extraction  
-    "objdump -h ${sample_path}" # PE header analysis
-]
-
-# Context updated after each subtask
-updated_context = {
-    "sample_path": "/data/samples/unknown_sample.exe",
-    "analysis_timeout": 300,
-    "static_analysis": {
-        "file_type": "PE32 executable",
-        "strings": ["suspicious_string1", "suspicious_string2"],
-        "pe_info": {...}
-    }
-}
-```
-
-## Refactoring Benefits
-
-### Improved Maintainability
-- **Single Responsibility**: Each component has one clear purpose
-- **Reduced Complexity**: TaskManager reduced from 655 to 308 lines
-- **Better Testing**: Specialized components can be tested independently
-- **Clearer Dependencies**: Component relationships are explicit and minimal
-
-### Enhanced Modularity
-- **TaskConfigLoader**: Can be swapped for different configuration sources
-- **Task with Embedded Logic**: Progression logic is encapsulated directly within each Task instance
-- **EpisodeManager**: Episode handling is self-contained and feature-complete
-
-### Better Separation of Concerns
-- **Configuration**: TaskConfigLoader handles all YAML parsing
-- **Business Logic**: Task instances manage their own DAG progression
-- **State Management**: EpisodeManager handles episode lifecycle and step creation
-- **Orchestration**: TaskManager coordinates between components
-
-## RL Gym Compatibility
-
-The refactored system provides standard RL gym interfaces:
-
-```python
-# Standard RL gym pattern
-task_manager = TaskManager(domain="malware_classification", tasks_file="tasks.yaml")
-
-# Reset environment for new episode
-episode = task_manager.reset(session_id="agent_001", task_id="malware_analysis")
-
-# Execute actions and get steps
-action = Action(tool_name="file", parameters={"path": "/sample.exe"})
-command_result = execute_command_somehow()  # Command execution happens first
-step = task_manager.step(session_id="agent_001", action=action, tool_result=tool_result)
-
-# Check if episode is complete
-if step.done:
-    print(f"Episode completed!")
-```
-
 ## Integration with SessionManager
 
-The refactored TaskManager integrates seamlessly with SessionManager:
+The TaskManager integrates with SessionManager:
 
 ```python
 # SessionManager delegates to TaskManager components
@@ -209,88 +119,4 @@ episode = task_manager.start_episode(session_id="client_001", task_id="malware_a
 action = Action(tool_name="docker_cli_executor", parameters={"command": "strings /sample.exe"})
 tool_result = session_manager.execute_tool("docker_cli_executor", {"command": "strings /sample.exe"})
 step_result = task_manager.step(session_id="client_001", action=action, tool_result=tool_result)
-```
-
-## Testing
-
-Test the refactored task management system:
-
-```bash
-# Run all task manager tests
-uv run pytest tests/tasks/ -v
-
-# Test specific components
-uv run pytest tests/tasks/test_task_manager.py -v        # Core orchestration
-uv run pytest tests/tasks/test_config_loader.py -v      # YAML parsing (if exists)
-uv run pytest tests/tasks/test_progression_engine.py -v # DAG logic (if exists)
-uv run pytest tests/tasks/test_episode_manager.py -v    # Episode management
-
-# Test specific functionality
-uv run pytest tests/test_task_manager.py::test_task_loading -v
-uv run pytest tests/test_task_manager.py::test_session_management -v
-```
-
-## Example Usage (Refactored API)
-
-```python
-from saber.server.tasks import TaskManager
-from saber.server.tasks.episodes.episode import Action
-
-# Initialize task manager with domain and tasks file
-task_manager = TaskManager(
-    domain="malware_classification",
-    tasks_file_path="malware_classification/tasks.yaml"
-)
-
-# RL-style usage pattern
-session_id = "agent_001"
-task_id = "malware_family_analysis"
-
-# Reset environment for new episode
-episode = task_manager.reset(session_id=session_id, task_id=task_id)
-print(f"Started episode: {episode.episode_id}")
-
-# Execute actions in RL gym style
-while not episode.is_complete:
-    # Create action for DockerCLIExecutor
-    action = Action(
-        tool_name="docker_cli_executor",
-        parameters={"command": "file /data/samples/unknown_sample.exe"}
-    )
-    
-    # Execute tool (handled by SessionManager) and record step
-    tool_result = session_manager.execute_tool("docker_cli_executor", 
-                                             {"command": "file /data/samples/unknown_sample.exe"})
-    step_result = task_manager.step(session_id=session_id, action=action, tool_result=tool_result)
-    
-    # Check completion
-    if step_result.done:
-        print(f"Episode completed!")
-        break
-
-# Traditional task management usage
-task = task_manager.get_task(task_id="malware_family_analysis")
-subtask = task_manager.get_subtask(task_id="malware_family_analysis", subtask_id="static_analysis")
-
-# Episode management
-episode_info = task_manager.get_episode_info(session_id=session_id)
-all_tasks = task_manager.list_tasks()
-```
-
-### Direct Component Usage
-
-```python
-from saber.server.tasks.core import TaskConfigLoader
-from saber.server.tasks.episodes import EpisodeManager
-
-# Use components independently for testing or specialized needs
-config_loader = TaskConfigLoader(domain="malware_classification")
-tasks = config_loader.load_tasks_from_file("tasks.yaml")
-
-episode_manager = EpisodeManager()
-
-# Manual episode control (advanced usage)
-task = tasks["malware_analysis"]
-episode = episode_manager.start_episode("session_001", task.task_id)
-task.initialize_episode(episode)
 ```

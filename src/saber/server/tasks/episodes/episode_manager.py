@@ -61,7 +61,6 @@ class EpisodeManager:
         session_id: str,
         action: Action,
         command_result: CommandResult,
-        current_objective: Optional[str] = None,
     ) -> Step:
         """
         Execute an RL-style step in the current episode.
@@ -70,7 +69,6 @@ class EpisodeManager:
             session_id: ID of the session
             action: Action to execute
             command_result: CommandResult from command execution
-            current_objective: Current objective based on active subtasks
 
         Returns:
             Step object with all step information
@@ -200,13 +198,8 @@ class EpisodeManager:
             timestamp=datetime.utcnow(),
             action=action,
             response=response_dict,
-            # These will be updated by the Task progression logic
-            current_subtask=episode.current_subtask,
-            completed_subtasks=episode.completed_subtasks.copy(),
-            in_progress_subtasks=episode.in_progress_subtasks.copy(),
-            not_visited_subtasks=episode.not_visited_subtasks.copy(),
             context_snapshot=episode.context.copy(),
-            done=False,  # Will be set by Task progression logic
+            done=False,  # Will be set by external completion logic
         )
 
         return step
@@ -258,10 +251,6 @@ class EpisodeManager:
             "task_id": episode.task_id,
             "state": episode.state.value,
             "total_steps": len(episode.steps),
-            "current_subtask": episode.current_subtask,
-            "completed_subtasks": list(episode.completed_subtasks),
-            "in_progress_subtasks": list(episode.in_progress_subtasks),
-            "not_visited_subtasks": list(episode.not_visited_subtasks),
             "duration": episode.duration,
             "start_time": episode.start_time.isoformat() if episode.start_time else None,
             "end_time": episode.end_time.isoformat() if episode.end_time else None,

@@ -39,9 +39,6 @@ class PromptBuilder:
         prompt_parts.append(f"Task: {task_info.title}")
         prompt_parts.append(f"Description: {task_info.description}")
 
-        if task_info.current_subtask:
-            prompt_parts.append(f"Current Focus: {task_info.current_subtask}")
-
         prompt_parts.append("")
 
         prompt_parts.append("Available commands:")

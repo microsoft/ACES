@@ -155,14 +155,8 @@ class ServerClient:
 
             if self.ui_enabled and self.panels:
                 progress_str = None
-                if task_info.completed_subtasks is not None and hasattr(task_info, "subtasks"):
-                    # Note: We'd need to add subtasks to TaskInfo model or get it differently
-                    total_subtasks = (
-                        len(task_info.completed_subtasks)
-                        + len(task_info.in_progress_subtasks or [])
-                        + len(task_info.not_visited_subtasks or [])
-                    )
-                    progress_str = f"{len(task_info.completed_subtasks)}/{total_subtasks}"
+                if task_info.step_count is not None:
+                    progress_str = f"Step {task_info.step_count}"
 
                 self.panels.task_panel(
                     task_title=task_info.title,

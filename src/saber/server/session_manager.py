@@ -244,10 +244,8 @@ class SessionManager:
                 step={
                     "step_number": step_result.step_number,
                     "done": step_result.done,
-                    "current_subtask": step_result.current_subtask,
-                    "completed_subtasks": list(step_result.completed_subtasks),
-                    "in_progress_subtasks": list(step_result.in_progress_subtasks),
-                    "not_visited_subtasks": list(step_result.not_visited_subtasks),
+                    "action": step_result.action.tool_name,
+                    "timestamp": step_result.timestamp.isoformat(),
                 },
                 error=None,
             )
@@ -296,10 +294,9 @@ class SessionManager:
             "title": task.title,
             "description": getattr(task, "description", ""),
             "episode_id": episode.episode_id,
-            "current_subtask": episode.current_subtask,
-            "completed_subtasks": list(episode.completed_subtasks),
-            "in_progress_subtasks": list(episode.in_progress_subtasks),
-            "not_visited_subtasks": list(episode.not_visited_subtasks),
+            "state": episode.state.value,
+            "step_count": len(episode.steps),
+            "duration": episode.duration,
         }
 
     def get_policy(self, session_id: str) -> PolicyDocument:

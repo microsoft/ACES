@@ -110,26 +110,32 @@ REST API layer that handles HTTP endpoints and delegates to SessionManager:
 Simplified orchestrator for task management with specialized components:
 - **Core Responsibilities**: Task storage/retrieval, episode lifecycle coordination, RL gym-style interfaces
 - **TaskConfigLoader**: Handles YAML parsing and task definition loading (extracted for maintainability)
-- **Task with Embedded Progression**: Tasks contain progression logic directly for simplified architecture
+- **Simplified Task Framework**: Tasks contain basic information without progression logic
 - **EpisodeManager**: Handles episode lifecycle and returns Step objects directly
-- **Task**: High-level security scenarios (renamed from DomainTask for clarity)
-- **SubTask**: Internal checkpoints with automatic progression based on command execution
+- **Task**: High-level security scenarios with basic metadata
+- **SubTask**: Informational elements returned at episode start (no progression tracking)
 - **Episode**: Complete task attempts with action-response tracking for RL training
 - **RL Compatibility**: Gym-style step() and reset() methods for reinforcement learning
 
 ##### TaskConfigLoader
 Specialized YAML configuration management:
+- **Task Definition Loading**: Parses YAML task configurations
+- **Object Creation**: Creates Task and SubTask objects from YAML data
+- **Basic Validation**: Ensures proper YAML structure and required fields
 
-##### Task with Embedded Progression Logic
-Each Task instance contains progression logic directly for simplified architecture and management:
+##### Simplified Task Framework
+Each Task instance contains basic task information without complex progression logic:
+- **Task Information**: Basic task metadata (ID, title, description)
+- **SubTask References**: Informational subtasks returned at episode start
+- **No State Tracking**: No progression logic, dependencies, or completion tracking
+- **Episode Integration**: Returns task information when episodes are started
 
 ##### EpisodeManager
 Simplified episode management for RL workflows:
 - **Episode Lifecycle**: Start, step, end operations
 - **Step Creation**: Returns Step objects directly from step() method
-- **Command Extraction**: Extract commands from DockerCLIExecutor for completion matching
 - **RL Integration**: Provides gym-compatible interfaces
-- **Active Episodes Only**: No history tracking for simplified operation
+- **Active Episodes Only**: No subtask state tracking for simplified operation
 
 #### ExecutionManager Integration
 Direct command execution with Docker sandbox isolation:

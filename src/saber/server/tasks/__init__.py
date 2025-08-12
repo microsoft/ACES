@@ -3,9 +3,7 @@
 from .core import SubTask, Task
 from .episodes import Action, Episode, EpisodeManager, EpisodeState, Step
 from .exceptions import (
-    DependencyNotMetException,
     EpisodeNotFoundException,
-    InvalidProgressionException,
     InvalidTaskDefinitionException,
     SubTaskNotFoundException,
     TaskManagerException,
@@ -25,11 +23,9 @@ __all__ = [
     "Action",
     "Step",
     # Exceptions
-    "DependencyNotMetException",
-    "TaskNotFoundException",
     "EpisodeNotFoundException",
-    "InvalidProgressionException",
     "InvalidTaskDefinitionException",
     "SubTaskNotFoundException",
     "TaskManagerException",
+    "TaskNotFoundException",
 ]

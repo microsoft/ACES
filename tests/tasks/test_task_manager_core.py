@@ -223,65 +223,6 @@ tasks:
         current = manager.get_current_episode("nonexistent_session")
         assert current is None
 
-    def test_get_current_objective_with_in_progress_subtasks(self, temp_tasks_file):
-        """Test getting current objective from in-progress subtasks."""
-        manager = TaskManager("malware_classification", temp_tasks_file)
-
-        task = manager.get_task("malware_family_analysis")
-
-        # Create mock episode with in-progress subtasks
-        mock_episode = Mock()
-        mock_episode.in_progress_subtasks = {"static_analysis"}
-        mock_episode.not_visited_subtasks = {"dynamic_analysis"}
-
-        objective = manager._get_current_objective(mock_episode, task)
-
-        # Should return objective from static_analysis subtask
-        static_subtask = task.get_subtask_by_id("static_analysis")
-        assert objective == static_subtask.objective
-
-    def test_get_current_objective_with_available_subtasks(self, temp_tasks_file):
-        """Test getting current objective from available subtasks."""
-        manager = TaskManager("malware_classification", temp_tasks_file)
-
-        task = manager.get_task("malware_family_analysis")
-
-        # Create mock episode with no in-progress but available subtasks
-        mock_episode = Mock()
-        mock_episode.in_progress_subtasks = set()
-        mock_episode.not_visited_subtasks = {"static_analysis"}
-
-        # Mock the subtask's check_entry_conditions to return True
-        static_subtask = task.get_subtask_by_id("static_analysis")
-
-        def mock_check_entry_conditions(self, episode):
-            return self.subtask_id == "static_analysis"
-
-        with patch.object(SubTask, 'check_entry_conditions', mock_check_entry_conditions):
-            objective = manager._get_current_objective(mock_episode, task)
-            assert objective == static_subtask.objective
-
-    def test_get_current_objective_fallback_to_task_description(self, temp_tasks_file):
-        """Test getting current objective falls back to task description."""
-        manager = TaskManager("malware_classification", temp_tasks_file)
-
-        task = manager.get_task("malware_family_analysis")
-
-        # Create mock episode with no available subtasks
-        mock_episode = Mock()
-        mock_episode.in_progress_subtasks = set()
-        mock_episode.not_visited_subtasks = {"static_analysis"}
-
-        # Mock the subtask's check_entry_conditions to return False
-        static_subtask = task.get_subtask_by_id("static_analysis")
-
-        def mock_check_entry_conditions(self, episode):
-            return False  # Always return False for this test
-
-        with patch.object(SubTask, 'check_entry_conditions', mock_check_entry_conditions):
-            objective = manager._get_current_objective(mock_episode, task)
-            assert objective == task.description
-
     def test_domain_consistency(self, temp_tasks_file):
         """Test that domain is consistently used across components."""
         domain = "malware_classification"
@@ -294,66 +235,26 @@ tasks:
         for task in manager.tasks.values():
             assert task.domain == domain
 
-    def test_task_manager_with_complex_yaml_structure(self, tmp_path):
-        """Test TaskManager with complex YAML structure."""
-        complex_yaml = tmp_path / "complex.yaml"
-        complex_yaml.write_text("""
-domain: "malware_classification"
-tasks:
-  - task_id: "advanced_analysis"
-    title: "Advanced Malware Analysis"
-    description: "Comprehensive multi-stage analysis"
-    initial_context:
-      priority: "high"
-      analyst: "expert_team"
-      tools_available: ["static", "dynamic", "behavioral"]
-    subtasks:
-      - subtask_id: "initialization"
-        title: "Environment Setup"
-        description: "Prepare analysis environment"
-        objective: "Setup complete analysis environment"
-        completion_conditions: ["setup_env", "validate_tools"]
-        depends_on: []
-      - subtask_id: "static_phase"
-        title: "Static Analysis Phase"
-        description: "Comprehensive static analysis"
-        objective: "Extract all static indicators"
-        completion_conditions: ["file_analysis", "string_extraction", "pe_parsing"]
-        depends_on: ["initialization"]
-      - subtask_id: "dynamic_phase"
-        title: "Dynamic Analysis Phase"
-        description: "Behavioral analysis in sandbox"
-        objective: "Capture runtime behavior"
-        completion_conditions: ["sandbox_execution", "behavior_capture"]
-        depends_on: ["initialization", "static_phase"]
-      - subtask_id: "reporting"
-        title: "Report Generation"
-        description: "Compile comprehensive report"
-        objective: "Generate final analysis report"
-        completion_conditions: ["compile_findings", "generate_report"]
-        depends_on: ["static_phase", "dynamic_phase"]
-""")
+    def test_list_tasks(self, temp_tasks_file):
+        """Test listing all available tasks."""
+        manager = TaskManager("malware_classification", temp_tasks_file)
 
-        manager = TaskManager("malware_classification", str(complex_yaml))
+        tasks_list = manager.list_tasks()
 
-        # Verify complex structure was loaded correctly
-        assert len(manager.tasks) == 1
-        task = manager.tasks["advanced_analysis"]
+        assert isinstance(tasks_list, list)
+        assert len(tasks_list) > 0
 
-        assert len(task.subtasks) == 4
-        assert task.initial_context["priority"] == "high"
-        assert task.initial_context["analyst"] == "expert_team"
+        # Check structure of task info
+        task_info = tasks_list[0]
+        assert "task_id" in task_info
+        assert "title" in task_info
+        assert "description" in task_info
+        assert "subtask_count" in task_info
 
-        # Verify dependency structure
-        init_subtask = task.get_subtask_by_id("initialization")
-        static_subtask = task.get_subtask_by_id("static_phase")
-        dynamic_subtask = task.get_subtask_by_id("dynamic_phase")
-        report_subtask = task.get_subtask_by_id("reporting")
-
-        assert init_subtask.depends_on == []
-        assert static_subtask.depends_on == ["initialization"]
-        assert dynamic_subtask.depends_on == ["initialization", "static_phase"]
-        assert report_subtask.depends_on == ["static_phase", "dynamic_phase"]
+        # Verify one of the expected tasks
+        malware_task = next((t for t in tasks_list if t["task_id"] == "malware_family_analysis"), None)
+        assert malware_task is not None
+        assert isinstance(malware_task["subtask_count"], int)
 
     def test_task_manager_logging_behavior(self, temp_tasks_file, caplog):
         """Test that TaskManager provides appropriate logging."""
