@@ -49,5 +49,4 @@ build/
 
 #Ignore llm api configs
 /task_env_servers/threat_investigation/excytin/config/llm_config.py
-task_env_servers/threat_investigation/excytin/.cache/100/cache.db
-task_env_servers/threat_investigation/excytin/.cache/110/cache.db
+task_env_servers/threat_investigation/excytin/.cache/*
