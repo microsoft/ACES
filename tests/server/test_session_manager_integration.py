@@ -88,15 +88,15 @@ class TestSessionManagerIntegration:
         assert session.current_episode_id == "episode_123"
 
         # 3. Execute first step
-        response1 = await manager.step(session_id, "command1")
+        action1 = Action(tool_name="cli", command="command1", parameters={})
+        response1 = await manager.execute_command(session_id, action1)
         assert response1.success is True
-        assert response1.step["done"] is False
         assert session.current_episode_id == "episode_123"  # Still active
 
         # 4. Execute final step (completes episode)
-        response2 = await manager.step(session_id, "command2")
+        action2 = Action(tool_name="cli", command="command2", parameters={})
+        response2 = await manager.execute_command(session_id, action2)
         assert response2.success is True
-        assert response2.step["done"] is True
         assert session.current_episode_id is None  # Episode completed
 
         # 5. Verify all components were called correctly
@@ -214,13 +214,12 @@ class TestSessionManagerErrorHandling:
         # Mock execution manager to fail
         manager.execution_manager.step.side_effect = Exception("Execution failed")
 
-        # Execute step
-        response = await manager.step(session.session_id, "failing_command")
+        # Execute command
+        action = Action(tool_name="cli", command="failing_command", parameters={})
+        response = await manager.execute_command(session.session_id, action)
 
         assert response.success is False
         assert response.error == "Execution failed"
-        assert response.data == {}
-        assert response.step == {}
 
     @pytest.mark.asyncio
     async def test_step_task_manager_failure(self, error_test_manager):
@@ -236,8 +235,9 @@ class TestSessionManagerErrorHandling:
         manager.execution_manager.step.return_value = command_result
         manager.task_manager.step.side_effect = Exception("Task manager failed")
 
-        # Execute step
-        response = await manager.step(session.session_id, "command")
+        # Execute command
+        action = Action(tool_name="cli", command="command", parameters={})
+        response = await manager.execute_command(session.session_id, action)
 
         assert response.success is False
         assert "Task manager failed" in response.error
@@ -265,7 +265,8 @@ class TestSessionManagerErrorHandling:
         manager.task_manager.step.return_value = mock_step
 
         # This should still work despite evaluation manager failures
-        response = await manager.step(session.session_id, "command")
+        action = Action(tool_name="cli", command="command", parameters={})
+        response = await manager.execute_command(session.session_id, action)
         assert response.success is True
 
     @pytest.mark.asyncio

@@ -174,7 +174,7 @@ class TestHarness:
         self.logger.info("Initializing SABER test harness")
 
         # Setup server client
-        self.server_client = ServerClient(server_url=self.config.server_url, timeout=self.config.request_timeout)
+        self.server_client = ServerClient(self.config.server_url, timeout=self.config.request_timeout)
 
         # Setup agent
         self.agent = agent

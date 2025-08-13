@@ -11,12 +11,14 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 from fastapi import HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
+from .api.session_mcp_api import SessionMCPAPI
+from .api.session_rest_api import SessionRestAPI
 from .evaluation.evaluation_manager import EvaluationManager
+from .execution.base import CommandResult
 from .execution.execution_manager import ExecutionManager
 from .policy.policy_manager import PolicyDocument, PolicyManager
-from .session_api import SessionAPI, SessionStepResponse
 from .tasks.base import Action
 from .tasks.task_manager import TaskManager
 
@@ -25,6 +27,8 @@ logger = logging.getLogger(__name__)
 
 class ClientSession(BaseModel):
     """Represents an active client session."""
+
+    model_config = ConfigDict()
 
     session_id: str = Field(..., description="Unique session identifier")
     client_id: str = Field(..., description="Client identifier")
@@ -35,10 +39,10 @@ class ClientSession(BaseModel):
     is_active: bool = Field(default=True, description="Whether session is active")
     context: Dict[str, Any] = Field(default_factory=dict, description="Session context data")
 
-    class Config:
-        """Pydantic configuration."""
-
-        json_encoders = {datetime: lambda v: v.isoformat()}
+    @field_serializer("created_at", "last_activity")
+    def serialize_datetime(self, value: datetime) -> str:
+        """Serialize datetime fields to ISO format."""
+        return value.isoformat()
 
     def update_activity(self) -> None:
         """Update the last activity timestamp."""
@@ -60,6 +64,8 @@ class SessionManager:
         execution_config_path: Optional[str] = None,
         host: str = "0.0.0.0",
         port: int = 8000,
+        mcp_host: str = "0.0.0.0",
+        mcp_port: int = 3001,
     ):
         """
         Initialize the SessionManager.
@@ -68,12 +74,16 @@ class SessionManager:
             domain_name: Name of the security domain (e.g., 'malware_classification')
             tasks_config_path: Path to tasks configuration file
             execution_config_path: Path to execution configuration file
-            host: Server host address
-            port: Server port
+            host: REST server host address
+            port: REST server port
+            mcp_host: MCP server host address
+            mcp_port: MCP server port
         """
         self.domain_name = domain_name
         self.host = host
         self.port = port
+        self.mcp_host = mcp_host
+        self.mcp_port = mcp_port
         self.active_sessions: Dict[str, ClientSession] = {}
 
         # Initialize server components
@@ -84,22 +94,29 @@ class SessionManager:
         self.policy_manager = PolicyManager(domain_name)
         self.evaluation_manager = EvaluationManager()
 
-        # Initialize API layer
-        self.api = SessionAPI(self, host, port)
+        # Initialize protocol handlers
+        self.rest_api = SessionRestAPI(self, host, port)
+        self.mcp_api = SessionMCPAPI(self, mcp_host, mcp_port)
 
-        logger.info(f"SessionManager initialized for domain '{domain_name}' on {host}:{port}")
+        logger.info(
+            f"SessionManager initialized for domain '{domain_name}' on REST:{host}:{port}, MCP:{mcp_host}:{mcp_port}"
+        )
 
     @property
     def app(self) -> Any:
-        return self.api.app
+        return self.rest_api.app
 
     async def start_server(self) -> None:
-        """Start the SessionManager server."""
-        await self.api.start_server()
+        """Start both REST and MCP servers."""
+        await self.rest_api.start_server()
+        await self.mcp_api.start_mcp_server()
 
     async def shutdown(self) -> None:
         """Shutdown the SessionManager and cleanup resources."""
         logger.info(f"Shutting down SessionManager for domain '{self.domain_name}'")
+
+        # Shutdown MCP server first
+        await self.mcp_api.shutdown_mcp_server()
 
         # Cleanup all active sessions
         session_ids = list(self.active_sessions.keys())
@@ -198,30 +215,24 @@ class SessionManager:
         logger.info(f"Started episode {episode.episode_id} for task {task_id} in session {session_id}")
         return episode
 
-    async def step(
-        self, session_id: str, command: str, parameters: Optional[Dict[str, Any]] = None
-    ) -> SessionStepResponse:
+    async def execute_command(self, session_id: str, action: Action) -> CommandResult:
         """
-        Execute RL step with command.
+        Execute command for MCP integration.
 
         Args:
             session_id: ID of the client session
-            command: Command to execute
-            parameters: Additional command parameters
+            action: Action object containing command and parameters
 
         Returns:
-            SessionStepResponse with execution results and step information
+            CommandResult with execution results
         """
         session = self._get_session(session_id)
         session.update_activity()
 
         if not session.current_episode_id:
-            raise HTTPException(status_code=400, detail="No active episode in session")
+            return CommandResult.error_result(error="No active episode in session")
 
         try:
-            # Create action for both execution and task managers
-            action = Action(tool_name="cli", parameters=parameters or {}, command=command)
-
             # Execute command through execution manager with session context
             context = {"session_id": session_id}
             command_result = await self.execution_manager.step(action, context)
@@ -237,19 +248,6 @@ class SessionManager:
             except Exception as e:
                 logger.warning(f"Failed to log action: {e}")
 
-            # Prepare response
-            response = SessionStepResponse(
-                success=command_result.success,
-                data=command_result.data if command_result.data is not None else {},
-                step={
-                    "step_number": step_result.step_number,
-                    "done": step_result.done,
-                    "action": step_result.action.tool_name,
-                    "timestamp": step_result.timestamp.isoformat(),
-                },
-                error=None,
-            )
-
             # End episode if step indicates completion
             if step_result.done:
                 self.task_manager.end_episode(session_id, "completed")
@@ -260,11 +258,11 @@ class SessionManager:
                 except Exception as e:
                     logger.warning(f"Failed to log episode end: {e}")
 
-            return response
+            return command_result
 
         except Exception as e:
-            logger.error(f"Step execution failed in session {session_id}: {e}")
-            return SessionStepResponse(success=False, data={}, step={}, error=str(e))
+            logger.error(f"Command execution failed in session {session_id}: {e}")
+            return CommandResult.error_result(error=str(e))
 
     async def get_current_task(self, session_id: str) -> Dict[str, Any]:
         """

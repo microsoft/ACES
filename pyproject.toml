@@ -127,8 +127,12 @@ module = "tests.*"
 disallow_untyped_defs = false
 
 [[tool.mypy.overrides]]
-module = "saber.server.session_api"
+module = "saber.server.api.session_rest_api"
 disallow_untyped_decorators = false
+
+[[tool.mypy.overrides]]
+module = "saber.server.api.session_mcp_api"
+warn_unused_ignores = false
 
 [tool.pytest.ini_options]
 minversion = "7.0"

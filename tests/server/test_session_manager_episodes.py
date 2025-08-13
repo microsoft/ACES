@@ -1,14 +1,14 @@
 """
 Unit tests for SessionManager episode management functionality.
 
-Tests episode creation, step execution, and task management integration.
+Tests episode creation and task management integration.
+Tool execution is tested separately for MCP API.
 """
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from saber.server.session_manager import SessionManager
-from saber.server.session_api import SessionStepRequest, SessionStepResponse
 from saber.server.tasks.base import Action, Step
 from saber.server.execution.base import CommandResult
 from saber.server.tasks.episodes.episode import Episode
@@ -136,15 +136,13 @@ class TestSessionManagerEpisodes:
         manager.execution_manager.step.return_value = command_result
         manager.task_manager.step.return_value = mock_step
 
-        # Execute step
-        response = await manager.step(session_id, "file test.txt", {"param": "value"})
+        # Execute command
+        action = Action(tool_name="cli", command="file test.txt", parameters={"param": "value"})
+        response = await manager.execute_command(session_id, action)
 
-        assert isinstance(response, SessionStepResponse)
+        assert isinstance(response, CommandResult)
         assert response.success is True
         assert response.data == {"output": "test output"}
-        assert response.step["step_number"] == 1
-        assert response.step["done"] is False
-        assert response.error is None
 
         # Verify execution manager was called with Action object
         call_args = manager.execution_manager.step.call_args
@@ -173,12 +171,13 @@ class TestSessionManagerEpisodes:
         session = await manager.create_session("test_client")
         session_id = session.session_id
 
-        from fastapi import HTTPException
-        with pytest.raises(HTTPException) as exc_info:
-            await manager.step(session_id, "file test.txt")
+        from saber.server.execution.base import CommandResult
+        action = Action(tool_name="cli", command="file test.txt", parameters={})
+        result = await manager.execute_command(session_id, action)
 
-        assert exc_info.value.status_code == 400
-        assert "No active episode" in str(exc_info.value.detail)
+        assert isinstance(result, CommandResult)
+        assert not result.success
+        assert "No active episode" in result.error
 
     @pytest.mark.asyncio
     async def test_step_execution_with_completion(self, session_manager_with_session, mock_step):
@@ -198,10 +197,11 @@ class TestSessionManagerEpisodes:
         manager.execution_manager.step.return_value = command_result
         manager.task_manager.step.return_value = mock_step
 
-        # Execute step
-        response = await manager.step(session_id, "final command")
+        # Execute command
+        action = Action(tool_name="cli", command="final command", parameters={})
+        response = await manager.execute_command(session_id, action)
 
-        assert response.step["done"] is True
+        assert response.success is True
         assert session.current_episode_id is None  # Episode should be cleared
 
         # Verify episode was ended
@@ -221,12 +221,12 @@ class TestSessionManagerEpisodes:
         # Mock execution manager to raise exception
         manager.execution_manager.step.side_effect = Exception("Execution failed")
 
-        # Execute step
-        response = await manager.step(session_id, "bad command")
+        # Execute command
+        action = Action(tool_name="cli", command="bad command", parameters={})
+        response = await manager.execute_command(session_id, action)
 
         assert response.success is False
         assert response.error == "Execution failed"
-        assert response.data == {}
 
     @pytest.mark.asyncio
     async def test_get_current_task(self, session_manager_with_session, mock_episode, mock_task):

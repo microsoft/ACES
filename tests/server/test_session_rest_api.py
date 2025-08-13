@@ -1,5 +1,5 @@
 """
-Unit tests for SessionManager REST API endpoints.
+Unit tests for SessionRestAPI endpoints.
 
 Tests FastAPI routes and HTTP interactions for session management, episodes,
 policy, status, and events. Tool execution is tested separately for MCP API.
@@ -14,8 +14,8 @@ from saber.server.session_manager import SessionManager
 from saber.server.policy.policy_manager import PolicyDocument
 
 
-class TestSessionManagerAPI:
-    """Test SessionManager FastAPI endpoints."""
+class TestSessionRestAPI:
+    """Test SessionRestAPI FastAPI endpoints."""
 
     @pytest.fixture
     def session_manager_app(self):
