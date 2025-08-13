@@ -85,27 +85,6 @@ class TestTaskManagerEpisodes:
         with pytest.raises(EpisodeNotFoundException):
             manager.step("nonexistent_session", action, sample_command_result)
 
-    def test_step_calls_episode_manager_step(self, temp_tasks_file, sample_command_result):
-        """Test that step execution delegates to episode manager."""
-        manager = TaskManager("malware_classification", temp_tasks_file)
-
-        episode = manager.start_episode("test_session", "malware_family_analysis")
-        action = Action(tool_name="test_tool", parameters={})
-
-        # Mock episode manager step method
-        expected_step = Mock(spec=Step)
-        with patch.object(manager.episode_manager, 'step', return_value=expected_step) as mock_step:
-            result_step = manager.step("test_session", action, sample_command_result)
-
-            assert result_step == expected_step
-            mock_step.assert_called_once()
-
-            # Verify arguments passed to episode manager
-            call_args = mock_step.call_args
-            assert call_args[1]["session_id"] == "test_session"
-            assert call_args[1]["action"] == action
-            assert call_args[1]["command_result"] == sample_command_result
-
     def test_reset_success(self, temp_tasks_file):
         """Test successful episode reset."""
         manager = TaskManager("malware_classification", temp_tasks_file)

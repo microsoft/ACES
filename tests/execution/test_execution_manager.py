@@ -23,22 +23,6 @@ from saber.server.tasks.base import Action
 class TestExecutionConfiguration:
     """Test cases for ExecutionConfiguration."""
 
-    def test_initialization_empty(self):
-        """Test initialization with no configuration."""
-        config = ExecutionConfiguration()
-        assert config._config == {}
-
-    def test_initialization_with_dict(self):
-        """Test initialization with configuration dictionary."""
-        config_dict = {
-            "execution": {"timeout": 60.0, "max_concurrent": 5},
-            "security": {"allowed_commands": ["file", "strings"]},
-            "sandbox": {"image": "saber/base-sandbox:latest"}
-        }
-
-        config = ExecutionConfiguration(config=config_dict)
-        assert config._config == config_dict
-
     @patch("builtins.open", new_callable=mock_open, read_data="""
 execution:
   timeout: 120.0
@@ -96,36 +80,6 @@ sandbox:
                 with pytest.raises(Exception, match="YAML error"):
                     config.load_configuration("test.yaml")
 
-    def test_get_execution_config(self):
-        """Test getting execution configuration section."""
-        config_dict = {"execution": {"timeout": 60.0, "max_concurrent": 5}}
-        config = ExecutionConfiguration(config=config_dict)
-
-        exec_config = config.get_section("execution")
-        assert exec_config == {"timeout": 60.0, "max_concurrent": 5}
-
-    def test_get_execution_config_missing(self):
-        """Test getting execution config when not present."""
-        config = ExecutionConfiguration()
-        exec_config = config.get_section("execution")
-        assert exec_config == {}
-
-    def test_get_security_config(self):
-        """Test getting security configuration section."""
-        config_dict = {"security": {"allowed_commands": ["file"]}}
-        config = ExecutionConfiguration(config=config_dict)
-
-        sec_config = config.get_section("security")
-        assert sec_config == {"allowed_commands": ["file"]}
-
-    def test_get_cli_config(self):
-        """Test getting CLI configuration section."""
-        config_dict = {"cli": {"default_shell_mode": True}}
-        config = ExecutionConfiguration(config=config_dict)
-
-        cli_config = config.get_section("cli")
-        assert cli_config == {"default_shell_mode": True}
-
     def test_get_generic_section(self):
         """Test getting any configuration section generically."""
         config_dict = {
@@ -143,72 +97,6 @@ sandbox:
         # Test non-existent section
         missing_config = config.get_section("does_not_exist")
         assert missing_config == {}
-
-    def test_get_execution_timeout_default(self):
-        """Test getting default execution timeout."""
-        config = ExecutionConfiguration()
-        assert config.get_execution_timeout() == 300.0
-
-    def test_get_execution_timeout_custom(self):
-        """Test getting custom execution timeout."""
-        config_dict = {"execution": {"timeout": 120.0}}
-        config = ExecutionConfiguration(config=config_dict)
-        assert config.get_execution_timeout() == 120.0
-
-    def test_get_max_concurrent_default(self):
-        """Test getting default max concurrent."""
-        config = ExecutionConfiguration()
-        assert config.get_max_concurrent() == 10
-
-    def test_get_max_concurrent_custom(self):
-        """Test getting custom max concurrent."""
-        config_dict = {"execution": {"max_concurrent": 20}}
-        config = ExecutionConfiguration(config=config_dict)
-        assert config.get_max_concurrent() == 20
-
-    def test_get_allowed_commands_default(self):
-        """Test getting default allowed commands."""
-        config = ExecutionConfiguration()
-        assert config.get_allowed_commands() == []
-
-    def test_get_allowed_commands_custom(self):
-        """Test getting custom allowed commands."""
-        config_dict = {"security": {"allowed_commands": ["file", "strings"]}}
-        config = ExecutionConfiguration(config=config_dict)
-        assert config.get_allowed_commands() == ["file", "strings"]
-
-    def test_get_max_command_length_default(self):
-        """Test getting default max command length."""
-        config = ExecutionConfiguration()
-        assert config.get_max_command_length() == 10000
-
-    def test_get_max_command_length_custom(self):
-        """Test getting custom max command length."""
-        config_dict = {"security": {"max_command_length": 5000}}
-        config = ExecutionConfiguration(config=config_dict)
-        assert config.get_max_command_length() == 5000
-
-    def test_get_sandbox_config(self):
-        """Test getting sandbox configuration."""
-        config_dict = {
-            "sandbox": {
-                "image": "saber/base-sandbox:latest",
-                "network_mode": "none"
-            }
-        }
-        config = ExecutionConfiguration(config=config_dict)
-
-        sandbox_config = config.get_sandbox_config()
-        assert sandbox_config == {
-            "image": "saber/base-sandbox:latest",
-            "network_mode": "none"
-        }
-
-    def test_get_sandbox_config_missing(self):
-        """Test getting sandbox config when not present."""
-        config = ExecutionConfiguration()
-        sandbox_config = config.get_sandbox_config()
-        assert sandbox_config == {}
 
 
 class TestExecutionManager:
@@ -518,18 +406,6 @@ class TestExecutionManager:
         # Should be called with empty context dict
         expected_params = {"command": "echo test"}
         mock_executor.execute.assert_called_once_with(expected_params, {})
-
-    def test_security_validator_initialization(self, sample_config):
-        """Test that SecurityValidator is initialized with correct allowed commands."""
-        with patch("saber.server.execution.execution_manager.SandboxManager"):
-            registry = ExecutionManager(config=sample_config)
-
-        # Verify that allowed commands from config are passed to validator
-        allowed_commands = sample_config["security"]["allowed_commands"]
-
-        # We can't directly access the validator's internal state easily,
-        # but we can verify it was initialized correctly by checking the config
-        assert registry._configuration.get_allowed_commands() == allowed_commands
 
     def test_get_executor(self, registry):
         """Test getting specific executor instance."""

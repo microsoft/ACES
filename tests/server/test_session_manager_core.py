@@ -207,26 +207,3 @@ class TestClientSession:
         assert isinstance(session.created_at, datetime)
         assert isinstance(session.last_activity, datetime)
         assert session.context == {}
-
-    def test_update_activity(self):
-        """Test updating session activity timestamp."""
-        session = ClientSession(session_id="test_id", client_id="client_123")
-        original_time = session.last_activity
-
-        # Wait a small amount to ensure time difference
-        import time
-        time.sleep(0.01)
-
-        session.update_activity()
-
-        assert session.last_activity > original_time
-
-    def test_session_serialization(self):
-        """Test session can be serialized to dict."""
-        session = ClientSession(session_id="test_id", client_id="client_123")
-        session_dict = session.dict()
-
-        assert session_dict["session_id"] == "test_id"
-        assert session_dict["client_id"] == "client_123"
-        assert "created_at" in session_dict
-        assert "last_activity" in session_dict

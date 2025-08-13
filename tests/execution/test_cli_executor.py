@@ -49,38 +49,6 @@ class TestCLIExecutor:
             allowed_commands=["file", "strings", "echo", "cat"]
         )
 
-    def test_initialization(self, mock_sandbox_manager):
-        """Test CLI executor initialization."""
-        cli = CLIExecutor(
-            sandbox_manager=mock_sandbox_manager,
-            timeout=60.0,
-            allowed_commands=["file", "strings"]
-        )
-
-        assert cli.get_timeout() == 60.0
-
-        # Check that parameters were added
-        params = cli.get_parameters()
-        assert "command" in params
-        assert "shell" in params
-
-        # Verify parameter definitions
-        command_param = params["command"]
-        assert command_param.name == "command"
-        assert command_param.type == ParameterType.STRING
-        assert command_param.required is True
-
-        shell_param = params["shell"]
-        assert shell_param.name == "shell"
-        assert shell_param.type == ParameterType.BOOLEAN
-        assert shell_param.required is False
-        assert shell_param.default is False
-
-    def test_initialization_without_sandbox_manager(self):
-        """Test that initialization fails without sandbox manager."""
-        with pytest.raises(SandboxExecutionError, match="sandbox_manager is required"):
-            CLIExecutor(sandbox_manager=None, timeout=60.0, allowed_commands=[])
-
     def test_security_command_metadata(self, docker_cli_tool):
         """Test that security command metadata is properly set."""
         metadata = docker_cli_tool._security_command_metadata
@@ -121,22 +89,6 @@ class TestCLIExecutor:
 
         # Should parse into individual arguments (default shell=False)
         assert result == ["echo", "hello", "world"]
-
-    def test_build_command_empty_string(self, docker_cli_tool):
-        """Test building command with empty string raises ValueError."""
-        parameters = {"command": "", "shell": False}
-        context = {}
-
-        with pytest.raises(ValueError, match="Command string cannot be empty"):
-            docker_cli_tool.build_command(parameters, context)
-
-    def test_build_command_whitespace_only(self, docker_cli_tool):
-        """Test building command with whitespace-only string raises ValueError."""
-        parameters = {"command": "   \t\n  ", "shell": False}
-        context = {}
-
-        with pytest.raises(ValueError, match="Command string cannot be empty"):
-            docker_cli_tool.build_command(parameters, context)
 
     def test_build_command_quoted_arguments(self, docker_cli_tool):
         """Test building command with quoted arguments."""

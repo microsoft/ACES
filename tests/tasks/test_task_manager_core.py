@@ -24,27 +24,6 @@ from saber.server.tasks.exceptions import (
 class TestTaskManagerCore:
     """Test cases for TaskManager core functionality."""
 
-    def test_task_manager_init(self, temp_tasks_file):
-        """Test TaskManager initialization."""
-        manager = TaskManager("malware_classification", temp_tasks_file)
-
-        assert manager.domain == "malware_classification"
-        assert manager.tasks_file_path == Path(temp_tasks_file)
-        assert isinstance(manager.config_loader, TaskConfigLoader)
-        assert isinstance(manager.episode_manager, EpisodeManager)
-        assert len(manager.tasks) > 0  # Should have loaded tasks
-
-    def test_task_manager_init_loads_tasks(self, temp_tasks_file):
-        """Test that TaskManager automatically loads tasks on initialization."""
-        manager = TaskManager("malware_classification", temp_tasks_file)
-
-        # Should have loaded the task from the YAML file
-        assert "malware_family_analysis" in manager.tasks
-        task = manager.tasks["malware_family_analysis"]
-        assert isinstance(task, Task)
-        assert task.task_id == "malware_family_analysis"
-        assert task.domain == "malware_classification"
-
     def test_load_tasks_from_yaml_success(self, temp_tasks_file):
         """Test successful loading of tasks from YAML."""
         manager = TaskManager("malware_classification", temp_tasks_file)

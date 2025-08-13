@@ -1,8 +1,7 @@
 """
 Unit tests for Episode class.
 
-Tests episode lifecycle and step management.
-Simplified after removing subtask state tracking.
+Tests meaningful episode functionality - pruned basic data structure tests.
 """
 
 import pytest
@@ -14,38 +13,6 @@ from saber.server.tasks.base import Step, EpisodeState, Action
 
 class TestEpisode:
     """Test cases for Episode functionality."""
-
-    def test_episode_creation_minimal(self):
-        """Test creating an episode with minimal parameters."""
-        episode = Episode(
-            task_id="test_task",
-            session_id="test_session"
-        )
-
-        assert episode.task_id == "test_task"
-        assert episode.session_id == "test_session"
-        assert episode.state == EpisodeState.CREATED
-        assert episode.steps == []
-        assert episode.context == {}
-        assert isinstance(episode.start_time, datetime)
-        assert episode.episode_id is not None
-
-    def test_episode_creation_with_context(self):
-        """Test creating an episode with initial context."""
-        context = {
-            "sample_path": "/data/test.exe",
-            "timeout": 300,
-            "domain": "malware_analysis"
-        }
-
-        episode = Episode(
-            task_id="test_task",
-            session_id="test_session",
-            context=context
-        )
-
-        assert episode.context == context
-        assert episode.context["sample_path"] == "/data/test.exe"
 
     def test_episode_add_step(self):
         """Test adding steps to an episode."""

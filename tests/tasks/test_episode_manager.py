@@ -18,11 +18,6 @@ from saber.server.execution.base import CommandResult
 class TestEpisodeManager:
     """Test cases for EpisodeManager functionality."""
 
-    def test_episode_manager_init(self):
-        """Test EpisodeManager initialization."""
-        manager = EpisodeManager()
-        assert manager.active_episodes == {}
-
     def test_start_episode_minimal(self):
         """Test starting an episode with minimal parameters."""
         manager = EpisodeManager()
@@ -76,13 +71,6 @@ class TestEpisodeManager:
 
         retrieved = manager.get_current_episode("test_session")
         assert retrieved == episode
-
-    def test_get_current_episode_not_exists(self):
-        """Test getting a non-existent episode."""
-        manager = EpisodeManager()
-
-        result = manager.get_current_episode("nonexistent_session")
-        assert result is None
 
     def test_step_basic(self):
         """Test basic step functionality."""

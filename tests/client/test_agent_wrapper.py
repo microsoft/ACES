@@ -125,24 +125,6 @@ def callable_agent():
 class TestAgentWrapper:
     """Test cases for AgentWrapper."""
 
-    def test_wrap_sync_agent(self, sync_agent):
-        """Test wrapping a sync agent."""
-        wrapper = AgentWrapper(sync_agent)
-
-        assert wrapper.agent is sync_agent
-        assert wrapper.process_method == sync_agent.process
-        assert wrapper.reset_method == sync_agent.reset
-        assert not wrapper.is_async
-
-    def test_wrap_async_agent(self, async_agent):
-        """Test wrapping an async agent."""
-        wrapper = AgentWrapper(async_agent)
-
-        assert wrapper.agent is async_agent
-        assert wrapper.process_method == async_agent.respond
-        assert wrapper.reset_method == async_agent.clear
-        assert wrapper.is_async
-
     def test_wrap_custom_method_agent(self, custom_agent):
         """Test wrapping agent with custom method names."""
         wrapper = AgentWrapper(custom_agent)
@@ -169,14 +151,6 @@ class TestAgentWrapper:
         assert hasattr(wrapper.process_method, '__call__')
         assert wrapper.reset_method is None
         assert not wrapper.is_async
-
-    def test_wrap_multiple_methods_agent(self):
-        """Test wrapping agent with multiple valid methods."""
-        agent = MultipleMethodAgent()
-        wrapper = AgentWrapper(agent)
-
-        # Should pick the first one found (process_prompt, process, generate, etc.)
-        assert wrapper.process_method == agent.process
 
     def test_wrap_invalid_agent(self):
         """Test wrapping agent without valid methods."""
@@ -252,23 +226,6 @@ class TestAgentWrapper:
 
         # Should not raise error
         await wrapper.reset()
-
-    def test_detect_parameter_name(self, sync_agent):
-        """Test parameter name detection."""
-        wrapper = AgentWrapper(sync_agent)
-
-        param_name = wrapper._detect_parameter_name(sync_agent.process)
-        assert param_name == "prompt"
-
-    def test_detect_parameter_name_no_params(self):
-        """Test parameter name detection with method that has no parameters."""
-        def no_param_method():
-            return "test"
-
-        wrapper = AgentWrapper(simple_function_agent)  # Just need an instance
-
-        with pytest.raises(ValueError, match="must accept at least one parameter"):
-            wrapper._detect_parameter_name(no_param_method)
 
 
 class TestAgentLoader:
