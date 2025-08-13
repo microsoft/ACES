@@ -22,9 +22,10 @@ package "Execution Management" {
 
     class ExecutionManager {
         +_configuration: ExecutionConfiguration
-        +_cli_command: DockerCLIExecutor
+        +_executor_factory: ExecutorFactory
         +_security_validator: SecurityValidator
         +_sandbox_manager: SandboxManager
+        +_semaphore: Semaphore
         --
         +step(action: Action): CommandResult
         +validate_command(): ValidationResult
@@ -32,6 +33,22 @@ package "Execution Management" {
         +list_commands(): List[Dict[str, Any]]
         +get_execution_stats(): Dict[str, Any]
         +get_command_count(): Dict[str, int]
+        +to_mcp_tools(): List[Dict[str, Any]]
+        +_determine_executor_type(action: Action): str
+    }
+
+    class ExecutorFactory {
+        +_executor_registry: Dict[str, Type[CommandExecutor]]
+        +_sandbox_manager: SandboxManager
+        +_security_validator: SecurityValidator
+        +_configuration: ExecutionConfiguration
+        --
+        +register_executor(executor_type: str, executor_class: Type): void
+        +get_executor(executor_type: str): CommandExecutor
+        +get_available_executors(): List[str]
+        +create_executor_for_command(command: str): CommandExecutor
+        +_analyze_command(command: str): str
+        +to_mcp_tools(): List[Dict[str, Any]]
     }
 
     class CommandExecutor {
@@ -42,18 +59,47 @@ package "Execution Management" {
         +get_timeout(): float
         +validate_parameters(): ValidationResult
         +to_mcp_schema(): Dict[str, Any]
+        +get_executor_type(): str
     }
 
-    class DockerCLIExecutor {
-        +_security_command_metadata: Dict
+    class DockerExecutor {
         +_sandbox_manager: SandboxManager
+        +_docker_config: Dict[str, Any]
+        --
+        {abstract} +execute(): CommandResult
+        +get_session_environment(): DockerExecutionEnvironment
+        +ensure_container_ready(): void
+        +cleanup_execution(): void
+        +get_container_logs(): str
+        +validate_docker_parameters(): ValidationResult
+    }
+
+    class CLIExecutor {
+        +_security_command_metadata: Dict
+        +_cli_config: Dict[str, Any]
         --
         +__init__(sandbox_manager, cli_config): void
-        +build_command(): List[str]
-        +parse_output(): CommandResult
-        +execute(): CommandResult
-        +validate_parameters(): ValidationResult
+        +build_command(command: str): List[str]
+        +parse_output(stdout: str, stderr: str, return_code: int): CommandResult
+        +execute(action: Action): CommandResult
+        +validate_parameters(action: Action): ValidationResult
         +get_security_info(): Dict[str, Any]
+        +to_mcp_schema(): Dict[str, Any]
+    }
+
+    class PythonExecutor {
+        +_python_config: Dict[str, Any]
+        +_script_templates: Dict[str, str]
+        +_allowed_modules: Set[str]
+        --
+        +__init__(sandbox_manager, python_config): void
+        +build_python_script(code: str, requirements: List[str]): str
+        +validate_python_code(code: str): ValidationResult
+        +execute(action: Action): CommandResult
+        +get_python_environment(): Dict[str, Any]
+        +install_requirements(requirements: List[str]): CommandResult
+        +get_security_info(): Dict[str, Any]
+        +to_mcp_schema(): Dict[str, Any]
     }
 
     class ExecutionConfiguration {
@@ -175,17 +221,26 @@ package "Docker Sandbox" <<stereototype S>> {
 }
 
 ' Inheritance relationships
-CommandExecutor <|-- DockerCLIExecutor
+CommandExecutor <|-- DockerExecutor
+DockerExecutor <|-- CLIExecutor
+DockerExecutor <|-- PythonExecutor
 
 ' Execution Manager composition relationships
-ExecutionManager *-- DockerCLIExecutor
+ExecutionManager *-- ExecutorFactory
 ExecutionManager *-- ExecutionConfiguration
 ExecutionManager *-- SandboxManager
 ExecutionManager *-- SecurityValidator
 
+' Factory relationships
+ExecutorFactory ..> CLIExecutor : creates
+ExecutorFactory ..> PythonExecutor : creates
+ExecutorFactory *-- SandboxManager
+ExecutorFactory *-- SecurityValidator
+ExecutorFactory *-- ExecutionConfiguration
+
 ' Sandbox relationships
 SandboxManager *-- DockerExecutionEnvironment
-DockerCLIExecutor *-- SandboxManager
+DockerExecutor *-- SandboxManager
 DockerExecutionEnvironment ..> CommandResult
 
 ' Component relationships
@@ -200,13 +255,24 @@ CommandExecutor ..> ValidationResult
 note top of ExecutionManager
 **Docker Sandbox Execution Manager**
 Central hub for all command execution components including:
-- DockerCLIExecutor command execution with Docker container isolation
+- Factory-based executor management for scalable executor types
 - Configuration management and security enforcement
 - Security validation performed before command execution
 - Sandbox manager for Docker container lifecycle management
 - Command listing for REST API integration
 - Execution monitoring and concurrency control
-- All command execution framework unified under single manager
+- MCP tools integration for multiple executor types
+- Dynamic executor type determination based on command analysis
+end note
+
+note right of ExecutorFactory
+**Executor Factory Pattern**
+Scalable factory for managing multiple executor types:
+- Registry-based executor management
+- Dynamic executor creation and selection
+- Command analysis for automatic executor type detection
+- MCP schema generation for all registered executors
+- Supports easy addition of new executor types
 end note
 
 note top of CommandExecutor
@@ -216,12 +282,19 @@ Base command execution framework:
 - Abstract execute method for command-specific implementation
 end note
 
-note bottom of DockerCLIExecutor
-Docker-based CLI command implementation inheriting from CommandExecutor.
+note bottom of CLIExecutor
+Docker-based CLI command implementation inheriting from DockerExecutor.
 Provides command execution in isolated Docker containers.
 Requires SandboxManager for container management.
 Security validation handled at ExecutionManager level before execution.
 Session-based container isolation with automatic cleanup.
+end note
+
+note bottom of PythonExecutor
+Docker-based Python script execution inheriting from DockerExecutor.
+Supports dependency installation via pip/uv and script templates.
+Provides code validation and secure Python environment execution.
+Uses uv for Python package management and script execution.
 end note
 
 note left of SecurityValidator

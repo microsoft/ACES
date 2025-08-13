@@ -64,6 +64,8 @@ package "SABER Server Side" {
         +list_commands(): List[Dict[str, Any]]
         +get_security_info(): Dict[str, Any]
         +get_execution_stats(): Dict[str, Any]
+        +to_mcp_tools(): List[Dict[str, Any]]
+        +_determine_executor_type(): str
     }
 
     class PolicyManager {
@@ -157,9 +159,11 @@ end note
 
 note top of ExecutionManager
 **Command Execution Manager**
+- Factory-based executor management supporting CLI and Python execution
 - Manages Docker-based command execution with security validation
 - Provides command listing and security information
 - Handles execution statistics and performance monitoring
+- Scalable architecture supporting multiple executor types
 - See command_execution_architecture.puml for detailed design
 end note
 

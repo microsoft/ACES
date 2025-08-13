@@ -124,21 +124,42 @@ package "Task Management" {
 package "Command Execution Framework" {
 
     class ExecutionManager {
-        +_cli_command: DockerCLIExecutor
+        +_executor_factory: ExecutorFactory
         +_security_validator: SecurityValidator
         +_sandbox_manager: SandboxManager
+        +_semaphore: Semaphore
         --
         +step(action: Action): CommandResult
         +validate_command(): ValidationResult
         +get_security_info(): Dict[str, Any]
         +list_commands(): List[Dict[str, Any]]
+        +to_mcp_tools(): List[Dict[str, Any]]
+        +_determine_executor_type(action: Action): str
     }
 
-    class DockerCLIExecutor {
+    class ExecutorFactory {
+        +_executor_registry: Dict[str, Type[CommandExecutor]]
         +_sandbox_manager: SandboxManager
         --
-        +execute(): CommandResult
-        +validate_parameters(): ValidationResult
+        +get_executor(executor_type: str): CommandExecutor
+        +get_available_executors(): List[str]
+        +create_executor_for_command(command: str): CommandExecutor
+        +to_mcp_tools(): List[Dict[str, Any]]
+    }
+
+    class CLIExecutor {
+        +_sandbox_manager: SandboxManager
+        --
+        +execute(action: Action): CommandResult
+        +validate_parameters(action: Action): ValidationResult
+        +to_mcp_schema(): Dict[str, Any]
+    }
+
+    class PythonExecutor {
+        +_sandbox_manager: SandboxManager
+        --
+        +execute(action: Action): CommandResult
+        +validate_parameters(action: Action): ValidationResult
         +to_mcp_schema(): Dict[str, Any]
     }
 
@@ -217,8 +238,11 @@ TaskManager *-- Task
 Task ..> EpisodeState
 EpisodeManager *-- Episode
 
-ExecutionManager *-- DockerCLIExecutor
+ExecutionManager *-- ExecutorFactory
 ExecutionManager *-- SandboxManager
+
+ExecutorFactory ..> CLIExecutor : creates
+ExecutorFactory ..> PythonExecutor : creates
 
 PolicyManager *-- PolicyDocument
 EvaluationManager *-- TrajectoryStore
