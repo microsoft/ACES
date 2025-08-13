@@ -8,6 +8,10 @@ from azure.ai.inference import ChatCompletionsClient
 from azure.core.credentials import AzureKeyCredential
 from utils.agent_utils import msging, call_llm, call_llm_foundry, update_model_usage
 from config.llm_config import CONFIG_LIST, filter_config_list
+import logfire
+
+# Configure logfire for this module
+logfire.configure()
 
 BASE_PROMPT = """You are a security analyst. 
 You need to answer a given security question by querying the database.
@@ -122,7 +126,7 @@ class MCPBaselineAgent:
         if "ai_foundry" in config_list[0].get('api_type', ''):
             self.llm_client = ChatCompletionsClient(
                 endpoint=config_list[0]['endpoint'],
-                credential=AzureKeyCredential(api_key),
+                credential=AzureKeyCredential(config_list[0]['api_key']),
                 seed=self.cache_seed
             )
         else:
@@ -141,6 +145,7 @@ class MCPBaselineAgent:
         if any(model_type in config_list[0]['model'] for model_type in ["r1", "R1", "qwen3"]):
             self.messages = [{"role": "system", "content": sys_prompt}]
             print("Using R1/DeepSeek-style prompt")
+            logfire.info("Using R1/DeepSeek-style prompt", model=config_list[0]['model'])
     
     @property
     def name(self):
@@ -212,9 +217,15 @@ class MCPBaselineAgent:
                 "q_idx": q_idx
             })
             print(f"Session initialized: {result.data if hasattr(result, 'data') else result}")
+            logfire.info("Session initialized successfully", 
+                        attack=attack, q_idx=q_idx, max_steps=max_steps, 
+                        split=split, use_full_db=use_full_db, layer=layer,
+                        result=str(result.data if hasattr(result, 'data') else result))
             return True
         except Exception as e:
             print(f"Failed to initialize session: {e}")
+            logfire.error("Failed to initialize session", 
+                         attack=attack, q_idx=q_idx, error=str(e))
             return False
     
     async def _get_current_question(self):
@@ -222,9 +233,11 @@ class MCPBaselineAgent:
         try:
             result = await self.mcp_client.call_tool("get_current_question", {})
             result_data = result.data if hasattr(result, 'data') else result
+            logfire.info("Retrieved current question", question=result_data.get('question', {}))
             return result_data.get('question', {})
         except Exception as e:
             print(f"Failed to get current question: {e}")
+            logfire.error("Failed to get current question", error=str(e))
             return None
     
     async def _execute_query(self, query: str):
@@ -234,9 +247,12 @@ class MCPBaselineAgent:
                 "query": query
             })
             result_data = result.data if hasattr(result, 'data') else result
-            return result_data.get('observation', f"Query executed: {query}")
+            observation = result_data.get('observation', f"Query executed: {query}")
+            logfire.info("SQL query executed", query=query, observation=observation)
+            return observation
         except Exception as e:
             print(f"Failed to execute query: {e}")
+            logfire.error("Failed to execute SQL query", query=query, error=str(e))
             return f"Error executing query: {str(e)}"
     
     async def _submit_answer(self, answer: str):
@@ -246,9 +262,11 @@ class MCPBaselineAgent:
                 "answer": answer
             })
             result_data = result.data if hasattr(result, 'data') else result
+            logfire.info("Answer submitted", answer=answer, result=result_data)
             return result_data
         except Exception as e:
             print(f"Failed to submit answer: {e}")
+            logfire.error("Failed to submit answer", answer=answer, error=str(e))
             return {"error": str(e)}
     
     async def act(self, observation: str = None):
@@ -275,6 +293,12 @@ class MCPBaselineAgent:
         print(response)
         print("="*60)
         
+        # Log agent's thinking
+        logfire.info("Agent step thinking", 
+                    step=self.step_count + 1, 
+                    response=response,
+                    model=self.config_list[0]['model'])
+        
         # Add summary prompt if we're at max steps
         if self.step_count >= self.max_steps - 1 and self.submit_summary:
             summary_prompt = "You have reached maximum number of steps. Please summarize your findings of key information, and submit them."
@@ -294,9 +318,13 @@ class MCPBaselineAgent:
             self._add_message(response.strip(), role="assistant")
         except:
             print("\n[RETRY] Splitting action failed, getting action separately:")
+            logfire.warning("Action splitting failed, retrying", 
+                           original_response=response.strip(),
+                           step=self.step_count + 1)
             thought = response.strip()
             action = self._call_llm(self.messages + [msging(f"{thought}\nAction:")])
             print(f"Action: {action}")
+            logfire.info("Action retry successful", action=action)
             action = action.strip()
             action = action.replace("<answer>", "").replace("</answer>", "")
             if "Thought" not in thought:
@@ -340,6 +368,11 @@ class MCPBaselineAgent:
                 return {"error": "Failed to get current question"}
             
             print(f"Question: {json.dumps(question, indent=2)}")
+            logfire.info("Episode started", 
+                        attack=attack, 
+                        q_idx=q_idx, 
+                        question=question,
+                        max_steps=max_steps)
             
             # Extract question text
             if isinstance(question, dict):
@@ -360,6 +393,12 @@ class MCPBaselineAgent:
                 print(f"Current observation: {observation}")
                 print(f"{'='*60}")
                 
+                # Log step start
+                logfire.info("Episode step started", 
+                           step=self.step_count + 1, 
+                           max_steps=max_steps, 
+                           observation=observation)
+                
                 # Get action from agent
                 action, is_submit = await self.act(observation)
                 
@@ -373,6 +412,12 @@ class MCPBaselineAgent:
                 print(f"\n[RESULT] Action to execute: {action}")
                 print(f"[RESULT] Is submission: {is_submit}")
                 
+                # Log action execution
+                logfire.info("Action generated", 
+                           step=self.step_count, 
+                           action=action, 
+                           is_submit=is_submit)
+                
                 if is_submit:
                     # Submit answer and get final result
                     final_result = await self._submit_answer(action)
@@ -382,6 +427,14 @@ class MCPBaselineAgent:
                     print(f"Answer: {action}")
                     print(f"Result: {final_result}")
                     print(f"{'='*60}")
+                    
+                    # Log final submission
+                    logfire.info("Final submission completed", 
+                               answer=action, 
+                               result=final_result,
+                               total_steps=self.step_count,
+                               attack=attack,
+                               q_idx=q_idx)
                     break
                 else:
                     # Execute query and get observation
@@ -390,6 +443,20 @@ class MCPBaselineAgent:
                     print(f"Query: {action}")
                     print(f"Result: {observation}")
                     episode_history[-1]["observation"] = observation
+                    
+                    # Log query execution
+                    logfire.info("Query executed in episode", 
+                               query=action, 
+                               observation=observation,
+                               step=self.step_count)
+            
+            # Log episode completion
+            logfire.info("Episode completed", 
+                        attack=attack,
+                        question_idx=q_idx, 
+                        total_steps=self.step_count,
+                        final_result=final_result,
+                        usage_summary=self.total_usage)
             
             return {
                 "attack": attack,
@@ -421,6 +488,11 @@ class MCPBaselineAgent:
             print(f"\n--- Message {i+1} ({msg['role']}) ---")
             print(msg['content'])
         print("="*80)
+        
+        # Log conversation history
+        logfire.info("Conversation history printed", 
+                    message_count=len(self.messages),
+                    messages=self.messages)
     
     def reset(self, change_seed: bool = True):
         """Reset the agent state."""
@@ -448,6 +520,12 @@ class MCPBaselineAgent:
             
         self.messages = [{"role": "system", "content": sys_prompt}]
         self.total_usage = {}
+        
+        # Log agent reset
+        logfire.info("Agent reset completed", 
+                    new_seed=self.cache_seed, 
+                    model=self.config_list[0]['model'],
+                    seed_changed=change_seed)
 
 
 # Example usage and testing function
@@ -474,6 +552,11 @@ async def test_mcp_baseline_agent():
     
     print("Episode Results:")
     print(json.dumps(result, indent=2, default=str))
+    
+    # Log test completion
+    logfire.info("Test episode completed", 
+                attack="incident_5", 
+                result=result)
 
 
 if __name__ == "__main__":

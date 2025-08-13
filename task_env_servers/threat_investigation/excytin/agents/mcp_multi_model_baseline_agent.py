@@ -8,6 +8,10 @@ from azure.ai.inference import ChatCompletionsClient
 from azure.core.credentials import AzureKeyCredential
 from utils.agent_utils import msging, call_llm, call_llm_foundry, update_model_usage
 from config.llm_config import CONFIG_LIST, filter_config_list
+import logfire
+
+# Configure logfire for this module
+logfire.configure()
 
 BASE_PROMPT = """You are a security analyst. 
 You need to answer a given security question by querying the database.
@@ -183,6 +187,11 @@ class MCPMultiModelBaselineAgent:
             model_name = "SLAVE"
         
         print(f"[MODEL SWITCH] Using {model_name} model: {self.config_list[0]['model']}")
+        logfire.info("Multi-model agent switching models", 
+                    model_type=model_name,
+                    model_name=self.config_list[0]['model'],
+                    step=self.step_count,
+                    switch_interval=self.switch_interval)
     
     def _call_llm(self, messages):
         """Call the current LLM with the given messages."""

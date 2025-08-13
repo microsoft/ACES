@@ -10,6 +10,10 @@ from azure.ai.inference import ChatCompletionsClient
 from azure.core.credentials import AzureKeyCredential
 from utils.agent_utils import msging, call_llm, call_llm_foundry, update_model_usage
 from config.llm_config import CONFIG_LIST, filter_config_list
+import logfire
+
+# Configure logfire for this module
+logfire.configure()
 
 # Get the directory containing react examples
 curr_path = os.path.dirname(os.path.abspath(__file__))

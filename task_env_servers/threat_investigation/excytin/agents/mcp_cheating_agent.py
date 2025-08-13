@@ -8,6 +8,10 @@ from azure.ai.inference import ChatCompletionsClient
 from azure.core.credentials import AzureKeyCredential
 from utils.agent_utils import msging, call_llm, call_llm_foundry, update_model_usage
 from config.llm_config import CONFIG_LIST, filter_config_list
+import logfire
+
+# Configure logfire for this module
+logfire.configure()
 
 BASE_PROMPT = """You are a security analyst working on investigating a security incident. 
 You need to answer a given question about the security incident by querying the database of security logs provided to you.
@@ -166,6 +170,7 @@ class MCPCheatingAgent:
         if any(model_type in config_list[0]['model'] for model_type in ["r1", "R1", "qwen3"]):
             self.messages = [{"role": "system", "content": sys_prompt}]
             print("Using R1/DeepSeek-style prompt with incident context")
+            logfire.info("Using R1/DeepSeek-style prompt with cheating context", model=config_list[0]['model'])
     
     @property
     def name(self):
@@ -237,9 +242,15 @@ class MCPCheatingAgent:
                 "q_idx": q_idx
             })
             print(f"Session initialized: {result.data if hasattr(result, 'data') else result}")
+            logfire.info("Cheating agent session initialized successfully", 
+                        attack=attack, q_idx=q_idx, max_steps=max_steps, 
+                        split=split, use_full_db=use_full_db, layer=layer,
+                        result=str(result.data if hasattr(result, 'data') else result))
             return True
         except Exception as e:
             print(f"Failed to initialize session: {e}")
+            logfire.error("Failed to initialize cheating agent session", 
+                         attack=attack, q_idx=q_idx, error=str(e))
             return False
     
     async def _get_current_question(self):
@@ -291,9 +302,14 @@ class MCPCheatingAgent:
                 }
                 
             print(f"[CHEATING] Retrieved incident info: {self.incident}")
+            logfire.info("Cheating agent retrieved incident info", 
+                        incident_info=self.incident,
+                        attack=attack)
             return True
         except Exception as e:
             print(f"Failed to get incident info for cheating: {e}")
+            logfire.error("Cheating agent failed to get incident info", 
+                         attack=attack, error=str(e))
             # Set default incident info
             self.incident = {
                 'IncidentNumber': attack,
@@ -356,6 +372,13 @@ class MCPCheatingAgent:
         print("="*60)
         print(response)
         print("="*60)
+        
+        # Log cheating agent's thinking
+        logfire.info("Cheating agent step thinking", 
+                    step=self.step_count + 1, 
+                    response=response,
+                    model=self.config_list[0]['model'],
+                    incident_info=self.incident)
         
         # Add summary prompt if we're at max steps
         if self.step_count >= self.max_steps - 1 and self.submit_summary:
@@ -425,6 +448,12 @@ class MCPCheatingAgent:
                 return {"error": "Failed to get current question"}
             
             print(f"Question: {json.dumps(question, indent=2)}")
+            logfire.info("Cheating agent episode started", 
+                        attack=attack, 
+                        q_idx=q_idx, 
+                        question=question,
+                        max_steps=max_steps,
+                        incident_info=self.incident)
             
             # Extract question text
             if isinstance(question, dict):

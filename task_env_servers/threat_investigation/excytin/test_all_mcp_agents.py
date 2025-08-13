@@ -10,6 +10,10 @@ import sys
 import os
 from typing import Dict, List
 from config.llm_config import CONFIG_LIST, filter_config_list
+import logfire
+
+# Configure logfire for this module
+logfire.configure()
 
 # Add the current directory to the path to find the agents module
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -38,6 +42,8 @@ async def test_agent(agent_class, agent_name, init_args=None, **kwargs):
     print(f"TESTING {agent_name.upper()}")
     print(f"{'='*80}")
     
+    logfire.info("Starting agent test", agent_name=agent_name, agent_class=agent_class.__name__)
+    
     try:
         # Initialize the agent
         if init_args:
@@ -53,9 +59,14 @@ async def test_agent(agent_class, agent_name, init_args=None, **kwargs):
             )
         
         print(f"{agent_name} initialized successfully")
+        logfire.info("Agent initialized successfully for test", 
+                    agent_name=agent_name,
+                    agent_class=agent_class.__name__,
+                    init_args=init_args is not None)
         
         # Run an episode
         print(f"Starting {agent_name} episode...")
+        logfire.info("Starting agent test episode", agent_name=agent_name)
         result = await agent.run_episode(
             attack="incident_5",
             q_idx=0,
@@ -70,11 +81,21 @@ async def test_agent(agent_class, agent_name, init_args=None, **kwargs):
         print(f"\n=== {agent_name} Episode Results ===")
         if "error" in result:
             print(f"Error: {result['error']}")
+            logfire.error("Agent test episode failed", 
+                         agent_name=agent_name, 
+                         error=result['error'])
         else:
             print(f"Attack: {result['attack']}")
             print(f"Question Index: {result['question_idx']}")
             print(f"Total Steps: {result['total_steps']}")
             print(f"Question: {json.dumps(result['question'], indent=2)}")
+            
+            logfire.info("Agent test episode completed successfully", 
+                        agent_name=agent_name,
+                        attack=result['attack'],
+                        question_idx=result['question_idx'],
+                        total_steps=result['total_steps'],
+                        final_result=result.get('final_result'))
             
             print(f"\n=== {agent_name} Episode History ===")
             for step in result['episode_history']:
@@ -126,10 +147,15 @@ async def test_agent(agent_class, agent_name, init_args=None, **kwargs):
                 print(f"Slave Usage: {json.dumps(result['slave_usage'], indent=2, default=str)}")
                 print(f"Switch Interval: {result['switch_interval']}")
         
+        logfire.info("Agent test completed successfully", agent_name=agent_name)
         return True
         
     except Exception as e:
         print(f"{agent_name} test failed with error: {e}")
+        logfire.error("Agent test failed with exception", 
+                     agent_name=agent_name, 
+                     error=str(e),
+                     error_type=type(e).__name__)
         import traceback
         traceback.print_exc()
         return False
@@ -137,6 +163,7 @@ async def test_agent(agent_class, agent_name, init_args=None, **kwargs):
 async def run_all_tests():
     """Run tests for all MCP agents."""
     print("=== Testing All MCP Security Analysis Agents ===\n")
+    logfire.info("Starting comprehensive test suite for all MCP agents")
     
     results = {}
     
@@ -192,6 +219,13 @@ async def run_all_tests():
     total_tests = len(results)
     passed_tests = sum(results.values())
     print(f"\nTotal: {passed_tests}/{total_tests} tests passed")
+    
+    # Log test suite completion
+    logfire.info("Test suite completed", 
+                total_tests=total_tests,
+                passed_tests=passed_tests,
+                failed_tests=total_tests - passed_tests,
+                results=results)
 
 async def run_single_test(agent_type: str):
     """Run test for a single agent type."""
@@ -334,25 +368,36 @@ async def main():
     if len(sys.argv) > 2:
         agent_type = sys.argv[2].lower()
     
+    logfire.info("Starting test_all_mcp_agents script", 
+                mode=mode, 
+                agent_type=agent_type,
+                args=sys.argv)
+    
     if mode == "help":
         print_usage()
+        logfire.info("Displayed help message")
     elif mode == "all":
         await run_all_tests()
     elif mode == "single":
         if not agent_type:
             print("Error: Agent type required for single mode")
             print("Available types: baseline, react, cheating, reflexion, multi_model")
+            logfire.error("Single mode called without agent type")
             return
+        logfire.info("Running single agent test", agent_type=agent_type)
         await run_single_test(agent_type)
     elif mode == "interactive":
         if not agent_type:
             print("Error: Agent type required for interactive mode")
             print("Available types: baseline, react, cheating, reflexion, multi_model")
+            logfire.error("Interactive mode called without agent type")
             return
+        logfire.info("Running interactive demo", agent_type=agent_type)
         await run_interactive_demo(agent_type)
     else:
         print(f"Unknown mode: {mode}")
         print_usage()
+        logfire.warning("Unknown mode selected", mode=mode)
 
 if __name__ == "__main__":
     asyncio.run(main())

@@ -9,6 +9,10 @@ from azure.ai.inference import ChatCompletionsClient
 from azure.core.credentials import AzureKeyCredential
 from utils.agent_utils import msging, call_llm, call_llm_foundry, update_model_usage
 from config.llm_config import CONFIG_LIST, filter_config_list
+import logfire
+
+# Configure logfire for this module
+logfire.configure()
 
 # Get the directory containing react examples
 curr_path = os.path.dirname(os.path.abspath(__file__))
@@ -152,6 +156,7 @@ class MCPReActAgent:
         if any(model_type in config_list[0]['model'] for model_type in ["r1", "R1", "qwen3"]):
             self.messages = [{"role": "system", "content": sys_prompt}]
             print("Using R1/DeepSeek-style prompt with examples")
+            logfire.info("Using R1/DeepSeek-style prompt with ReAct examples", model=config_list[0]['model'])
     
     @property
     def name(self):
@@ -224,9 +229,15 @@ class MCPReActAgent:
                 "q_idx": q_idx
             })
             print(f"Session initialized: {result.data if hasattr(result, 'data') else result}")
+            logfire.info("ReAct session initialized successfully", 
+                        attack=attack, q_idx=q_idx, max_steps=max_steps, 
+                        split=split, use_full_db=use_full_db, layer=layer,
+                        result=str(result.data if hasattr(result, 'data') else result))
             return True
         except Exception as e:
             print(f"Failed to initialize session: {e}")
+            logfire.error("Failed to initialize ReAct session", 
+                         attack=attack, q_idx=q_idx, error=str(e))
             return False
     
     async def _get_current_question(self):
@@ -234,9 +245,11 @@ class MCPReActAgent:
         try:
             result = await self.mcp_client.call_tool("get_current_question", {})
             result_data = result.data if hasattr(result, 'data') else result
+            logfire.info("ReAct agent retrieved current question", question=result_data.get('question', {}))
             return result_data.get('question', {})
         except Exception as e:
             print(f"Failed to get current question: {e}")
+            logfire.error("ReAct agent failed to get current question", error=str(e))
             return None
     
     async def _execute_query(self, query: str):
@@ -246,9 +259,12 @@ class MCPReActAgent:
                 "query": query
             })
             result_data = result.data if hasattr(result, 'data') else result
-            return result_data.get('observation', f"Query executed: {query}")
+            observation = result_data.get('observation', f"Query executed: {query}")
+            logfire.info("ReAct agent executed SQL query", query=query, observation=observation)
+            return observation
         except Exception as e:
             print(f"Failed to execute query: {e}")
+            logfire.error("ReAct agent failed to execute SQL query", query=query, error=str(e))
             return f"Error executing query: {str(e)}"
     
     async def _submit_answer(self, answer: str):
@@ -258,9 +274,11 @@ class MCPReActAgent:
                 "answer": answer
             })
             result_data = result.data if hasattr(result, 'data') else result
+            logfire.info("ReAct agent submitted answer", answer=answer, result=result_data)
             return result_data
         except Exception as e:
             print(f"Failed to submit answer: {e}")
+            logfire.error("ReAct agent failed to submit answer", answer=answer, error=str(e))
             return {"error": str(e)}
     
     async def act(self, observation: str = None):
@@ -287,6 +305,12 @@ class MCPReActAgent:
         print(response)
         print("="*60)
         
+        # Log ReAct agent's thinking
+        logfire.info("ReAct agent step thinking", 
+                    step=self.step_count + 1, 
+                    response=response,
+                    model=self.config_list[0]['model'])
+        
         # Add summary prompt if we're at max steps
         if self.step_count >= self.max_steps - 1 and self.submit_summary:
             summary_prompt = "You have reached maximum number of steps. Please summarize your findings of key information, and submit them."
@@ -306,9 +330,13 @@ class MCPReActAgent:
             self._add_message(response.strip(), role="assistant")
         except:
             print("\n[RETRY] Splitting action failed, getting action separately:")
+            logfire.warning("ReAct action splitting failed, retrying", 
+                           original_response=response.strip(),
+                           step=self.step_count + 1)
             thought = response.strip()
             action = self._call_llm(self.messages + [msging(f"{thought}\nAction:")])
             print(f"Action: {action}")
+            logfire.info("ReAct action retry successful", action=action)
             action = action.strip()
             action = action.replace("<answer>", "").replace("</answer>", "")
             if "Thought" not in thought:
@@ -352,6 +380,11 @@ class MCPReActAgent:
                 return {"error": "Failed to get current question"}
             
             print(f"Question: {json.dumps(question, indent=2)}")
+            logfire.info("ReAct episode started", 
+                        attack=attack, 
+                        q_idx=q_idx, 
+                        question=question,
+                        max_steps=max_steps)
             
             # Extract question text
             if isinstance(question, dict):
@@ -372,6 +405,12 @@ class MCPReActAgent:
                 print(f"Current observation: {observation}")
                 print(f"{'='*60}")
                 
+                # Log ReAct step start
+                logfire.info("ReAct episode step started", 
+                           step=self.step_count + 1, 
+                           max_steps=max_steps, 
+                           observation=observation)
+                
                 # Get action from agent
                 action, is_submit = await self.act(observation)
                 
@@ -385,6 +424,12 @@ class MCPReActAgent:
                 print(f"\n[RESULT] Action to execute: {action}")
                 print(f"[RESULT] Is submission: {is_submit}")
                 
+                # Log ReAct action execution
+                logfire.info("ReAct action generated", 
+                           step=self.step_count, 
+                           action=action, 
+                           is_submit=is_submit)
+                
                 if is_submit:
                     # Submit answer and get final result
                     final_result = await self._submit_answer(action)
@@ -394,6 +439,14 @@ class MCPReActAgent:
                     print(f"Answer: {action}")
                     print(f"Result: {final_result}")
                     print(f"{'='*60}")
+                    
+                    # Log ReAct final submission
+                    logfire.info("ReAct final submission completed", 
+                               answer=action, 
+                               result=final_result,
+                               total_steps=self.step_count,
+                               attack=attack,
+                               q_idx=q_idx)
                     break
                 else:
                     # Execute query and get observation
@@ -402,6 +455,20 @@ class MCPReActAgent:
                     print(f"Query: {action}")
                     print(f"Result: {observation}")
                     episode_history[-1]["observation"] = observation
+                    
+                    # Log ReAct query execution
+                    logfire.info("ReAct query executed in episode", 
+                               query=action, 
+                               observation=observation,
+                               step=self.step_count)
+            
+            # Log ReAct episode completion
+            logfire.info("ReAct episode completed", 
+                        attack=attack,
+                        question_idx=q_idx, 
+                        total_steps=self.step_count,
+                        final_result=final_result,
+                        usage_summary=self.total_usage)
             
             return {
                 "attack": attack,

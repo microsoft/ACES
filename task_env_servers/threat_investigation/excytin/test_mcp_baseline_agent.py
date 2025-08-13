@@ -10,6 +10,9 @@ import sys
 import os
 from typing import Dict, List
 from config.llm_config import CONFIG_LIST, filter_config_list
+import logfire
+
+logfire.configure()
 
 # Add the current directory to the path to find the agents module
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -27,7 +30,7 @@ except ImportError:
 async def run_simple_test():
     """Run a simple test of the MCP Baseline Agent."""
     print("=== Testing MCP Baseline Agent ===\n")
-
+    logfire.info("Starting simple test of MCP Baseline Agent")
 
     
     try:
@@ -42,9 +45,14 @@ async def run_simple_test():
         )
         
         print("Agent initialized successfully")
+        logfire.info("Agent initialized successfully", 
+                    server_path="excytin_bench_server.py",
+                    max_steps=8,
+                    model=config_list[0]['model'] if config_list else "unknown")
         
         # Run an episode
         print("Starting episode...")
+        logfire.info("Starting test episode", attack="incident_5", q_idx=0)
         result = await agent.run_episode(
             attack="incident_5",
             q_idx=0,
@@ -58,14 +66,32 @@ async def run_simple_test():
         print("\n=== Episode Results ===")
         if "error" in result:
             print(f"Error: {result['error']}")
+            logfire.error("Test episode failed", error=result['error'])
         else:
             print(f"Attack: {result['attack']}")
             print(f"Question Index: {result['question_idx']}")
             print(f"Total Steps: {result['total_steps']}")
             print(f"Question: {json.dumps(result['question'], indent=2)}")
             
+            logfire.info("Test episode completed successfully", 
+                        attack=result['attack'],
+                        question_idx=result['question_idx'],
+                        total_steps=result['total_steps'],
+                        final_result=result.get('final_result'))
+            
             print("\n=== Episode History ===")
+            logfire.info("Processing episode history", 
+                        total_steps=len(result['episode_history']))
+            
             for step in result['episode_history']:
+                print(f"\n--- Step {step['step']} ---")
+                
+                # Log step details
+                logfire.info("Episode step details", 
+                           step_number=step['step'],
+                           action=step['action'],
+                           is_submit=step['is_submit'],
+                           has_observation='observation' in step)
                 print(f"\n--- Step {step['step']} ---")
                 
                 # Show agent messages if available
@@ -103,12 +129,16 @@ async def run_simple_test():
         
     except Exception as e:
         print(f"Test failed with error: {e}")
+        logfire.error("Simple test failed with exception", 
+                     error=str(e),
+                     error_type=type(e).__name__)
         import traceback
         traceback.print_exc()
 
 async def run_interactive_demo():
     """Run an interactive demo where you can step through manually."""
     print("=== Interactive MCP Baseline Agent Demo ===\n")
+    logfire.info("Starting interactive MCP Baseline Agent demo")
     
     try:
         agent = MCPBaselineAgent(
@@ -120,6 +150,10 @@ async def run_interactive_demo():
         )
         
         print("Agent initialized successfully")
+        logfire.info("Interactive agent initialized", 
+                    max_steps=15,
+                    submit_summary=True,
+                    model=config_list[0]['model'] if config_list else "unknown")
         
         # Get user input for episode parameters
         attack = input("Enter attack name (default: incident_5): ").strip() or "incident_5"
@@ -127,20 +161,30 @@ async def run_interactive_demo():
         q_idx = int(q_idx_str)
         
         print(f"\nStarting interactive episode for {attack}, question {q_idx}")
+        logfire.info("User selected episode parameters", 
+                    attack=attack, 
+                    q_idx=q_idx)
         
         async with agent.mcp_client:
             # Initialize session
             if not await agent._initialize_session(attack, q_idx):
                 print("Failed to initialize session")
+                logfire.error("Failed to initialize interactive session", 
+                             attack=attack, q_idx=q_idx)
                 return
             
             # Get current question
             question = await agent._get_current_question()
             if question is None:
                 print("Failed to get current question")
+                logfire.error("Failed to get current question in interactive demo")
                 return
             
             print(f"\nQuestion: {json.dumps(question, indent=2)}")
+            logfire.info("Interactive session initialized successfully", 
+                        attack=attack, 
+                        q_idx=q_idx, 
+                        question=question)
             
             # Extract question text
             if isinstance(question, dict):
@@ -158,6 +202,11 @@ async def run_interactive_demo():
                 print(f"{'='*60}")
                 print(f"Current observation: {observation}")
                 
+                logfire.info("Interactive step started", 
+                           step=step + 1, 
+                           max_steps=agent.max_steps,
+                           observation=observation[:200] + "..." if len(observation) > 200 else observation)
+                
                 # Get action from agent (this will print the agent's thinking)
                 action, is_submit = await agent.act(observation)
                 
@@ -165,11 +214,20 @@ async def run_interactive_demo():
                 print(f"Action: {action}")
                 print(f"Is submit: {is_submit}")
                 
+                logfire.info("Interactive action extracted", 
+                           step=step + 1,
+                           action=action,
+                           is_submit=is_submit)
+                
                 if is_submit:
                     # Submit answer
                     result = await agent._submit_answer(action)
                     print(f"\n[SUBMISSION RESULT]")
                     print(json.dumps(result, indent=2, default=str))
+                    logfire.info("Interactive submission completed", 
+                               answer=action,
+                               result=result,
+                               step=step + 1)
                     break
                 else:
                     # Execute query
@@ -177,18 +235,27 @@ async def run_interactive_demo():
                     print(f"\n[QUERY RESULT]")
                     print(f"Query: {action}")
                     print(f"Result: {observation}")
+                    logfire.info("Interactive query executed", 
+                               query=action,
+                               observation=observation[:200] + "..." if len(str(observation)) > 200 else observation,
+                               step=step + 1)
                 
                 step += 1
                 
                 # Ask user if they want to continue
                 cont = input(f"\nPress Enter to continue, 'q' to quit: ").strip()
                 if cont.lower() == 'q':
+                    logfire.info("User chose to quit interactive demo", step=step)
                     break
             
             print("\nDemo completed!")
+            logfire.info("Interactive demo completed", total_steps=step)
         
     except Exception as e:
         print(f"Interactive demo failed with error: {e}")
+        logfire.error("Interactive demo failed with exception",
+                     error=str(e),
+                     error_type=type(e).__name__)
         import traceback
         traceback.print_exc()
 
@@ -214,8 +281,11 @@ async def main():
     if len(sys.argv) > 1:
         mode = sys.argv[1].lower()
     
+    logfire.info("Starting test script", mode=mode, args=sys.argv)
+    
     if mode == "help":
         print_usage()
+        logfire.info("Displayed help message")
     elif mode == "interactive":
         await run_interactive_demo()
     elif mode == "simple":
@@ -223,6 +293,7 @@ async def main():
     else:
         print(f"Unknown mode: {mode}")
         print_usage()
+        logfire.warning("Unknown mode selected", mode=mode)
 
 if __name__ == "__main__":
     asyncio.run(main())
