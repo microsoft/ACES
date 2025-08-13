@@ -9,6 +9,7 @@ participant "TaskManager" as TM
 participant "EpisodeManager" as EM
 participant "Task" as T
 participant "PolicyManager" as PM
+participant "EvaluationManager" as EVAL_M
 participant "ExecutionManager" as EM_EXEC
 
 == Episode Initialization ==
@@ -30,6 +31,8 @@ TM --> SM: episode
 
 SM -> TM: get_task(task_id)
 TM --> SM: current_task
+SM -> EVAL_M: initialize_evaluation(current_task)
+EVAL_M --> SM: evaluation_ready
 SM -> PM: get_policy()
 PM --> SM: policy_document
 SM -> PM: get_guidelines()
@@ -43,6 +46,17 @@ note right of SM
   - Domain policy document
   - Agent guidelines
   - Context hints
+
+  And initializes evaluation
+  with the task context
+end note
+
+note right of EVAL_M
+  EvaluationManager initialization:
+  - Sets up evaluation context for the task
+  - Prepares trajectory tracking
+  - Initializes performance baselines
+  - Configures task-specific metrics
 end note
 
 SM -> Client: HTTP 200 OK\n{episode_info, task_context, policy, guidelines, hints}
@@ -82,6 +96,21 @@ EM -> EM: add step to episode
 EM -> EM: update_episode_state(episode, step)
 EM --> TM: Step
 TM --> SM: Step
+
+== Step Evaluation ==
+
+SM -> EVAL_M: evaluate_step(step, episode_context)
+EVAL_M -> EVAL_M: analyze step effectiveness for subtask progress
+EVAL_M -> EVAL_M: update trajectory metrics
+EVAL_M --> SM: step_evaluation_result
+
+note right of EVAL_M
+  EvaluationManager evaluates:
+  - Step effectiveness for subtask progress
+  - Progress toward task completion
+  - Trajectory metrics
+  - Performance indicators
+end note
 
 alt if episode not complete (determined externally)
     SM -> Client: HTTP 200 OK\n{success: true, data: {output}, step: {done: false}}
@@ -150,6 +179,9 @@ note over Client, Agent
   - Episode completion signaled via step.done flag in command responses
   - Sessions can contain multiple sequential episodes
   - No subtask progression tracking or state management
+  - EvaluationManager provides continuous assessment of agent performance
+  - Task-specific evaluation metrics are initialized at episode start
+  - Step-by-step evaluation tracks trajectory and progress indicators
 end note
 
 @enduml
