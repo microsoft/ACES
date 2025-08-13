@@ -17,6 +17,12 @@ class ToolNotFoundError(ExecutionManagerError):
     pass
 
 
+class InvalidEnvironmentSpecException(ExecutionManagerError):
+    """Raised when environment specification is invalid."""
+
+    pass
+
+
 class ToolExecutionError(ExecutionManagerError):
     """Raised when tool execution fails."""
 

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..execution.base import CommandResult
+from ..execution.sandbox.environment_spec import EnvironmentSpec
 from .base import Action
 from .core.subtask import SubTask
 from .core.task import Task
@@ -24,20 +25,22 @@ class TaskManager:
     and RL-style interfaces with specialized components.
     """
 
-    def __init__(self, domain: str, tasks_file_path: str):
+    def __init__(self, domain: str, tasks_file_path: str, environments_file_path: Optional[str] = None):
         """
         Initialize TaskManager for a specific domain.
 
         Args:
             domain: The security domain (e.g., 'malware_classification')
             tasks_file_path: Path to the YAML tasks definition file
+            environments_file_path: Optional path to environments.yaml for environment resolution
         """
         self.domain = domain
         self.tasks_file_path = Path(tasks_file_path)
+        self.environments_file_path = environments_file_path
         self.tasks: Dict[str, Task] = {}
 
         # Initialize specialized components
-        self.config_loader = TaskConfigLoader(domain)
+        self.config_loader = TaskConfigLoader(domain, environments_file_path)
         self.episode_manager = EpisodeManager()
 
         logger.info(f"Initializing TaskManager for domain '{domain}' with tasks file: {tasks_file_path}")
@@ -94,6 +97,22 @@ class TaskManager:
             raise SubTaskNotFoundException(task_id, subtask_id)
 
         return subtask
+
+    def get_task_environment_spec(self, task_id: str) -> Optional[EnvironmentSpec]:
+        """
+        Get the environment specification for a task.
+
+        Args:
+            task_id: ID of the task
+
+        Returns:
+            EnvironmentSpec if task has environment configuration, None otherwise
+
+        Raises:
+            TaskNotFoundException: If task is not found
+        """
+        task = self.get_task(task_id)
+        return task.environment_spec
 
     def start_episode(self, session_id: str, task_id: str) -> Episode:
         """

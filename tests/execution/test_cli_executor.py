@@ -276,8 +276,11 @@ class TestCLIExecutorIntegration:
         from saber.server.execution.sandbox.docker_environment import CommandResult
 
         env = MagicMock()
-        env.get_container_id.return_value = "container123456789"
-        env.execute_command = AsyncMock()
+        # Mock the new interface
+        container_mock = MagicMock()
+        container_mock.id = "container123456789"
+        env.get_execution_container.return_value = container_mock
+        env.execute_command = MagicMock()  # Not async anymore
         return env
 
     @pytest.fixture
@@ -333,8 +336,7 @@ class TestCLIExecutorIntegration:
 
         # Verify Docker environment was called correctly
         env.execute_command.assert_called_once_with(
-            command=["echo", "Hello from Docker!"],
-            working_dir="/workspace"
+            command=["echo", "Hello from Docker!"]
         )
 
     @pytest.mark.asyncio
@@ -362,8 +364,7 @@ class TestCLIExecutorIntegration:
 
         # Verify shell command was constructed correctly
         env.execute_command.assert_called_once_with(
-            command=["/bin/sh", "-c", "echo hello world"],
-            working_dir="/workspace"
+            command=["/bin/sh", "-c", "echo hello world"]
         )
 
     @pytest.mark.asyncio
@@ -413,7 +414,10 @@ class TestCLIExecutorIntegration:
         command_result = CommandResult(exit_code=0, stdout="test\n", stderr="", execution_time=0.3)
         new_env = mock_sandbox_manager_with_env.create_session_environment.return_value
         new_env.execute_command.return_value = command_result
-        new_env.get_container_id.return_value = "newcontainer123"
+        # Mock the new interface
+        new_container_mock = MagicMock()
+        new_container_mock.id = "newcontainer123"
+        new_env.get_execution_container.return_value = new_container_mock
 
         parameters = {"command": "echo test", "shell": False}
         context = {"session_id": "new_session"}
@@ -424,7 +428,11 @@ class TestCLIExecutorIntegration:
         assert result.data["stdout"] == "test\n"
 
         # Verify that create_session_environment was called
-        mock_sandbox_manager_with_env.create_session_environment.assert_called_once_with("new_session")
+        # Note: the call now includes a default environment spec
+        assert mock_sandbox_manager_with_env.create_session_environment.called
+        call_args = mock_sandbox_manager_with_env.create_session_environment.call_args
+        assert call_args[0][0] == "new_session"  # session_id
+        assert len(call_args[0]) == 2  # session_id and environment_spec
 
     @pytest.mark.asyncio
     async def test_execute_docker_exception_handling(self, docker_cli_tool_with_env, mock_sandbox_manager_with_env):

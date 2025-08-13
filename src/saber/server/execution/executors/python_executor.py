@@ -14,7 +14,7 @@ from ..sandbox.sandbox_manager import SandboxManager
 from .docker_executor import DockerExecutor
 
 if TYPE_CHECKING:
-    from ..sandbox.docker_environment import DockerExecutionEnvironment
+    from ..sandbox.docker_sandbox_environment import DockerSandboxEnvironment
 
 logger = logging.getLogger(__name__)
 
@@ -228,7 +228,7 @@ class PythonExecutor(DockerExecutor):
         return "\n".join(setup_lines) + script
 
     async def install_requirements(
-        self, environment: "DockerExecutionEnvironment", requirements: List[str]
+        self, environment: "DockerSandboxEnvironment", requirements: List[str]
     ) -> CommandResult:
         """
         Install Python requirements in the container.
@@ -247,7 +247,7 @@ class PythonExecutor(DockerExecutor):
         pip_cmd = ["pip", "install"] + requirements
 
         try:
-            result = await environment.execute_command(command=pip_cmd, working_dir="/workspace")
+            result = environment.execute_command(command=pip_cmd)
 
             if result.exit_code == 0:
                 return CommandResult.success_result(
@@ -377,27 +377,27 @@ class PythonExecutor(DockerExecutor):
             script_path = f"/tmp/script_{session_id}.py"
 
             # Create script file using echo (simple approach)
-            create_script_cmd = ["sh", "-c", f"cat > {script_path} << 'EOF'\n{script_content}\nEOF"]
-            create_result = await environment.execute_command(
-                command=create_script_cmd, working_dir=parameters.get("working_dir", "/workspace")
-            )
+            working_dir = parameters.get("working_dir", "/workspace")
+            create_script_cmd = ["sh", "-c", f"cd {working_dir} && cat > {script_path} << 'EOF'\n{script_content}\nEOF"]
+            create_result = environment.execute_command(command=create_script_cmd)
 
             if create_result.exit_code != 0:
                 return CommandResult.error_result(error=f"Failed to create script file: {create_result.stderr}")
 
             # Execute Python script
-            python_cmd = ["python3", script_path]
-            result = await environment.execute_command(
-                command=python_cmd, working_dir=parameters.get("working_dir", "/workspace")
-            )
+            python_cmd = ["sh", "-c", f"cd {working_dir} && python3 {script_path}"]
+            result = environment.execute_command(command=python_cmd)
 
             # Parse output
             tool_result = self.parse_python_output(result.stdout, result.stderr, result.exit_code, script_path)
 
             # Add execution metadata
+            container = environment.get_execution_container()
+            container_id = container.id[:12] if container else "unknown"
+
             tool_result.metadata.update(
                 {
-                    "container_id": environment.get_container_id()[:12],
+                    "container_id": container_id,
                     "session_id": session_id,
                     "execution_time": result.execution_time,
                     "requirements_installed": requirements,

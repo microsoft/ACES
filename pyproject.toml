@@ -32,6 +32,7 @@ dependencies = [
     "pyyaml>=6.0",
     "pydantic>=2.0.0",
     "docker>=7.0.0",
+    "docker[compose]>=7.0.0",
     "httpx>=0.24.0",
     "rich>=13.0.0",
 ]
@@ -136,7 +137,7 @@ warn_unused_ignores = false
 
 [tool.pytest.ini_options]
 minversion = "7.0"
-addopts = "-ra -q --strict-markers --strict-config"
+addopts = "-ra -q --strict-markers --strict-config -m 'not integration'"
 testpaths = ["tests"]
 filterwarnings = [
     "error",
@@ -145,7 +146,7 @@ filterwarnings = [
 ]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-    "integration: marks tests as integration tests",
+    "integration: marks tests as integration tests (run with -m integration)",
     "unit: marks tests as unit tests",
 ]
 

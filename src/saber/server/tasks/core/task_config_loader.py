@@ -2,10 +2,11 @@
 
 from logging import getLogger
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import yaml
 
+from ..environment_loader import EnvironmentLoader
 from ..exceptions import InvalidTaskDefinitionException
 from .subtask import SubTask
 from .task import Task
@@ -18,14 +19,19 @@ class TaskConfigLoader:
     Handles loading and parsing YAML task definitions into Task objects.
     """
 
-    def __init__(self, domain: str):
+    def __init__(self, domain: str, environments_file_path: Optional[str] = None):
         """
         Initialize TaskConfigLoader for a specific domain.
 
         Args:
             domain: The security domain (e.g., 'malware_classification')
+            environments_file_path: Path to environments.yaml file for environment resolution
         """
         self.domain = domain
+        self.environment_loader = None
+
+        if environments_file_path:
+            self.environment_loader = EnvironmentLoader(environments_file_path)
 
     def load_tasks_from_file(self, tasks_file_path: str) -> Dict[str, Task]:
         """
@@ -116,6 +122,16 @@ class TaskConfigLoader:
 
         logger.debug(f"Parsing task '{task_id}': {title}")
 
+        # Parse environment configuration
+        environment_spec = None
+        if "environment" in task_data and self.environment_loader:
+            try:
+                environment_spec = self.environment_loader.resolve_environment(task_data["environment"])
+                logger.debug(f"Resolved environment specification for task '{task_id}'")
+            except Exception as e:
+                logger.error(f"Failed to resolve environment for task '{task_id}': {e}")
+                raise InvalidTaskDefinitionException(f"Invalid environment configuration: {e}")
+
         # Parse subtasks
         subtasks_data = task_data.get("subtasks", [])
         subtasks = []
@@ -134,6 +150,7 @@ class TaskConfigLoader:
             description=description,
             subtasks=subtasks,
             initial_context=initial_context,
+            environment_spec=environment_spec,
         )
 
         logger.debug(f"Created task '{task_id}' with {len(subtasks)} subtasks")

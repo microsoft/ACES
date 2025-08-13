@@ -1310,6 +1310,7 @@ dev = [
 requires-dist = [
     { name = "black", marker = "extra == 'dev'", specifier = ">=23.0.0" },
     { name = "docker", specifier = ">=7.0.0" },
+    { name = "docker", extras = ["compose"], specifier = ">=7.0.0" },
     { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.100.0" },
     { name = "fastmcp", marker = "extra == 'server'", specifier = ">=0.1.0" },
     { name = "flake8", marker = "extra == 'dev'", specifier = ">=6.0.0" },

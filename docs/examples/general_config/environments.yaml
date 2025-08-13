@@ -1,5 +1,5 @@
-# Environment Template Definitions
-# Reusable container and network configurations
+# Environment Configuration for SABER
+# Defines containers, networks, and environment templates for multi-container orchestration
 
 # Container Templates
 containers:
@@ -10,7 +10,7 @@ containers:
     user: "pentester:pentester"
     tools:
       - "nmap"
-      - "sqlmap" 
+      - "sqlmap"
       - "burpsuite"
       - "metasploit"
     resource_limits:

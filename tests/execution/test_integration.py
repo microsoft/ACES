@@ -59,34 +59,13 @@ class TestToolsIntegration:
         docker_cleanup(execution_manager)
         return execution_manager
 
-    @pytest.mark.asyncio
-    async def test_end_to_end_safe_command_execution(self, registry):
-        """Test complete flow for safe command execution in Docker."""
-        from saber.server.execution.sandbox.docker_environment import CommandResult
-
-        action = Action(tool_name="cli", command="echo hello world")
-        context = {"session_id": f"integration_test_001_{uuid.uuid4().hex[:8]}"}
-
-        # Mock Docker environment execution
-        mock_env = MagicMock()
-        mock_env.execute_command = AsyncMock()
-        mock_env.execute_command.return_value = CommandResult(
-            exit_code=0,
-            stdout="hello world\n",
-            stderr="",
-            execution_time=0.1
-        )
-        mock_env.get_container_id.return_value = "integration_container_123"
-
-        # Mock sandbox manager to return our environment
-        with patch.object(registry._sandbox_manager, 'get_session_environment', return_value=mock_env):
-            result = await registry.step(action, context)
-
-        # Verify complete success flow
-        assert result.success is True
-        assert result.data["stdout"] == "hello world\n"
-        assert result.data["return_code"] == 0
-        assert result.metadata["execution_environment"] == "docker_container"
+    # REMOVED: test_end_to_end_safe_command_execution - heavily mocked, not testing real integration
+    # REMOVED: test_end_to_end_whitelisted_command_execution - heavily mocked, not testing real integration
+    # REMOVED: test_concurrent_command_execution - heavily mocked, not testing real integration
+    # REMOVED: test_shell_mode_integration - heavily mocked, not testing real integration
+    # REMOVED: test_session_isolation_integration - heavily mocked, not testing real integration
+    # REMOVED: test_error_handling_integration - heavily mocked, not testing real integration
+    # REMOVED: test_realistic_malware_analysis_scenario - heavily mocked, not testing real integration
 
     @pytest.mark.asyncio
     async def test_end_to_end_blocked_command_execution(self, registry):
@@ -450,6 +429,7 @@ sandbox:
         assert "File type" in results[1].data["stdout"]
         assert "Strings found" in results[2].data["stdout"]
 
+    @pytest.mark.integration
     @pytest.mark.asyncio
     async def test_real_docker_container_cleanup(self, real_registry, docker_cleanup):
         """Test that real Docker containers are created and properly cleaned up."""

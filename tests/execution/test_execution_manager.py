@@ -479,6 +479,50 @@ class TestExecutionManager:
         expected_params = {"command": "", "code": "print('hello')"}
         mock_executor.execute.assert_called_once_with(expected_params, context)
 
+    def test_create_environment_success(self, registry):
+        """Test successful environment creation."""
+        from saber.server.execution.sandbox.environment_spec import (
+            EnvironmentSpec, NetworkSpec, ServiceSpec
+        )
+
+        # Create a sample environment spec
+        network = NetworkSpec(name="test_network")
+        service = ServiceSpec(name="webapp", container="nginx")
+        env_spec = EnvironmentSpec(
+            network=network,
+            execution_service="execution",
+            execution_config={"image": "ubuntu:latest"},
+            target_services=[service]
+        )
+
+        with patch.object(registry._sandbox_manager, 'create_session_environment') as mock_create:
+            registry.create_environment("test_session", env_spec)
+
+        mock_create.assert_called_once_with("test_session", env_spec)
+
+    def test_create_environment_failure(self, registry):
+        """Test environment creation failure."""
+        from saber.server.execution.sandbox.environment_spec import (
+            EnvironmentSpec, NetworkSpec
+        )
+
+        # Create a sample environment spec
+        network = NetworkSpec(name="test_network")
+        env_spec = EnvironmentSpec(
+            network=network,
+            execution_service="execution",
+            execution_config={"image": "ubuntu:latest"}
+        )
+
+        # Mock sandbox manager to raise exception
+        with patch.object(registry._sandbox_manager, 'create_session_environment') as mock_create:
+            mock_create.side_effect = Exception("Creation failed")
+
+            with pytest.raises(Exception, match="Creation failed"):
+                registry.create_environment("test_session", env_spec)
+
+        mock_create.assert_called_once_with("test_session", env_spec)
+
     def test_cleanup_all_sessions(self, registry):
         """Test cleanup of all sessions."""
         with patch.object(registry._sandbox_manager, 'cleanup_all_sessions') as mock_cleanup_sandbox:

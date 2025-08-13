@@ -3,6 +3,7 @@
 from logging import getLogger
 from typing import Any, Dict, List, Optional, Set
 
+from ...execution.sandbox.environment_spec import EnvironmentSpec
 from .subtask import SubTask
 
 logger = getLogger(__name__)
@@ -21,6 +22,7 @@ class Task:
         description: str,
         subtasks: Optional[List[SubTask]] = None,
         initial_context: Optional[Dict[str, Any]] = None,
+        environment_spec: Optional[EnvironmentSpec] = None,
     ):
         """
         Initialize a task.
@@ -32,6 +34,7 @@ class Task:
             description: Detailed description of the task
             subtasks: List of subtasks
             initial_context: Initial context provided when the task starts
+            environment_spec: Environment specification for multi-container orchestration
         """
         self.task_id = task_id
         self.domain = domain
@@ -39,6 +42,26 @@ class Task:
         self.description = description
         self.subtasks = subtasks or []
         self.initial_context = initial_context or {}
+        self.environment_spec = environment_spec
+        """
+        Initialize a task.
+
+        Args:
+            task_id: Unique identifier for the task
+            domain: Security domain this task belongs to
+            title: Human-readable title
+            description: Detailed description of the task
+            subtasks: List of subtasks
+            initial_context: Initial context provided when the task starts
+            environment_spec: Environment specification for multi-container orchestration
+        """
+        self.task_id = task_id
+        self.domain = domain
+        self.title = title
+        self.description = description
+        self.subtasks = subtasks or []
+        self.initial_context = initial_context or {}
+        self.environment_spec = environment_spec
 
         # Create lookup map for efficient subtask access
         self._subtask_map = {st.subtask_id: st for st in self.subtasks}

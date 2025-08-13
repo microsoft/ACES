@@ -105,7 +105,11 @@ class TestDockerExecutor:
 
         assert result == mock_docker_environment
         docker_executor._sandbox_manager.get_session_environment.assert_called_once_with(session_id)
-        docker_executor._sandbox_manager.create_session_environment.assert_called_once_with(session_id)
+        # Verify create_session_environment was called with session_id and environment_spec
+        assert docker_executor._sandbox_manager.create_session_environment.called
+        call_args = docker_executor._sandbox_manager.create_session_environment.call_args
+        assert call_args[0][0] == session_id  # session_id
+        assert len(call_args[0]) == 2  # session_id and environment_spec
 
     def test_get_session_environment_failure(self, docker_executor):
         """Test session environment retrieval failure."""

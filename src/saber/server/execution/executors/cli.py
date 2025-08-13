@@ -258,15 +258,18 @@ class CLIExecutor(DockerExecutor):
             command_args = self.build_command(parameters, context)
 
             # Execute command in Docker container
-            result = await environment.execute_command(command=command_args, working_dir="/workspace")
+            result = environment.execute_command(command=command_args)
 
             # Parse output
             tool_result = self.parse_output(result.stdout, result.stderr, result.exit_code)
 
             # Add execution metadata
+            container = environment.get_execution_container()
+            container_id = container.id[:12] if container else "unknown"
+
             tool_result.metadata.update(
                 {
-                    "container_id": environment.get_container_id()[:12],
+                    "container_id": container_id,
                     "session_id": session_id,
                     "execution_time": result.execution_time,
                 }

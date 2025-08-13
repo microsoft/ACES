@@ -70,6 +70,93 @@ class TestTaskManagerCore:
         assert exc_info.value.task_id == "nonexistent_task"
         assert "nonexistent_task" in str(exc_info.value)
 
+    def test_get_task_environment_spec_none(self, temp_tasks_file):
+        """Test getting environment spec for task without environment configuration."""
+        manager = TaskManager("malware_classification", temp_tasks_file)
+
+        # The default test task doesn't have an environment spec
+        env_spec = manager.get_task_environment_spec("malware_family_analysis")
+
+        assert env_spec is None
+
+    def test_get_task_environment_spec_exists(self, tmp_path):
+        """Test getting environment spec for task with environment configuration."""
+        # Create environments configuration file first
+        environments_yaml = """
+# Environment Template Definitions
+containers:
+  execution_sandbox:
+    image: "ubuntu:latest"
+    working_dir: "/workspace"
+
+  test_db:
+    image: "mysql:5.7"
+    environment:
+      - "MYSQL_ROOT_PASSWORD=test"
+
+networks:
+  test_network:
+    driver: "bridge"
+    internal: false
+
+environments:
+  excytin_db1:
+    network: "test_network"
+    execution: "execution_sandbox"
+    services:
+      - name: "database"
+        container: "test_db"
+"""
+
+        # Create a task configuration with environment spec
+        task_yaml_with_env = """
+domain: "malware_classification"
+tasks:
+  - task_id: "test_task_with_env"
+    title: "Test Task with Environment"
+    description: "Test task that includes environment configuration"
+    environment: "excytin_db1"
+    initial_context:
+      sample_path: "/data/test.exe"
+    subtasks:
+      - subtask_id: "analysis"
+        title: "Analysis"
+        description: "Analyze sample"
+        objective: "Complete analysis"
+        completion_conditions: ["test_command"]
+        depends_on: []
+"""
+
+        # Create both files
+        environments_file = tmp_path / "environments.yaml"
+        environments_file.write_text(environments_yaml)
+
+        tasks_file = tmp_path / "test_tasks_with_env.yaml"
+        tasks_file.write_text(task_yaml_with_env)
+
+        # Create manager with both files
+        manager = TaskManager("malware_classification", str(tasks_file), str(environments_file))
+
+        # Get environment spec
+        env_spec = manager.get_task_environment_spec("test_task_with_env")
+
+        # Should have environment spec since task has environment configuration
+        assert env_spec is not None
+        # The exact structure depends on environment loader, but it should be an EnvironmentSpec
+        from saber.server.execution.sandbox.environment_spec import EnvironmentSpec
+        assert isinstance(env_spec, EnvironmentSpec)
+        assert env_spec.execution_service == "execution_sandbox"
+        assert env_spec.network.name == "test_network"
+
+    def test_get_task_environment_spec_task_not_found(self, temp_tasks_file):
+        """Test getting environment spec for non-existent task."""
+        manager = TaskManager("malware_classification", temp_tasks_file)
+
+        with pytest.raises(TaskNotFoundException) as exc_info:
+            manager.get_task_environment_spec("nonexistent_task")
+
+        assert exc_info.value.task_id == "nonexistent_task"
+
     def test_get_subtask_success(self, temp_tasks_file):
         """Test successful subtask retrieval."""
         manager = TaskManager("malware_classification", temp_tasks_file)

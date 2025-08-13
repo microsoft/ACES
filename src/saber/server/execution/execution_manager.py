@@ -15,6 +15,7 @@ from ..tasks.base import Action
 from .base import CommandResult, ValidationResult
 from .executors.docker_executor import DockerExecutor
 from .executors.factory import ExecutorFactory
+from .sandbox.environment_spec import EnvironmentSpec
 from .sandbox.sandbox_manager import SandboxManager
 from .utils.security_validator import SecurityValidator
 
@@ -207,6 +208,21 @@ class ExecutionManager:
             Executor instance
         """
         return self._executor_factory.get_executor(executor_type)
+
+    def create_environment(self, session_id: str, environment_spec: EnvironmentSpec) -> None:
+        """
+        Create a sandbox environment for a session with the given specification.
+
+        Args:
+            session_id: Session identifier
+            environment_spec: Environment specification for multi-container orchestration
+        """
+        try:
+            self._sandbox_manager.create_session_environment(session_id, environment_spec)
+            logger.info(f"Created sandbox environment for session {session_id}")
+        except Exception as e:
+            logger.error(f"Failed to create environment for session {session_id}: {e}")
+            raise
 
     def cleanup_session(self, session_id: str) -> None:
         """

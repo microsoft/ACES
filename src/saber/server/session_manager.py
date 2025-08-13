@@ -201,6 +201,17 @@ class SessionManager:
         session = self._get_session(session_id)
         session.update_activity()
 
+        # Get environment specification from task
+        environment_spec = self.task_manager.get_task_environment_spec(task_id)
+        if environment_spec:
+            # Create execution environment for the task
+            try:
+                self.execution_manager.create_environment(session_id, environment_spec)
+                logger.info(f"Created execution environment for session {session_id}, task {task_id}")
+            except Exception as e:
+                logger.error(f"Failed to create execution environment for session {session_id}: {e}")
+                raise HTTPException(status_code=500, detail=f"Failed to create execution environment: {e}")
+
         # Start episode through task manager
         episode = self.task_manager.start_episode(session_id, task_id)
         session.current_episode_id = episode.episode_id

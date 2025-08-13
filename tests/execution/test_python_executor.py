@@ -40,8 +40,11 @@ class TestPythonExecutor:
         from saber.server.execution.sandbox.docker_environment import CommandResult
 
         env = MagicMock()
-        env.get_container_id.return_value = "container123456789"
-        env.execute_command = AsyncMock()
+        # Mock the new interface
+        container_mock = MagicMock()
+        container_mock.id = "container123456789"
+        env.get_execution_container.return_value = container_mock
+        env.execute_command = MagicMock()  # Not async anymore
         return env
 
     def test_initialization(self, mock_sandbox_manager):
@@ -197,8 +200,7 @@ import numpy as np
         assert result.success is True
         assert "requests" in result.data["installed_packages"]
         mock_docker_environment.execute_command.assert_called_once_with(
-            command=["pip", "install", "requests"],
-            working_dir="/workspace"
+            command=["pip", "install", "requests"]
         )
 
     @pytest.mark.asyncio

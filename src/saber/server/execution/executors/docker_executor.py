@@ -11,11 +11,12 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from ..base import CommandResult, ValidationResult
 from ..exceptions import SandboxExecutionError
+from ..sandbox.environment_spec import EnvironmentSpec, NetworkSpec
 from ..sandbox.sandbox_manager import SandboxManager
 from .base_executors import CommandExecutor
 
 if TYPE_CHECKING:
-    from ..sandbox.docker_environment import DockerExecutionEnvironment
+    from ..sandbox.docker_sandbox_environment import DockerSandboxEnvironment
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +54,7 @@ class DockerExecutor(CommandExecutor):
         self._sandbox_manager = sandbox_manager
         self._docker_config = docker_config or {}
 
-    def get_session_environment(self, session_id: str) -> "DockerExecutionEnvironment":
+    def get_session_environment(self, session_id: str) -> "DockerSandboxEnvironment":
         """
         Retrieve Docker environment for the given session.
 
@@ -61,7 +62,7 @@ class DockerExecutor(CommandExecutor):
             session_id: Session identifier
 
         Returns:
-            DockerExecutionEnvironment for the session
+            DockerSandboxEnvironment for the session
 
         Raises:
             SandboxExecutionError: If session environment cannot be retrieved
@@ -69,7 +70,14 @@ class DockerExecutor(CommandExecutor):
         try:
             environment = self._sandbox_manager.get_session_environment(session_id)
             if not environment:
-                environment = self._sandbox_manager.create_session_environment(session_id)
+                # Create a default environment spec for backward compatibility
+                default_network = NetworkSpec(name="default-network")
+                default_spec = EnvironmentSpec(
+                    network=default_network,
+                    execution_service="main",
+                    execution_config={"image": "python:3.11-slim", "working_dir": "/workspace"},
+                )
+                environment = self._sandbox_manager.create_session_environment(session_id, default_spec)
             return environment
         except Exception as e:
             raise SandboxExecutionError(f"Failed to get session environment: {e}")

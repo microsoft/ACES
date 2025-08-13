@@ -97,6 +97,35 @@ tasks:
 
 
 @pytest.fixture
+def sample_task_with_environment_yaml():
+    """Sample YAML content for task configuration with environment specification."""
+    return """
+domain: "malware_classification"
+tasks:
+  - task_id: "malware_analysis_with_env"
+    title: "Malware Analysis with Environment"
+    description: "Analyze malware sample in a multi-container environment"
+    environment: "excytin_db1"
+    initial_context:
+      sample_path: "/data/samples/unknown_sample.exe"
+      analysis_timeout: 300
+    subtasks:
+      - subtask_id: "static_analysis"
+        title: "Static Analysis"
+        description: "Perform static analysis of the malware sample"
+        objective: "Extract basic file properties, strings, and structural information"
+        completion_conditions: ["file unknown_sample.exe", "strings unknown_sample.exe"]
+        depends_on: []
+      - subtask_id: "dynamic_analysis"
+        title: "Dynamic Analysis"
+        description: "Execute sample in sandboxed environment with database"
+        objective: "Observe runtime behavior and database interactions"
+        completion_conditions: ["sandbox_run unknown_sample.exe"]
+        depends_on: ["static_analysis"]
+"""
+
+
+@pytest.fixture
 def temp_tasks_file(tmp_path, sample_task_yaml):
     """Create a temporary YAML file with task configuration."""
     tasks_file = tmp_path / "test_tasks.yaml"
