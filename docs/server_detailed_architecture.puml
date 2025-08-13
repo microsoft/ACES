@@ -182,9 +182,9 @@ package "Command Execution Framework" {
     }
 
     class SandboxManager {
-        +active_sessions: Dict[str, DockerExecutionEnvironment]
+        +active_sessions: Dict[str, DockerSandboxEnvironment]
         --
-        +create_session_environment(): DockerExecutionEnvironment
+        +create_session_environment(): DockerSandboxEnvironment
         +cleanup_session(): void
         +cleanup_all_sessions(): void
     }
@@ -315,11 +315,12 @@ Manages RL-compatible episode state transitions.
 end note
 
 note top of ExecutionManager
-**Docker Sandbox Execution Manager**
-Manages Docker-based command execution with security validation.
-Coordinates between CLI executor and sandbox management.
-Provides command listing for REST API.
-See tool_execution_architecture.puml for complete Command design.
+**Enhanced Docker Sandbox Execution Manager**
+Manages Docker-based command execution with security validation and multi-container orchestration.
+Coordinates between CLI executor and enhanced sandbox management supporting both single and multi-container environments.
+Provides command listing for REST API and handles complex task environments including target services.
+Enhanced SandboxManager supports Docker Compose for multi-service task environments (web apps, databases, etc.).
+See command_execution_architecture.puml for complete enhanced Command design.
 end note
 
 @enduml

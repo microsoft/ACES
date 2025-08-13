@@ -1,0 +1,195 @@
+@startuml Enhanced Sandbox Environment Setup Sequence
+
+!theme plain
+title SABER Enhanced Docker Sandbox Environment Setup - Multi-Container Support
+
+actor Agent
+participant "SessionManager" as SM
+participant "TaskManager" as TM
+participant "ExecutionManager" as EM
+participant "SandboxManager" as SBMGR
+participant "DockerSandboxEnvironment" as DSE
+participant "Docker Compose" as DC
+participant "Target Services" as TS
+
+== Episode Initialization with Multi-Container Environment ==
+
+Agent -> SM: POST /session/{id}/start-episode\n{task_id: "dvwa_sql_injection"}
+activate SM
+
+SM -> TM: start_episode(task_id, session_id)
+activate TM
+
+note over TM
+TaskManager loads task configuration
+including environment specification
+with target services
+end note
+
+TM -> TM: load_task_config(task_id)
+TM -> TM: extract_environment_spec()
+
+note over TM
+Environment spec includes:
+- execution container config
+- target services (DVWA + MySQL)
+- network configuration
+- resource limits
+end note
+
+TM -> EM: create_environment(session_id, environment_spec)
+activate EM
+
+EM -> SBMGR: create_session_environment(session_id, environment_spec)
+activate SBMGR
+
+SBMGR -> DSE: new DockerSandboxEnvironment(session_id, environment_spec)
+activate DSE
+
+note over DSE
+DockerSandboxEnvironment detects
+multi-container configuration and
+prepares Docker Compose setup
+end note
+
+DSE -> DSE: analyze_environment_spec()
+DSE -> DSE: is_multi_container() -> True
+
+== Multi-Container Environment Setup ==
+
+DSE -> DSE: generate_compose_config()
+
+note over DSE
+Generates docker-compose.yml with:
+- dvwa_webapp service (vulnerable web app)
+- dvwa_database service (MySQL)
+- pentesting_sandbox service (execution env)
+- Internal network with no external access
+- Health checks and dependencies
+end note
+
+DSE -> DC: docker-compose up -d
+activate DC
+
+DC -> TS: Start MySQL database
+activate TS
+
+note over TS
+MySQL container starts with:
+- DVWA database setup
+- Vulnerable configuration
+- Health checks enabled
+end note
+
+DC -> TS: Start DVWA web application
+note over TS
+DVWA container starts with:
+- Depends on database
+- Exposed on port 80 (internal network)
+- Health checks verify web server
+end note
+
+DC -> DSE: Start execution container
+note over DSE
+Pentesting sandbox starts with:
+- Network access to target services
+- Pentesting tools available
+- No external network access
+- Ready for agent commands
+end note
+
+DC -> DC: Wait for all health checks
+DC --> DSE: All services healthy
+deactivate DC
+
+DSE -> DSE: verify_environment_health()
+DSE -> DSE: get_primary_container() -> execution container
+
+DSE --> SBMGR: DockerSandboxEnvironment ready
+deactivate DSE
+
+SBMGR --> EM: Environment created successfully
+deactivate SBMGR
+
+EM --> TM: Execution environment ready
+deactivate EM
+
+TM -> TM: create_episode(task_id, session_id, environment)
+TM --> SM: Episode created with multi-container environment
+deactivate TM
+
+SM --> Agent: 200 OK\n{episode_id, environment_info}
+deactivate SM
+
+== Agent Command Execution in Enhanced Environment ==
+
+Agent -> SM: MCP tool call: execute_command("nmap dvwa_webapp")
+activate SM
+
+SM -> EM: execute_command(session_id, "nmap dvwa_webapp")
+activate EM
+
+EM -> SBMGR: get_session_environment(session_id)
+activate SBMGR
+
+SBMGR --> EM: DockerSandboxEnvironment
+deactivate SBMGR
+
+EM -> DSE: execute_command(["nmap", "dvwa_webapp"])
+activate DSE
+
+note over DSE
+Command executes in primary container
+(pentesting sandbox) with network access
+to target services via Docker Compose
+internal network
+end note
+
+DSE -> DSE: run_in_primary_container()
+DSE --> EM: CommandResult(success=True, data="Host dvwa_webapp is up...")
+deactivate DSE
+
+EM --> SM: CommandResult
+deactivate EM
+
+SM --> Agent: MCP result with nmap output
+deactivate SM
+
+== Environment Cleanup ==
+
+Agent -> SM: DELETE /session/{id}
+activate SM
+
+SM -> SBMGR: cleanup_session(session_id)
+activate SBMGR
+
+SBMGR -> DSE: stop()
+activate DSE
+
+DSE -> DC: docker-compose down --volumes
+activate DC
+
+DC -> TS: Stop and remove all containers
+deactivate TS
+
+DC -> DC: Remove networks and volumes
+DC --> DSE: Environment cleaned up
+deactivate DC
+
+DSE --> SBMGR: Cleanup complete
+deactivate DSE
+
+SBMGR --> SM: Session cleaned up
+deactivate SBMGR
+
+SM --> Agent: 200 OK - Session terminated
+deactivate SM
+
+note over Agent, DC
+Complete multi-container environment
+including target services and execution
+environment properly orchestrated and
+cleaned up via Docker Compose
+end note
+
+@enduml

@@ -64,7 +64,7 @@ package "Execution Management" {
         +_docker_config: Dict[str, Any]
         --
         {abstract} +execute(): CommandResult
-        +get_session_environment(): DockerExecutionEnvironment
+        +get_session_environment(): DockerSandboxEnvironment
         +ensure_container_ready(): void
         +cleanup_execution(): void
         +get_container_logs(): str
@@ -182,10 +182,10 @@ package "Docker Sandbox" <<stereototype S>> {
 
     class SandboxManager {
         +sandbox_config: Dict[str, Any]
-        +active_sessions: Dict[str, DockerExecutionEnvironment]
+        +active_sessions: Dict[str, DockerSandboxEnvironment]
         --
-        +create_session_environment(): DockerExecutionEnvironment
-        +get_session_environment(): Optional[DockerExecutionEnvironment]
+        +create_session_environment(): DockerSandboxEnvironment
+        +get_session_environment(): Optional[DockerSandboxEnvironment]
         +cleanup_session(): void
         +cleanup_all_sessions(): void
         +list_active_sessions(): List[str]
@@ -193,19 +193,72 @@ package "Docker Sandbox" <<stereototype S>> {
         +get_sandbox_config(): Dict[str, Any]
     }
 
-    class DockerExecutionEnvironment {
+    class DockerSandboxEnvironment {
         +session_id: str
-        +sandbox_config: Dict[str, Any]
-        +container: Container
+        +environment_spec: EnvironmentSpec
+        +compose_project: ComposeProject
         +docker_client: DockerClient
+        +compose_client: ComposeClient
+        +active_services: Dict[str, Container]
         --
         +start(): void
         +stop(): void
         +execute_command(): CommandResult
         +copy_to_container(): void
         +copy_from_container(): void
-        +get_container_id(): str
+        +get_execution_container(): Container
+        +get_service_container(service_name: str): Optional[Container]
+        +list_active_services(): List[str]
         +is_healthy(): bool
+        +is_service_healthy(service_name: str): bool
+        +get_service_info(): Dict[str, Any]
+        +get_service_logs(service_name: str): str
+        +_generate_compose_config(): Dict[str, Any]
+        +_track_service_containers(): void
+    }
+
+    class EnvironmentSpec {
+        +execution_config: Dict[str, Any]
+        +target_services: List[ServiceSpec]
+        +network_config: NetworkSpec
+        +template_name: Optional[str]
+        +overrides: Dict[str, Any]
+        --
+        +get_execution_service(): str
+        +get_all_services(): List[str]
+        +get_service_count(): int
+        +to_compose_dict(): Dict[str, Any]
+        +from_template_reference(template_name: str): EnvironmentSpec
+        +from_granular_config(config: Dict): EnvironmentSpec
+        +apply_overrides(overrides: Dict): void
+    }
+
+    class ServiceSpec {
+        +name: str
+        +image: str
+        +ports: List[str]
+        +environment: Dict[str, str]
+        +volumes: List[str]
+        +depends_on: List[str]
+        +health_check: Optional[HealthCheck]
+        --
+        +to_compose_service(): Dict[str, Any]
+    }
+
+    class NetworkSpec {
+        +mode: str
+        +isolation: str
+        +dns_config: Optional[Dict[str, Any]]
+        --
+        +to_compose_networks(): Dict[str, Any]
+    }
+
+    class HealthCheck {
+        +test: List[str]
+        +interval: str
+        +timeout: str
+        +retries: int
+        +start_period: str
     }
 }
 
@@ -220,15 +273,17 @@ ExecutionManager *-- ExecutionConfiguration
 ExecutionManager *-- SandboxManager
 
 ' Factory relationships
-ExecutorFactory ..> CLIExecutor : creates
-ExecutorFactory ..> PythonExecutor : creates
 ExecutorFactory *-- SandboxManager
 ExecutorFactory *-- ExecutionConfiguration
 
 ' Sandbox relationships
-SandboxManager *-- DockerExecutionEnvironment
+SandboxManager *-- DockerSandboxEnvironment
+DockerSandboxEnvironment *-- EnvironmentSpec
+EnvironmentSpec *-- ServiceSpec
+EnvironmentSpec *-- NetworkSpec
+ServiceSpec *-- HealthCheck
 DockerExecutor *-- SandboxManager
-DockerExecutionEnvironment ..> CommandResult
+DockerSandboxEnvironment ..> CommandResult
 
 ' Executor-specific relationships
 CLIExecutor *-- SecurityValidator
@@ -243,11 +298,11 @@ CommandExecutor ..> CommandResult
 CommandExecutor ..> ValidationResult
 
 note top of ExecutionManager
-**Docker Sandbox Execution Manager**
-Central hub for all command execution components including:
+**Docker Compose Execution Manager**
+Central hub for all command execution components:
 - Factory-based executor management for scalable executor types
 - Modular configuration management with generic configuration delegation
-- Sandbox manager for Docker container lifecycle management
+- Docker Compose orchestration for all sandbox environments
 - Dynamic MCP tool schema generation for agent discovery
 - Execution monitoring and concurrency control
 - MCP tools integration bridging executors to MCP protocol
@@ -255,38 +310,46 @@ Central hub for all command execution components including:
 - Security validation delegated to individual executors for separation of concerns
 end note
 
+note right of EnvironmentSpec
+**Task Environment Specification**
+Declarative configuration for complete task execution environment:
+- Execution container configuration (CLI tools, security settings)
+- Target service specifications (vulnerable web apps, databases, etc.)
+- Network topology and isolation requirements
+- Docker Compose orchestration for all environments
+- Health check definitions for reliable service startup
+- Service dependency declarations for proper startup ordering
+end note
+
+note bottom of SandboxManager
+**Docker Compose Sandbox Manager**
+Manages complete sandbox environments using Docker Compose orchestration:
+- Creates DockerSandboxEnvironment instances from EnvironmentSpec
+- Docker Compose orchestration for all sandbox environments
+- Session lifecycle management with proper cleanup
+- Health monitoring across all sandbox services
+- Resource tracking and limits enforcement
+- Network isolation and security boundaries
+end note
+
+note top of DockerSandboxEnvironment
+**Docker Compose Environment**
+Unified Docker Compose orchestration for all sandbox environments:
+- Always uses Docker Compose workflow (1 to many containers)
+- Tracks all service containers (execution + target services)
+- Execution service for agent command execution
+- Target services for task-specific environments
+- Per-service health monitoring and log access
+- Service discovery and network isolation
+- Health checks and dependency management
+- Unified interface regardless of service count
+end note
+
 note top of CommandExecutor
 Base command execution framework:
 - Parameter management and validation
 - MCP schema generation
 - Abstract execute method for command-specific implementation
-end note
-
-note bottom of CLIExecutor
-Docker-based CLI command implementation inheriting from DockerExecutor.
-Provides command execution in isolated Docker containers.
-Requires SandboxManager for container management.
-Security validation handled at executor level with dedicated SecurityValidator.
-Session-based container isolation with automatic cleanup.
-Extracts CLI-specific configuration using modular configuration system.
-end note
-
-note bottom of PythonExecutor
-Docker-based Python script execution inheriting from DockerExecutor.
-Supports dependency installation via pip/uv and script templates.
-Provides code validation and secure Python environment execution.
-Uses uv for Python package management and script execution.
-Extracts Python-specific configuration using modular configuration system.
-end note
-
-note right of ExecutionConfiguration
-**Modular Configuration System**
-Generic configuration management enabling scalability:
-- get_section(name) provides any configuration section
-- Executors extract their own configuration independently
-- No coupling between configuration class and specific executor types
-- Scales to support many (10s) of executor types without modification
-- Manager-level methods for execution and security settings still available
 end note
 
 @enduml

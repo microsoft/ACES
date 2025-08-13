@@ -1,0 +1,151 @@
+# Environment Template Definitions
+# Reusable container and network configurations
+
+# Container Templates
+containers:
+  # Execution environments
+  pentesting_sandbox:
+    image: "saber/pentesting-sandbox:latest"
+    working_dir: "/workspace"
+    user: "pentester:pentester"
+    tools:
+      - "nmap"
+      - "sqlmap" 
+      - "burpsuite"
+      - "metasploit"
+    resource_limits:
+      memory: "1g"
+      cpu: "0.5"
+
+  network_investigation_sandbox:
+    image: "saber/network-investigation-sandbox:latest"
+    working_dir: "/workspace"
+    user: "investigator:investigator"
+    tools:
+      - "netstat"
+      - "ss"
+      - "tcpdump"
+      - "wireshark"
+    resource_limits:
+      memory: "512m"
+      cpu: "0.5"
+
+  # Target services
+  dvwa_webapp:
+    image: "vulnerables/web-dvwa:latest"
+    ports:
+      - "80"  # Internal port only
+    environment:
+      - "SECURITY_LEVEL=low"
+    health_check:
+      test: ["CMD", "curl", "-f", "http://localhost/"]
+      interval: "30s"
+      timeout: "10s"
+      retries: 3
+      start_period: "60s"
+    depends_on:
+      - "dvwa_database"
+
+  dvwa_database:
+    image: "mysql:5.7"
+    environment:
+      - "MYSQL_ROOT_PASSWORD=dvwa"
+      - "MYSQL_DATABASE=dvwa"
+      - "MYSQL_USER=dvwa"
+      - "MYSQL_PASSWORD=password"
+    volumes:
+      - "/tmp/mysql-data:/var/lib/mysql:rw"
+    health_check:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: "30s"
+      timeout: "10s"
+      retries: 5
+      start_period: "30s"
+
+  vulnerable_ftp:
+    image: "vulnerables/ftp-server:latest"
+    ports:
+      - "21"
+      - "20"
+    environment:
+      - "FTP_USER=anonymous"
+      - "FTP_PASS=password"
+    health_check:
+      test: ["CMD", "nc", "-z", "localhost", "21"]
+      interval: "15s"
+      timeout: "5s"
+      retries: 3
+
+# Network Templates
+networks:
+  # Isolated network for pentesting scenarios
+  pentest_isolated:
+    driver: "bridge"
+    internal: true  # No external network access
+    ipam:
+      config:
+        - subnet: "172.20.0.0/16"
+    options:
+      com.docker.network.bridge.name: "pentest-br"
+
+  # Network investigation with limited external access
+  investigation_monitored:
+    driver: "bridge"
+    internal: false  # Allows external access for investigation
+    ipam:
+      config:
+        - subnet: "172.21.0.0/16"
+    options:
+      com.docker.network.bridge.name: "invest-br"
+
+  # Completely isolated network for malware analysis
+  malware_isolated:
+    driver: "bridge"
+    internal: true
+    ipam:
+      config:
+        - subnet: "172.22.0.0/16"
+    options:
+      com.docker.network.bridge.name: "malware-br"
+
+# Environment Compositions - Predefined combinations
+environments:
+  # DVWA pentesting environment
+  dvwa_pentest:
+    network: "pentest_isolated"
+    execution: "pentesting_sandbox"
+    services:
+      - name: "webapp"
+        container: "dvwa_webapp"
+      - name: "database"
+        container: "dvwa_database"
+    resource_limits:
+      total_memory: "2g"
+      total_cpu: "1.5"
+      execution_timeout: 600
+
+  # Multi-service vulnerable environment
+  full_pentest_lab:
+    network: "pentest_isolated"
+    execution: "pentesting_sandbox"
+    services:
+      - name: "dvwa_app"
+        container: "dvwa_webapp"
+      - name: "database"
+        container: "dvwa_database"
+      - name: "ftp_server"
+        container: "vulnerable_ftp"
+    resource_limits:
+      total_memory: "3g"
+      total_cpu: "2.0"
+      execution_timeout: 900
+
+  # Network investigation environment (single container)
+  network_investigation:
+    network: "investigation_monitored"
+    execution: "network_investigation_sandbox"
+    services: []  # No additional services needed
+    resource_limits:
+      total_memory: "1g"
+      total_cpu: "1.0"
+      execution_timeout: 600
