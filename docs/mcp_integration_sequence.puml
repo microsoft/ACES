@@ -1,0 +1,88 @@
+@startuml MCP Integration Workflow
+
+!theme plain
+title SABER MCP Integration - Command Execution Workflow
+
+actor Agent
+participant "ServerClient" as Client
+participant "SessionRestAPI\n(REST)" as REST
+participant "SessionMCPAPI\n(MCP Component)" as MCP
+participant "SessionManager" as SM
+participant "ExecutionManager" as EM
+participant "TaskManager" as TM
+
+== Session Initialization ==
+Agent -> Client: initialize()
+Client -> REST: POST /session
+REST -> SM: create_session()
+SM -> Client: session_id
+Client -> MCP: connect_mcp(session_id)
+MCP -> SM: map_session_context()
+MCP -> Client: mcp_connected
+
+== Episode Start ==
+Agent -> Client: start_episode(task_id)
+Client -> REST: POST /session/{id}/start-episode
+REST -> SM: start_episode()
+SM -> TM: start_episode()
+TM -> SM: episode_info
+SM -> Client: episode_started
+
+== Tool Discovery ==
+Agent -> Client: get_available_tools()
+Client -> MCP: list_tools()
+MCP -> SM: get_execution_manager()
+SM -> EM: to_mcp_tools()
+EM -> MCP: tool_schemas[]
+MCP -> Client: mcp_tools[]
+Client -> Agent: available_tools[]
+
+== Command Execution ==
+Agent -> Client: execute_command(tool_name, args)
+Client -> MCP: call_tool(tool_name, args)
+MCP -> SM: execute_command(session_id, action)
+SM -> EM: step(action, context)
+EM -> SM: command_result
+SM -> TM: step(session_id, action, result)
+TM -> SM: step_result
+SM -> MCP: execution_result
+MCP -> Client: mcp_result
+Client -> Agent: command_result
+
+== Session Cleanup ==
+Agent -> Client: close_session()
+Client -> MCP: disconnect()
+MCP -> SM: cleanup_mcp_session()
+Client -> REST: DELETE /session/{id}
+REST -> SM: terminate_session()
+SM -> Client: session_closed
+
+note right of MCP
+**SessionMCPAPI Responsibilities**
+- Tool discovery from ExecutionManager
+- Command execution delegation only
+- Session context mapping
+- Protocol translation (MCP ↔ SessionManager)
+- NO policy, session, or episode management
+end note
+
+note right of REST
+**SessionRestAPI Responsibilities**
+- Session lifecycle management
+- Episode management
+- Policy access
+- Status monitoring
+- Event streaming
+- Health checks
+end note
+
+note right of SM
+**SessionManager Coordination**
+- Unified backend for both protocols
+- Contains and manages MCP component
+- Session state management
+- Component orchestration
+- Security and validation
+end note
+
+@enduml

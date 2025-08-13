@@ -5,6 +5,8 @@ title SABER Episode Management Workflow
 actor Client
 participant "AgentUnderTest" as Agent
 participant "SessionManager" as SM
+participant "SessionRestAPI" as REST
+participant "SessionMCPAPI" as MCP
 participant "TaskManager" as TM
 participant "EpisodeManager" as EM
 participant "Task" as T
@@ -14,7 +16,8 @@ participant "ExecutionManager" as EM_EXEC
 
 == Episode Initialization ==
 
-Client -> SM: POST /session/{session_id}/start-episode\n{task_id: "malware_analysis_001"}
+Client -> REST: POST /session/{session_id}/start-episode\n{task_id: "malware_analysis_001"}
+REST -> SM: start_episode(session_id, task_id)
 SM -> TM: reset(session_id, task_id)
 TM -> EM: get_current_episode(session_id)
 EM --> TM: None (no active episode)
@@ -59,18 +62,33 @@ note right of EVAL_M
   - Configures task-specific metrics
 end note
 
-SM -> Client: HTTP 200 OK\n{episode_info, task_context, policy, guidelines, hints}
+SM -> REST: episode_info, task_context, policy, guidelines, hints
+REST -> Client: HTTP 200 OK\n{episode_info, task_context, policy, guidelines, hints}
 
 == Agent Initialization ==
 
 Client -> Agent: Prompt(task_context + policy + guidelines + hints)
 Agent --> Client: command_string
 
+== MCP Connection Setup ==
+
+Client -> MCP: connect_mcp(session_id)
+MCP -> SM: map_session_context(session_id)
+SM -> MCP: session_context
+MCP -> Client: mcp_connected
+
+Client -> MCP: list_tools()
+MCP -> SM: get_execution_manager()
+SM -> EM_EXEC: to_mcp_tools()
+EM_EXEC -> MCP: tool_schemas[]
+MCP -> Client: available_tools[]
+
 == Command Execution & RL Step ==
 
 Agent -> Agent: generate next command
-Agent -> Client: command_string
-Client -> SM: POST /session/{session_id}/step\n{command: "file malware.exe"}
+Agent -> Client: tool_call_request(tool_name: "cli", args: {command: "file malware.exe"})
+Client -> MCP: call_tool(tool_name: "cli", arguments: {command: "file malware.exe"})
+MCP -> SM: execute_command(session_id, action)
 SM -> SM: create Action(command, parameters)
 SM -> EM_EXEC: step(action)
 EM_EXEC --> SM: CommandResult
@@ -97,6 +115,15 @@ EM -> EM: update_episode_state(episode, step)
 EM --> TM: Step
 TM --> SM: Step
 
+SM -> MCP: command_result + step_info
+MCP -> Client: mcp_result(success, data, metadata)
+EM -> EM: extract command from action
+EM -> EM: create Step object
+EM -> EM: add step to episode
+EM -> EM: update_episode_state(episode, step)
+EM --> TM: Step
+TM --> SM: Step
+
 == Step Evaluation ==
 
 SM -> EVAL_M: evaluate_step(step, episode_context)
@@ -113,31 +140,31 @@ note right of EVAL_M
 end note
 
 alt if episode not complete (determined externally)
-    SM -> Client: HTTP 200 OK\n{success: true, data: {output}, step: {done: false}}
+    note over Client, Agent: Episode continues - agent processes MCP result
 else episode complete (determined externally)
-    SM -> Client: HTTP 200 OK\n{success: true, data: {output}, step: {done: true, episode_complete: true}}
+    note over Client, Agent: Episode done - agent completes current task
 end
 
 == Agent Response & Next Command Generation ==
 
-Client -> Agent: command_result + step_info
+Client -> Agent: mcp_result + step_info
 Agent -> Agent: analyze command results
 Agent -> Agent: update internal state
 Agent -> Agent: assess task progress
 
 alt if episode not complete
     Agent -> Agent: generate next command
-    Agent -> Client: command_string
+    Agent -> Client: tool_call_request
     note right of Agent
       Agent continues with next command
-      in the same episode
+      in the same episode using MCP tools
     end note
 else episode complete (step.done = true)
     Agent -> Agent: finalize episode completion
-    Client -> SM: POST /session/{session_id}/start-episode\n{task_id: "next_task_id"} [optional: start new episode]
+    Client -> REST: POST /session/{session_id}/start-episode\n{task_id: "next_task_id"} [optional: start new episode]
     note right of Client
       Client can start a new episode
-      in the same session or end session
+      in the same session or end session via REST API
     end note
 end
 
@@ -156,7 +183,10 @@ note over Client, SM
   Client terminates session when done with all work.
 end note
 
-Client -> SM: DELETE /session/{session_id}
+Client -> MCP: disconnect()
+MCP -> SM: cleanup_mcp_session()
+Client -> REST: DELETE /session/{session_id}
+REST -> SM: terminate_session(session_id)
 SM -> TM: end_episode(session_id, "session_ended") [if active episode exists]
 TM -> EM: get_current_episode(session_id)
 EM --> TM: episode [if exists]
@@ -167,21 +197,26 @@ EM -> EM: episode.completion_reason = "session_ended" [if episode exists]
 EM -> EM: delete from active_episodes [if episode exists]
 EM --> TM: episode [if exists]
 TM --> SM: episode [if exists]
-SM -> Client: HTTP 200 OK\n{message: "Session ended successfully"}
+SM -> REST: session_ended_successfully
+REST -> Client: HTTP 200 OK\n{message: "Session ended successfully"}
 Client -> Agent: cleanup()
 
 note over Client, Agent
   Clear interface boundaries:
-  - Client handles all server communication
-  - AgentUnderTest focuses on task execution
-  - Agent receives structured context and generates commands
+  - Client handles all server communication via dual protocols
+  - REST API: session management, episodes, policy access
+  - MCP API: tool discovery and command execution only
+  - AgentUnderTest focuses on task execution using MCP tools
+  - Agent receives structured context and generates tool calls
   - Client manages session lifecycle (multiple episodes per session)
-  - Episode completion signaled via step.done flag in command responses
+  - Episode completion signaled via external evaluation component
   - Sessions can contain multiple sequential episodes
   - No subtask progression tracking or state management
   - EvaluationManager provides continuous assessment of agent performance
   - Task-specific evaluation metrics are initialized at episode start
   - Step-by-step evaluation tracks trajectory and progress indicators
+  - Tool execution flows through MCP protocol for dynamic discovery
+  - Session and episode management remains on REST API
 end note
 
 @enduml

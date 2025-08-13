@@ -30,14 +30,15 @@ package "SABER Server Side" {
         +execution_manager: ExecutionManager
         +policy_manager: PolicyManager
         +evaluation_manager: EvaluationManager
-        +api: SessionAPI
+        +rest_api: SessionRestAPI
+        +mcp_api: SessionMCPAPI
         --
         +start_server(): void
         +shutdown(): void
         +create_session(): ClientSession
         +terminate_session(): void
         +start_episode(): Episode
-        +step(): SessionStepResponse
+        +execute_command(): CommandResult
         +get_current_task(): Dict[str, Any]
         +get_policy(): PolicyDocument
     }
@@ -98,15 +99,19 @@ package "SABER Client Side" {
     }
 
     class ServerClient {
-        +server_url: str
+        +rest_api_url: str
+        +mcp_api_url: str
         +session_id: str?
+        +mcp_client: MCPClient?
         --
         +create_session(): str
         +start_episode(): EpisodeInfo
-        +execute_step(): StepResponse
         +get_current_task(): TaskInfo
         +get_policy(): PolicyInfo
         +close_session(): void
+        +connect_mcp(): void
+        +list_tools(): List[MCPTool]
+        +call_tool(): MCPResult
     }
 
     class AgentWrapper {
@@ -153,7 +158,7 @@ note top of SessionManager
 - Single unified entry point for all client interactions
 - Integrates ExecutionManager for Docker sandbox command execution
 - Coordinates task execution and command processing
-- Provides REST API for command execution and task management
+- Provides dual protocol handlers: REST API for session management, MCP API for tool execution
 - Built for horizontal scaling with load balancing
 end note
 

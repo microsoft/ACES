@@ -19,38 +19,56 @@ package "Domain Server Core" {
         +execution_manager: ExecutionManager
         +policy_manager: PolicyManager
         +evaluation_manager: EvaluationManager
-        +api: SessionAPI
+        +rest_api: SessionRestAPI
+        +mcp_api: SessionMCPAPI
         --
         +start_server(): void
         +shutdown(): void
         +create_session(): ClientSession
         +terminate_session(): void
         +start_episode(): Episode
-        +step(): SessionStepResponse
+        +execute_command(): CommandResult
         +get_current_task(): Dict[str, Any]
         +get_policy(): PolicyDocument
         +_get_session(): ClientSession
     }
 
-    class SessionAPI {
-        +session_manager: SessionManager
-        +app: FastAPI
-        +host: str
-        +port: int
-        --
-        +start_server(): void
-        +get_events_stream(): StreamingResponse
-        --
-        **REST API Endpoints**
-        +POST /session
-        +DELETE /session/{id}
-        +POST /session/{id}/start-episode
-        +POST /session/{id}/step
-        +GET /session/{id}/current-task
-        +GET /session/{id}/policy
-        +GET /session/{id}/events
-        +GET /health
-        +GET /sessions
+    package "Protocol Handlers" {
+        class SessionRestAPI {
+            +session_manager: SessionManager
+            +app: FastAPI
+            +host: str
+            +port: int
+            --
+            +start_server(): void
+            +get_events_stream(): StreamingResponse
+            --
+            **REST API Endpoints**
+            +POST /session
+            +DELETE /session/{id}
+            +POST /session/{id}/start-episode
+            +GET /session/{id}/current-task
+            +GET /session/{id}/policy
+            +GET /session/{id}/events
+            +GET /health
+            +GET /sessions
+        }
+
+        class SessionMCPAPI {
+            +session_manager: SessionManager
+            +mcp_server: FastMCPServer
+            +active_mcp_sessions: Dict[str, str]
+            +host: str
+            +port: int
+            --
+            +start_mcp_server(): void
+            +shutdown_mcp_server(): void
+            +handle_list_tools(): List[MCPTool]
+            +handle_call_tool(): MCPResult
+            +_map_session_context(): Dict[str, Any]
+            +_convert_to_action(): Action
+            +_convert_to_mcp_result(): MCPResult
+        }
     }
 
     class ClientSession {
@@ -229,9 +247,11 @@ SessionManager *-- TaskManager
 SessionManager *-- ExecutionManager
 SessionManager *-- PolicyManager
 SessionManager *-- EvaluationManager
-SessionManager *-- SessionAPI
+SessionManager *-- SessionRestAPI
+SessionManager *-- SessionMCPAPI
 
-SessionAPI ..> SessionManager : delegates to
+SessionRestAPI ..> SessionManager : delegates to
+SessionMCPAPI ..> SessionManager : delegates to
 
 TaskManager *-- EpisodeManager
 TaskManager *-- Task
@@ -258,22 +278,33 @@ note top of SessionManager
 - Handles server lifecycle (start/shutdown)
 - Coordinates all server components
 - Built for horizontal scaling with load balancing
-- Provides REST API for command execution and task management
+- Provides dual protocol handlers: REST API for session management, MCP API for tool execution
 end note
+
+note left of SessionMCPAPI
+**MCP Protocol Handler**
+- Hosts Model Context Protocol server for agent tool access
+- Dynamically discovers tools from ExecutionManager
+- Maps MCP tool calls to SessionManager command execution
+- Maintains session context mapping for MCP clients
+- ONLY handles tool discovery and execution via MCP protocol
+- Complements REST API which handles all other operations
+end note
+
+note right of SessionRestAPI
+**REST Protocol Handler**
+- FastAPI-based REST endpoints for session management
+- Handles session lifecycle, episodes, policy access
+- Server-Sent Events for real-time updates
+- OpenAPI documentation generation
+- Delegates all business logic to SessionManager
+end note
+
 note top of TaskManager
 **Task Orchestrator**
 Coordinates task loading and episode management.
 Provides RL gym-style interfaces (step, reset).
-Simplified to focus on coordination between components.
 See task_framework_architecture.puml for detailed Task design.
-end note
-
-note left of Task
-**Simplified Task Definition**
-Tasks contain basic task information and subtasks for reference.
-No progression logic, dependency validation, or state tracking.
-Subtasks are purely informational elements returned at episode start.
-See task_framework_architecture.puml for complete Task framework.
 end note
 
 note top of EpisodeManager

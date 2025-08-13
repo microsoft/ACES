@@ -14,6 +14,7 @@ The SABER system architecture is documented in several PlantUML diagrams:
 - **[Command Execution Architecture](command_execution_architecture.puml)**: Detailed Command Execution framework design
 - **[Episode Workflow Sequence](episode_workflow_sequence.puml)**: Episode lifecycle and RL workflow
 - **[Client Architecture](client_architecture.puml)**: Client side architecture responsible for attaching to agent and facilitating comms with server
+- **[MCP Integration Sequence](mcp_integration_sequence.puml)**: Model Context Protocol integration workflow and dual protocol communication
 
 ### Package Management
 
@@ -38,12 +39,20 @@ The central orchestrator for each security domain, responsible for:
 - **Domain Hosting**: Provides single-domain server instances designed for horizontal scaling behind load balancers
 - **Server Lifecycle**: Handles startup, shutdown, and resource cleanup across all active sessions
 
-#### SessionAPI
-REST API layer that handles HTTP endpoints and delegates to SessionManager:
-- **HTTP Endpoints**: FastAPI-based REST API with endpoints for session management, task execution, and status monitoring
-- **Server-Sent Events**: Real-time streaming updates for session events and command execution progress
+#### SessionRestAPI
+REST protocol handler that processes HTTP endpoints and delegates to SessionManager:
+- **HTTP Endpoints**: FastAPI-based REST API with endpoints for session management, episode management, and status monitoring
+- **Server-Sent Events**: Real-time streaming updates for session events and command execution progress  
 - **Request Delegation**: Converts HTTP requests to SessionManager method calls with proper error handling
 - **API Documentation**: Auto-generated OpenAPI/Swagger documentation for client integration
+
+#### SessionMCPAPI
+Model Context Protocol handler component managed by SessionManager:
+- **MCP Server**: Hosts MCP server alongside REST API for agent tool execution only
+- **Dynamic Tool Discovery**: Provides real-time tool schemas from ExecutionManager
+- **Tool Execution**: Maps MCP tool calls to SessionManager command execution pipeline
+- **Session Context**: Maintains session mapping between MCP clients and SessionManager sessions
+- **Focused Scope**: ONLY handles tool discovery and execution via MCP protocol
 
 #### TaskManager
 Orchestrator for task management:
@@ -122,10 +131,12 @@ Context-aware prompt generation:
 
 ### Connection Flow
 
-1. Client connects to SessionManager via HTTP
+1. Client connects to SessionManager via HTTP for session management
 2. SessionManager creates ClientSession and delegates TaskSession creation to TaskManager
-3. Establishes SSE connection for real-time communication
-4. SessionManager coordinates with TaskManager to assign initial subtask with context
-5. Client executes subtask using commands via SessionManager unified API
-6. Results logged via EvaluationManager and next subtask assigned via TaskManager
-7. Process continues until task completion
+3. Client establishes MCP connection to MCPSessionManager for tool access
+4. Establishes SSE connection for real-time communication
+5. SessionManager coordinates with TaskManager to assign initial subtask with context
+6. Client discovers available tools via MCP protocol and executes commands through MCP tool calls
+7. MCPSessionManager delegates tool execution to SessionManager's ExecutionManager
+8. Results logged via EvaluationManager and next subtask assigned via TaskManager
+9. Process continues until task completion with dual protocol communication
