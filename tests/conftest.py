@@ -16,7 +16,7 @@ from unittest.mock import patch, Mock
 
 from saber.server.execution.base import CommandResult, Parameter, ParameterType
 from saber.server.execution.executors.base_executors import CommandExecutor
-from saber.server.execution.executors.cli import DockerCLIExecutor
+from saber.server.execution.executors.cli import CLIExecutor
 from saber.server.execution.utils.security_validator import SecurityValidator
 from saber.server.execution.execution_manager import ExecutionManager
 

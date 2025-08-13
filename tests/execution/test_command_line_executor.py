@@ -10,14 +10,14 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch, call
 
 from saber.server.execution.base import CommandResult, ValidationResult
-from saber.server.execution.executors.cli import DockerCLIExecutor
+from saber.server.execution.executors.cli import CLIExecutor
 from saber.server.execution.utils.security_validator import SecurityValidator
 from saber.server.execution.sandbox.sandbox_manager import SandboxManager
 from saber.server.execution.exceptions import SandboxExecutionError
 
 
-class MockDockerCLIExecutor(DockerCLIExecutor):
-    """Mock implementation for testing DockerCLIExecutor."""
+class MockCLIExecutor(CLIExecutor):
+    """Mock implementation for testing CLIExecutor."""
 
     def __init__(self, sandbox_manager, command="echo", **kwargs):
         super().__init__(sandbox_manager=sandbox_manager, **kwargs)
@@ -67,15 +67,16 @@ class TestDockerCLIExecutor:
     @pytest.fixture
     def executor(self, mock_sandbox_manager):
         """Create a DockerCLIExecutor instance for testing."""
-        return MockDockerCLIExecutor(
+        return MockCLIExecutor(
             sandbox_manager=mock_sandbox_manager,
             command="echo",
-            timeout=30.0
+            timeout=30.0,
+            allowed_commands=["echo", "rm", "cat", "file"]
         )
 
     def test_initialization(self, mock_sandbox_manager):
         """Test executor initialization."""
-        executor = MockDockerCLIExecutor(
+        executor = MockCLIExecutor(
             sandbox_manager=mock_sandbox_manager,
             command="test_cmd",
             timeout=60.0
@@ -86,7 +87,7 @@ class TestDockerCLIExecutor:
 
     def test_initialization_validates_base_command(self, mock_sandbox_manager):
         """Test that initialization works properly."""
-        executor = MockDockerCLIExecutor(
+        executor = MockCLIExecutor(
             sandbox_manager=mock_sandbox_manager,
             command="safe_cmd"
         )
@@ -104,7 +105,7 @@ class TestDockerCLIExecutor:
         """Test successful command execution in Docker environment."""
         from saber.server.execution.sandbox.docker_environment import CommandResult
 
-        parameters = {"arg1": "hello", "arg2": "world"}
+        parameters = {"command": "echo hello world"}
         context = {"session_id": "test123"}
 
         # Mock Docker environment execution
@@ -129,24 +130,22 @@ class TestDockerCLIExecutor:
 
     @pytest.mark.asyncio
     async def test_execute_security_validation_failure(self, executor, mock_sandbox_manager):
-        """Test execution when command building fails."""
+        """Test execution when security validation fails."""
         parameters = {"command": "rm -rf /"}
         context = {"session_id": "test123"}
 
-        # Mock build_command to raise an exception
-        with patch.object(executor, 'build_command', side_effect=ValueError("Invalid command")):
-            result = await executor.execute(parameters, context)
+        result = await executor.execute(parameters, context)
 
         assert result.success is False
-        assert "Docker command execution failed" in result.error
-        assert "Invalid command" in result.error
+        assert "security validation failed" in result.error.lower()
+        assert "dangerous pattern detected" in result.error.lower()
 
     @pytest.mark.asyncio
     async def test_execute_command_failure(self, executor, mock_sandbox_manager):
         """Test execution when command returns non-zero exit code."""
         from saber.server.execution.sandbox.docker_environment import CommandResult
 
-        parameters = {"arg": "invalid"}
+        parameters = {"command": "invalid_command"}
         context = {"session_id": "test123"}
 
         # Mock Docker environment execution with failure
@@ -173,7 +172,7 @@ class TestDockerCLIExecutor:
     @pytest.mark.asyncio
     async def test_execute_missing_session_id(self, executor, mock_sandbox_manager):
         """Test execution failure when session_id is missing."""
-        parameters = {"arg": "test"}
+        parameters = {"command": "echo test"}
         context = {}  # Missing session_id
 
         result = await executor.execute(parameters, context)
@@ -184,7 +183,7 @@ class TestDockerCLIExecutor:
     @pytest.mark.asyncio
     async def test_execute_exception_handling(self, executor, mock_sandbox_manager):
         """Test handling of unexpected exceptions during execution."""
-        parameters = {"arg": "test"}
+        parameters = {"command": "echo test"}
         context = {"session_id": "test123"}
 
         # Mock Docker environment to raise exception
@@ -205,7 +204,7 @@ class TestDockerCLIExecutor:
         """Test that new session environment is created when needed."""
         from saber.server.execution.sandbox.docker_environment import CommandResult
 
-        parameters = {"arg": "test"}
+        parameters = {"command": "echo test"}
         context = {"session_id": "new_session"}
 
         # First call returns None (no existing environment)
@@ -233,18 +232,18 @@ class TestDockerCLIExecutor:
         mock_sandbox_manager.create_session_environment.assert_called_once_with("new_session")
 
     def test_sandbox_manager_requirement(self):
-        """Test that DockerCLIExecutor requires sandbox manager."""
+        """Test that CLIExecutor requires sandbox manager."""
         with pytest.raises(SandboxExecutionError, match="sandbox_manager is required"):
-            MockDockerCLIExecutor(sandbox_manager=None)
+            MockCLIExecutor(sandbox_manager=None)
 
     def test_get_security_info_with_sandbox_config(self, executor):
         """Test that security info includes sandbox configuration."""
         info = executor.get_security_info()
 
         assert info["execution_environment"] == "docker_container"
-        assert "sandbox_config" in info
+        assert "docker_config" in info
 
-        sandbox_config = info["sandbox_config"]
-        assert sandbox_config["image"] == "saber/base-sandbox:latest"
-        assert sandbox_config["network_mode"] == "none"
-        assert sandbox_config["read_only_root"] is True
+        docker_config = info["docker_config"]
+        assert docker_config["image"] == "saber/base-sandbox:latest"
+        assert docker_config["network_mode"] == "none"
+        assert docker_config["read_only_root"] is True

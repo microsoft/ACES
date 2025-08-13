@@ -10,14 +10,14 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
 from saber.server.execution.base import ParameterType, ValidationResult
-from saber.server.execution.executors.cli import DockerCLIExecutor
+from saber.server.execution.executors.cli import CLIExecutor
 from saber.server.execution.utils.security_validator import SecurityValidator
 from saber.server.execution.sandbox.sandbox_manager import SandboxManager
 from saber.server.execution.exceptions import SandboxExecutionError
 
 
-class TestDockerCLI:
-    """Test cases for Docker CLI tool executor."""
+class TestCLIExecutor:
+    """Test cases for CLI executor."""
 
     @pytest.fixture
     def mock_security_validator(self):
@@ -42,12 +42,20 @@ class TestDockerCLI:
 
     @pytest.fixture
     def docker_cli_tool(self, mock_sandbox_manager):
-        """Create a Docker CLI tool instance for testing."""
-        return DockerCLIExecutor(sandbox_manager=mock_sandbox_manager, timeout=30.0)
+        """Create a CLI executor instance for testing."""
+        return CLIExecutor(
+            sandbox_manager=mock_sandbox_manager,
+            timeout=30.0,
+            allowed_commands=["file", "strings", "echo", "cat"]
+        )
 
     def test_initialization(self, mock_sandbox_manager):
-        """Test Docker CLI tool initialization."""
-        cli = DockerCLIExecutor(sandbox_manager=mock_sandbox_manager, timeout=60.0)
+        """Test CLI executor initialization."""
+        cli = CLIExecutor(
+            sandbox_manager=mock_sandbox_manager,
+            timeout=60.0,
+            allowed_commands=["file", "strings"]
+        )
 
         assert cli.get_timeout() == 60.0
 
@@ -71,7 +79,7 @@ class TestDockerCLI:
     def test_initialization_without_sandbox_manager(self):
         """Test that initialization fails without sandbox manager."""
         with pytest.raises(SandboxExecutionError, match="sandbox_manager is required"):
-            DockerCLIExecutor(sandbox_manager=None, timeout=60.0)
+            CLIExecutor(sandbox_manager=None, timeout=60.0, allowed_commands=[])
 
     def test_security_command_metadata(self, docker_cli_tool):
         """Test that security command metadata is properly set."""
@@ -298,17 +306,17 @@ class TestDockerCLI:
 
         assert security_info["execution_environment"] == "docker_container"
         assert security_info["timeout"] == 30.0
-        assert "sandbox_config" in security_info
+        assert "docker_config" in security_info
 
-        sandbox_config = security_info["sandbox_config"]
-        assert sandbox_config["image"] == "saber/base-sandbox:latest"
-        assert sandbox_config["network_mode"] == "none"
-        assert sandbox_config["read_only_root"] is True
-        assert sandbox_config["user"] == "tooluser:tooluser"
+        docker_config = security_info["docker_config"]
+        assert docker_config["image"] == "saber/base-sandbox:latest"
+        assert docker_config["network_mode"] == "none"
+        assert docker_config["read_only_root"] is True
+        assert docker_config["user"] == "tooluser:tooluser"
 
 
-class TestDockerCLIExecutorIntegration:
-    """Integration tests for Docker CLI executor with mocked Docker environment."""
+class TestCLIExecutorIntegration:
+    """Integration tests for CLI executor with mocked Docker environment."""
 
     @pytest.fixture
     def mock_docker_environment(self):
@@ -336,8 +344,12 @@ class TestDockerCLIExecutorIntegration:
 
     @pytest.fixture
     def docker_cli_tool_with_env(self, mock_sandbox_manager_with_env):
-        """Create a Docker CLI tool with mocked environment."""
-        return DockerCLIExecutor(sandbox_manager=mock_sandbox_manager_with_env, timeout=30.0)
+        """Create a CLI executor with mocked environment."""
+        return CLIExecutor(
+            sandbox_manager=mock_sandbox_manager_with_env,
+            timeout=30.0,
+            allowed_commands=["file", "strings", "echo", "cat"]
+        )
 
     @pytest.mark.asyncio
     async def test_execute_docker_integration_success(self, docker_cli_tool_with_env, mock_sandbox_manager_with_env):
@@ -380,7 +392,7 @@ class TestDockerCLIExecutorIntegration:
 
         command_result = CommandResult(
             exit_code=0,
-            stdout="file1.txt\nfile2.txt\n",
+            stdout="hello world\n",
             stderr="",
             execution_time=1.2
         )
@@ -388,17 +400,17 @@ class TestDockerCLIExecutorIntegration:
         env = mock_sandbox_manager_with_env.get_session_environment.return_value
         env.execute_command.return_value = command_result
 
-        parameters = {"command": "ls *.txt | sort", "shell": True}
+        parameters = {"command": "echo hello world", "shell": True}
         context = {"session_id": "shell_test_session"}
 
         result = await docker_cli_tool_with_env.execute(parameters, context)
 
         assert result.success is True
-        assert result.data["stdout"] == "file1.txt\nfile2.txt\n"
+        assert result.data["stdout"] == "hello world\n"
 
         # Verify shell command was constructed correctly
         env.execute_command.assert_called_once_with(
-            command=["/bin/sh", "-c", "ls *.txt | sort"],
+            command=["/bin/sh", "-c", "echo hello world"],
             working_dir="/workspace"
         )
 

@@ -2,23 +2,24 @@
 Docker-based Command Line Interface executor for executing validated shell commands.
 
 This module provides a secure CLI executor that accepts command strings over the MCP protocol
-and executes them in Docker containers. Security validation is performed at the
-ExecutionManager level before execution reaches this class.
+and executes them in Docker containers. Security validation is performed at the executor level
+before execution.
 """
 
 import logging
 import shlex
 from typing import Any, Dict, List, Optional
 
-from ..base import CommandResult, Parameter, ParameterType
+from ..base import CommandResult, Parameter, ParameterType, ValidationResult
 from ..exceptions import SandboxExecutionError
 from ..sandbox.sandbox_manager import SandboxManager
-from .base_executors import CommandExecutor
+from ..utils.security_validator import SecurityValidator
+from .docker_executor import DockerExecutor
 
 logger = logging.getLogger(__name__)
 
 
-class DockerCLIExecutor(CommandExecutor):
+class CLIExecutor(DockerExecutor):
     """
     Docker-based CLI executor for secure command execution in containers.
 
@@ -43,7 +44,11 @@ class DockerCLIExecutor(CommandExecutor):
     }
 
     def __init__(
-        self, sandbox_manager: SandboxManager, cli_config: Optional[Dict[str, Any]] = None, **kwargs: Any
+        self,
+        sandbox_manager: SandboxManager,
+        cli_config: Optional[Dict[str, Any]] = None,
+        allowed_commands: Optional[List[str]] = None,
+        **kwargs: Any,
     ) -> None:
         """
         Initialize Docker CLI executor.
@@ -51,19 +56,18 @@ class DockerCLIExecutor(CommandExecutor):
         Args:
             sandbox_manager: Required sandbox manager for Docker execution
             cli_config: Optional CLI configuration dictionary
+            allowed_commands: Optional list of allowed commands for security validation
             **kwargs: Additional arguments passed to parent
 
         Raises:
             SandboxExecutionError: If sandbox_manager is None or invalid
         """
-        super().__init__(**kwargs)
+        super().__init__(sandbox_manager=sandbox_manager, docker_config=cli_config, **kwargs)
 
-        # Require sandbox manager - no fallback to local execution
-        if sandbox_manager is None:
-            raise SandboxExecutionError("sandbox_manager is required for Docker execution")
-
-        self._sandbox_manager = sandbox_manager
         cli_config = cli_config or {}
+
+        # Initialize security validator for this executor
+        self._security_validator = SecurityValidator(allowed_commands=allowed_commands)
 
         # Add parameter for the command string
         self.add_parameter(
@@ -172,6 +176,48 @@ class DockerCLIExecutor(CommandExecutor):
 
             return CommandResult.error_result(error=error_msg, metadata={**metadata, "raw_data": result_data})
 
+    def validate_parameters(self, parameters: Dict[str, Any]) -> ValidationResult:
+        """
+        Validate parameters including security validation for CLI commands.
+
+        Args:
+            parameters: Tool parameters to validate
+
+        Returns:
+            ValidationResult with validation details
+        """
+        # First do basic parameter validation from parent
+        basic_validation = super().validate_parameters(parameters)
+        if not basic_validation.valid:
+            return basic_validation
+
+        # Extract command for security validation
+        command = parameters.get("command", "")
+        if not command or not isinstance(command, str):
+            return ValidationResult.failure(["Command parameter is required and must be a string"])
+
+        # Perform security validation on the command
+        try:
+            command_args = shlex.split(command.strip())
+            if not command_args:
+                return ValidationResult.failure(["Command cannot be empty"])
+
+            security_validation = self._security_validator.validate_full_command(command_args)
+            if not security_validation.valid:
+                return ValidationResult.failure(
+                    [f"Command security validation failed: {', '.join(security_validation.errors)}"]
+                )
+
+            # Add any security warnings to the validation result
+            if security_validation.warnings:
+                for warning in security_validation.warnings:
+                    basic_validation.add_warning(warning)
+
+            return basic_validation
+
+        except ValueError as e:
+            return ValidationResult.failure([f"Failed to parse command: {str(e)}"])
+
     async def execute(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> CommandResult:
         """
         Execute the command-line tool in Docker container.
@@ -184,19 +230,29 @@ class DockerCLIExecutor(CommandExecutor):
             CommandResult with execution results
 
         Note:
-            Security validation is performed at the ExecutionManager level
-            before this method is called. All execution happens in Docker containers.
+            Security validation is performed at this executor level before execution.
+            All execution happens in Docker containers.
         """
         try:
+            # Validate parameters including security validation
+            validation_result = self.validate_parameters(parameters)
+            if not validation_result.valid:
+                return CommandResult.error_result(
+                    error=f"Parameter validation failed: {', '.join(validation_result.errors)}"
+                )
+
+            # Log any security warnings
+            if validation_result.warnings:
+                for warning in validation_result.warnings:
+                    logger.warning(f"CLI security warning: {warning}")
+
             # Extract session ID from context
             session_id = context.get("session_id")
             if not session_id:
                 raise SandboxExecutionError("session_id required in context for Docker execution")
 
-            # Get or create Docker environment for session
-            environment = self._sandbox_manager.get_session_environment(session_id)
-            if not environment:
-                environment = self._sandbox_manager.create_session_environment(session_id)
+            # Get Docker environment for session (inherited from DockerExecutor)
+            environment = self.get_session_environment(session_id)
 
             # Build command
             command_args = self.build_command(parameters, context)
@@ -224,33 +280,10 @@ class DockerCLIExecutor(CommandExecutor):
 
     def get_security_info(self) -> Dict[str, Any]:
         """
-        Get information about security settings including sandbox info.
+        Get information about security settings including Docker info.
 
         Returns:
             Dictionary with security configuration
         """
-        base_info: Dict[str, Any] = {
-            "execution_environment": "docker_container",
-            "timeout": self.get_timeout(),
-        }
-
-        try:
-            sandbox_config = self._sandbox_manager.get_sandbox_config()
-            sandbox_info: Dict[str, Any] = {}
-
-            if sandbox_config.get("image"):
-                sandbox_info["image"] = str(sandbox_config["image"])
-            if sandbox_config.get("network_mode"):
-                sandbox_info["network_mode"] = str(sandbox_config["network_mode"])
-            if sandbox_config.get("read_only_root") is not None:
-                sandbox_info["read_only_root"] = bool(sandbox_config["read_only_root"])
-            if sandbox_config.get("user"):
-                sandbox_info["user"] = str(sandbox_config["user"])
-            if sandbox_config.get("resource_limits"):
-                sandbox_info["resource_limits"] = dict(sandbox_config["resource_limits"])
-
-            base_info["sandbox_config"] = sandbox_info
-        except Exception as e:
-            logger.warning(f"Could not retrieve sandbox config: {e}")
-
-        return base_info
+        # Get Docker-specific information from parent class
+        return self.get_docker_info()

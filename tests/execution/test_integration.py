@@ -1,7 +1,7 @@
 """
 Integration tests for the Docker-based tool execution framework.
 
-Tests integration between DockerDockerCLIExecutor, SandboxManager,
+Tests integration between CLIExecutor, SandboxManager,
 SecurityValidator, and ExecutionManager working together in Docker containers.
 """
 
@@ -13,7 +13,8 @@ from unittest.mock import patch, AsyncMock, MagicMock
 from saber.server.execution.execution_manager import ExecutionManager, ExecutionConfiguration
 from saber.server.execution.base import CommandResult, ValidationResult
 from saber.server.execution.utils.security_validator import SecurityValidator
-from saber.server.execution.executors.cli import DockerCLIExecutor
+from saber.server.execution.executors.cli import CLIExecutor
+from saber.server.execution.executors.factory import ExecutorFactory
 from saber.server.execution.sandbox.sandbox_manager import SandboxManager
 from saber.server.tasks.base import Action
 
@@ -210,20 +211,33 @@ class TestToolsIntegration:
         """Test MCP tools format integration."""
         mcp_tools = registry.to_mcp_tools()
 
-        assert len(mcp_tools) == 1
-        cli_tool = mcp_tools[0]
+        assert len(mcp_tools) == 2  # CLI and Python executors
 
-        # Verify MCP format compliance
-        assert cli_tool["name"] == "docker_cli"
+        # Find CLI and Python tools
+        cli_tool = next(tool for tool in mcp_tools if "cli" in tool["name"])
+        python_tool = next(tool for tool in mcp_tools if "python" in tool["name"])
+
+        # Verify MCP format compliance for CLI tool
         assert "description" in cli_tool
         assert "inputSchema" in cli_tool
 
-        schema = cli_tool["inputSchema"]
-        assert schema["type"] == "object"
-        assert "properties" in schema
-        assert "required" in schema
-        assert "command" in schema["properties"]
-        assert "command" in schema["required"]
+        cli_schema = cli_tool["inputSchema"]
+        assert cli_schema["type"] == "object"
+        assert "properties" in cli_schema
+        assert "required" in cli_schema
+        assert "command" in cli_schema["properties"]
+        assert "command" in cli_schema["required"]
+
+        # Verify MCP format compliance for Python tool
+        assert "description" in python_tool
+        assert "inputSchema" in python_tool
+
+        python_schema = python_tool["inputSchema"]
+        assert python_schema["type"] == "object"
+        assert "properties" in python_schema
+        assert "required" in python_schema
+        assert "code" in python_schema["properties"]
+        assert "code" in python_schema["required"]
 
     @pytest.mark.asyncio
     async def test_parameter_validation_integration(self, registry):
@@ -379,14 +393,19 @@ sandbox:
         # Verify all components exist and are correct types
         assert hasattr(registry, '_configuration')
         assert hasattr(registry, '_security_validator')
-        assert hasattr(registry, '_cli_tool')
+        assert hasattr(registry, '_executor_factory')
         assert hasattr(registry, '_sandbox_manager')
         assert hasattr(registry, '_semaphore')
 
         # Verify component types
         assert isinstance(registry._configuration, ExecutionConfiguration)
         assert isinstance(registry._security_validator, SecurityValidator)
-        assert isinstance(registry._cli_tool, DockerCLIExecutor)
+
+        # Verify executor factory has CLI capability
+        available_executors = registry._executor_factory.get_available_executors()
+        assert 'cli' in available_executors
+        assert 'python' in available_executors
+
         assert isinstance(registry._sandbox_manager, SandboxManager)
 
     @pytest.mark.asyncio

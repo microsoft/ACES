@@ -1,54 +1,92 @@
-# SABER Docker Sandbox Execution Manager and Security Framework
+# SABER Docker Sandbox Execution Manager and Hierarchical Executor Framework
 
-This module provides a Docker container-based command execution system with comprehensive security validation, designed to safely execute command-line commands through MCP integration while providing complete isolation and preventing security vulnerabilities.
+This module provides a Docker container-based command execution system with comprehensive security validation and a scalable executor hierarchy, designed to safely execute multiple types of commands (CLI and Python) through MCP integration while providing complete isolation and preventing security vulnerabilities.
 
 ## Architecture
 
 ```
-src/saber/server/tools/
-├── execution_manager.py       # Main ExecutionManager with ExecutionConfiguration
-├── base.py                    # result types
-├── exceptions.py              # Tool related exceptions
-├── executors/                 # Command execution frameworks
-│   ├── base_executors.py      # ToolExecutor
-│   └── cli.py                 # DockerCLIExecutor tool implementation
-├── sandbox/                   # Docker container management
-│   ├── sandbox_manager.py     # SandboxManager for container lifecycle
-│   └── docker_environment.py  # DockerExecutionEnvironment implementation
-└── utils/                     # Security utilities
-    ├── security_validator.py  # Comprehensive security validation
-    └── security_constants.py  # Security validation patterns and limits
+src/saber/server/execution/
+├── execution_manager.py       # Main ExecutionManager with ExecutorFactory
+├── base.py                    # Result types and base classes
+├── exceptions.py              # Execution related exceptions
+├── executors/                 # Hierarchical executor framework
+│   ├── base.py               # CommandExecutor base class
+│   ├── docker_executor.py   # DockerExecutor abstract base for Docker-based executors
+│   ├── cli.py               # CLIExecutor for shell command execution
+│   ├── python_executor.py   # PythonExecutor for Python script execution
+│   └── factory.py           # ExecutorFactory for scalable executor management
+├── sandbox/                  # Docker container management
+│   ├── sandbox_manager.py   # SandboxManager for container lifecycle
+│   └── docker_environment.py # DockerExecutionEnvironment implementation
+└── utils/                    # Security utilities
+    ├── security_validator.py # Comprehensive security validation
+    └── security_constants.py # Security validation patterns and limits
 ```
 
 ## Key Components
 
 ### ExecutionManager (`execution_manager.py`)
-Main execution manager for Docker-based CLI command execution with MCP integration:
-- **Single Docker CLI Tool**: Manages one DockerCLIExecutor instance for containerized command execution
+Main execution manager using factory pattern for scalable executor management:
+- **ExecutorFactory Integration**: Uses ExecutorFactory for dynamic executor selection and creation
+- **Multiple Executor Types**: Supports CLI and Python execution with easy extensibility
 - **Sandbox Manager**: Integrates SandboxManager for Docker container lifecycle management
-- **Security Validation**: Performs security validation at execution manager level before execution
+- **Modular Configuration**: Uses ExecutionConfiguration with generic configuration delegation
+- **Delegated Security**: Security validation handled by individual executors for separation of concerns
 - **Concurrency Control**: Built-in semaphore for limiting concurrent executions
-- **MCP Integration**: Direct conversion to Model Context Protocol format
-- **Configuration Management**: Uses ExecutionConfiguration for settings management including sandbox config
+
+### ExecutorFactory (`executors/factory.py`)
+Factory pattern implementation for scalable executor management:
+- **Registry System**: Maintains registry of available executor types for easy extensibility
+- **Dynamic Creation**: Creates appropriate executors based on command analysis
+- **Command Analysis**: Intelligent routing of commands to appropriate executor types
+- **MCP Aggregation**: Combines MCP schemas from all registered executors
+- **Scalable Design**: Supports adding many of executor types through registration
+
+### Executor Hierarchy
+
+#### CommandExecutor (`executors/base.py`)
+Base class for all command executors:
+- **Parameter Management**: Common parameter handling and validation framework
+- **MCP Schema Generation**: Abstract method for generating MCP tool schemas
+- **Timeout Management**: Configurable execution timeouts
+- **Result Standardization**: Consistent CommandResult return types
+
+#### DockerExecutor (`executors/docker_executor.py`)
+Abstract base class for Docker-based executors:
+- **Docker Integration**: Shared Docker container management functionality
+- **Session Environment**: Session-based container environment management
+- **Container Health**: Container readiness and health checking
+- **Security Info**: Docker-specific security information reporting
+
+#### CLIExecutor (`executors/cli.py`)
+Docker-based shell command executor:
+- **Shell Command Execution**: Executes shell commands in isolated Docker containers
+- **Integrated Security Validation**: Each executor manages its own SecurityValidator for separation of concerns
+- **Modular Configuration**: Extracts CLI-specific settings using `configuration.get_section("cli")`
+- **Command Building**: Parses command strings into safe execution arguments
+- **Session-based Containers**: Each session gets dedicated container environment
+- **Shell Mode Support**: Configurable shell vs direct command execution
+- **Output Parsing**: Structured parsing of command output and errors
+
+#### PythonExecutor (`executors/python_executor.py`)
+Docker-based Python script executor:
+- **Python Script Execution**: Executes Python code in isolated Docker containers using uv
+- **Modular Configuration**: Extracts Python-specific settings using `configuration.get_section("python")`
+- **Dependency Management**: Automatic installation of Python packages via pip/uv
+- **Code Validation**: Security validation of Python code before execution
+- **Script Templates**: Template-based script generation for consistent execution environment
+- **Module Restrictions**: Configurable allowed modules for security
 
 ### ExecutionConfiguration
-Configuration management for Docker-based CLI command execution:
+**Modular configuration management for multi-executor command execution:**
+- **Generic Section Access**: `get_section(name)` provides any configuration section for executor-specific configs
+- **Executor Independence**: Each executor extracts its own configuration independently using `get_section()`
+- **Scalable Design**: No coupling between configuration class and specific executor types
+- **Manager-level Settings**: Execution timeout, concurrency, and security settings for manager use
 - **YAML Support**: Load configuration from YAML files
-- **Execution Settings**: Timeout and concurrency configuration
-- **Security Settings**: Allowed commands and validation limits
-- **CLI Options**: CLI-specific configuration options
-- **Sandbox Configuration**: Docker container settings and security options
+- **Dynamic Extensibility**: Supports adding new executor types without modifying configuration class
 
-### DockerCLIExecutor Tool (`executors/cli.py`)
-Secure command-line interface executing in Docker containers:
-- **Docker Container Execution**: All commands executed in isolated Docker containers
-- **Session-based Containers**: Each session gets dedicated container environment
-- **Command Building**: Parses command strings into safe execution arguments
-- **Parameter Support**: Accepts command string and shell mode parameters
-- **Configuration Integration**: Accepts CLI configuration for parameter defaults
-- **Output Parsing**: Structured parsing of command output and errors
-- **MCP Schema Generation**: Generates own parameter schema for MCP integration
-- **Sandbox Manager Integration**: Requires SandboxManager for container management
+The modular configuration system allows unlimited executor types to be added without changing the core configuration management. Each executor calls `configuration.get_section("executor_name")` to extract its specific settings.
 
 ### SandboxManager (`sandbox/sandbox_manager.py`)
 Docker container lifecycle management:
@@ -64,9 +102,11 @@ Individual Docker container management:
 - **File Operations**: Copy files to/from containers
 - **Health Checks**: Monitor container health and availability
 
-### ToolExecutor Hierarchy
-- **ToolExecutor**: Base class with common functionality, parameter management, and MCP schema generation
-- **DockerCLIExecutor**: Docker-based command-line tool implementation with container isolation
+### Executor Hierarchy Overview
+- **CommandExecutor**: Base class with common functionality, parameter management, and MCP schema generation
+- **DockerExecutor**: Abstract base for Docker-based executors with shared container management
+- **CLIExecutor**: Docker-based shell command execution implementation
+- **PythonExecutor**: Docker-based Python script execution implementation
 
 ## Security Features
 
@@ -79,11 +119,12 @@ Individual Docker container management:
 - **Resource Limits**: Container-level CPU, memory, and process constraints
 
 ### Command Validation (ExecutionManager Level)
-- **Pre-execution validation**: SecurityValidator validates commands before DockerCLIExecutor execution
+- **Pre-execution validation**: SecurityValidator validates commands before executor execution
 - **Global command blacklist**: Dangerous commands are blocked system-wide
 - **Optional whitelist override**: Configuration-based `allowed_commands` can override blocked commands
 - **Pattern detection**: Advanced regex-based detection of dangerous constructs
 - **Argument sanitization**: Protection against injection attacks using shlex parsing
+- **Executor-specific validation**: Each executor type performs additional validation for its domain
 
 ### Container Security (SandboxManager Level)
 - **Container lifecycle management**: Automatic container creation, monitoring, and cleanup
@@ -91,51 +132,71 @@ Individual Docker container management:
 - **Session isolation**: Each session's container is completely isolated from others
 - **Automatic cleanup**: Containers are destroyed when sessions end
 
-### Input Sanitization
-- **Shell metacharacter detection**: Prevent command injection
-- **Path traversal prevention**: Block unauthorized file access
-- **Command length limits**: Prevent buffer overflow attacks
-
 ## Configuration
 
-Docker-based CLI command execution is managed through YAML configuration:
+Multi-executor command execution uses a **modular configuration system** where each executor independently extracts its configuration section:
 
 ```yaml
-# Execution settings for CLI tool
+# Manager-level execution settings (accessed via get_execution_timeout(), etc.)
 execution:
   timeout: 300                    # Default timeout for commands (seconds)
-  max_concurrent: 10              # Maximum concurrent CLI executions
+  max_concurrent: 10              # Maximum concurrent executions across all executor types
 
-# Docker sandbox configuration
+# Manager-level security settings (accessed via get_allowed_commands(), etc.)
+security:
+  max_command_length: 4096        # Maximum command string length
+  allowed_commands:               # Optional whitelist for command execution
+    - "file"                      # Overrides blocked commands when specified
+    - "strings"
+    - "hexdump"
+    - "python3"
+
+# Manager-level sandbox configuration (accessed via get_sandbox_config())
 sandbox:
   image: "saber/base-sandbox:latest"  # Docker image for command execution
   network_mode: "none"                # Container network isolation
   read_only_root: true                # Read-only root filesystem
   user: "tooluser"                    # Non-root user for command execution
 
-# Security configuration
-security:
-  max_command_length: 4096        # Maximum command string length
-  allowed_commands:      # Optional whitelist for command execution
-    - "file"                      # Overrides blocked commands when specified
-    - "strings"
-    - "hexdump"
-    - "python3"
-
-# CLI-specific settings
-cli:
-  default_shell_mode: false       # Default shell mode for CLI tool
+# Executor-specific configurations (accessed via get_section("executor_name"))
+cli:                              # CLIExecutor extracts via get_section("cli")
+  default_shell_mode: false       # Default shell mode for CLI executor
   max_output_size: 1048576        # Maximum output size (1MB)
+
+python:                           # PythonExecutor extracts via get_section("python")
+  allowed_modules:                # Optional whitelist of allowed Python modules
+    - "os"
+    - "sys"
+    - "json"
+    - "requests"
+  max_script_size: 1048576       # Maximum Python script size (1MB)
+  default_requirements: []        # Default packages to install
+
+# Future executors can add their own sections without modifying core classes
+database:                         # Example future DatabaseExecutor section
+  connection_timeout: 30
+  max_connections: 10
+
+file_ops:                         # Example future FileOperationsExecutor section
+  allowed_extensions: [".txt", ".json", ".yaml"]
+  max_file_size: 1000000
 ```
+
+### Modular Configuration Benefits
+
+- **Scalability**: Add unlimited executor types without changing ExecutionConfiguration
+- **Separation of Concerns**: Each executor manages its own configuration needs
+- **No Coupling**: Core configuration class remains generic and executor-agnostic
+- **Easy Extension**: New executors simply call `configuration.get_section("my_executor_name")`
 
 ## Usage Workflow
 
 ### 1. Initialize ExecutionManager
 
-Create an ExecutionManager instance with configuration:
+Create an ExecutionManager instance with configuration (uses ExecutorFactory internally):
 
 ```python
-from saber.server.tools.execution_manager import ExecutionManager
+from saber.server.execution.execution_manager import ExecutionManager
 
 # Initialize with configuration file
 registry = ExecutionManager(config_file="config.yaml")
@@ -144,30 +205,38 @@ registry = ExecutionManager(config_file="config.yaml")
 config = {
     "execution": {"timeout": 300, "max_concurrent": 10},
     "security": {"allowed_commands": ["ls", "cat", "grep"]},
-    "cli": {"default_shell_mode": False}
+    "cli": {"default_shell_mode": False},
+    "python": {"allowed_modules": ["os", "sys", "json"]}
 }
 registry = ExecutionManager(config=config)
+
+# Check available executor types
+available_executors = registry._executor_factory.get_available_executors()
+print(f"Available executors: {available_executors}")  # ['cli', 'python']
 ```
 
 ### 2. Execute Commands
 
-Execute shell commands through the CLI tool:
+Execute commands through different executor types:
 
 ```python
-# Execute a simple command
-result = await registry.execute_command({
-    "command": "ls -la /tmp",
-    "shell": False
-})
+# Execute shell commands via CLI executor
+cli_action = Action(tool_name="cli", command="ls -la /tmp")
+context = {"session_id": "my_session"}
+result = await registry.step(cli_action, context)
 
-# Execute with shell features
-result = await registry.execute_command({
-    "command": "ls -la | grep .txt",
-    "shell": True
-})
+# Execute Python scripts via Python executor
+python_action = Action(
+    tool_name="python",
+    parameters={
+        "code": "print('Hello from Python!')\nprint(f'Current directory: {os.getcwd()}')",
+        "requirements": ["requests"]
+    }
+)
+result = await registry.step(python_action, context)
 
 if result.success:
-    print("Command output:", result.data["stdout"])
+    print("Command output:", result.output)
 else:
     print("Command failed:", result.error)
 ```
@@ -177,9 +246,17 @@ else:
 Validate commands before execution:
 
 ```python
-validation = registry.validate_command("rm -rf /")
+# ExecutionManager automatically determines executor type and validates
+cli_action = Action(tool_name="cli", command="rm -rf /")
+validation = registry.validate_command(cli_action)
 if not validation.valid:
     print("Command blocked:", validation.errors)
+
+# Python code validation
+python_action = Action(tool_name="python", parameters={"code": "import subprocess; subprocess.run(['rm', '-rf', '/'])"})
+validation = registry.validate_command(python_action)
+if not validation.valid:
+    print("Python code blocked:", validation.errors)
 ```
 
 ### 4. MCP Integration
@@ -188,18 +265,25 @@ Convert to MCP format for language model integration:
 
 ```python
 mcp_tools = registry.to_mcp_tools()
-# Returns list with single CLI tool definition
+# Returns list with both CLI and Python tool definitions
+print(f"Available MCP tools: {len(mcp_tools)}")  # 2 tools
+
+# Each executor contributes its own MCP schema
+for tool in mcp_tools:
+    print(f"Tool: {tool['name']}")
 ```
 
-## CLI Tool Parameters
+## Executor Tool Parameters
 
-The CLI tool accepts the following parameters:
+### CLI Executor Parameters
+
+The CLI executor accepts the following parameters:
 
 ```python
 {
     "command": {
         "type": "string",
-        "description": "Command string to execute (will be validated for security)",
+        "description": "Shell command to execute (will be validated for security)",
         "required": True
     },
     "shell": {
@@ -211,36 +295,72 @@ The CLI tool accepts the following parameters:
 }
 ```
 
+### Python Executor Parameters
+
+The Python executor accepts the following parameters:
+
+```python
+{
+    "code": {
+        "type": "string",
+        "description": "Python code to execute (will be validated for security)",
+        "required": True
+    },
+    "requirements": {
+        "type": "array",
+        "description": "List of Python packages to install before execution",
+        "required": False,
+        "default": []
+    }
+}
+```
+
 ### Parameter Usage Examples
 
 ```python
-# Simple command without shell
-await registry.execute_command({
-    "command": "ls -la"
-})
+# CLI executor examples
+cli_action = Action(tool_name="cli", command="ls -la")
+cli_action = Action(tool_name="cli", command="ps aux | grep python", parameters={"shell": True})
 
-# Complex command with shell features
-await registry.execute_command({
-    "command": "ps aux | grep python | wc -l",
-    "shell": True
-})
+# Python executor examples
+python_action = Action(
+    tool_name="python", 
+    parameters={
+        "code": "import sys; print(sys.version)",
+        "requirements": []
+    }
+)
 
-# File operations
-await registry.execute_command({
-    "command": "cat /etc/passwd | head -5",
-    "shell": True
-})
+python_action = Action(
+    tool_name="python",
+    parameters={
+        "code": "import requests; response = requests.get('https://httpbin.org/json'); print(response.json())",
+        "requirements": ["requests"]
+    }
+)
 ```
 
 ## Security Validation
 
-The security framework includes multiple layers of protection:
+The security framework uses **distributed security validation** where each executor manages its own security validation for separation of concerns:
+
+### Distributed Security Architecture
+- **Executor-Level Validation**: Each executor owns a SecurityValidator instance for its specific security needs
+- **Separation of Concerns**: CLIExecutor handles shell command security, PythonExecutor handles Python code security
+- **Validation Before Execution**: Each executor validates parameters before any command execution
+- **Independent Configuration**: Each executor can be configured with its own allowed commands and restrictions
 
 ### SecurityValidator
 - **Base command validation**: Validates commands against blocked lists with optional whitelist override
-- **Pattern detection**: Identifies dangerous shell constructs
+- **Pattern detection**: Identifies dangerous shell constructs and Python code patterns
 - **Argument sanitization**: Validates all command arguments using shlex parsing
 - **Full command validation**: Comprehensive validation of complete command structures
+- **Executor-agnostic**: Works with any executor type through common validation interface
+
+### Executor-specific Security
+- **CLI Executor**: Each CLIExecutor instance has its own SecurityValidator for shell command validation, metacharacter detection, command injection prevention
+- **Python Executor**: Python code analysis, import restrictions, dangerous function detection (can be extended with its own SecurityValidator)
+- **Docker Isolation**: All executors benefit from Docker container isolation regardless of type
 
 ### SecurityConstants
 Comprehensive security configuration:
@@ -249,46 +369,66 @@ Comprehensive security configuration:
 - **Resource limits**: Default limits for execution
 - **Restricted environment**: Safe environment variables
 
-## Testing
-
-The module includes comprehensive testing for the CLI-only architecture:
-
-```bash
-# Run all tool-related tests
-uv run pytest tests/tools/ -v
-
-# Run specific test suites
-uv run pytest tests/tools/test_execution_manager.py -v        # Execution manager and configuration  
-uv run pytest tests/tools/test_security_validator.py -v  # Security validation
-uv run pytest tests/execution/test_cli_executor.py -v        # DockerCLIExecutor command execution
-uv run pytest tests/tools/test_integration.py -v         # Integration tests
-
-# Test coverage: 143+ tests across 6 test files
-```
-
 ## Integration with MCP
 
-The DockerCLIExecutor tool automatically generates its MCP schema from its parameter definitions:
+The ExecutorFactory automatically aggregates MCP schemas from all registered executors:
 
 ```python
 mcp_tools = registry.to_mcp_tools()
-# ExecutionManager delegates to DockerCLIExecutor's to_mcp_schema() method
-# Uses DockerCLIExecutor metadata and parameter definitions
+# ExecutionManager delegates to ExecutorFactory's to_mcp_tools() method
+# ExecutorFactory aggregates schemas from all registered executors
 # Returns:
-# [{
-#     "name": "cli",
-#     "description": "Execute validated shell commands in a secure environment",
+# [
+#   {
+#     "name": "cli_shell_command",
+#     "description": "Execute validated shell commands in Docker containers",
 #     "inputSchema": {
-#         "type": "object",
-#         "properties": {
-#             "command": {"type": "string", "description": "..."},
-#             "shell": {"type": "boolean", "description": "...", "default": false}
-#         },
-#         "required": ["command"]
+#       "type": "object",
+#       "properties": {
+#         "command": {"type": "string", "description": "Shell command to execute"},
+#         "shell": {"type": "boolean", "description": "Enable shell features", "default": false}
+#       },
+#       "required": ["command"]
 #     }
-# }]
+#   },
+#   {
+#     "name": "python_python_script", 
+#     "description": "Execute Python scripts with dependency management in Docker containers",
+#     "inputSchema": {
+#       "type": "object",
+#       "properties": {
+#         "code": {"type": "string", "description": "Python code to execute"},
+#         "requirements": {"type": "array", "description": "Python packages to install", "default": []}
+#       },
+#       "required": ["code"]
+#     }
+#   }
+# ]
 ```
 
-The default value for the `shell` parameter comes from the CLI configuration's `default_shell_mode` setting.
+### Adding New Executor Types
 
-This enables seamless integration with MCP-compatible language models and agents for secure command execution.
+The factory pattern makes it easy to add new executor types:
+
+```python
+# 1. Create new executor inheriting from CommandExecutor or DockerExecutor
+class JavaExecutor(DockerExecutor):
+    def execute(self, action: Action) -> CommandResult:
+        # Implementation here
+        pass
+    
+    def to_mcp_schema(self) -> Dict[str, Any]:
+        # Return MCP schema for Java execution
+        pass
+
+# 2. Register with factory (done automatically in __init__.py)
+factory.register_executor("java", JavaExecutor)
+
+# 3. New executor becomes available immediately
+available = factory.get_available_executors()  # ['cli', 'python', 'java']
+mcp_tools = registry.to_mcp_tools()  # Now includes Java tool
+```
+
+The default values for executor parameters come from their respective configuration sections (cli, python, etc.).
+
+This enables seamless integration with MCP-compatible language models and agents for secure multi-type command execution with easy extensibility for future executor types.

@@ -23,12 +23,10 @@ package "Execution Management" {
     class ExecutionManager {
         +_configuration: ExecutionConfiguration
         +_executor_factory: ExecutorFactory
-        +_security_validator: SecurityValidator
         +_sandbox_manager: SandboxManager
         +_semaphore: Semaphore
         --
         +step(action: Action): CommandResult
-        +validate_command(): ValidationResult
         +get_security_info(): Dict[str, Any]
         +list_commands(): List[Dict[str, Any]]
         +get_execution_stats(): Dict[str, Any]
@@ -40,7 +38,6 @@ package "Execution Management" {
     class ExecutorFactory {
         +_executor_registry: Dict[str, Type[CommandExecutor]]
         +_sandbox_manager: SandboxManager
-        +_security_validator: SecurityValidator
         +_configuration: ExecutionConfiguration
         --
         +register_executor(executor_type: str, executor_class: Type): void
@@ -77,8 +74,9 @@ package "Execution Management" {
     class CLIExecutor {
         +_security_command_metadata: Dict
         +_cli_config: Dict[str, Any]
+        +_security_validator: SecurityValidator
         --
-        +__init__(sandbox_manager, cli_config): void
+        +__init__(sandbox_manager, cli_config, allowed_commands): void
         +build_command(command: str): List[str]
         +parse_output(stdout: str, stderr: str, return_code: int): CommandResult
         +execute(action: Action): CommandResult
@@ -106,14 +104,12 @@ package "Execution Management" {
         +_config: Dict[str, Any]
         --
         +load_configuration(): void
-        +get_execution_config(): Dict[str, Any]
-        +get_security_config(): Dict[str, Any]
-        +get_cli_config(): Dict[str, Any]
-        +get_sandbox_config(): Dict[str, Any]
+        +get_section(name: str): Dict[str, Any]
         +get_execution_timeout(): float
         +get_max_concurrent(): int
         +get_allowed_commands(): List[str]
         +get_max_command_length(): int
+        +get_sandbox_config(): Dict[str, Any]
     }
 
     class SecurityValidator {
@@ -211,13 +207,6 @@ package "Docker Sandbox" <<stereototype S>> {
         +get_container_id(): str
         +is_healthy(): bool
     }
-
-    class CommandResult <<stereototype C>> {
-        +exit_code: int
-        +stdout: str
-        +stderr: str
-        +execution_time: float
-    }
 }
 
 ' Inheritance relationships
@@ -229,19 +218,20 @@ DockerExecutor <|-- PythonExecutor
 ExecutionManager *-- ExecutorFactory
 ExecutionManager *-- ExecutionConfiguration
 ExecutionManager *-- SandboxManager
-ExecutionManager *-- SecurityValidator
 
 ' Factory relationships
 ExecutorFactory ..> CLIExecutor : creates
 ExecutorFactory ..> PythonExecutor : creates
 ExecutorFactory *-- SandboxManager
-ExecutorFactory *-- SecurityValidator
 ExecutorFactory *-- ExecutionConfiguration
 
 ' Sandbox relationships
 SandboxManager *-- DockerExecutionEnvironment
 DockerExecutor *-- SandboxManager
 DockerExecutionEnvironment ..> CommandResult
+
+' Executor-specific relationships
+CLIExecutor *-- SecurityValidator
 
 ' Component relationships
 CommandExecutor *-- Parameter
@@ -256,23 +246,13 @@ note top of ExecutionManager
 **Docker Sandbox Execution Manager**
 Central hub for all command execution components including:
 - Factory-based executor management for scalable executor types
-- Configuration management and security enforcement
-- Security validation performed before command execution
+- Modular configuration management with generic configuration delegation
 - Sandbox manager for Docker container lifecycle management
-- Command listing for REST API integration
+- Dynamic MCP tool schema generation for agent discovery
 - Execution monitoring and concurrency control
-- MCP tools integration for multiple executor types
+- MCP tools integration bridging executors to MCP protocol
 - Dynamic executor type determination based on command analysis
-end note
-
-note right of ExecutorFactory
-**Executor Factory Pattern**
-Scalable factory for managing multiple executor types:
-- Registry-based executor management
-- Dynamic executor creation and selection
-- Command analysis for automatic executor type detection
-- MCP schema generation for all registered executors
-- Supports easy addition of new executor types
+- Security validation delegated to individual executors for separation of concerns
 end note
 
 note top of CommandExecutor
@@ -286,8 +266,9 @@ note bottom of CLIExecutor
 Docker-based CLI command implementation inheriting from DockerExecutor.
 Provides command execution in isolated Docker containers.
 Requires SandboxManager for container management.
-Security validation handled at ExecutionManager level before execution.
+Security validation handled at executor level with dedicated SecurityValidator.
 Session-based container isolation with automatic cleanup.
+Extracts CLI-specific configuration using modular configuration system.
 end note
 
 note bottom of PythonExecutor
@@ -295,28 +276,17 @@ Docker-based Python script execution inheriting from DockerExecutor.
 Supports dependency installation via pip/uv and script templates.
 Provides code validation and secure Python environment execution.
 Uses uv for Python package management and script execution.
+Extracts Python-specific configuration using modular configuration system.
 end note
 
-note left of SecurityValidator
-Multi-layer security validation (used by ExecutionManager):
-- Command whitelisting
-- Pattern detection for dangerous constructs
-- Argument sanitization
-- Path safety validation
-end note
-
-note right of SandboxManager
-Docker container lifecycle management:
-- Session-based container creation and management
-- Container health monitoring
-- Automatic cleanup on session end
-- Docker environment configuration
-end note
-
-note top of Parameter
-Core parameter and result types supporting
-command execution and MCP schema generation.
-All data models unified under execution manager.
+note right of ExecutionConfiguration
+**Modular Configuration System**
+Generic configuration management enabling scalability:
+- get_section(name) provides any configuration section
+- Executors extract their own configuration independently
+- No coupling between configuration class and specific executor types
+- Scales to support many (10s) of executor types without modification
+- Manager-level methods for execution and security settings still available
 end note
 
 @enduml
