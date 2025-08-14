@@ -132,7 +132,6 @@ class TestExecutionManager:
         assert isinstance(registry._security_validator, SecurityValidator)
         assert isinstance(registry._executor_factory, ExecutorFactory)
         assert registry._sandbox_manager == mock_sandbox.return_value
-        assert isinstance(registry._semaphore, asyncio.Semaphore)
 
     def test_initialization_with_config(self, sample_config):
         """Test initialization with configuration."""
@@ -140,7 +139,6 @@ class TestExecutionManager:
             registry = ExecutionManager(config=sample_config)
 
         assert registry._configuration.get_execution_timeout() == 60.0
-        assert registry._configuration.get_max_concurrent() == 5
         assert "file" in registry._configuration.get_allowed_commands()
 
         # Test sandbox configuration
@@ -220,33 +218,6 @@ class TestExecutionManager:
 
         assert result.success is False
         assert "Execution failed" in result.error
-
-    @pytest.mark.asyncio
-    async def test_step_concurrency_control(self, registry):
-        """Test that concurrency control works with semaphore."""
-        action = Action(tool_name="cli", command="sleep 1")
-
-        # Mock the executor to simulate slow execution
-        async def slow_execute(*args, **kwargs):
-            await asyncio.sleep(0.1)
-            return CommandResult.success_result(data="done")
-
-        mock_executor = MagicMock()
-        mock_executor.validate_parameters.return_value = ValidationResult.success()
-        mock_executor.execute.side_effect = slow_execute
-
-        with patch.object(registry._executor_factory, 'get_executor', return_value=mock_executor):
-            with patch.object(registry, '_determine_executor_type', return_value='cli'):
-                # Start multiple executions
-                tasks = [
-                    asyncio.create_task(registry.step(action))
-                    for _ in range(3)
-                ]
-
-                results = await asyncio.gather(*tasks)
-
-        # All should succeed
-        assert all(result.success for result in results)
 
     def test_validate_command(self, registry):
         """Test command validation."""
@@ -356,12 +327,11 @@ class TestExecutionManager:
         with patch.object(registry._executor_factory, 'get_executor_info', return_value=mock_executor_info):
             stats = registry.get_execution_stats()
 
-        assert "max_concurrent" in stats
-        assert "current_available" in stats
+        assert "execution_mode" in stats
         assert "timeout" in stats
         assert "security_config" in stats
         assert "executor_info" in stats
-        assert stats["max_concurrent"] == 5  # From sample config
+        assert stats["execution_mode"] == "sequential"
         assert stats["executor_info"] == mock_executor_info
 
     def test_load_configuration_updates_components(self, registry):
@@ -371,10 +341,9 @@ class TestExecutionManager:
         with patch.object(registry._configuration, 'load_configuration') as mock_load:
             with patch.object(registry._configuration, 'get_allowed_commands', return_value=["new_cmd"]):
                 with patch.object(registry._configuration, 'get_execution_timeout', return_value=120.0):
-                    with patch.object(registry._configuration, 'get_max_concurrent', return_value=15):
-                        with patch("saber.server.execution.execution_manager.SandboxManager") as mock_sandbox:
-                            with patch("saber.server.execution.execution_manager.ExecutorFactory") as mock_factory:
-                                registry.load_configuration(new_config_path)
+                    with patch("saber.server.execution.execution_manager.SandboxManager") as mock_sandbox:
+                        with patch("saber.server.execution.execution_manager.ExecutorFactory") as mock_factory:
+                            registry.load_configuration(new_config_path)
 
         mock_load.assert_called_once_with(new_config_path)
         # Components should be recreated with new configuration

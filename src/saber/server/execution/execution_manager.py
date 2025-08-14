@@ -78,11 +78,6 @@ class ExecutionConfiguration:
         timeout = self.get_section("execution").get("timeout", 300.0)
         return float(timeout)
 
-    def get_max_concurrent(self) -> int:
-        """Get maximum concurrent executions."""
-        max_concurrent = self.get_section("execution").get("max_concurrent", 10)
-        return int(max_concurrent)
-
     def get_allowed_commands(self) -> List[str]:
         """Get allowed commands override list."""
         commands = self.get_section("security").get("allowed_commands", [])
@@ -103,7 +98,7 @@ class ExecutionManager:
     Execution manager supporting multiple executor types with factory pattern.
 
     Provides unified interface for executing different types of commands (CLI, Python, etc.)
-    with security validation and Docker isolation.
+    with security validation and Docker isolation. Commands are executed sequentially.
     """
 
     def __init__(self, config: Optional[Dict[str, Any]] = None, config_file: Optional[str] = None):
@@ -132,16 +127,17 @@ class ExecutionManager:
             sandbox_manager=self._sandbox_manager, configuration=self._configuration
         )
 
-        # Concurrency control
-        max_concurrent = self._configuration.get_max_concurrent()
-        self._semaphore = asyncio.Semaphore(max_concurrent)
+        # Sequential execution lock - ensures only one command executes at a time
+        self._execution_lock = asyncio.Lock()
 
-        logger.info(f"ExecutionManager initialized with max_concurrent={max_concurrent}")
+        logger.info("ExecutionManager initialized for sequential execution")
         logger.info(f"Available executor types: {self._executor_factory.get_available_executors()}")
 
     async def step(self, action: Action, context: Optional[Dict[str, Any]] = None) -> CommandResult:
         """
         Execute the action with the appropriate executor.
+
+        Commands are executed sequentially - only one command can execute at a time.
 
         Args:
             action: Action object containing command and parameters
@@ -150,8 +146,7 @@ class ExecutionManager:
         Returns:
             CommandResult with execution results
         """
-
-        async with self._semaphore:
+        async with self._execution_lock:
             try:
                 # Determine executor type from action or command content
                 executor_type = self._determine_executor_type(action)
@@ -314,8 +309,7 @@ class ExecutionManager:
             Dictionary with execution statistics
         """
         return {
-            "max_concurrent": self._configuration.get_max_concurrent(),
-            "current_available": self._semaphore._value,
+            "execution_mode": "sequential",
             "timeout": self._configuration.get_execution_timeout(),
             "security_config": self.get_security_info(),
             "executor_info": self._executor_factory.get_executor_info(),
@@ -344,10 +338,6 @@ class ExecutionManager:
         self._executor_factory = ExecutorFactory(
             sandbox_manager=self._sandbox_manager, configuration=self._configuration
         )
-
-        # Update concurrency control
-        max_concurrent = self._configuration.get_max_concurrent()
-        self._semaphore = asyncio.Semaphore(max_concurrent)
 
         logger.info("Configuration updated successfully")
 

@@ -142,7 +142,6 @@ class TestModularConfiguration:
 
         # These methods should still work for manager-level config
         assert config.get_execution_timeout() == 300.0
-        assert config.get_max_concurrent() == 5
         assert config.get_allowed_commands() == ["file", "strings", "cat", "echo"]
         assert config.get_max_command_length() == 10000
 
@@ -187,7 +186,6 @@ class TestModularConfiguration:
 
         # Manager-level defaults should still work
         assert config.get_execution_timeout() == 300.0
-        assert config.get_max_concurrent() == 10
         assert config.get_allowed_commands() == []
 
     def test_partial_configuration(self):
