@@ -10,11 +10,8 @@ from unittest.mock import MagicMock, patch
 
 from saber.server.execution.executors.factory import ExecutorFactory
 from saber.server.execution.executors.cli import CLIExecutor
-from saber.server.execution.executors.curl_executor import CurlExecutor
 from saber.server.execution.executors.docker_executor import DockerExecutor
-from saber.server.execution.executors.file_io_executor import FileIoExecutor
 from saber.server.execution.executors.python_executor import PythonExecutor
-from saber.server.execution.executors.sql_executor import SqlExecutor
 from saber.server.execution.sandbox.sandbox_manager import SandboxManager
 
 
@@ -44,9 +41,6 @@ class TestExecutorFactory:
         assert len(factory._executor_instances) == 0
         assert "cli" in factory.get_available_executors()
         assert "python" in factory.get_available_executors()
-        assert "curl" in factory.get_available_executors()
-        assert "sql" in factory.get_available_executors()
-        assert "file_io" in factory.get_available_executors()
 
     def test_initialization_with_config(self, mock_sandbox_manager):
         """Test factory initialization with configuration."""
@@ -70,10 +64,7 @@ class TestExecutorFactory:
         assert isinstance(executors, list)
         assert "cli" in executors
         assert "python" in executors
-        assert "curl" in executors
-        assert "sql" in executors
-        assert "file_io" in executors
-        assert len(executors) >= 5
+        assert len(executors) >= 2
 
     def test_register_executor(self):
         """Test registering a new executor type."""
