@@ -2,19 +2,16 @@
 Docker-based Python script executor for executing Python code in isolated containers.
 
 This module provides a secure Python executor that accepts Python code and executes
-it in Docker containers with proper security validation and dependency management.
+it in Docker containers with proper security validation.
 """
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from ..base import CommandResult, Parameter, ParameterType, ValidationResult
 from ..exceptions import SandboxExecutionError
 from ..sandbox.sandbox_manager import SandboxManager
 from .docker_executor import DockerExecutor
-
-if TYPE_CHECKING:
-    from ..sandbox.docker_sandbox_environment import DockerSandboxEnvironment
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +22,6 @@ class PythonExecutor(DockerExecutor):
 
     This executor provides Python script execution capabilities including:
     - Python code validation and syntax checking
-    - Dependency management with pip install
     - Script template system for common patterns
     - Secure execution in Docker containers
     - Output parsing and error handling
@@ -34,7 +30,7 @@ class PythonExecutor(DockerExecutor):
     _security_command_metadata = {
         "domain": "python",
         "name": "python_script",
-        "description": "Execute Python scripts in Docker containers with dependency management",
+        "description": "Execute Python scripts in Docker containers",
         "author": "SABER Team",
         "security_level": "high",
         "requires_validation": True,
@@ -94,17 +90,6 @@ class PythonExecutor(DockerExecutor):
                 type=ParameterType.STRING,
                 description="Python code to execute in the container",
                 required=True,
-            )
-        )
-
-        # Requirements parameter for dependencies
-        self.add_parameter(
-            Parameter(
-                name="requirements",
-                type=ParameterType.ARRAY,
-                description="List of Python packages to install before execution",
-                required=False,
-                default=[],
             )
         )
 
@@ -227,44 +212,6 @@ class PythonExecutor(DockerExecutor):
 
         return "\n".join(setup_lines) + script
 
-    async def install_requirements(
-        self, environment: "DockerSandboxEnvironment", requirements: List[str]
-    ) -> CommandResult:
-        """
-        Install Python requirements in the container.
-
-        Args:
-            environment: Docker environment
-            requirements: List of package requirements
-
-        Returns:
-            CommandResult from pip install
-        """
-        if not requirements:
-            return CommandResult.success_result(data={"message": "No requirements to install"})
-
-        # Build pip install command
-        pip_cmd = ["pip", "install"] + requirements
-
-        try:
-            result = environment.execute_command(command=pip_cmd)
-
-            if result.exit_code == 0:
-                return CommandResult.success_result(
-                    data={
-                        "stdout": result.stdout,
-                        "installed_packages": requirements,
-                        "execution_time": result.execution_time,
-                    }
-                )
-            else:
-                return CommandResult.error_result(
-                    error=f"Package installation failed: {result.stderr}",
-                    metadata={"stdout": result.stdout, "exit_code": result.exit_code},
-                )
-        except Exception as e:
-            return CommandResult.error_result(error=f"Failed to install requirements: {e}")
-
     def get_python_environment(self, session_id: str) -> Dict[str, Any]:
         """
         Get Python environment information.
@@ -337,7 +284,7 @@ class PythonExecutor(DockerExecutor):
         Execute Python script in Docker container.
 
         Args:
-            parameters: Execution parameters including code and requirements
+            parameters: Execution parameters including code
             context: Execution context including session_id
 
         Returns:
@@ -362,13 +309,6 @@ class PythonExecutor(DockerExecutor):
             # Log any warnings
             if code_validation.warnings:
                 logger.warning(f"Python code warnings: {', '.join(code_validation.warnings)}")
-
-            # Install requirements if specified
-            requirements = parameters.get("requirements", [])
-            if requirements:
-                install_result = await self.install_requirements(environment, requirements)
-                if not install_result.success:
-                    return install_result
 
             # Build Python script
             script_content = self.build_python_script(parameters, context)
@@ -400,7 +340,6 @@ class PythonExecutor(DockerExecutor):
                     "container_id": container_id,
                     "session_id": session_id,
                     "execution_time": result.execution_time,
-                    "requirements_installed": requirements,
                 }
             )
 

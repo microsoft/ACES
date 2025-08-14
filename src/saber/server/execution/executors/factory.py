@@ -10,8 +10,11 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type
 
 from ..sandbox.sandbox_manager import SandboxManager
 from .cli import CLIExecutor
+from .curl_executor import CurlExecutor
 from .docker_executor import DockerExecutor
+from .file_io_executor import FileIoExecutor
 from .python_executor import PythonExecutor
+from .sql_executor import SqlExecutor
 
 if TYPE_CHECKING:
     from ..execution_manager import ExecutionConfiguration
@@ -31,6 +34,9 @@ class ExecutorFactory:
     _executor_registry: Dict[str, Type[DockerExecutor]] = {
         "cli": CLIExecutor,
         "python": PythonExecutor,
+        "curl": CurlExecutor,
+        "sql": SqlExecutor,
+        "file_io": FileIoExecutor,
     }
 
     # Default configurations for each executor type
@@ -61,6 +67,27 @@ class ExecutorFactory:
             ],
             "script_templates": {},
             "timeout": 600.0,  # Python scripts may take longer
+        },
+        "curl": {
+            "allowed_protocols": ["http", "https"],
+            "blocked_domains": ["localhost", "127.0.0.1", "0.0.0.0", "::1", "169.254.169.254"],
+            "allowed_domains": [],  # Empty means all allowed
+            "max_response_size": 10 * 1024 * 1024,  # 10MB
+            "timeout": 30,
+        },
+        "sql": {
+            "supported_databases": ["postgresql", "mysql", "sqlite", "mariadb"],
+            "max_query_length": 10000,
+            "query_timeout": 30,
+            "max_result_rows": 1000,
+            "allowed_operations": ["SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP"],
+        },
+        "file_io": {
+            "allowed_base_paths": ["/workspace", "/tmp"],
+            "blocked_paths": ["/etc", "/root", "/home", "/usr", "/bin", "/sbin", "/boot", "/dev", "/proc", "/sys"],
+            "max_file_size": 100 * 1024 * 1024,  # 100MB
+            "max_files_per_operation": 1000,
+            "allowed_extensions": [],  # Empty means all allowed
         },
     }
 

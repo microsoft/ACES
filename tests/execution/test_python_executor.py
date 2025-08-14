@@ -37,8 +37,6 @@ class TestPythonExecutor:
     @pytest.fixture
     def mock_docker_environment(self):
         """Create a mock Docker execution environment."""
-        from saber.server.execution.sandbox.docker_environment import CommandResult
-
         env = MagicMock()
         # Mock the new interface
         container_mock = MagicMock()
@@ -56,7 +54,6 @@ class TestPythonExecutor:
         # Check that parameters were added
         params = executor.get_parameters()
         assert "code" in params
-        assert "requirements" in params
         assert "template" in params
         assert "working_dir" in params
 
@@ -65,12 +62,6 @@ class TestPythonExecutor:
         assert code_param.name == "code"
         assert code_param.type == ParameterType.STRING
         assert code_param.required is True
-
-        requirements_param = params["requirements"]
-        assert requirements_param.name == "requirements"
-        assert requirements_param.type == ParameterType.ARRAY
-        assert requirements_param.required is False
-        assert requirements_param.default == []
 
     def test_initialization_without_sandbox_manager(self):
         """Test that initialization fails without sandbox manager."""
@@ -83,7 +74,7 @@ class TestPythonExecutor:
 
         assert metadata["domain"] == "python"
         assert metadata["name"] == "python_script"
-        assert metadata["description"] == "Execute Python scripts in Docker containers with dependency management"
+        assert metadata["description"] == "Execute Python scripts in Docker containers"
         assert metadata["author"] == "SABER Team"
         assert metadata["security_level"] == "high"
         assert metadata["requires_validation"] is True
@@ -173,55 +164,6 @@ import numpy as np
         assert "import numpy as np" in script
         assert "df = pd.DataFrame({'x': [1, 2, 3]})" in script
 
-    @pytest.mark.asyncio
-    async def test_install_requirements_empty(self, python_executor, mock_docker_environment):
-        """Test installing empty requirements list."""
-        result = await python_executor.install_requirements(mock_docker_environment, [])
-
-        assert result.success is True
-        assert "No requirements to install" in result.data["message"]
-
-    @pytest.mark.asyncio
-    async def test_install_requirements_success(self, python_executor, mock_docker_environment):
-        """Test successful package installation."""
-        from saber.server.execution.sandbox.docker_environment import CommandResult
-
-        # Mock successful pip install
-        pip_result = CommandResult(
-            exit_code=0,
-            stdout="Successfully installed requests-2.28.1",
-            stderr="",
-            execution_time=5.0
-        )
-        mock_docker_environment.execute_command.return_value = pip_result
-
-        result = await python_executor.install_requirements(mock_docker_environment, ["requests"])
-
-        assert result.success is True
-        assert "requests" in result.data["installed_packages"]
-        mock_docker_environment.execute_command.assert_called_once_with(
-            command=["pip", "install", "requests"]
-        )
-
-    @pytest.mark.asyncio
-    async def test_install_requirements_failure(self, python_executor, mock_docker_environment):
-        """Test failed package installation."""
-        from saber.server.execution.sandbox.docker_environment import CommandResult
-
-        # Mock failed pip install
-        pip_result = CommandResult(
-            exit_code=1,
-            stdout="",
-            stderr="ERROR: Could not find a version that satisfies the requirement invalid-package",
-            execution_time=2.0
-        )
-        mock_docker_environment.execute_command.return_value = pip_result
-
-        result = await python_executor.install_requirements(mock_docker_environment, ["invalid-package"])
-
-        assert result.success is False
-        assert "Package installation failed" in result.error
-
     def test_parse_python_output_success(self, python_executor):
         """Test parsing successful Python execution output."""
         result = python_executor.parse_python_output(
@@ -265,20 +207,22 @@ import numpy as np
     @pytest.mark.asyncio
     async def test_execute_success(self, python_executor, mock_sandbox_manager, mock_docker_environment):
         """Test successful Python script execution."""
-        from saber.server.execution.sandbox.docker_environment import CommandResult
-
         # Mock environment creation
         mock_sandbox_manager.get_session_environment.return_value = mock_docker_environment
         python_executor._sandbox_manager = mock_sandbox_manager
 
         # Mock script creation and execution
-        create_result = CommandResult(exit_code=0, stdout="", stderr="", execution_time=0.1)
-        execute_result = CommandResult(
-            exit_code=0,
-            stdout="Hello, World!\n",
-            stderr="",
-            execution_time=1.0
-        )
+        create_result = MagicMock()
+        create_result.exit_code = 0
+        create_result.stdout = ""
+        create_result.stderr = ""
+        create_result.execution_time = 0.1
+
+        execute_result = MagicMock()
+        execute_result.exit_code = 0
+        execute_result.stdout = "Hello, World!\n"
+        execute_result.stderr = ""
+        execute_result.execution_time = 1.0
 
         mock_docker_environment.execute_command.side_effect = [create_result, execute_result]
 
@@ -291,34 +235,6 @@ import numpy as np
         assert result.data["stdout"] == "Hello, World!\n"
         assert result.metadata["session_id"] == "test123"
         assert result.metadata["container_id"] == "container123"  # First 12 chars: container123
-
-    @pytest.mark.asyncio
-    async def test_execute_with_requirements(self, python_executor, mock_sandbox_manager, mock_docker_environment):
-        """Test Python script execution with package requirements."""
-        from saber.server.execution.sandbox.docker_environment import CommandResult
-
-        # Mock environment
-        mock_sandbox_manager.get_session_environment.return_value = mock_docker_environment
-        python_executor._sandbox_manager = mock_sandbox_manager
-
-        # Mock pip install, script creation, and execution
-        pip_result = CommandResult(exit_code=0, stdout="Successfully installed requests", stderr="", execution_time=5.0)
-        create_result = CommandResult(exit_code=0, stdout="", stderr="", execution_time=0.1)
-        execute_result = CommandResult(exit_code=0, stdout="Request sent\n", stderr="", execution_time=2.0)
-
-        mock_docker_environment.execute_command.side_effect = [pip_result, create_result, execute_result]
-
-        parameters = {
-            "code": "import requests; print('Request sent')",
-            "requirements": ["requests"]
-        }
-        context = {"session_id": "test123"}
-
-        result = await python_executor.execute(parameters, context)
-
-        assert result.success is True
-        assert result.data["stdout"] == "Request sent\n"
-        assert result.metadata["requirements_installed"] == ["requests"]
 
     @pytest.mark.asyncio
     async def test_execute_validation_failure(self, python_executor):
@@ -346,34 +262,11 @@ import numpy as np
         """Test parameter validation with valid parameters."""
         parameters = {
             "code": "print('hello')",
-            "requirements": ["requests"],
             "working_dir": "/workspace"
         }
 
         result = python_executor.validate_parameters(parameters)
         assert result.valid is True
-
-    def test_validate_parameters_invalid_requirements(self, python_executor):
-        """Test parameter validation with invalid requirements."""
-        parameters = {
-            "code": "print('hello')",
-            "requirements": "not_a_list"  # Should be a list
-        }
-
-        result = python_executor.validate_parameters(parameters)
-        assert result.valid is False
-        assert "must be an array" in str(result.errors) or "requirements must be a list" in str(result.errors)
-
-    def test_validate_parameters_invalid_requirement_item(self, python_executor):
-        """Test parameter validation with invalid requirement item."""
-        parameters = {
-            "code": "print('hello')",
-            "requirements": ["requests", 123]  # 123 is not a string
-        }
-
-        result = python_executor.validate_parameters(parameters)
-        assert result.valid is False
-        assert "requirement must be string" in str(result.errors)
 
     def test_get_security_info(self, python_executor):
         """Test getting security information."""
