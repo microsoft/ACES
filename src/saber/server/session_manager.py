@@ -89,8 +89,18 @@ class SessionManager:
         # Initialize server components
         logger.info(f"Initializing SessionManager for domain '{domain_name}'")
 
-        self.task_manager = TaskManager(domain_name, tasks_config_path, execution_config_path)
-        self.execution_manager = ExecutionManager(config_file=execution_config_path)
+        self.task_manager = TaskManager(domain_name, tasks_config_path)
+
+        # Get allowed executors from task configuration
+        allowed_executors = self.task_manager.get_allowed_executors()
+        if allowed_executors:
+            logger.info(f"Using executor restriction from task config: {allowed_executors}")
+        else:
+            logger.info("No executor restriction specified, all executors will be available")
+
+        self.execution_manager = ExecutionManager(
+            config_file=execution_config_path, allowed_executors=allowed_executors
+        )
         self.policy_manager = PolicyManager(domain_name)
         self.evaluation_manager = EvaluationManager()
 

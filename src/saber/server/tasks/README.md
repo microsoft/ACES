@@ -52,6 +52,15 @@ Tasks are defined in YAML files with the new checkpoint-based format:
 
 ```yaml
 domain: "malware_classification"
+
+# Optional: Executor filtering configuration
+# Restricts which command executors are available for this domain's tasks
+# If omitted, all available executors (cli, python, curl, sql, file_io) are enabled
+executors:
+  - "cli"
+  - "python"
+  # Note: any other executor is disabled for this domain
+
 tasks:
   - task_id: "malware_family_analysis"
     title: "Malware Family Classification and Analysis"

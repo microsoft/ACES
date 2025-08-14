@@ -41,6 +41,7 @@ Factory pattern implementation for scalable executor management:
 - **Command Analysis**: Intelligent routing of commands to appropriate executor types
 - **MCP Aggregation**: Combines MCP schemas from all registered executors
 - **Scalable Design**: Supports adding many of executor types through registration
+- **Executor Filtering**: Supports configuring a subset of available executors through `allowed_executors` parameter, enabling task-specific executor restrictions for security or functionality requirements
 
 ### Executor Hierarchy
 

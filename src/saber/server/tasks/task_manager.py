@@ -58,6 +58,15 @@ class TaskManager:
         self.tasks = self.config_loader.load_tasks_from_file(str(self.tasks_file_path))
         logger.info(f"TaskManager initialization complete. Loaded {len(self.tasks)} tasks for domain '{self.domain}'")
 
+    def get_allowed_executors(self) -> Optional[list[str]]:
+        """
+        Get the list of allowed executors from the task configuration.
+
+        Returns:
+            List of allowed executor names, or None if no restriction is configured
+        """
+        return self.config_loader.get_allowed_executors()
+
     def get_task(self, task_id: str) -> Task:
         """
         Get a task by ID.

@@ -101,13 +101,19 @@ class ExecutionManager:
     with security validation and Docker isolation. Commands are executed sequentially.
     """
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None, config_file: Optional[str] = None):
+    def __init__(
+        self,
+        config: Optional[Dict[str, Any]] = None,
+        config_file: Optional[str] = None,
+        allowed_executors: Optional[list[str]] = None,
+    ):
         """
         Initialize the execution manager.
 
         Args:
             config: Optional configuration dictionary
             config_file: Optional path to YAML configuration file
+            allowed_executors: Optional list of executor types to enable. If None, all executors are available.
         """
         self._configuration = ExecutionConfiguration(config, config_file)
 
@@ -121,17 +127,19 @@ class ExecutionManager:
         sandbox_config = self._configuration.get_sandbox_config()
         self._sandbox_manager = SandboxManager(sandbox_config)
 
-        # Initialize executor factory with full configuration
+        # Initialize executor factory with full configuration and executor filtering
         # Factory will extract relevant sections for each executor type
         self._executor_factory = ExecutorFactory(
-            sandbox_manager=self._sandbox_manager, configuration=self._configuration
+            sandbox_manager=self._sandbox_manager,
+            configuration=self._configuration,
+            allowed_executors=allowed_executors,
         )
 
         # Sequential execution lock - ensures only one command executes at a time
         self._execution_lock = asyncio.Lock()
 
         logger.info("ExecutionManager initialized for sequential execution")
-        logger.info(f"Available executor types: {self._executor_factory.get_available_executors()}")
+        logger.info(f"Available executor types: {self._executor_factory.get_filtered_available_executors()}")
 
     async def step(self, action: Action, context: Optional[Dict[str, Any]] = None) -> CommandResult:
         """

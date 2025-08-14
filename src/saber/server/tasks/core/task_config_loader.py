@@ -29,6 +29,7 @@ class TaskConfigLoader:
         """
         self.domain = domain
         self.environment_loader = None
+        self.allowed_executors: Optional[list[str]] = None
 
         if environments_file_path:
             self.environment_loader = EnvironmentLoader(environments_file_path)
@@ -77,6 +78,19 @@ class TaskConfigLoader:
                 logger.error("Tasks field is not a list")
                 raise InvalidTaskDefinitionException("Tasks must be a list", str(tasks_path))
 
+            # Parse executors configuration (optional)
+            executors_data = data.get("executors")
+            if executors_data is not None:
+                if not isinstance(executors_data, list):
+                    logger.error("Executors field is not a list")
+                    raise InvalidTaskDefinitionException("Executors must be a list", str(tasks_path))
+
+                self.allowed_executors = executors_data
+                logger.info(f"Loaded executor configuration: {self.allowed_executors}")
+            else:
+                self.allowed_executors = None
+                logger.info("No executor configuration found, all executors will be available")
+
             tasks = {}
             logger.info(f"Found {len(tasks_data)} tasks to load")
 
@@ -98,6 +112,15 @@ class TaskConfigLoader:
                 raise
             logger.error(f"Unexpected error loading tasks: {e}")
             raise InvalidTaskDefinitionException(f"Error loading tasks: {e}", str(tasks_path))
+
+    def get_allowed_executors(self) -> Optional[list[str]]:
+        """
+        Get the list of allowed executors from the configuration.
+
+        Returns:
+            List of allowed executor names, or None if no restriction is configured
+        """
+        return self.allowed_executors
 
     def _parse_task(self, task_data: Dict[str, Any]) -> Task:
         """

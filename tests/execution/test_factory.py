@@ -146,7 +146,7 @@ class TestExecutorFactory:
 
     def test_get_executor_unknown_type(self, executor_factory):
         """Test getting unknown executor type."""
-        with pytest.raises(ValueError, match="Unknown executor type: unknown"):
+        with pytest.raises(ValueError, match="Unknown or disabled executor type: unknown"):
             executor_factory.get_executor("unknown")
 
     def test_default_executor_configuration(self, executor_factory):
