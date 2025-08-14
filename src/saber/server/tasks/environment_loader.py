@@ -5,7 +5,9 @@ This module handles loading environment templates from YAML files and resolving
 them to complete EnvironmentSpec instances.
 """
 
+import hashlib
 import logging
+import subprocess
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -196,12 +198,28 @@ class EnvironmentLoader:
         )
 
     def _resolve_network(self, network_name: str, templates: Dict[str, Any]) -> NetworkSpec:
-        """Resolve network configuration by name."""
+        """Resolve network configuration by name with dynamic subnet allocation."""
         networks = templates.get("networks", {})
         if network_name not in networks:
             raise InvalidEnvironmentSpecException(f"Network '{network_name}' not found in configuration")
 
-        network_config = networks[network_name]
+        network_config = networks[network_name].copy()
+
+        # Always allocate a unique subnet for session isolation
+        unique_subnet = self._allocate_unique_subnet()
+
+        # Ensure IPAM configuration exists
+        if "ipam" not in network_config:
+            network_config["ipam"] = {"config": [{}]}
+        elif "config" not in network_config["ipam"]:
+            network_config["ipam"]["config"] = [{}]
+        elif not network_config["ipam"]["config"]:
+            network_config["ipam"]["config"] = [{}]
+
+        # Set the unique subnet in the first IPAM config
+        network_config["ipam"]["config"][0]["subnet"] = unique_subnet
+        logger.info(f"Allocated dynamic subnet {unique_subnet} for network {network_name}")
+
         return NetworkSpec(
             name=network_name,
             driver=network_config.get("driver", "bridge"),
@@ -209,6 +227,102 @@ class EnvironmentLoader:
             ipam_config=network_config.get("ipam", {}),
             options=network_config.get("options", {}),
         )
+
+    def _allocate_unique_subnet(self) -> str:
+        """
+        Allocate a unique subnet for the session network.
+        Uses sequential allocation in the 172.20.0.0/16 range.
+
+        Returns:
+            Unique subnet string (e.g., "172.20.1.0/24")
+        """
+        try:
+            # Get list of existing Docker networks and their subnets
+            existing_subnets = self._get_existing_subnets()
+
+            # Find next available subnet in 172.20.x.0/24 range
+            base_network = "172.20"
+            for subnet_id in range(1, 255):  # 172.20.1.0/24 to 172.20.254.0/24
+                candidate_subnet = f"{base_network}.{subnet_id}.0/24"
+                if candidate_subnet not in existing_subnets:
+                    return candidate_subnet
+
+            # Fallback to 172.21.x.0/24 range if 172.20 is exhausted
+            base_network = "172.21"
+            for subnet_id in range(1, 255):
+                candidate_subnet = f"{base_network}.{subnet_id}.0/24"
+                if candidate_subnet not in existing_subnets:
+                    return candidate_subnet
+
+            # If both ranges exhausted, use hash-based fallback
+            logger.warning("Standard subnet ranges exhausted, using hash-based allocation")
+            return self._generate_hash_based_subnet()
+
+        except Exception as e:
+            logger.warning(f"Failed to allocate unique subnet, using fallback: {e}")
+            return self._generate_hash_based_subnet()
+
+    def _get_existing_subnets(self) -> set:
+        """Get set of existing Docker network subnets."""
+        try:
+            # Query Docker networks for their IPAM configurations
+            result = subprocess.run(
+                ["docker", "network", "ls", "--format", "{{.Name}}"], capture_output=True, text=True, timeout=10
+            )
+
+            if result.returncode != 0:
+                logger.warning("Failed to query Docker networks")
+                return set()
+
+            existing_subnets = set()
+            network_names = result.stdout.strip().split("\n")
+
+            for network_name in network_names:
+                if not network_name or network_name in ["bridge", "host", "none"]:
+                    continue
+
+                # Inspect each network for subnet information
+                inspect_result = subprocess.run(
+                    [
+                        "docker",
+                        "network",
+                        "inspect",
+                        network_name,
+                        "--format",
+                        "{{range .IPAM.Config}}{{.Subnet}}{{end}}",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+
+                if inspect_result.returncode == 0 and inspect_result.stdout.strip():
+                    subnet = inspect_result.stdout.strip()
+                    if subnet and "/" in subnet:  # Valid CIDR notation
+                        existing_subnets.add(subnet)
+
+            logger.debug(f"Found existing subnets: {existing_subnets}")
+            return existing_subnets
+
+        except Exception as e:
+            logger.warning(f"Error querying existing subnets: {e}")
+            return set()
+
+    def _generate_hash_based_subnet(self) -> str:
+        """Generate subnet based on process ID and timestamp as fallback."""
+        import os
+        import time
+
+        # Create unique identifier from PID and timestamp
+        unique_id = f"{os.getpid()}-{int(time.time() * 1000)}"
+        hash_obj = hashlib.md5(unique_id.encode())
+        hash_int = int(hash_obj.hexdigest()[:4], 16)
+
+        # Map to 172.22-31.x.x range for hash-based allocation
+        subnet_second = 22 + (hash_int >> 8) % 10  # 172.22-31.x.x
+        subnet_third = hash_int & 0xFF  # 172.x.0-255.x
+
+        return f"172.{subnet_second}.{subnet_third}.0/24"
 
     def _resolve_container_config(self, container_name: str, templates: Dict[str, Any]) -> Dict[str, Any]:
         """Resolve container configuration by name."""
@@ -223,6 +337,8 @@ class EnvironmentLoader:
 
         if "image" in container_config:
             compose_config["image"] = container_config["image"]
+        if "command" in container_config:
+            compose_config["command"] = container_config["command"]
         if "working_dir" in container_config:
             compose_config["working_dir"] = container_config["working_dir"]
         if "user" in container_config:

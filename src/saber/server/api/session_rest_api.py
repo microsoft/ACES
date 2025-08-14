@@ -14,8 +14,6 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 
-from ..tasks.base import Action
-
 logger = logging.getLogger(__name__)
 
 
@@ -98,57 +96,6 @@ class SessionRestAPI:
             """SSE endpoint for real-time updates."""
             result: StreamingResponse = await self.get_events_stream(session_id, request)
             return result
-
-        @self.app.post("/session/{session_id}/step")
-        async def execute_step_endpoint(session_id: str, request: Request) -> Dict[str, Any]:
-            """
-            DEPRECATED: Execute a step command.
-            This endpoint is provided for backward compatibility.
-            New code should use MCP tool execution.
-            """
-            from fastapi import HTTPException
-
-            try:
-                # Parse request body to get command and parameters
-                body = await request.json()
-                command = body.get("command", "")
-                parameters = body.get("parameters", {})
-
-                # Create Action from command and parameters
-                action = Action(tool_name="execute_step_legacy", command=command, parameters=parameters)
-
-                # Execute through SessionManager
-                command_result = await self.session_manager.execute_command(session_id, action)
-
-                # Convert CommandResult to expected format for backward compatibility
-                if command_result.success:
-                    result: Dict[str, Any] = {
-                        "success": True,
-                        "data": {"output": str(command_result.data) if command_result.data else ""},
-                        "step": {"done": False, "info": "step completed"},
-                        "error": None,
-                    }
-                else:
-                    result = {
-                        "success": False,
-                        "data": {"output": ""},
-                        "step": {"done": True, "info": "step failed"},
-                        "error": command_result.error,
-                    }
-
-                return result
-
-            except Exception as e:
-                logger.error(f"Error in execute_step_endpoint: {e}")
-                # Check if it's a session not found error (404)
-                if "404" in str(e) or "not found" in str(e).lower():
-                    raise HTTPException(status_code=404, detail=str(e))
-                return {
-                    "success": False,
-                    "data": {"output": ""},
-                    "step": {"done": True, "info": "step failed"},
-                    "error": f"Step execution failed: {str(e)}",
-                }
 
         @self.app.get("/health")
         async def health_check() -> Dict[str, str]:

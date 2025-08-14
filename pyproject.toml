@@ -174,5 +174,6 @@ exclude_lines = [
 
 [dependency-groups]
 dev = [
+    "mcp>=1.12.1",
     "types-pyyaml>=6.0.12.20250516",
 ]

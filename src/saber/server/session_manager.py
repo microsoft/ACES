@@ -89,7 +89,7 @@ class SessionManager:
         # Initialize server components
         logger.info(f"Initializing SessionManager for domain '{domain_name}'")
 
-        self.task_manager = TaskManager(domain_name, tasks_config_path)
+        self.task_manager = TaskManager(domain_name, tasks_config_path, execution_config_path)
         self.execution_manager = ExecutionManager(config_file=execution_config_path)
         self.policy_manager = PolicyManager(domain_name)
         self.evaluation_manager = EvaluationManager()
@@ -107,9 +107,15 @@ class SessionManager:
         return self.rest_api.app
 
     async def start_server(self) -> None:
-        """Start both REST and MCP servers."""
-        await self.rest_api.start_server()
-        await self.mcp_api.start_mcp_server()
+        """Start both REST and MCP servers concurrently."""
+        import asyncio
+
+        # Start both servers concurrently using asyncio tasks
+        rest_task = asyncio.create_task(self.rest_api.start_server())
+        mcp_task = asyncio.create_task(self.mcp_api.start_mcp_server())
+
+        # Wait for both to complete (they run indefinitely)
+        await asyncio.gather(rest_task, mcp_task)
 
     async def shutdown(self) -> None:
         """Shutdown the SessionManager and cleanup resources."""

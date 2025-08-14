@@ -365,7 +365,7 @@ class DockerSandboxEnvironment:
         if not self.compose_file_path:
             raise ContainerCreationError("Compose file not available")
 
-        cmd = ["docker-compose", "-f", self.compose_file_path, "-p", self.compose_project_name, "up", "-d"]
+        cmd = ["docker", "compose", "-f", self.compose_file_path, "-p", self.compose_project_name, "up", "-d"]
 
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=300)
@@ -382,7 +382,8 @@ class DockerSandboxEnvironment:
             return
 
         cmd = [
-            "docker-compose",
+            "docker",
+            "compose",
             "-f",
             self.compose_file_path,
             "-p",

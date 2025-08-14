@@ -52,8 +52,8 @@ class SessionMCPAPI:
 
             logger.info(f"Starting SABER {self.session_manager.domain_name} MCP server on {self.host}:{self.port}")
 
-            # Start the MCP server
-            await self.mcp_server.run(host=self.host, port=self.port)  # type: ignore[func-returns-value]
+            # Use run_async instead of run to work within existing asyncio loop
+            await self.mcp_server.run_async(transport="sse", host=self.host, port=self.port)
 
         except Exception as e:
             logger.error(f"Failed to start MCP server: {e}")
@@ -79,17 +79,68 @@ class SessionMCPAPI:
         if not self.mcp_server:
             raise RuntimeError("MCP server not initialized")
 
-        @self.mcp_server.list_tools()  # type: ignore
-        async def handle_list_tools() -> List[Dict[str, Any]]:
-            """Handle MCP list_tools request."""
-            result: List[Dict[str, Any]] = await self.handle_list_tools()
-            return result
+        # Register tools for each available executor type
+        from ..execution.executors.factory import ExecutorFactory
 
-        @self.mcp_server.call_tool()  # type: ignore
-        async def handle_call_tool(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-            """Handle MCP call_tool request."""
-            result: Dict[str, Any] = await self.handle_call_tool(name, arguments)
-            return result
+        # Get available executors and register tools for each
+        available_executors = ExecutorFactory.get_available_executors()
+        logger.info(f"Registering MCP tools for executors: {available_executors}")
+
+        # Dynamically register a tool for each executor
+        for executor_name in available_executors:
+            self._register_executor_tool(executor_name)
+
+    def _register_executor_tool(self, executor_name: str) -> None:
+        """
+        Dynamically register an MCP tool for a specific executor.
+
+        Args:
+            executor_name: The name of the executor (e.g., 'cli', 'python')
+        """
+        tool_name = f"execute_{executor_name}"
+
+        # Create the async function for this executor
+        async def executor_tool(command: str, session_id: str, parameters: Optional[dict] = None) -> str:
+            f"""Execute a {executor_name} command in the SABER sandbox environment.
+
+            Args:
+                command: The {executor_name} command/code to execute
+                session_id: Session ID for context
+                parameters: Optional parameters for the {executor_name} executor
+
+            Returns:
+                Command execution result as JSON
+            """
+            try:
+                action = Action(tool_name=executor_name, command=command, parameters=parameters or {})
+                result = await self.session_manager.execute_command(session_id, action)
+
+                if result.success:
+                    import json
+
+                    return (
+                        json.dumps(result.data)
+                        if result.data
+                        else json.dumps({"success": True, "output": f"{executor_name.title()} executed successfully"})
+                    )
+                else:
+                    return json.dumps({"success": False, "error": result.error})
+
+            except Exception as e:
+                logger.error(f"Error executing {executor_name} command: {e}")
+                import json
+
+                return json.dumps({"success": False, "error": str(e)})
+
+        # Set proper function metadata for the tool
+        executor_tool.__name__ = tool_name
+        executor_tool.__doc__ = f"Execute a {executor_name} command in the SABER sandbox environment."
+
+        # Register the tool with the MCP server
+        if self.mcp_server is not None:
+            self.mcp_server.tool(name=tool_name)(executor_tool)
+
+        logger.debug(f"Registered MCP tool: {tool_name}")
 
     async def handle_list_tools(self) -> List[Dict[str, Any]]:
         """

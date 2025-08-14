@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from ..base import CommandResult, ValidationResult
 from ..exceptions import SandboxExecutionError
-from ..sandbox.environment_spec import EnvironmentSpec, NetworkSpec
 from ..sandbox.sandbox_manager import SandboxManager
 from .base_executors import CommandExecutor
 
@@ -70,14 +69,7 @@ class DockerExecutor(CommandExecutor):
         try:
             environment = self._sandbox_manager.get_session_environment(session_id)
             if not environment:
-                # Create a default environment spec for backward compatibility
-                default_network = NetworkSpec(name="default-network")
-                default_spec = EnvironmentSpec(
-                    network=default_network,
-                    execution_service="main",
-                    execution_config={"image": "python:3.11-slim", "working_dir": "/workspace"},
-                )
-                environment = self._sandbox_manager.create_session_environment(session_id, default_spec)
+                raise SandboxExecutionError(f"No environment found for session {session_id}")
             return environment
         except Exception as e:
             raise SandboxExecutionError(f"Failed to get session environment: {e}")

@@ -1303,6 +1303,7 @@ server = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "mcp" },
     { name = "types-pyyaml" },
 ]
 
@@ -1331,7 +1332,10 @@ requires-dist = [
 provides-extras = ["dev", "server", "client"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "types-pyyaml", specifier = ">=6.0.12.20250516" }]
+dev = [
+    { name = "mcp", specifier = ">=1.12.1" },
+    { name = "types-pyyaml", specifier = ">=6.0.12.20250516" },
+]
 
 [[package]]
 name = "sniffio"
