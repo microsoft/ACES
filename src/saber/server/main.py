@@ -51,8 +51,7 @@ async def main() -> None:
         # Initialize and start the SessionManager
         session_manager = SessionManager(
             domain_name=domain_name,
-            tasks_config_path=tasks_config_path,
-            execution_config_path=environments_config_path,  # Pass environments config to execution manager
+            config_dir=config_dir,
             host=host,
             port=port,
             mcp_host=host,

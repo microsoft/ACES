@@ -60,8 +60,7 @@ class SessionManager:
     def __init__(
         self,
         domain_name: str,
-        tasks_config_path: str,
-        execution_config_path: Optional[str] = None,
+        config_dir: str,
         host: str = "0.0.0.0",
         port: int = 8000,
         mcp_host: str = "0.0.0.0",
@@ -72,14 +71,14 @@ class SessionManager:
 
         Args:
             domain_name: Name of the security domain (e.g., 'malware_classification')
-            tasks_config_path: Path to tasks configuration file
-            execution_config_path: Path to execution configuration file
+            config_dir: Path to configuration directory containing tasks.yaml and environments.yaml
             host: REST server host address
             port: REST server port
             mcp_host: MCP server host address
             mcp_port: MCP server port
         """
         self.domain_name = domain_name
+        self.config_dir = config_dir
         self.host = host
         self.port = port
         self.mcp_host = mcp_host
@@ -89,7 +88,7 @@ class SessionManager:
         # Initialize server components
         logger.info(f"Initializing SessionManager for domain '{domain_name}'")
 
-        self.task_manager = TaskManager(domain_name, tasks_config_path)
+        self.task_manager = TaskManager(domain_name, config_dir)
 
         # Get allowed executors from task configuration
         allowed_executors = self.task_manager.get_allowed_executors()
@@ -98,6 +97,8 @@ class SessionManager:
         else:
             logger.info("No executor restriction specified, all executors will be available")
 
+        # Construct execution config path from config directory
+        execution_config_path = f"{config_dir}/environments.yaml"
         self.execution_manager = ExecutionManager(
             config_file=execution_config_path, allowed_executors=allowed_executors
         )

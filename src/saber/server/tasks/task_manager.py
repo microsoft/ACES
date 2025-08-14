@@ -25,25 +25,26 @@ class TaskManager:
     and RL-style interfaces with specialized components.
     """
 
-    def __init__(self, domain: str, tasks_file_path: str, environments_file_path: Optional[str] = None):
+    def __init__(self, domain: str, config_dir: str):
         """
         Initialize TaskManager for a specific domain.
 
         Args:
             domain: The security domain (e.g., 'malware_classification')
-            tasks_file_path: Path to the YAML tasks definition file
-            environments_file_path: Optional path to environments.yaml for environment resolution
+            config_dir: Path to the configuration directory containing tasks.yaml and environments.yaml
         """
         self.domain = domain
-        self.tasks_file_path = Path(tasks_file_path)
-        self.environments_file_path = environments_file_path
+        self.config_dir = Path(config_dir)
+        self.tasks_file_path = self.config_dir / "tasks.yaml"
+        self.environments_file_path = self.config_dir / "environments.yaml"
         self.tasks: Dict[str, Task] = {}
 
         # Initialize specialized components
-        self.config_loader = TaskConfigLoader(domain, environments_file_path)
+        environments_path = str(self.environments_file_path) if self.environments_file_path.exists() else None
+        self.config_loader = TaskConfigLoader(domain, environments_path)
         self.episode_manager = EpisodeManager()
 
-        logger.info(f"Initializing TaskManager for domain '{domain}' with tasks file: {tasks_file_path}")
+        logger.info(f"Initializing TaskManager for domain '{domain}' with config directory: {config_dir}")
 
         # Load tasks using the config loader
         self.load_tasks_from_yaml()

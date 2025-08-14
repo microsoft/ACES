@@ -6,6 +6,7 @@ providing tool discovery and tool execution only. All other operations
 are handled by SessionRestAPI.
 """
 
+import json
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -116,8 +117,6 @@ class SessionMCPAPI:
                 result = await self.session_manager.execute_command(session_id, action)
 
                 if result.success:
-                    import json
-
                     return (
                         json.dumps(result.data)
                         if result.data
@@ -128,8 +127,6 @@ class SessionMCPAPI:
 
             except Exception as e:
                 logger.error(f"Error executing {executor_name} command: {e}")
-                import json
-
                 return json.dumps({"success": False, "error": str(e)})
 
         # Set proper function metadata for the tool
