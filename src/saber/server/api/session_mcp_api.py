@@ -6,12 +6,14 @@ providing tool discovery and tool execution only. All other operations
 are handled by SessionRestAPI.
 """
 
+import json
 import logging
 from typing import Any, Dict, List, Optional
 
 from fastmcp import FastMCP
 
 from ..base import Action, CommandResult
+from ..execution.executors.factory import ExecutorFactory
 
 logger = logging.getLogger(__name__)
 
@@ -78,9 +80,6 @@ class SessionMCPAPI:
         if not self.mcp_server:
             raise RuntimeError("MCP server not initialized")
 
-        # Register tools for each available executor type
-        from ..execution.executors.factory import ExecutorFactory
-
         # Get available executors and register tools for each
         available_executors = ExecutorFactory.get_available_executors()
         logger.info(f"Registering MCP tools for executors: {available_executors}")
@@ -110,13 +109,12 @@ class SessionMCPAPI:
             Returns:
                 Command execution result as JSON
             """
+
             try:
                 action = Action(tool_name=executor_name, command=command, parameters=parameters or {})
                 result = await self.session_manager.execute_command(session_id, action)
 
                 if result.success:
-                    import json
-
                     return (
                         json.dumps(result.data)
                         if result.data
@@ -127,8 +125,6 @@ class SessionMCPAPI:
 
             except Exception as e:
                 logger.error(f"Error executing {executor_name} command: {e}")
-                import json
-
                 return json.dumps({"success": False, "error": str(e)})
 
         # Set proper function metadata for the tool
