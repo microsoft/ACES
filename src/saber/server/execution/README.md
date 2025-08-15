@@ -428,6 +428,25 @@ available = factory.get_available_executors()  # ['cli', 'python', 'java']
 mcp_tools = registry.to_mcp_tools()  # Now includes Java tool
 ```
 
+### Custom Executor Registration
+
+Users can define and register custom executors from external Python files without modifying the SABER framework. When SABER initializes, it automatically loads any `*_executor.py` files from the configuration directory (e.g., `pentest_demo/server/`) and registers the custom executors they contain. External executor files should import the registration hook and register their executors:
+
+```python
+# In pentest_demo/server/nmap_executor.py
+from saber.server.execution.custom_executor_registry import register_custom_executor
+from saber.server.execution.executors.docker_executor import DockerExecutor
+
+class NmapExecutor(DockerExecutor):
+    # Implement required methods: setup_parameters, execute, to_mcp_schema
+    pass
+
+# Register the executor - SABER will discover it automatically
+register_custom_executor("nmap", NmapExecutor)
+```
+
+This approach allows users to extend SABER's capabilities for specific domains (penetration testing, malware analysis, etc.) by simply placing custom executor files in their project directories. The custom executors become available through the same MCP interface as built-in executors.
+
 The default values for executor parameters come from their respective configuration sections (cli, python, etc.).
 
 This enables seamless integration with MCP-compatible language models and agents for secure multi-type command execution with easy extensibility for future executor types.

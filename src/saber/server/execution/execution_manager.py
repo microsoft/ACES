@@ -48,6 +48,9 @@ class ExecutionManager:
                 self._environment_loader = EnvironmentLoader(str(environments_path))
                 logger.info(f"Environment loader initialized with: {environments_path}")
 
+            # Load custom executors from the same directory
+            self._load_custom_executors(config_dir)
+
         self._configuration: Dict[str, Any] = {}
 
         # Initialize sandbox manager with empty config (will be updated per session)
@@ -64,6 +67,42 @@ class ExecutionManager:
 
         logger.info("ExecutionManager initialized for sequential execution")
         logger.info(f"Available executor types: {self._executor_factory.get_filtered_available_executors()}")
+
+    def _load_custom_executors(self, config_dir: str) -> None:
+        """
+        Load custom executors from the configuration directory.
+
+        Looks for Python files ending with '_executor.py' in the config directory
+        and loads them to allow registration of custom executors.
+
+        Args:
+            config_dir: Path to configuration directory
+        """
+        try:
+            from .custom_executor_registry import load_custom_executors_from_directory
+
+            # Load custom executors from the config directory
+            results = load_custom_executors_from_directory(config_dir)
+
+            if results:
+                successful_loads = [file for file, result in results.items() if result == "loaded_successfully"]
+                if successful_loads:
+                    logger.info(f"Loaded custom executor definitions from {len(successful_loads)} files")
+                    for file_path in successful_loads:
+                        logger.debug(f"Loaded custom executors from: {file_path}")
+
+                failed_loads = [(file, result) for file, result in results.items() if result != "loaded_successfully"]
+                if failed_loads:
+                    logger.warning(f"Failed to load {len(failed_loads)} custom executor files")
+                    for file_path, error in failed_loads:
+                        logger.warning(f"Failed to load {file_path}: {error}")
+            else:
+                logger.debug(f"No custom executor files found in {config_dir}")
+
+        except ImportError:
+            logger.warning("Custom executor registry not available - custom executors will not be loaded")
+        except Exception as e:
+            logger.warning(f"Error loading custom executors from {config_dir}: {e}")
 
     async def step(self, action: Action, context: Optional[Dict[str, Any]] = None) -> CommandResult:
         """

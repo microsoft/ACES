@@ -40,7 +40,17 @@ class TestExecutionManager:
         }
 
     @pytest.fixture
-    def registry(self, sample_config):
+    def cleanup_factory(self):
+        """Clean up factory state after tests."""
+        from saber.server.execution.executors.factory import ExecutorFactory
+        # Store original state
+        original_registry = ExecutorFactory._executor_registry.copy()
+        yield
+        # Restore original state
+        ExecutorFactory._executor_registry = original_registry
+
+    @pytest.fixture
+    def registry(self, sample_config, cleanup_factory):
         """Create an ExecutionManager instance for testing."""
         with patch("saber.server.execution.execution_manager.SandboxManager"):
             return ExecutionManager()
