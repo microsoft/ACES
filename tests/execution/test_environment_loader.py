@@ -10,7 +10,7 @@ import yaml
 from pathlib import Path
 from unittest.mock import Mock, patch, mock_open
 
-from saber.server.tasks.environment_loader import EnvironmentLoader
+from saber.server.execution.environment_loader import EnvironmentLoader
 from saber.server.execution.exceptions import InvalidEnvironmentSpecException
 from saber.server.execution.sandbox.environment_spec import EnvironmentSpec
 

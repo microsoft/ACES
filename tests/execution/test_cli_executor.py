@@ -9,6 +9,7 @@ in isolated Docker containers.
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
+from saber.server.base import CommandResult
 from saber.server.execution.base import ParameterType, ValidationResult
 from saber.server.execution.executors.cli import CLIExecutor
 from saber.server.execution.utils.security_validator import SecurityValidator
@@ -43,9 +44,12 @@ class TestCLIExecutor:
     @pytest.fixture
     def docker_cli_tool(self, mock_sandbox_manager):
         """Create a CLI executor instance for testing."""
+        config = {
+            "timeout": 30.0,
+        }
         return CLIExecutor(
             sandbox_manager=mock_sandbox_manager,
-            timeout=30.0,
+            config=config,
             allowed_commands=["file", "strings", "echo", "cat"]
         )
 
@@ -142,6 +146,8 @@ class TestCLIExecutor:
         assert result.data["stdout"] == stdout
         assert result.data["stderr"] == stderr
         assert result.data["return_code"] == return_code
+        assert result.data["success"] is True
+        assert result.data["output"] == stdout  # Primary output for success
         assert result.data["success"] is True
         assert result.data["output"] == stdout  # Primary output for success
 
@@ -271,9 +277,9 @@ class TestCLIExecutorIntegration:
     """Integration tests for CLI executor with mocked Docker environment."""
 
     @pytest.fixture
-    def mock_docker_environment(self):
+    def mock_docker_sandbox_environment(self):
         """Create a mock Docker execution environment."""
-        from saber.server.execution.sandbox.docker_environment import CommandResult
+
 
         env = MagicMock()
         # Mock the new interface
@@ -284,7 +290,7 @@ class TestCLIExecutorIntegration:
         return env
 
     @pytest.fixture
-    def mock_sandbox_manager_with_env(self, mock_docker_environment):
+    def mock_sandbox_manager_with_env(self, mock_docker_sandbox_environment):
         """Create a mock SandboxManager that returns a Docker environment."""
         manager = MagicMock(spec=SandboxManager)
         manager.get_sandbox_config.return_value = {
@@ -293,23 +299,24 @@ class TestCLIExecutorIntegration:
             "read_only_root": True,
             "user": "tooluser:tooluser"
         }
-        manager.get_session_environment.return_value = mock_docker_environment
-        manager.create_session_environment.return_value = mock_docker_environment
+        manager.get_session_environment.return_value = mock_docker_sandbox_environment
+        manager.create_session_environment.return_value = mock_docker_sandbox_environment
         return manager
 
     @pytest.fixture
     def docker_cli_tool_with_env(self, mock_sandbox_manager_with_env):
         """Create a CLI executor with mocked environment."""
+        config = {"timeout": 30.0}
         return CLIExecutor(
             sandbox_manager=mock_sandbox_manager_with_env,
-            timeout=30.0,
+            config=config,
             allowed_commands=["file", "strings", "echo", "cat"]
         )
 
     @pytest.mark.asyncio
     async def test_execute_docker_integration_success(self, docker_cli_tool_with_env, mock_sandbox_manager_with_env):
         """Test successful Docker command execution."""
-        from saber.server.execution.sandbox.docker_environment import CommandResult
+
 
         # Set up mock command result
         command_result = CommandResult(
@@ -336,13 +343,14 @@ class TestCLIExecutorIntegration:
 
         # Verify Docker environment was called correctly
         env.execute_command.assert_called_once_with(
-            command=["echo", "Hello from Docker!"]
+            command=["echo", "Hello from Docker!"],
+            timeout=30  # Timeout from fixture config
         )
 
     @pytest.mark.asyncio
     async def test_execute_docker_integration_shell_mode(self, docker_cli_tool_with_env, mock_sandbox_manager_with_env):
         """Test Docker command execution in shell mode."""
-        from saber.server.execution.sandbox.docker_environment import CommandResult
+
 
         command_result = CommandResult(
             exit_code=0,
@@ -364,13 +372,14 @@ class TestCLIExecutorIntegration:
 
         # Verify shell command was constructed correctly
         env.execute_command.assert_called_once_with(
-            command=["/bin/sh", "-c", "echo hello world"]
+            command=["/bin/sh", "-c", "echo hello world"],
+            timeout=30
         )
 
     @pytest.mark.asyncio
     async def test_execute_docker_integration_failure(self, docker_cli_tool_with_env, mock_sandbox_manager_with_env):
         """Test Docker command execution failure."""
-        from saber.server.execution.sandbox.docker_environment import CommandResult
+
 
         command_result = CommandResult(
             exit_code=127,
@@ -404,35 +413,31 @@ class TestCLIExecutorIntegration:
         assert "session_id required in context" in result.error
 
     @pytest.mark.asyncio
-    async def test_execute_create_new_environment(self, docker_cli_tool_with_env, mock_sandbox_manager_with_env):
-        """Test that new environment is created when none exists for session."""
-        from saber.server.execution.sandbox.docker_environment import CommandResult
+    async def test_execute_with_existing_environment(self, docker_cli_tool_with_env, mock_sandbox_manager_with_env):
+        """Test that command execution works when environment already exists for session."""
 
-        # First call returns None (no existing environment), second call returns new environment
-        mock_sandbox_manager_with_env.get_session_environment.return_value = None
+        # Mock an existing environment
+        existing_env = MagicMock()
+        mock_sandbox_manager_with_env.get_session_environment.return_value = existing_env
 
         command_result = CommandResult(exit_code=0, stdout="test\n", stderr="", execution_time=0.3)
-        new_env = mock_sandbox_manager_with_env.create_session_environment.return_value
-        new_env.execute_command.return_value = command_result
-        # Mock the new interface
-        new_container_mock = MagicMock()
-        new_container_mock.id = "newcontainer123"
-        new_env.get_execution_container.return_value = new_container_mock
+        existing_env.execute_command.return_value = command_result
+
+        # Mock the container interface
+        container_mock = MagicMock()
+        container_mock.id = "container123"
+        existing_env.get_execution_container.return_value = container_mock
 
         parameters = {"command": "echo test", "shell": False}
-        context = {"session_id": "new_session"}
+        context = {"session_id": "existing_session"}
 
         result = await docker_cli_tool_with_env.execute(parameters, context)
 
         assert result.success is True
         assert result.data["stdout"] == "test\n"
 
-        # Verify that create_session_environment was called
-        # Note: the call now includes a default environment spec
-        assert mock_sandbox_manager_with_env.create_session_environment.called
-        call_args = mock_sandbox_manager_with_env.create_session_environment.call_args
-        assert call_args[0][0] == "new_session"  # session_id
-        assert len(call_args[0]) == 2  # session_id and environment_spec
+        # Verify that create_session_environment was NOT called since environment exists
+        mock_sandbox_manager_with_env.create_session_environment.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_execute_docker_exception_handling(self, docker_cli_tool_with_env, mock_sandbox_manager_with_env):

@@ -8,7 +8,8 @@ in Docker containers with dependency management and security validation.
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
-from saber.server.execution.base import CommandResult, ParameterType, ValidationResult
+from saber.server.base import CommandResult
+from saber.server.execution.base import ParameterType, ValidationResult
 from saber.server.execution.executors.python_executor import PythonExecutor
 from saber.server.execution.sandbox.sandbox_manager import SandboxManager
 from saber.server.execution.exceptions import SandboxExecutionError
@@ -47,7 +48,11 @@ class TestPythonExecutor:
 
     def test_initialization(self, mock_sandbox_manager):
         """Test Python executor initialization."""
-        executor = PythonExecutor(sandbox_manager=mock_sandbox_manager, timeout=120.0)
+        config = {
+            "timeout": 120.0,
+            "allowed_modules": ["os", "sys", "json"]  # Required for Python executor
+        }
+        executor = PythonExecutor(sandbox_manager=mock_sandbox_manager, config=config)
 
         assert executor.get_timeout() == 120.0
 

@@ -15,11 +15,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
 from .api.session_mcp_api import SessionMCPAPI
 from .api.session_rest_api import SessionRestAPI
+from .base import Action, CommandResult
+from .episodes.episode_manager import EpisodeManager
 from .evaluation.evaluation_manager import EvaluationManager
-from .execution.base import CommandResult
 from .execution.execution_manager import ExecutionManager
 from .policy.policy_manager import PolicyDocument, PolicyManager
-from .tasks.base import Action
 from .tasks.task_manager import TaskManager
 
 logger = logging.getLogger(__name__)
@@ -71,7 +71,7 @@ class SessionManager:
 
         Args:
             domain_name: Name of the security domain (e.g., 'malware_classification')
-            config_dir: Path to configuration directory containing tasks.yaml and environments.yaml
+            config_dir: Path to configuration directory containing tasks.yaml and other config files
             host: REST server host address
             port: REST server port
             mcp_host: MCP server host address
@@ -86,22 +86,12 @@ class SessionManager:
         self.active_sessions: Dict[str, ClientSession] = {}
 
         # Initialize server components
-        logger.info(f"Initializing SessionManager for domain '{domain_name}'")
+        logger.info(f"Initializing SessionManager for domain '{domain_name}' with config dir: {config_dir}")
 
         self.task_manager = TaskManager(domain_name, config_dir)
 
-        # Get allowed executors from task configuration
-        allowed_executors = self.task_manager.get_allowed_executors()
-        if allowed_executors:
-            logger.info(f"Using executor restriction from task config: {allowed_executors}")
-        else:
-            logger.info("No executor restriction specified, all executors will be available")
-
-        # Construct execution config path from config directory
-        execution_config_path = f"{config_dir}/environments.yaml"
-        self.execution_manager = ExecutionManager(
-            config_file=execution_config_path, allowed_executors=allowed_executors
-        )
+        self.episode_manager = EpisodeManager()
+        self.execution_manager = ExecutionManager(config_dir)
         self.policy_manager = PolicyManager(domain_name)
         self.evaluation_manager = EvaluationManager()
 
@@ -181,7 +171,7 @@ class SessionManager:
         # End any active episode
         if session.current_episode_id:
             try:
-                self.task_manager.end_episode(session_id, "session_terminated")
+                self.episode_manager.end_episode(session_id, "session_terminated")
                 session.current_episode_id = None
                 session.current_task_id = None
             except Exception as e:
@@ -218,19 +208,17 @@ class SessionManager:
         session = self._get_session(session_id)
         session.update_activity()
 
-        # Get environment specification from task
-        environment_spec = self.task_manager.get_task_environment_spec(task_id)
-        if environment_spec:
-            # Create execution environment for the task
-            try:
-                self.execution_manager.create_environment(session_id, environment_spec)
-                logger.info(f"Created execution environment for session {session_id}, task {task_id}")
-            except Exception as e:
-                logger.error(f"Failed to create execution environment for session {session_id}: {e}")
-                raise HTTPException(status_code=500, detail=f"Failed to create execution environment: {e}")
+        # Get the task object to access its configuration
+        task = self.task_manager.get_task(task_id)
 
-        # Start episode through task manager
-        episode = self.task_manager.start_episode(session_id, task_id)
+        # Configure execution manager with task object directly
+        self.execution_manager.configure_for_task(session_id, task)
+
+        # Start episode through episode manager
+        episode = self.episode_manager.start_episode(
+            session_id=session_id, task_id=task_id, initial_context=task.initial_context.copy()
+        )
+
         session.current_episode_id = episode.episode_id
         session.current_task_id = task_id
 
@@ -265,8 +253,8 @@ class SessionManager:
             context = {"session_id": session_id}
             command_result = await self.execution_manager.step(action, context)
 
-            # Execute step through task manager
-            step_result = self.task_manager.step(session_id, action, command_result)
+            # Execute step through episode manager
+            step_result = self.episode_manager.step(session_id, action, command_result)
 
             # Log action with evaluation manager (ignore failures)
             try:
@@ -278,7 +266,7 @@ class SessionManager:
 
             # End episode if step indicates completion
             if step_result.done:
-                self.task_manager.end_episode(session_id, "completed")
+                self.episode_manager.end_episode(session_id, "completed")
                 session.current_episode_id = None
                 session.current_task_id = None
                 try:
@@ -308,8 +296,8 @@ class SessionManager:
         if not session.current_episode_id:
             raise HTTPException(status_code=400, detail="No active episode in session")
 
-        # Get current episode and task info from task manager
-        episode = self.task_manager.get_current_episode(session_id)
+        # Get current episode and task info from episode manager
+        episode = self.episode_manager.get_current_episode(session_id)
         if not episode:
             raise HTTPException(status_code=400, detail="No active episode found")
 

@@ -7,7 +7,7 @@ Only tests that verify real component integration without heavy mocking.
 import pytest
 import uuid
 
-from saber.server.execution.execution_manager import ExecutionManager, ExecutionConfiguration
+from saber.server.execution.execution_manager import ExecutionManager
 from saber.server.execution.utils.security_validator import SecurityValidator
 from saber.server.execution.executors.factory import ExecutorFactory
 from saber.server.execution.sandbox.sandbox_manager import SandboxManager
@@ -43,11 +43,10 @@ class TestComponentIntegration:
     def test_component_initialization_integration(self, test_config):
         """Test that all components can be initialized together."""
         # Test that ExecutionManager can be created with configuration
-        execution_manager = ExecutionManager(config=test_config)
+        execution_manager = ExecutionManager()
 
         # Verify initialization
         assert execution_manager._configuration is not None
-        assert execution_manager._security_validator is not None
         assert execution_manager._executor_factory is not None
         assert execution_manager._sandbox_manager is not None
 
@@ -101,7 +100,7 @@ class TestRealDockerIntegration:
     def real_registry(self, test_config):
         """Create ExecutionManager with real Docker components."""
         # Use the full config, not just the execution section
-        return ExecutionManager(config=test_config)
+        return ExecutionManager()
 
     @pytest.fixture
     def docker_cleanup(self):
@@ -130,7 +129,7 @@ class TestRealDockerIntegration:
         docker_cleanup(real_registry, session_id)
 
         # Create a simple action that should work in the container
-        from saber.server.tasks.base import Action
+        from saber.server.base import Action
         action = Action(tool_name="cli", command="echo 'real container test'")
         context = {"session_id": session_id}
 
@@ -140,9 +139,9 @@ class TestRealDockerIntegration:
 
             # Verify it worked (if the Docker image is available)
             # If the image isn't available, the test might fail, but cleanup should still work
-            if result.success:
-                assert "real container test" in result.data.get("stdout", "")
-                assert result.data.get("return_code") == 0
+            if result.exit_code == 0:
+                assert "real container test" in result.stdout
+                assert result.exit_code == 0
             else:
                 # If Docker image isn't available, that's ok for this test
                 # The important part is that cleanup works

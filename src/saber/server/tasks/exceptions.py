@@ -35,11 +35,3 @@ class InvalidTaskDefinitionException(TaskManagerException):
             super().__init__(f"Invalid task definition in {file_path}: {message}")
         else:
             super().__init__(f"Invalid task definition: {message}")
-
-
-class EpisodeNotFoundException(TaskManagerException):
-    """Raised when an episode is not found."""
-
-    def __init__(self, episode_id: str):
-        self.episode_id = episode_id
-        super().__init__(f"Episode not found: {episode_id}")

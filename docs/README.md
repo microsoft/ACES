@@ -55,28 +55,32 @@ Model Context Protocol handler component managed by SessionManager:
 - **Focused Scope**: ONLY handles tool discovery and execution via MCP protocol
 
 #### TaskManager
-Orchestrator for task management:
+Simplified task definition management:
+- **Task Configuration**: Loads and manages task definitions from YAML configuration files
+- **Task Lookup**: Provides task object retrieval by task ID with complete configuration
+- **Configuration Containment**: Task objects now contain all execution parameters (environment, allowed_executors)
+- **Focused Responsibility**: Only handles task definition parsing and lookup - no episode management
 
 ##### TaskConfigLoader
-Specialized YAML configuration management:
-- **YAML Task Loading**: Parses domain-specific task configurations from YAML files into structured objects
-- **Task Validation**: Ensures proper YAML structure, required fields, and subtask relationships
-- **Object Creation**: Instantiates Task and SubTask objects with validated configuration data
-- **Configuration Management**: Handles domain-specific task definition schemas and validation rules
+Enhanced YAML configuration management:
+- **Complete Task Loading**: Parses task definitions including execution configuration (allowed_executors, environment)
+- **Task Validation**: Ensures proper YAML structure, required fields, and execution parameters
+- **Object Creation**: Creates Task objects with complete configuration needed by other components
+- **Single Source**: Only component that reads task configuration files
 
 ##### Task Framework
-Each Task instance contains basic task information without complex progression logic:
-- **Task Definition**: Contains task metadata, subtasks, and requirements for domain workflows
-- **Subtask Management**: Organizes sequential workflow steps with dependencies and completion criteria
-- **State Tracking**: Provides task context and progress information to episode management
-- **Domain Integration**: Links task definitions to domain-specific execution capabilities
+Enhanced Task objects with complete execution configuration:
+- **Complete Configuration**: Tasks contain environment, allowed_executors, and all execution parameters
+- **Self-Contained**: No need for separate configuration lookups - all parameters in Task object
+- **Subtask Information**: Contains subtasks for informational purposes only
+- **Component Integration**: Provides all configuration needed by ExecutionManager and other components
 
-##### EpisodeManager
-Episode management for RL workflows:
-- **Episode Lifecycle**: Manages RL-style episode creation, progression, and termination with state transitions
-- **Step Coordination**: Coordinates individual action steps within episodes and tracks progression
-- **RL Interface**: Provides gym-style step/reset interface for reinforcement learning integration
-- **Session Integration**: Links episodes to client sessions and maintains episode state across interactions
+#### EpisodeManager
+Moved to SessionManager for better separation of concerns:
+- **Session-Level Management**: Now managed directly by SessionManager for better architectural separation
+- **Episode Lifecycle**: Manages RL-style episode creation, progression, and termination
+- **Step Coordination**: Handles individual action steps within episodes and tracks progression
+- **RL Interface**: Provides episode state management and step creation for RL workflows
 
 #### ExecutionManager
 Docker sandbox execution manager for MCP integration:

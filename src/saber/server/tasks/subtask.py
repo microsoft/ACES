@@ -28,9 +28,3 @@ class SubTask(BaseModel):
             Always False since dependencies are removed
         """
         return False
-
-    class Config:
-        """Pydantic configuration."""
-
-        # Configuration options can be added here as needed
-        pass

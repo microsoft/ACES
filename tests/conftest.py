@@ -14,7 +14,8 @@ from typing import Any, Dict, Optional
 import logging
 from unittest.mock import patch, Mock
 
-from saber.server.execution.base import CommandResult, Parameter, ParameterType
+from saber.server.base import CommandResult
+from saber.server.execution.base import Parameter, ParameterType
 from saber.server.execution.executors.base_executors import CommandExecutor
 from saber.server.execution.executors.cli import CLIExecutor
 from saber.server.execution.utils.security_validator import SecurityValidator
@@ -50,7 +51,7 @@ def test_config_dict(test_config_path):
 @pytest.fixture
 def registry_with_config(test_config_dict):
     """Create ExecutionManager with test configuration."""
-    return ExecutionManager(config=test_config_dict)
+    return ExecutionManager()
 
 
 @pytest.fixture
@@ -126,11 +127,11 @@ tasks:
 
 
 @pytest.fixture
-def temp_tasks_file(tmp_path, sample_task_yaml):
-    """Create a temporary YAML file with task configuration."""
-    tasks_file = tmp_path / "test_tasks.yaml"
+def temp_config_dir(tmp_path, sample_task_yaml):
+    """Create a temporary directory with tasks.yaml configuration and return the directory path."""
+    tasks_file = tmp_path / "tasks.yaml"
     tasks_file.write_text(sample_task_yaml)
-    return str(tasks_file)
+    return str(tmp_path)  # Return directory path
 
 
 @pytest.fixture
@@ -150,7 +151,7 @@ def sample_subtask_data():
 @pytest.fixture
 def sample_action():
     """Sample action for episode testing."""
-    from saber.server.tasks.episodes import Action
+    from saber.server.episodes import Action
     return Action(
         tool_name="docker_cli_executor",
         parameters={"command": "file sample.exe"},

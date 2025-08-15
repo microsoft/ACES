@@ -1,0 +1,19 @@
+FROM saber/base-sandbox:latest
+
+USER root
+
+# Install additional Python packages for Python execution
+RUN apt-get update && apt-get install -y \
+    python3-venv \
+    python3-dev \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Install common Python packages
+RUN python3 -m pip install --upgrade pip \
+    && python3 -m pip install numpy pandas requests beautifulsoup4 lxml
+
+USER tooluser
+
+# Security: Container runs as non-root, with limited capabilities

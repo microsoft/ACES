@@ -7,8 +7,7 @@ Tests meaningful episode functionality - pruned basic data structure tests.
 import pytest
 from datetime import datetime
 
-from saber.server.tasks.episodes.episode import Episode
-from saber.server.tasks.base import Step, EpisodeState, Action
+from saber.server.base import Episode, Step, EpisodeState, Action
 
 
 class TestEpisode:

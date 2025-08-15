@@ -16,24 +16,18 @@ package "Task Framework Core" {
         +domain: str
         +tasks: Dict[str, Task]
         +config_loader: TaskConfigLoader
-        +episode_manager: EpisodeManager
         --
         +get_task(task_id): Task
         +get_subtask(task_id, subtask_id): SubTask
-        +start_episode(session_id, task_id): Episode
-        +get_current_episode(session_id): Episode?
-        +step(session_id, action, command_result): Step
-        +reset(session_id, task_id): Episode
-        +end_episode(session_id, reason): Episode
-        +reset_episode(session_id): Episode
         +list_tasks(): List[Dict]
-        +get_episode_info(session_id): Dict
+        +load_tasks_from_yaml(): void
     }
 
     class TaskConfigLoader {
         +domain: str
         --
         +load_tasks_from_file(): Dict[str, Task]
+        +get_allowed_executors(): List[str]
         +_parse_task(): Task
         +_parse_subtask(): SubTask
     }
@@ -43,8 +37,10 @@ package "Task Framework Core" {
         +domain: str
         +title: str
         +description: str
-        +subtasks: List[SubTask]
+        +environment: Union[str, Dict[str, Any]]
+        +allowed_executors: List[str]
         +initial_context: Dict[str, Any]
+        +subtasks: List[SubTask]
         --
         +add_subtask(): void
         +get_subtask_by_id(): SubTask?
@@ -125,7 +121,6 @@ package "Episode Management" {
 
 ' Relationships
 TaskManager *-- TaskConfigLoader
-TaskManager *-- EpisodeManager
 TaskManager *-- Task
 
 TaskConfigLoader ..> Task : creates
@@ -139,18 +134,20 @@ Step *-- Action
 Episode ..> EpisodeState
 
 note top of TaskManager
-**Task Orchestrator**
-Coordinates task loading, episode management, and RL interfaces.
-Simplified to focus on coordination between specialized components.
-Provides gym-style step() and reset() methods for RL compatibility.
-Subtasks are retained for informational purposes only.
+**Task Definition Manager**
+Simplified to focus only on task definition management.
+No longer manages episodes or provides RL interfaces.
+Only responsible for task configuration loading and lookup.
+Task objects now contain all execution configuration (flexible environment, allowed_executors).
 end note
 
 note top of Task
-**Simplified Task Definition**
-Tasks contain basic task information and subtasks for reference.
-No progression logic, dependency validation, or state tracking.
-Subtasks are purely informational elements returned at episode start.
+**Enhanced Task Definition**
+Tasks now contain complete execution configuration including flexible environment specification and allowed_executors.
+Environment can be: string template reference, dict with granular config, or hybrid approach.
+No longer requires separate calls to get execution configuration.
+Contains all parameters needed by other SABER components.
+Subtasks are retained for informational purposes only.
 end note
 
 note top of EpisodeManager
@@ -163,10 +160,10 @@ end note
 
 note top of TaskConfigLoader
 **YAML Configuration Loader**
-Loads and validates task definitions directly from YAML files.
-Creates Task and SubTask objects from YAML data structures.
+Enhanced to load complete task configuration including execution parameters.
+Parses allowed_executors from YAML and includes in Task objects.
 No dependency validation or progression logic.
-Single responsibility: YAML parsing and object creation.
+Single responsibility: YAML parsing and complete Task object creation.
 end note
 
 note bottom of Episode

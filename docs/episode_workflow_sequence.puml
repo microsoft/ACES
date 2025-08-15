@@ -18,40 +18,32 @@ participant "ExecutionManager" as EM_EXEC
 
 Client -> REST: POST /session/{session_id}/start-episode\n{task_id: "malware_analysis_001"}
 REST -> SM: start_episode(session_id, task_id)
-SM -> TM: reset(session_id, task_id)
-TM -> EM: get_current_episode(session_id)
-EM --> TM: None (no active episode)
-TM -> EM: end_episode(session_id, "reset") [if exists]
-TM -> TM: get_task(task_id)
-TM -> TM: start_episode(session_id, task_id)
-TM -> EM: start_episode(session_id, task_id, initial_context)
+SM -> TM: get_task(task_id)
+TM --> SM: task_object
+SM -> EM: start_episode(session_id, task_id, task.initial_context)
 EM -> EM: create Episode object
 EM -> EM: store in active_episodes[session_id]
-EM --> TM: episode
-TM --> SM: episode
+EM --> SM: episode
 
 == Task Context & Policy Gathering ==
 
 SM -> TM: get_task(task_id)
-TM --> SM: current_task
-SM -> EVAL_M: initialize_evaluation(current_task)
+TM --> SM: task_object (with environment_spec, allowed_executors, etc.)
+SM -> EVAL_M: initialize_evaluation(task_object)
 EVAL_M --> SM: evaluation_ready
 SM -> PM: get_policy()
 PM --> SM: policy_document
-SM -> PM: get_guidelines()
-PM --> SM: guidelines
-SM -> PM: get_hints()
-PM --> SM: context_hints
 
 note right of SM
   SessionManager gathers:
-  - Current task details
+  - Complete task object with all configuration
   - Domain policy document
-  - Agent guidelines
-  - Context hints
 
-  And initializes evaluation
-  with the task context
+  Task object now contains:
+  - environment (flexible specification)
+  - allowed_executors
+  - initial_context
+  - subtasks (informational)
 end note
 
 note right of EVAL_M
@@ -62,12 +54,12 @@ note right of EVAL_M
   - Configures task-specific metrics
 end note
 
-SM -> REST: episode_info, task_context, policy, guidelines, hints
-REST -> Client: HTTP 200 OK\n{episode_info, task_context, policy, guidelines, hints}
+SM -> REST: episode_info, task_context, policy
+REST -> Client: HTTP 200 OK\n{episode_info, task_context, policy}
 
 == Agent Initialization ==
 
-Client -> Agent: Prompt(task_context + policy + guidelines + hints)
+Client -> Agent: Prompt(task_context + policy)
 Agent --> Client: command_string
 
 == MCP Connection Setup ==
@@ -98,11 +90,7 @@ note right of SM
   Action + CommandResult
 end note
 
-SM -> TM: step(session_id, action, command_result)
-TM -> EM: get_current_episode(session_id)
-EM --> TM: episode
-TM -> TM: get_task(episode.task_id)
-TM -> EM: step(session_id, action, command_result)
+SM -> EM: step(session_id, action, command_result)
 
 == EpisodeManager Step Processing ==
 
@@ -112,17 +100,10 @@ EM -> EM: extract command from action
 EM -> EM: create Step object
 EM -> EM: add step to episode
 EM -> EM: update_episode_state(episode, step)
-EM --> TM: Step
-TM --> SM: Step
+EM --> SM: Step
 
 SM -> MCP: command_result + step_info
 MCP -> Client: mcp_result(success, data, metadata)
-EM -> EM: extract command from action
-EM -> EM: create Step object
-EM -> EM: add step to episode
-EM -> EM: update_episode_state(episode, step)
-EM --> TM: Step
-TM --> SM: Step
 
 == Step Evaluation ==
 

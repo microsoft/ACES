@@ -8,8 +8,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from saber.server.api.session_mcp_api import SessionMCPAPI
-from saber.server.execution.base import CommandResult
-from saber.server.tasks.base import Action
+from saber.server.base import CommandResult, Action
 
 
 class TestSessionMCPAPI:
@@ -170,14 +169,14 @@ class TestSessionMCPAPI:
         # Mock FastMCP
         with patch('saber.server.api.session_mcp_api.FastMCP') as mock_fastmcp:
             mock_server = MagicMock()
-            mock_server.run = AsyncMock()
+            mock_server.run_async = AsyncMock()
             mock_server.close = AsyncMock()
             mock_fastmcp.return_value = mock_server
 
             # Test startup
             await mcp_api.start_mcp_server()
             assert mcp_api.mcp_server == mock_server
-            mock_server.run.assert_called_once_with(host="127.0.0.1", port=3001)
+            mock_server.run_async.assert_called_once_with(transport="sse", host="127.0.0.1", port=3001)
 
             # Test shutdown
             await mcp_api.shutdown_mcp_server()

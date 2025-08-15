@@ -8,7 +8,8 @@ it in Docker containers with proper security validation.
 import logging
 from typing import Any, Dict, Optional
 
-from ..base import CommandResult, Parameter, ParameterType, ValidationResult
+from ...base import CommandResult
+from ..base import Parameter, ParameterType, ValidationResult
 from ..exceptions import SandboxExecutionError
 from ..sandbox.sandbox_manager import SandboxManager
 from .docker_executor import DockerExecutor
@@ -36,25 +37,16 @@ class PythonExecutor(DockerExecutor):
         "requires_validation": True,
     }
 
-    def __init__(
-        self, sandbox_manager: SandboxManager, python_config: Optional[Dict[str, Any]] = None, **kwargs: Any
-    ) -> None:
+    @classmethod
+    def get_default_config(cls) -> Dict[str, Any]:
         """
-        Initialize Python executor.
+        Get default configuration for Python executor.
 
-        Args:
-            sandbox_manager: Required sandbox manager for Docker execution
-            python_config: Optional Python-specific configuration
-            **kwargs: Additional arguments passed to parent
+        Returns:
+            Dictionary containing Python executor default configuration
         """
-        super().__init__(sandbox_manager=sandbox_manager, docker_config=python_config, **kwargs)
-
-        self._python_config = python_config or {}
-
-        # Set up allowed modules (security feature)
-        self._allowed_modules = self._python_config.get(
-            "allowed_modules",
-            [
+        return {
+            "allowed_modules": [
                 "os",
                 "sys",
                 "json",
@@ -73,15 +65,59 @@ class PythonExecutor(DockerExecutor):
                 "hashlib",
                 "subprocess",
             ],
-        )
+            "script_templates": {},
+            "timeout": 600.0,  # Python scripts may take longer
+        }
+
+    @classmethod
+    def create_with_config(
+        cls,
+        sandbox_manager: SandboxManager,
+        config: Optional[Dict[str, Any]] = None,
+        additional_params: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> "PythonExecutor":
+        """
+        Create Python executor with standardized configuration interface.
+
+        Args:
+            sandbox_manager: Required sandbox manager for Docker execution
+            config: Python-specific configuration dictionary
+            additional_params: Additional parameters (not used for Python executor)
+            **kwargs: Additional keyword arguments
+
+        Returns:
+            Configured Python executor instance
+        """
+        merged_kwargs = {**kwargs}
+        if additional_params:
+            merged_kwargs.update(additional_params)
+
+        return cls(sandbox_manager=sandbox_manager, config=config, **merged_kwargs)
+
+    def __init__(self, sandbox_manager: SandboxManager, config: Optional[Dict[str, Any]] = None, **kwargs: Any) -> None:
+        """
+        Initialize Python executor.
+
+        Args:
+            sandbox_manager: Required sandbox manager for Docker execution
+            config: Python-specific configuration
+            **kwargs: Additional arguments passed to parent
+        """
+        super().__init__(sandbox_manager=sandbox_manager, config=config, **kwargs)
+
+        # Set up allowed modules (security feature) - must be explicitly configured
+        if "allowed_modules" not in self._config:
+            raise SandboxExecutionError("allowed_modules must be explicitly configured for Python executor")
+
+        self._allowed_modules = self._config["allowed_modules"]
+        if not isinstance(self._allowed_modules, list):
+            raise SandboxExecutionError("allowed_modules must be a list of module names")
 
         # Set up script templates
-        self._script_templates = self._python_config.get("script_templates", {})
+        self._script_templates = self._config.get("script_templates", {})
 
-        # Add parameters
-        self._setup_parameters()
-
-    def _setup_parameters(self) -> None:
+    def setup_parameters(self, config: Dict[str, Any]) -> None:
         """Set up Python executor parameters."""
         # Python code parameter
         self.add_parameter(
@@ -94,13 +130,14 @@ class PythonExecutor(DockerExecutor):
         )
 
         # Template parameter for common patterns
+        script_templates = config.get("script_templates", {})
         self.add_parameter(
             Parameter(
                 name="template",
                 type=ParameterType.STRING,
                 description="Optional script template to use",
                 required=False,
-                enum_values=list(self._script_templates.keys()) if self._script_templates else None,
+                enum_values=list(script_templates.keys()) if script_templates else None,
             )
         )
 
@@ -253,7 +290,8 @@ class PythonExecutor(DockerExecutor):
         result_data = {
             "stdout": stdout,
             "stderr": stderr,
-            "return_code": return_code,
+            "exit_code": return_code,
+            "return_code": return_code,  # Keep both for backward compatibility
             "success": success,
             "output": stdout if success else stderr,
             "script_path": script_path,
@@ -318,15 +356,16 @@ class PythonExecutor(DockerExecutor):
 
             # Create script file using echo (simple approach)
             working_dir = parameters.get("working_dir", "/workspace")
+            timeout = int(self.get_timeout())
             create_script_cmd = ["sh", "-c", f"cd {working_dir} && cat > {script_path} << 'EOF'\n{script_content}\nEOF"]
-            create_result = environment.execute_command(command=create_script_cmd)
+            create_result = environment.execute_command(command=create_script_cmd, timeout=timeout)
 
             if create_result.exit_code != 0:
                 return CommandResult.error_result(error=f"Failed to create script file: {create_result.stderr}")
 
             # Execute Python script
             python_cmd = ["sh", "-c", f"cd {working_dir} && python3 {script_path}"]
-            result = environment.execute_command(command=python_cmd)
+            result = environment.execute_command(command=python_cmd, timeout=timeout)
 
             # Parse output
             tool_result = self.parse_python_output(result.stdout, result.stderr, result.exit_code, script_path)

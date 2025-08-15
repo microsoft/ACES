@@ -8,11 +8,10 @@ Simplified after removing subtask progression tracking.
 import pytest
 from datetime import datetime
 
-from saber.server.tasks.episodes.episode_manager import EpisodeManager
-from saber.server.tasks.episodes import Episode, Step, Action
-from saber.server.tasks.base import EpisodeState
-from saber.server.tasks.exceptions import EpisodeNotFoundException
-from saber.server.execution.base import CommandResult
+from saber.server.episodes.episode_manager import EpisodeManager
+from saber.server.base import Episode, Step, Action, EpisodeState
+from saber.server.episodes.exceptions import EpisodeNotFoundException
+from saber.server.base import CommandResult
 
 
 class TestEpisodeManager:
@@ -79,18 +78,19 @@ class TestEpisodeManager:
 
         action = Action(tool_name="test_tool", parameters={"key": "value"})
         command_result = CommandResult(
-            success=True,
-            data={"output": "Test output", "file_type": "PE32"},
-            error=None,
-            execution_time=None
+            exit_code=0,
+            stdout="Test output",
+            stderr="",
+            execution_time=0.1,
+            metadata={"output": "Test output", "file_type": "PE32"}
         )
 
         step = manager.step("test_session", action, command_result)
 
         assert isinstance(step, Step)
         assert step.action == action
-        assert step.response["success"] is True
-        assert step.response["data"]["output"] == "Test output"
+        assert step.response["exit_code"] == 0  # Success is exit_code == 0
+        assert step.response["metadata"]["output"] == "Test output"
         assert step.step_number == 0
         assert step.done is False
 
@@ -102,7 +102,12 @@ class TestEpisodeManager:
         """Test step with non-existent session."""
         manager = EpisodeManager()
         action = Action(tool_name="test_tool", parameters={})
-        command_result = CommandResult(success=True, data={}, error=None, execution_time=None)
+        command_result = CommandResult(
+            exit_code=0,
+            stdout="",
+            stderr="",
+            execution_time=0.1
+        )
 
         with pytest.raises(EpisodeNotFoundException):
             manager.step("nonexistent_session", action, command_result)
@@ -113,7 +118,12 @@ class TestEpisodeManager:
         manager.start_episode("test_session", "test_task")
 
         action = Action(tool_name="test_tool", parameters={})
-        command_result = CommandResult(success=True, data={}, error=None, execution_time=None)
+        command_result = CommandResult(
+            exit_code=0,
+            stdout="",
+            stderr="",
+            execution_time=0.1
+        )
 
         step1 = manager.step("test_session", action, command_result)
         step2 = manager.step("test_session", action, command_result)
@@ -151,7 +161,12 @@ class TestEpisodeManager:
 
         # Add some steps to the old episode
         action = Action(tool_name="test_tool", parameters={})
-        command_result = CommandResult(success=True, data={}, error=None, execution_time=None)
+        command_result = CommandResult(
+            exit_code=0,
+            stdout="",
+            stderr="",
+            execution_time=0.1
+        )
         manager.step("test_session", action, command_result)
 
         # Reset the episode
@@ -210,14 +225,19 @@ class TestEpisodeManager:
         episode = manager.start_episode("test_session", "test_task")
 
         action = Action(tool_name="test_tool", parameters={"key": "value"})
-        response = CommandResult(success=True, data={"output": "test output"})
+        response = CommandResult(
+            exit_code=0,
+            stdout="test output",
+            stderr="",
+            execution_time=0.1
+        )
 
         step = manager.create_step(episode, action, response)
 
         assert isinstance(step, Step)
         assert step.action == action
-        assert step.response["success"] is True
-        assert step.response["data"]["output"] == "test output"
+        assert step.response["exit_code"] == 0  # Success is exit_code == 0
+        assert step.response["stdout"] == "test output"
         assert step.step_number == 0
         assert step.done is False
 

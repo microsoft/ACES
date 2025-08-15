@@ -7,7 +7,7 @@ and data models used throughout the ExecutionManager command execution system.
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Type, Union
+from typing import Any, List, Optional, Union
 
 
 class ParameterType(str, Enum):
@@ -83,31 +83,6 @@ class Parameter:
 
 
 @dataclass
-class CommandResult:
-    """Result of command execution."""
-
-    success: bool
-    data: Any = None
-    error: Optional[str] = None
-    execution_time: Optional[float] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
-
-    @classmethod
-    def success_result(
-        cls, data: Any, execution_time: Optional[float] = None, metadata: Optional[Dict[str, Any]] = None
-    ) -> "CommandResult":
-        """Create a successful command result."""
-        return cls(success=True, data=data, execution_time=execution_time, metadata=metadata or {})
-
-    @classmethod
-    def error_result(
-        cls, error: str, execution_time: Optional[float] = None, metadata: Optional[Dict[str, Any]] = None
-    ) -> "CommandResult":
-        """Create an error command result."""
-        return cls(success=False, error=error, execution_time=execution_time, metadata=metadata or {})
-
-
-@dataclass
 class ValidationResult:
     """Result of validation operations."""
 
@@ -133,33 +108,3 @@ class ValidationResult:
     def add_warning(self, warning: str) -> None:
         """Add a warning to the validation result."""
         self.warnings.append(warning)
-
-
-# Decorator for marking security commands
-def security_command(
-    domain: str,
-    name: str,
-    description: str,
-    author: str = "Unknown",
-) -> Callable[[Type], Type]:
-    """
-    Decorator to mark a CommandExecutor class as a security command.
-
-    Args:
-        domain: Security domain (malware, threat_investigation, forensics)
-        name: Command name
-        description: Command description
-        author: Command author
-    """
-
-    def decorator(cls: Type) -> Type:
-        # Store metadata on the class
-        cls._security_command_metadata = {
-            "domain": domain,
-            "name": name,
-            "description": description,
-            "author": author,
-        }
-        return cls
-
-    return decorator

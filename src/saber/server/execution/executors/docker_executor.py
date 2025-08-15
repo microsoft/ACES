@@ -9,7 +9,8 @@ import logging
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from ..base import CommandResult, ValidationResult
+from ...base import CommandResult
+from ..base import ValidationResult
 from ..exceptions import SandboxExecutionError
 from ..sandbox.sandbox_manager import SandboxManager
 from .base_executors import CommandExecutor
@@ -31,27 +32,54 @@ class DockerExecutor(CommandExecutor):
     - Post-execution cleanup
     """
 
-    def __init__(
-        self, sandbox_manager: SandboxManager, docker_config: Optional[Dict[str, Any]] = None, **kwargs: Any
-    ) -> None:
+    def __init__(self, sandbox_manager: SandboxManager, config: Optional[Dict[str, Any]] = None, **kwargs: Any) -> None:
         """
         Initialize Docker executor.
 
         Args:
             sandbox_manager: Required sandbox manager for Docker execution
-            docker_config: Optional Docker-specific configuration
+            config: Executor configuration dictionary
             **kwargs: Additional arguments passed to parent
 
         Raises:
             SandboxExecutionError: If sandbox_manager is None or invalid
         """
-        super().__init__(**kwargs)
+        super().__init__(config=config, **kwargs)
 
         if sandbox_manager is None:
             raise SandboxExecutionError("sandbox_manager is required for Docker execution")
 
         self._sandbox_manager = sandbox_manager
-        self._docker_config = docker_config or {}
+
+    @classmethod
+    def create_with_config(
+        cls,
+        sandbox_manager: SandboxManager,
+        config: Optional[Dict[str, Any]] = None,
+        additional_params: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> "DockerExecutor":
+        """
+        Generic factory method for creating executor instances with standardized configuration.
+
+        This method provides a consistent interface for all Docker executors, allowing
+        the factory to create instances without knowing specific constructor signatures.
+
+        Args:
+            sandbox_manager: Required sandbox manager for Docker execution
+            config: Executor-specific configuration dictionary
+            additional_params: Additional parameters specific to this executor type
+            **kwargs: Additional keyword arguments
+
+        Returns:
+            Configured executor instance
+        """
+        # Default implementation - subclasses can override for custom initialization
+        merged_kwargs = {**kwargs}
+        if additional_params:
+            merged_kwargs.update(additional_params)
+
+        return cls(sandbox_manager=sandbox_manager, docker_config=config, **merged_kwargs)
 
     def get_session_environment(self, session_id: str) -> "DockerSandboxEnvironment":
         """
@@ -69,7 +97,9 @@ class DockerExecutor(CommandExecutor):
         try:
             environment = self._sandbox_manager.get_session_environment(session_id)
             if not environment:
-                raise SandboxExecutionError(f"No environment found for session {session_id}")
+                raise SandboxExecutionError(
+                    f"No environment found for session {session_id}. Environment must be created before execution."
+                )
             return environment
         except Exception as e:
             raise SandboxExecutionError(f"Failed to get session environment: {e}")
@@ -160,6 +190,18 @@ class DockerExecutor(CommandExecutor):
             logger.warning(f"Could not retrieve Docker configuration: {e}")
 
         return info
+
+    def setup_parameters(self, config: Dict[str, Any]) -> None:
+        """
+        Set up Docker executor parameters.
+
+        DockerExecutor is a base class that doesn't define its own parameters.
+        Subclasses should override this method to define their specific parameters.
+
+        Args:
+            config: The merged configuration dictionary
+        """
+        pass
 
     @abstractmethod
     async def execute(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> CommandResult:

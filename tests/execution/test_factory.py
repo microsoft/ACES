@@ -44,7 +44,6 @@ class TestExecutorFactory:
 
     def test_initialization_with_config(self, mock_sandbox_manager):
         """Test factory initialization with configuration."""
-        from saber.server.execution.execution_manager import ExecutionConfiguration
 
         config_dict = {
             "executors": {
@@ -52,7 +51,7 @@ class TestExecutorFactory:
                 "python": {"allowed_modules": ["requests", "json"]}
             }
         }
-        configuration = ExecutionConfiguration(config=config_dict)
+        configuration = dict(config=config_dict)
 
         factory = ExecutorFactory(sandbox_manager=mock_sandbox_manager, configuration=configuration)
         assert factory._configuration == configuration
@@ -152,65 +151,30 @@ class TestExecutorFactory:
 
     def test_executor_config_extraction(self, mock_sandbox_manager):
         """Test executor configuration extraction with the new configuration system."""
-        from saber.server.execution.execution_manager import ExecutionConfiguration
 
-        config_dict = {
-            "common": {"timeout": 600},
+        configuration = {
+            "timeout": 600,
             "cli": {"default_shell_mode": True}
         }
-        configuration = ExecutionConfiguration(config=config_dict)
 
         factory = ExecutorFactory(sandbox_manager=mock_sandbox_manager, configuration=configuration)
 
         # Test extracting CLI config
-        cli_config = configuration.get_section("cli")
+        cli_config = configuration.get("cli", {})
         assert cli_config["default_shell_mode"] is True
 
-        # Test extracting common config
-        common_config = configuration.get_section("common")
-        assert common_config["timeout"] == 600
+        # Test extracting timeout from top level
+        assert configuration["timeout"] == 600
 
-    def test_analyze_command_python_indicators(self, executor_factory):
-        """Test command analysis for Python indicators."""
-        python_commands = [
-            "python script.py",
-            "python3 -c 'print(hello)'",
-            "pip install requests",
-            "pytest tests/",
-            "jupyter notebook"
-        ]
+    def test_create_executor_direct(self, executor_factory):
+        """Test creating executor by type."""
+        # Test CLI executor creation
+        cli_executor = executor_factory.get_executor("cli")
+        assert isinstance(cli_executor, CLIExecutor)
 
-        for command in python_commands:
-            result = executor_factory._analyze_command(command)
-            assert result == "python", f"Command '{command}' should be detected as python"
-
-    def test_analyze_command_cli_default(self, executor_factory):
-        """Test command analysis defaults to CLI."""
-        cli_commands = [
-            "ls -la",
-            "grep pattern file.txt",
-            "curl http://example.com",
-            "docker ps"
-        ]
-
-        for command in cli_commands:
-            result = executor_factory._analyze_command(command)
-            assert result == "cli", f"Command '{command}' should default to cli"
-
-    def test_create_executor_for_command_explicit_type(self, executor_factory):
-        """Test creating executor with explicit action type."""
-        executor = executor_factory.create_executor_for_command("any command", action_type="python")
-        assert isinstance(executor, PythonExecutor)
-
-    def test_create_executor_for_command_analysis(self, executor_factory):
-        """Test creating executor based on command analysis."""
-        # Python command
-        executor = executor_factory.create_executor_for_command("python3 script.py")
-        assert isinstance(executor, PythonExecutor)
-
-        # CLI command
-        executor = executor_factory.create_executor_for_command("ls -la")
-        assert isinstance(executor, CLIExecutor)
+        # Test Python executor creation
+        python_executor = executor_factory.get_executor("python")
+        assert isinstance(python_executor, PythonExecutor)
 
     def test_get_all_mcp_tools(self, executor_factory):
         """Test getting MCP tools for all executors."""
@@ -309,31 +273,26 @@ class TestExecutorFactory:
 
     def test_executor_configuration_inheritance(self, mock_sandbox_manager):
         """Test that executor configuration properly inherits from configuration sections."""
-        from saber.server.execution.execution_manager import ExecutionConfiguration
 
-        config_dict = {
-            "common": {
-                "timeout": 900,
-                "max_retries": 3
-            },
+        configuration = {
+            "timeout": 900,
+            "max_retries": 3,
             "python": {
                 "allowed_modules": ["requests", "numpy"],
                 "timeout": 1200  # Override common timeout for Python
             }
         }
-        configuration = ExecutionConfiguration(config=config_dict)
 
         factory = ExecutorFactory(sandbox_manager=mock_sandbox_manager, configuration=configuration)
 
         # Test CLI config (should get common values only)
-        cli_config = configuration.get_section("cli")  # Empty since no CLI section
-        common_config = configuration.get_section("common")
-        assert common_config["timeout"] == 900
-        assert common_config["max_retries"] == 3
-        assert "allowed_modules" not in common_config
+        cli_config = configuration.get("cli", {})  # Empty since no CLI section
+        assert configuration["timeout"] == 900
+        assert configuration["max_retries"] == 3
+        assert "allowed_modules" not in configuration
 
         # Test Python config (should have specific values)
-        python_config = configuration.get_section("python")
+        python_config = configuration.get("python", {})
         assert python_config["allowed_modules"] == ["requests", "numpy"]
         assert python_config["timeout"] == 1200  # Should override common timeout
 

@@ -12,28 +12,25 @@ import subprocess
 import tarfile
 import tempfile
 import time
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import yaml
-from docker.models.containers import Container
 
 import docker
 
+if TYPE_CHECKING:
+    from docker.models.containers import Container
+else:
+    try:
+        from docker.models.containers import Container
+    except ImportError:
+        Container = Any
+
+from ...base import CommandResult
 from ..exceptions import ContainerCreationError, SandboxExecutionError
 from .environment_spec import EnvironmentSpec
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class CommandResult:
-    """Result of command execution in container."""
-
-    exit_code: int
-    stdout: str
-    stderr: str
-    execution_time: float
 
 
 class DockerSandboxEnvironment:

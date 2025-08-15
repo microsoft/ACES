@@ -6,6 +6,7 @@ title SABER Enhanced Docker Sandbox Environment Setup - Multi-Container Support
 actor Agent
 participant "SessionManager" as SM
 participant "TaskManager" as TM
+participant "EpisodeManager" as EM_EP
 participant "ExecutionManager" as EM
 participant "SandboxManager" as SBMGR
 participant "DockerSandboxEnvironment" as DSE
@@ -17,7 +18,7 @@ participant "Target Services" as TS
 Agent -> SM: POST /session/{id}/start-episode\n{task_id: "dvwa_sql_injection"}
 activate SM
 
-SM -> TM: start_episode(task_id, session_id)
+SM -> TM: get_task(task_id)
 activate TM
 
 note over TM
@@ -26,10 +27,15 @@ including environment specification
 with target services
 end note
 
-TM -> TM: load_task_config(task_id)
-TM -> TM: extract_environment_spec()
+TM -> SM: task_object
+deactivate TM
 
-note over TM
+SM -> EM: configure_for_task(session_id, task_object)
+activate EM
+
+note over EM
+ExecutionManager extracts environment_spec
+from task object and configures sandbox
 Environment spec includes:
 - execution container config
 - target services (DVWA + MySQL)
@@ -37,14 +43,17 @@ Environment spec includes:
 - resource limits
 end note
 
-TM -> EM: create_environment(session_id, environment_spec)
-activate EM
-
 EM -> SBMGR: create_session_environment(session_id, environment_spec)
 activate SBMGR
 
 SBMGR -> DSE: new DockerSandboxEnvironment(session_id, environment_spec)
 activate DSE
+
+SM -> EM_EP: start_episode(session_id, task_id, initial_context)
+activate EM_EP
+
+EM_EP -> SM: episode_object
+deactivate EM_EP
 
 note over DSE
 DockerSandboxEnvironment detects

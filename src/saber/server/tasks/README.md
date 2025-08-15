@@ -1,50 +1,44 @@
 # SABER Task Management System
 
-The SABER TaskManager provides a robust framework for managing complex multi-step security tasks with RL-friendly episode-based execution. The system has been refactored into specialized components following single responsibility principles for better maintainability and testability.
+The SABER TaskManager provides task definition management for security benchmarking scenarios. TaskManager loads and provides access to task definitions while EpisodeManager handles episode lifecycle operations.
 
 ## Architecture
 
 ```
 src/saber/server/tasks/
 ├── __init__.py                      # Task management exports
-├── task_manager.py                  # Simplified orchestrator (308 lines, down from 655)
-├── exceptions.py                    # Task management exceptions
-├── core/                            # Core task definitions and specialized components
-│   ├── __init__.py                  # Core exports
-│   ├── task.py                      # High-level security task with embedded progression logic
-│   ├── subtask.py                   # Internal checkpoints with automatic progression
-│   └── task_config_loader.py        # YAML parsing and task definition loading
-└── episodes/                        # Episode management components
-    ├── __init__.py                  # Episode exports
-    ├── episode.py                   # RL episode data structures
-    └── episode_manager.py           # Episode lifecycle management and State enum
+├── task_manager.py                  # Task definition manager
+├── task.py                          # Task definition class
+├── subtask.py                       # SubTask definition class
+├── task_config_loader.py            # YAML parsing and task loading
+└── exceptions.py                    # Task management exceptions
+
+src/saber/server/episodes/
+├── __init__.py                      # Episode management exports
+├── episode_manager.py               # Episode lifecycle management
+└── exceptions.py                    # Episode management exceptions
 ```
 
-## Refactored Components
+## Components
 
-### TaskManager (Simplified Orchestrator)
+### TaskManager
 - **Task Storage & Retrieval**: Core task and subtask access methods
-- **Episode Lifecycle Coordination**: Delegates to EpisodeManager for episode operations
-- **RL Gym Interface**: Provides step() and reset() methods for reinforcement learning
+- **YAML Configuration Loading**: Loads task definitions from configuration files
 
-### TaskConfigLoader (Component)
+### TaskConfigLoader
 - **YAML Parsing**: Loads and validates task definitions from YAML files
 - **Task Creation**: Converts YAML data into Task and SubTask objects
 
-### EpisodeManager
-- **Episode Lifecycle**: Start, step, end operations with unified step() method
-- **Step Creation**: Returns Step objects directly from step() method
-
 ### Task
-- **Task Definition**: YAML-based task specifications
+- **Task Definition**: Contains task metadata, environment specification, and execution configuration
+- **Subtask Management**: Contains list of subtasks for informational purposes
 
 ### SubTask
-- **SubTask Definition**: YAML-based task specifications
+- **SubTask Definition**: Individual task components with objectives and descriptions
 
-### Episode
-Complete task attempt representation:
-- **Action History**: Full sequence of actions and responses
-- **State Tracking**: Checkpoint progression and completion status
+### EpisodeManager (separate component)
+- **Episode Lifecycle**: Start, step, and end operations for RL-compatible episodes
+- **Step Creation**: Returns Step objects from episode progression
 
 ## Task Definition Format
 

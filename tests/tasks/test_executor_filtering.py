@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 import pytest
 import yaml
 
-from saber.server.tasks.core.task_config_loader import TaskConfigLoader
+from saber.server.tasks.task_config_loader import TaskConfigLoader
 from saber.server.tasks.exceptions import InvalidTaskDefinitionException
 
 

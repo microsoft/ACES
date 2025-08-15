@@ -48,21 +48,30 @@ class TestSessionManagerCore:
         return mock
 
     @pytest.fixture
+    def mock_episode_manager(self):
+        """Mock EpisodeManager for testing."""
+        mock = MagicMock()
+        mock.start_episode = MagicMock()
+        mock.end_episode = MagicMock()
+        mock.get_episode = MagicMock()
+        return mock
+
+    @pytest.fixture
     def session_manager(self, mock_task_manager, mock_execution_manager,
-                       mock_policy_manager, mock_evaluation_manager):
+                       mock_policy_manager, mock_evaluation_manager, mock_episode_manager):
         """Create SessionManager with mocked dependencies."""
         with patch('saber.server.session_manager.TaskManager', return_value=mock_task_manager), \
              patch('saber.server.session_manager.ExecutionManager', return_value=mock_execution_manager), \
              patch('saber.server.session_manager.PolicyManager', return_value=mock_policy_manager), \
-             patch('saber.server.session_manager.EvaluationManager', return_value=mock_evaluation_manager):
+             patch('saber.server.session_manager.EvaluationManager', return_value=mock_evaluation_manager), \
+             patch('saber.server.session_manager.EpisodeManager', return_value=mock_episode_manager):
 
             manager = SessionManager(
-                domain_name="test_domain",
-                tasks_config_path="/tmp/test_tasks.yaml",
-                execution_config_path="/tmp/test_execution.yaml",
-                host="127.0.0.1",
-                port=8001
-            )
+            domain_name="test_domain",
+            config_dir="/tmp",
+            host="127.0.0.1",
+            port=8001
+        )
             return manager
 
     def test_session_manager_initialization(self, session_manager):
@@ -127,8 +136,8 @@ class TestSessionManagerCore:
 
         await session_manager.terminate_session(session_id)
 
-        # Should call task manager to end episode
-        session_manager.task_manager.end_episode.assert_called_once_with(
+        # Should call episode manager to end episode
+        session_manager.episode_manager.end_episode.assert_called_once_with(
             session_id, "session_terminated"
         )
         assert session_id not in session_manager.active_sessions

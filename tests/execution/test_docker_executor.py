@@ -9,7 +9,8 @@ import pytest
 from unittest.mock import MagicMock, patch
 
 from saber.server.execution.executors.docker_executor import DockerExecutor
-from saber.server.execution.base import CommandResult, ValidationResult
+from saber.server.base import CommandResult
+from saber.server.execution.base import ValidationResult
 from saber.server.execution.sandbox.sandbox_manager import SandboxManager
 from saber.server.execution.exceptions import SandboxExecutionError
 
@@ -40,9 +41,10 @@ class TestDockerExecutor:
     @pytest.fixture
     def docker_executor(self, mock_sandbox_manager):
         """Create a concrete Docker executor instance for testing."""
+        config = {"timeout": 60.0}
         return self.ConcreteDockerExecutor(
             sandbox_manager=mock_sandbox_manager,
-            timeout=60.0
+            config=config
         )
 
     @pytest.fixture
@@ -54,28 +56,31 @@ class TestDockerExecutor:
 
     def test_initialization_success(self, mock_sandbox_manager):
         """Test successful initialization with sandbox manager."""
+        config = {"timeout": 120.0}
         executor = self.ConcreteDockerExecutor(
             sandbox_manager=mock_sandbox_manager,
-            timeout=120.0
+            config=config
         )
 
         assert executor._sandbox_manager == mock_sandbox_manager
         assert executor.get_timeout() == 120.0
-        assert executor._docker_config == {}
 
     def test_initialization_with_docker_config(self, mock_sandbox_manager):
         """Test initialization with Docker configuration."""
-        docker_config = {
+        config = {
+            "timeout": 60.0,
             "working_dir": "/custom/workspace",
             "environment": {"PYTHONPATH": "/app"}
         }
 
         executor = self.ConcreteDockerExecutor(
             sandbox_manager=mock_sandbox_manager,
-            docker_config=docker_config
+            config=config
         )
 
-        assert executor._docker_config == docker_config
+        # Docker-specific configs are stored in the general config
+        assert executor._config["working_dir"] == "/custom/workspace"
+        assert executor._config["environment"]["PYTHONPATH"] == "/app"
 
     def test_initialization_without_sandbox_manager(self):
         """Test that initialization fails without sandbox manager."""
@@ -93,23 +98,28 @@ class TestDockerExecutor:
         assert result == mock_docker_environment
         docker_executor._sandbox_manager.get_session_environment.assert_called_once_with(session_id)
 
-    def test_get_session_environment_create_new(self, docker_executor, mock_docker_environment):
-        """Test creating new session environment when none exists."""
+    def test_get_session_environment_existing(self, docker_executor, mock_docker_environment):
+        """Test retrieving existing session environment."""
         session_id = "test_session_123"
 
-        # First call returns None (no existing environment), second call returns new environment
-        docker_executor._sandbox_manager.get_session_environment.return_value = None
-        docker_executor._sandbox_manager.create_session_environment.return_value = mock_docker_environment
+        # Mock an existing environment
+        docker_executor._sandbox_manager.get_session_environment.return_value = mock_docker_environment
 
         result = docker_executor.get_session_environment(session_id)
 
         assert result == mock_docker_environment
         docker_executor._sandbox_manager.get_session_environment.assert_called_once_with(session_id)
-        # Verify create_session_environment was called with session_id and environment_spec
-        assert docker_executor._sandbox_manager.create_session_environment.called
-        call_args = docker_executor._sandbox_manager.create_session_environment.call_args
-        assert call_args[0][0] == session_id  # session_id
-        assert len(call_args[0]) == 2  # session_id and environment_spec
+        # Verify create_session_environment was NOT called since environment exists
+        docker_executor._sandbox_manager.create_session_environment.assert_not_called()
+
+    def test_get_session_environment_not_found(self, docker_executor):
+        """Test behavior when session environment doesn't exist."""
+        session_id = "test_session_123"
+
+        docker_executor._sandbox_manager.get_session_environment.return_value = None
+
+        with pytest.raises(SandboxExecutionError, match="No environment found for session test_session_123"):
+            docker_executor.get_session_environment(session_id)
 
     def test_get_session_environment_failure(self, docker_executor):
         """Test session environment retrieval failure."""

@@ -130,10 +130,10 @@ class TestDockerSandboxEnvironment:
         # Verify compose file was written
         mock_temp_file.assert_called_once()
 
-        # Verify docker-compose up was called
+        # Verify docker compose up was called (modern docker syntax)
         mock_subprocess.assert_called_once()
         args = mock_subprocess.call_args[0][0]
-        assert "docker-compose" in args
+        assert "docker" in args and "compose" in args
         assert "up" in args
         assert "-d" in args
 
@@ -459,10 +459,10 @@ class TestDockerSandboxEnvironment:
              patch('saber.server.execution.sandbox.docker_sandbox_environment.os.unlink'):
             env.stop()
 
-        # Verify docker-compose down was called
+        # Verify docker compose down was called (modern docker syntax)
         mock_subprocess.assert_called_once()
         args = mock_subprocess.call_args[0][0]
-        assert "docker-compose" in args
+        assert "docker" in args and "compose" in args
         assert "down" in args
 
         # Verify cleanup

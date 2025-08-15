@@ -128,8 +128,7 @@ async def start_server(args: argparse.Namespace) -> None:
         # Initialize SessionManager
         session_manager = SessionManager(
             domain_name=args.domain,
-            tasks_config_path=tasks_config,
-            execution_config_path=environments_config,
+            config_dir=config_dir,
             host=args.host,
             port=args.port,
             mcp_host=args.host,

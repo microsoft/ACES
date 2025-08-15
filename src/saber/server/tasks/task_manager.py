@@ -2,49 +2,41 @@
 
 from logging import getLogger
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
-from ..execution.base import CommandResult
-from ..execution.sandbox.environment_spec import EnvironmentSpec
-from .base import Action
-from .core.subtask import SubTask
-from .core.task import Task
-from .core.task_config_loader import TaskConfigLoader
-from .episodes.episode import Episode, Step
-from .episodes.episode_manager import EpisodeManager
-from .exceptions import EpisodeNotFoundException, SubTaskNotFoundException, TaskNotFoundException
+from .exceptions import SubTaskNotFoundException, TaskNotFoundException
+from .subtask import SubTask
+from .task import Task
+from .task_config_loader import TaskConfigLoader
 
 logger = getLogger(__name__)
 
 
 class TaskManager:
     """
-    Main orchestrator for domain tasks and sessions.
+    Domain task definition manager.
 
-    Responsible for coordinating task loading, episode management,
-    and RL-style interfaces with specialized components.
+    Responsible for loading and providing access to task definitions from YAML configuration.
     """
 
     def __init__(self, domain: str, config_dir: str):
         """
-        Initialize TaskManager for a specific domain.
+        Initialize TaskManager with domain and configuration.
 
         Args:
-            domain: The security domain (e.g., 'malware_classification')
-            config_dir: Path to the configuration directory containing tasks.yaml and environments.yaml
+            domain: Security domain for tasks (e.g., 'malware_classification')
+            config_dir: Directory path containing task configuration files
         """
         self.domain = domain
         self.config_dir = Path(config_dir)
         self.tasks_file_path = self.config_dir / "tasks.yaml"
-        self.environments_file_path = self.config_dir / "environments.yaml"
         self.tasks: Dict[str, Task] = {}
 
         # Initialize specialized components
-        environments_path = str(self.environments_file_path) if self.environments_file_path.exists() else None
-        self.config_loader = TaskConfigLoader(domain, environments_path)
-        self.episode_manager = EpisodeManager()
+        self.config_loader = TaskConfigLoader(domain)
 
-        logger.info(f"Initializing TaskManager for domain '{domain}' with config directory: {config_dir}")
+        logger.info(f"Initializing TaskManager for domain '{domain}' with config dir: {config_dir}")
+        logger.info(f"Tasks file: {self.tasks_file_path}")
 
         # Load tasks using the config loader
         self.load_tasks_from_yaml()
@@ -58,15 +50,6 @@ class TaskManager:
         """
         self.tasks = self.config_loader.load_tasks_from_file(str(self.tasks_file_path))
         logger.info(f"TaskManager initialization complete. Loaded {len(self.tasks)} tasks for domain '{self.domain}'")
-
-    def get_allowed_executors(self) -> Optional[list[str]]:
-        """
-        Get the list of allowed executors from the task configuration.
-
-        Returns:
-            List of allowed executor names, or None if no restriction is configured
-        """
-        return self.config_loader.get_allowed_executors()
 
     def get_task(self, task_id: str) -> Task:
         """
@@ -108,152 +91,6 @@ class TaskManager:
 
         return subtask
 
-    def get_task_environment_spec(self, task_id: str) -> Optional[EnvironmentSpec]:
-        """
-        Get the environment specification for a task.
-
-        Args:
-            task_id: ID of the task
-
-        Returns:
-            EnvironmentSpec if task has environment configuration, None otherwise
-
-        Raises:
-            TaskNotFoundException: If task is not found
-        """
-        task = self.get_task(task_id)
-        return task.environment_spec
-
-    def start_episode(self, session_id: str, task_id: str) -> Episode:
-        """
-        Start a new episode for a session.
-
-        Args:
-            session_id: ID of the session starting the episode
-            task_id: ID of the task to execute
-
-        Returns:
-            Episode instance
-
-        Raises:
-            TaskNotFoundException: If task is not found
-        """
-        logger.info(f"Starting new episode for session '{session_id}' with task '{task_id}'")
-
-        # Get the task instance
-        task = self.get_task(task_id)
-
-        # Start episode with task reference and initial context
-        episode = self.episode_manager.start_episode(
-            session_id=session_id, task_id=task_id, initial_context=task.initial_context.copy()
-        )
-
-        logger.info(f"Started episode '{episode.episode_id}' for session '{session_id}' with task '{task_id}'")
-        return episode
-
-    def get_current_episode(self, session_id: str) -> Optional[Episode]:
-        """
-        Get the current active episode for a session.
-
-        Args:
-            session_id: ID of the session
-
-        Returns:
-            Episode instance if active, None otherwise
-        """
-        return self.episode_manager.get_current_episode(session_id)
-
-    def step(self, session_id: str, action: Action, command_result: CommandResult) -> Step:
-        """
-        RL gym-style step function that records episode steps and returns observations.
-
-        Args:
-            session_id: ID of the session
-            action: Action that was taken
-            command_result: CommandResult from tool execution
-
-        Returns:
-            Step object with all step information
-
-        Raises:
-            EpisodeNotFoundException: If session has no active episode
-        """
-        episode = self.episode_manager.get_current_episode(session_id)
-        if not episode:
-            raise EpisodeNotFoundException(f"No active episode found for session '{session_id}'")
-
-        logger.debug(f"Executing step for session '{session_id}', action: {action.tool_name}")
-
-        step = self.episode_manager.step(
-            session_id=session_id,
-            action=action,
-            command_result=command_result,
-        )
-
-        return step
-
-    def reset(self, session_id: str, task_id: str) -> Episode:
-        """
-        RL gym-style reset function for starting new episodes.
-
-        Args:
-            session_id: ID of the session
-            task_id: ID of the task to execute
-
-        Returns:
-            New Episode instance
-
-        Raises:
-            TaskNotFoundException: If task is not found
-        """
-        logger.info(f"RL reset for session '{session_id}' with task_id '{task_id}'")
-
-        # End current episode if exists
-        current_episode = self.episode_manager.get_current_episode(session_id)
-        if current_episode:
-            self.episode_manager.end_episode(session_id, "reset")
-
-        # Start new episode (which will automatically initialize with task)
-        episode = self.start_episode(session_id, task_id)
-
-        return episode
-
-    def end_episode(self, session_id: str, reason: str) -> Episode:
-        """
-        End the current episode for a session.
-
-        Args:
-            session_id: ID of the session
-            reason: Reason for ending the episode
-
-        Returns:
-            Episode with completion information
-        """
-        logger.info(f"Ending episode for session '{session_id}': {reason}")
-        return self.episode_manager.end_episode(session_id, reason)
-
-    def reset_episode(self, session_id: str) -> Episode:
-        """
-        Reset the current episode (start a new attempt).
-
-        Args:
-            session_id: ID of the session
-
-        Returns:
-            New Episode instance
-        """
-        logger.info(f"Resetting episode for session '{session_id}'")
-
-        # Get current episode to extract task_id
-        current_episode = self.episode_manager.get_current_episode(session_id)
-        if not current_episode:
-            raise EpisodeNotFoundException(session_id)
-
-        # Get the task for the reset
-        task = self.get_task(current_episode.task_id)
-
-        return self.episode_manager.reset_episode(session_id, task.task_id)
-
     def list_tasks(self) -> List[Dict[str, Any]]:
         """
         Get a list of all available tasks.
@@ -270,18 +107,3 @@ class TaskManager:
             }
             for task in self.tasks.values()
         ]
-
-    def get_episode_info(self, session_id: str) -> Dict[str, Any]:
-        """
-        Get information about the current episode for a session.
-
-        Args:
-            session_id: ID of the session
-
-        Returns:
-            Dictionary with episode information
-        """
-        episode = self.episode_manager.get_current_episode(session_id)
-        if episode:
-            return self.episode_manager._get_episode_progress_info(episode)
-        return {"error": "No active episode for session"}

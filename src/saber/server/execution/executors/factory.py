@@ -6,15 +6,12 @@ of command executors, supporting scaling to many executor types.
 """
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional, Type
 
 from ..sandbox.sandbox_manager import SandboxManager
 from .cli import CLIExecutor
 from .docker_executor import DockerExecutor
 from .python_executor import PythonExecutor
-
-if TYPE_CHECKING:
-    from ..execution_manager import ExecutionConfiguration
 
 logger = logging.getLogger(__name__)
 
@@ -33,41 +30,10 @@ class ExecutorFactory:
         "python": PythonExecutor,
     }
 
-    # Default configurations for each executor type
-    _default_configs: Dict[str, Dict[str, Any]] = {
-        "cli": {
-            "default_shell_mode": False,
-            "timeout": 300.0,
-        },
-        "python": {
-            "allowed_modules": [
-                "os",
-                "sys",
-                "json",
-                "csv",
-                "datetime",
-                "time",
-                "random",
-                "math",
-                "re",
-                "collections",
-                "itertools",
-                "functools",
-                "requests",
-                "urllib",
-                "base64",
-                "hashlib",
-                "subprocess",
-            ],
-            "script_templates": {},
-            "timeout": 600.0,  # Python scripts may take longer
-        },
-    }
-
     def __init__(
         self,
         sandbox_manager: SandboxManager,
-        configuration: Optional["ExecutionConfiguration"] = None,
+        configuration: Optional[Dict[str, Any]] = None,
         allowed_executors: Optional[list[str]] = None,
     ):
         """
@@ -75,11 +41,11 @@ class ExecutorFactory:
 
         Args:
             sandbox_manager: Sandbox manager for Docker operations
-            configuration: Full execution configuration manager (each executor extracts what it needs)
+            configuration: Execution configuration dictionary
             allowed_executors: Optional list of executor types to enable. If None, all executors are available.
         """
         self._sandbox_manager = sandbox_manager
-        self._configuration = configuration
+        self._configuration = configuration or {}
         self._executor_instances: Dict[str, DockerExecutor] = {}
 
         # Filter executors based on allowed list
@@ -185,93 +151,38 @@ class ExecutorFactory:
 
         logger.debug(f"Creating new {executor_type} executor instance")
 
+        # Get the executor class and its default configuration
+        executor_class = self._filtered_executor_registry[executor_type]
+        default_config = executor_class.get_default_config()
+
+        # Get executor-specific configuration from global configuration
+        executor_config = self._configuration.get(executor_type, {})
+
+        # Merge with defaults, giving preference to provided config
+        merged_config = {**default_config, **executor_config}
+
+        # Override timeout from global config if available
+        global_timeout = self._configuration.get("timeout")
+        if global_timeout is not None:
+            merged_config["timeout"] = global_timeout
+
+        # Prepare additional parameters for specific executor needs
+        additional_params = {}
+
+        # Add CLI-specific parameters if needed
         if executor_type == "cli":
-            # Pass CLI-specific configuration section and security config
-            cli_config = self._configuration.get_section("cli") if self._configuration else {}
-            allowed_commands = self._configuration.get_allowed_commands() if self._configuration else None
-            timeout = self._configuration.get_execution_timeout() if self._configuration else 300.0
+            allowed_commands = self._configuration.get("allowed_commands")
+            if allowed_commands is not None:
+                additional_params["allowed_commands"] = allowed_commands
 
-            executor = executor_class(
-                sandbox_manager=self._sandbox_manager,
-                cli_config=cli_config,
-                allowed_commands=allowed_commands,
-                timeout=timeout,
-            )
-        elif executor_type == "python":
-            # Pass Python-specific configuration section
-            python_config = self._configuration.get_section("python") if self._configuration else {}
-            timeout = self._configuration.get_execution_timeout() if self._configuration else 600.0
-
-            executor = executor_class(
-                sandbox_manager=self._sandbox_manager, python_config=python_config, timeout=timeout
-            )
-        else:
-            # Generic creation for custom executor types - use default config
-            default_config = self._default_configs.get(executor_type, {})
-            timeout = (
-                self._configuration.get_execution_timeout()
-                if self._configuration
-                else default_config.get("timeout", 300.0)
-            )
-
-            executor = executor_class(
-                sandbox_manager=self._sandbox_manager, docker_config=default_config, timeout=timeout
-            )
+        # Use the generic creation method
+        executor = executor_class.create_with_config(
+            sandbox_manager=self._sandbox_manager, config=merged_config, additional_params=additional_params
+        )
 
         # Cache the instance
         self._executor_instances[executor_type] = executor
         return executor
-
-    def create_executor_for_command(self, command: str, action_type: Optional[str] = None) -> DockerExecutor:
-        """
-        Create appropriate executor based on command content or action type.
-
-        Args:
-            command: Command string to analyze
-            action_type: Optional explicit action type
-
-        Returns:
-            Appropriate executor instance
-        """
-        # If action_type is explicitly provided, use it
-        if action_type and action_type in self._filtered_executor_registry:
-            return self.get_executor(action_type)
-
-        # Analyze command to determine best executor
-        executor_type = self._analyze_command(command)
-        return self.get_executor(executor_type)
-
-    def _analyze_command(self, command: str) -> str:
-        """
-        Analyze command string to determine appropriate executor type.
-
-        Args:
-            command: Command string to analyze
-
-        Returns:
-            Executor type name
-        """
-        command = command.strip().lower()
-
-        # Python script patterns
-        python_indicators = [
-            "python",
-            "python3",
-            "pip",
-            "pytest",
-            "jupyter",
-            ".py",
-            "import ",
-            "def ",
-            "class ",
-            "if __name__",
-        ]
-
-        if any(indicator in command for indicator in python_indicators):
-            return "python"
-
-        # Default to CLI executor for shell commands
-        return "cli"
 
     def get_all_mcp_tools(self) -> List[Dict[str, Any]]:
         """
@@ -321,11 +232,16 @@ class ExecutorFactory:
         Returns:
             Dictionary with executor information
         """
+        # Build configurations dynamically from executor classes
+        configurations = {}
+        for executor_type, executor_class in self._executor_registry.items():
+            configurations[executor_type] = executor_class.get_default_config()
+
         info = {
             "available_types": self.get_available_executors(),
             "active_instances": list(self._executor_instances.keys()),
             "registry_size": len(self._executor_registry),
-            "configurations": self._default_configs.copy(),
+            "configurations": configurations,
         }
 
         return info

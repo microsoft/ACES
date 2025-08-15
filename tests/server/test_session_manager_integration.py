@@ -1,5 +1,16 @@
 """
-Unit tests for SessionManager integration and error handling.
+Unit tests for SessionManage        with patch('saber.server.session_manager.TaskManager', return_value=mock_task_manager), \
+             patch('saber.server.session_manager.ExecutionManager', return_value=mock_execution_manager), \
+             patch('saber.server.session_manager.PolicyManager', return_value=mock_policy_manager), \
+             patch('saber.server.session_manager.EvaluationManager', return_value=mock_evaluation_manager):
+
+            manager = SessionManager(
+                domain_name="integration_test",
+                config_dir="/tmp",
+                host="127.0.0.1",
+                port=8004
+            )
+            return manageron and error handling.
 
 Tests component integration, error scenarios, and edge cases.
 """
@@ -9,8 +20,7 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch, call
 
 from saber.server.session_manager import SessionManager
-from saber.server.execution.base import CommandResult
-from saber.server.tasks.base import Action
+from saber.server.base import CommandResult, Action
 
 
 class TestSessionManagerIntegration:
@@ -31,18 +41,23 @@ class TestSessionManagerIntegration:
         mock_evaluation_manager.log_episode_end = AsyncMock()
         mock_evaluation_manager.log_action = AsyncMock()
 
+        mock_episode_manager = MagicMock()
+        mock_episode_manager.start_episode = MagicMock()
+        mock_episode_manager.end_episode = MagicMock()
+        mock_episode_manager.get_episode = MagicMock()
+
         with patch('saber.server.session_manager.TaskManager', return_value=mock_task_manager), \
              patch('saber.server.session_manager.ExecutionManager', return_value=mock_execution_manager), \
              patch('saber.server.session_manager.PolicyManager', return_value=mock_policy_manager), \
-             patch('saber.server.session_manager.EvaluationManager', return_value=mock_evaluation_manager):
+             patch('saber.server.session_manager.EvaluationManager', return_value=mock_evaluation_manager), \
+             patch('saber.server.session_manager.EpisodeManager', return_value=mock_episode_manager):
 
             manager = SessionManager(
                 domain_name="integration_test",
-                tasks_config_path="/tmp/test.yaml",
+                config_dir="/tmp",
                 host="127.0.0.1",
                 port=8004
             )
-
             return manager
 
     @pytest.mark.asyncio
@@ -57,7 +72,7 @@ class TestSessionManagerIntegration:
 
         mock_step1 = MagicMock()
         mock_step1.step_number = 1
-        mock_step1.done = False
+        mock_step1.done = False  # Explicitly ensure this step does not complete the episode
         mock_step1.current_subtask = "subtask_1"
         mock_step1.completed_subtasks = set()
         mock_step1.in_progress_subtasks = {"subtask_1"}
@@ -65,18 +80,24 @@ class TestSessionManagerIntegration:
 
         mock_step2 = MagicMock()
         mock_step2.step_number = 2
-        mock_step2.done = True
+        mock_step2.done = True  # This step will complete the episode
         mock_step2.current_subtask = "subtask_2"
         mock_step2.completed_subtasks = {"subtask_1", "subtask_2"}
         mock_step2.in_progress_subtasks = set()
         mock_step2.not_visited_subtasks = set()
 
-        # Configure mocks
-        manager.task_manager.start_episode.return_value = mock_episode
-        manager.task_manager.step.side_effect = [mock_step1, mock_step2]
+        # Configure mocks - use proper task/episode flow
+        mock_task = MagicMock()
+        mock_task.initial_context = {"test": "data"}
+        manager.task_manager.get_task.return_value = mock_task
+        manager.episode_manager.start_episode.return_value = mock_episode
+        # Also mock get_current_episode for execute_command calls
+        manager.episode_manager.get_current_episode.return_value = mock_episode
+        # Mock step method to return the proper steps
+        manager.episode_manager.step.side_effect = [mock_step1, mock_step2]
 
-        command_result1 = CommandResult(success=True, data={"output": "step1"})
-        command_result2 = CommandResult(success=True, data={"output": "step2"})
+        command_result1 = CommandResult(exit_code=0, stdout="step1", stderr="", execution_time=0.1)
+        command_result2 = CommandResult(exit_code=0, stdout="step2", stderr="", execution_time=0.1)
         manager.execution_manager.step.side_effect = [command_result1, command_result2]
 
         # 1. Create session
@@ -144,12 +165,12 @@ class TestSessionManagerIntegration:
 
             manager = SessionManager(
                 domain_name="test_domain",
-                tasks_config_path="/tmp/test.yaml"
+                config_dir="/tmp"
             )
 
             # Verify initialization order and parameters
-            mock_tm.assert_called_once_with("test_domain", "/tmp/test.yaml")
-            mock_em.assert_called_once_with(config_file=None)
+            mock_tm.assert_called_once_with("test_domain", "/tmp")
+            mock_em.assert_called_once_with("/tmp")
             mock_pm.assert_called_once_with("test_domain")
             mock_eval.assert_called_once()
 
@@ -172,14 +193,20 @@ class TestSessionManagerErrorHandling:
         mock_evaluation_manager.log_episode_end = AsyncMock()
         mock_evaluation_manager.log_action = AsyncMock()
 
+        mock_episode_manager = MagicMock()
+        mock_episode_manager.start_episode = MagicMock()
+        mock_episode_manager.end_episode = MagicMock()
+        mock_episode_manager.get_episode = MagicMock()
+
         with patch('saber.server.session_manager.TaskManager', return_value=mock_task_manager), \
              patch('saber.server.session_manager.ExecutionManager', return_value=mock_execution_manager), \
              patch('saber.server.session_manager.PolicyManager', return_value=mock_policy_manager), \
-             patch('saber.server.session_manager.EvaluationManager', return_value=mock_evaluation_manager):
+             patch('saber.server.session_manager.EvaluationManager', return_value=mock_evaluation_manager), \
+             patch('saber.server.session_manager.EpisodeManager', return_value=mock_episode_manager):
 
             manager = SessionManager(
                 domain_name="error_test",
-                tasks_config_path="/tmp/test.yaml"
+                config_dir="/tmp"
             )
 
             return manager
@@ -230,17 +257,23 @@ class TestSessionManagerErrorHandling:
         session = await manager.create_session("test_client")
         session.current_episode_id = "episode_123"
 
-        # Mock execution to succeed but task manager to fail
-        command_result = CommandResult(success=True, data={"output": "success"})
+        # Mock episode manager to return a valid episode
+        mock_episode_obj = MagicMock()
+        mock_episode_obj.episode_id = "episode_123"
+        mock_episode_obj.add_step = MagicMock()
+        manager.episode_manager.get_episode.return_value = mock_episode_obj
+
+        # Mock execution to succeed but episode manager to fail
+        command_result = CommandResult(exit_code=0, stdout="success", stderr="", execution_time=0.1)
         manager.execution_manager.step.return_value = command_result
-        manager.task_manager.step.side_effect = Exception("Task manager failed")
+        manager.episode_manager.step.side_effect = Exception("Episode manager failed")
 
         # Execute command
         action = Action(tool_name="cli", command="command", parameters={})
         response = await manager.execute_command(session.session_id, action)
 
         assert response.success is False
-        assert "Task manager failed" in response.error
+        assert "Episode manager failed" in response.error
 
     @pytest.mark.asyncio
     async def test_evaluation_manager_failure_resilience(self, error_test_manager):
@@ -255,8 +288,14 @@ class TestSessionManagerErrorHandling:
         session = await manager.create_session("test_client")
         session.current_episode_id = "episode_123"
 
+        # Mock episode manager to return a valid episode
+        mock_episode_obj = MagicMock()
+        mock_episode_obj.episode_id = "episode_123"
+        mock_episode_obj.add_step = MagicMock()
+        manager.episode_manager.get_episode.return_value = mock_episode_obj
+
         # Mock successful execution
-        command_result = CommandResult(success=True, data={"output": "success"})
+        command_result = CommandResult(exit_code=0, stdout="success", stderr="", execution_time=0.1)
         manager.execution_manager.step.return_value = command_result
 
         mock_step = MagicMock()

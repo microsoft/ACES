@@ -1,4 +1,4 @@
-# SABER Docker Sandbox Execution Manager and Hierarchical Executor Framework
+# SABER Execution Framework
 
 This module provides a Docker container-based command execution system with comprehensive security validation and a scalable executor hierarchy, designed to safely execute multiple types of commands (CLI and Python) through MCP integration while providing complete isolation and preventing security vulnerabilities.
 
@@ -27,20 +27,18 @@ src/saber/server/execution/
 
 ### ExecutionManager (`execution_manager.py`)
 Main execution manager using factory pattern for scalable executor management:
-- **ExecutorFactory Integration**: Uses ExecutorFactory for dynamic executor selection and creation
 - **Multiple Executor Types**: Supports CLI and Python execution with easy extensibility
 - **Sandbox Manager**: Integrates SandboxManager for Docker container lifecycle management
 - **Modular Configuration**: Uses ExecutionConfiguration with generic configuration delegation
-- **Delegated Security**: Security validation handled by individual executors for separation of concerns
+- **Security**: Security validation handled by individual executors for separation of concerns
 - **Concurrency Control**: Built-in semaphore for limiting concurrent executions
 
 ### ExecutorFactory (`executors/factory.py`)
 Factory pattern implementation for scalable executor management:
 - **Registry System**: Maintains registry of available executor types for easy extensibility
-- **Dynamic Creation**: Creates appropriate executors based on command analysis
 - **Command Analysis**: Intelligent routing of commands to appropriate executor types
 - **MCP Aggregation**: Combines MCP schemas from all registered executors
-- **Scalable Design**: Supports adding many of executor types through registration
+- **Scalable Design**: Supports adding many executor types through registration
 - **Executor Filtering**: Supports configuring a subset of available executors through `allowed_executors` parameter, enabling task-specific executor restrictions for security or functionality requirements
 
 ### Executor Hierarchy

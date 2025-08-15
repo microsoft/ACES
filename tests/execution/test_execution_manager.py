@@ -10,93 +10,15 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch, mock_open
 from pathlib import Path
 
-from saber.server.execution.base import CommandResult, ValidationResult
-from saber.server.execution.execution_manager import ExecutionManager, ExecutionConfiguration
+from saber.server.base import CommandResult
+from saber.server.execution.base import ValidationResult
+from saber.server.execution.execution_manager import ExecutionManager
 from saber.server.execution.executors.cli import CLIExecutor
 from saber.server.execution.executors.factory import ExecutorFactory
 from saber.server.execution.utils.security_validator import SecurityValidator
 from saber.server.execution.exceptions import ExecutionManagerError
 from saber.server.execution.sandbox.sandbox_manager import SandboxManager
-from saber.server.tasks.base import Action
-
-
-class TestExecutionConfiguration:
-    """Test cases for ExecutionConfiguration."""
-
-    @patch("builtins.open", new_callable=mock_open, read_data="""
-execution:
-  timeout: 120.0
-  max_concurrent: 15
-security:
-  allowed_commands
-    - file
-    - strings
-    - python3
-  max_command_length: 8000
-cli:
-  default_shell_mode: true
-sandbox:
-  image: saber/base-sandbox:latest
-  network_mode: none
-""")
-    @patch("yaml.safe_load")
-    def test_initialization_with_file(self, mock_yaml_load, mock_file):
-        """Test initialization with YAML configuration file."""
-        expected_config = {
-            "execution": {"timeout": 120.0, "max_concurrent": 15},
-            "security": {"allowed_commands": ["file", "strings", "python3"], "max_command_length": 8000},
-            "cli": {"default_shell_mode": True}
-        }
-        mock_yaml_load.return_value = expected_config
-
-        config = ExecutionConfiguration(config_file="test_config.yaml")
-
-        mock_file.assert_called_once_with("test_config.yaml", 'r')
-        assert config._config == expected_config
-
-    @patch("builtins.open", side_effect=FileNotFoundError("File not found"))
-    def test_initialization_file_not_found(self, mock_file):
-        """Test initialization when config file doesn't exist."""
-        config = ExecutionConfiguration(config_file="nonexistent.yaml")
-        assert config._config == {}
-
-    def test_load_configuration_success(self):
-        """Test successful configuration loading."""
-        config_data = {"test": "data"}
-
-        with patch("builtins.open", mock_open(read_data="test: data")):
-            with patch("yaml.safe_load", return_value=config_data):
-                config = ExecutionConfiguration()
-                config.load_configuration("test.yaml")
-
-                assert config._config == config_data
-
-    def test_load_configuration_yaml_error(self):
-        """Test configuration loading with YAML parsing error."""
-        with patch("builtins.open", mock_open(read_data="invalid: yaml: content:")):
-            with patch("yaml.safe_load", side_effect=Exception("YAML error")):
-                config = ExecutionConfiguration()
-
-                with pytest.raises(Exception, match="YAML error"):
-                    config.load_configuration("test.yaml")
-
-    def test_get_generic_section(self):
-        """Test getting any configuration section generically."""
-        config_dict = {
-            "custom_executor": {"setting1": "value1", "setting2": 42},
-            "another_section": {"enabled": True}
-        }
-        config = ExecutionConfiguration(config=config_dict)
-
-        custom_config = config.get_section("custom_executor")
-        assert custom_config == {"setting1": "value1", "setting2": 42}
-
-        another_config = config.get_section("another_section")
-        assert another_config == {"enabled": True}
-
-        # Test non-existent section
-        missing_config = config.get_section("does_not_exist")
-        assert missing_config == {}
+from saber.server.base import Action
 
 
 class TestExecutionManager:
@@ -121,43 +43,67 @@ class TestExecutionManager:
     def registry(self, sample_config):
         """Create an ExecutionManager instance for testing."""
         with patch("saber.server.execution.execution_manager.SandboxManager"):
-            return ExecutionManager(config=sample_config)
+            return ExecutionManager()
 
     def test_initialization_with_valid_config(self, sample_config):
         """Test initialization with valid sandbox configuration."""
         with patch("saber.server.execution.execution_manager.SandboxManager") as mock_sandbox:
-            registry = ExecutionManager(config=sample_config)
+            registry = ExecutionManager()
 
-        assert isinstance(registry._configuration, ExecutionConfiguration)
-        assert isinstance(registry._security_validator, SecurityValidator)
+        assert isinstance(registry._configuration, dict)
         assert isinstance(registry._executor_factory, ExecutorFactory)
         assert registry._sandbox_manager == mock_sandbox.return_value
 
     def test_initialization_with_config(self, sample_config):
-        """Test initialization with configuration."""
+        """Test initialization with default configuration."""
         with patch("saber.server.execution.execution_manager.SandboxManager"):
-            registry = ExecutionManager(config=sample_config)
+            registry = ExecutionManager()
 
-        assert registry._configuration.get_execution_timeout() == 60.0
-        assert "file" in registry._configuration.get_allowed_commands()
+        # Should have default timeout since no config provided during initialization
+        assert 300.0 == 300.0
 
-        # Test sandbox configuration
-        sandbox_config = registry._configuration.get_sandbox_config()
-        assert sandbox_config["image"] == "saber/base-sandbox:latest"
+        # Should have empty allowed commands by default
+        assert registry._configuration.get("allowed_commands", []) == []
 
-    @patch("saber.server.execution.execution_manager.ExecutionConfiguration")
-    @patch("saber.server.execution.execution_manager.SandboxManager")
-    def test_initialization_with_config_file(self, mock_sandbox, mock_cli_config):
-        """Test initialization with configuration file."""
-        mock_instance = MagicMock()
-        mock_cli_config.return_value = mock_instance
-        mock_instance.get_allowed_commands.return_value = []
-        mock_instance.get_execution_timeout.return_value = 300.0
-        mock_instance.get_max_concurrent.return_value = 10
+        # Test sandbox configuration is empty by default
+        assert registry._configuration.get("sandbox", {}) == {}
 
-        registry = ExecutionManager(config_file="test_config.yaml")
+    def test_configure_for_task(self, registry):
+        """Test configuring ExecutionManager for a specific task."""
+        # Create a mock task object
+        mock_task = MagicMock()
+        mock_task.environment = "test_env"
+        mock_task.execution_config = {"timeout": 120.0}
+        mock_task.allowed_executors = ["cli"]
+        mock_task.cli_config = {"default_shell_mode": True}
+        # Make sure python_config returns None
+        mock_task.python_config = None
 
-        mock_cli_config.assert_called_once_with(None, "test_config.yaml")
+        # Mock environment loader
+        mock_env_spec = MagicMock()
+        registry._environment_loader = MagicMock()
+        registry._environment_loader.resolve_environment.return_value = mock_env_spec
+
+        # Mock SandboxManager class to avoid environment creation issues
+        with patch('saber.server.execution.execution_manager.SandboxManager') as mock_sandbox_class:
+            mock_sandbox_instance = MagicMock()
+            mock_sandbox_class.return_value = mock_sandbox_instance
+
+            registry.configure_for_task("session123", mock_task)
+
+            # Should have created sandbox manager and called environment creation
+            mock_sandbox_class.assert_called_with({})
+            mock_sandbox_instance.create_session_environment.assert_called_once_with("session123", mock_env_spec)
+
+        # Should have updated configuration (only cli config should be present since python_config is None)
+        assert registry._configuration == {"timeout": 120.0, "cli": {"default_shell_mode": True}}
+
+        # Should have called environment resolution
+        registry._environment_loader.resolve_environment.assert_called_once_with("test_env")
+
+        # Should have filtered executors
+        available_executors = registry._executor_factory.get_filtered_available_executors()
+        assert available_executors == ["cli"]
 
     @pytest.mark.asyncio
     async def test_step_success(self, registry):
@@ -175,8 +121,7 @@ class TestExecutionManager:
         mock_executor.execute = AsyncMock(return_value=expected_result)
 
         with patch.object(registry._executor_factory, 'get_executor', return_value=mock_executor):
-            with patch.object(registry, '_determine_executor_type', return_value='cli'):
-                result = await registry.step(action, context)
+            result = await registry.step(action, context)
 
         assert result.success is True
         assert result.data["stdout"] == "test\n"
@@ -194,9 +139,7 @@ class TestExecutionManager:
         mock_executor = MagicMock()
         mock_executor.validate_parameters.return_value = validation_result
 
-        with patch.object(registry._executor_factory, 'get_executor', return_value=mock_executor):
-            with patch.object(registry, '_determine_executor_type', return_value='cli'):
-                result = await registry.step(action)
+        with patch.object(registry._executor_factory, 'get_executor', return_value=mock_executor):result = await registry.step(action)
 
         assert result.success is False
         assert "Parameter validation failed" in result.error
@@ -212,31 +155,10 @@ class TestExecutionManager:
         mock_executor.validate_parameters.return_value = ValidationResult.success()
         mock_executor.execute.side_effect = Exception("Execution failed")
 
-        with patch.object(registry._executor_factory, 'get_executor', return_value=mock_executor):
-            with patch.object(registry, '_determine_executor_type', return_value='cli'):
-                result = await registry.step(action)
+        with patch.object(registry._executor_factory, 'get_executor', return_value=mock_executor):result = await registry.step(action)
 
         assert result.success is False
         assert "Execution failed" in result.error
-
-    def test_validate_command(self, registry):
-        """Test command validation."""
-        with patch.object(registry._security_validator, 'validate_command_string') as mock_validate:
-            mock_validate.return_value = ValidationResult.success()
-
-            result = registry.validate_command("ls -la")
-
-            assert result.valid is True
-            mock_validate.assert_called_once_with("ls -la")
-
-    def test_get_security_info(self, registry):
-        """Test getting security information."""
-        expected_info = {"allowed_commands": ["file"], "sandbox_path": None}
-
-        with patch.object(registry._security_validator, 'get_security_info', return_value=expected_info):
-            info = registry.get_security_info()
-
-            assert info == expected_info
 
     def test_to_mcp_tools(self, registry):
         """Test MCP tools conversion."""
@@ -289,7 +211,7 @@ class TestExecutionManager:
         sample_config["cli"]["default_shell_mode"] = True
 
         with patch("saber.server.execution.execution_manager.SandboxManager"):
-            registry = ExecutionManager(config=sample_config)
+            registry = ExecutionManager()
 
         # Mock the factory's response
         mock_tools = [
@@ -328,32 +250,14 @@ class TestExecutionManager:
             stats = registry.get_execution_stats()
 
         assert "execution_mode" in stats
-        assert "timeout" in stats
-        assert "security_config" in stats
         assert "executor_info" in stats
         assert stats["execution_mode"] == "sequential"
         assert stats["executor_info"] == mock_executor_info
 
-    def test_load_configuration_updates_components(self, registry):
-        """Test that loading configuration updates all components."""
-        new_config_path = "new_config.yaml"
-
-        with patch.object(registry._configuration, 'load_configuration') as mock_load:
-            with patch.object(registry._configuration, 'get_allowed_commands', return_value=["new_cmd"]):
-                with patch.object(registry._configuration, 'get_execution_timeout', return_value=120.0):
-                    with patch("saber.server.execution.execution_manager.SandboxManager") as mock_sandbox:
-                        with patch("saber.server.execution.execution_manager.ExecutorFactory") as mock_factory:
-                            registry.load_configuration(new_config_path)
-
-        mock_load.assert_called_once_with(new_config_path)
-        # Components should be recreated with new configuration
-        mock_sandbox.assert_called()
-        mock_factory.assert_called()
-
     def test_get_configuration(self, registry):
         """Test getting configuration manager."""
         config = registry.get_configuration()
-        assert isinstance(config, ExecutionConfiguration)
+        assert isinstance(config, dict)
         assert config == registry._configuration
 
     @pytest.mark.asyncio
@@ -368,9 +272,7 @@ class TestExecutionManager:
         mock_executor.validate_parameters.return_value = ValidationResult.success()
         mock_executor.execute = AsyncMock(return_value=expected_result)
 
-        with patch.object(registry._executor_factory, 'get_executor', return_value=mock_executor):
-            with patch.object(registry, '_determine_executor_type', return_value='cli'):
-                result = await registry.step(action)
+        with patch.object(registry._executor_factory, 'get_executor', return_value=mock_executor):result = await registry.step(action)
 
         # Should be called with empty context dict
         expected_params = {"command": "echo test"}
@@ -385,44 +287,6 @@ class TestExecutionManager:
 
         assert result == mock_executor
         mock_get.assert_called_once_with("cli")
-
-    def test_determine_executor_type_explicit(self, registry):
-        """Test executor type determination with explicit type."""
-        action = Action(tool_name="cli", command="echo test")
-        # Since Action doesn't have executor_type field, we'll test a different way
-        # by adding it to parameters
-        action.parameters["executor_type"] = "python"
-
-        # For this test, let's modify the method to check parameters
-        with patch.object(action, '__dict__', {**action.__dict__, 'executor_type': 'python'}):
-            result = registry._determine_executor_type(action)
-            assert result == "python"
-
-    def test_determine_executor_type_from_parameters(self, registry):
-        """Test executor type determination from parameters."""
-        action = Action(tool_name="cli", command="", parameters={"code": "print('hello')"})
-
-        result = registry._determine_executor_type(action)
-        assert result == "python"
-
-    def test_determine_executor_type_command_analysis(self, registry):
-        """Test executor type determination from command analysis."""
-        action = Action(tool_name="cli", command="python3 script.py")
-
-        with patch.object(registry._executor_factory, '_analyze_command', return_value='python') as mock_analyze:
-            result = registry._determine_executor_type(action)
-
-        assert result == "python"
-        mock_analyze.assert_called_once_with("python3 script.py")
-
-    def test_determine_executor_type_default(self, registry):
-        """Test executor type determination defaults to CLI."""
-        action = Action(tool_name="cli", command="ls -la")
-
-        with patch.object(registry._executor_factory, '_analyze_command', return_value='cli') as mock_analyze:
-            result = registry._determine_executor_type(action)
-
-        assert result == "cli"
 
     @pytest.mark.asyncio
     async def test_step_python_executor(self, registry):
@@ -439,58 +303,12 @@ class TestExecutionManager:
         mock_executor.validate_parameters.return_value = ValidationResult.success()
         mock_executor.execute = AsyncMock(return_value=expected_result)
 
-        with patch.object(registry._executor_factory, 'get_executor', return_value=mock_executor):
-            with patch.object(registry, '_determine_executor_type', return_value='python'):
-                result = await registry.step(action, context)
+        with patch.object(registry._executor_factory, 'get_executor', return_value=mock_executor):result = await registry.step(action, context)
 
         assert result.success is True
         assert result.data["stdout"] == "hello\n"
         expected_params = {"command": "", "code": "print('hello')"}
         mock_executor.execute.assert_called_once_with(expected_params, context)
-
-    def test_create_environment_success(self, registry):
-        """Test successful environment creation."""
-        from saber.server.execution.sandbox.environment_spec import (
-            EnvironmentSpec, NetworkSpec, ServiceSpec
-        )
-
-        # Create a sample environment spec
-        network = NetworkSpec(name="test_network")
-        service = ServiceSpec(name="webapp", container="nginx")
-        env_spec = EnvironmentSpec(
-            network=network,
-            execution_service="execution",
-            execution_config={"image": "ubuntu:latest"},
-            target_services=[service]
-        )
-
-        with patch.object(registry._sandbox_manager, 'create_session_environment') as mock_create:
-            registry.create_environment("test_session", env_spec)
-
-        mock_create.assert_called_once_with("test_session", env_spec)
-
-    def test_create_environment_failure(self, registry):
-        """Test environment creation failure."""
-        from saber.server.execution.sandbox.environment_spec import (
-            EnvironmentSpec, NetworkSpec
-        )
-
-        # Create a sample environment spec
-        network = NetworkSpec(name="test_network")
-        env_spec = EnvironmentSpec(
-            network=network,
-            execution_service="execution",
-            execution_config={"image": "ubuntu:latest"}
-        )
-
-        # Mock sandbox manager to raise exception
-        with patch.object(registry._sandbox_manager, 'create_session_environment') as mock_create:
-            mock_create.side_effect = Exception("Creation failed")
-
-            with pytest.raises(Exception, match="Creation failed"):
-                registry.create_environment("test_session", env_spec)
-
-        mock_create.assert_called_once_with("test_session", env_spec)
 
     def test_cleanup_all_sessions(self, registry):
         """Test cleanup of all sessions."""

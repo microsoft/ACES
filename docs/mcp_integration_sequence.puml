@@ -8,7 +8,8 @@ participant "ServerClient" as Client
 participant "SessionRestAPI\n(REST)" as REST
 participant "SessionMCPAPI\n(MCP Component)" as MCP
 participant "SessionManager" as SM
-participant "ExecutionManager" as EM
+participant "ExecutionManager" as EM_EXEC
+participant "EpisodeManager" as EM_EP
 participant "TaskManager" as TM
 
 == Session Initialization ==
@@ -32,8 +33,8 @@ SM -> Client: episode_started
 Agent -> Client: get_available_tools()
 Client -> MCP: list_tools()
 MCP -> SM: get_execution_manager()
-SM -> EM: to_mcp_tools()
-EM -> MCP: tool_schemas[]
+SM -> EM_EXEC: to_mcp_tools()
+EM_EXEC -> MCP: tool_schemas[]
 MCP -> Client: mcp_tools[]
 Client -> Agent: available_tools[]
 
@@ -41,10 +42,10 @@ Client -> Agent: available_tools[]
 Agent -> Client: execute_command(tool_name, args)
 Client -> MCP: call_tool(tool_name, args)
 MCP -> SM: execute_command(session_id, action)
-SM -> EM: step(action, context)
-EM -> SM: command_result
-SM -> TM: step(session_id, action, result)
-TM -> SM: step_result
+SM -> EM_EXEC: step(action, context)
+EM_EXEC -> SM: command_result
+SM -> EM_EP: step(session_id, action, result)
+EM_EP -> SM: step_result
 SM -> MCP: execution_result
 MCP -> Client: mcp_result
 Client -> Agent: command_result
@@ -52,7 +53,6 @@ Client -> Agent: command_result
 == Session Cleanup ==
 Agent -> Client: close_session()
 Client -> MCP: disconnect()
-MCP -> SM: cleanup_mcp_session()
 Client -> REST: DELETE /session/{id}
 REST -> SM: terminate_session()
 SM -> Client: session_closed

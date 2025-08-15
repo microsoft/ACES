@@ -86,12 +86,6 @@ For detailed architecture documentation, see [docs/README.md](docs/README.md).
 # Run all tests
 uv run pytest
 
-# Run command configuration tests specifically
-uv run pytest tests/test_command_configuration.py
-
-# Run security validation tests
-uv run pytest tests/test_cli_security.py
-
 # Run with coverage
 uv run pytest --cov=src
 ```

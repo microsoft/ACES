@@ -10,7 +10,8 @@ import logging
 import shlex
 from typing import Any, Dict, List, Optional
 
-from ..base import CommandResult, Parameter, ParameterType, ValidationResult
+from ...base import CommandResult
+from ..base import Parameter, ParameterType, ValidationResult
 from ..exceptions import SandboxExecutionError
 from ..sandbox.sandbox_manager import SandboxManager
 from ..utils.security_validator import SecurityValidator
@@ -43,10 +44,56 @@ class CLIExecutor(DockerExecutor):
         "requires_validation": True,
     }
 
+    @classmethod
+    def get_default_config(cls) -> Dict[str, Any]:
+        """
+        Get default configuration for CLI executor.
+
+        Returns:
+            Dictionary containing CLI executor default configuration
+        """
+        return {
+            "default_shell_mode": False,
+            "timeout": 300.0,
+        }
+
+    @classmethod
+    def create_with_config(
+        cls,
+        sandbox_manager: SandboxManager,
+        config: Optional[Dict[str, Any]] = None,
+        additional_params: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> "CLIExecutor":
+        """
+        Create CLI executor with standardized configuration interface.
+
+        Args:
+            sandbox_manager: Required sandbox manager for Docker execution
+            config: CLI-specific configuration dictionary
+            additional_params: Additional parameters (e.g., allowed_commands)
+            **kwargs: Additional keyword arguments
+
+        Returns:
+            Configured CLI executor instance
+        """
+        merged_kwargs = {**kwargs}
+
+        # Extract CLI-specific parameters from additional_params
+        allowed_commands = None
+        if additional_params:
+            allowed_commands = additional_params.get("allowed_commands")
+            # Remove from kwargs since it's a specific parameter
+            if "allowed_commands" in additional_params:
+                additional_params = {k: v for k, v in additional_params.items() if k != "allowed_commands"}
+            merged_kwargs.update(additional_params)
+
+        return cls(sandbox_manager=sandbox_manager, config=config, allowed_commands=allowed_commands, **merged_kwargs)
+
     def __init__(
         self,
         sandbox_manager: SandboxManager,
-        cli_config: Optional[Dict[str, Any]] = None,
+        config: Optional[Dict[str, Any]] = None,
         allowed_commands: Optional[List[str]] = None,
         **kwargs: Any,
     ) -> None:
@@ -55,20 +102,20 @@ class CLIExecutor(DockerExecutor):
 
         Args:
             sandbox_manager: Required sandbox manager for Docker execution
-            cli_config: Optional CLI configuration dictionary
+            config: CLI configuration dictionary
             allowed_commands: Optional list of allowed commands for security validation
             **kwargs: Additional arguments passed to parent
 
         Raises:
             SandboxExecutionError: If sandbox_manager is None or invalid
         """
-        super().__init__(sandbox_manager=sandbox_manager, docker_config=cli_config, **kwargs)
-
-        cli_config = cli_config or {}
+        super().__init__(sandbox_manager=sandbox_manager, config=config, **kwargs)
 
         # Initialize security validator for this executor
         self._security_validator = SecurityValidator(allowed_commands=allowed_commands)
 
+    def setup_parameters(self, config: Dict[str, Any]) -> None:
+        """Set up CLI executor parameters."""
         # Add parameter for the command string
         self.add_parameter(
             Parameter(
@@ -80,8 +127,8 @@ class CLIExecutor(DockerExecutor):
         )
 
         # Add parameter for shell interpretation mode
-        # Use default from CLI config if provided
-        default_shell_mode = cli_config.get("default_shell_mode", False)
+        # Use default from config if provided
+        default_shell_mode = config.get("default_shell_mode", False)
         self.add_parameter(
             Parameter(
                 name="shell",
@@ -149,7 +196,8 @@ class CLIExecutor(DockerExecutor):
         result_data = {
             "stdout": stdout,
             "stderr": stderr,
-            "return_code": return_code,
+            "exit_code": return_code,
+            "return_code": return_code,  # Keep both for backward compatibility
             "success": success,
             "output": stdout if success else stderr,  # Primary output
         }
@@ -257,8 +305,9 @@ class CLIExecutor(DockerExecutor):
             # Build command
             command_args = self.build_command(parameters, context)
 
-            # Execute command in Docker container
-            result = environment.execute_command(command=command_args)
+            # Execute command in Docker container with timeout
+            timeout = int(self.get_timeout())
+            result = environment.execute_command(command=command_args, timeout=timeout)
 
             # Parse output
             tool_result = self.parse_output(result.stdout, result.stderr, result.exit_code)

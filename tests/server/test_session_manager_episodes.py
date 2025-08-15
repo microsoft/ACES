@@ -9,9 +9,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from saber.server.session_manager import SessionManager
-from saber.server.tasks.base import Action, Step
-from saber.server.execution.base import CommandResult
-from saber.server.tasks.episodes.episode import Episode
+from saber.server.base import Action, Step, CommandResult, Episode
 
 
 class TestSessionManagerEpisodes:
@@ -69,18 +67,23 @@ class TestSessionManagerEpisodes:
         mock_evaluation_manager.log_episode_end = AsyncMock()
         mock_evaluation_manager.log_action = AsyncMock()
 
+        mock_episode_manager = MagicMock()
+        mock_episode_manager.start_episode = MagicMock()
+        mock_episode_manager.end_episode = MagicMock()
+        mock_episode_manager.get_episode = MagicMock()
+
         with patch('saber.server.session_manager.TaskManager', return_value=mock_task_manager), \
              patch('saber.server.session_manager.ExecutionManager', return_value=mock_execution_manager), \
              patch('saber.server.session_manager.PolicyManager', return_value=mock_policy_manager), \
-             patch('saber.server.session_manager.EvaluationManager', return_value=mock_evaluation_manager):
+             patch('saber.server.session_manager.EvaluationManager', return_value=mock_evaluation_manager), \
+             patch('saber.server.session_manager.EpisodeManager', return_value=mock_episode_manager):
 
             manager = SessionManager(
                 domain_name="test_domain",
-                tasks_config_path="/tmp/test_tasks.yaml",
+                config_dir="/tmp",
                 host="127.0.0.1",
                 port=8002
             )
-
             return manager
 
     @pytest.mark.asyncio
@@ -93,8 +96,13 @@ class TestSessionManagerEpisodes:
         session_id = session.session_id
         task_id = "task_456"
 
-        # Mock task manager to return episode
-        manager.task_manager.start_episode.return_value = mock_episode
+        # Mock task with proper initial_context
+        mock_task = MagicMock()
+        mock_task.initial_context = {"initial_data": "test"}
+        manager.task_manager.get_task.return_value = mock_task
+
+        # Mock episode manager to return episode
+        manager.episode_manager.start_episode.return_value = mock_episode
 
         # Start episode
         episode = await manager.start_episode(session_id, task_id)
@@ -102,8 +110,13 @@ class TestSessionManagerEpisodes:
         assert episode == mock_episode
         assert session.current_episode_id == mock_episode.episode_id
 
-        # Verify task manager was called
-        manager.task_manager.start_episode.assert_called_once_with(session_id, task_id)
+        # Verify task manager was called to get task
+        manager.task_manager.get_task.assert_called_once_with(task_id)
+
+        # Verify episode manager was called
+        manager.episode_manager.start_episode.assert_called_once_with(
+            session_id=session_id, task_id=task_id, initial_context={"initial_data": "test"}
+        )
 
         # Verify evaluation manager was called
         manager.evaluation_manager.log_episode_start.assert_called_once_with(
@@ -131,10 +144,16 @@ class TestSessionManagerEpisodes:
         session_id = session.session_id
         session.current_episode_id = "episode_123"
 
-        # Mock execution and task manager responses
-        command_result = CommandResult(success=True, data={"output": "test output"})
+        # Mock episode manager to return a valid episode
+        mock_episode_obj = MagicMock()
+        mock_episode_obj.episode_id = "episode_123"
+        mock_episode_obj.add_step = MagicMock()
+        manager.episode_manager.get_episode.return_value = mock_episode_obj
+
+        # Mock execution and episode manager responses
+        command_result = CommandResult(exit_code=0, stdout="test output", stderr="", execution_time=0.1)
         manager.execution_manager.step.return_value = command_result
-        manager.task_manager.step.return_value = mock_step
+        manager.episode_manager.step.return_value = mock_step
 
         # Execute command
         action = Action(tool_name="cli", command="file test.txt", parameters={"param": "value"})
@@ -142,7 +161,8 @@ class TestSessionManagerEpisodes:
 
         assert isinstance(response, CommandResult)
         assert response.success is True
-        assert response.data == {"output": "test output"}
+        assert response.stdout == "test output"
+        assert response.exit_code == 0
 
         # Verify execution manager was called with Action object
         call_args = manager.execution_manager.step.call_args
@@ -153,8 +173,8 @@ class TestSessionManagerEpisodes:
         assert action_arg.parameters == {"param": "value"}
         assert action_arg.tool_name == "cli"
 
-        # Verify task manager was called with action
-        call_args = manager.task_manager.step.call_args
+        # Verify episode manager was called with action
+        call_args = manager.episode_manager.step.call_args
         assert call_args[0][0] == session_id  # session_id
         assert isinstance(call_args[0][1], Action)  # action
         assert call_args[0][2] == command_result  # command_result
@@ -171,7 +191,6 @@ class TestSessionManagerEpisodes:
         session = await manager.create_session("test_client")
         session_id = session.session_id
 
-        from saber.server.execution.base import CommandResult
         action = Action(tool_name="cli", command="file test.txt", parameters={})
         result = await manager.execute_command(session_id, action)
 
@@ -189,13 +208,19 @@ class TestSessionManagerEpisodes:
         session_id = session.session_id
         session.current_episode_id = "episode_123"
 
+        # Mock episode manager to return a valid episode
+        mock_episode_obj = MagicMock()
+        mock_episode_obj.episode_id = "episode_123"
+        mock_episode_obj.add_step = MagicMock()
+        manager.episode_manager.get_episode.return_value = mock_episode_obj
+
         # Mock step as completed
         mock_step.done = True
 
-        # Mock execution and task manager responses
-        command_result = CommandResult(success=True, data={"output": "completed"})
+        # Mock execution and episode manager responses
+        command_result = CommandResult(exit_code=0, stdout="completed", stderr="", execution_time=0.1)
         manager.execution_manager.step.return_value = command_result
-        manager.task_manager.step.return_value = mock_step
+        manager.episode_manager.step.return_value = mock_step
 
         # Execute command
         action = Action(tool_name="cli", command="final command", parameters={})
@@ -205,7 +230,7 @@ class TestSessionManagerEpisodes:
         assert session.current_episode_id is None  # Episode should be cleared
 
         # Verify episode was ended
-        manager.task_manager.end_episode.assert_called_once_with(session_id, "completed")
+        manager.episode_manager.end_episode.assert_called_once_with(session_id, "completed")
         manager.evaluation_manager.log_episode_end.assert_called_once_with(session_id, "completed")
 
     @pytest.mark.asyncio
@@ -238,8 +263,8 @@ class TestSessionManagerEpisodes:
         session_id = session.session_id
         session.current_episode_id = "episode_123"
 
-        # Mock task manager responses
-        manager.task_manager.get_current_episode.return_value = mock_episode
+        # Mock episode manager and task manager responses
+        manager.episode_manager.get_current_episode.return_value = mock_episode
         manager.task_manager.get_task.return_value = mock_task
 
         # Get current task
@@ -251,8 +276,8 @@ class TestSessionManagerEpisodes:
         assert task_info["episode_id"] == "episode_123"
         assert task_info["state"] == "active"
 
-        # Verify task manager was called
-        manager.task_manager.get_current_episode.assert_called_once_with(session_id)
+        # Verify episode manager and task manager were called
+        manager.episode_manager.get_current_episode.assert_called_once_with(session_id)
         manager.task_manager.get_task.assert_called_once_with("task_456")
 
     @pytest.mark.asyncio
@@ -281,8 +306,8 @@ class TestSessionManagerEpisodes:
         session_id = session.session_id
         session.current_episode_id = "episode_123"
 
-        # Mock task manager to return None
-        manager.task_manager.get_current_episode.return_value = None
+        # Mock episode manager to return None
+        manager.episode_manager.get_current_episode.return_value = None
 
         from fastapi import HTTPException
         with pytest.raises(HTTPException) as exc_info:

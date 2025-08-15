@@ -10,13 +10,13 @@ import pytest
 import uuid
 from unittest.mock import patch, AsyncMock, MagicMock
 
-from saber.server.execution.execution_manager import ExecutionManager, ExecutionConfiguration
-from saber.server.execution.base import CommandResult, ValidationResult
+from saber.server.execution.execution_manager import ExecutionManager
+from saber.server.base import CommandResult, Action
+from saber.server.execution.base import ValidationResult
 from saber.server.execution.utils.security_validator import SecurityValidator
 from saber.server.execution.executors.cli import CLIExecutor
 from saber.server.execution.executors.factory import ExecutorFactory
 from saber.server.execution.sandbox.sandbox_manager import SandboxManager
-from saber.server.tasks.base import Action
 
 
 class TestToolsIntegration:
@@ -49,23 +49,15 @@ class TestToolsIntegration:
     def registry(self, test_config):
         """Create ExecutionManager for integration testing."""
         with patch("saber.server.execution.execution_manager.SandboxManager"):
-            return ExecutionManager(config=test_config)
+            return ExecutionManager()
 
     @pytest.fixture
     def real_registry(self, test_config, docker_cleanup):
         """Create ExecutionManager with real Docker containers for integration testing."""
-        execution_manager = ExecutionManager(config=test_config)
+        execution_manager = ExecutionManager()
         # Register for cleanup
         docker_cleanup(execution_manager)
         return execution_manager
-
-    # REMOVED: test_end_to_end_safe_command_execution - heavily mocked, not testing real integration
-    # REMOVED: test_end_to_end_whitelisted_command_execution - heavily mocked, not testing real integration
-    # REMOVED: test_concurrent_command_execution - heavily mocked, not testing real integration
-    # REMOVED: test_shell_mode_integration - heavily mocked, not testing real integration
-    # REMOVED: test_session_isolation_integration - heavily mocked, not testing real integration
-    # REMOVED: test_error_handling_integration - heavily mocked, not testing real integration
-    # REMOVED: test_realistic_malware_analysis_scenario - heavily mocked, not testing real integration
 
     @pytest.mark.asyncio
     async def test_end_to_end_blocked_command_execution(self, registry):
@@ -82,14 +74,12 @@ class TestToolsIntegration:
     @pytest.mark.asyncio
     async def test_end_to_end_whitelisted_command_execution(self, registry):
         """Test execution of allowed command in Docker container."""
-        from saber.server.execution.sandbox.docker_environment import CommandResult
 
         action = Action(tool_name="cli", command="echo test")  # Safe command from allowed list
         context = {"session_id": f"integration_test_003_{uuid.uuid4().hex[:8]}"}
 
         # Mock Docker environment execution
         mock_env = MagicMock()
-        mock_env.execute_command = AsyncMock()
         mock_env.execute_command.return_value = CommandResult(
             exit_code=0,
             stdout="test\n",
@@ -101,13 +91,12 @@ class TestToolsIntegration:
         with patch.object(registry._sandbox_manager, 'get_session_environment', return_value=mock_env):
             result = await registry.step(action, context)
 
-        assert result.success is True
-        assert result.data["stdout"] == "test\n"
+        assert result.exit_code == 0
+        assert result.stdout == "test\n"
 
     @pytest.mark.asyncio
     async def test_concurrent_command_execution(self, registry):
         """Test concurrent execution with semaphore control in Docker."""
-        from saber.server.execution.sandbox.docker_environment import CommandResult
 
         actions_list = [
             Action(tool_name="cli", command=f"echo test{i}")
@@ -121,7 +110,7 @@ class TestToolsIntegration:
 
         # Mock Docker environment for all commands
         mock_env = MagicMock()
-        mock_env.execute_command = AsyncMock()
+        mock_env.execute_command = MagicMock()
         mock_env.execute_command.return_value = CommandResult(
             exit_code=0,
             stdout="test\n",
@@ -140,12 +129,11 @@ class TestToolsIntegration:
             results = await asyncio.gather(*tasks)
 
         # All should succeed despite concurrency limits
-        assert all(result.success for result in results)
+        assert all(result.exit_code == 0 for result in results)
 
     @pytest.mark.asyncio
     async def test_shell_mode_integration(self, registry):
         """Test shell mode with complex commands in Docker."""
-        from saber.server.execution.sandbox.docker_environment import CommandResult
 
         # Use a command that would benefit from shell mode but isn't dangerous
         action = Action(tool_name="cli", command="echo 'hello world'", parameters={"shell": True})
@@ -153,7 +141,7 @@ class TestToolsIntegration:
 
         # Mock Docker environment execution
         mock_env = MagicMock()
-        mock_env.execute_command = AsyncMock()
+        mock_env.execute_command = MagicMock()
         mock_env.execute_command.return_value = CommandResult(
             exit_code=0,
             stdout="hello world\n",
@@ -165,26 +153,27 @@ class TestToolsIntegration:
         with patch.object(registry._sandbox_manager, 'get_session_environment', return_value=mock_env) as mock_get_env:
             result = await registry.step(action, context)
 
-        assert result.success is True
-        assert result.data["stdout"] == "hello world\n"
+        assert result.exit_code == 0
+        assert result.stdout == "hello world\n"
 
         # Verify Docker step was called with shell format
         mock_env.execute_command.assert_called_once_with(
             command=["/bin/sh", "-c", "echo 'hello world'"],
-            working_dir="/workspace"
+            timeout=300
         )
 
     def test_security_validator_configuration_integration(self, registry):
-        """Test that security validator is properly configured."""
-        # Get security info to verify configuration
-        security_info = registry.get_security_info()
+        """Test that security validator is properly configured at executor level."""
+        # Get CLI executor and verify its security configuration
+        cli_executor = registry.get_executor("cli")
+        security_info = cli_executor.get_security_info()
 
-        # Should include allowed commands from config
-        allowed_commands = security_info.get("allowed_commands")
-        assert allowed_commands is not None
-        assert "echo" in allowed_commands
-        assert "cat" in allowed_commands
-        assert "ls" in allowed_commands
+        # Verify the CLI executor has proper Docker configuration
+        assert "docker_config" in security_info or "image" in security_info
+
+        # Test that security validation works by attempting to validate a command
+        validation_result = cli_executor.validate_parameters({"command": "echo test"})
+        assert validation_result.valid is True
 
     def test_mcp_integration(self, registry):
         """Test MCP tools format integration."""
@@ -228,21 +217,20 @@ class TestToolsIntegration:
         action = Action(tool_name="cli", command="", parameters={"shell": True})  # Missing command
         context = {"session_id": unique_session_id}
         result = await registry.step(action, context)
-        assert result.success is False
+        assert result.exit_code != 0
         # The test should fail during validation or execution, not necessarily with the exact message
         assert result.error is not None
 
         # Test invalid parameter type
         action = Action(tool_name="cli", command="echo test", parameters={"shell": "invalid"})
         result = await registry.step(action, context)
-        assert result.success is False
+        assert result.exit_code != 0
         # The test should fail with some validation error
         assert result.error is not None
 
     @pytest.mark.asyncio
     async def test_session_isolation_integration(self, registry):
         """Test that different sessions are properly isolated."""
-        from saber.server.execution.sandbox.docker_environment import CommandResult
 
         action1 = Action(tool_name="cli", command="echo session1")
         action2 = Action(tool_name="cli", command="echo session2")
@@ -253,18 +241,28 @@ class TestToolsIntegration:
 
         # Mock different environments for different sessions
         mock_env1 = MagicMock()
-        mock_env1.execute_command = AsyncMock()
+        mock_env1.execute_command = MagicMock()
         mock_env1.execute_command.return_value = CommandResult(
-            exit_code=0, stdout="session1\n", stderr="", execution_time=0.1
+            exit_code=0,
+            stdout="session1\n",
+            stderr="",
+            execution_time=0.1
         )
-        mock_env1.get_container_id.return_value = "session1_container"
+        mock_container1 = MagicMock()
+        mock_container1.id = "session1_container"
+        mock_env1.get_execution_container.return_value = mock_container1
 
         mock_env2 = MagicMock()
-        mock_env2.execute_command = AsyncMock()
+        mock_env2.execute_command = MagicMock()
         mock_env2.execute_command.return_value = CommandResult(
-            exit_code=0, stdout="session2\n", stderr="", execution_time=0.1
+            exit_code=0,
+            stdout="session2\n",
+            stderr="",
+            execution_time=0.1
         )
-        mock_env2.get_container_id.return_value = "session2_container"
+        mock_container2 = MagicMock()
+        mock_container2.id = "session2_container"
+        mock_env2.get_execution_container.return_value = mock_container2
 
         # Mock sandbox manager to return different environments per session
         def get_session_env(session_id):
@@ -279,25 +277,24 @@ class TestToolsIntegration:
             result2 = await registry.step(action2, context2)
 
         # Verify isolation worked
-        assert result1.success is True
-        assert result1.data["stdout"] == "session1\n"
+        assert result1.exit_code == 0
+        assert result1.stdout == "session1\n"
         assert result1.metadata["container_id"] == "session1_con"  # Truncated to 12 chars
 
-        assert result2.success is True
-        assert result2.data["stdout"] == "session2\n"
+        assert result2.exit_code == 0
+        assert result2.stdout == "session2\n"
         assert result2.metadata["container_id"] == "session2_con"  # Truncated to 12 chars
 
     @pytest.mark.asyncio
     async def test_error_handling_integration(self, registry):
         """Test error handling throughout the Docker system."""
-        from saber.server.execution.sandbox.docker_environment import CommandResult
 
         action = Action(tool_name="cli", command="nonexistent_command_xyz")
         context = {"session_id": f"error_test_session_{uuid.uuid4().hex[:8]}"}
 
         # Mock Docker environment returning error
         mock_env = MagicMock()
-        mock_env.execute_command = AsyncMock()
+        mock_env.execute_command = MagicMock()
         mock_env.execute_command.return_value = CommandResult(
             exit_code=127,
             stdout="",
@@ -309,42 +306,9 @@ class TestToolsIntegration:
         with patch.object(registry._sandbox_manager, 'get_session_environment', return_value=mock_env):
             result = await registry.step(action, context)
 
-        assert result.success is False
+        assert result.exit_code != 0
         assert "Command failed with exit code 127" in result.error
         assert "command not found" in result.error
-
-    def test_configuration_loading_integration(self, registry, tmp_path):
-        """Test configuration loading and component updates."""
-        # Create test config file
-        config_file = tmp_path / "test_config.yaml"
-        config_content = """
-execution:
-  timeout: 90.0
-  max_concurrent: 8
-security:
-  allowed_commands:
-    - "new_command"
-    - "another_command"
-  max_command_length: 2000
-sandbox:
-  image: "saber/updated-sandbox:latest"
-  network_mode: "bridge"
-"""
-        config_file.write_text(config_content)
-
-        # Load new configuration
-        registry.load_configuration(str(config_file))
-
-        # Verify configuration was updated
-        config = registry.get_configuration()
-        assert config.get_execution_timeout() == 90.0
-        assert config.get_max_concurrent() == 8
-        assert "new_command" in config.get_allowed_commands()
-
-        # Verify sandbox config was updated
-        sandbox_config = config.get_sandbox_config()
-        assert sandbox_config["image"] == "saber/updated-sandbox:latest"
-        assert sandbox_config["network_mode"] == "bridge"
 
     @pytest.mark.asyncio
     async def test_security_patterns_integration(self, registry):
@@ -361,24 +325,21 @@ sandbox:
             context = {"session_id": f"security_test_{uuid.uuid4().hex[:8]}"}
             result = await registry.step(action, context)
 
-            assert result.success is False, f"Dangerous command should be blocked: {cmd}"
+            assert result.exit_code != 0, f"Dangerous command should be blocked: {cmd}"
             assert "Command security validation failed" in result.error
 
     def test_component_initialization_integration(self, test_config):
         """Test that all components are properly initialized together."""
         with patch("saber.server.execution.sandbox.sandbox_manager.SandboxManager"):
-            registry = ExecutionManager(config=test_config)
+            registry = ExecutionManager()
 
         # Verify all components exist and are correct types
         assert hasattr(registry, '_configuration')
-        assert hasattr(registry, '_security_validator')
         assert hasattr(registry, '_executor_factory')
         assert hasattr(registry, '_sandbox_manager')
-        assert hasattr(registry, '_semaphore')
 
         # Verify component types
-        assert isinstance(registry._configuration, ExecutionConfiguration)
-        assert isinstance(registry._security_validator, SecurityValidator)
+        assert isinstance(registry._configuration, dict)
 
         # Verify executor factory has CLI capability
         available_executors = registry._executor_factory.get_available_executors()
@@ -390,7 +351,6 @@ sandbox:
     @pytest.mark.asyncio
     async def test_realistic_malware_analysis_scenario(self, registry):
         """Test realistic malware analysis commands in Docker environment."""
-        from saber.server.execution.sandbox.docker_environment import CommandResult
 
         # Simulate commands that might be used in malware analysis
         analysis_commands = [
@@ -401,7 +361,7 @@ sandbox:
 
         # Mock Docker environment
         mock_env = MagicMock()
-        mock_env.execute_command = AsyncMock()
+        mock_env.execute_command = MagicMock()
         mock_env.get_container_id.return_value = "analysis_container"
 
         results = []
@@ -422,12 +382,12 @@ sandbox:
                 results.append(result)
 
         # All analysis commands should succeed
-        assert all(result.success for result in results)
+        assert all(result.exit_code == 0 for result in results)
 
         # Verify expected outputs
-        assert "Analyzing file" in results[0].data["stdout"]
-        assert "File type" in results[1].data["stdout"]
-        assert "Strings found" in results[2].data["stdout"]
+        assert "Analyzing file" in results[0].stdout
+        assert "File type" in results[1].stdout
+        assert "Strings found" in results[2].stdout
 
     @pytest.mark.integration
     @pytest.mark.asyncio
@@ -448,9 +408,9 @@ sandbox:
 
             # Verify it worked (if the Docker image is available)
             # If the image isn't available, the test might fail, but cleanup should still work
-            if result.success:
-                assert "real container test" in result.data.get("stdout", "")
-                assert result.data.get("return_code") == 0
+            if result.exit_code == 0:
+                assert "real container test" in result.stdout
+                assert result.exit_code == 0
             else:
                 # If Docker image isn't available, that's ok for this test
                 # The important part is that cleanup works

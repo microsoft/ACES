@@ -33,18 +33,23 @@ class TestSessionRestAPI:
         mock_evaluation_manager.log_episode_end = AsyncMock()
         mock_evaluation_manager.log_action = AsyncMock()
 
+        mock_episode_manager = MagicMock()
+        mock_episode_manager.start_episode = MagicMock()
+        mock_episode_manager.end_episode = MagicMock()
+        mock_episode_manager.get_episode = MagicMock()
+
         with patch('saber.server.session_manager.TaskManager', return_value=mock_task_manager), \
              patch('saber.server.session_manager.ExecutionManager', return_value=mock_execution_manager), \
              patch('saber.server.session_manager.PolicyManager', return_value=mock_policy_manager), \
-             patch('saber.server.session_manager.EvaluationManager', return_value=mock_evaluation_manager):
+             patch('saber.server.session_manager.EvaluationManager', return_value=mock_evaluation_manager), \
+             patch('saber.server.session_manager.EpisodeManager', return_value=mock_episode_manager):
 
             manager = SessionManager(
                 domain_name="test_domain",
-                tasks_config_path="/tmp/test_tasks.yaml",
+                config_dir="/tmp",
                 host="127.0.0.1",
                 port=8003
             )
-
             return manager, TestClient(manager.app)
 
     def test_health_endpoint(self, session_manager_app):
@@ -118,11 +123,16 @@ class TestSessionRestAPI:
         """Test starting episode endpoint."""
         manager, client = session_manager_app
 
+        # Mock task with proper initial_context
+        mock_task = MagicMock()
+        mock_task.initial_context = {"initial_data": "test"}
+        manager.task_manager.get_task.return_value = mock_task
+
         # Mock episode
         mock_episode = MagicMock()
         mock_episode.episode_id = "episode_123"
         mock_episode.task_id = "task_456"
-        manager.task_manager.start_episode.return_value = mock_episode
+        manager.episode_manager.start_episode.return_value = mock_episode
 
         # Create session first
         create_response = client.post("/session?client_id=test_client")
@@ -163,7 +173,7 @@ class TestSessionRestAPI:
         mock_task.title = "Test Task"
         mock_task.description = "Test description"
 
-        manager.task_manager.get_current_episode.return_value = mock_episode
+        manager.episode_manager.get_current_episode.return_value = mock_episode
         manager.task_manager.get_task.return_value = mock_task
 
         # Get current task

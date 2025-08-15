@@ -16,6 +16,7 @@ package "Domain Server Core" {
         +domain_name: str
         +active_sessions: Dict[str, ClientSession]
         +task_manager: TaskManager
+        +episode_manager: EpisodeManager
         +execution_manager: ExecutionManager
         +policy_manager: PolicyManager
         +evaluation_manager: EvaluationManager
@@ -91,23 +92,28 @@ package "Task Management" {
         +domain: str
         +tasks: Dict[str, Task]
         +config_loader: TaskConfigLoader
-        +episode_manager: EpisodeManager
         --
         +get_task(): Task
-        +start_episode(): Episode
-        +step(action, command_result?): Step
-        +reset(): Episode
-        +end_episode(): Episode
+        +get_subtask(): SubTask
         +list_tasks(): List[Dict]
+        +load_tasks_from_yaml(): void
     }
 
     class Task {
         +task_id: str
         +title: str
+        +description: str
+        +environment: Union[str, Dict[str, Any]]
+        +execution_config: Dict[str, Any]
+        +allowed_executors: List[str]
+        +initial_context: Dict[str, Any]
         +subtasks: List[SubTask]
         --
         +get_all_subtask_ids(): Set[str]
     }
+}
+
+package "Episode Management" {
 
     class EpisodeManager {
         +active_episodes: Dict[str, Episode]
@@ -143,16 +149,17 @@ package "Command Execution Framework" {
 
     class ExecutionManager {
         +_executor_factory: ExecutorFactory
-        +_security_validator: SecurityValidator
         +_sandbox_manager: SandboxManager
-        +_semaphore: Semaphore
+        +_environment_loader: EnvironmentLoader
+        +_execution_lock: asyncio.Lock
         --
         +step(action: Action): CommandResult
-        +validate_command(): ValidationResult
+        +configure_for_task(session_id: str, task: Task): void
+        +cleanup_session(session_id: str): void
+        +cleanup_all_sessions(): void
         +get_security_info(): Dict[str, Any]
         +list_commands(): List[Dict[str, Any]]
         +to_mcp_tools(): List[Dict[str, Any]]
-        +_determine_executor_type(action: Action): str
     }
 
     class ExecutorFactory {
@@ -161,12 +168,12 @@ package "Command Execution Framework" {
         --
         +get_executor(executor_type: str): CommandExecutor
         +get_available_executors(): List[str]
-        +create_executor_for_command(command: str): CommandExecutor
         +to_mcp_tools(): List[Dict[str, Any]]
     }
 
     class CLIExecutor {
         +_sandbox_manager: SandboxManager
+        +_config: Dict[str, Any]
         --
         +execute(action: Action): CommandResult
         +validate_parameters(action: Action): ValidationResult
@@ -175,6 +182,7 @@ package "Command Execution Framework" {
 
     class PythonExecutor {
         +_sandbox_manager: SandboxManager
+        +_config: Dict[str, Any]
         --
         +execute(action: Action): CommandResult
         +validate_parameters(action: Action): ValidationResult
@@ -244,6 +252,7 @@ package "Policy and Evaluation" {
 ' Relationships
 SessionManager *-- ClientSession
 SessionManager *-- TaskManager
+SessionManager *-- EpisodeManager
 SessionManager *-- ExecutionManager
 SessionManager *-- PolicyManager
 SessionManager *-- EvaluationManager
@@ -253,7 +262,6 @@ SessionManager *-- SessionMCPAPI
 SessionRestAPI ..> SessionManager : delegates to
 SessionMCPAPI ..> SessionManager : delegates to
 
-TaskManager *-- EpisodeManager
 TaskManager *-- Task
 Task ..> EpisodeState
 EpisodeManager *-- Episode
@@ -301,14 +309,17 @@ note right of SessionRestAPI
 end note
 
 note top of TaskManager
-**Task Orchestrator**
-Coordinates task loading and episode management.
-Provides RL gym-style interfaces (step, reset).
-See task_framework_architecture.puml for detailed Task design.
+**Task Definition Manager**
+Simplified to only manage task definitions and configuration.
+Parses YAML configuration and provides task object lookup.
+No longer manages episodes - focus on task data only.
+Task objects contain execution_config and flexible environment specification.
+Environment can be string template reference, granular dict config, or hybrid approach.
 end note
 
 note top of EpisodeManager
 **Episode Manager**
+Moved from TaskManager to SessionManager for better separation.
 Focuses on episode lifecycle management and step creation.
 Returns Step objects directly from step() method.
 Manages RL-compatible episode state transitions.
@@ -316,11 +327,14 @@ end note
 
 note top of ExecutionManager
 **Enhanced Docker Sandbox Execution Manager**
-Manages Docker-based command execution with security validation and multi-container orchestration.
-Coordinates between CLI executor and enhanced sandbox management supporting both single and multi-container environments.
-Provides command listing for REST API and handles complex task environments including target services.
-Enhanced SandboxManager supports Docker Compose for multi-service task environments (web apps, databases, etc.).
-See command_execution_architecture.puml for complete enhanced Command design.
+Integrated task-based configuration with environment resolution:
+- configure_for_task() method handles Task objects directly
+- EnvironmentLoader resolves flexible environment specifications
+- Automatic environment creation during task configuration
+- Docker Compose orchestration for multi-service environments
+- Sequential execution with concurrency control
+- Enhanced security validation and executor management
+See command_execution_architecture.puml for complete detailed design.
 end note
 
 @enduml

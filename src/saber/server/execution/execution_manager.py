@@ -9,88 +9,12 @@ import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 
-import yaml
-
-from ..tasks.base import Action
-from .base import CommandResult, ValidationResult
+from ..base import Action, CommandResult
 from .executors.docker_executor import DockerExecutor
 from .executors.factory import ExecutorFactory
-from .sandbox.environment_spec import EnvironmentSpec
 from .sandbox.sandbox_manager import SandboxManager
-from .utils.security_validator import SecurityValidator
 
 logger = logging.getLogger(__name__)
-
-
-class ExecutionConfiguration:
-    """
-    Configuration management for execution manager.
-
-    Handles YAML configuration files and provides structured access to
-    execution, security, and sandbox settings. Renamed from CLIConfiguration
-    to reflect broader scope beyond just CLI tools.
-    """
-
-    def __init__(self, config: Optional[Dict[str, Any]] = None, config_file: Optional[str] = None):
-        """
-        Initialize the CLIConfiguration.
-
-        Args:
-            config: Optional configuration dictionary
-            config_file: Optional path to YAML configuration file
-        """
-        self._config: Dict[str, Any] = {}
-
-        if config_file:
-            try:
-                self.load_configuration(config_file)
-            except Exception as e:
-                logger.error(f"Failed to load configuration file '{config_file}': {e}")
-                self._config = {}
-        else:
-            self._config = config or {}
-
-    def load_configuration(self, config_path: str) -> None:
-        """Load configuration from YAML file."""
-        try:
-            with open(config_path, "r") as f:
-                self._config = yaml.safe_load(f) or {}
-            logger.info(f"Configuration loaded from {config_path}")
-        except Exception as e:
-            logger.error(f"Failed to load configuration from {config_path}: {e}")
-            raise
-
-    def get_section(self, section_name: str) -> Dict[str, Any]:
-        """
-        Get a configuration section by name.
-
-        Args:
-            section_name: Name of the configuration section
-
-        Returns:
-            Configuration section dictionary (empty dict if not found)
-        """
-        config = self._config.get(section_name, {})
-        return dict(config) if config else {}
-
-    def get_execution_timeout(self) -> float:
-        """Get default execution timeout."""
-        timeout = self.get_section("execution").get("timeout", 300.0)
-        return float(timeout)
-
-    def get_allowed_commands(self) -> List[str]:
-        """Get allowed commands override list."""
-        commands = self.get_section("security").get("allowed_commands", [])
-        return list(commands) if commands else []
-
-    def get_max_command_length(self) -> int:
-        """Get maximum command length."""
-        length = self.get_section("security").get("max_command_length", 10000)
-        return int(length)
-
-    def get_sandbox_config(self) -> Dict[str, Any]:
-        """Get sandbox configuration."""
-        return self.get_section("sandbox")
 
 
 class ExecutionManager:
@@ -101,38 +25,38 @@ class ExecutionManager:
     with security validation and Docker isolation. Commands are executed sequentially.
     """
 
-    def __init__(
-        self,
-        config: Optional[Dict[str, Any]] = None,
-        config_file: Optional[str] = None,
-        allowed_executors: Optional[list[str]] = None,
-    ):
+    def __init__(self, config_dir: Optional[str] = None):
         """
-        Initialize the execution manager.
+        Initialize the execution manager
 
         Args:
-            config: Optional configuration dictionary
-            config_file: Optional path to YAML configuration file
-            allowed_executors: Optional list of executor types to enable. If None, all executors are available.
+            config_dir: Path to configuration directory for environment resolution
+
+        Task-specific configuration will be provided when sessions are created.
         """
-        self._configuration = ExecutionConfiguration(config, config_file)
+        self._config_dir = config_dir
+        self._environment_loader = None
 
-        # Initialize security validator
-        allowed_commands = self._configuration.get_allowed_commands()
-        self._security_validator = SecurityValidator(
-            allowed_commands=allowed_commands if allowed_commands else None,
-        )
+        # Initialize environment loader if config directory is provided
+        if config_dir:
+            from pathlib import Path
 
-        # Initialize sandbox manager
-        sandbox_config = self._configuration.get_sandbox_config()
-        self._sandbox_manager = SandboxManager(sandbox_config)
+            environments_path = Path(config_dir) / "environments.yaml"
+            if environments_path.exists():
+                from .environment_loader import EnvironmentLoader
 
-        # Initialize executor factory with full configuration and executor filtering
-        # Factory will extract relevant sections for each executor type
+                self._environment_loader = EnvironmentLoader(str(environments_path))
+                logger.info(f"Environment loader initialized with: {environments_path}")
+
+        self._configuration: Dict[str, Any] = {}
+
+        # Initialize sandbox manager with empty config (will be updated per session)
+        self._sandbox_manager = SandboxManager({})
+
+        # Initialize executor factory with minimal configuration
         self._executor_factory = ExecutorFactory(
             sandbox_manager=self._sandbox_manager,
             configuration=self._configuration,
-            allowed_executors=allowed_executors,
         )
 
         # Sequential execution lock - ensures only one command executes at a time
@@ -156,9 +80,8 @@ class ExecutionManager:
         """
         async with self._execution_lock:
             try:
-                # Determine executor type from action or command content
-                executor_type = self._determine_executor_type(action)
-                executor = self._executor_factory.get_executor(executor_type)
+                # Get executor directly from action's tool name
+                executor = self._executor_factory.get_executor(action.tool_name)
 
                 # Extract parameters from action
                 parameters = {"command": action.command}
@@ -178,28 +101,6 @@ class ExecutionManager:
                 logger.error(f"Execution failed: {e}")
                 return CommandResult.error_result(error=str(e))
 
-    def _determine_executor_type(self, action: Action) -> str:
-        """
-        Determine the appropriate executor type for the given action.
-
-        Args:
-            action: Action to analyze
-
-        Returns:
-            Executor type string
-        """
-        # Check if action has explicit executor type (for testing or future extensibility)
-        if hasattr(action, "executor_type") and action.executor_type:
-            return str(action.executor_type)
-
-        # Check action parameters for hints
-        if "code" in action.parameters:
-            return "python"
-
-        # Use factory's command analysis
-        command = action.command or ""
-        return self._executor_factory._analyze_command(command)
-
     def get_executor(self, executor_type: str) -> DockerExecutor:
         """
         Get a specific executor instance.
@@ -212,20 +113,69 @@ class ExecutionManager:
         """
         return self._executor_factory.get_executor(executor_type)
 
-    def create_environment(self, session_id: str, environment_spec: EnvironmentSpec) -> None:
+    def configure_for_task(self, session_id: str, task: Any) -> None:
         """
-        Create a sandbox environment for a session with the given specification.
+        Configure ExecutionManager for a specific task/session.
 
         Args:
             session_id: Session identifier
-            environment_spec: Environment specification for multi-container orchestration
+            task: Task object containing execution parameters and environment specification
         """
-        try:
+        # Resolve environment if specified in task
+        environment_spec = None
+        if task.environment:
+            if not self._environment_loader:
+                logger.error(f"Environment specified but no environment loader available for session {session_id}")
+                raise RuntimeError("Environment loader not initialized but environment specified in task")
+
+            try:
+                environment_spec = self._environment_loader.resolve_environment(task.environment)
+                logger.debug(f"Resolved environment for session {session_id}: {task.environment}")
+            except Exception as e:
+                logger.error(f"Failed to resolve environment for session {session_id}: {e}")
+                raise
+
+        # Start with task's execution config
+        execution_config = task.execution_config.copy()
+
+        # Add executor-specific configurations generically
+        # Look for any config key that ends with "_config" and maps to an executor type
+        executor_types = self._executor_factory.get_available_executors()
+        for executor_type in executor_types:
+            config_attr = f"{executor_type}_config"
+            if hasattr(task, config_attr):
+                config_value = getattr(task, config_attr)
+                if config_value:
+                    execution_config[executor_type] = config_value
+                    logger.debug(f"Added {executor_type} configuration from task")
+
+        # Create new configuration for this task
+        self._configuration = execution_config
+
+        # Update sandbox manager with resolved environment spec
+        if environment_spec:
+            self._sandbox_manager = SandboxManager({})
+            # Create the session environment immediately
             self._sandbox_manager.create_session_environment(session_id, environment_spec)
             logger.info(f"Created sandbox environment for session {session_id}")
-        except Exception as e:
-            logger.error(f"Failed to create environment for session {session_id}: {e}")
-            raise
+        else:
+            self._sandbox_manager = SandboxManager({})
+
+        allowed_executors = task.allowed_executors
+        self._executor_factory = ExecutorFactory(
+            sandbox_manager=self._sandbox_manager,
+            configuration=self._configuration,
+            allowed_executors=allowed_executors,
+        )
+
+        logger.info(f"ExecutionManager configured for session {session_id} with task-specific settings")
+        if allowed_executors:
+            logger.info(f"Restricted to executors: {allowed_executors}")
+
+        # Log configured executor types
+        configured_executors = [k for k in self._configuration.keys() if k in executor_types]
+        if configured_executors:
+            logger.info(f"Configured executor-specific settings for: {configured_executors}")
 
     def cleanup_session(self, session_id: str) -> None:
         """
@@ -248,27 +198,6 @@ class ExecutionManager:
             logger.info("Cleaned up all execution resources")
         except Exception as e:
             logger.error(f"Error during cleanup: {e}")
-
-    def validate_command(self, command: str) -> ValidationResult:
-        """
-        Validate a command string using the security validator.
-
-        Args:
-            command: Command string to validate
-
-        Returns:
-            ValidationResult with validation details
-        """
-        return self._security_validator.validate_command_string(command)
-
-    def get_security_info(self) -> Dict[str, Any]:
-        """
-        Get security configuration information.
-
-        Returns:
-            Dictionary with security settings
-        """
-        return self._security_validator.get_security_info()
 
     def to_mcp_tools(self) -> List[Dict[str, Any]]:
         """
@@ -318,42 +247,28 @@ class ExecutionManager:
         """
         return {
             "execution_mode": "sequential",
-            "timeout": self._configuration.get_execution_timeout(),
-            "security_config": self.get_security_info(),
             "executor_info": self._executor_factory.get_executor_info(),
         }
 
-    def load_configuration(self, config_path: str) -> None:
+    def get_security_info(self) -> Dict[str, Any]:
         """
-        Load configuration from YAML file and update components.
-
-        Args:
-            config_path: Path to configuration file
-        """
-        self._configuration.load_configuration(config_path)
-
-        # Update security validator
-        allowed_commands = self._configuration.get_allowed_commands()
-        self._security_validator = SecurityValidator(
-            allowed_commands=allowed_commands if allowed_commands else None,
-        )
-
-        # Recreate sandbox manager with new configuration
-        sandbox_config = self._configuration.get_sandbox_config()
-        self._sandbox_manager = SandboxManager(sandbox_config)
-
-        # Recreate executor factory with new configuration
-        self._executor_factory = ExecutorFactory(
-            sandbox_manager=self._sandbox_manager, configuration=self._configuration
-        )
-
-        logger.info("Configuration updated successfully")
-
-    def get_configuration(self) -> ExecutionConfiguration:
-        """
-        Get the configuration manager.
+        Get security information about the execution environment.
 
         Returns:
-            ExecutionConfiguration instance
+            Dictionary containing security-related information
+        """
+        return {
+            "execution_mode": "docker_sandbox",
+            "security_level": "isolated",
+            "available_executors": self._executor_factory.get_available_executors(),
+            "sandbox_active": bool(self._sandbox_manager.active_sessions),
+        }
+
+    def get_configuration(self) -> Dict[str, Any]:
+        """
+        Get the configuration dictionary.
+
+        Returns:
+            Configuration dictionary
         """
         return self._configuration

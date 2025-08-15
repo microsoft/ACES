@@ -10,9 +10,9 @@ import tempfile
 import os
 from pathlib import Path
 
-from saber.server.tasks.core.task_config_loader import TaskConfigLoader
-from saber.server.tasks.core.task import Task
-from saber.server.tasks.core.subtask import SubTask
+from saber.server.tasks.task_config_loader import TaskConfigLoader
+from saber.server.tasks.task import Task
+from saber.server.tasks.subtask import SubTask
 
 
 class TestTaskConfigLoader:

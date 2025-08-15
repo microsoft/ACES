@@ -27,6 +27,7 @@ package "SABER Server Side" {
         +domain_name: str
         +active_sessions: Dict[str, ClientSession]
         +task_manager: TaskManager
+        +episode_manager: EpisodeManager
         +execution_manager: ExecutionManager
         +policy_manager: PolicyManager
         +evaluation_manager: EvaluationManager
@@ -47,26 +48,32 @@ package "SABER Server Side" {
         +domain: str
         +tasks: Dict[str, Task]
         +config_loader: TaskConfigLoader
-        +episode_manager: EpisodeManager
         --
         +get_task(): Task
         +get_subtask(): SubTask
-        +start_episode(): Episode
-        +step(session_id, action, command_result?): Step
-        +reset(): Episode
-        +end_episode(): Episode
         +list_tasks(): List[Dict]
+        +load_tasks_from_yaml(): void
+    }
+
+    class EpisodeManager {
+        +active_episodes: Dict[str, Episode]
+        --
+        +start_episode(): Episode
+        +step(): Step
+        +end_episode(): Episode
+        +get_current_episode(): Episode?
     }
 
     class ExecutionManager {
         --
         +step(): CommandResult
-        +validate_command(): ValidationResult
+        +configure_for_task(): void
+        +cleanup_session(): void
+        +cleanup_all_sessions(): void
         +list_commands(): List[Dict[str, Any]]
         +get_security_info(): Dict[str, Any]
         +get_execution_stats(): Dict[str, Any]
         +to_mcp_tools(): List[Dict[str, Any]]
-        +_determine_executor_type(): str
     }
 
     class PolicyManager {
@@ -77,11 +84,13 @@ package "SABER Server Side" {
     }
 
     class EvaluationManager {
-        +trajectory_store: TrajectoryStore
-        +action_tracker: ActionTracker
         --
+        +log_session_start(): void
+        +log_session_end(): void
+        +log_episode_start(): void
+        +log_episode_end(): void
         +log_action(): void
-        +get_trajectory(): List[ActionRecord]
+        +get_trajectory(): List[Any]
     }
 }
 
@@ -137,6 +146,7 @@ package "SABER Client Side" {
 
 ' Server Internal Relationships
 SessionManager *-- TaskManager
+SessionManager *-- EpisodeManager
 SessionManager *-- ExecutionManager
 SessionManager *-- PolicyManager
 SessionManager *-- EvaluationManager

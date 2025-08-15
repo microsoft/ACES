@@ -5,30 +5,66 @@ This module provides the base CommandExecutor class for implementing custom comm
 """
 
 import logging
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
-from ..base import CommandResult, Parameter, ValidationResult
+from ...base import CommandResult
+from ..base import Parameter, ValidationResult
 
 logger = logging.getLogger(__name__)
 
 
-class CommandExecutor:
+class CommandExecutor(ABC):
     """
     Base implementation for command executors with common functionality.
     """
 
-    def __init__(self, timeout: Optional[float] = None, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, config: Optional[Dict[str, Any]] = None, *args: Any, **kwargs: Any) -> None:
         """
         Initialize command executor.
 
         Args:
-            timeout: Execution timeout in seconds
+            config: Executor configuration dictionary
             *args: Additional positional arguments
             **kwargs: Additional keyword arguments
         """
-        self._timeout = timeout
+        # Merge provided config with defaults
+        default_config = self.get_default_config()
+        self._config = {**default_config, **(config or {})}
         self._parameters: Dict[str, Parameter] = {}
+
+        # Allow subclasses to set up their specific parameters
+        self.setup_parameters(self._config)
+
+    @classmethod
+    def get_default_config(cls) -> Dict[str, Any]:
+        """
+        Get default configuration for this executor type.
+
+        Subclasses should override this method to provide their specific default configurations.
+
+        Returns:
+            Dictionary containing default configuration values
+        """
+        return {
+            "timeout": 300.0,  # Default 5 minutes
+        }
+
+    @abstractmethod
+    def setup_parameters(self, config: Dict[str, Any]) -> None:
+        """
+        Set up executor-specific parameters.
+
+        This method is called during initialization and allows each executor
+        to define its specific parameters using add_parameter().
+
+        Args:
+            config: The merged configuration dictionary containing both default
+                   and user-provided configuration values
+
+        Subclasses must implement this method to define their parameters.
+        """
+        pass
 
     @abstractmethod
     async def execute(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> CommandResult:
@@ -44,14 +80,18 @@ class CommandExecutor:
         """
         pass
 
-    def get_timeout(self) -> Optional[float]:
+    def get_timeout(self) -> float:
         """
         Get the execution timeout for this command in seconds.
 
         Returns:
-            Timeout in seconds, or None for no timeout
+            Timeout in seconds from configuration
         """
-        return self._timeout or 300.0  # Default 5 minutes
+        timeout = self._config.get("timeout")
+        if timeout is None:
+            logger.warning(f"No timeout configured for {self.__class__.__name__}, using default 300.0 seconds")
+            return 300.0
+        return float(timeout)
 
     def get_parameters(self) -> Dict[str, Parameter]:
         """Get the command parameters."""
