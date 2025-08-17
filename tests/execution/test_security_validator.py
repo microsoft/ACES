@@ -166,7 +166,7 @@ class TestSecurityValidator:
 
     def test_validate_arguments_shell_metacharacters(self, validator):
         """Test detection of shell metacharacters in arguments."""
-        meta_args = ["echo", "hello; rm -rf /"]
+        meta_args = ["echo", "hello & rm -rf /"]  # Use & instead of ; since semicolons are now allowed
 
         result = validator.validate_arguments(meta_args)
 

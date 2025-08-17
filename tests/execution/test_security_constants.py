@@ -127,8 +127,8 @@ class TestSecurityConstants:
         """Test that shell metacharacters pattern detects dangerous characters."""
         import re
 
-        dangerous_chars = [";", "&", "|", "`", "$", "(", ")"]
-        safe_chars = ["a", "z", "0", "9", "-", "_", ".", "/"]
+        dangerous_chars = ["&", "|", "`", "$", "(", ")"]  # Semicolon removed - now allowed for command chaining
+        safe_chars = ["a", "z", "0", "9", "-", "_", ".", "/", ";"]  # Semicolon now safe
 
         for char in dangerous_chars:
             assert re.search(SHELL_METACHARACTERS_PATTERN, char), \

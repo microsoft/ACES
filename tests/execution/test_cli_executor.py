@@ -3,7 +3,7 @@ Tests for Docker CLI tool executor.
 
 This module tests the secure Docker-based command line interface tool that accepts
 arbitrary command strings and executes them with comprehensive security validation
-in isolated Docker containers.
+in isolated Docker containers. Includes tests for command chaining functionality.
 """
 
 import pytest
@@ -66,17 +66,17 @@ class TestCLIExecutor:
 
     def test_build_command_simple(self, docker_cli_tool):
         """Test building command with simple string (no shell mode)."""
-        parameters = {"command": "ls -la", "shell": False}
+        parameters = {"command": "ls -la"}
         context = {}
 
         result = docker_cli_tool.build_command(parameters, context)
 
-        # Should parse into individual arguments
-        assert result == ["ls", "-la"]
+        # Should always use shell mode
+        assert result == ["/bin/sh", "-c", "ls -la"]
 
     def test_build_command_shell_mode(self, docker_cli_tool):
-        """Test building command with shell mode enabled."""
-        parameters = {"command": "ls -la | grep test", "shell": True}
+        """Test building command with complex shell features."""
+        parameters = {"command": "ls -la | grep test"}
         context = {}
 
         result = docker_cli_tool.build_command(parameters, context)
@@ -85,30 +85,29 @@ class TestCLIExecutor:
         assert result == ["/bin/sh", "-c", "ls -la | grep test"]
 
     def test_build_command_default_shell_mode(self, docker_cli_tool):
-        """Test building command with default shell mode (False)."""
+        """Test building command always uses shell mode."""
         parameters = {"command": "echo hello world"}
         context = {}
 
         result = docker_cli_tool.build_command(parameters, context)
 
-        # Should parse into individual arguments (default shell=False)
-        assert result == ["echo", "hello", "world"]
+        # Should always use shell mode
+        assert result == ["/bin/sh", "-c", "echo hello world"]
 
     def test_build_command_quoted_arguments(self, docker_cli_tool):
         """Test building command with quoted arguments."""
-        parameters = {"command": 'echo "hello world" test', "shell": False}
+        parameters = {"command": 'echo "hello world" test'}
         context = {}
 
         result = docker_cli_tool.build_command(parameters, context)
 
-        # Should properly parse quoted strings
-        assert result == ["echo", "hello world", "test"]
+        # Should use shell mode (shell handles quotes properly)
+        assert result == ["/bin/sh", "-c", 'echo "hello world" test']
 
     def test_build_command_complex_shell_command(self, docker_cli_tool):
         """Test building command with complex shell constructs."""
         parameters = {
-            "command": "find /tmp -name '*.txt' | head -10 > results.txt",
-            "shell": True
+            "command": "find /tmp -name '*.txt' | head -10 > results.txt"
         }
         context = {}
 
@@ -117,22 +116,21 @@ class TestCLIExecutor:
         assert result == ["/bin/sh", "-c", "find /tmp -name '*.txt' | head -10 > results.txt"]
 
     def test_build_command_invalid_quotes(self, docker_cli_tool):
-        """Test building command with invalid quote parsing."""
-        parameters = {"command": 'echo "unclosed quote', "shell": False}
+        """Test building command with invalid quotes (shell handles gracefully)."""
+        parameters = {"command": 'echo "unclosed quote'}
         context = {}
 
-        with pytest.raises(ValueError, match="Failed to parse command string"):
-            docker_cli_tool.build_command(parameters, context)
+        # Shell mode doesn't validate quotes at build time
+        result = docker_cli_tool.build_command(parameters, context)
+        assert result == ["/bin/sh", "-c", 'echo "unclosed quote']
 
     def test_build_command_empty_after_parsing(self, docker_cli_tool):
-        """Test building command that results in empty arguments after parsing."""
-        # This is a tricky case - a command that shlex can parse but results in no arguments
-        with patch('shlex.split', return_value=[]):
-            parameters = {"command": "some_command", "shell": False}
-            context = {}
+        """Test building command with empty string."""
+        parameters = {"command": ""}
+        context = {}
 
-            with pytest.raises(ValueError, match="Parsed command resulted in empty argument list"):
-                docker_cli_tool.build_command(parameters, context)
+        with pytest.raises(ValueError, match="Command string cannot be empty"):
+            docker_cli_tool.build_command(parameters, context)
 
     def test_parse_output_success(self, docker_cli_tool):
         """Test parsing successful command output."""
@@ -242,12 +240,12 @@ class TestCLIExecutor:
 
     def test_parameter_validation_wrong_type(self, docker_cli_tool):
         """Test parameter validation with wrong parameter type."""
-        parameters = {"command": "ls", "shell": "true"}  # shell should be boolean
+        parameters = {"command": 123}  # command should be string
 
         result = docker_cli_tool.validate_parameters(parameters)
 
         assert result.valid is False
-        assert "Parameter 'shell' must be a boolean" in result.errors
+        assert "Parameter 'command' must be a string" in result.errors
 
     def test_parameter_validation_unknown_parameter(self, docker_cli_tool):
         """Test parameter validation with unknown parameter."""
@@ -329,7 +327,7 @@ class TestCLIExecutorIntegration:
         env = mock_sandbox_manager_with_env.get_session_environment.return_value
         env.execute_command.return_value = command_result
 
-        parameters = {"command": "echo 'Hello from Docker!'", "shell": False}
+        parameters = {"command": "echo 'Hello from Docker!'"}
         context = {"session_id": "test_session_123"}
 
         result = await docker_cli_tool_with_env.execute(parameters, context)
@@ -341,9 +339,9 @@ class TestCLIExecutorIntegration:
         assert result.metadata["session_id"] == "test_session_123"
         assert result.metadata["execution_time"] == 0.5
 
-        # Verify Docker environment was called correctly
+        # Verify Docker environment was called correctly (shell mode)
         env.execute_command.assert_called_once_with(
-            command=["echo", "Hello from Docker!"],
+            command=["/bin/sh", "-c", "echo 'Hello from Docker!'"],
             timeout=30  # Timeout from fixture config
         )
 

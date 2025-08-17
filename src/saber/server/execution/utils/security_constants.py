@@ -6,9 +6,10 @@ framework to validate and block potentially dangerous commands and patterns.
 """
 
 # Dangerous command patterns that should be blocked
+# Note: Semicolons are handled separately in command chaining mode
 DANGEROUS_PATTERNS = [
-    # Command injection patterns
-    r"[;&|`$()<>]",  # Shell metacharacters (including < and >)
+    # Command injection patterns (semicolon removed for chain support)
+    r"[&|`$()<>]",  # Shell metacharacters (excluding semicolon)
     r"\$\(",  # Command substitution
     r"`[^`]*`",  # Backtick command substitution
     r">\s*/",  # Redirect to filesystem root
@@ -44,6 +45,20 @@ DANGEROUS_PATTERNS = [
     r"/etc/shadow",  # Shadow file
     r"/root/",  # Root directory access
     r"~root/",  # Root home access
+]
+
+# Separate pattern for dangerous semicolon usage (not used in chain mode)
+DANGEROUS_SEMICOLON_PATTERNS = [
+    r";\s*rm\s+",  # Semicolon followed by rm
+    r";\s*sudo\s+",  # Semicolon followed by sudo
+    r";\s*su\s+",  # Semicolon followed by su
+    r";\s*chmod\s+",  # Semicolon followed by chmod
+    r";\s*chown\s+",  # Semicolon followed by chown
+    r";\s*kill\s+",  # Semicolon followed by kill
+    r";\s*/bin/",  # Semicolon followed by absolute path to bin
+    r";\s*/usr/bin/",  # Semicolon followed by absolute path to usr/bin
+    r";\s*\$\(",  # Semicolon followed by command substitution
+    r";\s*`",  # Semicolon followed by backtick
 ]
 
 # Commands that should never be allowed
@@ -123,8 +138,8 @@ DEFAULT_SECURITY_SETTINGS = {
 # Control characters that are allowed in commands
 ALLOWED_CONTROL_CHARS = {"\t", "\n", "\r"}
 
-# Shell metacharacters pattern for argument validation
-SHELL_METACHARACTERS_PATTERN = r"[;&|`$()]"
+# Shell metacharacters pattern for argument validation (excluding semicolon)
+SHELL_METACHARACTERS_PATTERN = r"[&|`$()]"
 
 # Minimum character code for control character detection
 MIN_CONTROL_CHAR_CODE = 32

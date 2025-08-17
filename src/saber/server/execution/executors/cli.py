@@ -7,7 +7,6 @@ before execution.
 """
 
 import logging
-import shlex
 from typing import Any, Dict, List, Optional
 
 from ...base import CommandResult
@@ -26,13 +25,15 @@ class CLIExecutor(DockerExecutor):
 
     This executor provides a unified interface for executing shell commands
     in isolated Docker containers with comprehensive security validation.
+    All commands are executed via shell (/bin/sh -c) for maximum CLI compatibility.
 
     Execution Features:
     - Docker container isolation
     - Timeout enforcement
-    - Shell/direct execution modes
+    - Shell execution mode (always enabled)
     - Working directory specification
     - Session-based container management
+    - Command chaining with semicolons
     """
 
     _security_command_metadata = {
@@ -53,7 +54,6 @@ class CLIExecutor(DockerExecutor):
             Dictionary containing CLI executor default configuration
         """
         return {
-            "default_shell_mode": False,
             "timeout": 300.0,
         }
 
@@ -126,24 +126,14 @@ class CLIExecutor(DockerExecutor):
             )
         )
 
-        # Add parameter for shell interpretation mode
-        # Use default from config if provided
-        default_shell_mode = config.get("default_shell_mode", False)
-        self.add_parameter(
-            Parameter(
-                name="shell",
-                type=ParameterType.BOOLEAN,
-                description="Whether to execute command through shell (enables pipes, redirections, etc.)",
-                required=False,
-                default=default_shell_mode,
-            )
-        )
+        # Command chaining happens naturally in the shell
 
     def build_command(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> List[str]:
         """
         Build the command arguments from the provided command string.
 
-        This method parses the command string and prepares it for execution.
+        This method always executes commands via shell for maximum compatibility
+        with CLI tools and shell features.
 
         Args:
             parameters: Tool parameters including the command string
@@ -160,22 +150,74 @@ class CLIExecutor(DockerExecutor):
         if not command_str:
             raise ValueError("Command string cannot be empty")
 
-        # Parse the command string into arguments
-        try:
-            if parameters.get("shell", False):
-                # If shell mode is requested, we'll execute via shell
-                # This is more dangerous but sometimes necessary for complex commands
-                return ["/bin/sh", "-c", command_str]
-            else:
-                # Parse command into individual arguments (safer)
-                # This prevents shell injection but limits shell features
-                parsed_args = shlex.split(command_str)
-                if not parsed_args:
-                    raise ValueError("Parsed command resulted in empty argument list")
-                return parsed_args
+        # Always execute via shell for maximum CLI compatibility
+        return ["/bin/sh", "-c", command_str]
 
-        except ValueError as e:
-            raise ValueError(f"Failed to parse command string: {e}")
+    async def execute(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> CommandResult:
+        """
+        Execute the command-line tool in Docker container.
+
+        This method automatically detects and handles command chains when semicolons
+        are present in the command string. No additional parameters are required.
+
+        Args:
+            parameters: Tool parameters (must include 'command')
+            context: Execution context including session_id
+
+        Returns:
+            CommandResult with execution results
+
+        Note:
+            Security validation is performed at this executor level before execution.
+            All execution happens in Docker containers. Command sequences (semicolons,
+            pipes, redirects, etc.) are handled naturally by the shell.
+        """
+        try:
+            # Validate parameters including security validation
+            validation_result = self.validate_parameters(parameters)
+            if not validation_result.valid:
+                return CommandResult.error_result(
+                    error=f"Parameter validation failed: {', '.join(validation_result.errors)}"
+                )
+
+            # Log any security warnings
+            if validation_result.warnings:
+                for warning in validation_result.warnings:
+                    logger.warning(f"CLI security warning: {warning}")
+
+            # Extract session ID from context
+            session_id = context.get("session_id")
+            if not session_id:
+                raise SandboxExecutionError("session_id required in context for Docker execution")
+
+            # Get Docker environment for session
+            environment = self.get_session_environment(session_id)
+            timeout = int(self.get_timeout())
+
+            # Execute command via shell (shell handles all command sequences naturally)
+            command_args = self.build_command(parameters, context)
+            result = environment.execute_command(command=command_args, timeout=timeout)
+
+            # Parse output using existing logic
+            tool_result = self.parse_output(result.stdout, result.stderr, result.exit_code)
+
+            # Add execution metadata
+            container = environment.get_execution_container()
+            container_id = container.id[:12] if container else "unknown"
+
+            tool_result.metadata.update(
+                {
+                    "container_id": container_id,
+                    "session_id": session_id,
+                    "execution_time": result.execution_time,
+                }
+            )
+
+            return tool_result
+
+        except Exception as e:
+            logger.error(f"Docker command execution error: {e}")
+            return CommandResult.error_result(f"Docker command execution failed: {str(e)}")
 
     def parse_output(self, stdout: str, stderr: str, return_code: int) -> CommandResult:
         """
@@ -244,13 +286,11 @@ class CLIExecutor(DockerExecutor):
         if not command or not isinstance(command, str):
             return ValidationResult.failure(["Command parameter is required and must be a string"])
 
-        # Perform security validation on the command
+        # Validate the command string for security (shell execution)
         try:
-            command_args = shlex.split(command.strip())
-            if not command_args:
-                return ValidationResult.failure(["Command cannot be empty"])
-
-            security_validation = self._security_validator.validate_full_command(command_args)
+            security_validation = self._security_validator.validate_command_string(
+                command.strip(), allow_semicolons=True
+            )
             if not security_validation.valid:
                 return ValidationResult.failure(
                     [f"Command security validation failed: {', '.join(security_validation.errors)}"]
@@ -263,72 +303,8 @@ class CLIExecutor(DockerExecutor):
 
             return basic_validation
 
-        except ValueError as e:
-            return ValidationResult.failure([f"Failed to parse command: {str(e)}"])
-
-    async def execute(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> CommandResult:
-        """
-        Execute the command-line tool in Docker container.
-
-        Args:
-            parameters: Tool parameters
-            context: Execution context including session_id
-
-        Returns:
-            CommandResult with execution results
-
-        Note:
-            Security validation is performed at this executor level before execution.
-            All execution happens in Docker containers.
-        """
-        try:
-            # Validate parameters including security validation
-            validation_result = self.validate_parameters(parameters)
-            if not validation_result.valid:
-                return CommandResult.error_result(
-                    error=f"Parameter validation failed: {', '.join(validation_result.errors)}"
-                )
-
-            # Log any security warnings
-            if validation_result.warnings:
-                for warning in validation_result.warnings:
-                    logger.warning(f"CLI security warning: {warning}")
-
-            # Extract session ID from context
-            session_id = context.get("session_id")
-            if not session_id:
-                raise SandboxExecutionError("session_id required in context for Docker execution")
-
-            # Get Docker environment for session (inherited from DockerExecutor)
-            environment = self.get_session_environment(session_id)
-
-            # Build command
-            command_args = self.build_command(parameters, context)
-
-            # Execute command in Docker container with timeout
-            timeout = int(self.get_timeout())
-            result = environment.execute_command(command=command_args, timeout=timeout)
-
-            # Parse output
-            tool_result = self.parse_output(result.stdout, result.stderr, result.exit_code)
-
-            # Add execution metadata
-            container = environment.get_execution_container()
-            container_id = container.id[:12] if container else "unknown"
-
-            tool_result.metadata.update(
-                {
-                    "container_id": container_id,
-                    "session_id": session_id,
-                    "execution_time": result.execution_time,
-                }
-            )
-
-            return tool_result
-
         except Exception as e:
-            logger.error(f"Docker command execution error: {e}")
-            return CommandResult.error_result(f"Docker command execution failed: {str(e)}")
+            return ValidationResult.failure([f"Command validation error: {str(e)}"])
 
     def get_security_info(self) -> Dict[str, Any]:
         """

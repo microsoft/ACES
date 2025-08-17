@@ -16,6 +16,7 @@ from .security_constants import (
     ALLOWED_CONTROL_CHARS,
     BLOCKED_COMMANDS,
     DANGEROUS_PATTERNS,
+    DANGEROUS_SEMICOLON_PATTERNS,
     DEFAULT_SECURITY_SETTINGS,
     MIN_CONTROL_CHAR_CODE,
     NULL_BYTE,
@@ -69,12 +70,13 @@ class SecurityValidator:
 
         # If command is not in blocked list, it's allowed regardless of whitelist
 
-    def validate_command_string(self, command_str: str) -> ValidationResult:
+    def validate_command_string(self, command_str: str, allow_semicolons: bool = False) -> ValidationResult:
         """
         Validate a command string for malicious patterns.
 
         Args:
             command_str: Command string to validate
+            allow_semicolons: Whether to allow semicolons (for command chaining)
 
         Returns:
             ValidationResult indicating if command is safe
@@ -85,6 +87,16 @@ class SecurityValidator:
         for pattern in DANGEROUS_PATTERNS:
             if re.search(pattern, command_str, re.IGNORECASE):
                 result.add_error(f"Dangerous pattern detected: {pattern}")
+
+        # Check for dangerous semicolon patterns only if semicolons are not explicitly allowed
+        if not allow_semicolons:
+            for pattern in DANGEROUS_SEMICOLON_PATTERNS:
+                if re.search(pattern, command_str, re.IGNORECASE):
+                    result.add_error(f"Dangerous semicolon pattern detected: {pattern}")
+
+            # Also check for any semicolon if not in allow mode
+            if ";" in command_str:
+                result.add_error("Semicolons not allowed (use chain_commands=true for command chaining)")
 
         # Check for null bytes (can bypass filters)
         if NULL_BYTE in command_str:
