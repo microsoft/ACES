@@ -177,9 +177,15 @@ def main():
     print(f"Output directory: {assets_dir}")
     print()
 
-    # Find all .puml files in docs directory only (not subdirectories)
-    puml_pattern = str(docs_dir / "*.puml")
-    puml_files = glob.glob(puml_pattern)
+    # Find all .puml files recursively in docs directory and subdirectories
+    puml_files = []
+    for root, dirs, files in os.walk(docs_dir):
+        # Skip reference directory
+        if 'reference' in dirs:
+            dirs.remove('reference')
+        for file in files:
+            if file.endswith('.puml'):
+                puml_files.append(os.path.join(root, file))
 
     if not puml_files:
         print(f"No .puml files found in {docs_dir} directory")
@@ -187,7 +193,8 @@ def main():
 
     print(f"Found {len(puml_files)} .puml file(s):")
     for f in puml_files:
-        print(f"  - {os.path.basename(f)}")
+        rel_path = os.path.relpath(f, docs_dir)
+        print(f"  - {rel_path}")
     print()
 
     # Process each PlantUML file
@@ -195,10 +202,21 @@ def main():
     total = len(puml_files)
 
     for puml_file in puml_files:
+        # Get relative path from docs directory
+        rel_path = os.path.relpath(puml_file, docs_dir)
+        rel_dir = os.path.dirname(rel_path)
+
         if args.verbose:
-            print(f"Processing: {os.path.basename(puml_file)}")
+            print(f"Processing: {rel_path}")
         else:
-            print(f"Processing: {os.path.basename(puml_file)}")
+            print(f"Processing: {rel_path}")
+
+        # Create corresponding output directory structure in assets
+        if rel_dir:
+            output_subdir = assets_dir / rel_dir
+            output_subdir.mkdir(parents=True, exist_ok=True)
+        else:
+            output_subdir = assets_dir
 
         # Build PlantUML command
         cmd = [
@@ -206,7 +224,7 @@ def main():
             "-DPLANTUML_LIMIT_SIZE=8192",
             "-jar", str(plantuml_jar),
             "-tpng",
-            "-o", str(assets_dir),
+            "-o", str(output_subdir),
             puml_file
         ]
 
@@ -219,11 +237,11 @@ def main():
 
             if result.returncode == 0:
                 base_name = Path(puml_file).stem
-                output_file = assets_dir / f"{base_name}.png"
-                print(f"  ✓ Generated: {output_file}")
+                output_file = output_subdir / f"{base_name}.png"
+                print(f"  ✓ Generated: {os.path.relpath(output_file, assets_dir)}")
                 processed += 1
             else:
-                print(f"  ✗ Failed to generate: {os.path.basename(puml_file)}")
+                print(f"  ✗ Failed to generate: {rel_path}")
                 print(f"    Exit code: {result.returncode}")
                 if result.stderr:
                     print(f"    Error: {result.stderr.strip()}")
@@ -231,7 +249,7 @@ def main():
                     print(f"    Output: {result.stdout.strip()}")
 
         except Exception as e:
-            print(f"  ✗ Error processing {os.path.basename(puml_file)}: {e}")
+            print(f"  ✗ Error processing {rel_path}: {e}")
 
         if not args.verbose:
             print()
@@ -245,13 +263,15 @@ def main():
     if processed > 0:
         print()
         print("Generated files:")
-        png_files = list(assets_dir.glob("*.png"))
-        if png_files:
-            for png_file in sorted(png_files):
-                file_size = png_file.stat().st_size
-                print(f"  - {png_file.name} ({file_size:,} bytes)")
-        else:
-            print("  No PNG files found in assets directory")
+        for root, dirs, files in os.walk(assets_dir):
+            for file in files:
+                if file.endswith('.png'):
+                    png_file = Path(root) / file
+                    rel_path = os.path.relpath(png_file, assets_dir)
+                    file_size = png_file.stat().st_size
+                    print(f"  - {rel_path} ({file_size:,} bytes)")
+    else:
+        print("  No PNG files generated")
 
     print()
     print("Done!")

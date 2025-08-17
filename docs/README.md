@@ -6,15 +6,21 @@ This document describes the high-level architecture for a security agent benchma
 
 ## Architecture Diagrams
 
-The SABER system architecture is documented in several PlantUML diagrams:
+The SABER system architecture is documented in several PlantUML diagrams organized by module:
 
-- **[System Overview](system_overview_architecture.puml)**: High-level system components and relationships
-- **[Server Detailed Architecture](server_detailed_architecture.puml)**: Main server architecture with simplified framework views
-- **[Task Framework Architecture](task_framework_architecture.puml)**: Detailed Task Management system design
-- **[Command Execution Architecture](command_execution_architecture.puml)**: Detailed Command Execution framework design
-- **[Episode Workflow Sequence](episode_workflow_sequence.puml)**: Episode lifecycle and RL workflow
-- **[Client Architecture](client_architecture.puml)**: Client side architecture responsible for attaching to agent and facilitating comms with server
-- **[MCP Integration Sequence](mcp_integration_sequence.puml)**: Model Context Protocol integration workflow and dual protocol communication
+### System Overview
+- **[System Overview](system/system_overview_architecture.puml)**: High-level system components and relationships
+
+### Server Architecture
+- **[Server Detailed Architecture](server/session/server_detailed_architecture.puml)**: Main server architecture with simplified framework views
+- **[Task Framework Architecture](server/tasks/task_framework_architecture.puml)**: Detailed Task Management system design
+- **[Command Execution Architecture](server/execution/command_execution_architecture.puml)**: Detailed Command Execution framework design
+- **[Episode Workflow Sequence](server/episodes/episode_workflow_sequence.puml)**: Episode lifecycle and RL workflow
+- **[Enhanced Sandbox Sequence](server/execution/enhanced_sandbox_sequence.puml)**: Enhanced sandbox environment setup sequence
+- **[MCP Integration Sequence](server/api/mcp_integration_sequence.puml)**: Model Context Protocol integration workflow and dual protocol communication
+
+### Client Architecture
+- **[Client Architecture](client/client_architecture.puml)**: Client side architecture responsible for attaching to agent and facilitating comms with server
 
 ### Package Management
 
