@@ -68,6 +68,15 @@ class ExecutionManager:
         logger.info("ExecutionManager initialized for sequential execution")
         logger.info(f"Available executor types: {self._executor_factory.get_filtered_available_executors()}")
 
+    def is_sandbox_ready(self) -> bool:
+        """
+        Check if the sandbox manager is ready to create session environments.
+
+        Returns:
+            True if sandbox manager is ready, False otherwise
+        """
+        return self._sandbox_manager.is_ready() if self._sandbox_manager else False
+
     def _load_custom_executors(self, config_dir: str) -> None:
         """
         Load custom executors from the configuration directory.
@@ -152,13 +161,14 @@ class ExecutionManager:
         """
         return self._executor_factory.get_executor(executor_type)
 
-    def configure_for_task(self, session_id: str, task: Any) -> None:
+    def configure_for_task(self, session_id: str, task: Any, cleanup_token: Optional[str] = None) -> None:
         """
         Configure ExecutionManager for a specific task/session.
 
         Args:
             session_id: Session identifier
             task: Task object containing execution parameters and environment specification
+            cleanup_token: Optional cleanup token for container self-termination coordination
         """
         # Resolve environment if specified in task
         environment_spec = None
@@ -177,6 +187,14 @@ class ExecutionManager:
         # Start with task's execution config
         execution_config = task.execution_config.copy()
 
+        # Add cleanup token to environment variables if provided
+        if cleanup_token:
+            if "environment" not in execution_config:
+                execution_config["environment"] = {}
+            execution_config["environment"]["SABER_CLEANUP_TOKEN"] = cleanup_token
+            execution_config["environment"]["SABER_SESSION_ID"] = session_id
+            logger.debug(f"Added cleanup coordination environment variables for session {session_id}")
+
         # Add executor-specific configurations generically
         # Look for any config key that ends with "_config" and maps to an executor type
         executor_types = self._executor_factory.get_available_executors()
@@ -194,9 +212,11 @@ class ExecutionManager:
         # Update sandbox manager with resolved environment spec
         if environment_spec:
             self._sandbox_manager = SandboxManager({})
-            # Create the session environment immediately
-            self._sandbox_manager.create_session_environment(session_id, environment_spec)
+            # Create the session environment immediately with orchestrator integration
+            self._sandbox_manager.create_session_environment(session_id, environment_spec, cleanup_token)
             logger.info(f"Created sandbox environment for session {session_id}")
+            if cleanup_token:
+                logger.info(f"Episode orchestrator will auto-start for session {session_id}")
         else:
             self._sandbox_manager = SandboxManager({})
 

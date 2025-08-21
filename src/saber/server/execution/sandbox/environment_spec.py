@@ -139,25 +139,95 @@ class EnvironmentSpec:
                 return service
         return None
 
-    def to_compose_dict(self) -> Dict[str, Any]:
-        """Generate complete Docker Compose configuration."""
+    def to_compose_dict(
+        self,
+        session_id: Optional[str] = None,
+        cleanup_token: Optional[str] = None,
+        saber_host_url: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Generate complete Docker Compose configuration.
+
+        Args:
+            session_id: Session identifier for orchestrator integration
+            cleanup_token: Cleanup token for orchestrator authentication
+            saber_host_url: SABER server URL for orchestrator polling
+        """
         services = {}
+
+        # Add SABER orchestrator service (if session info provided)
+        if session_id and cleanup_token:
+            orchestrator_config = {
+                "image": "saber-orchestrator:latest",
+                "container_name": f"saber-orchestrator-{session_id}",
+                "environment": [
+                    f"SABER_SESSION_ID={session_id}",
+                    f"SABER_CLEANUP_TOKEN={cleanup_token}",
+                    f"SABER_HOST_URL={saber_host_url or 'http://host.docker.internal:8000'}",
+                    "SABER_POLL_INTERVAL=30",
+                    f"SABER_COMPOSE_PROJECT=saber-session-{session_id}",
+                ],
+                "volumes": ["/var/run/docker.sock:/var/run/docker.sock", ".:/app"],
+                "labels": [
+                    f"saber.session_id={session_id}",
+                    "saber.role=orchestrator",
+                    f"saber.cleanup_token={cleanup_token}",
+                ],
+                "restart": "unless-stopped",
+                "networks": [self.network.name],
+            }
+            services["saber-orchestrator"] = orchestrator_config
 
         # Add execution service
         exec_config = self.execution_config.copy()
         exec_config["networks"] = [self.network.name]
+        # Add SABER labels to execution service
+        if session_id:
+            if "labels" not in exec_config:
+                exec_config["labels"] = []
+            exec_config["labels"].extend(
+                [
+                    f"saber.session_id={session_id}",
+                    "saber.role=execution",
+                    f"saber.cleanup_token={cleanup_token}" if cleanup_token else f"saber.session_id={session_id}",
+                ]
+            )
+            # Add dependency on orchestrator
+            exec_config["depends_on"] = ["saber-orchestrator"]
         services[self.execution_service] = exec_config
 
         # Add target services
         for service_spec in self.target_services:
             service_config = service_spec.to_compose_service()
             service_config["networks"] = [self.network.name]
+            # Add SABER labels to target services
+            if session_id:
+                if "labels" not in service_config:
+                    service_config["labels"] = []
+                service_config["labels"].extend(
+                    [
+                        f"saber.session_id={session_id}",
+                        "saber.role=target",
+                        f"saber.cleanup_token={cleanup_token}" if cleanup_token else f"saber.session_id={session_id}",
+                    ]
+                )
+                # Add dependency on orchestrator
+                if "depends_on" not in service_config:
+                    service_config["depends_on"] = []
+                service_config["depends_on"].append("saber-orchestrator")
             services[service_spec.name] = service_config
+
+        # Add SABER labels to network
+        network_config = self.network.to_compose_network()
+        if session_id:
+            if "labels" not in network_config:
+                network_config["labels"] = []
+            network_config["labels"].append(f"saber.session_id={session_id}")
 
         compose_config = {
             "version": "3.8",
             "services": services,
-            "networks": {self.network.name: self.network.to_compose_network()},
+            "networks": {self.network.name: network_config},
         }
 
         return compose_config

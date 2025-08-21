@@ -1,5 +1,6 @@
 """EpisodeManager implementation for RL-friendly task execution."""
 
+import uuid
 from dataclasses import asdict
 from datetime import datetime
 from logging import getLogger
@@ -22,6 +23,7 @@ class EpisodeManager:
     def __init__(self) -> None:
         """Initialize the EpisodeManager."""
         self.active_episodes: Dict[str, Episode] = {}  # session_id -> Episode
+        self.cleanup_tokens: Dict[str, str] = {}  # session_id -> cleanup_token for container coordination
 
     def start_episode(self, session_id: str, task_id: str, initial_context: Optional[Dict[str, Any]] = None) -> Episode:
         """
@@ -29,7 +31,7 @@ class EpisodeManager:
 
         Args:
             session_id: ID of the session starting the episode
-            task: Task instance to execute
+            task_id: Task ID to execute
             initial_context: Initial context for the episode
 
         Returns:
@@ -37,19 +39,23 @@ class EpisodeManager:
         """
         logger.info(f"Starting new episode for session '{session_id}' with task '{task_id}'")
 
+        # Generate cleanup token for container coordination
+        cleanup_token = str(uuid.uuid4())
+
         # Create new episode
         episode = Episode(
             task_id=task_id,
             session_id=session_id,
             state=EpisodeState.ACTIVE,
             context=initial_context or {},
-            metadata={"created_at": datetime.utcnow().isoformat()},
+            metadata={"created_at": datetime.utcnow().isoformat(), "cleanup_token": cleanup_token},
             end_time=None,
             completion_reason=None,
         )
 
-        # Store as active episode
+        # Store as active episode and register cleanup token
         self.active_episodes[session_id] = episode
+        self.cleanup_tokens[session_id] = cleanup_token
 
         logger.info(f"Created episode '{episode.episode_id}' for session '{session_id}'")
         return episode
@@ -122,6 +128,10 @@ class EpisodeManager:
         # Remove from active episodes
         del self.active_episodes[session_id]
 
+        # Remove cleanup token (containers will detect this and self-terminate)
+        if session_id in self.cleanup_tokens:
+            del self.cleanup_tokens[session_id]
+
         logger.info(
             f"Episode '{episode.episode_id}' completed: {len(episode.steps)} steps,\
                 success={episode.state == EpisodeState.COMPLETED}"
@@ -134,10 +144,10 @@ class EpisodeManager:
 
         Args:
             session_id: ID of the session
-            task: Task instance to use for the new episode
+            task_id: Task ID to use for the new episode
 
         Returns:
-            New Episode instance
+            New Episode instance (cleanup token available in episode.metadata["cleanup_token"])
 
         Raises:
             EpisodeNotFoundException: If session has no active episode
@@ -267,6 +277,11 @@ class EpisodeManager:
         if session_id in self.active_episodes:
             self.end_episode(session_id, "session_cleanup")
 
+        # Clean up any remaining cleanup tokens
+        if session_id in self.cleanup_tokens:
+            del self.cleanup_tokens[session_id]
+            logger.debug(f"Removed cleanup token for session '{session_id}'")
+
     def get_current_episode(self, session_id: str) -> Optional[Episode]:
         """
         Get the current active episode for a session.
@@ -278,3 +293,74 @@ class EpisodeManager:
             Current Episode instance, or None if no active episode
         """
         return self.active_episodes.get(session_id)
+
+    def remove_episode_on_error(self, session_id: str, error: Exception) -> None:
+        """
+        Immediately remove episode tracking due to error, triggering container self-termination.
+
+        This is the key insight - on any error, remove episode tracking so containers
+        detect the episode is no longer active and self-terminate.
+
+        Args:
+            session_id: ID of the session with the error
+            error: Exception that caused the episode to be removed
+        """
+        logger.error(f"Removing episode tracking for session '{session_id}' due to error: {error}")
+
+        if session_id in self.active_episodes:
+            # End episode with error reason
+            episode = self.active_episodes[session_id]
+            episode.end_time = datetime.utcnow()
+            episode.state = EpisodeState.FAILED
+            episode.completion_reason = f"error: {str(error)}"
+
+            # Remove from active tracking
+            del self.active_episodes[session_id]
+            logger.info(f"Episode '{episode.episode_id}' removed from tracking due to error")
+
+        # Remove cleanup token (containers will detect this and self-terminate)
+        if session_id in self.cleanup_tokens:
+            del self.cleanup_tokens[session_id]
+            logger.info(f"Cleanup token removed for session '{session_id}' - containers will self-terminate")
+
+    def is_episode_active(self, session_id: str, token: str) -> bool:
+        """
+        Check if an episode is active for container polling.
+
+        Containers use this endpoint to determine if they should continue running.
+        If this returns False, containers should self-terminate.
+
+        Args:
+            session_id: ID of the session to check
+            token: Cleanup token for authentication
+
+        Returns:
+            True if episode is active and token is valid, False otherwise
+        """
+        # Check if cleanup token exists and matches
+        if session_id not in self.cleanup_tokens:
+            logger.debug(f"No cleanup token found for session '{session_id}' - episode inactive")
+            return False
+
+        if self.cleanup_tokens[session_id] != token:
+            logger.warning(f"Invalid cleanup token for session '{session_id}' - potential security issue")
+            return False
+
+        # Check if episode is still active
+        is_active = session_id in self.active_episodes
+        logger.debug(f"Episode active check for session '{session_id}': {is_active}")
+        return is_active
+
+    def get_cleanup_token(self, session_id: str) -> Optional[str]:
+        """
+        Get the cleanup token for a session.
+
+        Used by container orchestration systems to pass the token to containers.
+
+        Args:
+            session_id: ID of the session
+
+        Returns:
+            Cleanup token if session exists, None otherwise
+        """
+        return self.cleanup_tokens.get(session_id)

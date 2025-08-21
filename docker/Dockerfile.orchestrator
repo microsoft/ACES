@@ -1,0 +1,26 @@
+FROM python:3.11-slim
+
+# Install Docker CLI for container management
+RUN apt-get update && apt-get install -y \
+    curl \
+    && curl -fsSL https://get.docker.com | sh \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+RUN pip install httpx
+
+# Copy the orchestrator script
+COPY src/saber/server/episodes/episode_orchestrator.py /usr/local/bin/episode-orchestrator
+RUN chmod +x /usr/local/bin/episode-orchestrator
+
+# Create a non-root user (optional, for security)
+RUN useradd -r -s /bin/false saber
+
+# Set working directory
+WORKDIR /app
+
+# Run as root to access Docker socket (required for Docker commands)
+USER root
+
+# Default command
+CMD ["python3", "/usr/local/bin/episode-orchestrator"]

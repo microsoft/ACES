@@ -5,9 +5,10 @@ The SessionManager serves as the central orchestrator for managing client sessio
 and coordinating all server components. REST API functionality is handled by SessionAPI.
 """
 
+import asyncio
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
 from fastapi import HTTPException
@@ -65,6 +66,8 @@ class SessionManager:
         port: int = 8000,
         mcp_host: str = "0.0.0.0",
         mcp_port: int = 3001,
+        session_timeout_minutes: int = 30,
+        cleanup_interval_minutes: int = 5,
     ):
         """
         Initialize the SessionManager.
@@ -76,6 +79,8 @@ class SessionManager:
             port: REST server port
             mcp_host: MCP server host address
             mcp_port: MCP server port
+            session_timeout_minutes: Minutes of inactivity before a session times out
+            cleanup_interval_minutes: Minutes between cleanup checks
         """
         self.domain_name = domain_name
         self.config_dir = config_dir
@@ -83,7 +88,11 @@ class SessionManager:
         self.port = port
         self.mcp_host = mcp_host
         self.mcp_port = mcp_port
+        self.session_timeout_minutes = session_timeout_minutes
+        self.cleanup_interval_minutes = cleanup_interval_minutes
         self.active_sessions: Dict[str, ClientSession] = {}
+        self.cleanup_task: Optional[asyncio.Task] = None
+        self.shutdown_event = asyncio.Event()
 
         # Initialize server components
         logger.info(f"Initializing SessionManager for domain '{domain_name}' with config dir: {config_dir}")
@@ -108,19 +117,33 @@ class SessionManager:
         return self.rest_api.app
 
     async def start_server(self) -> None:
-        """Start both REST and MCP servers concurrently."""
+        """Start both REST and MCP servers concurrently with session cleanup."""
         import asyncio
+
+        # Start the session cleanup task
+        self.cleanup_task = asyncio.create_task(self._session_cleanup_loop())
 
         # Start both servers concurrently using asyncio tasks
         rest_task = asyncio.create_task(self.rest_api.start_server())
         mcp_task = asyncio.create_task(self.mcp_api.start_mcp_server())
 
         # Wait for both to complete (they run indefinitely)
-        await asyncio.gather(rest_task, mcp_task)
+        await asyncio.gather(rest_task, mcp_task, self.cleanup_task)
 
     async def shutdown(self) -> None:
         """Shutdown the SessionManager and cleanup resources."""
         logger.info(f"Shutting down SessionManager for domain '{self.domain_name}'")
+
+        # Signal shutdown to stop cleanup loop
+        self.shutdown_event.set()
+
+        # Cancel cleanup task if running
+        if self.cleanup_task and not self.cleanup_task.done():
+            self.cleanup_task.cancel()
+            try:
+                await self.cleanup_task
+            except asyncio.CancelledError:
+                pass
 
         # Shutdown MCP server first
         await self.mcp_api.shutdown_mcp_server()
@@ -141,7 +164,14 @@ class SessionManager:
 
         Returns:
             ClientSession object for the new session
+
+        Raises:
+            HTTPException: If the server is not ready for session creation
         """
+        # Check if the sandbox manager is ready before creating sessions
+        if not self.execution_manager.is_sandbox_ready():
+            raise HTTPException(status_code=503, detail="Server is still initializing. Please try again in a moment.")
+
         session_id = str(uuid.uuid4())
         session = ClientSession(
             session_id=session_id, client_id=client_id, current_episode_id=None, current_task_id=None
@@ -211,16 +241,21 @@ class SessionManager:
         # Get the task object to access its configuration
         task = self.task_manager.get_task(task_id)
 
-        # Configure execution manager with task object directly
-        self.execution_manager.configure_for_task(session_id, task)
-
         # Start episode through episode manager
         episode = self.episode_manager.start_episode(
             session_id=session_id, task_id=task_id, initial_context=task.initial_context.copy()
         )
 
+        # Get the cleanup token for orchestrator coordination
+        cleanup_token = self.episode_manager.get_cleanup_token(session_id)
+
+        # Configure execution manager with task object and cleanup token
+        self.execution_manager.configure_for_task(session_id, task, cleanup_token)
+
         session.current_episode_id = episode.episode_id
         session.current_task_id = task_id
+
+        logger.debug(f"Episode cleanup token for session {session_id}: {cleanup_token}")
 
         # Log episode start with evaluation manager (ignore failures)
         try:
@@ -278,6 +313,16 @@ class SessionManager:
 
         except Exception as e:
             logger.error(f"Command execution failed in session {session_id}: {e}")
+
+            # Remove episode tracking immediately on any error - containers will self-terminate
+            try:
+                self.episode_manager.remove_episode_on_error(session_id, e)
+                session.current_episode_id = None
+                session.current_task_id = None
+                logger.info("Episode removed from tracking due to error - containers will self-terminate")
+            except Exception as cleanup_error:
+                logger.error(f"Failed to remove episode on error: {cleanup_error}")
+
             return CommandResult.error_result(error=str(e))
 
     async def get_current_task(self, session_id: str) -> Dict[str, Any]:
@@ -349,3 +394,77 @@ class SessionManager:
             raise HTTPException(status_code=400, detail="Session is not active")
 
         return session
+
+    async def _session_cleanup_loop(self) -> None:
+        """Periodic cleanup of inactive sessions."""
+        logger.info(
+            f"Starting session cleanup loop - timeout: {self.session_timeout_minutes}min, "
+            f"check interval: {self.cleanup_interval_minutes}min"
+        )
+
+        while not self.shutdown_event.is_set():
+            try:
+                await self._cleanup_inactive_sessions()
+
+                # Wait for cleanup interval or shutdown signal
+                try:
+                    await asyncio.wait_for(self.shutdown_event.wait(), timeout=self.cleanup_interval_minutes * 60)
+                    # If shutdown event is set, exit the loop
+                    break
+                except asyncio.TimeoutError:
+                    # Timeout is expected - continue with next cleanup cycle
+                    continue
+
+            except Exception as e:
+                logger.error(f"Error in session cleanup loop: {e}")
+                # Wait a bit before retrying to avoid tight error loops
+                await asyncio.sleep(30)
+
+    async def _cleanup_inactive_sessions(self) -> None:
+        """Check for and cleanup inactive sessions."""
+        current_time = datetime.utcnow()
+        timeout_threshold = timedelta(minutes=self.session_timeout_minutes)
+        sessions_to_cleanup = []
+
+        for session_id, session in self.active_sessions.items():
+            time_since_activity = current_time - session.last_activity
+
+            if time_since_activity > timeout_threshold:
+                logger.info(
+                    f"Session {session_id} timed out after " f"{time_since_activity.total_seconds():.1f}s of inactivity"
+                )
+                sessions_to_cleanup.append(session_id)
+
+        # Cleanup identified sessions
+        for session_id in sessions_to_cleanup:
+            try:
+                await self.terminate_session(session_id)
+                logger.info(f"Cleaned up inactive session {session_id}")
+            except Exception as e:
+                logger.error(f"Error cleaning up session {session_id}: {e}")
+
+    def get_session_stats(self) -> Dict[str, Any]:
+        """Get statistics about active sessions."""
+        current_time = datetime.utcnow()
+        stats: Dict[str, Any] = {
+            "total_sessions": len(self.active_sessions),
+            "timeout_minutes": self.session_timeout_minutes,
+            "cleanup_interval_minutes": self.cleanup_interval_minutes,
+            "sessions": [],
+        }
+
+        for session_id, session in self.active_sessions.items():
+            time_since_activity = current_time - session.last_activity
+            stats["sessions"].append(
+                {
+                    "session_id": session_id,
+                    "client_id": session.client_id,
+                    "current_episode_id": session.current_episode_id,
+                    "current_task_id": session.current_task_id,
+                    "uptime_seconds": (current_time - session.created_at).total_seconds(),
+                    "time_since_activity_seconds": time_since_activity.total_seconds(),
+                    "is_active": session.is_active,
+                }
+            )
+
+        return stats

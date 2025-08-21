@@ -93,6 +93,36 @@ class TestSessionRestAPI:
         assert "sessions" in data
         assert len(data["sessions"]) == 2
 
+    def test_session_stats_endpoint(self, session_manager_app):
+        """Test session statistics endpoint."""
+        manager, client = session_manager_app
+
+        # Create a few sessions
+        client.post("/session?client_id=client1")
+        client.post("/session?client_id=client2")
+
+        response = client.get("/sessions/stats")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Verify expected fields
+        assert "total_sessions" in data
+        assert "timeout_minutes" in data
+        assert "cleanup_interval_minutes" in data
+        assert "sessions" in data
+
+        assert data["total_sessions"] == 2
+        assert len(data["sessions"]) == 2
+
+        # Verify session details
+        for session_info in data["sessions"]:
+            assert "session_id" in session_info
+            assert "client_id" in session_info
+            assert "uptime_seconds" in session_info
+            assert "time_since_activity_seconds" in session_info
+            assert "is_active" in session_info
+
     def test_terminate_session_endpoint(self, session_manager_app):
         """Test session termination endpoint."""
         manager, client = session_manager_app

@@ -41,19 +41,29 @@ class DockerSandboxEnvironment:
     using Docker Compose for coordinated container management.
     """
 
-    def __init__(self, session_id: str, environment_spec: EnvironmentSpec) -> None:
+    def __init__(
+        self,
+        session_id: str,
+        environment_spec: EnvironmentSpec,
+        cleanup_token: Optional[str] = None,
+        saber_host_url: Optional[str] = None,
+    ) -> None:
         """
         Initialize Docker sandbox environment.
 
         Args:
             session_id: Unique session identifier
             environment_spec: Environment specification for container orchestration
+            cleanup_token: Optional cleanup token for orchestrator coordination
+            saber_host_url: Optional SABER server URL for orchestrator polling
 
         Raises:
             ContainerCreationError: If Docker client cannot be initialized
         """
         self.session_id = session_id
         self.environment_spec = environment_spec
+        self.cleanup_token = cleanup_token
+        self.saber_host_url = saber_host_url or "http://host.docker.internal:8000"
         self.active_services: Dict[str, Container] = {}
         self.compose_project_name = f"saber-session-{session_id}"
         self.compose_file_path: Optional[str] = None
@@ -76,8 +86,10 @@ class DockerSandboxEnvironment:
             ContainerCreationError: If environment cannot be created or started
         """
         try:
-            # Generate Docker Compose configuration
-            compose_config = self.environment_spec.to_compose_dict()
+            # Generate Docker Compose configuration with orchestrator integration
+            compose_config = self.environment_spec.to_compose_dict(
+                session_id=self.session_id, cleanup_token=self.cleanup_token, saber_host_url=self.saber_host_url
+            )
 
             # Set project name
             compose_config["name"] = self.compose_project_name

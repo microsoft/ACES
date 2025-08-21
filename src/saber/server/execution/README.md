@@ -93,6 +93,8 @@ Docker container lifecycle management:
 - **Container Health Monitoring**: Tracks container status and health
 - **Automatic Cleanup**: Handles container destruction when sessions end
 - **Configuration Management**: Manages Docker container security settings
+- **Orchestrator Integration**: Coordinates with external orchestrator for container cleanup during failures
+- **Dynamic Image Building**: Builds required Docker images on server initialization if missing
 
 ### DockerExecutionEnvironment (`sandbox/docker_environment.py`)
 Individual Docker container management:

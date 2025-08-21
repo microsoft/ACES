@@ -99,11 +99,11 @@ class TestExecutionManager:
             mock_sandbox_instance = MagicMock()
             mock_sandbox_class.return_value = mock_sandbox_instance
 
-            registry.configure_for_task("session123", mock_task)
+            registry.configure_for_task("session123", mock_task, None)
 
             # Should have created sandbox manager and called environment creation
             mock_sandbox_class.assert_called_with({})
-            mock_sandbox_instance.create_session_environment.assert_called_once_with("session123", mock_env_spec)
+            mock_sandbox_instance.create_session_environment.assert_called_once_with("session123", mock_env_spec, None)
 
         # Should have updated configuration (only cli config should be present since python_config is None)
         assert registry._configuration == {"timeout": 120.0, "cli": {"default_shell_mode": True}}

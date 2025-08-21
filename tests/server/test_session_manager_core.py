@@ -201,6 +201,62 @@ class TestSessionManagerCore:
         # All sessions should be terminated
         assert len(session_manager.active_sessions) == 0
 
+    @pytest.mark.asyncio
+    async def test_session_timeout_cleanup(self, session_manager):
+        """Test that inactive sessions are automatically cleaned up after timeout."""
+        # Create test sessions
+        session1 = await session_manager.create_session("client_1")
+        session2 = await session_manager.create_session("client_2")
+
+        # Verify sessions are active
+        assert len(session_manager.active_sessions) == 2
+
+        # Manually set one session to be inactive beyond timeout
+        from datetime import datetime, timedelta
+        old_time = datetime.utcnow() - timedelta(minutes=session_manager.session_timeout_minutes + 1)
+        session1.last_activity = old_time
+
+        # Run cleanup manually (instead of waiting for the periodic task)
+        await session_manager._cleanup_inactive_sessions()
+
+        # Verify only the active session remains
+        assert len(session_manager.active_sessions) == 1
+        assert session2.session_id in session_manager.active_sessions
+        assert session1.session_id not in session_manager.active_sessions
+
+    @pytest.mark.asyncio
+    async def test_session_stats(self, session_manager):
+        """Test session statistics functionality."""
+        # Create test sessions
+        session1 = await session_manager.create_session("client_1")
+        session2 = await session_manager.create_session("client_2")
+
+        # Get stats
+        stats = session_manager.get_session_stats()
+
+        # Verify stats structure
+        assert "total_sessions" in stats
+        assert "timeout_minutes" in stats
+        assert "cleanup_interval_minutes" in stats
+        assert "sessions" in stats
+
+        assert stats["total_sessions"] == 2
+        assert stats["timeout_minutes"] == session_manager.session_timeout_minutes
+        assert len(stats["sessions"]) == 2
+
+        # Verify session details in stats
+        session_ids = [s["session_id"] for s in stats["sessions"]]
+        assert session1.session_id in session_ids
+        assert session2.session_id in session_ids
+
+        # Check required fields for each session
+        for session_stat in stats["sessions"]:
+            assert "session_id" in session_stat
+            assert "client_id" in session_stat
+            assert "uptime_seconds" in session_stat
+            assert "time_since_activity_seconds" in session_stat
+            assert "is_active" in session_stat
+
 
 class TestClientSession:
     """Test ClientSession model functionality."""

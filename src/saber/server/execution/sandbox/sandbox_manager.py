@@ -7,7 +7,11 @@ single and multi-container orchestration.
 """
 
 import logging
+import subprocess
+from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+import docker
 
 from ..exceptions import SandboxExecutionError
 from .docker_sandbox_environment import DockerSandboxEnvironment
@@ -36,14 +40,137 @@ class SandboxManager:
         """
         self.sandbox_config = sandbox_config
         self.active_sessions: Dict[str, DockerSandboxEnvironment] = {}
+        self._is_ready = False  # Track readiness state
 
         # Set cleanup behavior
         self.cleanup_on_session_end = sandbox_config.get("cleanup_on_session_end", True)
 
-        logger.info("SandboxManager initialized with Docker sandbox support")
+        logger.info("SandboxManager initializing...")
+
+        try:
+            # Ensure core SABER infrastructure images are available
+            self._ensure_orchestrator_image_exists()
+
+            # Mark as ready once initialization is complete
+            self._is_ready = True
+            logger.info("SandboxManager initialized and ready for session creation")
+
+        except Exception as e:
+            logger.error(f"SandboxManager initialization failed: {e}")
+            self._is_ready = False
+            raise
+
+    def _ensure_docker_images_exist(self, environment_spec: EnvironmentSpec) -> None:
+        """
+        Ensure all required Docker images exist, building them if necessary.
+
+        Args:
+            environment_spec: Environment specification containing required images
+
+        Raises:
+            SandboxExecutionError: If image building fails
+        """
+        # For MVP: Orchestrator image is built during initialization
+        # TODO: In the future, dynamically discover and build other images from environments.yaml
+        # For now, we assume other images (saber-execution, saber-webapp, etc.) exist or
+        # will be handled by the environment setup process
+        pass
+
+    def _ensure_orchestrator_image_exists(self) -> None:
+        """
+        Ensure the SABER orchestrator image exists, building it if necessary.
+
+        Raises:
+            SandboxExecutionError: If orchestrator image building fails
+        """
+        docker_client = docker.from_env()  # type: ignore
+        orchestrator_image = "saber-orchestrator:latest"
+
+        try:
+            # Check if orchestrator image exists
+            docker_client.images.get(orchestrator_image)
+            logger.info(f"Docker image {orchestrator_image} already exists")
+        except docker.errors.ImageNotFound:  # type: ignore
+            logger.info(f"Building Docker image {orchestrator_image}...")
+            self._build_docker_image(orchestrator_image, "docker/Dockerfile.orchestrator")
+
+    def _build_docker_image(self, image_name: str, dockerfile_path: str) -> None:
+        """
+        Build a Docker image from a Dockerfile.
+
+        Args:
+            image_name: Name and tag for the built image
+            dockerfile_path: Path to Dockerfile relative to repo root
+
+        Raises:
+            SandboxExecutionError: If image building fails
+        """
+        try:
+            # When running in container:
+            # - /app/src contains the src/ directory
+            # - /app/docker contains the docker/ directory
+            # - /app is effectively the repo root for our purposes
+            repo_root = Path("/app")
+            dockerfile_full_path = repo_root / dockerfile_path
+
+            if not dockerfile_full_path.exists():
+                raise SandboxExecutionError(f"Dockerfile not found: {dockerfile_full_path}")
+
+            # Build context is the repo root (so COPY paths work correctly)
+            build_context = repo_root
+
+            logger.info(f"Building {image_name} from {dockerfile_full_path}")
+            logger.info(f"Build context: {build_context}")
+
+            # Use docker build command for better control
+            cmd = ["docker", "build", "-t", image_name, "-f", str(dockerfile_full_path), str(build_context)]
+
+            result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(repo_root))
+
+            if result.returncode != 0:
+                logger.error(f"Docker build failed for {image_name}")
+                logger.error(f"STDOUT: {result.stdout}")
+                logger.error(f"STDERR: {result.stderr}")
+                raise SandboxExecutionError(f"Failed to build Docker image {image_name}: {result.stderr}")
+
+            logger.info(f"Successfully built Docker image {image_name}")
+
+        except Exception as e:
+            raise SandboxExecutionError(f"Error building Docker image {image_name}: {e}")
+
+    def is_ready(self) -> bool:
+        """
+        Check if the sandbox manager is ready to create sessions.
+
+        Returns:
+            True if ready for session creation, False otherwise
+        """
+        return self._is_ready
+
+    def wait_for_ready(self, timeout: int = 60) -> bool:
+        """
+        Wait for the sandbox manager to become ready.
+
+        Args:
+            timeout: Maximum time to wait in seconds
+
+        Returns:
+            True if became ready within timeout, False if timed out
+        """
+        import time
+
+        start_time = time.time()
+        while not self._is_ready and (time.time() - start_time) < timeout:
+            time.sleep(0.5)
+
+        return self._is_ready
 
     def create_session_environment(
-        self, session_id: str, environment_spec: EnvironmentSpec
+        self,
+        session_id: str,
+        environment_spec: EnvironmentSpec,
+        cleanup_token: Optional[str] = None,
+        saber_host_url: Optional[str] = None,
     ) -> DockerSandboxEnvironment:
         """
         Create a new Docker sandbox environment for a session.
@@ -51,6 +178,8 @@ class SandboxManager:
         Args:
             session_id: Unique identifier for the session
             environment_spec: Environment specification for container orchestration
+            cleanup_token: Optional cleanup token for orchestrator coordination
+            saber_host_url: Optional SABER server URL for orchestrator polling
 
         Returns:
             DockerSandboxEnvironment instance
@@ -58,20 +187,29 @@ class SandboxManager:
         Raises:
             SandboxExecutionError: If session already exists or environment cannot be created
         """
+        # Check if sandbox manager is ready
+        if not self._is_ready:
+            raise SandboxExecutionError("SandboxManager is not ready yet. Please wait for initialization to complete.")
+
         if session_id in self.active_sessions:
             raise SandboxExecutionError(f"Session {session_id} already has an active environment")
 
         try:
-            # Create new environment with specification
-            environment = DockerSandboxEnvironment(session_id, environment_spec)
+            # Ensure required Docker images exist (build if necessary)
+            self._ensure_docker_images_exist(environment_spec)
 
-            # Start the environment
+            # Create new environment with specification and orchestrator info
+            environment = DockerSandboxEnvironment(session_id, environment_spec, cleanup_token, saber_host_url)
+
+            # Start the environment (orchestrator will auto-start)
             environment.start()
 
             # Track the session
             self.active_sessions[session_id] = environment
 
             logger.info(f"Created Docker sandbox environment for session {session_id}")
+            if cleanup_token:
+                logger.info(f"Orchestrator auto-started for session {session_id}")
             return environment
 
         except Exception as e:
