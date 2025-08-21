@@ -130,7 +130,7 @@ class TestRealDockerIntegration:
 
         # Create a simple action that should work in the container
         from saber.server.base import Action
-        action = Action(tool_name="cli", command="echo 'real container test'")
+        action = Action(tool_name="cli", arguments="echo 'real container test'")
         context = {"session_id": session_id}
 
         try:

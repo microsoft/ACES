@@ -62,7 +62,7 @@ class TestToolsIntegration:
     @pytest.mark.asyncio
     async def test_end_to_end_blocked_command_execution(self, registry):
         """Test complete flow for blocked command execution."""
-        action = Action(tool_name="cli", command="sudo rm -rf /")
+        action = Action(tool_name="cli", arguments="sudo rm -rf /", parameters={"arguments": "sudo rm -rf /"})
         context = {"session_id": f"integration_test_002_{uuid.uuid4().hex[:8]}"}
 
         result = await registry.step(action, context)
@@ -75,7 +75,7 @@ class TestToolsIntegration:
     async def test_end_to_end_whitelisted_command_execution(self, registry):
         """Test execution of allowed command in Docker container."""
 
-        action = Action(tool_name="cli", command="echo test")  # Safe command from allowed list
+        action = Action(tool_name="cli", arguments="echo test", parameters={"arguments": "echo test"})  # Safe command from allowed list
         context = {"session_id": f"integration_test_003_{uuid.uuid4().hex[:8]}"}
 
         # Mock Docker environment execution
@@ -99,7 +99,7 @@ class TestToolsIntegration:
         """Test concurrent execution with semaphore control in Docker."""
 
         actions_list = [
-            Action(tool_name="cli", command=f"echo test{i}")
+            Action(tool_name="cli", arguments=f"echo test{i}", parameters={"arguments": f"echo test{i}"})
             for i in range(5)
         ]
 
@@ -136,7 +136,7 @@ class TestToolsIntegration:
         """Test shell mode with complex commands in Docker."""
 
         # Use a command that would benefit from shell mode but isn't dangerous
-        action = Action(tool_name="cli", command="echo 'hello world'", parameters={"shell": True})
+        action = Action(tool_name="cli", arguments="echo 'hello world'", parameters={"arguments": "echo 'hello world'", "shell": True})
         context = {"session_id": f"integration_test_004_{uuid.uuid4().hex[:8]}"}
 
         # Mock Docker environment execution
@@ -172,7 +172,7 @@ class TestToolsIntegration:
         assert "docker_config" in security_info or "image" in security_info
 
         # Test that security validation works by attempting to validate a command
-        validation_result = cli_executor.validate_parameters({"command": "echo test"})
+        validation_result = cli_executor.validate_parameters({"arguments": "echo test"})
         assert validation_result.valid is True
 
     def test_mcp_integration(self, registry):
@@ -193,8 +193,8 @@ class TestToolsIntegration:
         assert cli_schema["type"] == "object"
         assert "properties" in cli_schema
         assert "required" in cli_schema
-        assert "command" in cli_schema["properties"]
-        assert "command" in cli_schema["required"]
+        assert "arguments" in cli_schema["properties"]
+        assert "arguments" in cli_schema["required"]
 
         # Verify MCP format compliance for Python tool
         assert "description" in python_tool
@@ -204,8 +204,8 @@ class TestToolsIntegration:
         assert python_schema["type"] == "object"
         assert "properties" in python_schema
         assert "required" in python_schema
-        assert "code" in python_schema["properties"]
-        assert "code" in python_schema["required"]
+        assert "arguments" in python_schema["properties"]
+        assert "arguments" in python_schema["required"]
 
     @pytest.mark.asyncio
     async def test_parameter_validation_integration(self, registry):
@@ -214,7 +214,7 @@ class TestToolsIntegration:
         unique_session_id = f"test_validation_{uuid.uuid4().hex[:8]}"
 
         # Test missing required parameter (empty command)
-        action = Action(tool_name="cli", command="", parameters={"shell": True})  # Missing command
+        action = Action(tool_name="cli", arguments="", parameters={"arguments": "", "shell": True})  # Missing command
         context = {"session_id": unique_session_id}
         result = await registry.step(action, context)
         assert result.exit_code != 0
@@ -222,7 +222,7 @@ class TestToolsIntegration:
         assert result.error is not None
 
         # Test invalid parameter type
-        action = Action(tool_name="cli", command="echo test", parameters={"shell": "invalid"})
+        action = Action(tool_name="cli", arguments="echo test", parameters={"arguments": "echo test", "shell": "invalid"})
         result = await registry.step(action, context)
         assert result.exit_code != 0
         # The test should fail with some validation error
@@ -232,8 +232,8 @@ class TestToolsIntegration:
     async def test_session_isolation_integration(self, registry):
         """Test that different sessions are properly isolated."""
 
-        action1 = Action(tool_name="cli", command="echo session1")
-        action2 = Action(tool_name="cli", command="echo session2")
+        action1 = Action(tool_name="cli", arguments="echo session1", parameters={"arguments": "echo session1"})
+        action2 = Action(tool_name="cli", arguments="echo session2", parameters={"arguments": "echo session2"})
         session_id_1 = f"session_isolation_1_{uuid.uuid4().hex[:8]}"
         session_id_2 = f"session_isolation_2_{uuid.uuid4().hex[:8]}"
         context1 = {"session_id": session_id_1}
@@ -289,7 +289,7 @@ class TestToolsIntegration:
     async def test_error_handling_integration(self, registry):
         """Test error handling throughout the Docker system."""
 
-        action = Action(tool_name="cli", command="nonexistent_command_xyz")
+        action = Action(tool_name="cli", arguments="nonexistent_command_xyz", parameters={"arguments": "nonexistent_command_xyz"})
         context = {"session_id": f"error_test_session_{uuid.uuid4().hex[:8]}"}
 
         # Mock Docker environment returning error
@@ -321,7 +321,7 @@ class TestToolsIntegration:
         ]
 
         for cmd in dangerous_commands:
-            action = Action(tool_name="cli", command=cmd)
+            action = Action(tool_name="cli", arguments=cmd, parameters={"arguments": cmd})
             context = {"session_id": f"security_test_{uuid.uuid4().hex[:8]}"}
             result = await registry.step(action, context)
 
@@ -354,9 +354,9 @@ class TestToolsIntegration:
 
         # Simulate commands that might be used in malware analysis
         analysis_commands = [
-            Action(tool_name="cli", command="echo 'Analyzing file'"),
-            Action(tool_name="cli", command="echo 'File type: PE32 executable'"),  # Simulating file command
-            Action(tool_name="cli", command="echo 'Strings found: 50'"),           # Simulating strings command
+            Action(tool_name="cli", arguments="echo 'Analyzing file'", parameters={"arguments": "echo 'Analyzing file'"}),
+            Action(tool_name="cli", arguments="echo 'File type: PE32 executable'", parameters={"arguments": "echo 'File type: PE32 executable'"}),  # Simulating file command
+            Action(tool_name="cli", arguments="echo 'Strings found: 50'", parameters={"arguments": "echo 'Strings found: 50'"}),           # Simulating strings command
         ]
 
         # Mock Docker environment
@@ -367,7 +367,7 @@ class TestToolsIntegration:
         results = []
 
         for i, action in enumerate(analysis_commands):
-            expected_output = action.command.split("'")[1] + "\n"
+            expected_output = action.arguments.split("'")[1] + "\n"
             mock_env.execute_command.return_value = CommandResult(
                 exit_code=0,
                 stdout=expected_output,
@@ -399,7 +399,7 @@ class TestToolsIntegration:
         docker_cleanup(real_registry, session_id)
 
         # Create a simple action that should work in the container
-        action = Action(tool_name="cli", command="echo 'real container test'")
+        action = Action(tool_name="cli", arguments="echo 'real container test'", parameters={"arguments": "echo 'real container test'"})
         context = {"session_id": session_id}
 
         try:

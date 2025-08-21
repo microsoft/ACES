@@ -58,31 +58,27 @@ class TestPythonExecutor:
 
         # Check that parameters were added
         params = executor.get_parameters()
-        assert "code" in params
+        assert "arguments" in params
         assert "template" in params
         assert "working_dir" in params
 
         # Verify parameter definitions
-        code_param = params["code"]
-        assert code_param.name == "code"
-        assert code_param.type == ParameterType.STRING
-        assert code_param.required is True
+        arguments_param = params["arguments"]
+        assert arguments_param.name == "arguments"
+        assert arguments_param.type == ParameterType.STRING
+        assert arguments_param.required is True
 
     def test_initialization_without_sandbox_manager(self):
         """Test that initialization fails without sandbox manager."""
         with pytest.raises(SandboxExecutionError, match="sandbox_manager is required"):
             PythonExecutor(sandbox_manager=None, timeout=60.0)
 
-    def test_security_command_metadata(self, python_executor):
-        """Test that security command metadata is properly set."""
-        metadata = python_executor._security_command_metadata
+    def test_executor_metadata(self, python_executor):
+        """Test executor metadata is correctly defined."""
+        metadata = python_executor._executor_metadata
 
-        assert metadata["domain"] == "python"
         assert metadata["name"] == "python_script"
         assert metadata["description"] == "Execute Python scripts in Docker containers"
-        assert metadata["author"] == "SABER Team"
-        assert metadata["security_level"] == "high"
-        assert metadata["requires_validation"] is True
 
     def test_validate_python_code_valid(self, python_executor):
         """Test validation of valid Python code."""
@@ -135,7 +131,7 @@ from urllib import request
 
     def test_build_python_script_simple(self, python_executor):
         """Test building simple Python script."""
-        parameters = {"code": "print('Hello, World!')"}
+        parameters = {"arguments": "print('Hello, World!')"}
         context = {}
 
         script = python_executor.build_python_script(parameters, context)
@@ -160,7 +156,7 @@ import numpy as np
 """
         }
 
-        parameters = {"code": "df = pd.DataFrame({'x': [1, 2, 3]})", "template": "data_analysis"}
+        parameters = {"arguments": "df = pd.DataFrame({'x': [1, 2, 3]})", "template": "data_analysis"}
         context = {}
 
         script = python_executor.build_python_script(parameters, context)
@@ -231,7 +227,7 @@ import numpy as np
 
         mock_docker_environment.execute_command.side_effect = [create_result, execute_result]
 
-        parameters = {"code": "print('Hello, World!')"}
+        parameters = {"arguments": "print('Hello, World!')"}
         context = {"session_id": "test123"}
 
         result = await python_executor.execute(parameters, context)
@@ -244,7 +240,7 @@ import numpy as np
     @pytest.mark.asyncio
     async def test_execute_validation_failure(self, python_executor):
         """Test execution with invalid Python code."""
-        parameters = {"code": ""}  # Empty code
+        parameters = {"arguments": ""}  # Empty code
         context = {"session_id": "test123"}
 
         result = await python_executor.execute(parameters, context)
@@ -255,7 +251,7 @@ import numpy as np
     @pytest.mark.asyncio
     async def test_execute_missing_session_id(self, python_executor):
         """Test execution without session ID."""
-        parameters = {"code": "print('hello')"}
+        parameters = {"arguments": "print('hello')"}
         context = {}  # Missing session_id
 
         result = await python_executor.execute(parameters, context)
@@ -266,7 +262,7 @@ import numpy as np
     def test_validate_parameters_valid(self, python_executor):
         """Test parameter validation with valid parameters."""
         parameters = {
-            "code": "print('hello')",
+            "arguments": "print('hello')",
             "working_dir": "/workspace"
         }
 

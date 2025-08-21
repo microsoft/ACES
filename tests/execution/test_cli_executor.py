@@ -53,20 +53,16 @@ class TestCLIExecutor:
             allowed_commands=["file", "strings", "echo", "cat"]
         )
 
-    def test_security_command_metadata(self, docker_cli_tool):
-        """Test that security command metadata is properly set."""
-        metadata = docker_cli_tool._security_command_metadata
+    def test_executor_metadata(self, docker_cli_tool):
+        """Test executor metadata is correctly defined."""
+        metadata = docker_cli_tool._executor_metadata
 
-        assert metadata["domain"] == "general"
         assert metadata["name"] == "docker_cli"
         assert metadata["description"] == "Execute validated shell commands in Docker containers"
-        assert metadata["author"] == "SABER Team"
-        assert metadata["security_level"] == "high"
-        assert metadata["requires_validation"] is True
 
     def test_build_command_simple(self, docker_cli_tool):
         """Test building command with simple string (no shell mode)."""
-        parameters = {"command": "ls -la"}
+        parameters = {"arguments": "ls -la"}
         context = {}
 
         result = docker_cli_tool.build_command(parameters, context)
@@ -76,7 +72,7 @@ class TestCLIExecutor:
 
     def test_build_command_shell_mode(self, docker_cli_tool):
         """Test building command with complex shell features."""
-        parameters = {"command": "ls -la | grep test"}
+        parameters = {"arguments": "ls -la | grep test"}
         context = {}
 
         result = docker_cli_tool.build_command(parameters, context)
@@ -86,7 +82,7 @@ class TestCLIExecutor:
 
     def test_build_command_default_shell_mode(self, docker_cli_tool):
         """Test building command always uses shell mode."""
-        parameters = {"command": "echo hello world"}
+        parameters = {"arguments": "echo hello world"}
         context = {}
 
         result = docker_cli_tool.build_command(parameters, context)
@@ -96,7 +92,7 @@ class TestCLIExecutor:
 
     def test_build_command_quoted_arguments(self, docker_cli_tool):
         """Test building command with quoted arguments."""
-        parameters = {"command": 'echo "hello world" test'}
+        parameters = {"arguments": 'echo "hello world" test'}
         context = {}
 
         result = docker_cli_tool.build_command(parameters, context)
@@ -107,7 +103,7 @@ class TestCLIExecutor:
     def test_build_command_complex_shell_command(self, docker_cli_tool):
         """Test building command with complex shell constructs."""
         parameters = {
-            "command": "find /tmp -name '*.txt' | head -10 > results.txt"
+            "arguments": "find /tmp -name '*.txt' | head -10 > results.txt"
         }
         context = {}
 
@@ -117,7 +113,7 @@ class TestCLIExecutor:
 
     def test_build_command_invalid_quotes(self, docker_cli_tool):
         """Test building command with invalid quotes (shell handles gracefully)."""
-        parameters = {"command": 'echo "unclosed quote'}
+        parameters = {"arguments": 'echo "unclosed quote'}
         context = {}
 
         # Shell mode doesn't validate quotes at build time
@@ -126,10 +122,10 @@ class TestCLIExecutor:
 
     def test_build_command_empty_after_parsing(self, docker_cli_tool):
         """Test building command with empty string."""
-        parameters = {"command": ""}
+        parameters = {"arguments": ""}
         context = {}
 
-        with pytest.raises(ValueError, match="Command string cannot be empty"):
+        with pytest.raises(ValueError, match="Arguments string cannot be empty"):
             docker_cli_tool.build_command(parameters, context)
 
     def test_parse_output_success(self, docker_cli_tool):
@@ -222,7 +218,7 @@ class TestCLIExecutor:
 
     def test_parameter_validation_success(self, docker_cli_tool):
         """Test successful parameter validation."""
-        parameters = {"command": "ls -la", "shell": False}
+        parameters = {"arguments": "ls -la", "shell": False}
 
         result = docker_cli_tool.validate_parameters(parameters)
 
@@ -236,20 +232,20 @@ class TestCLIExecutor:
         result = docker_cli_tool.validate_parameters(parameters)
 
         assert result.valid is False
-        assert "Required parameter 'command' is missing" in result.errors
+        assert "Required parameter 'arguments' is missing" in result.errors
 
     def test_parameter_validation_wrong_type(self, docker_cli_tool):
         """Test parameter validation with wrong parameter type."""
-        parameters = {"command": 123}  # command should be string
+        parameters = {"arguments": 123}  # command should be string
 
         result = docker_cli_tool.validate_parameters(parameters)
 
         assert result.valid is False
-        assert "Parameter 'command' must be a string" in result.errors
+        assert "Parameter 'arguments' must be a string" in result.errors
 
     def test_parameter_validation_unknown_parameter(self, docker_cli_tool):
         """Test parameter validation with unknown parameter."""
-        parameters = {"command": "ls", "unknown_param": "value"}
+        parameters = {"arguments": "ls", "unknown_param": "value"}
 
         result = docker_cli_tool.validate_parameters(parameters)
 
@@ -327,7 +323,7 @@ class TestCLIExecutorIntegration:
         env = mock_sandbox_manager_with_env.get_session_environment.return_value
         env.execute_command.return_value = command_result
 
-        parameters = {"command": "echo 'Hello from Docker!'"}
+        parameters = {"arguments": "echo 'Hello from Docker!'"}
         context = {"session_id": "test_session_123"}
 
         result = await docker_cli_tool_with_env.execute(parameters, context)
@@ -360,7 +356,7 @@ class TestCLIExecutorIntegration:
         env = mock_sandbox_manager_with_env.get_session_environment.return_value
         env.execute_command.return_value = command_result
 
-        parameters = {"command": "echo hello world", "shell": True}
+        parameters = {"arguments": "echo hello world", "shell": True}
         context = {"session_id": "shell_test_session"}
 
         result = await docker_cli_tool_with_env.execute(parameters, context)
@@ -389,7 +385,7 @@ class TestCLIExecutorIntegration:
         env = mock_sandbox_manager_with_env.get_session_environment.return_value
         env.execute_command.return_value = command_result
 
-        parameters = {"command": "nonexistent_command", "shell": False}
+        parameters = {"arguments": "nonexistent_command", "shell": False}
         context = {"session_id": "failure_test_session"}
 
         result = await docker_cli_tool_with_env.execute(parameters, context)
@@ -402,7 +398,7 @@ class TestCLIExecutorIntegration:
     @pytest.mark.asyncio
     async def test_execute_missing_session_id(self, docker_cli_tool_with_env):
         """Test that execution fails without session_id in context."""
-        parameters = {"command": "echo test", "shell": False}
+        parameters = {"arguments": "echo test", "shell": False}
         context = {}  # Missing session_id
 
         result = await docker_cli_tool_with_env.execute(parameters, context)
@@ -426,7 +422,7 @@ class TestCLIExecutorIntegration:
         container_mock.id = "container123"
         existing_env.get_execution_container.return_value = container_mock
 
-        parameters = {"command": "echo test", "shell": False}
+        parameters = {"arguments": "echo test", "shell": False}
         context = {"session_id": "existing_session"}
 
         result = await docker_cli_tool_with_env.execute(parameters, context)
@@ -443,7 +439,7 @@ class TestCLIExecutorIntegration:
         env = mock_sandbox_manager_with_env.get_session_environment.return_value
         env.execute_command.side_effect = Exception("Docker daemon not available")
 
-        parameters = {"command": "echo test", "shell": False}
+        parameters = {"arguments": "echo test", "shell": False}
         context = {"session_id": "exception_test"}
 
         result = await docker_cli_tool_with_env.execute(parameters, context)

@@ -78,10 +78,10 @@ MCP -> Client: available_tools[]
 == Command Execution & RL Step ==
 
 Agent -> Agent: generate next command
-Agent -> Client: tool_call_request(tool_name: "cli", args: {command: "file malware.exe"})
-Client -> MCP: call_tool(tool_name: "cli", arguments: {command: "file malware.exe"})
+Agent -> Client: tool_call_request(tool_name: "cli", args: {arguments: "file malware.exe"})
+Client -> MCP: call_tool(tool_name: "cli", arguments: {arguments: "file malware.exe"})
 MCP -> SM: execute_command(session_id, action)
-SM -> SM: create Action(command, parameters)
+SM -> SM: create Action(arguments, parameters)
 SM -> EM_EXEC: step(action)
 EM_EXEC --> SM: CommandResult
 
@@ -96,7 +96,7 @@ SM -> EM: step(session_id, action, command_result)
 
 EM -> EM: get_current_episode(session_id)
 EM -> EM: create_step(episode, action, command_result)
-EM -> EM: extract command from action
+EM -> EM: extract arguments from action
 EM -> EM: create Step object
 EM -> EM: add step to episode
 EM -> EM: update_episode_state(episode, step)

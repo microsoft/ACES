@@ -374,6 +374,17 @@ class DockerSandboxEnvironment:
         if not self.compose_file_path:
             raise ContainerCreationError("Compose file not available")
 
+        # Check if modern docker compose is available
+        try:
+            check_cmd = ["docker", "compose", "version"]
+            subprocess.run(check_cmd, capture_output=True, text=True, check=True, timeout=10)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
+            raise ContainerCreationError(
+                "Docker Compose plugin not available. Please ensure Docker Compose v2+ is installed. "
+                "Modern Docker installations should include the 'docker compose' command "
+                "(not legacy 'docker-compose'). Install with: apt-get install docker-compose-plugin"
+            )
+
         cmd = ["docker", "compose", "-f", self.compose_file_path, "-p", self.compose_project_name, "up", "-d"]
 
         try:

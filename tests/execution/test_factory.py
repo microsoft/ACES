@@ -181,7 +181,7 @@ class TestExecutorFactory:
         with patch.object(executor_factory, 'get_executor') as mock_get_executor:
             # Mock CLI executor
             mock_cli = MagicMock()
-            mock_cli._security_command_metadata = {
+            mock_cli._executor_metadata = {
                 'name': 'docker_cli',
                 'description': 'Execute shell commands'
             }
@@ -189,7 +189,7 @@ class TestExecutorFactory:
 
             # Mock Python executor
             mock_python = MagicMock()
-            mock_python._security_command_metadata = {
+            mock_python._executor_metadata = {
                 'name': 'python_script',
                 'description': 'Execute Python scripts'
             }
@@ -225,7 +225,7 @@ class TestExecutorFactory:
             def mock_get_executor_side_effect(executor_type):
                 if executor_type == "cli":
                     mock_cli = MagicMock()
-                    mock_cli._security_command_metadata = {'name': 'docker_cli', 'description': 'Execute shell commands'}
+                    mock_cli._executor_metadata = {'name': 'docker_cli', 'description': 'Execute shell commands'}
                     mock_cli.to_mcp_schema.return_value = {"type": "object"}
                     return mock_cli
                 else:

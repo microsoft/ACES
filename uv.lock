@@ -1274,18 +1274,18 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "docker" },
+    { name = "fastapi" },
+    { name = "fastmcp" },
     { name = "httpx" },
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "requests" },
     { name = "rich" },
+    { name = "uvicorn" },
+    { name = "websockets" },
 ]
 
 [package.optional-dependencies]
-client = [
-    { name = "httpx" },
-    { name = "websockets" },
-]
 dev = [
     { name = "black" },
     { name = "flake8" },
@@ -1295,11 +1295,6 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
-]
-server = [
-    { name = "fastapi" },
-    { name = "fastmcp" },
-    { name = "uvicorn" },
 ]
 
 [package.dev-dependencies]
@@ -1313,11 +1308,10 @@ requires-dist = [
     { name = "black", marker = "extra == 'dev'", specifier = ">=23.0.0" },
     { name = "docker", specifier = ">=7.0.0" },
     { name = "docker", extras = ["compose"], specifier = ">=7.0.0" },
-    { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.100.0" },
-    { name = "fastmcp", marker = "extra == 'server'", specifier = ">=0.1.0" },
+    { name = "fastapi", specifier = ">=0.100.0" },
+    { name = "fastmcp", specifier = ">=0.1.0" },
     { name = "flake8", marker = "extra == 'dev'", specifier = ">=6.0.0" },
     { name = "httpx", specifier = ">=0.24.0" },
-    { name = "httpx", marker = "extra == 'client'", specifier = ">=0.24.0" },
     { name = "isort", marker = "extra == 'dev'", specifier = ">=5.12.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.0.0" },
@@ -1328,8 +1322,8 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "requests", specifier = ">=2.28.0" },
     { name = "rich", specifier = ">=13.0.0" },
-    { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.20.0" },
-    { name = "websockets", marker = "extra == 'client'", specifier = ">=11.0.0" },
+    { name = "uvicorn", specifier = ">=0.20.0" },
+    { name = "websockets", specifier = ">=11.0.0" },
 ]
 provides-extras = ["dev", "server", "client"]
 

@@ -131,9 +131,8 @@ class ExecutionManager:
                 # Get executor directly from action's tool name
                 executor = self._executor_factory.get_executor(action.tool_name)
 
-                # Extract parameters from action
-                parameters = {"command": action.command}
-                parameters.update(action.parameters)
+                # Use action parameters directly - no mapping needed
+                parameters = action.parameters.copy()
 
                 # Validate parameters first
                 validation_result = executor.validate_parameters(parameters)
@@ -279,7 +278,7 @@ class ExecutionManager:
         for executor_type in self._executor_factory.get_available_executors():
             try:
                 executor = self._executor_factory.get_executor(executor_type)
-                metadata = getattr(executor, "_security_command_metadata", {})
+                metadata = getattr(executor, "_executor_metadata", {})
 
                 command_info = {
                     "executor_type": executor_type,

@@ -38,7 +38,7 @@ class TestSessionManagerEpisodes:
         # Mock action attribute properly
         mock_action = MagicMock()
         mock_action.tool_name = "test_tool"
-        mock_action.command = "test command"
+        mock_action.arguments = "test command"
         mock_action.parameters = {}
         step.action = mock_action
         step.response = {"output": "test output"}
@@ -156,7 +156,7 @@ class TestSessionManagerEpisodes:
         manager.episode_manager.step.return_value = mock_step
 
         # Execute command
-        action = Action(tool_name="cli", command="file test.txt", parameters={"param": "value"})
+        action = Action(tool_name="cli", arguments="file test.txt", parameters={"param": "value"})
         response = await manager.execute_command(session_id, action)
 
         assert isinstance(response, CommandResult)
@@ -169,7 +169,7 @@ class TestSessionManagerEpisodes:
         assert call_args is not None
         action_arg = call_args[0][0]  # First positional argument
         assert isinstance(action_arg, Action)
-        assert action_arg.command == "file test.txt"
+        assert action_arg.arguments == "file test.txt"
         assert action_arg.parameters == {"param": "value"}
         assert action_arg.tool_name == "cli"
 
@@ -191,7 +191,7 @@ class TestSessionManagerEpisodes:
         session = await manager.create_session("test_client")
         session_id = session.session_id
 
-        action = Action(tool_name="cli", command="file test.txt", parameters={})
+        action = Action(tool_name="cli", arguments="file test.txt", parameters={})
         result = await manager.execute_command(session_id, action)
 
         assert isinstance(result, CommandResult)
@@ -223,7 +223,7 @@ class TestSessionManagerEpisodes:
         manager.episode_manager.step.return_value = mock_step
 
         # Execute command
-        action = Action(tool_name="cli", command="final command", parameters={})
+        action = Action(tool_name="cli", arguments="final command", parameters={})
         response = await manager.execute_command(session_id, action)
 
         assert response.success is True
@@ -247,7 +247,7 @@ class TestSessionManagerEpisodes:
         manager.execution_manager.step.side_effect = Exception("Execution failed")
 
         # Execute command
-        action = Action(tool_name="cli", command="bad command", parameters={})
+        action = Action(tool_name="cli", arguments="bad command", parameters={})
         response = await manager.execute_command(session_id, action)
 
         assert response.success is False

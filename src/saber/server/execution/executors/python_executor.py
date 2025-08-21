@@ -28,13 +28,9 @@ class PythonExecutor(DockerExecutor):
     - Output parsing and error handling
     """
 
-    _security_command_metadata = {
-        "domain": "python",
+    _executor_metadata = {
         "name": "python_script",
         "description": "Execute Python scripts in Docker containers",
-        "author": "SABER Team",
-        "security_level": "high",
-        "requires_validation": True,
     }
 
     @classmethod
@@ -122,7 +118,7 @@ class PythonExecutor(DockerExecutor):
         # Python code parameter
         self.add_parameter(
             Parameter(
-                name="code",
+                name="arguments",
                 type=ParameterType.STRING,
                 description="Python code to execute in the container",
                 required=True,
@@ -224,7 +220,7 @@ class PythonExecutor(DockerExecutor):
         Returns:
             Complete Python script as string
         """
-        code = str(parameters["code"])  # Ensure code is a string
+        code = str(parameters["arguments"])  # Ensure code is a string
         template = parameters.get("template")
 
         script: str
@@ -338,7 +334,7 @@ class PythonExecutor(DockerExecutor):
             environment = self.get_session_environment(session_id)
 
             # Validate Python code
-            code_validation = self.validate_python_code(parameters["code"])
+            code_validation = self.validate_python_code(parameters["arguments"])
             if not code_validation.valid:
                 return CommandResult.error_result(
                     error=f"Python code validation failed: {', '.join(code_validation.errors)}"
@@ -402,8 +398,8 @@ class PythonExecutor(DockerExecutor):
         result = super().validate_parameters(parameters)
 
         # Add Python-specific validation
-        if "code" in parameters:
-            code_validation = self.validate_python_code(parameters["code"])
+        if "arguments" in parameters:
+            code_validation = self.validate_python_code(parameters["arguments"])
             result.errors.extend(code_validation.errors)
             result.warnings.extend(code_validation.warnings)
 

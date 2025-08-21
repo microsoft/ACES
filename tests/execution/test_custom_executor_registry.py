@@ -1,7 +1,8 @@
 """
-Tests for custom executor registry functionality.
-
-These tests demonstrate how the custom executor registration system works
+Tests for custom executor registry functionality.        self._executor_metadata = {
+            "name": "test_executor",
+            "description": "Test executor for registry testing",
+        }ese tests demonstrate how the custom executor registration system works
 and validate that external executors can be properly registered and used.
 """
 
@@ -51,9 +52,9 @@ class TestCustomExecutor(DockerExecutor):
         )
 
     def to_mcp_schema(self) -> Dict[str, Any]:
-        self._security_command_metadata = {
-            "name": "test_executor",
-            "description": "Test executor for unit testing",
+        self._executor_metadata = {
+            "name": "test_with_file",
+            "description": "Test executor for file loading",
         }
         return super().to_mcp_schema()
 
@@ -135,9 +136,9 @@ class FileTestExecutor(DockerExecutor):
         return CommandResult.success_result(output="File executor test")
 
     def to_mcp_schema(self):
-        self._security_command_metadata = {
-            "name": "file_test",
-            "description": "File-based test executor",
+        self._executor_metadata = {
+            "name": "test_singleton",
+            "description": "Test executor for singleton behavior",
         }
         return super().to_mcp_schema()
 '''
@@ -209,9 +210,9 @@ class DirTestExecutor(DockerExecutor):
         return CommandResult.success_result(output="Directory executor test")
 
     def to_mcp_schema(self):
-        self._security_command_metadata = {
-            "name": "dir_test",
-            "description": "Directory-based test executor",
+        self._executor_metadata = {
+            "name": "test_config_error",
+            "description": "Test executor for config error handling",
         }
         return super().to_mcp_schema()
 
@@ -331,7 +332,7 @@ class HookFileExecutor(DockerExecutor):
         return CommandResult.success_result(output="Hook file executor test")
 
     def to_mcp_schema(self):
-        self._security_command_metadata = {
+        self._executor_metadata = {
             "name": "hook_file_test",
             "description": "Hook file test executor",
         }
@@ -388,7 +389,7 @@ class HookDirExecutor(DockerExecutor):
         return CommandResult.success_result(output="Hook directory executor test")
 
     def to_mcp_schema(self):
-        self._security_command_metadata = {
+        self._executor_metadata = {
             "name": "hook_dir_test",
             "description": "Hook directory test executor",
         }
