@@ -69,7 +69,7 @@ class TestIntegrationExecutor(DockerExecutor):
         )
 
     def to_mcp_schema(self) -> Dict[str, Any]:
-        self._security_command_metadata = {
+        self._executor_metadata = {
             "name": "integration_test",
             "description": "Test executor for integration testing",
         }
@@ -202,7 +202,7 @@ class SchemaTestExecutor(DockerExecutor):
         return CommandResult.success_result(output="Schema test executed")
 
     def to_mcp_schema(self):
-        self._security_command_metadata = {
+        self._executor_metadata = {
             "name": "schema_test",
             "description": "Test executor for MCP schema validation",
         }
@@ -276,9 +276,9 @@ class FactoryTestExecutor(DockerExecutor):
         return CommandResult.success_result(output="Factory test")
 
     def to_mcp_schema(self):
-        self._security_command_metadata = {
+        self._executor_metadata = {
             "name": "factory_test",
-            "description": "Factory integration test executor",
+            "description": "Test executor for factory integration",
         }
         return super().to_mcp_schema()
 

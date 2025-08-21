@@ -196,9 +196,9 @@ class EpisodeManager:
         # Convert CommandResult to dictionary using dataclass asdict
         response_dict = asdict(response)
 
-        # Extract command from action for completion matching
-        command = self._extract_command_from_action(action)
-        action.command = command
+        # Extract arguments from action for completion matching
+        arguments = self._extract_arguments_from_action(action)
+        action.arguments = arguments
 
         # Create step without adding it to episode yet
         step = Step(
@@ -224,17 +224,17 @@ class EpisodeManager:
         if step.done:
             episode.state = EpisodeState.COMPLETED
 
-    def _extract_command_from_action(self, action: Action) -> Optional[str]:
+    def _extract_arguments_from_action(self, action: Action) -> Optional[str]:
         """
-        Extract actual command executed from action parameters.
+        Extract actual arguments executed from action parameters.
 
         Currently focused on DockerCLIExecutor tool only.
 
         Args:
-            action: Action to extract command from
+            action: Action to extract arguments from
 
         Returns:
-            Extracted command string, or None if not extractable
+            Extracted arguments string, or None if not extractable
         """
         if action.tool_name == "docker_cli_executor":
             # Extract command from DockerCLIExecutor parameters

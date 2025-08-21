@@ -199,7 +199,7 @@ class ExecutorFactory:
 
                 # Get the tool definition with executor type prefix
                 tool_schema = executor.to_mcp_schema()
-                metadata = getattr(executor, "_security_command_metadata", {})
+                metadata = getattr(executor, "_executor_metadata", {})
 
                 tool_def = {
                     "name": f"{executor_type}_{metadata.get('name', 'command')}",

@@ -106,7 +106,7 @@ package "Episode Management" {
         +tool_name: str
         +parameters: Dict[str, Any]
         +timestamp: datetime
-        +command: Optional[str]
+        +arguments: Optional[str]
     }
 
     enum EpisodeState {

@@ -88,6 +88,37 @@ class SessionMCPAPI:
         for executor_name in available_executors:
             self._register_executor_tool(executor_name)
 
+        # Register hardcoded MCP API tools
+        self._register_hardcoded_tools()
+
+    def _register_hardcoded_tools(self) -> None:
+        """Register hardcoded MCP API tools with the FastMCP server."""
+        if not self.mcp_server:
+            raise RuntimeError("MCP server not initialized")
+
+        # Register end_episode tool
+        async def end_episode_tool(session_id: str, arguments: Optional[str] = None) -> str:
+            """End the current episode and optionally record a discovered flag/target/objective."""
+            try:
+                args = {"session_id": session_id}
+                if arguments:
+                    args["result"] = arguments  # Map arguments to result internally
+                mcp_result = await self._handle_end_episode_call(args)
+                # Extract the text content from the MCP result
+                if mcp_result.get("isError", False):
+                    return json.dumps({"success": False, "error": mcp_result["content"][0]["text"]})
+                else:
+                    return str(mcp_result["content"][0]["text"])
+            except Exception as e:
+                logger.error(f"Error in end_episode tool: {e}")
+                return json.dumps({"success": False, "error": str(e)})
+
+        # Set proper function metadata and register with FastMCP
+        end_episode_tool.__name__ = "end_episode"
+        self.mcp_server.tool(name="end_episode")(end_episode_tool)
+
+        logger.debug("Registered hardcoded MCP tool: end_episode")
+
     def _register_executor_tool(self, executor_name: str) -> None:
         """
         Dynamically register an MCP tool for a specific executor.
@@ -98,34 +129,29 @@ class SessionMCPAPI:
         tool_name = f"execute_{executor_name}"
 
         # Create the async function for this executor
-        async def executor_tool(command: str, session_id: str, parameters: Optional[dict] = None) -> str:
+        async def executor_tool(session_id: str, arguments: str, parameters: Optional[dict] = None) -> str:
             f"""Execute a {executor_name} command in the SABER sandbox environment.
 
             Args:
-                command: The {executor_name} command/code to execute
                 session_id: Session ID for context
+                arguments: The {executor_name} command/code to execute
                 parameters: Optional parameters for the {executor_name} executor
 
             Returns:
                 Command execution result as JSON
             """
+            # Delegate to the standard handle_call_tool method
+            mcp_args = {"session_id": session_id, "arguments": arguments}
+            if parameters:
+                mcp_args.update(parameters)
 
-            try:
-                action = Action(tool_name=executor_name, command=command, parameters=parameters or {})
-                result = await self.session_manager.execute_command(session_id, action)
+            result = await self.handle_call_tool(executor_name, mcp_args)
 
-                if result.success:
-                    return (
-                        json.dumps(result.data)
-                        if result.data
-                        else json.dumps({"success": True, "output": f"{executor_name.title()} executed successfully"})
-                    )
-                else:
-                    return json.dumps({"success": False, "error": result.error})
-
-            except Exception as e:
-                logger.error(f"Error executing {executor_name} command: {e}")
-                return json.dumps({"success": False, "error": str(e)})
+            # Extract the text content from the MCP result
+            if result.get("isError", False):
+                return json.dumps({"success": False, "error": result["content"][0]["text"]})
+            else:
+                return str(result["content"][0]["text"])
 
         # Set proper function metadata for the tool
         executor_tool.__name__ = tool_name
@@ -142,14 +168,41 @@ class SessionMCPAPI:
         Handle MCP tool discovery.
 
         Returns:
-            List of available MCP tools from ExecutionManager
+            List of available MCP tools from ExecutionManager plus hardcoded MCP tools
         """
         try:
             # Get tools from execution manager
             tools: List[Dict[str, Any]] = self.session_manager.execution_manager.to_mcp_tools()
 
-            logger.debug(f"Returning {len(tools)} tools for MCP discovery")
-            return tools
+            # Add hardcoded MCP API tools
+            hardcoded_tools = [
+                {
+                    "name": "end_episode",
+                    "description": "End the current episode and optionally record a discovered flag/target/objective",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "session_id": {"type": "string", "description": "Session ID for context"},
+                            "arguments": {
+                                "type": "string",
+                                "description": (
+                                    "Optional flag, target, or objective that was " "discovered during the episode"
+                                ),
+                            },
+                        },
+                        "required": ["session_id"],
+                    },
+                }
+            ]
+
+            # Combine executor tools and hardcoded tools
+            all_tools = tools + hardcoded_tools
+
+            logger.debug(
+                f"Returning {len(all_tools)} tools ({len(tools)} executor tools + "
+                f"{len(hardcoded_tools)} hardcoded tool) for MCP discovery"
+            )
+            return all_tools
 
         except Exception as e:
             logger.error(f"Error handling list_tools: {e}")
@@ -167,6 +220,10 @@ class SessionMCPAPI:
             MCP-formatted execution result
         """
         try:
+            # Handle hardcoded MCP API tools
+            if name == "end_episode":
+                return await self._handle_end_episode_call(arguments)
+
             # Extract session context from arguments
             session_context = self._map_session_context(arguments)
             session_id = session_context.get("session_id")
@@ -188,6 +245,59 @@ class SessionMCPAPI:
         except Exception as e:
             logger.error(f"Error handling call_tool {name}: {e}")
             return self._convert_to_mcp_result(CommandResult.error_result(error=f"Tool execution failed: {str(e)}"))
+
+    async def _handle_end_episode_call(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Handle the hardcoded end_episode tool call.
+
+        Args:
+            arguments: Tool arguments (should contain session_id and optional result)
+
+        Returns:
+            MCP-formatted result confirming episode end
+        """
+        try:
+            # Extract session context
+            session_context = self._map_session_context(arguments)
+            session_id = session_context.get("session_id")
+
+            if not session_id:
+                return self._convert_to_mcp_result(
+                    CommandResult.error_result(error="Missing session_id in end_episode arguments")
+                )
+
+            # Extract optional result/flag/objective
+            result = arguments.get("arguments", "")
+
+            # If a result was provided, save it as an action in the episode
+            if result:
+                logger.info(f"Episode ending with result: {result}")
+                # Create an action to record the discovered result
+                result_action = Action(
+                    tool_name="episode_result",
+                    arguments=f"Episode completed with result: {result}",
+                    parameters={"result": result, "episode_end": True},
+                )
+                # Execute the result action to save it in the episode
+                await self.session_manager.execute_command(session_id, result_action)
+
+            # End the episode through SessionManager
+            await self.session_manager.end_episode(session_id)
+
+            # Prepare success message
+            success_message = "Episode ended successfully"
+            if result:
+                success_message += f" with result: {result}"
+
+            logger.info(f"Episode ended for session {session_id}")
+
+            # Return success result
+            command_result = CommandResult.success_result(data=success_message)
+            return self._convert_to_mcp_result(command_result)
+
+        except Exception as e:
+            logger.error(f"Error handling end_episode tool call: {e}")
+            return self._convert_to_mcp_result(CommandResult.error_result(error=f"Failed to end episode: {str(e)}"))
 
     def _map_session_context(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -223,20 +333,24 @@ class SessionMCPAPI:
         Returns:
             Action object for execution
         """
-        # Extract command from arguments
-        command = arguments.get("command", "")
+        # Extract arguments for the tool (command, code, etc.)
+        tool_arguments = arguments.get("arguments", "")
 
         # Extract nested parameters, or use empty dict if not provided
-        # Filter out session context and command from parameters
+        # Filter out session context and arguments from parameters
         if "parameters" in arguments and isinstance(arguments["parameters"], dict):
             parameters = arguments["parameters"]
         else:
-            # If no nested parameters, filter out known session/command fields
+            # If no nested parameters, filter out known session/arguments fields
             parameters = {
-                k: v for k, v in arguments.items() if k not in ["session_id", "client_id", "context", "command"]
+                k: v for k, v in arguments.items() if k not in ["session_id", "client_id", "context", "arguments"]
             }
 
-        return Action(tool_name=tool_name, command=command, parameters=parameters)
+        # Add the arguments directly to parameters
+        if tool_arguments:
+            parameters["arguments"] = tool_arguments
+
+        return Action(tool_name=tool_name, arguments=tool_arguments, parameters=parameters)
 
     def _convert_to_mcp_result(self, command_result: CommandResult) -> Dict[str, Any]:
         """

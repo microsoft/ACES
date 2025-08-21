@@ -74,7 +74,7 @@ package "Execution Management" {
     }
 
     class CLIExecutor {
-        +_security_command_metadata: Dict
+        +_executor_metadata: Dict
         +_security_validator: SecurityValidator
         --
         +setup_parameters(config: Dict[str, Any]): void

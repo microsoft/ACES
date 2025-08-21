@@ -142,7 +142,7 @@ class Action(BaseModel):
     tool_name: str = Field(..., description="Name of the tool being executed")
     parameters: Dict[str, Any] = Field(default_factory=dict, description="Parameters passed to the tool")
     timestamp: datetime = Field(default_factory=datetime.utcnow, description="When the action was initiated")
-    command: Optional[str] = Field(None, description="Extracted command for completion matching")
+    arguments: Optional[str] = Field(None, description="Extracted arguments for completion matching")
 
     class Config:
         """Pydantic configuration."""
@@ -213,9 +213,9 @@ class Episode(BaseModel):
         self.steps.append(step)
 
     def get_executed_commands(self) -> List[str]:
-        """Get all commands executed during this episode."""
+        """Get all arguments executed during this episode."""
         commands = []
         for step in self.steps:
-            if step.action.command:
-                commands.append(step.action.command)
+            if step.action.arguments:
+                commands.append(step.action.arguments)
         return commands

@@ -130,12 +130,18 @@ class TestDockerSandboxEnvironment:
         # Verify compose file was written
         mock_temp_file.assert_called_once()
 
-        # Verify docker compose up was called (modern docker syntax)
-        mock_subprocess.assert_called_once()
-        args = mock_subprocess.call_args[0][0]
-        assert "docker" in args and "compose" in args
-        assert "up" in args
-        assert "-d" in args
+        # Verify docker compose version check and up were called (modern docker syntax)
+        assert mock_subprocess.call_count == 2
+
+        # First call should be version check
+        version_args = mock_subprocess.call_args_list[0][0][0]
+        assert "docker" in version_args and "compose" in version_args and "version" in version_args
+
+        # Second call should be the actual up command
+        up_args = mock_subprocess.call_args_list[1][0][0]
+        assert "docker" in up_args and "compose" in up_args
+        assert "up" in up_args
+        assert "-d" in up_args
 
         # Verify containers were tracked
         assert len(env.active_services) == 2

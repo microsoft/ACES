@@ -21,7 +21,7 @@ class TestEpisode:
         )
 
         # Add first step
-        action1 = Action(tool_name="shell", command="ls -la")
+        action1 = Action(tool_name="shell", arguments="ls -la")
         step1 = Step(
             step_number=1,
             action=action1,
@@ -32,10 +32,10 @@ class TestEpisode:
         episode.add_step(step1)
         assert len(episode.steps) == 1
         assert episode.steps[0].step_number == 1
-        assert episode.steps[0].action.command == "ls -la"
+        assert episode.steps[0].action.arguments == "ls -la"
 
         # Add second step
-        action2 = Action(tool_name="shell", command="cat file.txt")
+        action2 = Action(tool_name="shell", arguments="cat file.txt")
         step2 = Step(
             step_number=2,
             action=action2,
@@ -67,7 +67,7 @@ class TestEpisode:
         episode.state = EpisodeState.ACTIVE
 
         # Add a step
-        action = Action(tool_name="shell", command="pwd")
+        action = Action(tool_name="shell", arguments="pwd")
         step = Step(
             step_number=1,
             action=action,
@@ -78,7 +78,7 @@ class TestEpisode:
         episode.add_step(step)
         assert len(episode.steps) == 1
         assert episode.steps[0].step_number == 1
-        assert episode.steps[0].action.command == "pwd"
+        assert episode.steps[0].action.arguments == "pwd"
 
     def test_episode_state_transitions(self):
         """Test episode state transitions."""
@@ -111,7 +111,7 @@ class TestEpisode:
         )
 
         # Add steps with commands
-        action1 = Action(tool_name="shell", command="ls -la")
+        action1 = Action(tool_name="shell", arguments="ls -la")
         step1 = Step(
             step_number=1,
             action=action1,
@@ -120,7 +120,7 @@ class TestEpisode:
         )
         episode.add_step(step1)
 
-        action2 = Action(tool_name="shell", command="pwd")
+        action2 = Action(tool_name="shell", arguments="pwd")
         step2 = Step(
             step_number=2,
             action=action2,
