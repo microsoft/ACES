@@ -4,11 +4,12 @@ Unit tests for SessionMCPAPI.
 Tests MCP protocol functionality for tool discovery and execution.
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from saber.server.api.session_mcp_api import SessionMCPAPI
-from saber.server.base import CommandResult, Action
+from saber.server.base import Action, CommandResult
 
 
 class TestSessionMCPAPI:
@@ -20,7 +21,7 @@ class TestSessionMCPAPI:
         mock_manager = MagicMock()
         mock_manager.domain_name = "test_domain"
         mock_manager.execution_manager = MagicMock()
-        mock_manager.execute_command = AsyncMock()
+        mock_manager.execute_action = AsyncMock()
         mock_manager._get_session = MagicMock()
         return mock_manager
 
@@ -37,7 +38,7 @@ class TestSessionMCPAPI:
         assert mcp_api.host == "0.0.0.0"
         assert mcp_api.port == 3001
         assert mcp_api.mcp_server is None
-        assert mcp_api.active_mcp_sessions == {}
+        assert mcp_api.mcp_connection_to_session == {}
 
     @pytest.mark.asyncio
     async def test_handle_list_tools(self, mcp_api):
@@ -45,7 +46,7 @@ class TestSessionMCPAPI:
         # Mock execution manager returning tools
         mock_tools = [
             {"name": "cli", "description": "Command line executor", "inputSchema": {"type": "object"}},
-            {"name": "python", "description": "Python executor", "inputSchema": {"type": "object"}}
+            {"name": "python", "description": "Python executor", "inputSchema": {"type": "object"}},
         ]
         mcp_api.session_manager.execution_manager.to_mcp_tools.return_value = mock_tools
 
@@ -64,9 +65,12 @@ class TestSessionMCPAPI:
 
         # Verify end_episode tool definition
         end_episode_tool = next(t for t in tools if t["name"] == "end_episode")
-        assert end_episode_tool["description"] == "End the current episode and optionally record a discovered flag/target/objective"
-        assert "session_id" in end_episode_tool["inputSchema"]["required"]
-        assert "arguments" in end_episode_tool["inputSchema"]["properties"]
+        assert (
+            end_episode_tool["description"]
+            == "End the current episode and optionally record a discovered flag/target/objective"
+        )
+        assert end_episode_tool["inputSchema"]["required"] == []
+        assert "submission" in end_episode_tool["inputSchema"]["properties"]
 
         mcp_api.session_manager.execution_manager.to_mcp_tools.assert_called_once()
 
@@ -75,12 +79,11 @@ class TestSessionMCPAPI:
         """Test successful MCP tool execution."""
         # Mock successful command execution
         command_result = CommandResult.success_result(data={"output": "test output"})
-        mcp_api.session_manager.execute_command.return_value = command_result
+        mcp_api.session_manager.execute_action.return_value = command_result
 
         # Test tool call
         result = await mcp_api.handle_call_tool(
-            name="cli",
-            arguments={"session_id": "session_123", "command": "ls", "parameters": {}}
+            name="cli", arguments={"session_id": "session_123", "command": "ls", "parameters": {}}
         )
 
         # Verify result format
@@ -88,9 +91,9 @@ class TestSessionMCPAPI:
         assert result["content"][0]["type"] == "text"
         assert "output" in result["content"][0]["text"]
 
-        # Verify execute_command was called correctly
-        mcp_api.session_manager.execute_command.assert_called_once()
-        call_args = mcp_api.session_manager.execute_command.call_args
+        # Verify execute_action was called correctly
+        mcp_api.session_manager.execute_action.assert_called_once()
+        call_args = mcp_api.session_manager.execute_action.call_args
         assert call_args[0][0] == "session_123"  # session_id
         assert isinstance(call_args[0][1], Action)  # action
 
@@ -99,12 +102,11 @@ class TestSessionMCPAPI:
         """Test MCP tool execution with error."""
         # Mock failed command execution
         command_result = CommandResult.error_result(error="Command failed")
-        mcp_api.session_manager.execute_command.return_value = command_result
+        mcp_api.session_manager.execute_action.return_value = command_result
 
         # Test tool call
         result = await mcp_api.handle_call_tool(
-            name="cli",
-            arguments={"session_id": "session_123", "command": "invalid_command"}
+            name="cli", arguments={"session_id": "session_123", "command": "invalid_command"}
         )
 
         # Verify error result format
@@ -116,14 +118,11 @@ class TestSessionMCPAPI:
     async def test_handle_call_tool_missing_session(self, mcp_api):
         """Test MCP tool execution without session_id."""
         # Test tool call without session_id
-        result = await mcp_api.handle_call_tool(
-            name="cli",
-            arguments={"command": "ls"}
-        )
+        result = await mcp_api.handle_call_tool(name="cli", arguments={"command": "ls"})
 
         # Verify error result
         assert result["isError"] is True
-        assert "Missing session_id" in result["content"][0]["text"]
+        assert "No active session" in result["content"][0]["text"]
 
     @pytest.mark.asyncio
     async def test_handle_end_episode_call_success(self, mcp_api):
@@ -147,15 +146,14 @@ class TestSessionMCPAPI:
         """Test end_episode tool call with result flag."""
         # Mock methods
         mcp_api.session_manager.end_episode = AsyncMock()
-        mcp_api.session_manager.execute_command = AsyncMock(
+        mcp_api.session_manager.execute_action = AsyncMock(
             return_value=CommandResult.success_result(data="Action recorded")
         )
 
         # Test end_episode tool call with result
-        result = await mcp_api._handle_end_episode_call({
-            "session_id": "session_123",
-            "arguments": "flag{test_flag_found}"
-        })
+        result = await mcp_api._handle_end_episode_call(
+            {"session_id": "session_123", "parameters": {"submission": "flag{test_flag_found}"}}
+        )
 
         # Verify successful result with flag
         assert result["isError"] is False
@@ -164,13 +162,13 @@ class TestSessionMCPAPI:
         assert "Episode ended successfully with result: flag{test_flag_found}" in result_text
 
         # Verify result action was executed
-        mcp_api.session_manager.execute_command.assert_called_once()
-        call_args = mcp_api.session_manager.execute_command.call_args
+        mcp_api.session_manager.execute_action.assert_called_once()
+        call_args = mcp_api.session_manager.execute_action.call_args
         assert call_args[0][0] == "session_123"  # session_id
         action = call_args[0][1]  # action
         assert action.tool_name == "episode_result"
-        assert "flag{test_flag_found}" in action.arguments
-        assert action.parameters["result"] == "flag{test_flag_found}"
+        assert "flag{test_flag_found}" in action.parameters.get("submission", "")
+        assert action.parameters["submission"] == "flag{test_flag_found}"
         assert action.parameters["episode_end"] is True
 
         # Verify end_episode was called
@@ -184,7 +182,7 @@ class TestSessionMCPAPI:
 
         # Verify error result
         assert result["isError"] is True
-        assert "Missing session_id in end_episode arguments" in result["content"][0]["text"]
+        assert "No active session for end_episode" in result["content"][0]["text"]
 
     @pytest.mark.asyncio
     async def test_handle_call_tool_hardcoded_tools(self, mcp_api):
@@ -220,17 +218,13 @@ class TestSessionMCPAPI:
             tool_name="cli",
             arguments={
                 "session_id": "session_123",
-                "arguments": "ls -la",
-                "parameters": {"flag": "-l"},
-                "context": {"extra": "data"}
-            }
+                "parameters": {"arguments": "ls -la", "flag": "-l"},
+                "context": {"extra": "data"},
+            },
         )
 
         assert action.tool_name == "cli"
-        assert action.arguments == "ls -la"
-        assert action.parameters == {"flag": "-l", "arguments": "ls -la"}
-        # session_id should be filtered out
-        assert "session_id" not in action.parameters
+        assert action.parameters == {"parameters": {"arguments": "ls -la", "flag": "-l"}, "context": {"extra": "data"}}
 
     def test_convert_to_mcp_result_success(self, mcp_api):
         """Test conversion of successful CommandResult to MCP format."""
@@ -256,7 +250,7 @@ class TestSessionMCPAPI:
     async def test_start_and_shutdown_mcp_server(self, mcp_api):
         """Test MCP server startup and shutdown."""
         # Mock FastMCP
-        with patch('saber.server.api.session_mcp_api.FastMCP') as mock_fastmcp:
+        with patch("saber.server.api.session_mcp_api.FastMCP") as mock_fastmcp:
             mock_server = MagicMock()
             mock_server.run_async = AsyncMock()
             mock_server.close = AsyncMock()
@@ -271,4 +265,4 @@ class TestSessionMCPAPI:
             await mcp_api.shutdown_mcp_server()
             mock_server.close.assert_called_once()
             assert mcp_api.mcp_server is None
-            assert mcp_api.active_mcp_sessions == {}
+            assert mcp_api.mcp_connection_to_session == {}

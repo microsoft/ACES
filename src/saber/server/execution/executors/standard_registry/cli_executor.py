@@ -9,12 +9,12 @@ before execution.
 import logging
 from typing import Any, Dict, List, Optional
 
-from ...base import CommandResult
-from ..base import Parameter, ParameterType, ValidationResult
-from ..exceptions import SandboxExecutionError
-from ..sandbox.sandbox_manager import SandboxManager
-from ..utils.security_validator import SecurityValidator
-from .docker_executor import DockerExecutor
+from ....base import CommandResult
+from ...base import Parameter, ParameterType, ValidationResult
+from ...exceptions import SandboxExecutionError
+from ...sandbox.sandbox_manager import SandboxManager
+from ...utils.security_validator import SecurityValidator
+from ..docker_executor import DockerExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +37,8 @@ class CLIExecutor(DockerExecutor):
     """
 
     _executor_metadata = {
-        "name": "docker_cli",
-        "description": "Execute validated shell commands in Docker containers",
+        "name": "execute_cli",
+        "description": "Execute CLI commands in secure Docker container",
     }
 
     @classmethod
@@ -112,12 +112,12 @@ class CLIExecutor(DockerExecutor):
 
     def setup_parameters(self, config: Dict[str, Any]) -> None:
         """Set up CLI executor parameters."""
-        # Add parameter for the command arguments
+        # Add parameter for the command
         self.add_parameter(
             Parameter(
-                name="arguments",
+                name="command",
                 type=ParameterType.STRING,
-                description="Command string to execute in Docker container (will be validated for security)",
+                description="Command to execute in Docker container (will be validated for security)",
                 required=True,
             )
         )
@@ -132,19 +132,19 @@ class CLIExecutor(DockerExecutor):
         with CLI tools and shell features.
 
         Args:
-            parameters: Tool parameters including the arguments string
+            parameters: Tool parameters including the command string
             context: Execution context
 
         Returns:
             List of command arguments ready for Docker execution
 
         Raises:
-            ValueError: If arguments string is invalid or empty
+            ValueError: If command string is invalid or empty
         """
-        command_str = parameters["arguments"].strip()
+        command_str = parameters["command"].strip()
 
         if not command_str:
-            raise ValueError("Arguments string cannot be empty")
+            raise ValueError("Command string cannot be empty")
 
         # Always execute via shell for maximum CLI compatibility
         return ["/bin/sh", "-c", command_str]
@@ -157,7 +157,7 @@ class CLIExecutor(DockerExecutor):
         are present in the command string. No additional parameters are required.
 
         Args:
-            parameters: Tool parameters (must include 'arguments')
+            parameters: Tool parameters (must include 'command')
             context: Execution context including session_id
 
         Returns:
@@ -277,10 +277,10 @@ class CLIExecutor(DockerExecutor):
         if not basic_validation.valid:
             return basic_validation
 
-        # Extract arguments for security validation
-        command = parameters.get("arguments", "")
+        # Extract command for security validation
+        command = parameters.get("command", "")
         if not command or not isinstance(command, str):
-            return ValidationResult.failure(["Arguments parameter is required and must be a string"])
+            return ValidationResult.failure(["Command parameter is required and must be a string"])
 
         # Validate the command string for security (shell execution)
         try:
@@ -302,7 +302,7 @@ class CLIExecutor(DockerExecutor):
             # return basic_validation
 
         except Exception as e:
-            return ValidationResult.failure([f"Arguments validation error: {str(e)}"])
+            return ValidationResult.failure([f"Command validation error: {str(e)}"])
 
     def get_security_info(self) -> Dict[str, Any]:
         """
@@ -313,3 +313,9 @@ class CLIExecutor(DockerExecutor):
         """
         # Get Docker-specific information from parent class
         return self.get_docker_info()
+
+
+# Register this executor with the registry - must be at module level
+from ..executor_registry import register_executor  # noqa: E402
+
+register_executor("cli", CLIExecutor, "standard")

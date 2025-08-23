@@ -4,21 +4,17 @@ Integration test for multi-container orchestration with real Docker containers.
 This test verifies the complete multi-container workflow using actual Docker containers.
 """
 
-import pytest
-import docker
-import time
-import tempfile
 import os
+import tempfile
+import time
 from pathlib import Path
 
-from saber.server.execution.sandbox.docker_sandbox_environment import DockerSandboxEnvironment
-from saber.server.execution.sandbox.environment_spec import (
-    EnvironmentSpec,
-    ServiceSpec,
-    NetworkSpec,
-    HealthCheck
-)
+import pytest
+
+import docker
 from saber.server.execution.exceptions import ContainerCreationError, SandboxExecutionError
+from saber.server.execution.sandbox.docker_sandbox_environment import DockerSandboxEnvironment
+from saber.server.execution.sandbox.environment_spec import EnvironmentSpec, HealthCheck, NetworkSpec, ServiceSpec
 
 
 class TestMultiContainerIntegration:
@@ -38,9 +34,7 @@ class TestMultiContainerIntegration:
     def simple_environment_spec(self):
         """Create a simple environment spec for testing."""
         network = NetworkSpec(
-            name="saber_test_network",
-            driver="bridge",
-            internal=False  # Allow external access for testing
+            name="saber_test_network", driver="bridge", internal=False  # Allow external access for testing
         )
 
         # Simple nginx service for testing
@@ -54,8 +48,8 @@ class TestMultiContainerIntegration:
                 interval="10s",
                 timeout="5s",
                 retries=3,
-                start_period="10s"
-            )
+                start_period="10s",
+            ),
         )
 
         return EnvironmentSpec(
@@ -64,22 +58,16 @@ class TestMultiContainerIntegration:
             execution_config={
                 "image": "ubuntu:latest",
                 "working_dir": "/workspace",
-                "command": ["sleep", "3600"]  # Keep container running
+                "command": ["sleep", "3600"],  # Keep container running
             },
             target_services=[nginx_service],
-            resource_limits={
-                "total_memory": "512m"
-            }
+            resource_limits={"total_memory": "512m"},
         )
 
     @pytest.fixture
     def complex_environment_spec(self):
         """Create a complex environment spec with multiple services."""
-        network = NetworkSpec(
-            name="saber_complex_test_network",
-            driver="bridge",
-            internal=False
-        )
+        network = NetworkSpec(name="saber_complex_test_network", driver="bridge", internal=False)
 
         # Redis service
         redis_service = ServiceSpec(
@@ -87,12 +75,7 @@ class TestMultiContainerIntegration:
             container="redis_container",
             image="redis:alpine",
             ports=["6379"],
-            health_check=HealthCheck(
-                test=["CMD", "redis-cli", "ping"],
-                interval="10s",
-                timeout="3s",
-                retries=3
-            )
+            health_check=HealthCheck(test=["CMD", "redis-cli", "ping"], interval="10s", timeout="3s", retries=3),
         )
 
         # Nginx service that depends on Redis
@@ -106,39 +89,35 @@ class TestMultiContainerIntegration:
                 test=["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/"],
                 interval="10s",
                 timeout="5s",
-                retries=3
-            )
+                retries=3,
+            ),
         )
 
         return EnvironmentSpec(
             network=network,
             execution_service="ubuntu_executor",
-            execution_config={
-                "image": "ubuntu:latest",
-                "working_dir": "/workspace",
-                "command": ["sleep", "3600"]
-            },
+            execution_config={"image": "ubuntu:latest", "working_dir": "/workspace", "command": ["sleep", "3600"]},
             target_services=[redis_service, nginx_service],
-            resource_limits={
-                "total_memory": "1g"
-            }
+            resource_limits={"total_memory": "1g"},
         )
 
     @pytest.mark.integration
     def test_simple_single_service_environment(self, docker_client, simple_environment_spec):
         """Test creating and managing a simple single-service environment."""
         session_id = "test_simple_session"
+        cleanup_token = "test_cleanup_token_123"
         env = None
 
         try:
             # Create and start environment
-            env = DockerSandboxEnvironment(session_id, simple_environment_spec)
+            env = DockerSandboxEnvironment(session_id, simple_environment_spec, cleanup_token=cleanup_token)
             env.start()
 
             # Verify environment is running
-            assert len(env.active_services) == 2  # execution + nginx
+            assert len(env.active_services) == 3  # execution + nginx + orchestrator
             assert "ubuntu_executor" in env.active_services
             assert "nginx" in env.active_services
+            assert "saber-orchestrator" in env.active_services
 
             # Get execution container
             exec_container = env.get_execution_container()
@@ -197,18 +176,20 @@ class TestMultiContainerIntegration:
     def test_complex_multi_service_environment(self, docker_client, complex_environment_spec):
         """Test creating and managing a complex multi-service environment."""
         session_id = "test_complex_session"
+        cleanup_token = "test_cleanup_token_complex"
         env = None
 
         try:
             # Create and start environment
-            env = DockerSandboxEnvironment(session_id, complex_environment_spec)
+            env = DockerSandboxEnvironment(session_id, complex_environment_spec, cleanup_token=cleanup_token)
             env.start()
 
             # Verify all services are running
-            assert len(env.active_services) == 3  # execution + redis + nginx
+            assert len(env.active_services) == 4  # execution + redis + nginx + orchestrator
             assert "ubuntu_executor" in env.active_services
             assert "redis" in env.active_services
             assert "nginx" in env.active_services
+            assert "saber-orchestrator" in env.active_services
 
             # Test command execution
             result = env.execute_command(["apt-get", "update"])
@@ -243,10 +224,13 @@ class TestMultiContainerIntegration:
             print(f"Service info: {service_info}")
 
             # Verify we can interact with Redis
-            result = env.execute_command([
-                "bash", "-c",
-                "echo 'import socket; s=socket.socket(); s.connect((\"redis\", 6379)); s.close(); print(\"Redis reachable\")' | python3"
-            ])
+            result = env.execute_command(
+                [
+                    "bash",
+                    "-c",
+                    'echo \'import socket; s=socket.socket(); s.connect(("redis", 6379)); s.close(); print("Redis reachable")\' | python3',
+                ]
+            )
             if result.exit_code != 0:
                 print(f"Redis connectivity test stdout: {result.stdout}")
                 print(f"Redis connectivity test stderr: {result.stderr}")
@@ -280,7 +264,7 @@ class TestMultiContainerIntegration:
         session_id = "test_lifecycle_session"
 
         # First lifecycle
-        env1 = DockerSandboxEnvironment(session_id + "_1", simple_environment_spec)
+        env1 = DockerSandboxEnvironment(session_id + "_1", simple_environment_spec, cleanup_token="token_1")
         try:
             env1.start()
 
@@ -302,7 +286,7 @@ class TestMultiContainerIntegration:
             raise
 
         # Second lifecycle - should work independently
-        env2 = DockerSandboxEnvironment(session_id + "_2", simple_environment_spec)
+        env2 = DockerSandboxEnvironment(session_id + "_2", simple_environment_spec, cleanup_token="token_2")
         try:
             env2.start()
 
@@ -326,10 +310,11 @@ class TestMultiContainerIntegration:
     def test_file_operations(self, docker_client, simple_environment_spec):
         """Test basic file operations in container."""
         session_id = "test_file_ops_session"
+        cleanup_token = "test_cleanup_token_file_ops"
         env = None
 
         try:
-            env = DockerSandboxEnvironment(session_id, simple_environment_spec)
+            env = DockerSandboxEnvironment(session_id, simple_environment_spec, cleanup_token=cleanup_token)
             env.start()
 
             # Test creating and reading files in container
@@ -337,9 +322,7 @@ class TestMultiContainerIntegration:
             container_path = "/workspace/test_file.txt"
 
             # Create file in container
-            result = env.execute_command([
-                "bash", "-c", f"echo '{test_content}' > {container_path}"
-            ])
+            result = env.execute_command(["bash", "-c", f"echo '{test_content}' > {container_path}"])
             assert result.exit_code == 0
 
             # Read file from container
@@ -349,9 +332,7 @@ class TestMultiContainerIntegration:
 
             # Modify file in container
             new_content = "Modified in container"
-            result = env.execute_command([
-                "bash", "-c", f"echo '{new_content}' > {container_path}"
-            ])
+            result = env.execute_command(["bash", "-c", f"echo '{new_content}' > {container_path}"])
             assert result.exit_code == 0
 
             # Verify modification
@@ -377,10 +358,10 @@ class TestMultiContainerIntegration:
             network=network,
             execution_service="invalid_executor",
             execution_config={"image": "nonexistent:image"},
-            target_services=[]
+            target_services=[],
         )
 
-        env = DockerSandboxEnvironment("test_error_session", invalid_spec)
+        env = DockerSandboxEnvironment("test_error_session", invalid_spec, cleanup_token="test_error_token")
 
         with pytest.raises(ContainerCreationError):
             env.start()

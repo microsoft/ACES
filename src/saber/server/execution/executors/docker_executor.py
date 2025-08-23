@@ -219,6 +219,22 @@ class DockerExecutor(CommandExecutor):
         """
         pass
 
+    async def __call__(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> CommandResult:
+        """
+        Call the executor with given parameters and context.
+
+        This provides a more intuitive interface: executor(parameters, context)
+        instead of executor.execute(parameters, context).
+
+        Args:
+            parameters: Command-specific parameters
+            context: Execution context including session_id
+
+        Returns:
+            CommandResult with execution results
+        """
+        return await self.execute(parameters, context)
+
     def validate_parameters(self, parameters: Dict[str, Any]) -> ValidationResult:
         """
         Validate parameters for Docker execution.

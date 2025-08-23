@@ -4,12 +4,13 @@ Unit tests for SessionManager core functionality.
 Tests session creation, termination, and basic server lifecycle.
 """
 
-import pytest
 import uuid
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from saber.server.session_manager import SessionManager, ClientSession
+import pytest
+
+from saber.server.session_manager import ClientSession, SessionManager
 
 
 class TestSessionManagerCore:
@@ -57,21 +58,24 @@ class TestSessionManagerCore:
         return mock
 
     @pytest.fixture
-    def session_manager(self, mock_task_manager, mock_execution_manager,
-                       mock_policy_manager, mock_evaluation_manager, mock_episode_manager):
+    def session_manager(
+        self,
+        mock_task_manager,
+        mock_execution_manager,
+        mock_policy_manager,
+        mock_evaluation_manager,
+        mock_episode_manager,
+    ):
         """Create SessionManager with mocked dependencies."""
-        with patch('saber.server.session_manager.TaskManager', return_value=mock_task_manager), \
-             patch('saber.server.session_manager.ExecutionManager', return_value=mock_execution_manager), \
-             patch('saber.server.session_manager.PolicyManager', return_value=mock_policy_manager), \
-             patch('saber.server.session_manager.EvaluationManager', return_value=mock_evaluation_manager), \
-             patch('saber.server.session_manager.EpisodeManager', return_value=mock_episode_manager):
+        with (
+            patch("saber.server.session_manager.TaskManager", return_value=mock_task_manager),
+            patch("saber.server.session_manager.ExecutionManager", return_value=mock_execution_manager),
+            patch("saber.server.session_manager.PolicyManager", return_value=mock_policy_manager),
+            patch("saber.server.session_manager.EvaluationManager", return_value=mock_evaluation_manager),
+            patch("saber.server.session_manager.EpisodeManager", return_value=mock_episode_manager),
+        ):
 
-            manager = SessionManager(
-            domain_name="test_domain",
-            config_dir="/tmp",
-            host="127.0.0.1",
-            port=8001
-        )
+            manager = SessionManager(domain_name="test_domain", config_dir="/tmp", host="127.0.0.1", port=8001)
             return manager
 
     def test_session_manager_initialization(self, session_manager):
@@ -96,9 +100,7 @@ class TestSessionManagerCore:
         assert session.session_id in session_manager.active_sessions
 
         # Check evaluation manager was called
-        session_manager.evaluation_manager.log_session_start.assert_called_once_with(
-            session.session_id, client_id
-        )
+        session_manager.evaluation_manager.log_session_start.assert_called_once_with(session.session_id, client_id)
 
     @pytest.mark.asyncio
     async def test_create_multiple_sessions(self, session_manager):
@@ -137,9 +139,7 @@ class TestSessionManagerCore:
         await session_manager.terminate_session(session_id)
 
         # Should call episode manager to end episode
-        session_manager.episode_manager.end_episode.assert_called_once_with(
-            session_id, "session_terminated"
-        )
+        session_manager.episode_manager.end_episode.assert_called_once_with(session_id, "session_terminated")
         assert session_id not in session_manager.active_sessions
 
     @pytest.mark.asyncio
@@ -213,6 +213,7 @@ class TestSessionManagerCore:
 
         # Manually set one session to be inactive beyond timeout
         from datetime import datetime, timedelta
+
         old_time = datetime.utcnow() - timedelta(minutes=session_manager.session_timeout_minutes + 1)
         session1.last_activity = old_time
 

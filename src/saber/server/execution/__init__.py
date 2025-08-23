@@ -4,12 +4,6 @@ Command execution and validators for SABER.
 
 from ..base import CommandResult
 from .base import Parameter, ParameterType, ValidationResult
-from .custom_executor_registry import (
-    get_custom_executor_info,
-    load_custom_executors_from_directory,
-    register_custom_executor,
-    register_executor_from_file,
-)
 from .exceptions import (
     DomainNotFoundError,
     DuplicateToolError,
@@ -19,6 +13,12 @@ from .exceptions import (
     ToolNotFoundError,
 )
 from .execution_manager import ExecutionManager
+from .executors.executor_registry import (
+    get_executor_info,
+    load_executors_from_directory,
+    register_executor,
+    register_executor_from_file,
+)
 
 __all__ = [
     "CommandResult",
@@ -32,9 +32,9 @@ __all__ = [
     "DuplicateToolError",
     "DomainNotFoundError",
     "ExecutionManager",
-    # Custom executor registration hooks
-    "register_custom_executor",
+    # Executor registration hooks
+    "register_executor",
     "register_executor_from_file",
-    "load_custom_executors_from_directory",
-    "get_custom_executor_info",
+    "load_executors_from_directory",
+    "get_executor_info",
 ]

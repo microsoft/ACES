@@ -4,16 +4,17 @@ Tests for TestHarness functionality.
 Tests the main orchestrator that coordinates server, agent, and prompt building.
 """
 
-import pytest
-from unittest.mock import AsyncMock, Mock, patch, patch, MagicMock
-from typing import Any, Dict, List
 from pathlib import Path
+from typing import Any, Dict, List
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
-from saber.client.test_harness import TestHarness, TestHarnessConfig
-from saber.client.server_client import ServerClient
-from saber.client.prompt_builder import PromptBuilder
+import pytest
+
+from saber.api_models import EpisodeInfo, PolicyInfo, StepResponse, TaskInfo
 from saber.client.agent_wrapper import AgentWrapper
-from saber.api_models import StepResponse, TaskInfo, PolicyInfo, EpisodeInfo
+from saber.client.prompt_builder import PromptBuilder
+from saber.client.server_client import ServerClient
+from saber.client.test_harness import TestHarness, TestHarnessConfig
 
 
 @pytest.fixture
@@ -31,30 +32,22 @@ def mock_server_client():
     client = AsyncMock(spec=ServerClient)
     client.session_id = "test-session"
     client.create_session = AsyncMock(return_value="test-session")
-    client.start_episode = AsyncMock(return_value=EpisodeInfo(
-        episode_id="episode-123",
-        task_id="task-456",
-        message="Episode started"
-    ))
-    client.execute_step = AsyncMock(return_value=StepResponse(
-        success=True,
-        output="command output",
-        done=False,
-        error=None,
-        info={}
-    ))
-    client.get_current_task = AsyncMock(return_value=TaskInfo(
-        task_id="task-456",
-        title="Test Task",
-        description="Test description",
-        current_subtask="subtask-1"
-    ))
-    client.get_policy = AsyncMock(return_value=PolicyInfo(
-        domain="test",
-        available_commands=["ls", "cat"],
-        guidelines="Be careful",
-        constraints=["No rm commands"]
-    ))
+    client.start_episode = AsyncMock(
+        return_value=EpisodeInfo(episode_id="episode-123", task_id="task-456", message="Episode started")
+    )
+    client.execute_step = AsyncMock(
+        return_value=StepResponse(success=True, output="command output", done=False, error=None, info={})
+    )
+    client.get_current_task = AsyncMock(
+        return_value=TaskInfo(
+            task_id="task-456", title="Test Task", description="Test description", current_subtask="subtask-1"
+        )
+    )
+    client.get_policy = AsyncMock(
+        return_value=PolicyInfo(
+            domain="test", available_commands=["ls", "cat"], guidelines="Be careful", constraints=["No rm commands"]
+        )
+    )
     client.close_session = AsyncMock()
     return client
 
@@ -80,12 +73,7 @@ def mock_agent_wrapper():
 @pytest.fixture
 def test_config():
     """Test configuration for TestHarness."""
-    return TestHarnessConfig(
-        server_url="http://test:8000",
-        max_steps=5,
-        request_timeout=30.0,
-        log_level="INFO"
-    )
+    return TestHarnessConfig(server_url="http://test:8000", max_steps=5, request_timeout=30.0, log_level="INFO")
 
 
 class TestTestHarnessConfig:
@@ -93,9 +81,7 @@ class TestTestHarnessConfig:
 
     def test_default_values(self):
         """Test TestHarnessConfig with default values."""
-        config = TestHarnessConfig(
-            server_url="http://localhost:8000"
-        )
+        config = TestHarnessConfig(server_url="http://localhost:8000")
 
         assert config.server_url == "http://localhost:8000"
         assert config.max_steps == 100
@@ -128,7 +114,7 @@ class TestTestHarness:
         harness = TestHarness(test_config)
 
         # Mock the ServerClient to avoid real network calls
-        with patch('saber.client.test_harness.ServerClient') as MockServerClient:
+        with patch("saber.client.test_harness.ServerClient") as MockServerClient:
             mock_server = AsyncMock()
             MockServerClient.return_value = mock_server
 
@@ -145,18 +131,18 @@ class TestTestHarness:
         """Test TestHarness as async context manager."""
         async with TestHarness(test_config) as harness:
             assert harness is not None
-            assert hasattr(harness, 'config')
+            assert hasattr(harness, "config")
 
     def test_basic_methods_exist(self, test_config):
         """Test that required methods exist."""
         harness = TestHarness(test_config)
 
         # Check that key methods exist
-        assert hasattr(harness, 'initialize')
-        assert hasattr(harness, 'run_test')
-        assert hasattr(harness, 'shutdown')
-        assert hasattr(harness, '__aenter__')
-        assert hasattr(harness, '__aexit__')
+        assert hasattr(harness, "initialize")
+        assert hasattr(harness, "run_test")
+        assert hasattr(harness, "shutdown")
+        assert hasattr(harness, "__aenter__")
+        assert hasattr(harness, "__aexit__")
 
 
 class TestIntegrationScenarios:
@@ -165,16 +151,12 @@ class TestIntegrationScenarios:
     @pytest.mark.asyncio
     async def test_basic_integration_workflow(self, test_agent):
         """Test basic integration workflow."""
-        config = TestHarnessConfig(
-            server_url="http://test:8000",
-            max_steps=3,
-            request_timeout=30.0
-        )
+        config = TestHarnessConfig(server_url="http://test:8000", max_steps=3, request_timeout=30.0)
 
         harness = TestHarness(config)
 
         # Mock the ServerClient to avoid real network calls
-        with patch('saber.client.test_harness.ServerClient') as MockServerClient:
+        with patch("saber.client.test_harness.ServerClient") as MockServerClient:
             mock_server = AsyncMock()
             MockServerClient.return_value = mock_server
 
@@ -188,14 +170,10 @@ class TestIntegrationScenarios:
     @pytest.mark.asyncio
     async def test_context_manager_integration(self, test_agent):
         """Test context manager integration."""
-        config = TestHarnessConfig(
-            server_url="http://test:8000",
-            max_steps=2,
-            request_timeout=30.0
-        )
+        config = TestHarnessConfig(server_url="http://test:8000", max_steps=2, request_timeout=30.0)
 
         # Mock the ServerClient to avoid real network calls
-        with patch('saber.client.test_harness.ServerClient') as MockServerClient:
+        with patch("saber.client.test_harness.ServerClient") as MockServerClient:
             mock_server = AsyncMock()
             MockServerClient.return_value = mock_server
 
@@ -213,16 +191,12 @@ class TestLoggingFeatures:
         """Test that file logging is properly configured."""
         log_file = tmp_path / "test.log"
 
-        config = TestHarnessConfig(
-            server_url="http://test:8000",
-            log_file=log_file,
-            log_level="INFO"
-        )
+        config = TestHarnessConfig(server_url="http://test:8000", log_file=log_file, log_level="INFO")
 
         harness = TestHarness(config)
 
         # Check that the logger is properly configured
-        assert hasattr(harness, 'logger')
+        assert hasattr(harness, "logger")
         assert len(harness.logger.handlers) >= 2  # Console + File handlers
 
         # Check that log file is created
@@ -230,7 +204,7 @@ class TestLoggingFeatures:
         assert log_file.exists()
 
         # Check log content
-        with open(log_file, 'r') as f:
+        with open(log_file, "r") as f:
             content = f.read()
             assert "Test log message" in content
 
@@ -240,25 +214,20 @@ class TestLoggingFeatures:
         log_file = tmp_path / "structured.jsonl"
 
         config = TestHarnessConfig(
-            server_url="http://test:8000",
-            log_file=log_file,
-            log_structured=True,
-            log_level="INFO"
+            server_url="http://test:8000", log_file=log_file, log_structured=True, log_level="INFO"
         )
 
         harness = TestHarness(config)
 
         # Log a message with extra data
-        harness.logger.info("Test structured message", extra={
-            "session_id": "test-123",
-            "step_number": 5,
-            "event_type": "test_event"
-        })
+        harness.logger.info(
+            "Test structured message", extra={"session_id": "test-123", "step_number": 5, "event_type": "test_event"}
+        )
 
         assert log_file.exists()
 
         # Check that the log content is valid JSON
-        with open(log_file, 'r') as f:
+        with open(log_file, "r") as f:
             lines = f.readlines()
 
         # Find the structured log entry we're interested in
@@ -266,6 +235,7 @@ class TestLoggingFeatures:
         for line in lines:
             try:
                 import json
+
                 log_entry = json.loads(line.strip())
                 if log_entry.get("message") == "Test structured message":
                     structured_entry = log_entry
@@ -286,11 +256,7 @@ class TestLoggingFeatures:
         """Test that log directories are automatically created."""
         log_file = tmp_path / "subdir" / "nested" / "test.log"
 
-        config = TestHarnessConfig(
-            server_url="http://test:8000",
-            log_file=log_file,
-            log_level="INFO"
-        )
+        config = TestHarnessConfig(server_url="http://test:8000", log_file=log_file, log_level="INFO")
 
         harness = TestHarness(config)
         harness.logger.info("Test message")
@@ -305,41 +271,31 @@ class TestLoggingFeatures:
         log_file = tmp_path / "step_test.jsonl"
 
         config = TestHarnessConfig(
-            server_url="http://test:8000",
-            log_file=log_file,
-            log_structured=True,
-            log_level="INFO",
-            max_steps=1
+            server_url="http://test:8000", log_file=log_file, log_structured=True, log_level="INFO", max_steps=1
         )
 
         # Mock the ServerClient completely
-        with patch('saber.client.test_harness.ServerClient') as MockServerClient:
+        with patch("saber.client.test_harness.ServerClient") as MockServerClient:
             mock_server = AsyncMock()
             mock_server.create_session = AsyncMock(return_value="test-session")
-            mock_server.start_episode = AsyncMock(return_value=EpisodeInfo(
-                episode_id="episode-123",
-                task_id="task-456",
-                message="Episode started"
-            ))
-            mock_server.get_current_task = AsyncMock(return_value=TaskInfo(
-                task_id="task-456",
-                title="Test Task",
-                description="Test description",
-                current_subtask="subtask-1"
-            ))
-            mock_server.get_policy = AsyncMock(return_value=PolicyInfo(
-                domain="test",
-                available_commands=["ls"],
-                guidelines="Test guidelines",
-                constraints=[]
-            ))
-            mock_server.execute_step = AsyncMock(return_value=StepResponse(
-                success=True,
-                output="test output",
-                done=True,  # Complete after one step
-                error=None,
-                info={}
-            ))
+            mock_server.start_episode = AsyncMock(
+                return_value=EpisodeInfo(episode_id="episode-123", task_id="task-456", message="Episode started")
+            )
+            mock_server.get_current_task = AsyncMock(
+                return_value=TaskInfo(
+                    task_id="task-456", title="Test Task", description="Test description", current_subtask="subtask-1"
+                )
+            )
+            mock_server.get_policy = AsyncMock(
+                return_value=PolicyInfo(
+                    domain="test", available_commands=["ls"], guidelines="Test guidelines", constraints=[]
+                )
+            )
+            mock_server.execute_step = AsyncMock(
+                return_value=StepResponse(
+                    success=True, output="test output", done=True, error=None, info={}  # Complete after one step
+                )
+            )
             mock_server.close_session = AsyncMock()
             mock_server.health_check = AsyncMock(return_value={"status": "healthy"})
 
@@ -356,7 +312,7 @@ class TestLoggingFeatures:
                 # Check the log file contains structured data
                 assert log_file.exists()
 
-                with open(log_file, 'r') as f:
+                with open(log_file, "r") as f:
                     lines = f.readlines()
 
                 # Find log entries with session context
@@ -364,6 +320,7 @@ class TestLoggingFeatures:
                 for line in lines:
                     try:
                         import json
+
                         log_entry = json.loads(line.strip())
                         if "session_id" in log_entry:
                             structured_logs.append(log_entry)

@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from ..base import Action, CommandResult
 from .executors.docker_executor import DockerExecutor
-from .executors.factory import ExecutorFactory
+from .executors.executor_factory import ExecutorFactory
 from .sandbox.sandbox_manager import SandboxManager
 
 logger = logging.getLogger(__name__)
@@ -66,7 +66,7 @@ class ExecutionManager:
         self._execution_lock = asyncio.Lock()
 
         logger.info("ExecutionManager initialized for sequential execution")
-        logger.info(f"Available executor types: {self._executor_factory.get_filtered_available_executors()}")
+        logger.info(f"Available executor types: {self._executor_factory.get_available_executors()}")
 
     def is_sandbox_ready(self) -> bool:
         """
@@ -88,10 +88,10 @@ class ExecutionManager:
             config_dir: Path to configuration directory
         """
         try:
-            from .custom_executor_registry import load_custom_executors_from_directory
+            from .executors.executor_registry import load_executors_from_directory
 
             # Load custom executors from the config directory
-            results = load_custom_executors_from_directory(config_dir)
+            results = load_executors_from_directory(config_dir)
 
             if results:
                 successful_loads = [file for file, result in results.items() if result == "loaded_successfully"]
@@ -141,8 +141,8 @@ class ExecutionManager:
                         error=f"Parameter validation failed: {', '.join(validation_result.errors)}"
                     )
 
-                # Execute using the appropriate executor
-                return await executor.execute(parameters, context or {})
+                # Execute using the appropriate executor with callable interface
+                return await executor(parameters, context or {})
 
             except Exception as e:
                 logger.error(f"Execution failed: {e}")
@@ -150,15 +150,27 @@ class ExecutionManager:
 
     def get_executor(self, executor_type: str) -> DockerExecutor:
         """
-        Get a specific executor instance.
+        Get a specific executor by type.
 
         Args:
             executor_type: Type of executor to retrieve
 
         Returns:
             Executor instance
+
+        Raises:
+            ValueError: If executor type is not supported
         """
         return self._executor_factory.get_executor(executor_type)
+
+    def get_available_executors(self) -> List[str]:
+        """
+        Get list of all available executor types.
+
+        Returns:
+            List of executor type names
+        """
+        return self._executor_factory.get_available_executors()
 
     def configure_for_task(self, session_id: str, task: Any, cleanup_token: Optional[str] = None) -> None:
         """

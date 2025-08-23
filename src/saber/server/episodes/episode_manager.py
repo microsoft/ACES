@@ -196,15 +196,11 @@ class EpisodeManager:
         # Convert CommandResult to dictionary using dataclass asdict
         response_dict = asdict(response)
 
-        # Extract arguments from action for completion matching
-        arguments = self._extract_arguments_from_action(action)
-        action.arguments = arguments
-
         # Create step without adding it to episode yet
         step = Step(
             step_number=len(episode.steps),
             timestamp=datetime.utcnow(),
-            action=action,
+            action=action,  # Pass Action object directly - it should work with Pydantic
             response=response_dict,
             context_snapshot=episode.context.copy(),
             done=False,  # Will be set by external completion logic
@@ -224,17 +220,17 @@ class EpisodeManager:
         if step.done:
             episode.state = EpisodeState.COMPLETED
 
-    def _extract_arguments_from_action(self, action: Action) -> Optional[str]:
+    def _extract_parameters_from_action(self, action: Action) -> Optional[str]:
         """
-        Extract actual arguments executed from action parameters.
+        Extract actual parameters executed from action.
 
         Currently focused on DockerCLIExecutor tool only.
 
         Args:
-            action: Action to extract arguments from
+            action: Action to extract parameters from
 
         Returns:
-            Extracted arguments string, or None if not extractable
+            Extracted parameters string, or None if not extractable
         """
         if action.tool_name == "docker_cli_executor":
             # Extract command from DockerCLIExecutor parameters

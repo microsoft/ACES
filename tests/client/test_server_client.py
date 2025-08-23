@@ -4,13 +4,14 @@ Tests for ServerClient functionality.
 Tests the REST API client for SABER server communication.
 """
 
-import pytest
-import httpx
+from typing import Any, Dict
 from unittest.mock import AsyncMock, Mock, patch
-from typing import Dict, Any
 
+import httpx
+import pytest
+
+from saber.api_models import EpisodeInfo, PolicyInfo, StepResponse, TaskInfo
 from saber.client.server_client import ServerClient
-from saber.api_models import StepResponse, TaskInfo, PolicyInfo, EpisodeInfo
 
 
 @pytest.fixture
@@ -48,7 +49,7 @@ class TestServerClient:
         mock_response = Mock()
         mock_response.json.return_value = {"session_id": "test-session-123"}
 
-        with patch.object(server_client, '_client') as mock_client:
+        with patch.object(server_client, "_client") as mock_client:
             mock_client.post = AsyncMock(return_value=mock_response)
 
             session_id = await server_client.create_session("test-client")
@@ -56,8 +57,7 @@ class TestServerClient:
             assert session_id == "test-session-123"
             assert server_client.session_id == "test-session-123"
             mock_client.post.assert_called_once_with(
-                "http://test-server:8000/session",
-                params={"client_id": "test-client"}
+                "http://test-server:8000/session", params={"client_id": "test-client"}
             )
             mock_response.raise_for_status.assert_called_once()
 
@@ -67,15 +67,14 @@ class TestServerClient:
         mock_response = Mock()
         mock_response.json.return_value = {"session_id": "test-session-456"}
 
-        with patch.object(server_client, '_client') as mock_client:
+        with patch.object(server_client, "_client") as mock_client:
             mock_client.post = AsyncMock(return_value=mock_response)
 
             session_id = await server_client.create_session()
 
             assert session_id == "test-session-456"
             mock_client.post.assert_called_once_with(
-                "http://test-server:8000/session",
-                params={"client_id": "saber_client"}
+                "http://test-server:8000/session", params={"client_id": "saber_client"}
             )
 
     @pytest.mark.asyncio
@@ -86,7 +85,7 @@ class TestServerClient:
             "Bad Request", request=Mock(), response=Mock()
         )
 
-        with patch.object(server_client, '_client') as mock_client:
+        with patch.object(server_client, "_client") as mock_client:
             mock_client.post = AsyncMock(return_value=mock_response)
 
             with pytest.raises(httpx.HTTPStatusError):
@@ -101,10 +100,10 @@ class TestServerClient:
         mock_response.json.return_value = {
             "episode_id": "episode-123",
             "task_id": "task-456",
-            "message": "Episode started"
+            "message": "Episode started",
         }
 
-        with patch.object(server_client, '_client') as mock_client:
+        with patch.object(server_client, "_client") as mock_client:
             mock_client.post = AsyncMock(return_value=mock_response)
 
             episode_info = await server_client.start_episode("malware-task")
@@ -113,8 +112,7 @@ class TestServerClient:
             assert episode_info.episode_id == "episode-123"
             assert episode_info.task_id == "task-456"
             mock_client.post.assert_called_once_with(
-                "http://test-server:8000/session/test-session/start-episode",
-                params={"task_id": "malware-task"}
+                "http://test-server:8000/session/test-session/start-episode", params={"task_id": "malware-task"}
             )
 
     @pytest.mark.asyncio
@@ -133,10 +131,10 @@ class TestServerClient:
             "success": True,
             "data": {"output": "command output"},
             "step": {"done": False, "info": "step info"},
-            "error": None
+            "error": None,
         }
 
-        with patch.object(server_client, '_client') as mock_client:
+        with patch.object(server_client, "_client") as mock_client:
             mock_client.post = AsyncMock(return_value=mock_response)
 
             step_response = await server_client.execute_step("ls -la")
@@ -147,8 +145,7 @@ class TestServerClient:
             assert step_response.done is False
             assert step_response.error is None
             mock_client.post.assert_called_once_with(
-                "http://test-server:8000/session/test-session/step",
-                json={"command": "ls -la", "parameters": {}}
+                "http://test-server:8000/session/test-session/step", json={"command": "ls -la", "parameters": {}}
             )
 
     @pytest.mark.asyncio
@@ -161,10 +158,10 @@ class TestServerClient:
             "success": False,
             "data": {"output": ""},
             "step": {"done": False},
-            "error": "Command failed"
+            "error": "Command failed",
         }
 
-        with patch.object(server_client, '_client') as mock_client:
+        with patch.object(server_client, "_client") as mock_client:
             mock_client.post = AsyncMock(return_value=mock_response)
 
             step_response = await server_client.execute_step("invalid-command")
@@ -188,10 +185,10 @@ class TestServerClient:
             "task_id": "task-123",
             "title": "Malware Analysis",
             "description": "Analyze suspicious file",
-            "state": "active"
+            "state": "active",
         }
 
-        with patch.object(server_client, '_client') as mock_client:
+        with patch.object(server_client, "_client") as mock_client:
             mock_client.get = AsyncMock(return_value=mock_response)
 
             task_info = await server_client.get_current_task()
@@ -200,9 +197,7 @@ class TestServerClient:
             assert task_info.task_id == "task-123"
             assert task_info.title == "Malware Analysis"
             assert task_info.state == "active"
-            mock_client.get.assert_called_once_with(
-                "http://test-server:8000/session/test-session/current-task"
-            )
+            mock_client.get.assert_called_once_with("http://test-server:8000/session/test-session/current-task")
 
     @pytest.mark.asyncio
     async def test_get_current_task_no_session(self, server_client):
@@ -220,10 +215,10 @@ class TestServerClient:
             "domain": "malware",
             "available_commands": ["file", "strings", "hexdump"],
             "guidelines": "Use multiple analysis techniques",
-            "constraints": ["No network access", "Read-only filesystem"]
+            "constraints": ["No network access", "Read-only filesystem"],
         }
 
-        with patch.object(server_client, '_client') as mock_client:
+        with patch.object(server_client, "_client") as mock_client:
             mock_client.get = AsyncMock(return_value=mock_response)
 
             policy_info = await server_client.get_policy()
@@ -232,9 +227,7 @@ class TestServerClient:
             assert policy_info.available_commands == ["file", "strings", "hexdump"]
             assert policy_info.guidelines == "Use multiple analysis techniques"
             assert len(policy_info.constraints) == 2
-            mock_client.get.assert_called_once_with(
-                "http://test-server:8000/session/test-session/policy"
-            )
+            mock_client.get.assert_called_once_with("http://test-server:8000/session/test-session/policy")
 
     @pytest.mark.asyncio
     async def test_get_policy_no_session(self, server_client):
@@ -249,15 +242,13 @@ class TestServerClient:
 
         mock_response = Mock()
 
-        with patch.object(server_client, '_client') as mock_client:
+        with patch.object(server_client, "_client") as mock_client:
             mock_client.delete = AsyncMock(return_value=mock_response)
 
             await server_client.close_session()
 
             assert server_client.session_id is None
-            mock_client.delete.assert_called_once_with(
-                "http://test-server:8000/session/test-session"
-            )
+            mock_client.delete.assert_called_once_with("http://test-server:8000/session/test-session")
             mock_response.raise_for_status.assert_called_once()
 
     @pytest.mark.asyncio
@@ -273,11 +264,9 @@ class TestServerClient:
         server_client.session_id = "test-session"
 
         mock_response = Mock()
-        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
-            "Not Found", request=Mock(), response=Mock()
-        )
+        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError("Not Found", request=Mock(), response=Mock())
 
-        with patch.object(server_client, '_client') as mock_client:
+        with patch.object(server_client, "_client") as mock_client:
             mock_client.delete = AsyncMock(return_value=mock_response)
 
             # Should raise the error but still clear session_id due to finally block
@@ -289,29 +278,24 @@ class TestServerClient:
     async def test_health_check_success(self, server_client):
         """Test successful health check."""
         mock_response = Mock()
-        mock_response.json.return_value = {
-            "status": "healthy",
-            "domain": "malware-analysis"
-        }
+        mock_response.json.return_value = {"status": "healthy", "domain": "malware-analysis"}
 
-        with patch.object(server_client, '_client') as mock_client:
+        with patch.object(server_client, "_client") as mock_client:
             mock_client.get = AsyncMock(return_value=mock_response)
 
             health_info = await server_client.health_check()
 
             assert health_info["status"] == "healthy"
             assert health_info["domain"] == "malware-analysis"
-            mock_client.get.assert_called_once_with(
-                "http://test-server:8000/health"
-            )
+            mock_client.get.assert_called_once_with("http://test-server:8000/health")
 
     @pytest.mark.asyncio
     async def test_context_manager(self, server_client):
         """Test ServerClient as async context manager."""
         server_client.session_id = "test-session"
 
-        with patch.object(server_client, 'close_session') as mock_close:
-            with patch.object(server_client, '_client') as mock_client:
+        with patch.object(server_client, "close_session") as mock_close:
+            with patch.object(server_client, "_client") as mock_client:
                 mock_client.aclose = AsyncMock()
 
                 async with server_client as client:
@@ -333,7 +317,7 @@ class TestStepResponseParsing:
         mock_response = Mock()
         mock_response.json.return_value = {}  # Empty response
 
-        with patch.object(client, '_client') as mock_client:
+        with patch.object(client, "_client") as mock_client:
             mock_client.post = AsyncMock(return_value=mock_response)
 
             step_response = await client.execute_step("test")
@@ -353,18 +337,11 @@ class TestStepResponseParsing:
         mock_response = Mock()
         mock_response.json.return_value = {
             "success": True,
-            "data": {
-                "output": "nested output",
-                "metadata": {"source": "test"}
-            },
-            "step": {
-                "done": True,
-                "subtask_id": "sub-123",
-                "additional_info": {"score": 95}
-            }
+            "data": {"output": "nested output", "metadata": {"source": "test"}},
+            "step": {"done": True, "subtask_id": "sub-123", "additional_info": {"score": 95}},
         }
 
-        with patch.object(client, '_client') as mock_client:
+        with patch.object(client, "_client") as mock_client:
             mock_client.post = AsyncMock(return_value=mock_response)
 
             step_response = await client.execute_step("test")

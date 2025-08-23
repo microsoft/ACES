@@ -6,8 +6,8 @@ Tests meaningful task functionality - pruned basic data structure tests.
 
 import pytest
 
-from saber.server.tasks.task import Task
 from saber.server.tasks.subtask import SubTask
+from saber.server.tasks.task import Task
 
 
 class TestTask:
@@ -20,14 +20,14 @@ class TestTask:
             task_id="test_task",
             title="First Subtask",
             description="First test subtask",
-            objective="Complete first step"
+            objective="Complete first step",
         )
         subtask2 = SubTask(
             subtask_id="subtask2",
             task_id="test_task",
             title="Second Subtask",
             description="Second test subtask",
-            objective="Complete second step"
+            objective="Complete second step",
         )
 
         task = Task(
@@ -35,7 +35,7 @@ class TestTask:
             domain="test_domain",
             title="Test Task",
             description="A test task",
-            subtasks=[subtask1, subtask2]
+            subtasks=[subtask1, subtask2],
         )
 
         # Test finding existing subtask

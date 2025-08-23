@@ -5,13 +5,14 @@ Tests FastAPI routes and HTTP interactions for session management, episodes,
 policy, status, and events. Tool execution is tested separately for MCP API.
 """
 
-import pytest
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 from fastapi.testclient import TestClient
 
-from saber.server.session_manager import SessionManager
 from saber.server.policy.policy_manager import PolicyDocument
+from saber.server.session_manager import SessionManager
 
 
 class TestSessionManagerAPI:
@@ -38,18 +39,15 @@ class TestSessionManagerAPI:
         mock_episode_manager.end_episode = MagicMock()
         mock_episode_manager.get_episode = MagicMock()
 
-        with patch('saber.server.session_manager.TaskManager', return_value=mock_task_manager), \
-             patch('saber.server.session_manager.ExecutionManager', return_value=mock_execution_manager), \
-             patch('saber.server.session_manager.PolicyManager', return_value=mock_policy_manager), \
-             patch('saber.server.session_manager.EvaluationManager', return_value=mock_evaluation_manager), \
-             patch('saber.server.session_manager.EpisodeManager', return_value=mock_episode_manager):
+        with (
+            patch("saber.server.session_manager.TaskManager", return_value=mock_task_manager),
+            patch("saber.server.session_manager.ExecutionManager", return_value=mock_execution_manager),
+            patch("saber.server.session_manager.PolicyManager", return_value=mock_policy_manager),
+            patch("saber.server.session_manager.EvaluationManager", return_value=mock_evaluation_manager),
+            patch("saber.server.session_manager.EpisodeManager", return_value=mock_episode_manager),
+        ):
 
-            manager = SessionManager(
-                domain_name="test_domain",
-                config_dir="/tmp",
-                host="127.0.0.1",
-                port=8003
-            )
+            manager = SessionManager(domain_name="test_domain", config_dir="/tmp", host="127.0.0.1", port=8003)
             return manager, TestClient(manager.app)
 
     def test_health_endpoint(self, session_manager_app):
@@ -215,7 +213,9 @@ class TestSessionManagerAPI:
         # We can't easily test SSE streaming with TestClient without hanging
         # Instead, verify the route exists in the app
         routes = [route.path for route in manager.app.routes]
-        assert f"/session/{{session_id}}/events" in routes or "/session/{session_id}/events" in [r.path_regex.pattern for r in manager.app.routes if hasattr(r, 'path_regex')]
+        assert f"/session/{{session_id}}/events" in routes or "/session/{session_id}/events" in [
+            r.path_regex.pattern for r in manager.app.routes if hasattr(r, "path_regex")
+        ]
 
     def test_invalid_session_endpoints(self, session_manager_app):
         """Test endpoints with invalid session IDs."""

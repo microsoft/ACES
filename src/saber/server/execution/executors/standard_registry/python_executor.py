@@ -8,11 +8,11 @@ it in Docker containers with proper security validation.
 import logging
 from typing import Any, Dict, Optional
 
-from ...base import CommandResult
-from ..base import Parameter, ParameterType, ValidationResult
-from ..exceptions import SandboxExecutionError
-from ..sandbox.sandbox_manager import SandboxManager
-from .docker_executor import DockerExecutor
+from ....base import CommandResult
+from ...base import Parameter, ParameterType, ValidationResult
+from ...exceptions import SandboxExecutionError
+from ...sandbox.sandbox_manager import SandboxManager
+from ..docker_executor import DockerExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +29,8 @@ class PythonExecutor(DockerExecutor):
     """
 
     _executor_metadata = {
-        "name": "python_script",
-        "description": "Execute Python scripts in Docker containers",
+        "name": "execute_python",
+        "description": "Execute Python code in secure Docker container",
     }
 
     @classmethod
@@ -118,7 +118,7 @@ class PythonExecutor(DockerExecutor):
         # Python code parameter
         self.add_parameter(
             Parameter(
-                name="arguments",
+                name="code",
                 type=ParameterType.STRING,
                 description="Python code to execute in the container",
                 required=True,
@@ -220,7 +220,7 @@ class PythonExecutor(DockerExecutor):
         Returns:
             Complete Python script as string
         """
-        code = str(parameters["arguments"])  # Ensure code is a string
+        code = str(parameters["code"])  # Ensure code is a string
         template = parameters.get("template")
 
         script: str
@@ -334,7 +334,7 @@ class PythonExecutor(DockerExecutor):
             environment = self.get_session_environment(session_id)
 
             # Validate Python code
-            code_validation = self.validate_python_code(parameters["arguments"])
+            code_validation = self.validate_python_code(parameters["code"])
             if not code_validation.valid:
                 return CommandResult.error_result(
                     error=f"Python code validation failed: {', '.join(code_validation.errors)}"
@@ -398,8 +398,8 @@ class PythonExecutor(DockerExecutor):
         result = super().validate_parameters(parameters)
 
         # Add Python-specific validation
-        if "arguments" in parameters:
-            code_validation = self.validate_python_code(parameters["arguments"])
+        if "code" in parameters:
+            code_validation = self.validate_python_code(parameters["code"])
             result.errors.extend(code_validation.errors)
             result.warnings.extend(code_validation.warnings)
 
@@ -413,3 +413,9 @@ class PythonExecutor(DockerExecutor):
                     result.add_error(f"requirement must be string, got: {type(req)}")
 
         return result
+
+
+# Register this executor with the registry - must be at module level
+from ..executor_registry import register_executor  # noqa: E402
+
+register_executor("python", PythonExecutor, "standard")

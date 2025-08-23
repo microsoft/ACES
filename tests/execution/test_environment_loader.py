@@ -4,11 +4,12 @@ Unit tests for EnvironmentLoader.
 Tests the environment template loading and resolution system.
 """
 
-import pytest
 import tempfile
-import yaml
 from pathlib import Path
-from unittest.mock import Mock, patch, mock_open
+from unittest.mock import Mock, mock_open, patch
+
+import pytest
+import yaml
 
 from saber.server.execution.environment_loader import EnvironmentLoader
 from saber.server.execution.exceptions import InvalidEnvironmentSpecException
@@ -27,10 +28,7 @@ class TestEnvironmentLoader:
                     "image": "ubuntu:latest",
                     "working_dir": "/workspace",
                     "user": "user:user",
-                    "resource_limits": {
-                        "memory": "512m",
-                        "cpu": "0.5"
-                    }
+                    "resource_limits": {"memory": "512m", "cpu": "0.5"},
                 },
                 "webapp_container": {
                     "image": "nginx:latest",
@@ -40,58 +38,47 @@ class TestEnvironmentLoader:
                         "test": ["CMD", "curl", "-f", "http://localhost/"],
                         "interval": "30s",
                         "timeout": "10s",
-                        "retries": 3
+                        "retries": 3,
                     },
-                    "depends_on": ["database_container"]
+                    "depends_on": ["database_container"],
                 },
                 "database_container": {
                     "image": "mysql:5.7",
                     "environment": ["MYSQL_ROOT_PASSWORD=root"],
-                    "volumes": ["/data:/var/lib/mysql"]
-                }
+                    "volumes": ["/data:/var/lib/mysql"],
+                },
             },
             "networks": {
                 "test_network": {
                     "driver": "bridge",
                     "internal": True,
-                    "ipam": {
-                        "config": [{"subnet": "172.20.0.0/16"}]
-                    }
+                    "ipam": {"config": [{"subnet": "172.20.0.0/16"}]},
                 },
-                "external_network": {
-                    "driver": "bridge",
-                    "internal": False
-                }
+                "external_network": {"driver": "bridge", "internal": False},
             },
             "environments": {
                 "simple_env": {
                     "network": "test_network",
                     "execution": "execution_container",
-                    "services": [
-                        {"name": "webapp", "container": "webapp_container"}
-                    ],
-                    "resource_limits": {
-                        "total_memory": "1g"
-                    }
+                    "services": [{"name": "webapp", "container": "webapp_container"}],
+                    "resource_limits": {"total_memory": "1g"},
                 },
                 "complex_env": {
                     "network": "test_network",
                     "execution": "execution_container",
                     "services": [
                         {"name": "webapp", "container": "webapp_container"},
-                        {"name": "database", "container": "database_container"}
+                        {"name": "database", "container": "database_container"},
                     ],
-                    "resource_limits": {
-                        "total_memory": "2g"
-                    }
-                }
-            }
+                    "resource_limits": {"total_memory": "2g"},
+                },
+            },
         }
 
     @pytest.fixture
     def temp_environments_file(self, sample_environments_data):
         """Create temporary environments.yaml file."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.dump(sample_environments_data, f)
             return f.name
 
@@ -133,7 +120,7 @@ class TestEnvironmentLoader:
 
     def test_load_templates_invalid_yaml(self):
         """Test loading with invalid YAML."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write("invalid: yaml: content: [")
             temp_file = f.name
 
@@ -144,7 +131,7 @@ class TestEnvironmentLoader:
 
     def test_load_templates_not_dict(self):
         """Test loading when file doesn't contain a dictionary."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.dump(["not", "a", "dict"], f)
             temp_file = f.name
 
@@ -186,9 +173,7 @@ class TestEnvironmentLoader:
         config = {
             "network": "test_network",
             "execution": "execution_container",
-            "services": [
-                {"name": "webapp", "container": "webapp_container"}
-            ]
+            "services": [{"name": "webapp", "container": "webapp_container"}],
         }
 
         env_spec = loader.resolve_environment(config)
@@ -204,12 +189,8 @@ class TestEnvironmentLoader:
 
         config = {
             "base_template": "simple_env",
-            "additional_services": [
-                {"name": "database", "container": "database_container"}
-            ],
-            "resource_limits": {
-                "total_memory": "3g"
-            }
+            "additional_services": [{"name": "database", "container": "database_container"}],
+            "resource_limits": {"total_memory": "3g"},
         }
 
         env_spec = loader.resolve_environment(config)
@@ -230,10 +211,7 @@ class TestEnvironmentLoader:
         """Test granular build with missing network."""
         loader = EnvironmentLoader(temp_environments_file)
 
-        config = {
-            "execution": "execution_container",
-            "services": []
-        }
+        config = {"execution": "execution_container", "services": []}
 
         with pytest.raises(InvalidEnvironmentSpecException, match="Network must be specified"):
             loader.build_from_granular(config)
@@ -242,10 +220,7 @@ class TestEnvironmentLoader:
         """Test granular build with missing execution service."""
         loader = EnvironmentLoader(temp_environments_file)
 
-        config = {
-            "network": "test_network",
-            "services": []
-        }
+        config = {"network": "test_network", "services": []}
 
         with pytest.raises(InvalidEnvironmentSpecException, match="Execution service must be specified"):
             loader.build_from_granular(config)
@@ -295,10 +270,7 @@ class TestEnvironmentLoader:
         loader = EnvironmentLoader(temp_environments_file)
         templates = loader._load_templates()
 
-        service_config = {
-            "name": "webapp",
-            "container": "webapp_container"
-        }
+        service_config = {"name": "webapp", "container": "webapp_container"}
 
         service_spec = loader._resolve_service_config(service_config, templates)
 
@@ -315,9 +287,7 @@ class TestEnvironmentLoader:
         loader = EnvironmentLoader(temp_environments_file)
         templates = loader._load_templates()
 
-        service_config = {
-            "container": "webapp_container"
-        }
+        service_config = {"container": "webapp_container"}
 
         with pytest.raises(InvalidEnvironmentSpecException, match="Service name must be specified"):
             loader._resolve_service_config(service_config, templates)
@@ -327,9 +297,7 @@ class TestEnvironmentLoader:
         loader = EnvironmentLoader(temp_environments_file)
         templates = loader._load_templates()
 
-        service_config = {
-            "name": "webapp"
-        }
+        service_config = {"name": "webapp"}
 
         with pytest.raises(InvalidEnvironmentSpecException, match="Service container must be specified"):
             loader._resolve_service_config(service_config, templates)
@@ -339,10 +307,7 @@ class TestEnvironmentLoader:
         loader = EnvironmentLoader(temp_environments_file)
         templates = loader._load_templates()
 
-        service_config = {
-            "name": "webapp",
-            "container": "nonexistent_container"
-        }
+        service_config = {"name": "webapp", "container": "nonexistent_container"}
 
         with pytest.raises(InvalidEnvironmentSpecException, match="Container 'nonexistent_container' not found"):
             loader._resolve_service_config(service_config, templates)
@@ -353,15 +318,9 @@ class TestEnvironmentLoader:
 
         config = {
             "base_template": "simple_env",
-            "additional_services": [
-                {"name": "database", "container": "database_container"}
-            ],
-            "network_overrides": {
-                "internal": False
-            },
-            "resource_limits": {
-                "total_cpu": "2.0"
-            }
+            "additional_services": [{"name": "database", "container": "database_container"}],
+            "network_overrides": {"internal": False},
+            "resource_limits": {"total_cpu": "2.0"},
         }
 
         env_spec = loader._merge_template_with_additions(config)

@@ -80,7 +80,7 @@ MCP -> Client: available_tools[]
 Agent -> Agent: generate next command
 Agent -> Client: tool_call_request(tool_name: "cli", args: {arguments: "file malware.exe"})
 Client -> MCP: call_tool(tool_name: "cli", arguments: {arguments: "file malware.exe"})
-MCP -> SM: execute_command(session_id, action)
+MCP -> SM: execute_action(session_id, action)
 SM -> SM: create Action(arguments, parameters)
 SM -> EM_EXEC: step(action)
 EM_EXEC --> SM: CommandResult

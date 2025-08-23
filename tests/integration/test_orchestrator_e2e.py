@@ -13,19 +13,21 @@ Note: This test spins up its own resources and doesn't require external services
 """
 
 import asyncio
-import docker
 import json
 import logging
 import os
-import pytest
-import requests
 import subprocess
 import tempfile
-import time
 import threading
+import time
 from pathlib import Path
 from typing import Dict, List, Set
 from unittest.mock import patch
+
+import pytest
+import requests
+
+import docker
 
 # Set up logging for debugging
 logging.basicConfig(level=logging.INFO)
@@ -40,7 +42,9 @@ SERVER_STARTUP_TIMEOUT = 30  # seconds
 TEST_PORT_BASE = 18000  # Use different ports to avoid conflicts
 
 
-def wait_for_containers(project_name: str, expected_count: int = None, timeout: int = CONTAINER_CHECK_TIMEOUT) -> List[str]:
+def wait_for_containers(
+    project_name: str, expected_count: int = None, timeout: int = CONTAINER_CHECK_TIMEOUT
+) -> List[str]:
     """Wait for containers to be created for the given compose project."""
     try:
         docker_client = docker.from_env()
@@ -50,9 +54,7 @@ def wait_for_containers(project_name: str, expected_count: int = None, timeout: 
 
     for attempt in range(timeout):
         try:
-            containers = docker_client.containers.list(
-                filters={"label": f"com.docker.compose.project={project_name}"}
-            )
+            containers = docker_client.containers.list(filters={"label": f"com.docker.compose.project={project_name}"})
             container_ids = [c.id for c in containers]
 
             if expected_count is None:
@@ -76,10 +78,11 @@ def wait_for_containers(project_name: str, expected_count: int = None, timeout: 
 def cleanup_test_containers(project_name: str):
     """Clean up any containers from test project."""
     try:
-        subprocess.run([
-            "docker", "compose", "-p", project_name,
-            "down", "--remove-orphans", "--volumes", "--timeout", "5"
-        ], capture_output=True, timeout=30)
+        subprocess.run(
+            ["docker", "compose", "-p", project_name, "down", "--remove-orphans", "--volumes", "--timeout", "5"],
+            capture_output=True,
+            timeout=30,
+        )
         logger.info(f"Cleaned up containers for project {project_name}")
     except Exception as e:
         logger.warning(f"Error during container cleanup: {e}")
@@ -112,7 +115,7 @@ services:
 """
 
         compose_file = Path(temp_dir) / "docker-compose.yml"
-        with open(compose_file, 'w') as f:
+        with open(compose_file, "w") as f:
             f.write(compose_content)
 
         # Check if Docker is available
@@ -122,9 +125,12 @@ services:
             pytest.skip("Docker not available for workflow test")
 
         # Start test containers
-        result = subprocess.run([
-            "docker", "compose", "-f", str(compose_file), "-p", project_name, "up", "-d"
-        ], capture_output=True, text=True, timeout=60)
+        result = subprocess.run(
+            ["docker", "compose", "-f", str(compose_file), "-p", project_name, "up", "-d"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
 
         if result.returncode != 0:
             pytest.skip(f"Failed to start test containers: {result.stderr}")
@@ -135,27 +141,27 @@ services:
         logger.info(f"✅ Created {len(containers)} test containers")
 
         # Step 2: Test container discovery (what orchestrator would do)
-        result = subprocess.run([
-            "docker", "compose", "-p", project_name, "ps", "-q"
-        ], capture_output=True, text=True)
+        result = subprocess.run(["docker", "compose", "-p", project_name, "ps", "-q"], capture_output=True, text=True)
 
         assert result.returncode == 0
-        discovered_containers = [line.strip() for line in result.stdout.strip().split('\n') if line.strip()]
+        discovered_containers = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
         assert len(discovered_containers) > 0, "No containers discovered by orchestrator"
         logger.info(f"✅ Orchestrator discovered {len(discovered_containers)} containers")
 
         # Step 3: Test graceful cleanup (what orchestrator would do on episode end)
-        result = subprocess.run([
-            "docker", "compose", "-p", project_name, "stop", "-t", "5"
-        ], capture_output=True, text=True)
+        result = subprocess.run(
+            ["docker", "compose", "-p", project_name, "stop", "-t", "5"], capture_output=True, text=True
+        )
 
         assert result.returncode == 0, f"Graceful stop failed: {result.stderr}"
         logger.info("✅ Graceful container stop successful")
 
         # Step 4: Test complete cleanup
-        result = subprocess.run([
-            "docker", "compose", "-p", project_name, "down", "--remove-orphans", "--volumes"
-        ], capture_output=True, text=True)
+        result = subprocess.run(
+            ["docker", "compose", "-p", project_name, "down", "--remove-orphans", "--volumes"],
+            capture_output=True,
+            text=True,
+        )
 
         assert result.returncode == 0, f"Cleanup failed: {result.stderr}"
         logger.info("✅ Container cleanup successful")
@@ -170,6 +176,7 @@ services:
         cleanup_test_containers(project_name)
         if os.path.exists(temp_dir):
             import shutil
+
             shutil.rmtree(temp_dir)
 
 
@@ -209,13 +216,16 @@ services:
 """
 
             compose_file = Path(temp_dir) / f"docker-compose-{i}.yml"
-            with open(compose_file, 'w') as f:
+            with open(compose_file, "w") as f:
                 f.write(compose_content)
 
             # Start containers
-            result = subprocess.run([
-                "docker", "compose", "-f", str(compose_file), "-p", project_name, "up", "-d"
-            ], capture_output=True, text=True, timeout=60)
+            result = subprocess.run(
+                ["docker", "compose", "-f", str(compose_file), "-p", project_name, "up", "-d"],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
 
             if result.returncode != 0:
                 pytest.skip(f"Failed to start test containers for project {i}: {result.stderr}")
@@ -234,9 +244,11 @@ services:
 
         # Test cleanup of first project (simulating session termination)
         first_project = project_names[0]
-        result = subprocess.run([
-            "docker", "compose", "-p", first_project, "down", "--remove-orphans", "--volumes"
-        ], capture_output=True, text=True)
+        result = subprocess.run(
+            ["docker", "compose", "-p", first_project, "down", "--remove-orphans", "--volumes"],
+            capture_output=True,
+            text=True,
+        )
 
         assert result.returncode == 0, f"Cleanup of first project failed: {result.stderr}"
 
@@ -253,14 +265,16 @@ services:
         second_project = project_names[1]
 
         # First try graceful stop
-        result = subprocess.run([
-            "docker", "compose", "-p", second_project, "stop", "-t", "2"
-        ], capture_output=True, text=True)
+        result = subprocess.run(
+            ["docker", "compose", "-p", second_project, "stop", "-t", "2"], capture_output=True, text=True
+        )
 
         # Then force cleanup
-        result = subprocess.run([
-            "docker", "compose", "-p", second_project, "down", "--remove-orphans", "--volumes", "--timeout", "2"
-        ], capture_output=True, text=True)
+        result = subprocess.run(
+            ["docker", "compose", "-p", second_project, "down", "--remove-orphans", "--volumes", "--timeout", "2"],
+            capture_output=True,
+            text=True,
+        )
 
         assert result.returncode == 0, f"Force cleanup failed: {result.stderr}"
 
@@ -277,6 +291,7 @@ services:
 
         if os.path.exists(temp_dir):
             import shutil
+
             shutil.rmtree(temp_dir)
 
 
@@ -309,14 +324,17 @@ services:
 """
 
         compose_file = Path(temp_dir) / "docker-compose.yml"
-        with open(compose_file, 'w') as f:
+        with open(compose_file, "w") as f:
             f.write(compose_content)
 
         # Start containers using docker-compose
         project_name = "saber-test-monitoring"
-        result = subprocess.run([
-            "docker", "compose", "-f", str(compose_file), "-p", project_name, "up", "-d"
-        ], capture_output=True, text=True, timeout=60)
+        result = subprocess.run(
+            ["docker", "compose", "-f", str(compose_file), "-p", project_name, "up", "-d"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
 
         if result.returncode != 0:
             pytest.skip(f"Failed to start test containers: {result.stderr}")
@@ -326,25 +344,25 @@ services:
         assert len(containers) > 0, "Test container was not created"
 
         # Test container discovery
-        result = subprocess.run([
-            "docker", "compose", "-p", project_name, "ps", "-q"
-        ], capture_output=True, text=True)
+        result = subprocess.run(["docker", "compose", "-p", project_name, "ps", "-q"], capture_output=True, text=True)
 
         assert result.returncode == 0
-        discovered_containers = [line.strip() for line in result.stdout.strip().split('\n') if line.strip()]
+        discovered_containers = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
         assert len(discovered_containers) > 0, "No containers discovered"
 
         # Test graceful stop
-        result = subprocess.run([
-            "docker", "compose", "-p", project_name, "stop", "-t", "5"
-        ], capture_output=True, text=True)
+        result = subprocess.run(
+            ["docker", "compose", "-p", project_name, "stop", "-t", "5"], capture_output=True, text=True
+        )
 
         assert result.returncode == 0, f"Graceful stop failed: {result.stderr}"
 
         # Test cleanup
-        result = subprocess.run([
-            "docker", "compose", "-p", project_name, "down", "--remove-orphans", "--volumes"
-        ], capture_output=True, text=True)
+        result = subprocess.run(
+            ["docker", "compose", "-p", project_name, "down", "--remove-orphans", "--volumes"],
+            capture_output=True,
+            text=True,
+        )
 
         assert result.returncode == 0, f"Cleanup failed: {result.stderr}"
 
@@ -359,6 +377,7 @@ services:
         cleanup_test_containers(project_name)
         if os.path.exists(temp_dir):
             import shutil
+
             shutil.rmtree(temp_dir)
 
 
@@ -372,15 +391,16 @@ async def test_session_timeout_mechanism():
 
     try:
         # Test importing and basic functionality of timeout-related components
-        from saber.server.session_manager import ClientSession
         from datetime import datetime, timedelta
+
+        from saber.server.session_manager import ClientSession
 
         # Create a test session
         session = ClientSession(
             session_id="test_session_123",
             client_id="test_client",
             created_at=datetime.utcnow() - timedelta(minutes=5),  # 5 minutes ago
-            last_activity=datetime.utcnow() - timedelta(minutes=3)  # 3 minutes ago
+            last_activity=datetime.utcnow() - timedelta(minutes=3),  # 3 minutes ago
         )
 
         # Verify session properties

@@ -4,12 +4,13 @@ Tests for PromptBuilder functionality.
 Tests the component responsible for building prompts from task and policy information.
 """
 
-import pytest
+from typing import Any, Dict, List
 from unittest.mock import AsyncMock, Mock
-from typing import Dict, Any, List
 
+import pytest
+
+from saber.api_models import PolicyInfo, StepResponse, TaskInfo
 from saber.client.prompt_builder import PromptBuilder
-from saber.api_models import TaskInfo, PolicyInfo, StepResponse
 
 
 @pytest.fixture
@@ -19,7 +20,7 @@ def sample_task_info():
         task_id="malware-analysis-001",
         title="Malware Sample Analysis",
         description="Analyze the suspicious file located at /tmp/sample.exe to determine if it's malicious",
-        current_subtask="initial-inspection"
+        current_subtask="initial-inspection",
     )
 
 
@@ -30,7 +31,7 @@ def sample_policy_info():
         domain="malware-analysis",
         available_commands=["file", "strings", "hexdump", "ls", "cat", "grep"],
         guidelines="Use multiple analysis techniques. Start with basic file inspection, then proceed to strings analysis and hex dumps. Look for suspicious patterns, URLs, and embedded files.",
-        constraints=["No network access allowed", "Read-only filesystem", "No execution of suspicious files"]
+        constraints=["No network access allowed", "Read-only filesystem", "No execution of suspicious files"],
     )
 
 
@@ -43,15 +44,15 @@ def sample_step_responses():
             output="sample.exe: PE32 executable (GUI) Intel 80386, for MS Windows",
             done=False,
             error=None,
-            info={"command": "file /tmp/sample.exe"}
+            info={"command": "file /tmp/sample.exe"},
         ),
         StepResponse(
             success=True,
             output="http://malicious-domain.com/payload\nC:\\Users\\victim\\Desktop\nCreateProcessA",
             done=False,
             error=None,
-            info={"command": "strings /tmp/sample.exe | head -10"}
-        )
+            info={"command": "strings /tmp/sample.exe | head -10"},
+        ),
     ]
 
 
@@ -75,6 +76,7 @@ class TestPromptBuilder:
         assert "Analyze the suspicious file" in prompt
         assert "file" in prompt  # Available command
         assert "strings" in prompt  # Available command    @pytest.mark.asyncio
+
     def test_build_initial_prompt_formatting(self, sample_task_info, sample_policy_info):
         """Test that initial prompt is well-formatted."""
         builder = PromptBuilder()
@@ -88,7 +90,7 @@ class TestPromptBuilder:
         assert "Guidelines:" in prompt
 
         # Check formatting
-        lines = prompt.split('\n')
+        lines = prompt.split("\n")
         assert len(lines) > 5  # Should be multi-line
 
         # Should have clear structure
@@ -108,19 +110,9 @@ class TestPromptBuilder:
         """Test building initial prompt with minimal information."""
         builder = PromptBuilder()
 
-        minimal_task = TaskInfo(
-            task_id="test-task",
-            title="Test",
-            description="",
-            current_subtask=""
-        )
+        minimal_task = TaskInfo(task_id="test-task", title="Test", description="", current_subtask="")
 
-        minimal_policy = PolicyInfo(
-            domain="test",
-            available_commands=[],
-            guidelines="",
-            constraints=[]
-        )
+        minimal_policy = PolicyInfo(domain="test", available_commands=[], guidelines="", constraints=[])
 
         prompt = builder.build_initial_prompt(minimal_task, minimal_policy)
 
@@ -169,11 +161,7 @@ class TestPromptBuilder:
         builder = PromptBuilder()
 
         step_response = StepResponse(
-            success=False,
-            output="",
-            done=False,
-            error="Permission denied",
-            info={"command": "cat /etc/shadow"}
+            success=False, output="", done=False, error="Permission denied", info={"command": "cat /etc/shadow"}
         )
 
         prompt = builder.build_step_prompt("", "cat /etc/shadow", step_response)
@@ -191,11 +179,7 @@ class TestPromptBuilder:
         long_output = "x" * 10000  # 10KB of text
 
         step_response = StepResponse(
-            success=True,
-            output=long_output,
-            done=False,
-            error=None,
-            info={"command": "cat large_file.txt"}
+            success=True, output=long_output, done=False, error=None, info={"command": "cat large_file.txt"}
         )
 
         prompt = builder.build_step_prompt(long_output, "cat large_file.txt", step_response)
@@ -210,13 +194,7 @@ class TestPromptBuilder:
         """Test building step prompt with command information."""
         builder = PromptBuilder()
 
-        step_response = StepResponse(
-            success=True,
-            output="output1",
-            done=False,
-            error=None,
-            info={"command": "ls -la"}
-        )
+        step_response = StepResponse(success=True, output="output1", done=False, error=None, info={"command": "ls -la"})
 
         prompt = builder.build_step_prompt("output1", "ls -la", step_response)
 
@@ -236,9 +214,12 @@ class TestPromptBuilderCustomization:
         prompt = builder.build_initial_prompt(sample_task_info, sample_policy_info)
 
         # Should use consistent section headers (exclude final instruction line)
-        lines = prompt.split('\n')
-        section_headers = [line for line in lines if ':' in line and not line.strip().startswith('  ')
-                          and not line.startswith('Please provide')]
+        lines = prompt.split("\n")
+        section_headers = [
+            line
+            for line in lines
+            if ":" in line and not line.strip().startswith("  ") and not line.startswith("Please provide")
+        ]
 
         # Should have multiple clear sections
         assert len(section_headers) >= 2
@@ -268,10 +249,10 @@ class TestPromptBuilderCustomization:
         # Should not have excessive punctuation or poor formatting
         command_section = ""
         in_command_section = False
-        for line in prompt.split('\n'):
+        for line in prompt.split("\n"):
             if "Available commands:" in line:
                 in_command_section = True
-            elif in_command_section and line.strip() and ':' in line:
+            elif in_command_section and line.strip() and ":" in line:
                 break  # Next section
             elif in_command_section:
                 command_section += line + "\n"
@@ -307,14 +288,14 @@ class TestPromptBuilderIntegration:
             task_id="malware-001",
             title="Suspicious Email Attachment Analysis",
             description="Analyze attachment.zip from suspicious email for potential malware",
-            current_subtask="file-identification"
+            current_subtask="file-identification",
         )
 
         policy = PolicyInfo(
             domain="malware-analysis",
             available_commands=["file", "unzip", "strings", "hexdump", "md5sum", "sha256sum"],
             guidelines="Follow standard malware analysis procedures. Start with static analysis.",
-            constraints=["Sandboxed environment only", "No network connectivity"]
+            constraints=["Sandboxed environment only", "No network connectivity"],
         )
 
         # Build initial prompt
@@ -333,22 +314,22 @@ class TestPromptBuilderIntegration:
                 output="attachment.zip: Zip archive data, at least v2.0 to extract",
                 done=False,
                 error=None,
-                info={"command": "file attachment.zip"}
+                info={"command": "file attachment.zip"},
             ),
             StepResponse(
                 success=True,
                 output="  Length      Date    Time    Name\n---------  ---------- -----   ----\n     2048  2023-12-01 10:30   invoice.exe",
                 done=False,
                 error=None,
-                info={"command": "unzip -l attachment.zip"}
-            )
+                info={"command": "unzip -l attachment.zip"},
+            ),
         ]
 
         # Build step prompt
         step_prompt = builder.build_step_prompt(
             steps[-1].output,  # Use the last output as a string
             "unzip -l attachment.zip",  # Previous command
-            steps[-1]  # Full response
+            steps[-1],  # Full response
         )
 
         # Verify step progression
@@ -365,14 +346,14 @@ class TestPromptBuilderIntegration:
             task_id="network-001",
             title="Network Connectivity Issues",
             description="Diagnose network connectivity problems on the target system",
-            current_subtask="initial-assessment"
+            current_subtask="initial-assessment",
         )
 
         policy = PolicyInfo(
             domain="network-diagnostics",
             available_commands=["ping", "traceroute", "netstat", "ss", "ip", "dig"],
             guidelines="Start with basic connectivity tests, then examine routing and DNS",
-            constraints=["Limited to diagnostic commands only"]
+            constraints=["Limited to diagnostic commands only"],
         )
 
         initial_prompt = builder.build_initial_prompt(task, policy)
@@ -390,14 +371,12 @@ class TestPromptBuilderIntegration:
                 output="ping: connect: Network is unreachable",
                 done=False,
                 error="Network unreachable",
-                info={"command": "ping 8.8.8.8"}
+                info={"command": "ping 8.8.8.8"},
             )
         ]
 
         step_prompt = builder.build_step_prompt(
-            steps[0].output,  # Use the output as a string
-            "ping 8.8.8.8",   # Previous command
-            steps[0]          # Full response
+            steps[0].output, "ping 8.8.8.8", steps[0]  # Use the output as a string  # Previous command  # Full response
         )
 
         # Should handle network errors appropriately
@@ -410,19 +389,9 @@ class TestPromptBuilderIntegration:
         builder = PromptBuilder()
 
         # Test with None values (shouldn't happen in practice, but good to be safe)
-        task = TaskInfo(
-            task_id="test",
-            title="",
-            description="",
-            current_subtask=""
-        )
+        task = TaskInfo(task_id="test", title="", description="", current_subtask="")
 
-        policy = PolicyInfo(
-            domain="",
-            available_commands=[],
-            guidelines="",
-            constraints=[]
-        )
+        policy = PolicyInfo(domain="", available_commands=[], guidelines="", constraints=[])
 
         # Should not raise exceptions
         prompt = builder.build_initial_prompt(task, policy)

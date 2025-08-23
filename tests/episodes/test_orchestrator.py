@@ -13,11 +13,11 @@ import asyncio
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
 from pathlib import Path
-import sys
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 from saber.server.episodes.episode_orchestrator import EpisodeContainerOrchestrator
 
@@ -30,14 +30,16 @@ class TestEpisodeContainerOrchestrator(unittest.TestCase):
         self.original_env = os.environ.copy()
 
         # Set required environment variables for testing
-        os.environ.update({
-            "SABER_SESSION_ID": "test_session_123",
-            "SABER_CLEANUP_TOKEN": "test_token_456",
-            "SABER_HOST_URL": "http://localhost:8000",
-            "SABER_COMPOSE_PROJECT": "saber-session-test_session_123",
-            "SABER_POLL_INTERVAL": "5",  # Short interval for tests
-            "SABER_GRACEFUL_TIMEOUT": "10"
-        })
+        os.environ.update(
+            {
+                "SABER_SESSION_ID": "test_session_123",
+                "SABER_CLEANUP_TOKEN": "test_token_456",
+                "SABER_HOST_URL": "http://localhost:8000",
+                "SABER_COMPOSE_PROJECT": "saber-session-test_session_123",
+                "SABER_POLL_INTERVAL": "5",  # Short interval for tests
+                "SABER_GRACEFUL_TIMEOUT": "10",
+            }
+        )
 
     def tearDown(self):
         """Restore original environment."""
@@ -82,7 +84,7 @@ class TestEpisodeContainerOrchestrator(unittest.TestCase):
 
         self.assertIn("SABER_COMPOSE_PROJECT", str(context.exception))
 
-    @patch('httpx.AsyncClient')
+    @patch("httpx.AsyncClient")
     async def test_check_episode_status_active(self, mock_client):
         """Test episode status check when episode is active."""
         # Mock HTTP response
@@ -99,11 +101,10 @@ class TestEpisodeContainerOrchestrator(unittest.TestCase):
 
         self.assertTrue(result)
         mock_client_instance.get.assert_called_once_with(
-            "http://localhost:8000/internal/episode-status/test_session_123",
-            params={"token": "test_token_456"}
+            "http://localhost:8000/internal/episode-status/test_session_123", params={"token": "test_token_456"}
         )
 
-    @patch('httpx.AsyncClient')
+    @patch("httpx.AsyncClient")
     async def test_check_episode_status_inactive(self, mock_client):
         """Test episode status check when episode is inactive."""
         # Mock HTTP response
@@ -120,7 +121,7 @@ class TestEpisodeContainerOrchestrator(unittest.TestCase):
 
         self.assertFalse(result)
 
-    @patch('httpx.AsyncClient')
+    @patch("httpx.AsyncClient")
     async def test_check_episode_status_http_error(self, mock_client):
         """Test episode status check with HTTP error."""
         # Mock HTTP error response
@@ -136,7 +137,7 @@ class TestEpisodeContainerOrchestrator(unittest.TestCase):
 
         self.assertIsNone(result)
 
-    @patch('httpx.AsyncClient')
+    @patch("httpx.AsyncClient")
     async def test_check_episode_status_network_error(self, mock_client):
         """Test episode status check with network error."""
         # Mock network exception
@@ -149,7 +150,7 @@ class TestEpisodeContainerOrchestrator(unittest.TestCase):
 
         self.assertIsNone(result)
 
-    @patch('subprocess.run')
+    @patch("subprocess.run")
     def test_get_episode_containers_success(self, mock_run):
         """Test successful container discovery."""
         mock_run.return_value.returncode = 0
@@ -163,10 +164,10 @@ class TestEpisodeContainerOrchestrator(unittest.TestCase):
             ["docker", "compose", "-p", "saber-session-test_session_123", "ps", "-q"],
             capture_output=True,
             text=True,
-            timeout=30
+            timeout=30,
         )
 
-    @patch('subprocess.run')
+    @patch("subprocess.run")
     def test_get_episode_containers_failure(self, mock_run):
         """Test container discovery failure."""
         mock_run.return_value.returncode = 1
@@ -177,7 +178,7 @@ class TestEpisodeContainerOrchestrator(unittest.TestCase):
 
         self.assertEqual(containers, [])
 
-    @patch('subprocess.run')
+    @patch("subprocess.run")
     def test_graceful_stop_containers_success(self, mock_run):
         """Test successful graceful container stop."""
         mock_run.return_value.returncode = 0
@@ -190,10 +191,10 @@ class TestEpisodeContainerOrchestrator(unittest.TestCase):
             ["docker", "compose", "-p", "saber-session-test_session_123", "stop", "-t", "10"],
             capture_output=True,
             text=True,
-            timeout=40
+            timeout=40,
         )
 
-    @patch('subprocess.run')
+    @patch("subprocess.run")
     def test_graceful_stop_containers_failure(self, mock_run):
         """Test graceful container stop failure."""
         mock_run.return_value.returncode = 1
@@ -204,7 +205,7 @@ class TestEpisodeContainerOrchestrator(unittest.TestCase):
 
         self.assertFalse(result)
 
-    @patch('subprocess.run')
+    @patch("subprocess.run")
     def test_force_cleanup_containers_success(self, mock_run):
         """Test successful force cleanup."""
         mock_run.return_value.returncode = 0
@@ -215,15 +216,22 @@ class TestEpisodeContainerOrchestrator(unittest.TestCase):
         self.assertTrue(result)
         mock_run.assert_called_once_with(
             [
-                "docker", "compose", "-p", "saber-session-test_session_123",
-                "down", "--remove-orphans", "--volumes", "--timeout", "10"
+                "docker",
+                "compose",
+                "-p",
+                "saber-session-test_session_123",
+                "down",
+                "--remove-orphans",
+                "--volumes",
+                "--timeout",
+                "10",
             ],
             capture_output=True,
             text=True,
-            timeout=60
+            timeout=60,
         )
 
-    @patch('subprocess.run')
+    @patch("subprocess.run")
     def test_nuclear_cleanup_success(self, mock_run):
         """Test nuclear cleanup with containers found."""
         # Mock finding containers by label
@@ -243,7 +251,7 @@ class TestEpisodeContainerOrchestrator(unittest.TestCase):
         # Should have made 5 calls: 1 to find + 4 to kill/remove
         self.assertEqual(mock_run.call_count, 5)
 
-    @patch('subprocess.run')
+    @patch("subprocess.run")
     def test_nuclear_cleanup_no_containers(self, mock_run):
         """Test nuclear cleanup with no containers found."""
         # Mock no containers found
@@ -260,8 +268,10 @@ class TestEpisodeContainerOrchestrator(unittest.TestCase):
         """Test successful graceful cleanup."""
         orchestrator = EpisodeContainerOrchestrator()
 
-        with patch.object(orchestrator, 'get_episode_containers') as mock_get, \
-             patch.object(orchestrator, 'graceful_stop_containers') as mock_graceful:
+        with (
+            patch.object(orchestrator, "get_episode_containers") as mock_get,
+            patch.object(orchestrator, "graceful_stop_containers") as mock_graceful,
+        ):
 
             mock_get.side_effect = [["container1"], []]  # Before and after cleanup
             mock_graceful.return_value = True
@@ -274,9 +284,11 @@ class TestEpisodeContainerOrchestrator(unittest.TestCase):
         """Test cleanup with force fallback."""
         orchestrator = EpisodeContainerOrchestrator()
 
-        with patch.object(orchestrator, 'get_episode_containers') as mock_get, \
-             patch.object(orchestrator, 'graceful_stop_containers') as mock_graceful, \
-             patch.object(orchestrator, 'force_cleanup_containers') as mock_force:
+        with (
+            patch.object(orchestrator, "get_episode_containers") as mock_get,
+            patch.object(orchestrator, "graceful_stop_containers") as mock_graceful,
+            patch.object(orchestrator, "force_cleanup_containers") as mock_force,
+        ):
 
             mock_get.side_effect = [["container1"], ["container1"], []]  # Before, after graceful, after force
             mock_graceful.return_value = False
@@ -291,10 +303,12 @@ class TestEpisodeContainerOrchestrator(unittest.TestCase):
         """Test cleanup with nuclear fallback."""
         orchestrator = EpisodeContainerOrchestrator()
 
-        with patch.object(orchestrator, 'get_episode_containers') as mock_get, \
-             patch.object(orchestrator, 'graceful_stop_containers') as mock_graceful, \
-             patch.object(orchestrator, 'force_cleanup_containers') as mock_force, \
-             patch.object(orchestrator, 'nuclear_cleanup') as mock_nuclear:
+        with (
+            patch.object(orchestrator, "get_episode_containers") as mock_get,
+            patch.object(orchestrator, "graceful_stop_containers") as mock_graceful,
+            patch.object(orchestrator, "force_cleanup_containers") as mock_force,
+            patch.object(orchestrator, "nuclear_cleanup") as mock_nuclear,
+        ):
 
             mock_get.side_effect = [["container1"], ["container1"], ["container1"]]  # All fail
             mock_graceful.return_value = False
@@ -310,8 +324,10 @@ class TestEpisodeContainerOrchestrator(unittest.TestCase):
         """Test normal episode termination detection."""
         orchestrator = EpisodeContainerOrchestrator()
 
-        with patch.object(orchestrator, 'check_episode_status') as mock_check, \
-             patch.object(orchestrator, 'cleanup_episode') as mock_cleanup:
+        with (
+            patch.object(orchestrator, "check_episode_status") as mock_check,
+            patch.object(orchestrator, "cleanup_episode") as mock_cleanup,
+        ):
 
             # Episode becomes inactive
             mock_check.return_value = False
@@ -325,8 +341,10 @@ class TestEpisodeContainerOrchestrator(unittest.TestCase):
         """Test cleanup after max failures."""
         orchestrator = EpisodeContainerOrchestrator()
 
-        with patch.object(orchestrator, 'check_episode_status') as mock_check, \
-             patch.object(orchestrator, 'cleanup_episode') as mock_cleanup:
+        with (
+            patch.object(orchestrator, "check_episode_status") as mock_check,
+            patch.object(orchestrator, "cleanup_episode") as mock_cleanup,
+        ):
 
             # All status checks fail
             mock_check.return_value = None

@@ -2,17 +2,18 @@
 Tests for Python executor.
 
 This module tests the secure Python script executor that executes Python code
-in Docker containers with dependency management and security validation.
+in Docker containers with dependency management             parameters = {"code": "df = pd.DataFrame({'x': [1, 2, 3]})", "template": "data_analysis"}nd security validation.
 """
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
 
 from saber.server.base import CommandResult
 from saber.server.execution.base import ParameterType, ValidationResult
-from saber.server.execution.executors.python_executor import PythonExecutor
-from saber.server.execution.sandbox.sandbox_manager import SandboxManager
 from saber.server.execution.exceptions import SandboxExecutionError
+from saber.server.execution.executors.standard_registry.python_executor import PythonExecutor
+from saber.server.execution.sandbox.sandbox_manager import SandboxManager
 
 
 class TestPythonExecutor:
@@ -26,7 +27,7 @@ class TestPythonExecutor:
             "image": "saber/python-sandbox:latest",
             "network_mode": "none",
             "read_only_root": True,
-            "user": "tooluser:tooluser"
+            "user": "tooluser:tooluser",
         }
         return manager
 
@@ -48,25 +49,22 @@ class TestPythonExecutor:
 
     def test_initialization(self, mock_sandbox_manager):
         """Test Python executor initialization."""
-        config = {
-            "timeout": 120.0,
-            "allowed_modules": ["os", "sys", "json"]  # Required for Python executor
-        }
+        config = {"timeout": 120.0, "allowed_modules": ["os", "sys", "json"]}  # Required for Python executor
         executor = PythonExecutor(sandbox_manager=mock_sandbox_manager, config=config)
 
         assert executor.get_timeout() == 120.0
 
         # Check that parameters were added
         params = executor.get_parameters()
-        assert "arguments" in params
+        assert "code" in params
         assert "template" in params
         assert "working_dir" in params
 
         # Verify parameter definitions
-        arguments_param = params["arguments"]
-        assert arguments_param.name == "arguments"
-        assert arguments_param.type == ParameterType.STRING
-        assert arguments_param.required is True
+        code_param = params["code"]
+        assert code_param.name == "code"
+        assert code_param.type == ParameterType.STRING
+        assert code_param.required is True
 
     def test_initialization_without_sandbox_manager(self):
         """Test that initialization fails without sandbox manager."""
@@ -77,8 +75,8 @@ class TestPythonExecutor:
         """Test executor metadata is correctly defined."""
         metadata = python_executor._executor_metadata
 
-        assert metadata["name"] == "python_script"
-        assert metadata["description"] == "Execute Python scripts in Docker containers"
+        assert metadata["name"] == "execute_python"
+        assert metadata["description"] == "Execute Python code in secure Docker container"
 
     def test_validate_python_code_valid(self, python_executor):
         """Test validation of valid Python code."""
@@ -131,7 +129,7 @@ from urllib import request
 
     def test_build_python_script_simple(self, python_executor):
         """Test building simple Python script."""
-        parameters = {"arguments": "print('Hello, World!')"}
+        parameters = {"code": "print('Hello, World!')"}
         context = {}
 
         script = python_executor.build_python_script(parameters, context)
@@ -156,7 +154,7 @@ import numpy as np
 """
         }
 
-        parameters = {"arguments": "df = pd.DataFrame({'x': [1, 2, 3]})", "template": "data_analysis"}
+        parameters = {"code": "df = pd.DataFrame({'x': [1, 2, 3]})", "template": "data_analysis"}
         context = {}
 
         script = python_executor.build_python_script(parameters, context)
@@ -168,10 +166,7 @@ import numpy as np
     def test_parse_python_output_success(self, python_executor):
         """Test parsing successful Python execution output."""
         result = python_executor.parse_python_output(
-            stdout="Hello, World!\n",
-            stderr="",
-            return_code=0,
-            script_path="/tmp/script.py"
+            stdout="Hello, World!\n", stderr="", return_code=0, script_path="/tmp/script.py"
         )
 
         assert result.success is True
@@ -187,7 +182,7 @@ import numpy as np
             stdout="",
             stderr="NameError: name 'undefined_var' is not defined",
             return_code=1,
-            script_path="/tmp/script.py"
+            script_path="/tmp/script.py",
         )
 
         assert result.success is False
@@ -196,7 +191,7 @@ import numpy as np
 
     def test_get_python_environment(self, python_executor):
         """Test getting Python environment information."""
-        with patch.object(python_executor, 'get_session_environment') as mock_get_env:
+        with patch.object(python_executor, "get_session_environment") as mock_get_env:
             mock_env = MagicMock()
             mock_get_env.return_value = mock_env
 
@@ -227,10 +222,10 @@ import numpy as np
 
         mock_docker_environment.execute_command.side_effect = [create_result, execute_result]
 
-        parameters = {"arguments": "print('Hello, World!')"}
+        parameters = {"code": "print('Hello, World!')"}
         context = {"session_id": "test123"}
 
-        result = await python_executor.execute(parameters, context)
+        result = await python_executor(parameters, context)
 
         assert result.success is True
         assert result.data["stdout"] == "Hello, World!\n"
@@ -240,10 +235,10 @@ import numpy as np
     @pytest.mark.asyncio
     async def test_execute_validation_failure(self, python_executor):
         """Test execution with invalid Python code."""
-        parameters = {"arguments": ""}  # Empty code
+        parameters = {"code": ""}  # Empty code
         context = {"session_id": "test123"}
 
-        result = await python_executor.execute(parameters, context)
+        result = await python_executor(parameters, context)
 
         assert result.success is False
         assert "Python code validation failed" in result.error
@@ -254,17 +249,14 @@ import numpy as np
         parameters = {"arguments": "print('hello')"}
         context = {}  # Missing session_id
 
-        result = await python_executor.execute(parameters, context)
+        result = await python_executor(parameters, context)
 
         assert result.success is False
         assert "session_id required" in result.error
 
     def test_validate_parameters_valid(self, python_executor):
         """Test parameter validation with valid parameters."""
-        parameters = {
-            "arguments": "print('hello')",
-            "working_dir": "/workspace"
-        }
+        parameters = {"code": "print('hello')", "working_dir": "/workspace"}
 
         result = python_executor.validate_parameters(parameters)
         assert result.valid is True

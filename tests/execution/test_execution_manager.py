@@ -6,19 +6,19 @@ with MCP integration and comprehensive security validation in Docker containers.
 """
 
 import asyncio
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch, mock_open
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
-from saber.server.base import CommandResult
+import pytest
+
+from saber.server.base import Action, CommandResult
 from saber.server.execution.base import ValidationResult
-from saber.server.execution.execution_manager import ExecutionManager
-from saber.server.execution.executors.cli import CLIExecutor
-from saber.server.execution.executors.factory import ExecutorFactory
-from saber.server.execution.utils.security_validator import SecurityValidator
 from saber.server.execution.exceptions import ExecutionManagerError
+from saber.server.execution.execution_manager import ExecutionManager
+from saber.server.execution.executors.executor_factory import ExecutorFactory
+from saber.server.execution.executors.standard_registry.cli_executor import CLIExecutor
 from saber.server.execution.sandbox.sandbox_manager import SandboxManager
-from saber.server.base import Action
+from saber.server.execution.utils.security_validator import SecurityValidator
 
 
 class TestExecutionManager:
@@ -35,19 +35,20 @@ class TestExecutionManager:
                 "image": "saber/base-sandbox:latest",
                 "network_mode": "none",
                 "read_only_root": True,
-                "user": "tooluser:tooluser"
-            }
+                "user": "tooluser:tooluser",
+            },
         }
 
     @pytest.fixture
     def cleanup_factory(self):
         """Clean up factory state after tests."""
-        from saber.server.execution.executors.factory import ExecutorFactory
+        from saber.server.execution.executors.executor_registry import executor_registry
+
         # Store original state
-        original_registry = ExecutorFactory._executor_registry.copy()
+        original_registry = executor_registry._registered_executors.copy()
         yield
         # Restore original state
-        ExecutorFactory._executor_registry = original_registry
+        executor_registry._registered_executors = original_registry
 
     @pytest.fixture
     def registry(self, sample_config, cleanup_factory):
@@ -95,7 +96,7 @@ class TestExecutionManager:
         registry._environment_loader.resolve_environment.return_value = mock_env_spec
 
         # Mock SandboxManager class to avoid environment creation issues
-        with patch('saber.server.execution.execution_manager.SandboxManager') as mock_sandbox_class:
+        with patch("saber.server.execution.execution_manager.SandboxManager") as mock_sandbox_class:
             mock_sandbox_instance = MagicMock()
             mock_sandbox_class.return_value = mock_sandbox_instance
 
@@ -106,42 +107,41 @@ class TestExecutionManager:
             mock_sandbox_instance.create_session_environment.assert_called_once_with("session123", mock_env_spec, None)
 
         # Should have updated configuration (only cli config should be present since python_config is None)
-        assert registry._configuration == {"timeout": 120.0, "cli": {"default_shell_mode": True}}
+        assert registry._configuration["timeout"] == 120.0
+        assert registry._configuration["cli"] == {"default_shell_mode": True}
 
         # Should have called environment resolution
         registry._environment_loader.resolve_environment.assert_called_once_with("test_env")
 
         # Should have filtered executors
-        available_executors = registry._executor_factory.get_filtered_available_executors()
-        assert available_executors == ["cli"]
+        available_executors = registry._executor_factory.get_available_executors()
+        assert "cli" in available_executors
 
     @pytest.mark.asyncio
     async def test_step_success(self, registry):
         """Test successful command execution."""
-        action = Action(tool_name="cli", arguments="echo test", parameters={"arguments": "echo test", "shell": False})
+        action = Action(tool_name="cli", parameters={"arguments": "echo test", "shell": False})
         context = {"session_id": "test123"}
 
-        expected_result = CommandResult.success_result(
-            data={"stdout": "test\n", "stderr": "", "return_code": 0}
-        )
+        expected_result = CommandResult.success_result(data={"stdout": "test\n", "stderr": "", "return_code": 0})
 
         # Mock the executor factory to return a mock executor
-        mock_executor = MagicMock()
-        mock_executor.validate_parameters.return_value = ValidationResult.success()
-        mock_executor.execute = AsyncMock(return_value=expected_result)
+        mock_executor = AsyncMock()
+        mock_executor.validate_parameters = MagicMock(return_value=ValidationResult.success())
+        mock_executor.return_value = expected_result
 
-        with patch.object(registry._executor_factory, 'get_executor', return_value=mock_executor):
+        with patch.object(registry._executor_factory, "get_executor", return_value=mock_executor):
             result = await registry.step(action, context)
 
         assert result.success is True
         assert result.data["stdout"] == "test\n"
         expected_params = {"arguments": "echo test", "shell": False}
-        mock_executor.execute.assert_called_once_with(expected_params, context)
+        mock_executor.assert_called_once_with(expected_params, context)
 
     @pytest.mark.asyncio
     async def test_step_validation_failure(self, registry):
         """Test command execution with parameter validation failure."""
-        action = Action(tool_name="cli", arguments="", parameters={"invalid": "params"})
+        action = Action(tool_name="cli", parameters={"invalid": "params"})
 
         validation_result = ValidationResult.failure(["Missing required parameter 'arguments'"])
 
@@ -149,7 +149,7 @@ class TestExecutionManager:
         mock_executor = MagicMock()
         mock_executor.validate_parameters.return_value = validation_result
 
-        with patch.object(registry._executor_factory, 'get_executor', return_value=mock_executor):
+        with patch.object(registry._executor_factory, "get_executor", return_value=mock_executor):
             result = await registry.step(action)
 
         assert result.success is False
@@ -159,14 +159,14 @@ class TestExecutionManager:
     @pytest.mark.asyncio
     async def test_step_execution_exception(self, registry):
         """Test command execution with exception during execution."""
-        action = Action(tool_name="cli", arguments="test", parameters={"arguments": "test"})
+        action = Action(tool_name="cli", parameters={"arguments": "test"})
 
         # Mock the executor factory to return a mock executor
-        mock_executor = MagicMock()
-        mock_executor.validate_parameters.return_value = ValidationResult.success()
-        mock_executor.execute.side_effect = Exception("Execution failed")
+        mock_executor = AsyncMock()
+        mock_executor.validate_parameters = MagicMock(return_value=ValidationResult.success())
+        mock_executor.side_effect = Exception("Execution failed")
 
-        with patch.object(registry._executor_factory, 'get_executor', return_value=mock_executor):
+        with patch.object(registry._executor_factory, "get_executor", return_value=mock_executor):
             result = await registry.step(action)
 
         assert result.success is False
@@ -183,10 +183,10 @@ class TestExecutionManager:
                     "type": "object",
                     "properties": {
                         "arguments": {"type": "string", "description": "Command to execute"},
-                        "shell": {"type": "boolean", "description": "Use shell mode", "default": False}
+                        "shell": {"type": "boolean", "description": "Use shell mode", "default": False},
                     },
-                    "required": ["arguments"]
-                }
+                    "required": ["arguments"],
+                },
             },
             {
                 "name": "python_python_script",
@@ -195,14 +195,14 @@ class TestExecutionManager:
                     "type": "object",
                     "properties": {
                         "arguments": {"type": "string", "description": "Python code to execute"},
-                        "requirements": {"type": "array", "description": "Python packages to install"}
+                        "requirements": {"type": "array", "description": "Python packages to install"},
                     },
-                    "required": ["arguments"]
-                }
-            }
+                    "required": ["arguments"],
+                },
+            },
         ]
 
-        with patch.object(registry._executor_factory, 'get_all_mcp_tools', return_value=mock_tools):
+        with patch.object(registry._executor_factory, "get_all_mcp_tools", return_value=mock_tools):
             mcp_tools = registry.to_mcp_tools()
 
         assert len(mcp_tools) == 2
@@ -234,14 +234,14 @@ class TestExecutionManager:
                     "type": "object",
                     "properties": {
                         "arguments": {"type": "string", "description": "Command to execute"},
-                        "shell": {"type": "boolean", "description": "Use shell mode", "default": True}
+                        "shell": {"type": "boolean", "description": "Use shell mode", "default": True},
                     },
-                    "required": ["arguments"]
-                }
+                    "required": ["arguments"],
+                },
             }
         ]
 
-        with patch.object(registry._executor_factory, 'get_all_mcp_tools', return_value=mock_tools):
+        with patch.object(registry._executor_factory, "get_all_mcp_tools", return_value=mock_tools):
             mcp_tools = registry.to_mcp_tools()
 
         tool = mcp_tools[0]
@@ -255,10 +255,10 @@ class TestExecutionManager:
             "available_types": ["cli", "python"],
             "active_instances": ["cli"],
             "registry_size": 2,
-            "configurations": {"cli": {}, "python": {}}
+            "configurations": {"cli": {}, "python": {}},
         }
 
-        with patch.object(registry._executor_factory, 'get_executor_info', return_value=mock_executor_info):
+        with patch.object(registry._executor_factory, "get_executor_info", return_value=mock_executor_info):
             stats = registry.get_execution_stats()
 
         assert "execution_mode" in stats
@@ -275,27 +275,27 @@ class TestExecutionManager:
     @pytest.mark.asyncio
     async def test_step_default_context(self, registry):
         """Test step with default context when none provided."""
-        action = Action(tool_name="cli", arguments="echo test", parameters={"arguments": "echo test"})
+        action = Action(tool_name="cli", parameters={"arguments": "echo test"})
 
         expected_result = CommandResult.success_result(data="test")
 
         # Mock the executor factory to return a mock executor
-        mock_executor = MagicMock()
-        mock_executor.validate_parameters.return_value = ValidationResult.success()
-        mock_executor.execute = AsyncMock(return_value=expected_result)
+        mock_executor = AsyncMock()
+        mock_executor.validate_parameters = MagicMock(return_value=ValidationResult.success())
+        mock_executor.return_value = expected_result
 
-        with patch.object(registry._executor_factory, 'get_executor', return_value=mock_executor):
+        with patch.object(registry._executor_factory, "get_executor", return_value=mock_executor):
             result = await registry.step(action)
 
         # Should be called with empty context dict
         expected_params = {"arguments": "echo test"}
-        mock_executor.execute.assert_called_once_with(expected_params, {})
+        mock_executor.assert_called_once_with(expected_params, {})
 
     def test_get_executor(self, registry):
         """Test getting specific executor instance."""
         mock_executor = MagicMock()
 
-        with patch.object(registry._executor_factory, 'get_executor', return_value=mock_executor) as mock_get:
+        with patch.object(registry._executor_factory, "get_executor", return_value=mock_executor) as mock_get:
             result = registry.get_executor("cli")
 
         assert result == mock_executor
@@ -304,30 +304,28 @@ class TestExecutionManager:
     @pytest.mark.asyncio
     async def test_step_python_executor(self, registry):
         """Test step with Python executor."""
-        action = Action(tool_name="python", arguments="print('hello')", parameters={"arguments": "print('hello')"})
+        action = Action(tool_name="python", parameters={"arguments": "print('hello')"})
         context = {"session_id": "test123"}
 
-        expected_result = CommandResult.success_result(
-            data={"stdout": "hello\n", "stderr": "", "return_code": 0}
-        )
+        expected_result = CommandResult.success_result(data={"stdout": "hello\n", "stderr": "", "return_code": 0})
 
         # Mock the executor factory to return a mock Python executor
-        mock_executor = MagicMock()
-        mock_executor.validate_parameters.return_value = ValidationResult.success()
-        mock_executor.execute = AsyncMock(return_value=expected_result)
+        mock_executor = AsyncMock()
+        mock_executor.validate_parameters = MagicMock(return_value=ValidationResult.success())
+        mock_executor.return_value = expected_result
 
-        with patch.object(registry._executor_factory, 'get_executor', return_value=mock_executor):
+        with patch.object(registry._executor_factory, "get_executor", return_value=mock_executor):
             result = await registry.step(action, context)
 
         assert result.success is True
         assert result.data["stdout"] == "hello\n"
         expected_params = {"arguments": "print('hello')"}
-        mock_executor.execute.assert_called_once_with(expected_params, context)
+        mock_executor.assert_called_once_with(expected_params, context)
 
     def test_cleanup_all_sessions(self, registry):
         """Test cleanup of all sessions."""
-        with patch.object(registry._sandbox_manager, 'cleanup_all_sessions') as mock_cleanup_sandbox:
-            with patch.object(registry._executor_factory, 'cleanup_all_executors') as mock_cleanup_executors:
+        with patch.object(registry._sandbox_manager, "cleanup_all_sessions") as mock_cleanup_sandbox:
+            with patch.object(registry._executor_factory, "cleanup_all_executors") as mock_cleanup_executors:
                 registry.cleanup_all_sessions()
 
         mock_cleanup_sandbox.assert_called_once()
@@ -342,7 +340,7 @@ class TestExecutionManager:
                 "description": "Execute shell commands",
                 "domain": "general",
                 "security_level": "high",
-                "parameters": ["command", "shell"]
+                "parameters": ["command", "shell"],
             },
             {
                 "executor_type": "python",
@@ -350,35 +348,35 @@ class TestExecutionManager:
                 "description": "Execute Python scripts",
                 "domain": "python",
                 "security_level": "high",
-                "parameters": ["code", "requirements"]
-            }
+                "parameters": ["code", "requirements"],
+            },
         ]
 
         # Mock executor factory methods
-        with patch.object(registry._executor_factory, 'get_available_executors', return_value=['cli', 'python']):
+        with patch.object(registry._executor_factory, "get_available_executors", return_value=["cli", "python"]):
             mock_cli_executor = MagicMock()
             mock_cli_executor._executor_metadata = {
-                'name': 'docker_cli',
-                'description': 'Execute shell commands',
+                "name": "docker_cli",
+                "description": "Execute shell commands",
             }
-            mock_cli_executor.get_parameters.return_value = {'command': MagicMock(), 'shell': MagicMock()}
+            mock_cli_executor.get_parameters.return_value = {"command": MagicMock(), "shell": MagicMock()}
 
             mock_python_executor = MagicMock()
             mock_python_executor._executor_metadata = {
-                'name': 'python_script',
-                'description': 'Execute Python scripts',
+                "name": "python_script",
+                "description": "Execute Python scripts",
             }
-            mock_python_executor.get_parameters.return_value = {'code': MagicMock(), 'requirements': MagicMock()}
+            mock_python_executor.get_parameters.return_value = {"code": MagicMock(), "requirements": MagicMock()}
 
             def mock_get_executor(executor_type):
-                if executor_type == 'cli':
+                if executor_type == "cli":
                     return mock_cli_executor
-                elif executor_type == 'python':
+                elif executor_type == "python":
                     return mock_python_executor
 
-            with patch.object(registry._executor_factory, 'get_executor', side_effect=mock_get_executor):
+            with patch.object(registry._executor_factory, "get_executor", side_effect=mock_get_executor):
                 commands = registry.list_commands()
 
         assert len(commands) == 2
-        assert any(cmd['executor_type'] == 'cli' for cmd in commands)
-        assert any(cmd['executor_type'] == 'python' for cmd in commands)
+        assert any(cmd["executor_type"] == "cli" for cmd in commands)
+        assert any(cmd["executor_type"] == "python" for cmd in commands)

@@ -132,10 +132,10 @@ deactivate SM
 
 == Agent Command Execution in Enhanced Environment ==
 
-Agent -> SM: MCP tool call: execute_command("nmap dvwa_webapp")
+Agent -> SM: MCP tool call: execute_action("nmap dvwa_webapp")
 activate SM
 
-SM -> EM: execute_command(session_id, "nmap dvwa_webapp")
+SM -> EM: execute_action(session_id, "nmap dvwa_webapp")
 activate EM
 
 EM -> SBMGR: get_session_environment(session_id)

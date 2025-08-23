@@ -5,14 +5,15 @@ This module tests the abstract Docker executor base class that provides shared
 Docker container management functionality.
 """
 
-import pytest
 from unittest.mock import MagicMock, patch
 
-from saber.server.execution.executors.docker_executor import DockerExecutor
+import pytest
+
 from saber.server.base import CommandResult
 from saber.server.execution.base import ValidationResult
-from saber.server.execution.sandbox.sandbox_manager import SandboxManager
 from saber.server.execution.exceptions import SandboxExecutionError
+from saber.server.execution.executors.docker_executor import DockerExecutor
+from saber.server.execution.sandbox.sandbox_manager import SandboxManager
 
 
 class TestDockerExecutor:
@@ -34,7 +35,7 @@ class TestDockerExecutor:
             "network_mode": "none",
             "read_only_root": True,
             "user": "tooluser:tooluser",
-            "resource_limits": {"memory": "512m", "cpus": "1.0"}
+            "resource_limits": {"memory": "512m", "cpus": "1.0"},
         }
         return manager
 
@@ -42,10 +43,7 @@ class TestDockerExecutor:
     def docker_executor(self, mock_sandbox_manager):
         """Create a concrete Docker executor instance for testing."""
         config = {"timeout": 60.0}
-        return self.ConcreteDockerExecutor(
-            sandbox_manager=mock_sandbox_manager,
-            config=config
-        )
+        return self.ConcreteDockerExecutor(sandbox_manager=mock_sandbox_manager, config=config)
 
     @pytest.fixture
     def mock_docker_environment(self):
@@ -57,26 +55,16 @@ class TestDockerExecutor:
     def test_initialization_success(self, mock_sandbox_manager):
         """Test successful initialization with sandbox manager."""
         config = {"timeout": 120.0}
-        executor = self.ConcreteDockerExecutor(
-            sandbox_manager=mock_sandbox_manager,
-            config=config
-        )
+        executor = self.ConcreteDockerExecutor(sandbox_manager=mock_sandbox_manager, config=config)
 
         assert executor._sandbox_manager == mock_sandbox_manager
         assert executor.get_timeout() == 120.0
 
     def test_initialization_with_docker_config(self, mock_sandbox_manager):
         """Test initialization with Docker configuration."""
-        config = {
-            "timeout": 60.0,
-            "working_dir": "/custom/workspace",
-            "environment": {"PYTHONPATH": "/app"}
-        }
+        config = {"timeout": 60.0, "working_dir": "/custom/workspace", "environment": {"PYTHONPATH": "/app"}}
 
-        executor = self.ConcreteDockerExecutor(
-            sandbox_manager=mock_sandbox_manager,
-            config=config
-        )
+        executor = self.ConcreteDockerExecutor(sandbox_manager=mock_sandbox_manager, config=config)
 
         # Docker-specific configs are stored in the general config
         assert executor._config["working_dir"] == "/custom/workspace"
@@ -171,11 +159,7 @@ class TestDockerExecutor:
 
     def test_validate_docker_parameters_valid(self, docker_executor):
         """Test validation of valid Docker parameters."""
-        parameters = {
-            "working_dir": "/workspace",
-            "timeout": 300,
-            "other_param": "value"
-        }
+        parameters = {"working_dir": "/workspace", "timeout": 300, "other_param": "value"}
 
         result = docker_executor.validate_docker_parameters(parameters)
 
@@ -255,15 +239,12 @@ class TestDockerExecutor:
     def test_validate_parameters_combined(self, docker_executor):
         """Test parameter validation combining base and Docker validation."""
         # Mock base class validation
-        with patch.object(DockerExecutor.__bases__[0], 'validate_parameters') as mock_base_validate:
+        with patch.object(DockerExecutor.__bases__[0], "validate_parameters") as mock_base_validate:
             base_result = ValidationResult.success()
             base_result.add_warning("Base warning")
             mock_base_validate.return_value = base_result
 
-            parameters = {
-                "working_dir": "/workspace",
-                "timeout": 300
-            }
+            parameters = {"working_dir": "/workspace", "timeout": 300}
 
             result = docker_executor.validate_parameters(parameters)
 
@@ -274,7 +255,7 @@ class TestDockerExecutor:
     def test_validate_parameters_combined_with_errors(self, docker_executor):
         """Test parameter validation with both base and Docker errors."""
         # Mock base class validation with errors
-        with patch.object(DockerExecutor.__bases__[0], 'validate_parameters') as mock_base_validate:
+        with patch.object(DockerExecutor.__bases__[0], "validate_parameters") as mock_base_validate:
             base_result = ValidationResult.failure(["Base error"])
             mock_base_validate.return_value = base_result
 
@@ -294,7 +275,7 @@ class TestDockerExecutor:
         parameters = {"test": "param"}
         context = {"session_id": "test"}
 
-        result = await docker_executor.execute(parameters, context)
+        result = await docker_executor(parameters, context)
 
         assert result.success is True
         assert result.data == "test_execution"
@@ -304,17 +285,17 @@ class TestDockerExecutor:
         from saber.server.execution.executors.base_executors import CommandExecutor
 
         assert isinstance(docker_executor, CommandExecutor)
-        assert hasattr(docker_executor, 'get_timeout')
-        assert hasattr(docker_executor, 'get_parameters')
-        assert hasattr(docker_executor, 'add_parameter')
+        assert hasattr(docker_executor, "get_timeout")
+        assert hasattr(docker_executor, "get_parameters")
+        assert hasattr(docker_executor, "add_parameter")
 
     def test_docker_specific_methods_exist(self, docker_executor):
         """Test that Docker-specific methods are properly defined."""
-        assert hasattr(docker_executor, 'get_session_environment')
-        assert hasattr(docker_executor, 'ensure_container_ready')
-        assert hasattr(docker_executor, 'cleanup_execution')
-        assert hasattr(docker_executor, 'validate_docker_parameters')
-        assert hasattr(docker_executor, 'get_docker_info')
+        assert hasattr(docker_executor, "get_session_environment")
+        assert hasattr(docker_executor, "ensure_container_ready")
+        assert hasattr(docker_executor, "cleanup_execution")
+        assert hasattr(docker_executor, "validate_docker_parameters")
+        assert hasattr(docker_executor, "get_docker_info")
 
     def test_abstract_class_cannot_be_instantiated(self, mock_sandbox_manager):
         """Test that DockerExecutor cannot be instantiated directly."""
@@ -324,7 +305,7 @@ class TestDockerExecutor:
         try:
             # This should work since we're not using ABC
             executor = DockerExecutor(sandbox_manager=mock_sandbox_manager)
-            assert hasattr(executor, 'execute')
+            assert hasattr(executor, "execute")
             # The execute method should be abstract (not implemented)
         except Exception:
             # If there are import or other issues, that's also fine

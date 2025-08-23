@@ -80,6 +80,22 @@ class CommandExecutor(ABC):
         """
         pass
 
+    async def __call__(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> CommandResult:
+        """
+        Call the executor with given parameters and context.
+
+        This provides a more intuitive interface: executor(parameters, context)
+        instead of executor.execute(parameters, context).
+
+        Args:
+            parameters: Command-specific parameters
+            context: Execution context (session_id, task_id, etc.)
+
+        Returns:
+            CommandResult containing execution results
+        """
+        return await self.execute(parameters, context)
+
     def get_timeout(self) -> float:
         """
         Get the execution timeout for this command in seconds.

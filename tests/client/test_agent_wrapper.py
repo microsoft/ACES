@@ -5,14 +5,15 @@ Tests the generic agent adaptation system that allows any agent
 to work with SABER without code changes.
 """
 
-import pytest
 import asyncio
 import tempfile
 from pathlib import Path
-from unittest.mock import Mock, AsyncMock, patch
 from typing import Any
+from unittest.mock import AsyncMock, Mock, patch
 
-from saber.client.agent_wrapper import AgentWrapper, AgentLoader
+import pytest
+
+from saber.client.agent_wrapper import AgentLoader, AgentWrapper
 
 
 # Test agent classes for testing
@@ -148,7 +149,7 @@ class TestAgentWrapper:
         assert wrapper.agent == simple_function_agent
         assert callable(wrapper.process_method)
         # For function agents, the process_method is the __call__ method
-        assert hasattr(wrapper.process_method, '__call__')
+        assert hasattr(wrapper.process_method, "__call__")
         assert wrapper.reset_method is None
         assert not wrapper.is_async
 
@@ -192,6 +193,7 @@ class TestAgentWrapper:
     @pytest.mark.asyncio
     async def test_process_prompt_non_string_result(self):
         """Test process_prompt with non-string result."""
+
         class NumericAgent:
             def process(self, prompt):
                 return 42
@@ -234,16 +236,16 @@ class TestAgentLoader:
     def test_load_from_path_simple_class(self):
         """Test loading agent from file with simple class."""
         # Create temporary agent file
-        agent_code = '''
+        agent_code = """
 class TestAgent:
     def process(self, prompt):
         return f"loaded: {prompt}"
 
     def reset(self):
         pass
-'''
+"""
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
             f.write(agent_code)
             f.flush()
 
@@ -258,7 +260,7 @@ class TestAgent:
 
     def test_load_from_path_specific_class(self):
         """Test loading specific class from file."""
-        agent_code = '''
+        agent_code = """
 class FirstAgent:
     def process(self, prompt):
         return "first"
@@ -266,9 +268,9 @@ class FirstAgent:
 class SecondAgent:
     def generate(self, prompt):
         return "second"
-'''
+"""
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
             f.write(agent_code)
             f.flush()
 
@@ -282,12 +284,12 @@ class SecondAgent:
 
     def test_load_from_path_function(self):
         """Test loading function-based agent from file."""
-        agent_code = '''
+        agent_code = """
 def my_agent_function(prompt):
     return f"function result: {prompt}"
-'''
+"""
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
             f.write(agent_code)
             f.flush()
 
@@ -302,7 +304,7 @@ def my_agent_function(prompt):
 
     def test_load_from_path_multiple_agents(self):
         """Test loading from file with multiple agent classes."""
-        agent_code = '''
+        agent_code = """
 class SecurityAgent:
     def process(self, prompt):
         return "security"
@@ -310,9 +312,9 @@ class SecurityAgent:
 class DataAgent:
     def analyze(self, prompt):
         return "data"
-'''
+"""
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
             f.write(agent_code)
             f.flush()
 
@@ -331,13 +333,13 @@ class DataAgent:
 
     def test_load_from_path_no_agent_found(self):
         """Test loading from file with no valid agents."""
-        agent_code = '''
+        agent_code = """
 class NotAnAgent:
     def some_method(self):
         return "not an agent"
-'''
+"""
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
             f.write(agent_code)
             f.flush()
 
@@ -349,13 +351,13 @@ class NotAnAgent:
 
     def test_load_from_path_class_not_found(self):
         """Test loading specific class that doesn't exist."""
-        agent_code = '''
+        agent_code = """
 class ExistingAgent:
     def process(self, prompt):
         return "exists"
-'''
+"""
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
             f.write(agent_code)
             f.flush()
 

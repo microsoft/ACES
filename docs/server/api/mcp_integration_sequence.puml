@@ -1,7 +1,7 @@
 @startuml MCP Integration Workflow
 
 !theme plain
-title SABER MCP Integration - Command Execution Workflow
+title SABER MCP Integration - Connection-Based Session Mapping (MCP Compliant)
 
 actor Agent
 participant "ServerClient" as Client
@@ -17,31 +17,33 @@ Agent -> Client: initialize()
 Client -> REST: POST /session
 REST -> SM: create_session()
 SM -> Client: session_id
-Client -> MCP: connect_mcp(session_id)
-MCP -> SM: map_session_context()
+
+== MCP Connection with Headers ==
+Agent -> Client: connect_mcp_with_headers()
+note right: Headers: X-SABER-Session-ID, X-SABER-Task-ID, X-SABER-Client-ID
+Client -> MCP: connect(headers)
+MCP -> MCP: _handle_mcp_connection(connection_id, headers)
+MCP -> SM: create_session() or map_existing_session()
+MCP -> SM: start_episode(task_id) if provided
+MCP -> MCP: map connection_id → session_id
 MCP -> Client: mcp_connected
 
-== Episode Start ==
-Agent -> Client: start_episode(task_id)
-Client -> REST: POST /session/{id}/start-episode
-REST -> SM: start_episode()
-SM -> TM: start_episode()
-TM -> SM: episode_info
-SM -> Client: episode_started
-
-== Tool Discovery ==
+== Tool Discovery (Clean MCP Tools) ==
 Agent -> Client: get_available_tools()
 Client -> MCP: list_tools()
 MCP -> SM: get_execution_manager()
 SM -> EM_EXEC: to_mcp_tools()
-EM_EXEC -> MCP: tool_schemas[]
+note right of EM_EXEC: Returns clean tool schemas:\n- execute_python(code)\n- execute_cli(command)\n- end_episode(submission)
+EM_EXEC -> MCP: clean_tool_schemas[]
 MCP -> Client: mcp_tools[]
 Client -> Agent: available_tools[]
 
-== Command Execution ==
-Agent -> Client: execute_command(tool_name, args)
-Client -> MCP: call_tool(tool_name, args)
-MCP -> SM: execute_command(session_id, action)
+== Command Execution (No Session Context in Tools) ==
+Agent -> Client: execute_python(code="print('hello')")
+Client -> MCP: call_tool("execute_python", {code: "print('hello')"})
+MCP -> MCP: get_session_from_connection(connection_id)
+MCP -> SM: execute_action(session_id, action)
+note right of MCP: Session context handled\nat connection level,\nnot in tool parameters
 SM -> EM_EXEC: step(action, context)
 EM_EXEC -> SM: command_result
 SM -> EM_EP: step(session_id, action, result)
@@ -50,20 +52,34 @@ SM -> MCP: execution_result
 MCP -> Client: mcp_result
 Client -> Agent: command_result
 
+== Episode End (Clean Tool) ==
+Agent -> Client: end_episode(submission="flag{found}")
+Client -> MCP: call_tool("end_episode", {submission: "flag{found}"})
+MCP -> MCP: get_session_from_connection(connection_id)
+MCP -> SM: end_episode(session_id, submission)
+SM -> MCP: episode_ended
+MCP -> Client: success_result
+Client -> Agent: episode_completed
+
 == Session Cleanup ==
-Agent -> Client: close_session()
-Client -> MCP: disconnect()
-Client -> REST: DELETE /session/{id}
-REST -> SM: terminate_session()
-SM -> Client: session_closed
+Agent -> Client: disconnect_mcp()
+MCP -> MCP: _cleanup_connection(connection_id)
+MCP -> SM: terminate_session(session_id)
+Client -> REST: DELETE /session/{id} (optional)
+REST -> SM: terminate_session() (if needed)
 
 note right of MCP
-**SessionMCPAPI Responsibilities**
-- Tool discovery from ExecutionManager
-- Command execution delegation only
-- Session context mapping
-- Protocol translation (MCP ↔ SessionManager)
-- NO policy, session, or episode management
+**MCP Compliance Achieved**
+✅ Clean tool schemas (no session_id)
+✅ Connection-based session mapping
+✅ Pure functional parameters
+✅ Standard MCP client compatibility
+✅ Semantic parameter names
+
+**Tool Examples:**
+- execute_python(code: str)
+- execute_cli(command: str)
+- end_episode(submission?: str)
 end note
 
 note right of REST
@@ -77,12 +93,12 @@ note right of REST
 end note
 
 note right of SM
-**SessionManager Coordination**
-- Unified backend for both protocols
-- Contains and manages MCP component
-- Session state management
-- Component orchestration
-- Security and validation
+**Dual Protocol Support**
+- REST API for session management
+- MCP API for tool execution
+- Connection → Session mapping
+- Automatic session creation
+- Resource cleanup on disconnect
 end note
 
 @enduml

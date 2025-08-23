@@ -97,6 +97,12 @@ class SessionRestAPI:
             result: StreamingResponse = await self.get_events_stream(session_id, request)
             return result
 
+        @self.app.get("/session/{session_id}/episodes/{episode_id}/events")
+        async def get_episode_events_endpoint(session_id: str, episode_id: str, request: Request) -> StreamingResponse:
+            """SSE endpoint for episode-specific real-time events."""
+            result: StreamingResponse = await self.get_episode_events_stream(session_id, episode_id, request)
+            return result
+
         @self.app.get("/internal/episode-status/{session_id}")
         async def check_episode_status_endpoint(session_id: str, token: str) -> Dict[str, bool]:
             """
@@ -182,6 +188,121 @@ class SessionRestAPI:
 
         return StreamingResponse(
             event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "Cache-Control",
+            },
+        )
+
+    async def get_episode_events_stream(self, session_id: str, episode_id: str, request: Request) -> StreamingResponse:
+        """
+        SSE endpoint for episode-specific real-time events.
+
+        Args:
+            session_id: ID of the client session
+            episode_id: ID of the episode to monitor
+            request: FastAPI request object
+
+        Returns:
+            StreamingResponse with episode SSE events
+        """
+        session = self.session_manager._get_session(session_id)
+        episode = self.session_manager.episode_manager.get_current_episode(session_id)
+
+        if not episode or episode.episode_id != episode_id:
+            # Return empty stream if episode not found or doesn't match
+            async def empty_generator() -> AsyncGenerator[str, None]:
+                yield 'event: error\ndata: {"message": "Episode not found or inactive"}\n\n'
+                return
+
+            return StreamingResponse(
+                empty_generator(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Headers": "Cache-Control",
+                },
+            )
+
+        async def episode_event_generator() -> AsyncGenerator[str, None]:
+            """Generate SSE events for the episode."""
+            try:
+                # Get episode configuration from SessionManager
+                episode_config = self.session_manager.get_episode_config(session_id)
+                max_steps = episode_config["max_steps"]
+                last_step_count = 0
+
+                logger.info(f"Started episode monitoring for {session_id}/{episode_id} (max_steps: {max_steps})")
+
+                while session.is_active:
+                    # Check if client disconnected
+                    if await request.is_disconnected():
+                        break
+
+                    # Check if episode should be terminated using SessionManager logic
+                    should_terminate, termination_reason = self.session_manager.is_episode_over(session_id)
+
+                    if should_terminate:
+                        if termination_reason.startswith("max_steps_reached"):
+                            yield (
+                                f"event: max_steps_reached\n"
+                                f'data: {{"current_steps": {last_step_count}, "max_steps": {max_steps}, '
+                                f'"episode_id": "{episode_id}"}}\n\n'
+                            )
+                            # End the episode
+                            self.session_manager.episode_manager.end_episode(session_id, termination_reason)
+                        else:
+                            yield (
+                                f"event: episode_complete\n"
+                                f'data: {{"episode_id": "{episode_id}", "reason": "{termination_reason}"}}\n\n'
+                            )
+                        break
+
+                    # Get current episode (refresh in case it was updated)
+                    current_episode = self.session_manager.episode_manager.get_current_episode(session_id)
+                    if not current_episode or current_episode.episode_id != episode_id:
+                        # Episode ended or changed
+                        yield (
+                            f"event: episode_complete\n"
+                            f'data: {{"episode_id": "{episode_id}", "reason": "episode_ended"}}\n\n'
+                        )
+                        break
+
+                    current_steps = len(current_episode.steps)
+
+                    # Send step count update if it changed
+                    if current_steps != last_step_count:
+                        yield (
+                            f"event: step_count_update\n"
+                            f'data: {{"current_steps": {current_steps}, "max_steps": {max_steps}, '
+                            f'"episode_id": "{episode_id}"}}\n\n'
+                        )
+                        last_step_count = current_steps
+
+                    # Send periodic heartbeat
+                    timestamp = datetime.utcnow().isoformat()
+                    yield (
+                        f"event: heartbeat\n"
+                        f'data: {{"timestamp": "{timestamp}", "episode_id": "{episode_id}", '
+                        f'"steps": {current_steps}}}\n\n'
+                    )
+
+                    # Wait before next check
+                    await asyncio.sleep(2)  # Check every 2 seconds for responsiveness
+
+            except Exception as e:
+                logger.error(f"Episode SSE stream error for {session_id}/{episode_id}: {e}")
+                yield f'event: error\ndata: {{"message": "Stream error: {str(e)}"}}\n\n'
+            finally:
+                logger.info(f"Episode SSE stream ended for {session_id}/{episode_id}")
+
+        return StreamingResponse(
+            episode_event_generator(),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",

@@ -1,6 +1,7 @@
 """
 Tests for executor filtering feature in TaskConfigLoader.
 """
+
 import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -8,8 +9,8 @@ from unittest.mock import Mock, patch
 import pytest
 import yaml
 
-from saber.server.tasks.task_config_loader import TaskConfigLoader
 from saber.server.tasks.exceptions import InvalidTaskDefinitionException
+from saber.server.tasks.task_config_loader import TaskConfigLoader
 
 
 class TestExecutorFiltering:
