@@ -6,23 +6,24 @@ Tests for custom executor registry functionality.        self._executor_metadata
 and validate that external executors can be properly registered and used.
 """
 
-import pytest
 import tempfile
 from pathlib import Path
 from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from saber.server.base import CommandResult
 from saber.server.execution.base import Parameter, ParameterType
-from saber.server.execution.custom_executor_registry import (
-    CustomExecutorRegistry,
-    register_custom_executor,
-    register_executor_from_file,
-    load_custom_executors_from_directory,
-    get_custom_executor_info,
-)
 from saber.server.execution.executors.docker_executor import DockerExecutor
-from saber.server.execution.executors.factory import ExecutorFactory
+from saber.server.execution.executors.executor_factory import ExecutorFactory
+from saber.server.execution.executors.executor_registry import (
+    ExecutorRegistry,
+    get_executor_info,
+    load_executors_from_directory,
+    register_executor,
+    register_executor_from_file,
+)
 from saber.server.execution.sandbox.sandbox_manager import SandboxManager
 
 
@@ -47,9 +48,7 @@ class TestCustomExecutor(DockerExecutor):
         )
 
     async def execute(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> CommandResult:
-        return CommandResult.success_result(
-            output=f"Test executed with input: {parameters.get('test_input', 'none')}"
-        )
+        return CommandResult.success_result(output=f"Test executed with input: {parameters.get('test_input', 'none')}")
 
     def to_mcp_schema(self) -> Dict[str, Any]:
         self._executor_metadata = {
@@ -59,8 +58,8 @@ class TestCustomExecutor(DockerExecutor):
         return super().to_mcp_schema()
 
 
-class TestCustomExecutorRegistry:
-    """Test cases for CustomExecutorRegistry."""
+class TestExecutorRegistry:
+    """Test cases for ExecutorRegistry."""
 
     @pytest.fixture
     def mock_sandbox_manager(self):
@@ -70,28 +69,25 @@ class TestCustomExecutorRegistry:
 
     @pytest.fixture
     def registry(self):
-        """Create a fresh CustomExecutorRegistry for testing."""
-        return CustomExecutorRegistry()
+        """Create a fresh ExecutorRegistry for testing."""
+        return ExecutorRegistry()
 
     @pytest.fixture
     def cleanup_factory(self):
         """Clean up factory state after tests."""
-        # Store original state
-        original_registry = ExecutorFactory._executor_registry.copy()
+        # No factory-level cleanup needed since we use the global registry
         yield
-        # Restore original state
-        ExecutorFactory._executor_registry = original_registry
 
     def test_register_executor_class_success(self, registry, mock_sandbox_manager, cleanup_factory):
         """Test successful executor class registration."""
-        registry.register_executor_class("test", TestCustomExecutor)
+        registry.register_executor_class("test", TestCustomExecutor, "test")
 
-        assert "test" in registry._custom_executors
-        assert registry._custom_executors["test"] == TestCustomExecutor
-        assert "test" in ExecutorFactory._executor_registry
+        assert "test" in registry._registered_executors
+        assert registry._registered_executors["test"] == TestCustomExecutor
 
     def test_register_executor_class_invalid_class(self, registry, cleanup_factory):
         """Test registering invalid executor class."""
+
         class InvalidExecutor:
             pass
 
@@ -108,7 +104,7 @@ class TestCustomExecutorRegistry:
     def test_register_executor_from_file_success(self, registry, cleanup_factory):
         """Test registering executor from file."""
         # Create a temporary Python file with an executor
-        executor_code = '''
+        executor_code = """
 from typing import Any, Dict
 from saber.server.base import CommandResult
 from saber.server.execution.base import Parameter, ParameterType
@@ -141,17 +137,16 @@ class FileTestExecutor(DockerExecutor):
             "description": "Test executor for singleton behavior",
         }
         return super().to_mcp_schema()
-'''
+"""
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
             f.write(executor_code)
             temp_file = f.name
 
         try:
             registry.register_executor_from_file("filetest", temp_file, "FileTestExecutor")
 
-            assert "filetest" in registry._custom_executors
-            assert "filetest" in ExecutorFactory._executor_registry
+            assert "filetest" in registry._registered_executors
         finally:
             Path(temp_file).unlink()
 
@@ -164,7 +159,7 @@ class FileTestExecutor(DockerExecutor):
         """Test registering executor from file with missing class."""
         executor_code = "# Empty file"
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
             f.write(executor_code)
             temp_file = f.name
 
@@ -182,7 +177,7 @@ class FileTestExecutor(DockerExecutor):
 
             # Create a valid executor file
             executor_file = temp_path / "custom_executor.py"
-            executor_code = '''
+            executor_code = """
 from typing import Any, Dict
 from saber.server.base import CommandResult
 from saber.server.execution.base import Parameter, ParameterType
@@ -217,9 +212,9 @@ class DirTestExecutor(DockerExecutor):
         return super().to_mcp_schema()
 
 # Register the executor using the global registry for testing
-from saber.server.execution.custom_executor_registry import custom_executor_registry
-custom_executor_registry.register_executor_class("dirtest", DirTestExecutor)
-'''
+from saber.server.execution.executors.executor_registry import executor_registry
+executor_registry.register_executor_class("dirtest", DirTestExecutor, "test")
+"""
             executor_file.write_text(executor_code)
 
             # Create an invalid file
@@ -237,39 +232,39 @@ custom_executor_registry.register_executor_class("dirtest", DirTestExecutor)
             assert "Failed to load" in results[str(invalid_file)]
 
             # Check that the valid executor was registered in the global registry
-            from saber.server.execution.custom_executor_registry import custom_executor_registry
-            assert "dirtest" in custom_executor_registry._custom_executors
+            from saber.server.execution.executors.executor_registry import executor_registry
+
+            assert "dirtest" in executor_registry._registered_executors
 
     def test_unregister_executor(self, registry, cleanup_factory):
         """Test unregistering executor."""
-        registry.register_executor_class("test", TestCustomExecutor)
-        assert "test" in registry._custom_executors
+        registry.register_executor_class("test", TestCustomExecutor, "test")
+        assert "test" in registry._registered_executors
 
         registry.unregister_executor("test")
-        assert "test" not in registry._custom_executors
-        assert "test" not in ExecutorFactory._executor_registry
+        assert "test" not in registry._registered_executors
 
-    def test_list_custom_executors(self, registry, cleanup_factory):
-        """Test listing custom executors."""
-        registry.register_executor_class("test", TestCustomExecutor)
+    def test_list_registered_executors(self, registry, cleanup_factory):
+        """Test listing registered executors."""
+        registry.register_executor_class("test", TestCustomExecutor, "test")
 
-        executors = registry.list_custom_executors()
+        executors = registry.list_registered_executors()
 
         assert "test" in executors
         assert executors["test"]["class_name"] == "TestCustomExecutor"
-        assert executors["test"]["source"] == "external"
+        assert executors["test"]["source"] == "test"
         assert "default_config" in executors["test"]
 
-    def test_clear_all_custom_executors(self, registry, cleanup_factory):
-        """Test clearing all custom executors."""
-        registry.register_executor_class("test1", TestCustomExecutor)
+    def test_clear_all_executors(self, registry, cleanup_factory):
+        """Test clearing all executors."""
+        registry.register_executor_class("test1", TestCustomExecutor, "test")
         registry.register_executor_class("test2", TestCustomExecutor, "test_source")
 
-        assert len(registry._custom_executors) == 2
+        assert len(registry._registered_executors) == 2
 
-        registry.clear_all_custom_executors()
+        registry.clear_all_executors()
 
-        assert len(registry._custom_executors) == 0
+        assert len(registry._registered_executors) == 0
 
 
 class TestHookFunctions:
@@ -278,33 +273,31 @@ class TestHookFunctions:
     @pytest.fixture
     def cleanup_registry(self):
         """Clean up registry state after tests."""
-        from saber.server.execution.custom_executor_registry import custom_executor_registry
+        from saber.server.execution.executors.executor_registry import executor_registry
 
         # Store original state
-        original_executors = custom_executor_registry._custom_executors.copy()
-        original_sources = custom_executor_registry._registration_sources.copy()
-        original_factory = ExecutorFactory._executor_registry.copy()
+        original_executors = executor_registry._registered_executors.copy()
+        original_sources = executor_registry._registration_sources.copy()
 
         yield
 
         # Restore original state
-        custom_executor_registry._custom_executors = original_executors
-        custom_executor_registry._registration_sources = original_sources
-        ExecutorFactory._executor_registry = original_factory
+        executor_registry._registered_executors = original_executors
+        executor_registry._registration_sources = original_sources
 
-    def test_register_custom_executor_hook(self, cleanup_registry):
-        """Test the register_custom_executor hook function."""
-        register_custom_executor("hooktest", TestCustomExecutor)
+    def test_register_executor_hook(self, cleanup_registry):
+        """Test the register_executor hook function."""
+        register_executor("hooktest", TestCustomExecutor, "test")
 
         # Check that it was registered
-        info = get_custom_executor_info()
+        info = get_executor_info()
         assert "hooktest" in info
         assert info["hooktest"]["class_name"] == "TestCustomExecutor"
 
     def test_register_executor_from_file_hook(self, cleanup_registry):
         """Test the register_executor_from_file hook function."""
         # Create a temporary executor file
-        executor_code = '''
+        executor_code = """
 from typing import Any, Dict
 from saber.server.base import CommandResult
 from saber.server.execution.base import Parameter, ParameterType
@@ -337,9 +330,9 @@ class HookFileExecutor(DockerExecutor):
             "description": "Hook file test executor",
         }
         return super().to_mcp_schema()
-'''
+"""
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
             f.write(executor_code)
             temp_file = f.name
 
@@ -347,21 +340,21 @@ class HookFileExecutor(DockerExecutor):
             register_executor_from_file("hookfile", temp_file, "HookFileExecutor")
 
             # Check that it was registered
-            info = get_custom_executor_info()
+            info = get_executor_info()
             assert "hookfile" in info
             assert info["hookfile"]["class_name"] == "HookFileExecutor"
         finally:
             Path(temp_file).unlink()
 
-    def test_load_custom_executors_from_directory_hook(self, cleanup_registry):
-        """Test the load_custom_executors_from_directory hook function."""
+    def test_load_executors_from_directory_hook(self, cleanup_registry):
+        """Test the load_executors_from_directory hook function."""
         # Create a temporary directory with an executor file
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
 
             executor_file = temp_path / "hook_dir_executor.py"
-            executor_code = '''
-from saber.server.execution.custom_executor_registry import register_custom_executor
+            executor_code = """
+from saber.server.execution.executors.executor_registry import register_executor
 from typing import Any, Dict
 from saber.server.base import CommandResult
 from saber.server.execution.base import Parameter, ParameterType
@@ -396,29 +389,29 @@ class HookDirExecutor(DockerExecutor):
         return super().to_mcp_schema()
 
 # Register the executor
-register_custom_executor("hookdir", HookDirExecutor)
-'''
+register_executor("hookdir", HookDirExecutor, "test")
+"""
             executor_file.write_text(executor_code)
 
             # Load executors from directory
-            results = load_custom_executors_from_directory(str(temp_dir))
+            results = load_executors_from_directory(str(temp_dir))
 
             # Check results
             assert str(executor_file) in results
             assert results[str(executor_file)] == "loaded_successfully"
 
             # Check that the executor was registered
-            info = get_custom_executor_info()
+            info = get_executor_info()
             assert "hookdir" in info
             assert info["hookdir"]["class_name"] == "HookDirExecutor"
 
-    def test_get_custom_executor_info_hook(self, cleanup_registry):
-        """Test the get_custom_executor_info hook function."""
+    def test_get_executor_info_hook(self, cleanup_registry):
+        """Test the get_executor_info hook function."""
         # Register a test executor
-        register_custom_executor("infotest", TestCustomExecutor)
+        register_executor("infotest", TestCustomExecutor, "test")
 
         # Get info
-        info = get_custom_executor_info()
+        info = get_executor_info()
 
         assert "infotest" in info
         assert info["infotest"]["class_name"] == "TestCustomExecutor"

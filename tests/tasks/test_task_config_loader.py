@@ -5,14 +5,15 @@ Tests YAML task configuration loading and parsing.
 Simplified after removing dependency validation and progression logic.
 """
 
-import pytest
-import tempfile
 import os
+import tempfile
 from pathlib import Path
 
-from saber.server.tasks.task_config_loader import TaskConfigLoader
-from saber.server.tasks.task import Task
+import pytest
+
 from saber.server.tasks.subtask import SubTask
+from saber.server.tasks.task import Task
+from saber.server.tasks.task_config_loader import TaskConfigLoader
 
 
 class TestTaskConfigLoader:
@@ -34,7 +35,7 @@ tasks:
     subtasks: []
 """
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write(yaml_content)
             temp_path = f.name
 
@@ -74,7 +75,7 @@ tasks:
         objective: Complete second step
 """
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write(yaml_content)
             temp_path = f.name
 
@@ -128,7 +129,7 @@ tasks:
         # Missing closing bracket - invalid YAML
 """
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write(yaml_content)
             temp_path = f.name
 
@@ -149,7 +150,7 @@ tasks:
     subtasks: []
 """
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write(yaml_content)
             temp_path = f.name
 

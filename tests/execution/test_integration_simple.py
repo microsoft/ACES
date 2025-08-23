@@ -4,36 +4,29 @@ Simple integration tests for configuration and component setup.
 Only tests that verify real component integration without heavy mocking.
 """
 
-import pytest
 import uuid
 
+import pytest
+
 from saber.server.execution.execution_manager import ExecutionManager
-from saber.server.execution.utils.security_validator import SecurityValidator
-from saber.server.execution.executors.factory import ExecutorFactory
+from saber.server.execution.executors.executor_factory import ExecutorFactory
 from saber.server.execution.sandbox.sandbox_manager import SandboxManager
+from saber.server.execution.utils.security_validator import SecurityValidator
 
 
 @pytest.fixture
 def test_config():
     """Test configuration for integration tests."""
     return {
-        "execution": {
-            "timeout": 30.0,
-            "max_concurrent": 3
-        },
-        "security": {
-            "allowed_commands": ["echo", "cat", "ls"],
-            "max_command_length": 1000
-        },
-        "cli": {
-            "default_shell_mode": False
-        },
+        "execution": {"timeout": 30.0, "max_concurrent": 3},
+        "security": {"allowed_commands": ["echo", "cat", "ls"], "max_command_length": 1000},
+        "cli": {"default_shell_mode": False},
         "sandbox": {
             "image": "saber/base-sandbox:latest",
             "network_mode": "none",
             "read_only_root": True,
-            "user": "tooluser:tooluser"
-        }
+            "user": "tooluser:tooluser",
+        },
     }
 
 
@@ -83,6 +76,7 @@ security:
         # Test that configuration can be loaded
         # (This tests file loading, YAML parsing, and config validation)
         import yaml
+
         loaded_config = yaml.safe_load(config_file.read_text())
 
         # Verify configuration structure
@@ -130,7 +124,8 @@ class TestRealDockerIntegration:
 
         # Create a simple action that should work in the container
         from saber.server.base import Action
-        action = Action(tool_name="cli", arguments="echo 'real container test'")
+
+        action = Action(tool_name="cli", parameters={"arguments": "echo 'real container test'"})
         context = {"session_id": session_id}
 
         try:

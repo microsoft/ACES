@@ -6,12 +6,11 @@ of command executors, supporting scaling to many executor types.
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional
 
 from ..sandbox.sandbox_manager import SandboxManager
-from .cli import CLIExecutor
 from .docker_executor import DockerExecutor
-from .python_executor import PythonExecutor
+from .executor_registry import executor_registry
 
 logger = logging.getLogger(__name__)
 
@@ -21,14 +20,8 @@ class ExecutorFactory:
     Factory for creating and managing command executors.
 
     Supports dynamic executor selection and creation with configuration management.
-    Designed to scale to many (10s) of executor types.
+    Uses the global executor registry for discovering available executors.
     """
-
-    # Registry of available executor types
-    _executor_registry: Dict[str, Type[DockerExecutor]] = {
-        "cli": CLIExecutor,
-        "python": PythonExecutor,
-    }
 
     def __init__(
         self,
@@ -48,79 +41,35 @@ class ExecutorFactory:
         self._configuration = configuration or {}
         self._executor_instances: Dict[str, DockerExecutor] = {}
 
+        # Get available executors from the global registry
+        available_executors = executor_registry.get_available_executors()
+
         # Filter executors based on allowed list
         if allowed_executors is not None:
             # Validate that all requested executors are available
-            invalid_executors = [ex for ex in allowed_executors if ex not in self._executor_registry]
+            invalid_executors = [ex for ex in allowed_executors if ex not in available_executors]
             if invalid_executors:
                 logger.warning(
-                    f"Invalid executor types requested: \
-                        {invalid_executors}. Available: {list(self._executor_registry.keys())}"
+                    f"Invalid executor types requested: {invalid_executors}. Available: {available_executors}"
                 )
 
-            # Create filtered registry
-            self._filtered_executor_registry = {
-                executor_type: executor_class
-                for executor_type, executor_class in self._executor_registry.items()
-                if executor_type in allowed_executors
-            }
-            logger.info(
-                f"ExecutorFactory initialized with filtered executors: {list(self._filtered_executor_registry.keys())}"
-            )
+            # Create filtered list
+            self._allowed_executors = [ex for ex in allowed_executors if ex in available_executors]
+            logger.info(f"ExecutorFactory initialized with filtered executors: {self._allowed_executors}")
         else:
-            self._filtered_executor_registry = self._executor_registry.copy()
-            logger.info(
-                f"ExecutorFactory initialized with all available executors: \
-                    {list(self._filtered_executor_registry.keys())}"
-            )
+            self._allowed_executors = available_executors.copy()
+            logger.info(f"ExecutorFactory initialized with all available executors: {self._allowed_executors}")
 
-        logger.info(f"ExecutorFactory initialized with {len(self._filtered_executor_registry)} executor types")
+        logger.info(f"ExecutorFactory initialized with {len(self._allowed_executors)} executor types")
 
-    @classmethod
-    def register_executor(cls, executor_type: str, executor_class: Type[DockerExecutor]) -> None:
+    def get_available_executors(self) -> List[str]:
         """
-        Register a new executor type.
-
-        Args:
-            executor_type: String identifier for the executor
-            executor_class: Executor class (must inherit from DockerExecutor)
-        """
-        if not issubclass(executor_class, DockerExecutor):
-            raise ValueError(f"Executor class must inherit from DockerExecutor, got: {executor_class}")
-
-        cls._executor_registry[executor_type] = executor_class
-        logger.info(f"Registered executor type: {executor_type}")
-
-    @classmethod
-    def unregister_executor(cls, executor_type: str) -> None:
-        """
-        Unregister an executor type.
-
-        Args:
-            executor_type: String identifier for the executor to remove
-        """
-        if executor_type in cls._executor_registry:
-            del cls._executor_registry[executor_type]
-            logger.info(f"Unregistered executor type: {executor_type}")
-
-    @classmethod
-    def get_available_executors(cls) -> List[str]:
-        """
-        Get list of available executor types.
+        Get list of available executor types for this factory instance.
 
         Returns:
-            List of registered executor type names
+            List of executor type names that this factory can create
         """
-        return list(cls._executor_registry.keys())
-
-    def get_filtered_available_executors(self) -> List[str]:
-        """
-        Get list of executor types available in this factory instance.
-
-        Returns:
-            List of executor type names available in this instance (filtered by allowed_executors)
-        """
-        return list(self._filtered_executor_registry.keys())
+        return self._allowed_executors.copy()
 
     def get_executor(self, executor_type: str, force_new: bool = False) -> DockerExecutor:
         """
@@ -134,25 +83,26 @@ class ExecutorFactory:
             Configured executor instance
 
         Raises:
-            ValueError: If executor_type is not registered
+            ValueError: If executor_type is not registered or not allowed
         """
-        if executor_type not in self._filtered_executor_registry:
+        if executor_type not in self._allowed_executors:
             raise ValueError(
-                f"Unknown or disabled executor type: {executor_type}. "
-                f"Available types: {list(self._filtered_executor_registry.keys())}"
+                f"Unknown or disabled executor type: {executor_type}. " f"Available types: {self._allowed_executors}"
             )
 
         # Return existing instance unless force_new is True
         if not force_new and executor_type in self._executor_instances:
             return self._executor_instances[executor_type]
 
-        # Create new executor instance
-        executor_class = self._filtered_executor_registry[executor_type]
+        # Get executor class from global registry
+        try:
+            executor_class = executor_registry.get_executor_class(executor_type)
+        except KeyError:
+            raise ValueError(f"Executor type '{executor_type}' not found in registry")
 
         logger.debug(f"Creating new {executor_type} executor instance")
 
-        # Get the executor class and its default configuration
-        executor_class = self._filtered_executor_registry[executor_type]
+        # Get the executor class's default configuration
         default_config = executor_class.get_default_config()
 
         # Get executor-specific configuration from global configuration
@@ -193,7 +143,7 @@ class ExecutorFactory:
         """
         tools = []
 
-        for executor_type in self._filtered_executor_registry:
+        for executor_type in self._allowed_executors:
             try:
                 executor = self.get_executor(executor_type)
 
@@ -202,7 +152,7 @@ class ExecutorFactory:
                 metadata = getattr(executor, "_executor_metadata", {})
 
                 tool_def = {
-                    "name": f"{executor_type}_{metadata.get('name', 'command')}",
+                    "name": metadata.get("name", executor_type),
                     "description": metadata.get("description", f"{executor_type.title()} executor"),
                     "inputSchema": tool_schema,
                 }
@@ -234,13 +184,17 @@ class ExecutorFactory:
         """
         # Build configurations dynamically from executor classes
         configurations = {}
-        for executor_type, executor_class in self._executor_registry.items():
-            configurations[executor_type] = executor_class.get_default_config()
+        for executor_type in self._allowed_executors:
+            try:
+                executor_class = executor_registry.get_executor_class(executor_type)
+                configurations[executor_type] = executor_class.get_default_config()
+            except KeyError:
+                logger.warning(f"Executor type '{executor_type}' not found in registry")
 
         info = {
             "available_types": self.get_available_executors(),
             "active_instances": list(self._executor_instances.keys()),
-            "registry_size": len(self._executor_registry),
+            "registry_size": len(self._allowed_executors),
             "configurations": configurations,
         }
 

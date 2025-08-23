@@ -152,7 +152,17 @@ class EnvironmentSpec:
             session_id: Session identifier for orchestrator integration
             cleanup_token: Cleanup token for orchestrator authentication
             saber_host_url: SABER server URL for orchestrator polling
+
+        Raises:
+            ValueError: If session_id is provided but cleanup_token is missing
         """
+        # Validate orchestrator requirements
+        if session_id and not cleanup_token:
+            raise ValueError(
+                "cleanup_token is required when session_id is provided. "
+                "The orchestrator service requires both session_id and cleanup_token for proper integration."
+            )
+
         services = {}
 
         # Add SABER orchestrator service (if session info provided)

@@ -15,12 +15,13 @@ Unit tests for SessionManage        with patch('saber.server.session_manager.Tas
 Tests component integration, error scenarios, and edge cases.
 """
 
-import pytest
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
+import pytest
+
+from saber.server.base import Action, CommandResult
 from saber.server.session_manager import SessionManager
-from saber.server.base import CommandResult, Action
 
 
 class TestSessionManagerIntegration:
@@ -46,18 +47,15 @@ class TestSessionManagerIntegration:
         mock_episode_manager.end_episode = MagicMock()
         mock_episode_manager.get_episode = MagicMock()
 
-        with patch('saber.server.session_manager.TaskManager', return_value=mock_task_manager), \
-             patch('saber.server.session_manager.ExecutionManager', return_value=mock_execution_manager), \
-             patch('saber.server.session_manager.PolicyManager', return_value=mock_policy_manager), \
-             patch('saber.server.session_manager.EvaluationManager', return_value=mock_evaluation_manager), \
-             patch('saber.server.session_manager.EpisodeManager', return_value=mock_episode_manager):
+        with (
+            patch("saber.server.session_manager.TaskManager", return_value=mock_task_manager),
+            patch("saber.server.session_manager.ExecutionManager", return_value=mock_execution_manager),
+            patch("saber.server.session_manager.PolicyManager", return_value=mock_policy_manager),
+            patch("saber.server.session_manager.EvaluationManager", return_value=mock_evaluation_manager),
+            patch("saber.server.session_manager.EpisodeManager", return_value=mock_episode_manager),
+        ):
 
-            manager = SessionManager(
-                domain_name="integration_test",
-                config_dir="/tmp",
-                host="127.0.0.1",
-                port=8004
-            )
+            manager = SessionManager(domain_name="integration_test", config_dir="/tmp", host="127.0.0.1", port=8004)
             return manager
 
     @pytest.mark.asyncio
@@ -91,7 +89,7 @@ class TestSessionManagerIntegration:
         mock_task.initial_context = {"test": "data"}
         manager.task_manager.get_task.return_value = mock_task
         manager.episode_manager.start_episode.return_value = mock_episode
-        # Also mock get_current_episode for execute_command calls
+        # Also mock get_current_episode for execute_action calls
         manager.episode_manager.get_current_episode.return_value = mock_episode
         # Mock step method to return the proper steps
         manager.episode_manager.step.side_effect = [mock_step1, mock_step2]
@@ -109,14 +107,14 @@ class TestSessionManagerIntegration:
         assert session.current_episode_id == "episode_123"
 
         # 3. Execute first step
-        action1 = Action(tool_name="cli", command="command1", parameters={})
-        response1 = await manager.execute_command(session_id, action1)
+        action1 = Action(tool_name="cli", parameters={"arguments": "command1"})
+        response1 = await manager.execute_action(session_id, action1)
         assert response1.success is True
         assert session.current_episode_id == "episode_123"  # Still active
 
         # 4. Execute final step (completes episode)
-        action2 = Action(tool_name="cli", command="command2", parameters={})
-        response2 = await manager.execute_command(session_id, action2)
+        action2 = Action(tool_name="cli", parameters={"arguments": "command2"})
+        response2 = await manager.execute_action(session_id, action2)
         assert response2.success is True
         assert session.current_episode_id is None  # Episode completed
 
@@ -158,15 +156,14 @@ class TestSessionManagerIntegration:
     @pytest.mark.asyncio
     async def test_component_initialization_order(self):
         """Test that components are initialized in the correct order."""
-        with patch('saber.server.session_manager.TaskManager') as mock_tm, \
-             patch('saber.server.session_manager.ExecutionManager') as mock_em, \
-             patch('saber.server.session_manager.PolicyManager') as mock_pm, \
-             patch('saber.server.session_manager.EvaluationManager') as mock_eval:
+        with (
+            patch("saber.server.session_manager.TaskManager") as mock_tm,
+            patch("saber.server.session_manager.ExecutionManager") as mock_em,
+            patch("saber.server.session_manager.PolicyManager") as mock_pm,
+            patch("saber.server.session_manager.EvaluationManager") as mock_eval,
+        ):
 
-            manager = SessionManager(
-                domain_name="test_domain",
-                config_dir="/tmp"
-            )
+            manager = SessionManager(domain_name="test_domain", config_dir="/tmp")
 
             # Verify initialization order and parameters
             mock_tm.assert_called_once_with("test_domain", "/tmp")
@@ -198,16 +195,15 @@ class TestSessionManagerErrorHandling:
         mock_episode_manager.end_episode = MagicMock()
         mock_episode_manager.get_episode = MagicMock()
 
-        with patch('saber.server.session_manager.TaskManager', return_value=mock_task_manager), \
-             patch('saber.server.session_manager.ExecutionManager', return_value=mock_execution_manager), \
-             patch('saber.server.session_manager.PolicyManager', return_value=mock_policy_manager), \
-             patch('saber.server.session_manager.EvaluationManager', return_value=mock_evaluation_manager), \
-             patch('saber.server.session_manager.EpisodeManager', return_value=mock_episode_manager):
+        with (
+            patch("saber.server.session_manager.TaskManager", return_value=mock_task_manager),
+            patch("saber.server.session_manager.ExecutionManager", return_value=mock_execution_manager),
+            patch("saber.server.session_manager.PolicyManager", return_value=mock_policy_manager),
+            patch("saber.server.session_manager.EvaluationManager", return_value=mock_evaluation_manager),
+            patch("saber.server.session_manager.EpisodeManager", return_value=mock_episode_manager),
+        ):
 
-            manager = SessionManager(
-                domain_name="error_test",
-                config_dir="/tmp"
-            )
+            manager = SessionManager(domain_name="error_test", config_dir="/tmp")
 
             return manager
 
@@ -242,8 +238,8 @@ class TestSessionManagerErrorHandling:
         manager.execution_manager.step.side_effect = Exception("Execution failed")
 
         # Execute command
-        action = Action(tool_name="cli", command="failing_command", parameters={})
-        response = await manager.execute_command(session.session_id, action)
+        action = Action(tool_name="cli", parameters={"arguments": "failing_command"})
+        response = await manager.execute_action(session.session_id, action)
 
         assert response.success is False
         assert response.error == "Execution failed"
@@ -269,8 +265,8 @@ class TestSessionManagerErrorHandling:
         manager.episode_manager.step.side_effect = Exception("Episode manager failed")
 
         # Execute command
-        action = Action(tool_name="cli", command="command", parameters={})
-        response = await manager.execute_command(session.session_id, action)
+        action = Action(tool_name="cli", parameters={"arguments": "command"})
+        response = await manager.execute_action(session.session_id, action)
 
         assert response.success is False
         assert "Episode manager failed" in response.error
@@ -304,8 +300,8 @@ class TestSessionManagerErrorHandling:
         manager.task_manager.step.return_value = mock_step
 
         # This should still work despite evaluation manager failures
-        action = Action(tool_name="cli", command="command", parameters={})
-        response = await manager.execute_command(session.session_id, action)
+        action = Action(tool_name="cli", parameters={"arguments": "command"})
+        response = await manager.execute_action(session.session_id, action)
         assert response.success is True
 
     @pytest.mark.asyncio
@@ -335,10 +331,7 @@ class TestSessionManagerErrorHandling:
             return session.session_id
 
         # Run multiple concurrent operations
-        tasks = [
-            create_and_terminate_session(f"client_{i}")
-            for i in range(5)
-        ]
+        tasks = [create_and_terminate_session(f"client_{i}") for i in range(5)]
 
         session_ids = await asyncio.gather(*tasks)
 
@@ -353,6 +346,7 @@ class TestSessionManagerErrorHandling:
 
         # Create session directly (avoiding async)
         from saber.server.session_manager import ClientSession
+
         session = ClientSession(session_id="test_id", client_id="test_client")
         manager.active_sessions["test_id"] = session
 

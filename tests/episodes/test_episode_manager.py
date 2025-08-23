@@ -5,13 +5,13 @@ Tests episode lifecycle management, RL interfaces, and state transitions.
 Simplified after removing subtask progression tracking.
 """
 
-import pytest
 from datetime import datetime
 
+import pytest
+
+from saber.server.base import Action, CommandResult, Episode, EpisodeState, Step
 from saber.server.episodes.episode_manager import EpisodeManager
-from saber.server.base import Episode, Step, Action, EpisodeState
 from saber.server.episodes.exceptions import EpisodeNotFoundException
-from saber.server.base import CommandResult
 
 
 class TestEpisodeManager:
@@ -21,10 +21,7 @@ class TestEpisodeManager:
         """Test starting an episode with minimal parameters."""
         manager = EpisodeManager()
 
-        episode = manager.start_episode(
-            session_id="test_session",
-            task_id="test_task"
-        )
+        episode = manager.start_episode(session_id="test_session", task_id="test_task")
 
         assert isinstance(episode, Episode)
         assert episode.task_id == "test_task"
@@ -39,11 +36,7 @@ class TestEpisodeManager:
         manager = EpisodeManager()
         initial_context = {"sample_path": "/data/test.exe", "timeout": 300}
 
-        episode = manager.start_episode(
-            session_id="test_session",
-            task_id="test_task",
-            initial_context=initial_context
-        )
+        episode = manager.start_episode(session_id="test_session", task_id="test_task", initial_context=initial_context)
 
         assert episode.context == initial_context
 
@@ -82,7 +75,7 @@ class TestEpisodeManager:
             stdout="Test output",
             stderr="",
             execution_time=0.1,
-            metadata={"output": "Test output", "file_type": "PE32"}
+            metadata={"output": "Test output", "file_type": "PE32"},
         )
 
         step = manager.step("test_session", action, command_result)
@@ -102,12 +95,7 @@ class TestEpisodeManager:
         """Test step with non-existent session."""
         manager = EpisodeManager()
         action = Action(tool_name="test_tool", parameters={})
-        command_result = CommandResult(
-            exit_code=0,
-            stdout="",
-            stderr="",
-            execution_time=0.1
-        )
+        command_result = CommandResult(exit_code=0, stdout="", stderr="", execution_time=0.1)
 
         with pytest.raises(EpisodeNotFoundException):
             manager.step("nonexistent_session", action, command_result)
@@ -118,12 +106,7 @@ class TestEpisodeManager:
         manager.start_episode("test_session", "test_task")
 
         action = Action(tool_name="test_tool", parameters={})
-        command_result = CommandResult(
-            exit_code=0,
-            stdout="",
-            stderr="",
-            execution_time=0.1
-        )
+        command_result = CommandResult(exit_code=0, stdout="", stderr="", execution_time=0.1)
 
         step1 = manager.step("test_session", action, command_result)
         step2 = manager.step("test_session", action, command_result)
@@ -161,12 +144,7 @@ class TestEpisodeManager:
 
         # Add some steps to the old episode
         action = Action(tool_name="test_tool", parameters={})
-        command_result = CommandResult(
-            exit_code=0,
-            stdout="",
-            stderr="",
-            execution_time=0.1
-        )
+        command_result = CommandResult(exit_code=0, stdout="", stderr="", execution_time=0.1)
         manager.step("test_session", action, command_result)
 
         # Reset the episode
@@ -225,12 +203,7 @@ class TestEpisodeManager:
         episode = manager.start_episode("test_session", "test_task")
 
         action = Action(tool_name="test_tool", parameters={"key": "value"})
-        response = CommandResult(
-            exit_code=0,
-            stdout="test output",
-            stderr="",
-            execution_time=0.1
-        )
+        response = CommandResult(exit_code=0, stdout="test output", stderr="", execution_time=0.1)
 
         step = manager.create_step(episode, action, response)
 

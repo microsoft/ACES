@@ -5,13 +5,14 @@ This module tests the executor factory that manages different types of command e
 with dynamic selection and creation.
 """
 
-import pytest
 from unittest.mock import MagicMock, patch
 
-from saber.server.execution.executors.factory import ExecutorFactory
-from saber.server.execution.executors.cli import CLIExecutor
+import pytest
+
 from saber.server.execution.executors.docker_executor import DockerExecutor
-from saber.server.execution.executors.python_executor import PythonExecutor
+from saber.server.execution.executors.executor_factory import ExecutorFactory
+from saber.server.execution.executors.standard_registry.cli_executor import CLIExecutor
+from saber.server.execution.executors.standard_registry.python_executor import PythonExecutor
 from saber.server.execution.sandbox.sandbox_manager import SandboxManager
 
 
@@ -22,10 +23,7 @@ class TestExecutorFactory:
     def mock_sandbox_manager(self):
         """Create a mock SandboxManager."""
         manager = MagicMock(spec=SandboxManager)
-        manager.get_sandbox_config.return_value = {
-            "image": "saber/base-sandbox:latest",
-            "network_mode": "none"
-        }
+        manager.get_sandbox_config.return_value = {"image": "saber/base-sandbox:latest", "network_mode": "none"}
         return manager
 
     @pytest.fixture
@@ -45,12 +43,7 @@ class TestExecutorFactory:
     def test_initialization_with_config(self, mock_sandbox_manager):
         """Test factory initialization with configuration."""
 
-        config_dict = {
-            "executors": {
-                "common": {"timeout": 600},
-                "python": {"allowed_modules": ["requests", "json"]}
-            }
-        }
+        config_dict = {"executors": {"common": {"timeout": 600}, "python": {"allowed_modules": ["requests", "json"]}}}
         configuration = dict(config=config_dict)
 
         factory = ExecutorFactory(sandbox_manager=mock_sandbox_manager, configuration=configuration)
@@ -66,42 +59,48 @@ class TestExecutorFactory:
         assert len(executors) >= 2
 
     def test_register_executor(self):
-        """Test registering a new executor type."""
+        """Test registering a new executor type through the registry."""
+        from saber.server.execution.executors.executor_registry import executor_registry, register_executor
+
         class CustomExecutor(DockerExecutor):
             async def execute(self, parameters, context):
                 pass
 
-        initial_count = len(ExecutorFactory._executor_registry)
-        ExecutorFactory.register_executor("custom", CustomExecutor)
+        initial_count = len(executor_registry.get_available_executors())
+        register_executor("custom", CustomExecutor, "test")
 
-        assert "custom" in ExecutorFactory._executor_registry
-        assert len(ExecutorFactory._executor_registry) == initial_count + 1
-        assert ExecutorFactory._executor_registry["custom"] == CustomExecutor
+        assert "custom" in executor_registry.get_available_executors()
+        assert len(executor_registry.get_available_executors()) == initial_count + 1
+        assert executor_registry.get_executor_class("custom") == CustomExecutor
 
         # Cleanup
-        ExecutorFactory.unregister_executor("custom")
+        executor_registry.unregister_executor("custom")
 
     def test_register_executor_invalid_class(self):
         """Test registering an invalid executor class."""
+        from saber.server.execution.executors.executor_registry import register_executor
+
         class InvalidExecutor:
             pass
 
         with pytest.raises(ValueError, match="must inherit from DockerExecutor"):
-            ExecutorFactory.register_executor("invalid", InvalidExecutor)
+            register_executor("invalid", InvalidExecutor, "test")
 
     def test_unregister_executor(self):
-        """Test unregistering an executor type."""
+        """Test unregistering an executor type through the registry."""
+        from saber.server.execution.executors.executor_registry import executor_registry, register_executor
+
         # Register a temporary executor
         class TempExecutor(DockerExecutor):
             async def execute(self, parameters, context):
                 pass
 
-        ExecutorFactory.register_executor("temp", TempExecutor)
-        assert "temp" in ExecutorFactory._executor_registry
+        register_executor("temp", TempExecutor, "test")
+        assert "temp" in executor_registry.get_available_executors()
 
         # Unregister it
-        ExecutorFactory.unregister_executor("temp")
-        assert "temp" not in ExecutorFactory._executor_registry
+        executor_registry.unregister_executor("temp")
+        assert "temp" not in executor_registry.get_available_executors()
 
     def test_get_executor_cli(self, executor_factory):
         """Test getting CLI executor."""
@@ -152,10 +151,7 @@ class TestExecutorFactory:
     def test_executor_config_extraction(self, mock_sandbox_manager):
         """Test executor configuration extraction with the new configuration system."""
 
-        configuration = {
-            "timeout": 600,
-            "cli": {"default_shell_mode": True}
-        }
+        configuration = {"timeout": 600, "cli": {"default_shell_mode": True}}
 
         factory = ExecutorFactory(sandbox_manager=mock_sandbox_manager, configuration=configuration)
 
@@ -178,21 +174,15 @@ class TestExecutorFactory:
 
     def test_get_all_mcp_tools(self, executor_factory):
         """Test getting MCP tools for all executors."""
-        with patch.object(executor_factory, 'get_executor') as mock_get_executor:
+        with patch.object(executor_factory, "get_executor") as mock_get_executor:
             # Mock CLI executor
             mock_cli = MagicMock()
-            mock_cli._executor_metadata = {
-                'name': 'docker_cli',
-                'description': 'Execute shell commands'
-            }
+            mock_cli._executor_metadata = {"name": "docker_cli", "description": "Execute shell commands"}
             mock_cli.to_mcp_schema.return_value = {"type": "object", "properties": {"command": {"type": "string"}}}
 
             # Mock Python executor
             mock_python = MagicMock()
-            mock_python._executor_metadata = {
-                'name': 'python_script',
-                'description': 'Execute Python scripts'
-            }
+            mock_python._executor_metadata = {"name": "python_script", "description": "Execute Python scripts"}
             mock_python.to_mcp_schema.return_value = {"type": "object", "properties": {"code": {"type": "string"}}}
 
             def mock_get_executor_side_effect(executor_type):
@@ -221,11 +211,12 @@ class TestExecutorFactory:
 
     def test_get_all_mcp_tools_with_error(self, executor_factory):
         """Test getting MCP tools when one executor fails."""
-        with patch.object(executor_factory, 'get_executor') as mock_get_executor:
+        with patch.object(executor_factory, "get_executor") as mock_get_executor:
+
             def mock_get_executor_side_effect(executor_type):
                 if executor_type == "cli":
                     mock_cli = MagicMock()
-                    mock_cli._executor_metadata = {'name': 'docker_cli', 'description': 'Execute shell commands'}
+                    mock_cli._executor_metadata = {"name": "docker_cli", "description": "Execute shell commands"}
                     mock_cli.to_mcp_schema.return_value = {"type": "object"}
                     return mock_cli
                 else:
@@ -277,10 +268,7 @@ class TestExecutorFactory:
         configuration = {
             "timeout": 900,
             "max_retries": 3,
-            "python": {
-                "allowed_modules": ["requests", "numpy"],
-                "timeout": 1200  # Override common timeout for Python
-            }
+            "python": {"allowed_modules": ["requests", "numpy"], "timeout": 1200},  # Override common timeout for Python
         }
 
         factory = ExecutorFactory(sandbox_manager=mock_sandbox_manager, configuration=configuration)

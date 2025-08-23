@@ -6,13 +6,14 @@ and become available through the SABER execution framework.
 """
 
 import tempfile
-import pytest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from saber.server.execution.execution_manager import ExecutionManager
-from saber.server.execution.custom_executor_registry import get_custom_executor_info
-from saber.server.execution.executors.factory import ExecutorFactory
+from saber.server.execution.executors.executor_factory import ExecutorFactory
+from saber.server.execution.executors.executor_registry import get_executor_info
 
 
 class TestCustomExecutorIntegration:
@@ -21,11 +22,8 @@ class TestCustomExecutorIntegration:
     @pytest.fixture
     def cleanup_factory(self):
         """Clean up factory state after tests."""
-        # Store original state
-        original_registry = ExecutorFactory._executor_registry.copy()
+        # No factory-level cleanup needed since we use the global registry
         yield
-        # Restore original state
-        ExecutorFactory._executor_registry = original_registry
 
     def test_execution_manager_loads_custom_executors(self, cleanup_factory):
         """Test that ExecutionManager loads custom executors from config directory."""
@@ -39,7 +37,7 @@ class TestCustomExecutorIntegration:
 from typing import Any, Dict, Optional
 from saber.server.base import CommandResult
 from saber.server.execution.base import Parameter, ParameterType
-from saber.server.execution.custom_executor_registry import register_custom_executor
+from saber.server.execution.executors.executor_registry import register_executor
 from saber.server.execution.executors.docker_executor import DockerExecutor
 from saber.server.execution.sandbox.sandbox_manager import SandboxManager
 
@@ -75,7 +73,7 @@ class TestIntegrationExecutor(DockerExecutor):
         }
         return super().to_mcp_schema()
 
-register_custom_executor("integration_test", TestIntegrationExecutor)
+register_executor("integration_test", TestIntegrationExecutor, "test")
 '''
             executor_file.write_text(executor_code)
 
@@ -88,11 +86,11 @@ register_custom_executor("integration_test", TestIntegrationExecutor)
                 execution_manager = ExecutionManager(config_dir=str(temp_dir))
 
                 # Check that the custom executor was loaded and is available
-                available_executors = execution_manager._executor_factory.get_filtered_available_executors()
+                available_executors = execution_manager._executor_factory.get_available_executors()
                 assert "integration_test" in available_executors
 
-                # Verify it's in the custom executor registry
-                custom_info = get_custom_executor_info()
+                # Verify it's in the executor registry
+                custom_info = get_executor_info()
                 assert "integration_test" in custom_info
                 assert custom_info["integration_test"]["class_name"] == "TestIntegrationExecutor"
 
@@ -118,32 +116,31 @@ register_custom_executor("integration_test", TestIntegrationExecutor)
             # Create ExecutionManager with pentest demo config directory
             execution_manager = ExecutionManager(config_dir=str(pentest_demo_path))
 
-            # Check that custom executors were loaded
-            available_executors = execution_manager._executor_factory.get_filtered_available_executors()
+        # Check that custom executors were loaded
+        available_executors = execution_manager._executor_factory.get_available_executors()
+        # Should have the built-in executors plus any custom ones
+        assert "cli" in available_executors
+        assert "python" in available_executors
 
-            # Should have the built-in executors plus any custom ones
-            assert "cli" in available_executors
-            assert "python" in available_executors
+        # Check if pentest executors were loaded (if file exists)
+        pentest_executor_file = pentest_demo_path / "pentest_executors.py"
+        if pentest_executor_file.exists():
+            custom_info = get_executor_info()
+            # The pentest_executors.py file should register nmap and sqlmap
+            expected_executors = ["nmap", "sqlmap"]
+            for executor_name in expected_executors:
+                if executor_name in custom_info:
+                    assert executor_name in available_executors
 
-            # Check if pentest executors were loaded (if file exists)
-            pentest_executor_file = pentest_demo_path / "pentest_executors.py"
-            if pentest_executor_file.exists():
-                custom_info = get_custom_executor_info()
-                # The pentest_executors.py file should register nmap and sqlmap
-                expected_executors = ["nmap", "sqlmap"]
-                for executor_name in expected_executors:
-                    if executor_name in custom_info:
-                        assert executor_name in available_executors
+            # Check MCP tools include custom executors
+            mcp_tools = execution_manager.to_mcp_tools()
+            tool_names = [tool["name"] for tool in mcp_tools]
 
-                # Check MCP tools include custom executors
-                mcp_tools = execution_manager.to_mcp_tools()
-                tool_names = [tool["name"] for tool in mcp_tools]
-
-                # Should have at least the built-in tools
-                cli_tools = [name for name in tool_names if "cli" in name]
-                python_tools = [name for name in tool_names if "python" in name]
-                assert len(cli_tools) > 0
-                assert len(python_tools) > 0
+            # Should have at least the built-in tools
+            cli_tools = [name for name in tool_names if "cli" in name]
+            python_tools = [name for name in tool_names if "python" in name]
+            assert len(cli_tools) > 0
+            assert len(python_tools) > 0
 
     def test_custom_executor_mcp_schema_generation(self, cleanup_factory):
         """Test that custom executors generate proper MCP schemas."""
@@ -153,11 +150,11 @@ register_custom_executor("integration_test", TestIntegrationExecutor)
 
             # Create a custom executor with specific parameters
             executor_file = temp_path / "schema_test_executor.py"
-            executor_code = '''
+            executor_code = """
 from typing import Any, Dict, Optional
 from saber.server.base import CommandResult
 from saber.server.execution.base import Parameter, ParameterType
-from saber.server.execution.custom_executor_registry import register_custom_executor
+from saber.server.execution.executors.executor_registry import register_executor
 from saber.server.execution.executors.docker_executor import DockerExecutor
 
 class SchemaTestExecutor(DockerExecutor):
@@ -208,8 +205,8 @@ class SchemaTestExecutor(DockerExecutor):
         }
         return super().to_mcp_schema()
 
-register_custom_executor("schema_test", SchemaTestExecutor)
-'''
+register_executor("schema_test", SchemaTestExecutor)
+"""
             executor_file.write_text(executor_code)
 
             # Mock SandboxManager
@@ -259,8 +256,8 @@ register_custom_executor("schema_test", SchemaTestExecutor)
             temp_path = Path(temp_dir)
 
             executor_file = temp_path / "factory_test_executor.py"
-            executor_code = '''
-from saber.server.execution.custom_executor_registry import register_custom_executor
+            executor_code = """
+from saber.server.execution.executors.executor_registry import register_executor
 from saber.server.execution.executors.docker_executor import DockerExecutor
 
 class FactoryTestExecutor(DockerExecutor):
@@ -282,8 +279,8 @@ class FactoryTestExecutor(DockerExecutor):
         }
         return super().to_mcp_schema()
 
-register_custom_executor("factory_test", FactoryTestExecutor)
-'''
+register_executor("factory_test", FactoryTestExecutor)
+"""
             executor_file.write_text(executor_code)
 
             with patch("saber.server.execution.execution_manager.SandboxManager") as mock_sandbox:
@@ -297,7 +294,7 @@ register_custom_executor("factory_test", FactoryTestExecutor)
                 factory = execution_manager._executor_factory
 
                 # Check it's in available executors
-                available = factory.get_filtered_available_executors()
+                available = factory.get_available_executors()
                 assert "factory_test" in available
 
                 # Check we can get the executor instance

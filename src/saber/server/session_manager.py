@@ -179,6 +179,10 @@ class SessionManager:
 
         self.active_sessions[session_id] = session
 
+        # Register session with MCP API using client_id as MCP client identifier
+        # This allows MCP clients to use the client_id when connecting to map to SABER sessions
+        self.mcp_api.register_session_for_client(client_id, session_id)
+
         # Log session creation with evaluation manager (ignore failures)
         try:
             await self.evaluation_manager.log_session_start(session_id, client_id)
@@ -206,6 +210,9 @@ class SessionManager:
                 session.current_task_id = None
             except Exception as e:
                 logger.warning(f"Error ending episode during session termination: {e}")
+
+        # Unregister session from MCP API using client_id
+        self.mcp_api.unregister_session_for_client(session.client_id)
 
         # Log session end with evaluation manager (ignore failures)
         try:
@@ -266,9 +273,9 @@ class SessionManager:
         logger.info(f"Started episode {episode.episode_id} for task {task_id} in session {session_id}")
         return episode
 
-    async def execute_command(self, session_id: str, action: Action) -> CommandResult:
+    async def execute_action(self, session_id: str, action: Action) -> CommandResult:
         """
-        Execute command for MCP integration.
+        Execute action for MCP integration.
 
         Args:
             session_id: ID of the client session
@@ -372,6 +379,76 @@ class SessionManager:
         session.update_activity()
 
         return self.policy_manager.get_policy()
+
+    def is_episode_over(self, session_id: str) -> tuple[bool, str]:
+        """
+        Check if the current episode should be terminated.
+
+        Args:
+            session_id: ID of the client session
+
+        Returns:
+            Tuple of (should_terminate, reason)
+        """
+        episode = self.episode_manager.get_current_episode(session_id)
+        if not episode:
+            return True, "no_active_episode"
+
+        if episode.is_complete:
+            return True, episode.completion_reason or "completed"
+
+        # Get task configuration for episode limits
+        try:
+            task = self.task_manager.get_task(episode.task_id)
+            episode_config = task.episode_config
+
+            # Check max steps
+            max_steps = episode_config.get("max_steps", 20)  # Default to 20
+            current_steps = len(episode.steps)
+
+            if current_steps >= max_steps:
+                return True, f"max_steps_reached ({current_steps}/{max_steps})"
+
+            # Could add more termination conditions here:
+            # - episode timeout
+            # - step timeout
+            # - resource limits
+            # etc.
+
+        except Exception as e:
+            logger.warning(f"Failed to check episode termination conditions: {e}")
+            # Don't terminate on configuration errors
+            pass
+
+        return False, ""
+
+    def get_episode_config(self, session_id: str) -> Dict[str, Any]:
+        """
+        Get episode configuration for the current episode.
+
+        Args:
+            session_id: ID of the client session
+
+        Returns:
+            Episode configuration dictionary with defaults
+        """
+        episode = self.episode_manager.get_current_episode(session_id)
+        if not episode:
+            return {"max_steps": 20}  # Default config
+
+        try:
+            task = self.task_manager.get_task(episode.task_id)
+            config = task.episode_config.copy()
+
+            # Apply defaults for missing values
+            config.setdefault("max_steps", 20)
+            config.setdefault("step_timeout_seconds", 300)
+            config.setdefault("episode_timeout_minutes", 30)
+
+            return config
+        except Exception as e:
+            logger.warning(f"Failed to get episode configuration: {e}")
+            return {"max_steps": 20}
 
     def _get_session(self, session_id: str) -> ClientSession:
         """

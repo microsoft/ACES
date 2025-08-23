@@ -4,19 +4,20 @@ Unit tests for TaskManager - Core Functionality.
 Tests initialization, task loading, basic operations, and task/subtask retrieval.
 """
 
-import pytest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from saber.server.tasks.task_manager import TaskManager
-from saber.server.tasks.task import Task
-from saber.server.tasks.subtask import SubTask
-from saber.server.tasks.task_config_loader import TaskConfigLoader
+import pytest
+
 from saber.server.tasks.exceptions import (
-    TaskNotFoundException,
+    InvalidTaskDefinitionException,
     SubTaskNotFoundException,
-    InvalidTaskDefinitionException
+    TaskNotFoundException,
 )
+from saber.server.tasks.subtask import SubTask
+from saber.server.tasks.task import Task
+from saber.server.tasks.task_config_loader import TaskConfigLoader
+from saber.server.tasks.task_manager import TaskManager
 
 
 class TestTaskManagerCore:
@@ -37,7 +38,7 @@ class TestTaskManagerCore:
         assert len(manager.tasks) == 1
         assert "malware_family_analysis" in manager.tasks
 
-    @patch.object(TaskConfigLoader, 'load_tasks_from_file')
+    @patch.object(TaskConfigLoader, "load_tasks_from_file")
     def test_load_tasks_from_yaml_delegates_to_config_loader(self, mock_load, temp_config_dir):
         """Test that loading delegates to TaskConfigLoader."""
         mock_tasks = {"test_task": Mock(spec=Task)}
@@ -120,10 +121,12 @@ class TestTaskManagerCore:
         """Test listing tasks when no tasks are defined."""
         # Create tasks.yaml in the tmp directory
         tasks_yaml = tmp_path / "tasks.yaml"
-        tasks_yaml.write_text("""
+        tasks_yaml.write_text(
+            """
 domain: "malware_classification"
 tasks: []
-""")
+"""
+        )
 
         manager = TaskManager("malware_classification", str(tmp_path))
 
@@ -134,7 +137,8 @@ tasks: []
         """Test listing multiple tasks."""
         # Create tasks.yaml in the tmp directory
         tasks_yaml = tmp_path / "tasks.yaml"
-        tasks_yaml.write_text("""
+        tasks_yaml.write_text(
+            """
 domain: "malware_classification"
 tasks:
   - task_id: "task1"
@@ -149,7 +153,8 @@ tasks:
     title: "Second Task"
     description: "Second test task"
     subtasks: []
-""")
+"""
+        )
 
         manager = TaskManager("malware_classification", str(tmp_path))
 
@@ -186,12 +191,12 @@ tasks:
             manager = self._create_task_manager_from_temp_config_dir(temp_config_dir)
 
         # Check for initialization logs
-        assert any("Initializing TaskManager for domain 'malware_classification'" in record.message
-                  for record in caplog.records)
-        assert any("TaskManager initialization complete" in record.message
-                  for record in caplog.records)
-        assert any("Loaded 1 tasks" in record.message
-                  for record in caplog.records)
+        assert any(
+            "Initializing TaskManager for domain 'malware_classification'" in record.message
+            for record in caplog.records
+        )
+        assert any("TaskManager initialization complete" in record.message for record in caplog.records)
+        assert any("Loaded 1 tasks" in record.message for record in caplog.records)
 
     def test_task_manager_file_path_handling(self, temp_config_dir):
         """Test that TaskManager correctly handles file path types."""

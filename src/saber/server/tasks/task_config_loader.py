@@ -145,6 +145,9 @@ class TaskConfigLoader:
         # Get execution configuration
         execution_config = task_data.get("execution_config", {})
 
+        # Get episode configuration
+        episode_config = task_data.get("episode_config", {})
+
         # Parse subtasks
         subtasks_data = task_data.get("subtasks", [])
         subtasks = []
@@ -166,6 +169,7 @@ class TaskConfigLoader:
             environment=environment,
             allowed_executors=self.allowed_executors,
             execution_config=execution_config,
+            episode_config=episode_config,
         )
 
         logger.debug(f"Created task '{task_id}' with {len(subtasks)} subtasks")

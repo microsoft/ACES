@@ -4,28 +4,21 @@ Unit tests for DockerSandboxEnvironment.
 Tests the multi-container Docker sandbox environment management.
 """
 
-import pytest
-import tempfile
 import os
-from unittest.mock import Mock, patch, MagicMock, mock_open
-from docker.models.containers import Container
+import tempfile
+from unittest.mock import MagicMock, Mock, mock_open, patch
 
-from saber.server.execution.sandbox.docker_sandbox_environment import (
-    DockerSandboxEnvironment,
-    CommandResult
-)
-from saber.server.execution.sandbox.environment_spec import (
-    EnvironmentSpec,
-    ServiceSpec,
-    NetworkSpec,
-    HealthCheck
-)
+import pytest
+
+from docker.models.containers import Container
 from saber.server.execution.exceptions import (
+    ContainerCommunicationError,
     ContainerCreationError,
-    SandboxExecutionError,
     InvalidEnvironmentSpecException,
-    ContainerCommunicationError
+    SandboxExecutionError,
 )
+from saber.server.execution.sandbox.docker_sandbox_environment import CommandResult, DockerSandboxEnvironment
+from saber.server.execution.sandbox.environment_spec import EnvironmentSpec, HealthCheck, NetworkSpec, ServiceSpec
 
 
 class TestDockerSandboxEnvironment:
@@ -34,32 +27,24 @@ class TestDockerSandboxEnvironment:
     @pytest.fixture
     def sample_environment_spec(self):
         """Create a sample environment specification."""
-        network = NetworkSpec(
-            name="test_network",
-            driver="bridge",
-            internal=True
-        )
+        network = NetworkSpec(name="test_network", driver="bridge", internal=True)
 
         webapp_service = ServiceSpec(
             name="webapp",
             container="webapp_container",
             image="nginx:latest",
             ports=["80"],
-            health_check=HealthCheck(test=["CMD", "curl", "-f", "http://localhost/"])
+            health_check=HealthCheck(test=["CMD", "curl", "-f", "http://localhost/"]),
         )
 
         return EnvironmentSpec(
             network=network,
             execution_service="execution",
-            execution_config={
-                "image": "ubuntu:latest",
-                "working_dir": "/workspace",
-                "user": "user:user"
-            },
-            target_services=[webapp_service]
+            execution_config={"image": "ubuntu:latest", "working_dir": "/workspace", "user": "user:user"},
+            target_services=[webapp_service],
         )
 
-    @patch('saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env')
+    @patch("saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env")
     def test_init_success(self, mock_docker, sample_environment_spec):
         """Test successful initialization."""
         mock_client = Mock()
@@ -73,7 +58,7 @@ class TestDockerSandboxEnvironment:
         assert env.compose_project_name == "saber-session-test_session"
         assert env.docker_client == mock_client
 
-    @patch('saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env')
+    @patch("saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env")
     def test_init_docker_error(self, mock_docker, sample_environment_spec):
         """Test initialization with Docker client error."""
         mock_docker.side_effect = Exception("Docker not available")
@@ -81,7 +66,7 @@ class TestDockerSandboxEnvironment:
         with pytest.raises(ContainerCreationError, match="Failed to initialize Docker client"):
             DockerSandboxEnvironment("test_session", sample_environment_spec)
 
-    @patch('saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env')
+    @patch("saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env")
     def test_init_validation_error(self, mock_docker):
         """Test initialization with invalid environment spec."""
         mock_client = Mock()
@@ -90,17 +75,15 @@ class TestDockerSandboxEnvironment:
         # Create invalid spec (missing execution service)
         network = NetworkSpec(name="test_network")
         invalid_spec = EnvironmentSpec(
-            network=network,
-            execution_service="",  # Invalid empty string
-            execution_config={}
+            network=network, execution_service="", execution_config={}  # Invalid empty string
         )
 
         with pytest.raises(InvalidEnvironmentSpecException):
             DockerSandboxEnvironment("test_session", invalid_spec)
 
-    @patch('saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env')
-    @patch('saber.server.execution.sandbox.docker_sandbox_environment.tempfile.NamedTemporaryFile')
-    @patch('saber.server.execution.sandbox.docker_sandbox_environment.subprocess.run')
+    @patch("saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env")
+    @patch("saber.server.execution.sandbox.docker_sandbox_environment.tempfile.NamedTemporaryFile")
+    @patch("saber.server.execution.sandbox.docker_sandbox_environment.subprocess.run")
     def test_start_success(self, mock_subprocess, mock_temp_file, mock_docker, sample_environment_spec):
         """Test successful environment start."""
         # Setup mocks
@@ -121,10 +104,10 @@ class TestDockerSandboxEnvironment:
 
         mock_client.containers.list.return_value = [mock_container1, mock_container2]
 
-        env = DockerSandboxEnvironment("test_session", sample_environment_spec)
+        env = DockerSandboxEnvironment("test_session", sample_environment_spec, cleanup_token="test_cleanup_token")
 
         # Mock service health checks
-        with patch.object(env, 'is_service_healthy', return_value=True):
+        with patch.object(env, "is_service_healthy", return_value=True):
             env.start()
 
         # Verify compose file was written
@@ -148,7 +131,7 @@ class TestDockerSandboxEnvironment:
         assert "execution" in env.active_services
         assert "webapp" in env.active_services
 
-    @patch('saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env')
+    @patch("saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env")
     def test_start_compose_error(self, mock_docker, sample_environment_spec):
         """Test start with docker-compose error."""
         mock_client = Mock()
@@ -156,13 +139,13 @@ class TestDockerSandboxEnvironment:
 
         env = DockerSandboxEnvironment("test_session", sample_environment_spec)
 
-        with patch('saber.server.execution.sandbox.docker_sandbox_environment.subprocess.run') as mock_subprocess:
+        with patch("saber.server.execution.sandbox.docker_sandbox_environment.subprocess.run") as mock_subprocess:
             mock_subprocess.side_effect = Exception("Compose failed")
 
             with pytest.raises(ContainerCreationError, match="Failed to start sandbox environment"):
                 env.start()
 
-    @patch('saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env')
+    @patch("saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env")
     def test_execute_command_success(self, mock_docker, sample_environment_spec):
         """Test successful command execution."""
         mock_client = Mock()
@@ -186,7 +169,7 @@ class TestDockerSandboxEnvironment:
         assert result.stderr == ""
         assert result.execution_time > 0
 
-    @patch('saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env')
+    @patch("saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env")
     def test_execute_command_no_environment(self, mock_docker, sample_environment_spec):
         """Test command execution without started environment."""
         mock_client = Mock()
@@ -197,7 +180,7 @@ class TestDockerSandboxEnvironment:
         with pytest.raises(SandboxExecutionError, match="Environment not started"):
             env.execute_command(["echo", "test"])
 
-    @patch('saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env')
+    @patch("saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env")
     def test_execute_command_no_execution_container(self, mock_docker, sample_environment_spec):
         """Test command execution without execution container."""
         mock_client = Mock()
@@ -209,7 +192,7 @@ class TestDockerSandboxEnvironment:
         with pytest.raises(SandboxExecutionError, match="Execution container not available"):
             env.execute_command(["echo", "test"])
 
-    @patch('saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env')
+    @patch("saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env")
     def test_execute_command_container_error(self, mock_docker, sample_environment_spec):
         """Test command execution with container error."""
         mock_client = Mock()
@@ -224,7 +207,7 @@ class TestDockerSandboxEnvironment:
         with pytest.raises(SandboxExecutionError, match="Command execution failed"):
             env.execute_command(["echo", "test"])
 
-    @patch('saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env')
+    @patch("saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env")
     def test_copy_to_container_success(self, mock_docker, sample_environment_spec):
         """Test successful file copy to container."""
         mock_client = Mock()
@@ -236,14 +219,16 @@ class TestDockerSandboxEnvironment:
         env = DockerSandboxEnvironment("test_session", sample_environment_spec)
         env.active_services["execution"] = mock_container
 
-        with patch('saber.server.execution.sandbox.docker_sandbox_environment.tarfile.open'), \
-             patch('saber.server.execution.sandbox.docker_sandbox_environment.io.BytesIO'), \
-             patch('builtins.open', mock_open(read_data=b"test file content")):
+        with (
+            patch("saber.server.execution.sandbox.docker_sandbox_environment.tarfile.open"),
+            patch("saber.server.execution.sandbox.docker_sandbox_environment.io.BytesIO"),
+            patch("builtins.open", mock_open(read_data=b"test file content")),
+        ):
             env.copy_to_container("/local/file", "/container/file")
 
         mock_container.put_archive.assert_called_once()
 
-    @patch('saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env')
+    @patch("saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env")
     def test_copy_to_container_no_execution_container(self, mock_docker, sample_environment_spec):
         """Test file copy without execution container."""
         mock_client = Mock()
@@ -254,7 +239,7 @@ class TestDockerSandboxEnvironment:
         with pytest.raises(SandboxExecutionError, match="Execution container not available"):
             env.copy_to_container("/local/file", "/container/file")
 
-    @patch('saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env')
+    @patch("saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env")
     def test_copy_from_container_success(self, mock_docker, sample_environment_spec):
         """Test successful file copy from container."""
         mock_client = Mock()
@@ -266,14 +251,16 @@ class TestDockerSandboxEnvironment:
         env = DockerSandboxEnvironment("test_session", sample_environment_spec)
         env.active_services["execution"] = mock_container
 
-        with patch('saber.server.execution.sandbox.docker_sandbox_environment.tarfile.open'), \
-             patch('saber.server.execution.sandbox.docker_sandbox_environment.io.BytesIO'), \
-             patch('builtins.open', mock_open()) as mock_file:
+        with (
+            patch("saber.server.execution.sandbox.docker_sandbox_environment.tarfile.open"),
+            patch("saber.server.execution.sandbox.docker_sandbox_environment.io.BytesIO"),
+            patch("builtins.open", mock_open()) as mock_file,
+        ):
             env.copy_from_container("/container/file", "/local/file")
 
         mock_container.get_archive.assert_called_once_with("/container/file")
 
-    @patch('saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env')
+    @patch("saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env")
     def test_get_execution_container(self, mock_docker, sample_environment_spec):
         """Test getting execution container."""
         mock_client = Mock()
@@ -287,7 +274,7 @@ class TestDockerSandboxEnvironment:
         result = env.get_execution_container()
         assert result == mock_container
 
-    @patch('saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env')
+    @patch("saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env")
     def test_get_service_container(self, mock_docker, sample_environment_spec):
         """Test getting specific service container."""
         mock_client = Mock()
@@ -304,7 +291,7 @@ class TestDockerSandboxEnvironment:
         result = env.get_service_container("nonexistent")
         assert result is None
 
-    @patch('saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env')
+    @patch("saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env")
     def test_is_service_healthy_running_with_health(self, mock_docker, sample_environment_spec):
         """Test health check for running service with health status."""
         mock_client = Mock()
@@ -312,20 +299,14 @@ class TestDockerSandboxEnvironment:
 
         mock_container = Mock(spec=Container)
         mock_container.status = "running"
-        mock_container.attrs = {
-            "State": {
-                "Health": {
-                    "Status": "healthy"
-                }
-            }
-        }
+        mock_container.attrs = {"State": {"Health": {"Status": "healthy"}}}
 
         env = DockerSandboxEnvironment("test_session", sample_environment_spec)
         env.active_services["webapp"] = mock_container
 
         assert env.is_service_healthy("webapp") is True
 
-    @patch('saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env')
+    @patch("saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env")
     def test_is_service_healthy_running_no_health(self, mock_docker, sample_environment_spec):
         """Test health check for running service without health check."""
         mock_client = Mock()
@@ -340,7 +321,7 @@ class TestDockerSandboxEnvironment:
 
         assert env.is_service_healthy("webapp") is True
 
-    @patch('saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env')
+    @patch("saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env")
     def test_is_service_healthy_not_running(self, mock_docker, sample_environment_spec):
         """Test health check for non-running service."""
         mock_client = Mock()
@@ -354,7 +335,7 @@ class TestDockerSandboxEnvironment:
 
         assert env.is_service_healthy("webapp") is False
 
-    @patch('saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env')
+    @patch("saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env")
     def test_is_service_healthy_unhealthy(self, mock_docker, sample_environment_spec):
         """Test health check for unhealthy service."""
         mock_client = Mock()
@@ -362,20 +343,14 @@ class TestDockerSandboxEnvironment:
 
         mock_container = Mock(spec=Container)
         mock_container.status = "running"
-        mock_container.attrs = {
-            "State": {
-                "Health": {
-                    "Status": "unhealthy"
-                }
-            }
-        }
+        mock_container.attrs = {"State": {"Health": {"Status": "unhealthy"}}}
 
         env = DockerSandboxEnvironment("test_session", sample_environment_spec)
         env.active_services["webapp"] = mock_container
 
         assert env.is_service_healthy("webapp") is False
 
-    @patch('saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env')
+    @patch("saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env")
     def test_is_service_healthy_service_not_found(self, mock_docker, sample_environment_spec):
         """Test health check for non-existent service."""
         mock_client = Mock()
@@ -385,7 +360,7 @@ class TestDockerSandboxEnvironment:
 
         assert env.is_service_healthy("nonexistent") is False
 
-    @patch('saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env')
+    @patch("saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env")
     def test_get_service_logs(self, mock_docker, sample_environment_spec):
         """Test getting service logs."""
         mock_client = Mock()
@@ -401,7 +376,7 @@ class TestDockerSandboxEnvironment:
         assert logs == "Log line 1\nLog line 2\n"
         mock_container.logs.assert_called_once_with(tail=100, timestamps=True)
 
-    @patch('saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env')
+    @patch("saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env")
     def test_get_service_logs_not_found(self, mock_docker, sample_environment_spec):
         """Test getting logs for non-existent service."""
         mock_client = Mock()
@@ -412,7 +387,7 @@ class TestDockerSandboxEnvironment:
         logs = env.get_service_logs("nonexistent")
         assert "Service nonexistent not found" in logs
 
-    @patch('saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env')
+    @patch("saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env")
     def test_list_active_services(self, mock_docker, sample_environment_spec):
         """Test listing active services."""
         mock_client = Mock()
@@ -425,7 +400,7 @@ class TestDockerSandboxEnvironment:
         services = env.list_active_services()
         assert set(services) == {"execution", "webapp"}
 
-    @patch('saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env')
+    @patch("saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env")
     def test_get_service_info(self, mock_docker, sample_environment_spec):
         """Test getting service information."""
         mock_client = Mock()
@@ -440,7 +415,7 @@ class TestDockerSandboxEnvironment:
         env = DockerSandboxEnvironment("test_session", sample_environment_spec)
         env.active_services["webapp"] = mock_container
 
-        with patch.object(env, 'is_service_healthy', return_value=True):
+        with patch.object(env, "is_service_healthy", return_value=True):
             info = env.get_service_info()
 
         assert "webapp" in info
@@ -450,8 +425,8 @@ class TestDockerSandboxEnvironment:
         assert webapp_info["image"] == "nginx:latest"
         assert webapp_info["healthy"] is True
 
-    @patch('saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env')
-    @patch('saber.server.execution.sandbox.docker_sandbox_environment.subprocess.run')
+    @patch("saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env")
+    @patch("saber.server.execution.sandbox.docker_sandbox_environment.subprocess.run")
     def test_stop_success(self, mock_subprocess, mock_docker, sample_environment_spec):
         """Test successful environment stop."""
         mock_client = Mock()
@@ -461,8 +436,10 @@ class TestDockerSandboxEnvironment:
         env.compose_file_path = "/tmp/test_compose.yml"
         env.active_services["webapp"] = Mock()
 
-        with patch('saber.server.execution.sandbox.docker_sandbox_environment.os.path.exists', return_value=True), \
-             patch('saber.server.execution.sandbox.docker_sandbox_environment.os.unlink'):
+        with (
+            patch("saber.server.execution.sandbox.docker_sandbox_environment.os.path.exists", return_value=True),
+            patch("saber.server.execution.sandbox.docker_sandbox_environment.os.unlink"),
+        ):
             env.stop()
 
         # Verify docker compose down was called (modern docker syntax)

@@ -4,16 +4,17 @@ Unit tests for EnvironmentSpec classes.
 Tests the environment specification system for multi-container orchestration.
 """
 
-import pytest
 from unittest.mock import Mock, patch
 
+import pytest
+
+from saber.server.execution.exceptions import InvalidEnvironmentSpecException
 from saber.server.execution.sandbox.environment_spec import (
     EnvironmentSpec,
-    ServiceSpec,
-    NetworkSpec,
     HealthCheck,
+    NetworkSpec,
+    ServiceSpec,
 )
-from saber.server.execution.exceptions import InvalidEnvironmentSpecException
 
 
 class TestHealthCheck:
@@ -26,7 +27,7 @@ class TestHealthCheck:
             interval="30s",
             timeout="10s",
             retries=3,
-            start_period="60s"
+            start_period="60s",
         )
 
         assert health_check.test == ["CMD", "curl", "-f", "http://localhost/"]
@@ -48,11 +49,7 @@ class TestHealthCheck:
     def test_to_compose_health_check(self):
         """Test conversion to Docker Compose format."""
         health_check = HealthCheck(
-            test=["CMD", "curl", "-f", "http://localhost/"],
-            interval="15s",
-            timeout="5s",
-            retries=5,
-            start_period="30s"
+            test=["CMD", "curl", "-f", "http://localhost/"], interval="15s", timeout="5s", retries=5, start_period="30s"
         )
 
         compose_config = health_check.to_compose_health_check()
@@ -62,7 +59,7 @@ class TestHealthCheck:
             "interval": "15s",
             "timeout": "5s",
             "retries": 5,
-            "start_period": "30s"
+            "start_period": "30s",
         }
 
         assert compose_config == expected
@@ -86,7 +83,7 @@ class TestServiceSpec:
             health_check=health_check,
             working_dir="/app",
             user="nginx:nginx",
-            resource_limits={"memory": "512m", "cpu": "0.5"}
+            resource_limits={"memory": "512m", "cpu": "0.5"},
         )
 
         assert service.name == "webapp"
@@ -132,7 +129,7 @@ class TestServiceSpec:
             health_check=health_check,
             working_dir="/app",
             user="nginx",
-            resource_limits={"memory": "1g", "cpu": "1.0"}
+            resource_limits={"memory": "1g", "cpu": "1.0"},
         )
 
         compose_config = service.to_compose_service()
@@ -168,7 +165,7 @@ class TestNetworkSpec:
             driver="bridge",
             internal=True,
             ipam_config={"config": [{"subnet": "172.20.0.0/16"}]},
-            options={"com.docker.network.bridge.name": "test-br"}
+            options={"com.docker.network.bridge.name": "test-br"},
         )
 
         assert network.name == "test_network"
@@ -194,7 +191,7 @@ class TestNetworkSpec:
             driver="overlay",
             internal=True,
             ipam_config={"config": [{"subnet": "172.20.0.0/16"}]},
-            options={"encrypted": "true"}
+            options={"encrypted": "true"},
         )
 
         compose_config = network.to_compose_network()
@@ -203,7 +200,7 @@ class TestNetworkSpec:
             "driver": "overlay",
             "internal": True,
             "ipam": {"config": [{"subnet": "172.20.0.0/16"}]},
-            "driver_opts": {"encrypted": "true"}
+            "driver_opts": {"encrypted": "true"},
         }
 
         assert compose_config == expected
@@ -214,10 +211,7 @@ class TestNetworkSpec:
 
         compose_config = network.to_compose_network()
 
-        expected = {
-            "driver": "bridge",
-            "internal": False
-        }
+        expected = {"driver": "bridge", "internal": False}
 
         assert compose_config == expected
 
@@ -235,7 +229,7 @@ class TestEnvironmentSpec:
             execution_service="execution",
             execution_config={"image": "ubuntu:latest"},
             target_services=[service],
-            resource_limits={"total_memory": "2g"}
+            resource_limits={"total_memory": "2g"},
         )
 
         assert env_spec.network == network
@@ -249,9 +243,7 @@ class TestEnvironmentSpec:
         network = NetworkSpec(name="test_network")
 
         env_spec = EnvironmentSpec(
-            network=network,
-            execution_service="execution",
-            execution_config={"image": "ubuntu:latest"}
+            network=network, execution_service="execution", execution_config={"image": "ubuntu:latest"}
         )
 
         assert env_spec.target_services == []
@@ -261,9 +253,7 @@ class TestEnvironmentSpec:
         """Test getting execution service name."""
         network = NetworkSpec(name="test_network")
         env_spec = EnvironmentSpec(
-            network=network,
-            execution_service="my_executor",
-            execution_config={"image": "ubuntu:latest"}
+            network=network, execution_service="my_executor", execution_config={"image": "ubuntu:latest"}
         )
 
         assert env_spec.get_execution_service() == "my_executor"
@@ -278,7 +268,7 @@ class TestEnvironmentSpec:
             network=network,
             execution_service="execution",
             execution_config={"image": "ubuntu:latest"},
-            target_services=[service1, service2]
+            target_services=[service1, service2],
         )
 
         all_services = env_spec.get_all_services()
@@ -294,7 +284,7 @@ class TestEnvironmentSpec:
             network=network,
             execution_service="execution",
             execution_config={"image": "ubuntu:latest"},
-            target_services=[service1, service2]
+            target_services=[service1, service2],
         )
 
         found_service = env_spec.get_service_by_name("webapp")
@@ -306,21 +296,13 @@ class TestEnvironmentSpec:
     def test_to_compose_dict(self):
         """Test generating Docker Compose configuration."""
         network = NetworkSpec(name="test_network")
-        service = ServiceSpec(
-            name="webapp",
-            container="nginx",
-            image="nginx:latest",
-            ports=["80"]
-        )
+        service = ServiceSpec(name="webapp", container="nginx", image="nginx:latest", ports=["80"])
 
         env_spec = EnvironmentSpec(
             network=network,
             execution_service="execution",
-            execution_config={
-                "image": "ubuntu:latest",
-                "working_dir": "/workspace"
-            },
-            target_services=[service]
+            execution_config={"image": "ubuntu:latest", "working_dir": "/workspace"},
+            target_services=[service],
         )
 
         compose_dict = env_spec.to_compose_dict()
@@ -360,7 +342,7 @@ class TestEnvironmentSpec:
             network=network,
             execution_service="execution",
             execution_config={"image": "ubuntu:latest"},
-            target_services=[service]
+            target_services=[service],
         )
 
         # Should not raise
@@ -370,11 +352,7 @@ class TestEnvironmentSpec:
         """Test validation with missing execution service."""
         network = NetworkSpec(name="test_network")
 
-        env_spec = EnvironmentSpec(
-            network=network,
-            execution_service="",
-            execution_config={"image": "ubuntu:latest"}
-        )
+        env_spec = EnvironmentSpec(network=network, execution_service="", execution_config={"image": "ubuntu:latest"})
 
         with pytest.raises(InvalidEnvironmentSpecException, match="Execution service must be specified"):
             env_spec.validate()
@@ -384,9 +362,7 @@ class TestEnvironmentSpec:
         network = NetworkSpec(name="")
 
         env_spec = EnvironmentSpec(
-            network=network,
-            execution_service="execution",
-            execution_config={"image": "ubuntu:latest"}
+            network=network, execution_service="execution", execution_config={"image": "ubuntu:latest"}
         )
 
         with pytest.raises(InvalidEnvironmentSpecException, match="Network name must be specified"):
@@ -402,7 +378,7 @@ class TestEnvironmentSpec:
             network=network,
             execution_service="webapp",  # Also duplicate
             execution_config={"image": "ubuntu:latest"},
-            target_services=[service1, service2]
+            target_services=[service1, service2],
         )
 
         with pytest.raises(InvalidEnvironmentSpecException, match="Service names must be unique"):
@@ -411,37 +387,31 @@ class TestEnvironmentSpec:
     def test_validate_missing_dependency(self):
         """Test validation with missing dependency."""
         network = NetworkSpec(name="test_network")
-        service = ServiceSpec(
-            name="webapp",
-            container="nginx",
-            depends_on=["nonexistent_service"]
-        )
+        service = ServiceSpec(name="webapp", container="nginx", depends_on=["nonexistent_service"])
 
         env_spec = EnvironmentSpec(
             network=network,
             execution_service="execution",
             execution_config={"image": "ubuntu:latest"},
-            target_services=[service]
+            target_services=[service],
         )
 
-        with pytest.raises(InvalidEnvironmentSpecException, match="depends on 'nonexistent_service' which is not defined"):
+        with pytest.raises(
+            InvalidEnvironmentSpecException, match="depends on 'nonexistent_service' which is not defined"
+        ):
             env_spec.validate()
 
     def test_validate_valid_dependency(self):
         """Test validation with valid dependencies."""
         network = NetworkSpec(name="test_network")
         db_service = ServiceSpec(name="database", container="mysql")
-        webapp_service = ServiceSpec(
-            name="webapp",
-            container="nginx",
-            depends_on=["database"]
-        )
+        webapp_service = ServiceSpec(name="webapp", container="nginx", depends_on=["database"])
 
         env_spec = EnvironmentSpec(
             network=network,
             execution_service="execution",
             execution_config={"image": "ubuntu:latest"},
-            target_services=[db_service, webapp_service]
+            target_services=[db_service, webapp_service],
         )
 
         # Should not raise

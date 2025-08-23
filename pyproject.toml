@@ -81,9 +81,6 @@ include = [
     "data/",
 ]
 
-[tool.flake8]
-line-length = 120
-
 [tool.black]
 line-length = 120
 target-version = ['py310']
@@ -101,6 +98,9 @@ extend-exclude = '''
   | buck-out
   | build
   | dist
+  | .*/targets/.*
+  | .*/.archive/.*
+  | examples/.*
 )/
 '''
 
@@ -115,7 +115,7 @@ ensure_newline_before_comments = true
 
 [tool.flake8]
 max-line-length = 120
-extend-ignore = ["E203", "W503"]
+extend-ignore = ["E203", "W503", "E402"]
 exclude = [
     ".git",
     "__pycache__",
@@ -124,6 +124,9 @@ exclude = [
     "*.egg",
     "build",
     "dist",
+    "*/targets/*",
+    "*/.archive/*",
+    "examples/",
 ]
 
 [tool.mypy]

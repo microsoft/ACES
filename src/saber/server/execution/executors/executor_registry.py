@@ -1,8 +1,9 @@
 """
-Custom Executor Registry for SABER Framework.
+Executor Registry for SABER Framework.
 
-This module provides functionality for users to register custom executors
-from external Python modules, enabling extensibility without modifying core framework code.
+This module provides a unified registration system for all executors,
+both standard framework executors and user-defined custom executors.
+All executors must register themselves through this registry.
 """
 
 import importlib.util
@@ -10,31 +11,30 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, Type
 
-from .executors.docker_executor import DockerExecutor
-from .executors.factory import ExecutorFactory
+from .docker_executor import DockerExecutor
 
 logger = logging.getLogger(__name__)
 
 
-class CustomExecutorRegistry:
+class ExecutorRegistry:
     """
-    Registry for managing custom executor registration from external Python modules.
+    Registry for managing all executor registration in the SABER framework.
 
-    Enables users to define custom executors in external Python files and register them
-    with the SABER execution framework through simple hook functions.
+    Provides a unified system for registering both standard framework executors
+    and user-defined custom executors. All executors must register through this system.
     """
 
     def __init__(self) -> None:
-        """Initialize the custom executor registry."""
-        self._custom_executors: Dict[str, Type[DockerExecutor]] = {}
+        """Initialize the executor registry."""
+        self._registered_executors: Dict[str, Type[DockerExecutor]] = {}
         self._registration_sources: Dict[str, str] = {}  # Track where each executor came from
-        logger.info("CustomExecutorRegistry initialized")
+        logger.info("ExecutorRegistry initialized")
 
     def register_executor_class(
         self, executor_type: str, executor_class: Type[DockerExecutor], source: str = "external"
     ) -> None:
         """
-        Register a custom executor class directly.
+        Register an executor class.
 
         Args:
             executor_type: String identifier for the executor
@@ -48,19 +48,18 @@ class CustomExecutorRegistry:
         if not issubclass(executor_class, DockerExecutor):
             raise ValueError(f"Executor class must inherit from DockerExecutor, got: {executor_class}")
 
-        if executor_type in self._custom_executors:
+        if executor_type in self._registered_executors:
             existing_source = self._registration_sources.get(executor_type, "unknown")
             raise RuntimeError(f"Executor type '{executor_type}' is already registered from source: {existing_source}")
 
         # Validate the executor class has required methods
         self._validate_executor_class(executor_class)
 
-        # Register with both our registry and the factory
-        self._custom_executors[executor_type] = executor_class
+        # Register in our registry
+        self._registered_executors[executor_type] = executor_class
         self._registration_sources[executor_type] = source
-        ExecutorFactory.register_executor(executor_type, executor_class)
 
-        logger.info(f"Registered custom executor '{executor_type}' from source: {source}")
+        logger.info(f"Registered executor '{executor_type}' from source: {source}")
 
     def register_executor_from_file(self, executor_type: str, file_path: str, class_name: str) -> None:
         """
@@ -111,7 +110,7 @@ class CustomExecutorRegistry:
         Load all executor definition files from a directory.
 
         Looks for Python files that define custom executors and loads them.
-        Does NOT automatically register - files should use register_custom_executor().
+        Does NOT automatically register - files should use register_executor().
 
         Args:
             directory_path: Path to directory containing executor definition files
@@ -155,29 +154,28 @@ class CustomExecutorRegistry:
 
     def unregister_executor(self, executor_type: str) -> None:
         """
-        Unregister a custom executor.
+        Unregister an executor.
 
         Args:
             executor_type: String identifier for the executor to remove
         """
-        if executor_type in self._custom_executors:
-            del self._custom_executors[executor_type]
+        if executor_type in self._registered_executors:
+            del self._registered_executors[executor_type]
             if executor_type in self._registration_sources:
                 del self._registration_sources[executor_type]
-            ExecutorFactory.unregister_executor(executor_type)
-            logger.info(f"Unregistered custom executor: {executor_type}")
+            logger.info(f"Unregistered executor: {executor_type}")
         else:
             logger.warning(f"Attempted to unregister unknown executor: {executor_type}")
 
-    def list_custom_executors(self) -> Dict[str, Dict[str, Any]]:
+    def list_registered_executors(self) -> Dict[str, Dict[str, Any]]:
         """
-        List all registered custom executors with their metadata.
+        List all registered executors with their metadata.
 
         Returns:
             Dictionary mapping executor_type to metadata
         """
         result = {}
-        for executor_type, executor_class in self._custom_executors.items():
+        for executor_type, executor_class in self._registered_executors.items():
             result[executor_type] = {
                 "class_name": executor_class.__name__,
                 "module": executor_class.__module__,
@@ -187,17 +185,44 @@ class CustomExecutorRegistry:
             }
         return result
 
-    def clear_all_custom_executors(self) -> None:
+    def get_executor_class(self, executor_type: str) -> Type[DockerExecutor]:
         """
-        Unregister all custom executors.
+        Get an executor class by type.
 
-        Note: This only affects executors registered through this registry,
-        not the built-in executors (cli, python).
+        Args:
+            executor_type: String identifier for the executor
+
+        Returns:
+            Executor class
+
+        Raises:
+            KeyError: If executor_type is not registered
         """
-        custom_types = list(self._custom_executors.keys())
-        for executor_type in custom_types:
+        if executor_type not in self._registered_executors:
+            available = list(self._registered_executors.keys())
+            raise KeyError(f"Executor type '{executor_type}' not registered. Available: {available}")
+        return self._registered_executors[executor_type]
+
+    def get_available_executors(self) -> list[str]:
+        """
+        Get list of all registered executor types.
+
+        Returns:
+            List of executor type strings
+        """
+        return list(self._registered_executors.keys())
+
+    def clear_all_executors(self) -> None:
+        """
+        Unregister all executors.
+
+        Warning: This will clear ALL executors, including standard ones.
+        Use with caution.
+        """
+        executor_types = list(self._registered_executors.keys())
+        for executor_type in executor_types:
             self.unregister_executor(executor_type)
-        logger.info(f"Cleared {len(custom_types)} custom executors")
+        logger.info(f"Cleared {len(executor_types)} executors")
 
     def _validate_executor_class(self, executor_class: Type[DockerExecutor]) -> None:
         """
@@ -221,32 +246,33 @@ class CustomExecutorRegistry:
 
 
 # Global registry instance
-custom_executor_registry = CustomExecutorRegistry()
+executor_registry = ExecutorRegistry()
 
 
-def register_custom_executor(executor_type: str, executor_class: Type[DockerExecutor]) -> None:
+def register_executor(executor_type: str, executor_class: Type[DockerExecutor], source: str = "external") -> None:
     """
-    Hook function for registering custom executors from external modules.
+    Hook function for registering executors.
 
-    This is the main entry point for external code to register custom executors.
-    Custom executor files should call this function to register their executor classes.
+    This is the main entry point for all executor registration, both standard framework
+    executors and user-defined custom executors.
 
     Args:
-        executor_type: String identifier for the executor (e.g., "java", "nodejs")
+        executor_type: String identifier for the executor (e.g., "cli", "python", "java")
         executor_class: Executor class that inherits from DockerExecutor
+        source: Source description for tracking (e.g., "standard", "external", "file:path")
 
     Example:
-        from saber.server.execution.custom_executor_registry import register_custom_executor
+        from saber.server.execution.executors.executor_registry import register_executor
         from my_executor import JavaExecutor
 
-        register_custom_executor("java", JavaExecutor)
+        register_executor("java", JavaExecutor, "external")
     """
-    custom_executor_registry.register_executor_class(executor_type, executor_class)
+    executor_registry.register_executor_class(executor_type, executor_class, source)
 
 
 def register_executor_from_file(executor_type: str, file_path: str, class_name: str) -> None:
     """
-    Hook function for registering custom executors from external Python files.
+    Hook function for registering executors from external Python files.
 
     Args:
         executor_type: String identifier for the executor
@@ -256,34 +282,57 @@ def register_executor_from_file(executor_type: str, file_path: str, class_name: 
     Example:
         register_executor_from_file("java", "/path/to/java_executor.py", "JavaExecutor")
     """
-    custom_executor_registry.register_executor_from_file(executor_type, file_path, class_name)
+    executor_registry.register_executor_from_file(executor_type, file_path, class_name)
 
 
-def load_custom_executors_from_directory(directory_path: str) -> Dict[str, str]:
+def load_executors_from_directory(directory_path: str) -> Dict[str, str]:
     """
-    Hook function for loading all custom executor definitions from a directory.
+    Hook function for loading all executor definitions from a directory.
 
-    This loads all *_executor.py files from the specified directory.
-    The files themselves should use register_custom_executor() to register their executors.
+    This loads all *executor*.py files from the specified directory.
+    The files themselves should use register_executor() to register their executors.
 
     Args:
-        directory_path: Path to directory containing custom executor files
+        directory_path: Path to directory containing executor files
 
     Returns:
         Dictionary mapping file paths to load results
 
     Example:
-        # Load all custom executors from the pentest demo server directory
-        load_custom_executors_from_directory("/path/to/pentest_demo/server/executors")
+        # Load all executors from the pentest demo server directory
+        load_executors_from_directory("/path/to/pentest_demo/server/executors")
     """
-    return custom_executor_registry.load_executors_from_directory(directory_path)
+    return executor_registry.load_executors_from_directory(directory_path)
 
 
-def get_custom_executor_info() -> Dict[str, Dict[str, Any]]:
+def get_executor_info() -> Dict[str, Dict[str, Any]]:
     """
-    Get information about all registered custom executors.
+    Get information about all registered executors.
 
     Returns:
         Dictionary mapping executor_type to metadata
     """
-    return custom_executor_registry.list_custom_executors()
+    return executor_registry.list_registered_executors()
+
+
+def get_executor_class(executor_type: str) -> Type[DockerExecutor]:
+    """
+    Get an executor class by type.
+
+    Args:
+        executor_type: String identifier for the executor
+
+    Returns:
+        Executor class
+    """
+    return executor_registry.get_executor_class(executor_type)
+
+
+def get_available_executors() -> list[str]:
+    """
+    Get list of all registered executor types.
+
+    Returns:
+        List of executor type strings
+    """
+    return executor_registry.get_available_executors()

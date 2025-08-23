@@ -6,20 +6,21 @@ that can be shared across multiple test modules.
 """
 
 import asyncio
-import pytest
+import logging
 import tempfile
-import yaml
 from pathlib import Path
 from typing import Any, Dict, Optional
-import logging
-from unittest.mock import patch, Mock
+from unittest.mock import Mock, patch
+
+import pytest
+import yaml
 
 from saber.server.base import CommandResult
 from saber.server.execution.base import Parameter, ParameterType
-from saber.server.execution.executors.base_executors import CommandExecutor
-from saber.server.execution.executors.cli import CLIExecutor
-from saber.server.execution.utils.security_validator import SecurityValidator
 from saber.server.execution.execution_manager import ExecutionManager
+from saber.server.execution.executors.base_executors import CommandExecutor
+from saber.server.execution.executors.standard_registry.cli_executor import CLIExecutor
+from saber.server.execution.utils.security_validator import SecurityValidator
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,7 @@ def test_config_path():
 @pytest.fixture
 def test_config_dict(test_config_path):
     """Load test configuration as dictionary."""
-    with open(test_config_path, 'r') as f:
+    with open(test_config_path, "r") as f:
         return yaml.safe_load(f)
 
 
@@ -68,6 +69,7 @@ def temp_sandbox_dir():
 
 
 # Task Framework Test Fixtures
+
 
 @pytest.fixture
 def sample_task_yaml():
@@ -144,7 +146,7 @@ def sample_subtask_data():
         "description": "A test subtask for unit testing",
         "objective": "Complete the test objectives",
         "completion_conditions": ["test_command", "another_command"],
-        "depends_on": ["prerequisite_subtask"]
+        "depends_on": ["prerequisite_subtask"],
     }
 
 
@@ -152,20 +154,14 @@ def sample_subtask_data():
 def sample_action():
     """Sample action for episode testing."""
     from saber.server.episodes import Action
-    return Action(
-        tool_name="docker_cli_executor",
-        parameters={"command": "file sample.exe"},
-        command="file sample.exe"
-    )
+
+    return Action(tool_name="docker_cli_executor", parameters={"command": "file sample.exe"}, command="file sample.exe")
 
 
 @pytest.fixture
 def sample_command_result():
     """Sample command result for testing."""
-    return CommandResult.success_result({
-        "output": "sample.exe: PE32 executable",
-        "file_type": "PE32"
-    })
+    return CommandResult.success_result({"output": "sample.exe: PE32 executable", "file_type": "PE32"})
 
 
 @pytest.fixture(scope="function")
@@ -198,7 +194,7 @@ def docker_cleanup():
     for execution_manager in execution_managers:
         try:
             # Cleanup all sessions if the manager has that capability
-            if hasattr(execution_manager, '_sandbox_manager'):
+            if hasattr(execution_manager, "_sandbox_manager"):
                 execution_manager._sandbox_manager.cleanup_all_sessions()
                 logger.debug("Cleaned up all sessions from execution manager")
         except Exception as e:

@@ -5,11 +5,12 @@ Tests episode creation and task management integration.
 Tool execution is tested separately for MCP API.
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
+from saber.server.base import Action, CommandResult, Episode, Step
 from saber.server.session_manager import SessionManager
-from saber.server.base import Action, Step, CommandResult, Episode
 
 
 class TestSessionManagerEpisodes:
@@ -72,18 +73,15 @@ class TestSessionManagerEpisodes:
         mock_episode_manager.end_episode = MagicMock()
         mock_episode_manager.get_episode = MagicMock()
 
-        with patch('saber.server.session_manager.TaskManager', return_value=mock_task_manager), \
-             patch('saber.server.session_manager.ExecutionManager', return_value=mock_execution_manager), \
-             patch('saber.server.session_manager.PolicyManager', return_value=mock_policy_manager), \
-             patch('saber.server.session_manager.EvaluationManager', return_value=mock_evaluation_manager), \
-             patch('saber.server.session_manager.EpisodeManager', return_value=mock_episode_manager):
+        with (
+            patch("saber.server.session_manager.TaskManager", return_value=mock_task_manager),
+            patch("saber.server.session_manager.ExecutionManager", return_value=mock_execution_manager),
+            patch("saber.server.session_manager.PolicyManager", return_value=mock_policy_manager),
+            patch("saber.server.session_manager.EvaluationManager", return_value=mock_evaluation_manager),
+            patch("saber.server.session_manager.EpisodeManager", return_value=mock_episode_manager),
+        ):
 
-            manager = SessionManager(
-                domain_name="test_domain",
-                config_dir="/tmp",
-                host="127.0.0.1",
-                port=8002
-            )
+            manager = SessionManager(domain_name="test_domain", config_dir="/tmp", host="127.0.0.1", port=8002)
             return manager
 
     @pytest.mark.asyncio
@@ -129,6 +127,7 @@ class TestSessionManagerEpisodes:
         manager = session_manager_with_session
 
         from fastapi import HTTPException
+
         with pytest.raises(HTTPException) as exc_info:
             await manager.start_episode("invalid_session", "task_123")
 
@@ -156,8 +155,8 @@ class TestSessionManagerEpisodes:
         manager.episode_manager.step.return_value = mock_step
 
         # Execute command
-        action = Action(tool_name="cli", arguments="file test.txt", parameters={"param": "value"})
-        response = await manager.execute_command(session_id, action)
+        action = Action(tool_name="cli", parameters={"arguments": "file test.txt", "param": "value"})
+        response = await manager.execute_action(session_id, action)
 
         assert isinstance(response, CommandResult)
         assert response.success is True
@@ -169,8 +168,8 @@ class TestSessionManagerEpisodes:
         assert call_args is not None
         action_arg = call_args[0][0]  # First positional argument
         assert isinstance(action_arg, Action)
-        assert action_arg.arguments == "file test.txt"
-        assert action_arg.parameters == {"param": "value"}
+        assert action_arg.parameters["arguments"] == "file test.txt"
+        assert action_arg.parameters == {"arguments": "file test.txt", "param": "value"}
         assert action_arg.tool_name == "cli"
 
         # Verify episode manager was called with action
@@ -191,8 +190,8 @@ class TestSessionManagerEpisodes:
         session = await manager.create_session("test_client")
         session_id = session.session_id
 
-        action = Action(tool_name="cli", arguments="file test.txt", parameters={})
-        result = await manager.execute_command(session_id, action)
+        action = Action(tool_name="cli", parameters={"arguments": "file test.txt"})
+        result = await manager.execute_action(session_id, action)
 
         assert isinstance(result, CommandResult)
         assert not result.success
@@ -223,8 +222,8 @@ class TestSessionManagerEpisodes:
         manager.episode_manager.step.return_value = mock_step
 
         # Execute command
-        action = Action(tool_name="cli", arguments="final command", parameters={})
-        response = await manager.execute_command(session_id, action)
+        action = Action(tool_name="cli", parameters={"arguments": "final command"})
+        response = await manager.execute_action(session_id, action)
 
         assert response.success is True
         assert session.current_episode_id is None  # Episode should be cleared
@@ -247,8 +246,8 @@ class TestSessionManagerEpisodes:
         manager.execution_manager.step.side_effect = Exception("Execution failed")
 
         # Execute command
-        action = Action(tool_name="cli", arguments="bad command", parameters={})
-        response = await manager.execute_command(session_id, action)
+        action = Action(tool_name="cli", parameters={"arguments": "bad command"})
+        response = await manager.execute_action(session_id, action)
 
         assert response.success is False
         assert response.error == "Execution failed"
@@ -290,6 +289,7 @@ class TestSessionManagerEpisodes:
         session_id = session.session_id
 
         from fastapi import HTTPException
+
         with pytest.raises(HTTPException) as exc_info:
             await manager.get_current_task(session_id)
 
@@ -310,6 +310,7 @@ class TestSessionManagerEpisodes:
         manager.episode_manager.get_current_episode.return_value = None
 
         from fastapi import HTTPException
+
         with pytest.raises(HTTPException) as exc_info:
             await manager.get_current_task(session_id)
 

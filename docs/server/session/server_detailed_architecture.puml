@@ -28,7 +28,7 @@ package "Domain Server Core" {
         +create_session(): ClientSession
         +terminate_session(): void
         +start_episode(): Episode
-        +execute_command(): CommandResult
+        +execute_action(): CommandResult
         +get_current_task(): Dict[str, Any]
         +get_policy(): PolicyDocument
         +_get_session(): ClientSession

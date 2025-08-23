@@ -24,6 +24,7 @@ class Task:
         environment: Optional[Union[str, Dict[str, Any]]] = None,
         allowed_executors: Optional[List[str]] = None,
         execution_config: Optional[Dict[str, Any]] = None,
+        episode_config: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize a task.
@@ -41,6 +42,7 @@ class Task:
                 - dict with granular config: Full environment specification
             allowed_executors: List of allowed executor types for this task
             execution_config: Direct execution configuration (timeouts, limits, etc.)
+            episode_config: Episode-specific configuration (max_steps, timeouts, etc.)
         """
         self.task_id = task_id
         self.domain = domain
@@ -51,6 +53,7 @@ class Task:
         self.environment = environment
         self.allowed_executors = allowed_executors
         self.execution_config = execution_config or {}
+        self.episode_config = episode_config or {}
 
         # Create lookup map for efficient subtask access
         self._subtask_map = {st.subtask_id: st for st in self.subtasks}

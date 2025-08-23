@@ -436,7 +436,7 @@ Users can define and register custom executors from external Python files withou
 
 ```python
 # In pentest_demo/server/nmap_executor.py
-from saber.server.execution.custom_executor_registry import register_custom_executor
+from saber.server.execution.executors.executor_registry import register_executor
 from saber.server.execution.executors.docker_executor import DockerExecutor
 
 class NmapExecutor(DockerExecutor):
@@ -444,7 +444,7 @@ class NmapExecutor(DockerExecutor):
     pass
 
 # Register the executor - SABER will discover it automatically
-register_custom_executor("nmap", NmapExecutor)
+register_executor("nmap", NmapExecutor)
 ```
 
 This approach allows users to extend SABER's capabilities for specific domains (penetration testing, malware analysis, etc.) by simply placing custom executor files in their project directories. The custom executors become available through the same MCP interface as built-in executors.
