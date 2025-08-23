@@ -5,7 +5,6 @@ This version provides access to CLI commands with comprehensive
 security validation capabilities.
 """
 
-import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -62,11 +61,13 @@ class ExecutionManager:
             configuration=self._configuration,
         )
 
-        # Sequential execution lock - ensures only one command executes at a time
-        self._execution_lock = asyncio.Lock()
+        # Session-based execution tracking for concurrent commands
+        self._active_executions: Dict[str, int] = {}  # session_id -> count of active executions
+        self._max_concurrent_per_session = 3  # Allow multiple concurrent commands per session
 
-        logger.info("ExecutionManager initialized for sequential execution")
+        logger.info("ExecutionManager initialized for concurrent execution")
         logger.info(f"Available executor types: {self._executor_factory.get_available_executors()}")
+        logger.info(f"Max concurrent executions per session: {self._max_concurrent_per_session}")
 
     def is_sandbox_ready(self) -> bool:
         """
@@ -117,7 +118,7 @@ class ExecutionManager:
         """
         Execute the action with the appropriate executor.
 
-        Commands are executed sequentially - only one command can execute at a time.
+        Commands are executed concurrently with session-based limits.
 
         Args:
             action: Action object containing command and parameters
@@ -126,27 +127,51 @@ class ExecutionManager:
         Returns:
             CommandResult with execution results
         """
-        async with self._execution_lock:
-            try:
-                # Get executor directly from action's tool name
-                executor = self._executor_factory.get_executor(action.tool_name)
+        session_id = context.get("session_id") if context else None
 
-                # Use action parameters directly - no mapping needed
-                parameters = action.parameters.copy()
+        # Track concurrent executions per session
+        if session_id:
+            current_count = self._active_executions.get(session_id, 0)
+            if current_count >= self._max_concurrent_per_session:
+                error_msg = (
+                    f"Too many concurrent executions for session {session_id} "
+                    f"({current_count}/{self._max_concurrent_per_session})"
+                )
+                return CommandResult.error_result(error=error_msg)
 
-                # Validate parameters first
-                validation_result = executor.validate_parameters(parameters)
-                if not validation_result.valid:
-                    return CommandResult.error_result(
-                        error=f"Parameter validation failed: {', '.join(validation_result.errors)}"
-                    )
+            # Increment active execution count
+            self._active_executions[session_id] = current_count + 1
+            logger.debug(f"Session {session_id} active executions: {self._active_executions[session_id]}")
 
-                # Execute using the appropriate executor with callable interface
-                return await executor(parameters, context or {})
+        try:
+            # Get executor directly from action's tool name
+            executor = self._executor_factory.get_executor(action.tool_name)
 
-            except Exception as e:
-                logger.error(f"Execution failed: {e}")
-                return CommandResult.error_result(error=str(e))
+            # Use action parameters directly - no mapping needed
+            parameters = action.parameters.copy()
+
+            # Validate parameters first
+            validation_result = executor.validate_parameters(parameters)
+            if not validation_result.valid:
+                return CommandResult.error_result(
+                    error=f"Parameter validation failed: {', '.join(validation_result.errors)}"
+                )
+
+            # Execute using the appropriate executor with callable interface
+            # This is now truly async and non-blocking
+            return await executor(parameters, context or {})
+
+        except Exception as e:
+            logger.error(f"Execution failed: {e}")
+            return CommandResult.error_result(error=str(e))
+
+        finally:
+            # Decrement active execution count
+            if session_id and session_id in self._active_executions:
+                self._active_executions[session_id] -= 1
+                if self._active_executions[session_id] <= 0:
+                    del self._active_executions[session_id]
+                logger.debug(f"Session {session_id} active executions: {self._active_executions.get(session_id, 0)}")
 
     def get_executor(self, executor_type: str) -> DockerExecutor:
         """
@@ -255,6 +280,13 @@ class ExecutionManager:
             session_id: Session identifier to clean up
         """
         try:
+            # Cancel any active executions for this session
+            if session_id in self._active_executions:
+                logger.info(
+                    f"Cancelling {self._active_executions[session_id]} active executions for session {session_id}"
+                )
+                del self._active_executions[session_id]
+
             self._sandbox_manager.cleanup_session(session_id)
             logger.info(f"Cleaned up execution resources for session {session_id}")
         except Exception as e:
@@ -308,18 +340,6 @@ class ExecutionManager:
 
         return commands
 
-    def get_execution_stats(self) -> Dict[str, Any]:
-        """
-        Get execution statistics.
-
-        Returns:
-            Dictionary with execution statistics
-        """
-        return {
-            "execution_mode": "sequential",
-            "executor_info": self._executor_factory.get_executor_info(),
-        }
-
     def get_security_info(self) -> Dict[str, Any]:
         """
         Get security information about the execution environment.
@@ -342,3 +362,18 @@ class ExecutionManager:
             Configuration dictionary
         """
         return self._configuration
+
+    def get_execution_stats(self) -> Dict[str, Any]:
+        """
+        Get statistics about active executions.
+
+        Returns:
+            Dictionary with execution statistics
+        """
+        total_active = sum(self._active_executions.values())
+        return {
+            "total_active_executions": total_active,
+            "active_sessions": len(self._active_executions),
+            "max_concurrent_per_session": self._max_concurrent_per_session,
+            "session_execution_counts": self._active_executions.copy(),
+        }

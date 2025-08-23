@@ -37,8 +37,8 @@ class CLIExecutor(DockerExecutor):
     """
 
     _executor_metadata = {
-        "name": "execute_cli",
-        "description": "Execute CLI commands in secure Docker container",
+        "name": "cli",
+        "description": "Execute a cli command in the SABER sandbox environment.",
     }
 
     @classmethod
@@ -192,7 +192,7 @@ class CLIExecutor(DockerExecutor):
 
             # Execute command via shell (shell handles all command sequences naturally)
             command_args = self.build_command(parameters, context)
-            result = environment.execute_command(command=command_args, timeout=timeout)
+            result = await environment.execute_command(command=command_args, timeout=timeout)
 
             # Parse output using existing logic
             tool_result = self.parse_output(result.stdout, result.stderr, result.exit_code)

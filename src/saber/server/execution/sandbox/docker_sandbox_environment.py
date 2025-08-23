@@ -5,6 +5,7 @@ This module provides Docker Compose-based execution environments that support
 both single container and multi-container scenarios for complex security tasks.
 """
 
+import asyncio
 import io
 import logging
 import os
@@ -112,9 +113,9 @@ class DockerSandboxEnvironment:
             self._cleanup_compose_file()
             raise ContainerCreationError(f"Failed to start sandbox environment: {e}")
 
-    def execute_command(self, command: List[str], timeout: int = 300) -> CommandResult:
+    async def execute_command(self, command: List[str], timeout: int = 300) -> CommandResult:
         """
-        Execute command in the execution container.
+        Execute command in the execution container asynchronously.
 
         Args:
             command: Command to execute as list of strings
@@ -136,16 +137,27 @@ class DockerSandboxEnvironment:
         try:
             start_time = time.time()
 
-            # Execute command in container
-            # Note: exec_run doesn't support timeout parameter directly
-            result = execution_container.exec_run(
-                command,
-                tty=False,
-                stdout=True,
-                stderr=True,
-                stream=False,
-                demux=True,
-            )
+            # Execute command in container asynchronously with timeout
+            # This prevents blocking the event loop and allows proper timeout handling
+            try:
+                loop = asyncio.get_event_loop()
+                result = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        None,  # Use default thread pool
+                        lambda: execution_container.exec_run(
+                            command,
+                            tty=False,
+                            stdout=True,
+                            stderr=True,
+                            stream=False,
+                            demux=True,
+                        ),
+                    ),
+                    timeout=timeout,
+                )
+            except asyncio.TimeoutError:
+                execution_time = time.time() - start_time
+                raise SandboxExecutionError(f"Command execution timed out after {timeout} seconds")
 
             execution_time = time.time() - start_time  # Process output
             stdout = ""

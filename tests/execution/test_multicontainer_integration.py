@@ -102,29 +102,28 @@ class TestMultiContainerIntegration:
         )
 
     @pytest.mark.integration
-    def test_simple_single_service_environment(self, docker_client, simple_environment_spec):
+    @pytest.mark.asyncio
+    async def test_simple_single_service_environment(self, docker_client, simple_environment_spec):
         """Test creating and managing a simple single-service environment."""
         session_id = "test_simple_session"
-        cleanup_token = "test_cleanup_token_123"
         env = None
 
         try:
-            # Create and start environment
-            env = DockerSandboxEnvironment(session_id, simple_environment_spec, cleanup_token=cleanup_token)
+            # Create and start environment WITHOUT cleanup token (no orchestrator for basic testing)
+            env = DockerSandboxEnvironment(session_id, simple_environment_spec, cleanup_token=None)
             env.start()
 
-            # Verify environment is running
-            assert len(env.active_services) == 3  # execution + nginx + orchestrator
+            # Verify environment is running (no orchestrator in this test)
+            assert len(env.active_services) == 2  # execution + nginx (no orchestrator)
             assert "ubuntu_executor" in env.active_services
             assert "nginx" in env.active_services
-            assert "saber-orchestrator" in env.active_services
 
             # Get execution container
             exec_container = env.get_execution_container()
             assert exec_container is not None
 
             # Test command execution
-            result = env.execute_command(["echo", "Hello from container"])
+            result = await env.execute_command(["echo", "Hello from container"])
             assert result.exit_code == 0
             assert "Hello from container" in result.stdout
 
@@ -173,40 +172,39 @@ class TestMultiContainerIntegration:
                     print(f"Cleanup error: {cleanup_error}")
 
     @pytest.mark.integration
-    def test_complex_multi_service_environment(self, docker_client, complex_environment_spec):
+    @pytest.mark.asyncio
+    async def test_complex_multi_service_environment(self, docker_client, complex_environment_spec):
         """Test creating and managing a complex multi-service environment."""
         session_id = "test_complex_session"
-        cleanup_token = "test_cleanup_token_complex"
         env = None
 
         try:
-            # Create and start environment
-            env = DockerSandboxEnvironment(session_id, complex_environment_spec, cleanup_token=cleanup_token)
+            # Create and start environment WITHOUT cleanup token (no orchestrator for basic testing)
+            env = DockerSandboxEnvironment(session_id, complex_environment_spec, cleanup_token=None)
             env.start()
 
-            # Verify all services are running
-            assert len(env.active_services) == 4  # execution + redis + nginx + orchestrator
+            # Verify all services are running (no orchestrator in this test)
+            assert len(env.active_services) == 3  # execution + redis + nginx (no orchestrator)
             assert "ubuntu_executor" in env.active_services
             assert "redis" in env.active_services
             assert "nginx" in env.active_services
-            assert "saber-orchestrator" in env.active_services
 
             # Test command execution
-            result = env.execute_command(["apt-get", "update"])
+            result = await env.execute_command(["apt-get", "update"])
             assert result.exit_code == 0
 
             # Install network tools for testing
-            result = env.execute_command(["apt-get", "install", "-y", "iputils-ping", "curl"])
+            result = await env.execute_command(["apt-get", "install", "-y", "iputils-ping", "curl"])
             assert result.exit_code == 0
 
             # Test network connectivity between services
             # Ping redis from execution container
-            result = env.execute_command(["ping", "-c", "1", "redis"])
+            result = await env.execute_command(["ping", "-c", "1", "redis"])
             assert result.exit_code == 0
             assert "1 packets transmitted, 1 received" in result.stdout
 
             # Ping nginx from execution container
-            result = env.execute_command(["ping", "-c", "1", "nginx"])
+            result = await env.execute_command(["ping", "-c", "1", "nginx"])
             assert result.exit_code == 0
 
             # Wait for services to be healthy
@@ -224,7 +222,7 @@ class TestMultiContainerIntegration:
             print(f"Service info: {service_info}")
 
             # Verify we can interact with Redis
-            result = env.execute_command(
+            result = await env.execute_command(
                 [
                     "bash",
                     "-c",
@@ -259,16 +257,17 @@ class TestMultiContainerIntegration:
                     print(f"Cleanup error: {cleanup_error}")
 
     @pytest.mark.integration
-    def test_environment_lifecycle(self, docker_client, simple_environment_spec):
+    @pytest.mark.asyncio
+    async def test_environment_lifecycle(self, docker_client, simple_environment_spec):
         """Test complete environment lifecycle: create, use, stop, recreate."""
         session_id = "test_lifecycle_session"
 
         # First lifecycle
-        env1 = DockerSandboxEnvironment(session_id + "_1", simple_environment_spec, cleanup_token="token_1")
+        env1 = DockerSandboxEnvironment(session_id + "_1", simple_environment_spec, cleanup_token=None)
         try:
             env1.start()
 
-            result = env1.execute_command(["echo", "first lifecycle"])
+            result = await env1.execute_command(["echo", "first lifecycle"])
             assert result.exit_code == 0
             assert "first lifecycle" in result.stdout
 
@@ -286,11 +285,11 @@ class TestMultiContainerIntegration:
             raise
 
         # Second lifecycle - should work independently
-        env2 = DockerSandboxEnvironment(session_id + "_2", simple_environment_spec, cleanup_token="token_2")
+        env2 = DockerSandboxEnvironment(session_id + "_2", simple_environment_spec, cleanup_token=None)
         try:
             env2.start()
 
-            result = env2.execute_command(["echo", "second lifecycle"])
+            result = await env2.execute_command(["echo", "second lifecycle"])
             assert result.exit_code == 0
             assert "second lifecycle" in result.stdout
 
@@ -307,14 +306,15 @@ class TestMultiContainerIntegration:
         print("✓ Environment lifecycle test passed")
 
     @pytest.mark.integration
-    def test_file_operations(self, docker_client, simple_environment_spec):
+    @pytest.mark.asyncio
+    async def test_file_operations(self, docker_client, simple_environment_spec):
         """Test basic file operations in container."""
         session_id = "test_file_ops_session"
-        cleanup_token = "test_cleanup_token_file_ops"
         env = None
 
         try:
-            env = DockerSandboxEnvironment(session_id, simple_environment_spec, cleanup_token=cleanup_token)
+            # Create and start environment WITHOUT cleanup token (no orchestrator for basic testing)
+            env = DockerSandboxEnvironment(session_id, simple_environment_spec, cleanup_token=None)
             env.start()
 
             # Test creating and reading files in container
@@ -322,21 +322,21 @@ class TestMultiContainerIntegration:
             container_path = "/workspace/test_file.txt"
 
             # Create file in container
-            result = env.execute_command(["bash", "-c", f"echo '{test_content}' > {container_path}"])
+            result = await env.execute_command(["bash", "-c", f"echo '{test_content}' > {container_path}"])
             assert result.exit_code == 0
 
             # Read file from container
-            result = env.execute_command(["cat", container_path])
+            result = await env.execute_command(["cat", container_path])
             assert result.exit_code == 0
             assert test_content in result.stdout
 
             # Modify file in container
             new_content = "Modified in container"
-            result = env.execute_command(["bash", "-c", f"echo '{new_content}' > {container_path}"])
+            result = await env.execute_command(["bash", "-c", f"echo '{new_content}' > {container_path}"])
             assert result.exit_code == 0
 
             # Verify modification
-            result = env.execute_command(["cat", container_path])
+            result = await env.execute_command(["cat", container_path])
             assert result.exit_code == 0
             assert new_content in result.stdout
 
@@ -367,3 +367,8 @@ class TestMultiContainerIntegration:
             env.start()
 
         print("✓ Error handling test passed")
+
+    # NOTE: For orchestrator integration testing with cleanup_token != None,
+    # a real SABER server needs to be running on port 8000 to handle
+    # episode status polling from the orchestrator container.
+    # This enables full end-to-end testing of the episode lifecycle.

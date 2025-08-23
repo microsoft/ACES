@@ -416,3 +416,75 @@ class TestEnvironmentSpec:
 
         # Should not raise
         env_spec.validate()
+
+    def test_cleanup_token_none_skips_orchestrator(self):
+        """Test that cleanup_token=None doesn't include orchestrator in compose config."""
+        network = NetworkSpec(name="test_network", driver="bridge", internal=False)
+        nginx_service = ServiceSpec(
+            name="nginx",
+            container="nginx_container",
+            image="nginx:alpine",
+            ports=["80"],
+            health_check=HealthCheck(test=["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/"]),
+        )
+
+        environment_spec = EnvironmentSpec(
+            network=network,
+            execution_service="ubuntu_executor",
+            execution_config={"image": "ubuntu:latest", "working_dir": "/workspace"},
+            target_services=[nginx_service],
+        )
+
+        # Test with session_id but cleanup_token=None
+        compose_config = environment_spec.to_compose_dict(
+            session_id="test_session", cleanup_token=None, saber_host_url="http://localhost:8000"
+        )
+
+        services = compose_config["services"]
+
+        # Should NOT have orchestrator
+        assert "saber-orchestrator" not in services
+        # Should have execution and target services
+        assert "ubuntu_executor" in services
+        assert "nginx" in services
+        # Services should not depend on orchestrator
+        exec_service = services["ubuntu_executor"]
+        assert "saber-orchestrator" not in exec_service.get("depends_on", [])
+        target_service = services["nginx"]
+        assert "saber-orchestrator" not in target_service.get("depends_on", [])
+
+    def test_cleanup_token_with_value_includes_orchestrator(self):
+        """Test that cleanup_token with value includes orchestrator and dependencies."""
+        network = NetworkSpec(name="test_network", driver="bridge", internal=False)
+        nginx_service = ServiceSpec(
+            name="nginx",
+            container="nginx_container",
+            image="nginx:alpine",
+            ports=["80"],
+            health_check=HealthCheck(test=["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/"]),
+        )
+
+        environment_spec = EnvironmentSpec(
+            network=network,
+            execution_service="ubuntu_executor",
+            execution_config={"image": "ubuntu:latest", "working_dir": "/workspace"},
+            target_services=[nginx_service],
+        )
+
+        # Test with session_id and cleanup_token
+        compose_config = environment_spec.to_compose_dict(
+            session_id="test_session", cleanup_token="test_token_123", saber_host_url="http://localhost:8000"
+        )
+
+        services = compose_config["services"]
+
+        # Should have orchestrator
+        assert "saber-orchestrator" in services
+        # Should have execution and target services
+        assert "ubuntu_executor" in services
+        assert "nginx" in services
+        # Services should depend on orchestrator
+        exec_service = services["ubuntu_executor"]
+        assert "saber-orchestrator" in exec_service.get("depends_on", [])
+        target_service = services["nginx"]
+        assert "saber-orchestrator" in target_service.get("depends_on", [])

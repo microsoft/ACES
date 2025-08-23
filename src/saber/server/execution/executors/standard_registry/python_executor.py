@@ -29,8 +29,8 @@ class PythonExecutor(DockerExecutor):
     """
 
     _executor_metadata = {
-        "name": "execute_python",
-        "description": "Execute Python code in secure Docker container",
+        "name": "python",
+        "description": "Execute a python command in the SABER sandbox environment.",
     }
 
     @classmethod
@@ -354,14 +354,14 @@ class PythonExecutor(DockerExecutor):
             working_dir = parameters.get("working_dir", "/workspace")
             timeout = int(self.get_timeout())
             create_script_cmd = ["sh", "-c", f"cd {working_dir} && cat > {script_path} << 'EOF'\n{script_content}\nEOF"]
-            create_result = environment.execute_command(command=create_script_cmd, timeout=timeout)
+            create_result = await environment.execute_command(command=create_script_cmd, timeout=timeout)
 
             if create_result.exit_code != 0:
                 return CommandResult.error_result(error=f"Failed to create script file: {create_result.stderr}")
 
             # Execute Python script
             python_cmd = ["sh", "-c", f"cd {working_dir} && python3 {script_path}"]
-            result = environment.execute_command(command=python_cmd, timeout=timeout)
+            result = await environment.execute_command(command=python_cmd, timeout=timeout)
 
             # Parse output
             tool_result = self.parse_python_output(result.stdout, result.stderr, result.exit_code, script_path)

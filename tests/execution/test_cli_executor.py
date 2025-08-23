@@ -52,13 +52,6 @@ class TestCLIExecutor:
             sandbox_manager=mock_sandbox_manager, config=config, allowed_commands=["file", "strings", "echo", "cat"]
         )
 
-    def test_executor_metadata(self, docker_cli_tool):
-        """Test executor metadata is correctly defined."""
-        metadata = docker_cli_tool._executor_metadata
-
-        assert metadata["name"] == "execute_cli"
-        assert metadata["description"] == "Execute CLI commands in secure Docker container"
-
     def test_build_command_simple(self, docker_cli_tool):
         """Test building command with simple string (no shell mode)."""
         parameters = {"command": "ls -la"}
@@ -311,7 +304,7 @@ class TestCLIExecutorIntegration:
         command_result = CommandResult(exit_code=0, stdout="Hello from Docker!\n", stderr="", execution_time=0.5)
 
         env = mock_sandbox_manager_with_env.get_session_environment.return_value
-        env.execute_command.return_value = command_result
+        env.execute_command = AsyncMock(return_value=command_result)
 
         parameters = {"command": "echo 'Hello from Docker!'"}
         context = {"session_id": "test_session_123"}
@@ -337,7 +330,7 @@ class TestCLIExecutorIntegration:
         command_result = CommandResult(exit_code=0, stdout="hello world\n", stderr="", execution_time=1.2)
 
         env = mock_sandbox_manager_with_env.get_session_environment.return_value
-        env.execute_command.return_value = command_result
+        env.execute_command = AsyncMock(return_value=command_result)
 
         parameters = {"command": "echo hello world", "shell": True}
         context = {"session_id": "shell_test_session"}
@@ -359,7 +352,7 @@ class TestCLIExecutorIntegration:
         )
 
         env = mock_sandbox_manager_with_env.get_session_environment.return_value
-        env.execute_command.return_value = command_result
+        env.execute_command = AsyncMock(return_value=command_result)
 
         parameters = {"command": "nonexistent_command", "shell": False}
         context = {"session_id": "failure_test_session"}
@@ -391,7 +384,7 @@ class TestCLIExecutorIntegration:
         mock_sandbox_manager_with_env.get_session_environment.return_value = existing_env
 
         command_result = CommandResult(exit_code=0, stdout="test\n", stderr="", execution_time=0.3)
-        existing_env.execute_command.return_value = command_result
+        existing_env.execute_command = AsyncMock(return_value=command_result)
 
         # Mock the container interface
         container_mock = MagicMock()

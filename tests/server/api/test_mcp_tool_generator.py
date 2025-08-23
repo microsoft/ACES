@@ -16,7 +16,12 @@ from saber.server.api.mcp_tool_generator import MCPToolGenerator
 class TestMCPToolGenerator:
     """Test suite for MCPToolGenerator utility class."""
 
-    def test_validate_mcp_schema_valid(self):
+    @pytest.fixture
+    def generator(self):
+        """Create MCPToolGenerator instance for testing."""
+        return MCPToolGenerator()
+
+    def test_validate_mcp_schema_valid(self, generator):
         """Test schema validation with valid schema."""
         valid_schema = {
             "name": "test_tool",
@@ -38,26 +43,26 @@ class TestMCPToolGenerator:
             }
         }
 
-        assert MCPToolGenerator.validate_mcp_schema(valid_schema) is True
+        assert generator.validate_mcp_schema(valid_schema) is True
 
-    def test_validate_mcp_schema_invalid(self):
+    def test_validate_mcp_schema_invalid(self, generator):
         """Test schema validation with invalid schemas."""
         # Not a dictionary
-        assert MCPToolGenerator.validate_mcp_schema("invalid") is False
+        assert generator.validate_mcp_schema("invalid") is False
 
         # Missing inputSchema
-        assert MCPToolGenerator.validate_mcp_schema({}) is False
+        assert generator.validate_mcp_schema({}) is False
 
         # Invalid inputSchema
-        assert MCPToolGenerator.validate_mcp_schema({"inputSchema": "invalid"}) is False
+        assert generator.validate_mcp_schema({"inputSchema": "invalid"}) is False
 
         # Missing properties
-        assert MCPToolGenerator.validate_mcp_schema({
+        assert generator.validate_mcp_schema({
             "inputSchema": {"type": "object"}
         }) is False
 
         # Invalid property definition
-        assert MCPToolGenerator.validate_mcp_schema({
+        assert generator.validate_mcp_schema({
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -67,7 +72,7 @@ class TestMCPToolGenerator:
         }) is False
 
         # Missing type in property
-        assert MCPToolGenerator.validate_mcp_schema({
+        assert generator.validate_mcp_schema({
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -78,18 +83,18 @@ class TestMCPToolGenerator:
             }
         }) is False
 
-    def test_json_type_to_python_type(self):
+    def test_json_type_to_python_type(self, generator):
         """Test JSON schema type to Python type conversion."""
-        assert MCPToolGenerator._json_type_to_python_type("string") == "str"
-        assert MCPToolGenerator._json_type_to_python_type("integer") == "int"
-        assert MCPToolGenerator._json_type_to_python_type("boolean") == "bool"
-        assert MCPToolGenerator._json_type_to_python_type("number") == "float"
-        assert MCPToolGenerator._json_type_to_python_type("array") == "List[str]"
-        assert MCPToolGenerator._json_type_to_python_type("object") == "Dict[str, Any]"
-        assert MCPToolGenerator._json_type_to_python_type("unknown") == "str"  # fallback
+        assert generator._json_type_to_python_type("string") == "str"
+        assert generator._json_type_to_python_type("integer") == "int"
+        assert generator._json_type_to_python_type("boolean") == "bool"
+        assert generator._json_type_to_python_type("number") == "float"
+        assert generator._json_type_to_python_type("array") == "List[str]"
+        assert generator._json_type_to_python_type("object") == "Dict[str, Any]"
+        assert generator._json_type_to_python_type("unknown") == "str"  # fallback
 
     @pytest.mark.asyncio
-    async def test_create_executor_tool_cli(self):
+    async def test_create_executor_tool_cli(self, generator):
         """Test creating MCP tool function for CLI executor."""
         # Mock handler function
         mock_handler = AsyncMock(return_value={
@@ -119,20 +124,21 @@ class TestMCPToolGenerator:
         }
 
         # Generate the tool function
-        tool_function = MCPToolGenerator.create_executor_tool(
+        tool_function = generator.create_executor_tool(
             executor_name="cli",
             mcp_schema=cli_schema,
             handler_func=mock_handler
         )
 
         # Verify function properties
-        assert tool_function.__name__ == "execute_cli"
+        assert tool_function.__name__ == "cli"
         assert "CLI" in tool_function.__doc__ or "cli" in tool_function.__doc__
         assert asyncio.iscoroutinefunction(tool_function)
 
         # Test function execution with required parameter
-        result = await tool_function(command="ls -la")
+        result = await tool_function(command="ls -la", shell=False)
         assert result == "Command executed successfully"
+        # shell=False is the default, so it gets filtered out
         mock_handler.assert_called_once_with("cli", {"command": "ls -la"})
 
         # Reset mock and test with optional parameter
@@ -142,7 +148,8 @@ class TestMCPToolGenerator:
         mock_handler.assert_called_once_with("cli", {"command": "ps aux", "shell": True})
 
     @pytest.mark.asyncio
-    async def test_create_executor_tool_python(self):
+    @pytest.mark.asyncio
+    async def test_create_executor_tool_python(self, generator):
         """Test creating MCP tool function for Python executor."""
         # Mock handler function
         mock_handler = AsyncMock(return_value={
@@ -176,26 +183,28 @@ class TestMCPToolGenerator:
         }
 
         # Generate the tool function
-        tool_function = MCPToolGenerator.create_executor_tool(
+        tool_function = generator.create_executor_tool(
             executor_name="python",
             mcp_schema=python_schema,
             handler_func=mock_handler
         )
 
         # Verify function properties
-        assert tool_function.__name__ == "execute_python"
+        assert tool_function.__name__ == "python"
         assert asyncio.iscoroutinefunction(tool_function)
 
         # Test function execution
-        result = await tool_function(code="print('hello')", working_dir="/tmp")
+        result = await tool_function(code="print('hello')", template="basic", working_dir="/tmp")
         assert result == "Python code executed"
+        # working_dir="/workspace" is default, but we passed "/tmp" which is different
         mock_handler.assert_called_once_with("python", {
             "code": "print('hello')",
+            "template": "basic",
             "working_dir": "/tmp"
         })
 
     @pytest.mark.asyncio
-    async def test_create_executor_tool_error_handling(self):
+    async def test_create_executor_tool_error_handling(self, generator):
         """Test error handling in generated tool function."""
         # Mock handler function that returns error
         mock_handler = AsyncMock(return_value={
@@ -220,7 +229,7 @@ class TestMCPToolGenerator:
         }
 
         # Generate the tool function
-        tool_function = MCPToolGenerator.create_executor_tool(
+        tool_function = generator.create_executor_tool(
             executor_name="test",
             mcp_schema=schema,
             handler_func=mock_handler
@@ -231,7 +240,7 @@ class TestMCPToolGenerator:
         assert '"success": false' in result
         assert '"error": "Command failed"' in result
 
-    def test_create_executor_tool_none_filtering(self):
+    def test_create_executor_tool_none_filtering(self, generator):
         """Test that None values are filtered from parameters."""
         # This test verifies the generated function filters None values
         # We'll inspect the generated code rather than execute it
@@ -258,7 +267,7 @@ class TestMCPToolGenerator:
         mock_handler = AsyncMock()
 
         # Generate the tool function
-        tool_function = MCPToolGenerator.create_executor_tool(
+        tool_function = generator.create_executor_tool(
             executor_name="test",
             mcp_schema=schema,
             handler_func=mock_handler
@@ -268,7 +277,7 @@ class TestMCPToolGenerator:
         assert callable(tool_function)
         assert asyncio.iscoroutinefunction(tool_function)
 
-    def test_create_executor_tool_invalid_schema(self):
+    def test_create_executor_tool_invalid_schema(self, generator):
         """Test error handling for invalid schemas."""
         mock_handler = AsyncMock()
 
@@ -281,13 +290,13 @@ class TestMCPToolGenerator:
 
         # Should raise an error during function generation
         with pytest.raises(Exception):
-            MCPToolGenerator.create_executor_tool(
+            generator.create_executor_tool(
                 executor_name="invalid",
                 mcp_schema=invalid_schema,
                 handler_func=mock_handler
             )
 
-    def test_create_executor_tool_complex_types(self):
+    def test_create_executor_tool_complex_types(self, generator):
         """Test handling of complex parameter types."""
         mock_handler = AsyncMock(return_value={
             "content": [{"type": "text", "text": "Success"}],
@@ -313,11 +322,11 @@ class TestMCPToolGenerator:
         }
 
         # Should generate function without errors
-        tool_function = MCPToolGenerator.create_executor_tool(
+        tool_function = generator.create_executor_tool(
             executor_name="complex",
             mcp_schema=complex_schema,
             handler_func=mock_handler
         )
 
         assert callable(tool_function)
-        assert tool_function.__name__ == "execute_complex"
+        assert tool_function.__name__ == "complex"

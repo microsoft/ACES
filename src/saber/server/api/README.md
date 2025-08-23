@@ -52,8 +52,8 @@ Model Context Protocol server that provides MCP-compliant tool interfaces for AI
 - ✅ Pure functional tool interfaces
 
 **Available Tools:**
-- `execute_python(code: str)` - Execute Python code in sandbox
-- `execute_cli(command: str)` - Execute shell commands in sandbox  
+- `python(code: str)` - Execute Python code in sandbox
+- `cli(command: str)` - Execute shell commands in sandbox  
 - `end_episode(submission?: str)` - End episode with optional result
 
 **Connection Headers:**
@@ -96,7 +96,7 @@ await mcp_client.connect({
 });
 
 // Clean tool calls without session context
-await mcp_client.call_tool('execute_python', {
+await mcp_client.call_tool('python', {
   code: 'print("hello world")'
 });
 ```
@@ -154,11 +154,11 @@ client = await Client.connect_sse(
 tools = await client.list_tools()
 
 # Execute clean tools
-result = await client.call_tool("execute_python", {
+result = await client.call_tool("python", {
     "code": "import requests; print(requests.__version__)"
 })
 
-result = await client.call_tool("execute_cli", {
+result = await client.call_tool("cli", {
     "command": "nmap -sV target.local"
 })
 

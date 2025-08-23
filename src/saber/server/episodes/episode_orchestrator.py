@@ -55,7 +55,8 @@ class EpisodeContainerOrchestrator:
         self.logger = self._setup_logging()
         self.running = True
         self.failure_count = 0
-        self.max_failures = 3
+        # Increased tolerance for async execution - allow longer command execution times
+        self.max_failures = int(os.getenv("SABER_MAX_ORCHESTRATOR_FAILURES", "10"))  # 30s × 10 = 5 minutes tolerance
 
         # Setup signal handlers for graceful shutdown
         signal.signal(signal.SIGTERM, self._signal_handler)
