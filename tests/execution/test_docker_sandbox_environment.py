@@ -146,7 +146,8 @@ class TestDockerSandboxEnvironment:
                 env.start()
 
     @patch("saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env")
-    def test_execute_command_success(self, mock_docker, sample_environment_spec):
+    @pytest.mark.asyncio
+    async def test_execute_command_success(self, mock_docker, sample_environment_spec):
         """Test successful command execution."""
         mock_client = Mock()
         mock_docker.return_value = mock_client
@@ -161,7 +162,7 @@ class TestDockerSandboxEnvironment:
         env = DockerSandboxEnvironment("test_session", sample_environment_spec)
         env.active_services["execution"] = mock_container
 
-        result = env.execute_command(["echo", "Hello World"])
+        result = await env.execute_command(["echo", "Hello World"])
 
         assert isinstance(result, CommandResult)
         assert result.exit_code == 0
@@ -170,7 +171,8 @@ class TestDockerSandboxEnvironment:
         assert result.execution_time > 0
 
     @patch("saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env")
-    def test_execute_command_no_environment(self, mock_docker, sample_environment_spec):
+    @pytest.mark.asyncio
+    async def test_execute_command_no_environment(self, mock_docker, sample_environment_spec):
         """Test command execution without started environment."""
         mock_client = Mock()
         mock_docker.return_value = mock_client
@@ -178,10 +180,11 @@ class TestDockerSandboxEnvironment:
         env = DockerSandboxEnvironment("test_session", sample_environment_spec)
 
         with pytest.raises(SandboxExecutionError, match="Environment not started"):
-            env.execute_command(["echo", "test"])
+            await env.execute_command(["echo", "test"])
 
     @patch("saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env")
-    def test_execute_command_no_execution_container(self, mock_docker, sample_environment_spec):
+    @pytest.mark.asyncio
+    async def test_execute_command_no_execution_container(self, mock_docker, sample_environment_spec):
         """Test command execution without execution container."""
         mock_client = Mock()
         mock_docker.return_value = mock_client
@@ -190,10 +193,11 @@ class TestDockerSandboxEnvironment:
         env.active_services["webapp"] = Mock()  # Only webapp, no execution
 
         with pytest.raises(SandboxExecutionError, match="Execution container not available"):
-            env.execute_command(["echo", "test"])
+            await env.execute_command(["echo", "test"])
 
     @patch("saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env")
-    def test_execute_command_container_error(self, mock_docker, sample_environment_spec):
+    @pytest.mark.asyncio
+    async def test_execute_command_container_error(self, mock_docker, sample_environment_spec):
         """Test command execution with container error."""
         mock_client = Mock()
         mock_docker.return_value = mock_client
@@ -205,7 +209,7 @@ class TestDockerSandboxEnvironment:
         env.active_services["execution"] = mock_container
 
         with pytest.raises(SandboxExecutionError, match="Command execution failed"):
-            env.execute_command(["echo", "test"])
+            await env.execute_command(["echo", "test"])
 
     @patch("saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env")
     def test_copy_to_container_success(self, mock_docker, sample_environment_spec):

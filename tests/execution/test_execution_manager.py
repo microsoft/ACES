@@ -250,21 +250,15 @@ class TestExecutionManager:
 
     def test_get_execution_stats(self, registry):
         """Test getting execution statistics."""
-        # Mock executor factory info
-        mock_executor_info = {
-            "available_types": ["cli", "python"],
-            "active_instances": ["cli"],
-            "registry_size": 2,
-            "configurations": {"cli": {}, "python": {}},
-        }
+        stats = registry.get_execution_stats()
 
-        with patch.object(registry._executor_factory, "get_executor_info", return_value=mock_executor_info):
-            stats = registry.get_execution_stats()
-
-        assert "execution_mode" in stats
-        assert "executor_info" in stats
-        assert stats["execution_mode"] == "sequential"
-        assert stats["executor_info"] == mock_executor_info
+        assert "total_active_executions" in stats
+        assert "active_sessions" in stats
+        assert "max_concurrent_per_session" in stats
+        assert "session_execution_counts" in stats
+        assert stats["total_active_executions"] == 0
+        assert stats["active_sessions"] == 0
+        assert stats["max_concurrent_per_session"] == 3
 
     def test_get_configuration(self, registry):
         """Test getting configuration manager."""

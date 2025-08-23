@@ -41,12 +41,6 @@ class SessionMCPAPI:
         self.host = host
         self.port = port
         self.mcp_server: Optional[FastMCP] = None
-
-        # Session mapping - no longer needed with header approach
-        self.request_to_session: Dict[str, str] = {}  # request_id → SABER session ID (legacy)
-        self.client_to_session: Dict[str, str] = {}  # client_id → SABER session ID (legacy)
-
-        # Initialize tool generator
         self.tool_generator = MCPToolGenerator()
 
         logger.info(f"SessionMCPAPI initialized for domain '{session_manager.domain_name}' on {host}:{port}")
@@ -96,11 +90,6 @@ class SessionMCPAPI:
             if self.mcp_server:
                 await self.mcp_server.close()  # type: ignore[attr-defined]
                 self.mcp_server = None
-
-            # Clean up session mappings
-            self.request_to_session.clear()
-            self.client_to_session.clear()
-
             logger.info("MCP server shutdown complete")
 
         except Exception as e:
@@ -121,31 +110,6 @@ class SessionMCPAPI:
 
         # Register hardcoded MCP API tools
         self._register_hardcoded_tools()
-
-    def register_session_for_client(self, client_id: str, session_id: str) -> None:
-        """
-        Register a SABER session for a specific MCP client ID.
-
-        This should be called by the REST API when a session is created
-        and the client plans to use MCP for tool execution.
-
-        Args:
-            client_id: MCP client identifier
-            session_id: SABER session ID to map to
-        """
-        self.client_to_session[client_id] = session_id
-        logger.info(f"Registered SABER session {session_id} for MCP client {client_id}")
-
-    def unregister_session_for_client(self, client_id: str) -> None:
-        """
-        Unregister session mapping for a client.
-
-        Args:
-            client_id: MCP client identifier to unregister
-        """
-        if client_id in self.client_to_session:
-            session_id = self.client_to_session.pop(client_id)
-            logger.info(f"Unregistered SABER session {session_id} for MCP client {client_id}")
 
     def _register_hardcoded_tools(self) -> None:
         """Register hardcoded MCP API tools with the FastMCP server."""
@@ -293,18 +257,32 @@ class SessionMCPAPI:
             logger.error(f"Error handling call_tool {name}: {e}")
             return self._convert_to_mcp_result(CommandResult.error_result(error=f"Tool execution failed: {str(e)}"))
 
-    async def _handle_end_episode_call(self, arguments: Dict[str, Any], session_id: str) -> Dict[str, Any]:
+    async def _handle_end_episode_call(
+        self, arguments: Dict[str, Any], session_id: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         Handle the hardcoded end_episode tool call.
 
         Args:
             arguments: Tool arguments (clean, no session_id)
-            session_id: SABER session ID from Context
+            session_id: SABER session ID from Context (can be None for legacy support)
 
         Returns:
             MCP-formatted result confirming episode end
         """
         try:
+            # If session_id not provided, try to get it from arguments or headers
+            if not session_id:
+                if "session_id" in arguments:
+                    session_id = arguments["session_id"]
+                else:
+                    session_id = await self._get_session_from_headers()
+
+            if not session_id:
+                return self._convert_to_mcp_result(
+                    CommandResult.error_result(error="No SABER session mapped to MCP request")
+                )
+
             # Extract optional result/flag/objective from parameters.submission
             result = ""
             if "parameters" in arguments and isinstance(arguments["parameters"], dict):
@@ -354,8 +332,9 @@ class SessionMCPAPI:
         Returns:
             Action object for execution
         """
-        # Arguments should be clean - no session_id expected
-        return Action(tool_name=tool_name, parameters=arguments)
+        # Filter out session_id from arguments for the Action parameters
+        filtered_arguments = {k: v for k, v in arguments.items() if k != "session_id"}
+        return Action(tool_name=tool_name, parameters=filtered_arguments)
 
     def _convert_to_mcp_result(self, command_result: CommandResult) -> Dict[str, Any]:
         """

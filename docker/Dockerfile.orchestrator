@@ -19,6 +19,12 @@ RUN useradd -r -s /bin/false saber
 # Set working directory
 WORKDIR /app
 
+# Configure orchestrator environment variables with sensible defaults
+# These can be overridden when running the container
+ENV SABER_POLL_INTERVAL=30
+ENV SABER_MAX_ORCHESTRATOR_FAILURES=10
+ENV SABER_GRACEFUL_TIMEOUT=30
+
 # Run as root to access Docker socket (required for Docker commands)
 USER root
 

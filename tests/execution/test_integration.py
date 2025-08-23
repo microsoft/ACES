@@ -76,9 +76,9 @@ class TestToolsIntegration:
 
         # Mock Docker environment execution
         mock_env = MagicMock()
-        mock_env.execute_command.return_value = CommandResult(
+        mock_env.execute_command = AsyncMock(return_value=CommandResult(
             exit_code=0, stdout="test\n", stderr="", execution_time=0.05
-        )
+        ))
         mock_env.get_container_id.return_value = "whitelist_container_456"
 
         with patch.object(registry._sandbox_manager, "get_session_environment", return_value=mock_env):
@@ -97,10 +97,9 @@ class TestToolsIntegration:
 
         # Mock Docker environment for all commands
         mock_env = MagicMock()
-        mock_env.execute_command = MagicMock()
-        mock_env.execute_command.return_value = CommandResult(
+        mock_env.execute_command = AsyncMock(return_value=CommandResult(
             exit_code=0, stdout="test\n", stderr="", execution_time=0.02
-        )
+        ))
         mock_env.get_container_id.return_value = "concurrent_container"
 
         with patch.object(registry._sandbox_manager, "get_session_environment", return_value=mock_env):
@@ -125,10 +124,9 @@ class TestToolsIntegration:
 
         # Mock Docker environment execution
         mock_env = MagicMock()
-        mock_env.execute_command = MagicMock()
-        mock_env.execute_command.return_value = CommandResult(
+        mock_env.execute_command = AsyncMock(return_value=CommandResult(
             exit_code=0, stdout="hello world\n", stderr="", execution_time=0.03
-        )
+        ))
         mock_env.get_container_id.return_value = "shell_test_container"
 
         with patch.object(registry._sandbox_manager, "get_session_environment", return_value=mock_env) as mock_get_env:
@@ -219,19 +217,17 @@ class TestToolsIntegration:
 
         # Mock different environments for different sessions
         mock_env1 = MagicMock()
-        mock_env1.execute_command = MagicMock()
-        mock_env1.execute_command.return_value = CommandResult(
+        mock_env1.execute_command = AsyncMock(return_value=CommandResult(
             exit_code=0, stdout="session1\n", stderr="", execution_time=0.1
-        )
+        ))
         mock_container1 = MagicMock()
         mock_container1.id = "session1_container"
         mock_env1.get_execution_container.return_value = mock_container1
 
         mock_env2 = MagicMock()
-        mock_env2.execute_command = MagicMock()
-        mock_env2.execute_command.return_value = CommandResult(
+        mock_env2.execute_command = AsyncMock(return_value=CommandResult(
             exit_code=0, stdout="session2\n", stderr="", execution_time=0.1
-        )
+        ))
         mock_container2 = MagicMock()
         mock_container2.id = "session2_container"
         mock_env2.get_execution_container.return_value = mock_container2
@@ -266,10 +262,9 @@ class TestToolsIntegration:
 
         # Mock Docker environment returning error
         mock_env = MagicMock()
-        mock_env.execute_command = MagicMock()
-        mock_env.execute_command.return_value = CommandResult(
+        mock_env.execute_command = AsyncMock(return_value=CommandResult(
             exit_code=127, stdout="", stderr="command not found: nonexistent_command_xyz\n", execution_time=0.01
-        )
+        ))
         mock_env.get_container_id.return_value = "error_test_container"
 
         with patch.object(registry._sandbox_manager, "get_session_environment", return_value=mock_env):
@@ -330,7 +325,7 @@ class TestToolsIntegration:
 
         # Mock Docker environment
         mock_env = MagicMock()
-        mock_env.execute_command = MagicMock()
+        mock_env.execute_command = AsyncMock()
         mock_env.get_container_id.return_value = "analysis_container"
 
         results = []

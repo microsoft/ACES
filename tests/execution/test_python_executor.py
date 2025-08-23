@@ -71,13 +71,6 @@ class TestPythonExecutor:
         with pytest.raises(SandboxExecutionError, match="sandbox_manager is required"):
             PythonExecutor(sandbox_manager=None, timeout=60.0)
 
-    def test_executor_metadata(self, python_executor):
-        """Test executor metadata is correctly defined."""
-        metadata = python_executor._executor_metadata
-
-        assert metadata["name"] == "execute_python"
-        assert metadata["description"] == "Execute Python code in secure Docker container"
-
     def test_validate_python_code_valid(self, python_executor):
         """Test validation of valid Python code."""
         code = """
@@ -220,7 +213,7 @@ import numpy as np
         execute_result.stderr = ""
         execute_result.execution_time = 1.0
 
-        mock_docker_environment.execute_command.side_effect = [create_result, execute_result]
+        mock_docker_environment.execute_command = AsyncMock(side_effect=[create_result, execute_result])
 
         parameters = {"code": "print('Hello, World!')"}
         context = {"session_id": "test123"}

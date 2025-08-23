@@ -179,10 +179,6 @@ class SessionManager:
 
         self.active_sessions[session_id] = session
 
-        # Register session with MCP API using client_id as MCP client identifier
-        # This allows MCP clients to use the client_id when connecting to map to SABER sessions
-        self.mcp_api.register_session_for_client(client_id, session_id)
-
         # Log session creation with evaluation manager (ignore failures)
         try:
             await self.evaluation_manager.log_session_start(session_id, client_id)
@@ -210,9 +206,6 @@ class SessionManager:
                 session.current_task_id = None
             except Exception as e:
                 logger.warning(f"Error ending episode during session termination: {e}")
-
-        # Unregister session from MCP API using client_id
-        self.mcp_api.unregister_session_for_client(session.client_id)
 
         # Log session end with evaluation manager (ignore failures)
         try:

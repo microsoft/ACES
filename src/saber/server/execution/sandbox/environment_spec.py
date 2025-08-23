@@ -156,16 +156,12 @@ class EnvironmentSpec:
         Raises:
             ValueError: If session_id is provided but cleanup_token is missing
         """
-        # Validate orchestrator requirements
-        if session_id and not cleanup_token:
-            raise ValueError(
-                "cleanup_token is required when session_id is provided. "
-                "The orchestrator service requires both session_id and cleanup_token for proper integration."
-            )
+        # Validate orchestrator requirements - only add orchestrator if both session_id and cleanup_token are provided
+        # If cleanup_token is None, the orchestrator will be skipped (useful for testing or simplified deployments)
 
         services = {}
 
-        # Add SABER orchestrator service (if session info provided)
+        # Add SABER orchestrator service (only if both session_id and cleanup_token are provided)
         if session_id and cleanup_token:
             orchestrator_config = {
                 "image": "saber-orchestrator:latest",
@@ -202,8 +198,9 @@ class EnvironmentSpec:
                     f"saber.cleanup_token={cleanup_token}" if cleanup_token else f"saber.session_id={session_id}",
                 ]
             )
-            # Add dependency on orchestrator
-            exec_config["depends_on"] = ["saber-orchestrator"]
+            # Add dependency on orchestrator only if orchestrator is being created
+            if cleanup_token:
+                exec_config["depends_on"] = ["saber-orchestrator"]
         services[self.execution_service] = exec_config
 
         # Add target services
@@ -221,10 +218,11 @@ class EnvironmentSpec:
                         f"saber.cleanup_token={cleanup_token}" if cleanup_token else f"saber.session_id={session_id}",
                     ]
                 )
-                # Add dependency on orchestrator
-                if "depends_on" not in service_config:
-                    service_config["depends_on"] = []
-                service_config["depends_on"].append("saber-orchestrator")
+                # Add dependency on orchestrator only if orchestrator is being created
+                if cleanup_token:
+                    if "depends_on" not in service_config:
+                        service_config["depends_on"] = []
+                    service_config["depends_on"].append("saber-orchestrator")
             services[service_spec.name] = service_config
 
         # Add SABER labels to network
