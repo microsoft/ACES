@@ -1,32 +1,45 @@
 """
-SABER Client - Minimal test harness for connecting agents to SABER server.
+SABER Client - Enhanced Agent Testing Framework
 
-This client provides a simple interface for agents to interact with the SABER
-security benchmarking server. The server handles all complex logic while the
-client facilitates communication and prompt building.
+Enhanced client framework for testing security agents against SABER server.
+Supports both autonomous agents with MCP integration and traditional step-by-step agents.
+
+Key Features:
+- Autonomous agent execution with MCP tool integration
+- Session and episode management via REST API
+- LLM client factory with extensible provider support
+- Episode status monitoring via SSE
+- Comprehensive logging and error handling
+- Flexible agent adaptation
 
 CLI Usage:
-    python -m saber.client --agent <path_to_agent> --task task_id --episodes 2
+    python -m saber.client --agent <path_to_agent> --task task_id
 
-Customers can use any agent - no interface requirements!
+Programmatic Usage:
+    from saber.client import SABERHarness, SABERHarnessConfig
+
+    config = SABERHarnessConfig(server_url="http://localhost:8000")
+    harness = SABERHarness(config)
+    await harness.initialize(agent)
+    results = await harness.run_test()
 """
 
 from ..api_models import EpisodeInfo, PolicyInfo, SessionInfo, StepResponse, TaskInfo
-from .agent_wrapper import AgentLoader, AgentWrapper
-from .prompt_builder import PromptBuilder
-from .server_client import ServerClient
-from .test_harness import TestHarness, TestHarnessConfig
+from .api import SABERMCPClient, SABERRestClient
+from .llm import AzureOpenAIClient, LLMClientFactory, create_llm_client
+from .saber_harness import SABERHarness, SABERHarnessConfig
 
 __all__ = [
-    "TestHarness",
-    "TestHarnessConfig",
-    "ServerClient",
+    "SABERHarness",
+    "SABERHarnessConfig",
+    "SABERMCPClient",
+    "SABERRestClient",
+    "AzureOpenAIClient",
+    "LLMClientFactory",
+    "create_llm_client",
     "StepResponse",
     "TaskInfo",
     "PolicyInfo",
     "EpisodeInfo",
     "SessionInfo",
-    "AgentWrapper",
-    "AgentLoader",
-    "PromptBuilder",
 ]

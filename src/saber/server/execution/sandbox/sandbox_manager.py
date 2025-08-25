@@ -6,18 +6,19 @@ providing lifecycle management and cleanup capabilities for both
 single and multi-container orchestration.
 """
 
-import logging
 import subprocess
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import docker
 
+from ....logging_config import get_execution_logger
 from ..exceptions import SandboxExecutionError
 from .docker_sandbox_environment import DockerSandboxEnvironment
 from .environment_spec import EnvironmentSpec
 
-logger = logging.getLogger(__name__)
+logger = get_execution_logger(__name__)
 
 
 class SandboxManager:
@@ -28,9 +29,9 @@ class SandboxManager:
     across multiple sessions with support for multi-container orchestration.
     """
 
-    def __init__(self, sandbox_config: Dict[str, Any]) -> None:
+    def __init__(self, sandbox_config: Dict[str, Any]):
         """
-        Initialize sandbox manager.
+        Initialize the SandboxManager.
 
         Args:
             sandbox_config: Configuration dictionary for sandbox settings
@@ -157,8 +158,6 @@ class SandboxManager:
         Returns:
             True if became ready within timeout, False if timed out
         """
-        import time
-
         start_time = time.time()
         while not self._is_ready and (time.time() - start_time) < timeout:
             time.sleep(0.5)
@@ -171,6 +170,7 @@ class SandboxManager:
         environment_spec: EnvironmentSpec,
         cleanup_token: Optional[str] = None,
         saber_host_url: Optional[str] = None,
+        server_network: Optional[str] = None,
     ) -> DockerSandboxEnvironment:
         """
         Create a new Docker sandbox environment for a session.
@@ -180,6 +180,7 @@ class SandboxManager:
             environment_spec: Environment specification for container orchestration
             cleanup_token: Optional cleanup token for orchestrator coordination
             saber_host_url: Optional SABER server URL for orchestrator polling
+            server_network: Optional server network name for orchestrator connectivity
 
         Returns:
             DockerSandboxEnvironment instance
@@ -199,7 +200,9 @@ class SandboxManager:
             self._ensure_docker_images_exist(environment_spec)
 
             # Create new environment with specification and orchestrator info
-            environment = DockerSandboxEnvironment(session_id, environment_spec, cleanup_token, saber_host_url)
+            environment = DockerSandboxEnvironment(
+                session_id, environment_spec, cleanup_token, saber_host_url, server_network
+            )
 
             # Start the environment (orchestrator will auto-start)
             environment.start()
@@ -232,7 +235,7 @@ class SandboxManager:
 
         # Check if environment services are still healthy
         if environment and not self._is_environment_healthy(environment):
-            logger.warning(f"Environment for session {session_id} is unhealthy, removing")
+            logger.warning(f"🔥 HEALTH CHECK FAILURE: Environment for session {session_id} is unhealthy, removing")
             self.cleanup_session(session_id)
             return None
 
@@ -245,23 +248,80 @@ class SandboxManager:
         Args:
             session_id: Session identifier to clean up
         """
+        logger.warning(
+            f"🔥 CONTAINER TERMINATION INITIATED: SandboxManager.cleanup_session() called for session {session_id}"
+        )
         environment = self.active_sessions.get(session_id)
         if not environment:
-            logger.debug(f"No active environment found for session {session_id}")
+            logger.warning(
+                f"🔥 NO ENVIRONMENT OBJECT: No active environment found for session {session_id}, "
+                f"checking for orphaned resources"
+            )
+            # Even if no environment object exists, try to clean up orphaned resources
+            self._cleanup_orphaned_session_resources(session_id)
             return
 
         try:
+            logger.warning(f"🔥 STOPPING DOCKER ENVIRONMENT: About to call environment.stop() for session {session_id}")
             # Stop and clean up the multi-container environment
             environment.stop()
             logger.info(f"Cleaned up Docker sandbox environment for session {session_id}")
 
         except Exception as e:
             logger.error(f"Error cleaning up session {session_id}: {e}")
+            # Still try to clean up orphaned resources as fallback
+            logger.warning(f"🔥 FALLBACK CLEANUP: Attempting to clean orphaned resources for session {session_id}")
+            self._cleanup_orphaned_session_resources(session_id)
 
         finally:
             # Remove from active sessions
             if session_id in self.active_sessions:
+                logger.warning(f"🔥 REMOVING SESSION TRACKING: Deleting session {session_id} from active_sessions")
                 del self.active_sessions[session_id]
+
+    def _cleanup_orphaned_session_resources(self, session_id: str) -> None:
+        """
+        Clean up orphaned Docker resources for a session even without environment object.
+
+        Args:
+            session_id: Session identifier to clean up orphaned resources for
+        """
+        try:
+            import subprocess
+
+            # Try to stop any containers with the session label
+            compose_project_name = f"saber-session-{session_id}"
+            logger.warning(f"🔥 ORPHANED CLEANUP: Attempting to clean up project {compose_project_name}")
+
+            # Use docker compose down with project name to clean up any remaining resources
+            cmd = [
+                "docker",
+                "compose",
+                "-p",
+                compose_project_name,
+                "down",
+                "--remove-orphans",
+                "--volumes",
+                "--timeout",
+                "30",
+            ]
+
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            if result.returncode == 0:
+                logger.warning(f"🔥 ORPHANED CLEANUP SUCCESS: Cleaned up orphaned resources for session {session_id}")
+            else:
+                logger.warning(
+                    f"🔥 ORPHANED CLEANUP PARTIAL: docker compose down returned {result.returncode} "
+                    f"for session {session_id}"
+                )
+
+            if result.stderr:
+                logger.debug(f"Orphaned cleanup stderr: {result.stderr}")
+
+        except Exception as e:
+            logger.warning(
+                f"🔥 ORPHANED CLEANUP ERROR: Failed to clean orphaned resources for session {session_id}: {e}"
+            )
 
     def cleanup_all_sessions(self) -> None:
         """
@@ -274,13 +334,17 @@ class SandboxManager:
             logger.info("No active sessions to clean up")
             return
 
-        logger.info(f"Cleaning up {len(self.active_sessions)} active sessions")
+        logger.warning(
+            f"🔥 MASS CONTAINER TERMINATION: SandboxManager.cleanup_all_sessions() cleaning up "
+            f"{len(self.active_sessions)} active sessions"
+        )
 
         # Copy session IDs to avoid modifying dict during iteration
         session_ids = list(self.active_sessions.keys())
 
         for session_id in session_ids:
             try:
+                logger.warning(f"🔥 BATCH CLEANUP: Processing session {session_id}")
                 self.cleanup_session(session_id)
             except Exception as e:
                 logger.error(f"Error cleaning up session {session_id}: {e}")
@@ -306,7 +370,7 @@ class SandboxManager:
 
         # Clean up unhealthy sessions
         for session_id in unhealthy_sessions:
-            logger.warning(f"Cleaning up unhealthy session {session_id}")
+            logger.warning(f"🔥 HEALTH CHECK CLEANUP: Cleaning up unhealthy session {session_id}")
             self.cleanup_session(session_id)
 
         return healthy_sessions
@@ -322,16 +386,31 @@ class SandboxManager:
             True if all services are healthy, False otherwise
         """
         try:
+            logger.debug("Starting health check for environment...")
+
             # Check if execution service is healthy
             execution_service = environment.environment_spec.get_execution_service()
-            if not environment.is_service_healthy(execution_service):
+            logger.debug(f"Checking execution service: {execution_service}")
+
+            execution_healthy = environment.is_service_healthy(execution_service)
+            logger.debug(f"Execution service {execution_service} health status: {execution_healthy}")
+
+            if not execution_healthy:
+                logger.warning(f"Execution service {execution_service} is unhealthy")
                 return False
 
             # Check all target services
+            logger.debug(f"Checking {len(environment.environment_spec.target_services)} target services...")
             for service in environment.environment_spec.target_services:
-                if not environment.is_service_healthy(service.name):
+                logger.debug(f"Checking target service: {service.name}")
+                service_healthy = environment.is_service_healthy(service.name)
+                logger.debug(f"Target service {service.name} health status: {service_healthy}")
+
+                if not service_healthy:
+                    logger.warning(f"Target service {service.name} is unhealthy")
                     return False
 
+            logger.debug("All services passed health check")
             return True
 
         except Exception as e:

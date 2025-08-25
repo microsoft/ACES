@@ -52,6 +52,10 @@ Examples:
 
     parser.add_argument("--mcp-port", type=int, default=8001, help="MCP API port (default: 8001)")
 
+    parser.add_argument(
+        "--server-network", type=str, help="Docker network name where SABER server runs (for orchestrator connectivity)"
+    )
+
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
 
     return parser

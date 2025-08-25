@@ -15,10 +15,6 @@ from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
-# Load .env file from the client directory (parent of llm_clients)
-env_path = Path(__file__).parent.parent / ".env"
-load_dotenv(env_path, override=True)
-
 
 class AzureOpenAIClient:
     """
@@ -34,6 +30,7 @@ class AzureOpenAIClient:
         endpoint: Optional[str] = None,
         deployment: Optional[str] = None,
         api_version: Optional[str] = None,
+        env_file: Optional[Path] = None,
     ):
         """
         Initialize Azure OpenAI client.
@@ -43,13 +40,18 @@ class AzureOpenAIClient:
             endpoint: Azure OpenAI endpoint (defaults to env var)
             deployment: Azure deployment name (defaults to env var)
             api_version: API version to use
+            env_file: Optional path to .env file for configuration
         """
+        # Load environment file if provided
+        if env_file and env_file.exists():
+            load_dotenv(env_file, override=True)
+
         self.api_key = api_key or os.getenv("AZURE_OPENAI_API_KEY")
         self.endpoint = endpoint or os.getenv("AZURE_OPENAI_ENDPOINT")
         self.deployment = deployment or os.getenv("AZURE_OPENAI_DEPLOYMENT")
         self.api_version = api_version or os.getenv("AZURE_OPENAI_API_VERSION")
 
-        self._client = None
+        self._client: Any = None
         self._model_name = self.deployment
         self._initialize_client()
 
@@ -71,6 +73,14 @@ class AzureOpenAIClient:
         try:
             import openai
 
+            if not all([self.api_key, self.endpoint, self.api_version]):
+                raise ValueError("Missing required configuration parameters")
+
+            # Type-safe assignment
+            assert self.api_key is not None
+            assert self.endpoint is not None
+            assert self.api_version is not None
+
             self._client = openai.AzureOpenAI(
                 api_key=self.api_key, azure_endpoint=self.endpoint, api_version=self.api_version
             )
@@ -81,13 +91,17 @@ class AzureOpenAIClient:
             raise RuntimeError(f"Failed to initialize Azure OpenAI client: {e}")
 
     @property
-    def chat(self):
+    def chat(self) -> Any:
         """Access to chat completions."""
+        if self._client is None:
+            raise RuntimeError("Azure OpenAI client not initialized")
         return self._client.chat
 
     @property
     def model_name(self) -> str:
         """Get the model/deployment name."""
+        if self._model_name is None:
+            raise RuntimeError("Model name not available")
         return self._model_name
 
     def create_completion(
@@ -97,7 +111,7 @@ class AzureOpenAIClient:
         tool_choice: str = "auto",
         max_tokens: int = 1000,
         temperature: float = 0.7,
-        **kwargs,
+        **kwargs: Any,
     ) -> Any:
         """
         Create a chat completion with standardized parameters.
@@ -126,12 +140,16 @@ class AzureOpenAIClient:
                 completion_args["tools"] = tools
                 completion_args["tool_choice"] = tool_choice
 
+            if self._client is None:
+                raise RuntimeError("Azure OpenAI client not initialized")
             return self._client.chat.completions.create(**completion_args)
 
         except Exception as e:
             logger.error(f"❌ Azure OpenAI completion failed: {e}")
             raise
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:
         """Delegate any other attributes to the underlying client."""
+        if self._client is None:
+            raise RuntimeError("Azure OpenAI client not initialized")
         return getattr(self._client, name)
