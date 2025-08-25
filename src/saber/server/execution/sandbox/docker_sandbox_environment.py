@@ -7,7 +7,6 @@ both single container and multi-container scenarios for complex security tasks.
 
 import asyncio
 import io
-import logging
 import os
 import subprocess
 import tarfile
@@ -15,9 +14,8 @@ import tempfile
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-import yaml
-
 import docker
+import yaml
 
 if TYPE_CHECKING:
     from docker.models.containers import Container
@@ -27,11 +25,18 @@ else:
     except ImportError:
         Container = Any
 
+from ....logging_config import (
+    get_docker_logger,
+    log_operation_failure,
+    log_operation_start,
+    log_operation_success,
+    log_timeout,
+)
 from ...base import CommandResult
 from ..exceptions import ContainerCreationError, SandboxExecutionError
 from .environment_spec import EnvironmentSpec
 
-logger = logging.getLogger(__name__)
+logger = get_docker_logger(__name__)
 
 
 class DockerSandboxEnvironment:
@@ -48,6 +53,7 @@ class DockerSandboxEnvironment:
         environment_spec: EnvironmentSpec,
         cleanup_token: Optional[str] = None,
         saber_host_url: Optional[str] = None,
+        server_network: Optional[str] = None,
     ) -> None:
         """
         Initialize Docker sandbox environment.
@@ -57,6 +63,7 @@ class DockerSandboxEnvironment:
             environment_spec: Environment specification for container orchestration
             cleanup_token: Optional cleanup token for orchestrator coordination
             saber_host_url: Optional SABER server URL for orchestrator polling
+            server_network: Optional server network name for orchestrator connectivity
 
         Raises:
             ContainerCreationError: If Docker client cannot be initialized
@@ -65,6 +72,7 @@ class DockerSandboxEnvironment:
         self.environment_spec = environment_spec
         self.cleanup_token = cleanup_token
         self.saber_host_url = saber_host_url or "http://host.docker.internal:8000"
+        self.server_network = server_network
         self.active_services: Dict[str, Container] = {}
         self.compose_project_name = f"saber-session-{session_id}"
         self.compose_file_path: Optional[str] = None
@@ -77,7 +85,7 @@ class DockerSandboxEnvironment:
         # Validate environment specification
         self.environment_spec.validate()
 
-        logger.info(f"Docker sandbox environment initialized for session {session_id}")
+        logger.info("Docker sandbox environment initialized", session_id)
 
     def start(self) -> None:
         """
@@ -89,7 +97,10 @@ class DockerSandboxEnvironment:
         try:
             # Generate Docker Compose configuration with orchestrator integration
             compose_config = self.environment_spec.to_compose_dict(
-                session_id=self.session_id, cleanup_token=self.cleanup_token, saber_host_url=self.saber_host_url
+                session_id=self.session_id,
+                cleanup_token=self.cleanup_token,
+                saber_host_url=self.saber_host_url,
+                server_network=self.server_network,
             )
 
             # Set project name
@@ -107,7 +118,7 @@ class DockerSandboxEnvironment:
             # Wait for services to be healthy
             self._wait_for_services_healthy()
 
-            logger.info(f"Docker sandbox environment started for session {self.session_id}")
+            logger.info("Docker sandbox environment started", self.session_id)
 
         except Exception as e:
             self._cleanup_compose_file()
@@ -140,6 +151,9 @@ class DockerSandboxEnvironment:
             # Execute command in container asynchronously with timeout
             # This prevents blocking the event loop and allows proper timeout handling
             try:
+                log_operation_start(
+                    logger, "Command execution", self.session_id, timeout=timeout, command=" ".join(command)
+                )
                 loop = asyncio.get_event_loop()
                 result = await asyncio.wait_for(
                     loop.run_in_executor(
@@ -155,9 +169,33 @@ class DockerSandboxEnvironment:
                     ),
                     timeout=timeout,
                 )
+                execution_time = time.time() - start_time
+                log_operation_success(
+                    logger, "Command execution", self.session_id, execution_time=f"{execution_time:.2f}s"
+                )
             except asyncio.TimeoutError:
                 execution_time = time.time() - start_time
-                raise SandboxExecutionError(f"Command execution timed out after {timeout} seconds")
+                log_timeout(
+                    logger,
+                    "Command execution",
+                    timeout,
+                    self.session_id,
+                    execution_time=f"{execution_time:.2f}s",
+                    command=" ".join(command),
+                )
+                # Return a CommandResult instead of raising an exception
+                timeout_message = (
+                    f"Command execution timed out after {timeout} seconds. Commands are limited to "
+                    f"{timeout} second execution time. The command was automatically terminated to "
+                    f"prevent blocking. Consider breaking down long-running operations into smaller "
+                    f"steps or using shorter commands."
+                )
+                return CommandResult(
+                    exit_code=124,  # Standard timeout exit code
+                    stdout="",
+                    stderr=timeout_message,
+                    execution_time=execution_time,
+                )
 
             execution_time = time.time() - start_time  # Process output
             stdout = ""
@@ -293,20 +331,33 @@ class DockerSandboxEnvironment:
         """Check if a service is healthy and running."""
         container = self.active_services.get(service_name)
         if not container:
+            logger.debug(f"Service {service_name} not found in active_services: {list(self.active_services.keys())}")
             return False
 
         try:
             container.reload()
 
+            # Log container status details
+            logger.debug(f"Service {service_name} container status: {container.status}")
+            logger.debug(f"Service {service_name} container ID: {container.short_id}")
+
             # Check if container is running
             if container.status != "running":
+                logger.debug(f"Service {service_name} is not running (status: {container.status})")
                 return False
 
             # Check health status if available
             health = container.attrs.get("State", {}).get("Health", {})
             if health:
                 status = health.get("Status")
-                return str(status) == "healthy" if status is not None else True
+                logger.debug(f"Service {service_name} has health check - status: {status}")
+
+                # If there's a health check, it must be healthy
+                is_healthy = str(status) == "healthy" if status is not None else True
+                logger.debug(f"Service {service_name} health check result: {is_healthy}")
+                return is_healthy
+            else:
+                logger.debug(f"Service {service_name} has no health check defined - considering healthy since running")
 
             # If no health check, consider running containers healthy
             return True
@@ -352,20 +403,28 @@ class DockerSandboxEnvironment:
 
     def stop(self) -> None:
         """Stop and clean up the sandbox environment."""
+        from ....logging_config import get_cleanup_logger
+
+        cleanup_logger = get_cleanup_logger(__name__)
+
+        cleanup_logger.info("Docker environment stop initiated", self.session_id)
         try:
+            cleanup_logger.info("Stopping Docker Compose services", self.session_id)
             # Stop Docker Compose services
             self._stop_compose_services()
 
+            cleanup_logger.info("Clearing container tracking", self.session_id)
             # Clear tracked containers
             self.active_services.clear()
 
+            cleanup_logger.info("Cleaning up temporary files", self.session_id)
             # Clean up compose file
             self._cleanup_compose_file()
 
-            logger.info(f"Docker sandbox environment stopped for session {self.session_id}")
+            logger.info("Docker sandbox environment stopped", self.session_id)
 
         except Exception as e:
-            logger.error(f"Error stopping sandbox environment: {e}")
+            log_operation_failure(cleanup_logger, "Docker environment stop", str(e), self.session_id)
             raise SandboxExecutionError(f"Failed to stop environment: {e}")
 
     def _write_compose_file(self, compose_config: Dict[str, Any]) -> str:
@@ -410,7 +469,12 @@ class DockerSandboxEnvironment:
 
     def _stop_compose_services(self) -> None:
         """Stop services using docker-compose."""
+        from ....logging_config import get_cleanup_logger
+
+        cleanup_logger = get_cleanup_logger(__name__)
+
         if not self.compose_file_path:
+            cleanup_logger.warning("No compose file available for cleanup", self.session_id)
             return
 
         cmd = [
@@ -424,12 +488,19 @@ class DockerSandboxEnvironment:
             "--remove-orphans",
         ]
 
+        log_operation_start(cleanup_logger, "Docker Compose down", self.session_id, command=" ".join(cmd))
+
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            log_operation_success(cleanup_logger, "Docker Compose down", self.session_id, return_code=result.returncode)
             logger.debug(f"Docker Compose down output: {result.stdout}")
+            if result.stderr:
+                cleanup_logger.warning(f"Docker Compose stderr: {result.stderr}", self.session_id)
 
         except subprocess.TimeoutExpired:
-            logger.warning("Docker Compose shutdown timed out")
+            log_timeout(cleanup_logger, "Docker Compose down", 60, self.session_id)
+        except Exception as e:
+            log_operation_failure(cleanup_logger, "Docker Compose down", str(e), self.session_id)
 
     def _track_service_containers(self) -> None:
         """Find and track containers for all services."""

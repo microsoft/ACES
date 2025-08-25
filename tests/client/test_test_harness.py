@@ -14,7 +14,7 @@ from saber.api_models import EpisodeInfo, PolicyInfo, StepResponse, TaskInfo
 from saber.client.agent_wrapper import AgentWrapper
 from saber.client.prompt_builder import PromptBuilder
 from saber.client.server_client import ServerClient
-from saber.client.test_harness import TestHarness, TestHarnessConfig
+from saber.client.saber_harness import TestHarness, TestHarnessConfig
 
 
 @pytest.fixture

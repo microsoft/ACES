@@ -197,7 +197,14 @@ class ExecutionManager:
         """
         return self._executor_factory.get_available_executors()
 
-    def configure_for_task(self, session_id: str, task: Any, cleanup_token: Optional[str] = None) -> None:
+    def configure_for_task(
+        self,
+        session_id: str,
+        task: Any,
+        cleanup_token: Optional[str] = None,
+        saber_host_url: Optional[str] = None,
+        server_network: Optional[str] = None,
+    ) -> None:
         """
         Configure ExecutionManager for a specific task/session.
 
@@ -205,6 +212,8 @@ class ExecutionManager:
             session_id: Session identifier
             task: Task object containing execution parameters and environment specification
             cleanup_token: Optional cleanup token for container self-termination coordination
+            saber_host_url: Optional SABER server URL for orchestrator connectivity
+            server_network: Optional server network name for orchestrator connectivity
         """
         # Resolve environment if specified in task
         environment_spec = None
@@ -248,8 +257,31 @@ class ExecutionManager:
         # Update sandbox manager with resolved environment spec
         if environment_spec:
             self._sandbox_manager = SandboxManager({})
+
+            # Use provided SABER host URL or sensible defaults
+            if not saber_host_url:
+                import os
+
+                # Option 1: Use explicit environment variable if set
+                if os.environ.get("SABER_ORCHESTRATOR_HOST_URL"):
+                    saber_host_url = os.environ.get("SABER_ORCHESTRATOR_HOST_URL")
+                # Option 2: Default based on environment
+                elif os.path.exists("/.dockerenv"):
+                    # For containers, use Docker bridge gateway as fallback
+                    port = os.environ.get("SABER_PORT", "8000")
+                    saber_host_url = f"http://172.17.0.1:{port}"
+                else:
+                    # Default for non-containerized environments
+                    saber_host_url = "http://localhost:8000"
+
+            logger.info(f"Using SABER host URL for orchestrator: {saber_host_url}")
+            if server_network:
+                logger.info(f"Using server network for orchestrator: {server_network}")
+
             # Create the session environment immediately with orchestrator integration
-            self._sandbox_manager.create_session_environment(session_id, environment_spec, cleanup_token)
+            self._sandbox_manager.create_session_environment(
+                session_id, environment_spec, cleanup_token, saber_host_url, server_network
+            )
             logger.info(f"Created sandbox environment for session {session_id}")
             if cleanup_token:
                 logger.info(f"Episode orchestrator will auto-start for session {session_id}")
@@ -279,14 +311,19 @@ class ExecutionManager:
         Args:
             session_id: Session identifier to clean up
         """
+        logger.warning(f"🔥 EXECUTION CLEANUP: ExecutionManager.cleanup_session() called for session {session_id}")
         try:
             # Cancel any active executions for this session
             if session_id in self._active_executions:
-                logger.info(
-                    f"Cancelling {self._active_executions[session_id]} active executions for session {session_id}"
+                logger.warning(
+                    f"🔥 ACTIVE EXECUTION CANCEL: Cancelling {self._active_executions[session_id]} "
+                    f"active executions for session {session_id}"
                 )
                 del self._active_executions[session_id]
 
+            logger.warning(
+                f"🔥 SANDBOX CLEANUP: About to call sandbox_manager.cleanup_session() for session {session_id}"
+            )
             self._sandbox_manager.cleanup_session(session_id)
             logger.info(f"Cleaned up execution resources for session {session_id}")
         except Exception as e:
@@ -294,8 +331,11 @@ class ExecutionManager:
 
     def cleanup_all_sessions(self) -> None:
         """Clean up all execution resources."""
+        logger.warning("🔥 EXECUTION CLEANUP ALL: ExecutionManager.cleanup_all_sessions() called")
         try:
+            logger.warning("🔥 SANDBOX CLEANUP ALL: About to call sandbox_manager.cleanup_all_sessions()")
             self._sandbox_manager.cleanup_all_sessions()
+            logger.warning("🔥 EXECUTOR CLEANUP ALL: About to call executor_factory.cleanup_all_executors()")
             self._executor_factory.cleanup_all_executors()
             logger.info("Cleaned up all execution resources")
         except Exception as e:

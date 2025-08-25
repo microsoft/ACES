@@ -2,13 +2,44 @@
 Environment specification classes for multi-container orchestration.
 
 This module defines specifications for Docker Compose-based execution environments,
-supporting both template references and granular container configuration.
+supporting both template referen                              "restart": "unless-stopped",
+                "networks": [self.network.name],  # Session-specific network for accessing execution containers
+            }
+
+            # 🔥 ORCHESTRATOR NETWORKS: Log network configuration
+            logger.warning(
+                f"🔥 ORCHESTRATOR NETWORKS: Initial networks=[{self.network.name}], "
+                f"server_network={server_network}, session_network={self.network.name}"
+            )
+
+            # Add server network for orchestrator connectivity if provided
+            if server_network and server_network != self.network.name:
+                networks_list = orchestrator_config["networks"]
+                if isinstance(networks_list, list):
+                    networks_list.append(server_network)"unless-stopped",
+                "networks        # Build networks configuration
+        networks_config = {self.network.name: network_config}
+
+        # Add server network as external if orchestrator needs it
+        if server_network and server_network != self.network.name:
+            networks_config[server_network] = {
+                "external": True,
+                "name": server_network
+            }ork.name],  # Session-specific network for accessing execution containers
+            }
+
+            # Add server network for orchestrator connectivity if provided
+            if server_network and server_network != self.network.name:
+                orchestrator_config["networks"].append(server_network)nular container configuration.
 """
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from ..exceptions import InvalidEnvironmentSpecException
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -144,6 +175,7 @@ class EnvironmentSpec:
         session_id: Optional[str] = None,
         cleanup_token: Optional[str] = None,
         saber_host_url: Optional[str] = None,
+        server_network: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Generate complete Docker Compose configuration.
@@ -152,6 +184,7 @@ class EnvironmentSpec:
             session_id: Session identifier for orchestrator integration
             cleanup_token: Cleanup token for orchestrator authentication
             saber_host_url: SABER server URL for orchestrator polling
+            server_network: Optional server network name for orchestrator connectivity
 
         Raises:
             ValueError: If session_id is provided but cleanup_token is missing
@@ -173,15 +206,42 @@ class EnvironmentSpec:
                     "SABER_POLL_INTERVAL=30",
                     f"SABER_COMPOSE_PROJECT=saber-session-{session_id}",
                 ],
-                "volumes": ["/var/run/docker.sock:/var/run/docker.sock", ".:/app"],
+                "volumes": [
+                    "/var/run/docker.sock:/var/run/docker.sock",
+                    ".:/app",
+                    "/tmp/saber-orchestrator-logs:/tmp/saber-orchestrator-logs",
+                ],
                 "labels": [
                     f"saber.session_id={session_id}",
                     "saber.role=orchestrator",
                     f"saber.cleanup_token={cleanup_token}",
                 ],
                 "restart": "unless-stopped",
-                "networks": [self.network.name],
+                "networks": list([self.network.name]),  # Session-specific network for accessing execution containers
             }
+
+            # 🔥 ORCHESTRATOR NETWORKS: Log network configuration
+            logger.warning(
+                f"🔥 ORCHESTRATOR NETWORKS: Initial networks=[{self.network.name}], "
+                f"server_network={server_network}, session_network={self.network.name}"
+            )
+
+            # Add server network for orchestrator connectivity if provided
+            if server_network and server_network != self.network.name:
+                networks_list = orchestrator_config.get("networks", [])
+                if isinstance(networks_list, list):
+                    networks_list.append(server_network)
+                    orchestrator_config["networks"] = networks_list
+                logger.warning(
+                    f"🔥 ORCHESTRATOR NETWORKS: Added server network, "
+                    f"final networks={orchestrator_config['networks']}"
+                )
+            else:
+                logger.warning(
+                    f"🔥 ORCHESTRATOR NETWORKS: No server network added - "
+                    f"server_network={server_network}, same_as_session={server_network == self.network.name}"
+                )
+
             services["saber-orchestrator"] = orchestrator_config
 
         # Add execution service
@@ -232,10 +292,26 @@ class EnvironmentSpec:
                 network_config["labels"] = []
             network_config["labels"].append(f"saber.session_id={session_id}")
 
+        # Build networks configuration
+        networks_config = {self.network.name: network_config}
+
+        # 🔥 EXTERNAL NETWORKS: Log external network configuration
+        logger.warning(f"🔥 EXTERNAL NETWORKS: server_network={server_network}, session_network={self.network.name}")
+
+        # Add server network as external if orchestrator needs it
+        if server_network and server_network != self.network.name:
+            networks_config[server_network] = {"external": True, "name": server_network}
+            logger.warning(f"🔥 EXTERNAL NETWORKS: Added external network {server_network} to compose config")
+        else:
+            logger.warning(
+                f"🔥 EXTERNAL NETWORKS: No external network added - "
+                f"server_network={server_network}, same_as_session={server_network == self.network.name}"
+            )
+
         compose_config = {
             "version": "3.8",
             "services": services,
-            "networks": {self.network.name: network_config},
+            "networks": networks_config,
         }
 
         return compose_config

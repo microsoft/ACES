@@ -63,6 +63,7 @@ class SessionRestAPI:
         @self.app.delete("/session/{session_id}")
         async def terminate_session_endpoint(session_id: str) -> Dict[str, str]:
             """Terminate a client session."""
+            logger.warning(f"🔥 REST API TERMINATION: DELETE /session/{session_id} endpoint called")
             await self.session_manager.terminate_session(session_id)
             result: Dict[str, str] = {"message": "Session terminated successfully"}
             return result
@@ -248,6 +249,10 @@ class SessionRestAPI:
                     should_terminate, termination_reason = self.session_manager.is_episode_over(session_id)
 
                     if should_terminate:
+                        logger.warning(
+                            f"🔥 SSE EPISODE TERMINATION: Episode {episode_id} for session {session_id} "
+                            f"should terminate - reason: {termination_reason}"
+                        )
                         if termination_reason.startswith("max_steps_reached"):
                             yield (
                                 f"event: max_steps_reached\n"
@@ -255,6 +260,10 @@ class SessionRestAPI:
                                 f'"episode_id": "{episode_id}"}}\n\n'
                             )
                             # End the episode
+                            logger.warning(
+                                f"🔥 SSE MAX STEPS END: Ending episode {episode_id} for session {session_id} "
+                                f"due to max steps"
+                            )
                             self.session_manager.episode_manager.end_episode(session_id, termination_reason)
                         else:
                             yield (

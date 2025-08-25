@@ -54,7 +54,14 @@ class SessionMCPAPI:
         """
         try:
             headers = get_http_headers()
-            session_id_from_header = headers.get(MCPHeaders.SESSION_ID)
+
+            # Try case-insensitive header lookup
+            session_id_from_header = None
+            for header_name, header_value in headers.items():
+                if header_name.lower() == MCPHeaders.SESSION_ID.lower():
+                    session_id_from_header = header_value
+                    break
+
             if session_id_from_header:
                 logger.info(f"✅ Found session_id in header: {session_id_from_header}")
                 return str(session_id_from_header)
@@ -304,7 +311,8 @@ class SessionMCPAPI:
                 await self.session_manager.execute_action(session_id, result_action)
 
             # End the episode through SessionManager
-            await self.session_manager.end_episode(session_id)
+            logger.warning(f"🔥 MCP END EPISODE: Agent called end_episode tool for session {session_id}")
+            self.session_manager.end_episode(session_id, "agent_completed")
 
             # Prepare success message
             success_message = "Episode ended successfully"

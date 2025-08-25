@@ -150,7 +150,12 @@ class SessionManager:
 
         # Cleanup all active sessions
         session_ids = list(self.active_sessions.keys())
+        logger.warning(
+            f"🔥 SHUTDOWN CLEANUP: SessionManager.shutdown() cleaning up {len(session_ids)} "
+            f"active sessions: {session_ids}"
+        )
         for session_id in session_ids:
+            logger.warning(f"🔥 SHUTDOWN SESSION: Terminating session {session_id} during shutdown")
             await self.terminate_session(session_id)
 
         logger.info("SessionManager shutdown complete")
@@ -195,12 +200,16 @@ class SessionManager:
         Args:
             session_id: ID of the session to terminate
         """
+        logger.warning(f"🔥 SESSION TERMINATION: SessionManager.terminate_session() called for session {session_id}")
         session = self._get_session(session_id)
         session.is_active = False
 
         # End any active episode
         if session.current_episode_id:
             try:
+                logger.warning(
+                    f"🔥 EPISODE END: Ending active episode {session.current_episode_id} for session {session_id}"
+                )
                 self.episode_manager.end_episode(session_id, "session_terminated")
                 session.current_episode_id = None
                 session.current_task_id = None
@@ -215,11 +224,15 @@ class SessionManager:
 
         # Cleanup execution resources (Docker containers)
         try:
+            logger.warning(
+                f"🔥 EXECUTION CLEANUP: About to call execution_manager.cleanup_session() for session {session_id}"
+            )
             self.execution_manager.cleanup_session(session_id)
         except Exception as e:
             logger.warning(f"Failed to cleanup execution resources: {e}")
 
         # Remove session from active sessions
+        logger.warning(f"🔥 SESSION REMOVAL: Removing session {session_id} from active_sessions dict")
         del self.active_sessions[session_id]
 
         logger.info(f"Terminated session {session_id}")
@@ -250,7 +263,22 @@ class SessionManager:
         cleanup_token = self.episode_manager.get_cleanup_token(session_id)
 
         # Configure execution manager with task object and cleanup token
-        self.execution_manager.configure_for_task(session_id, task, cleanup_token)
+        # Construct server URL for orchestrator connectivity
+        import os
+
+        # Use simple naming convention: saber-{domain}-network
+        server_network = f"saber-{self.domain_name.replace('_', '-')}-network"
+
+        # If we're running in a container, use the container name; otherwise use host:port
+        if os.path.exists("/.dockerenv"):
+            # We're in a container - use the server container name
+            server_container_name = f"saber-{self.domain_name.replace('_', '-')}-server"
+            saber_host_url = f"http://{server_container_name}:{self.port}"
+        else:
+            # Running natively - use the host
+            saber_host_url = f"http://{self.host}:{self.port}"
+
+        self.execution_manager.configure_for_task(session_id, task, cleanup_token, saber_host_url, server_network)
 
         session.current_episode_id = episode.episode_id
         session.current_task_id = task_id
@@ -265,6 +293,26 @@ class SessionManager:
 
         logger.info(f"Started episode {episode.episode_id} for task {task_id} in session {session_id}")
         return episode
+
+    def end_episode(self, session_id: str, reason: str = "completed") -> None:
+        """
+        End the current episode for a session.
+
+        Args:
+            session_id: ID of the client session
+            reason: Reason for episode termination (e.g., "completed", "agent_completed", "terminated")
+        """
+        session = self._get_session(session_id)
+        session.update_activity()
+
+        # End episode through episode manager
+        self.episode_manager.end_episode(session_id, reason)
+
+        # Clear current episode and task from session
+        session.current_episode_id = None
+        session.current_task_id = None
+
+        logger.info(f"Ended episode for session {session_id} with reason: {reason}")
 
     async def execute_action(self, session_id: str, action: Action) -> CommandResult:
         """
@@ -284,9 +332,24 @@ class SessionManager:
             return CommandResult.error_result(error="No active episode in session")
 
         try:
+            # 🔥 ACTION EXECUTION START: Log action execution start
+            logger.warning(
+                f"🔥 ACTION EXECUTION START: session={session_id}, tool={action.tool_name}, "
+                f"episode={session.current_episode_id}"
+            )
+
             # Execute command through execution manager with session context
             context = {"session_id": session_id}
             command_result = await self.execution_manager.step(action, context)
+
+            # 🔥 ACTION EXECUTION RESULT: Log command result
+            if command_result.success:
+                logger.warning(f"🔥 ACTION EXECUTION SUCCESS: session={session_id}, tool={action.tool_name}")
+            else:
+                logger.warning(
+                    f"🔥 ACTION EXECUTION FAILED: session={session_id}, tool={action.tool_name}, "
+                    f"error='{command_result.error}'"
+                )
 
             # Execute step through episode manager
             step_result = self.episode_manager.step(session_id, action, command_result)
@@ -508,6 +571,7 @@ class SessionManager:
         # Cleanup identified sessions
         for session_id in sessions_to_cleanup:
             try:
+                logger.warning(f"🔥 TIMEOUT CLEANUP: Cleaning up inactive session {session_id} due to timeout")
                 await self.terminate_session(session_id)
                 logger.info(f"Cleaned up inactive session {session_id}")
             except Exception as e:

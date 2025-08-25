@@ -111,6 +111,9 @@ class EpisodeManager:
         Raises:
             EpisodeNotFoundException: If session has no active episode
         """
+        logger.warning(
+            f"🔥 EPISODE END: EpisodeManager.end_episode() called for session {session_id}, reason: {reason}"
+        )
         episode = self.get_current_episode(session_id)
         if not episode:
             raise EpisodeNotFoundException(session_id)
@@ -126,10 +129,18 @@ class EpisodeManager:
         episode.completion_reason = reason
 
         # Remove from active episodes
+        logger.warning(
+            f"🔥 EPISODE ACTIVE REMOVAL: Removing episode {episode.episode_id} from active_episodes "
+            f"for session {session_id}"
+        )
         del self.active_episodes[session_id]
 
         # Remove cleanup token (containers will detect this and self-terminate)
         if session_id in self.cleanup_tokens:
+            logger.warning(
+                f"🔥 CLEANUP TOKEN REMOVAL: Deleting cleanup token for session {session_id} - "
+                f"containers will detect this and self-terminate"
+            )
             del self.cleanup_tokens[session_id]
 
         logger.info(
@@ -262,21 +273,19 @@ class EpisodeManager:
 
     def cleanup_session(self, session_id: str) -> None:
         """
-        Clean up all episodes for a session.
+        Clean up episode resources for a session.
 
         Args:
-            session_id: ID of the session to clean up
+            session_id: Session identifier to clean up
         """
-        logger.info(f"Cleaning up episodes for session '{session_id}'")
-
-        # End active episode if exists
+        logger.warning(f"🔥 EPISODE CLEANUP SESSION: EpisodeManager.cleanup_session() called for session {session_id}")
         if session_id in self.active_episodes:
+            logger.warning(f"🔥 EPISODE CLEANUP ACTIVE: Ending active episode for session {session_id} during cleanup")
             self.end_episode(session_id, "session_cleanup")
 
-        # Clean up any remaining cleanup tokens
         if session_id in self.cleanup_tokens:
+            logger.warning(f"🔥 EPISODE CLEANUP TOKEN: Removing cleanup token for session {session_id}")
             del self.cleanup_tokens[session_id]
-            logger.debug(f"Removed cleanup token for session '{session_id}'")
 
     def get_current_episode(self, session_id: str) -> Optional[Episode]:
         """
