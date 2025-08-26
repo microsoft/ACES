@@ -28,6 +28,7 @@ class TestSessionManagerCore:
         """Mock ExecutionManager for testing."""
         mock = MagicMock()
         mock.step = AsyncMock()
+        mock.configure_for_task = MagicMock()
         return mock
 
     @pytest.fixture
@@ -35,6 +36,7 @@ class TestSessionManagerCore:
         """Mock PolicyManager for testing."""
         mock = MagicMock()
         mock.get_policy = AsyncMock()
+        mock.configure_for_task = MagicMock()
         return mock
 
     @pytest.fixture

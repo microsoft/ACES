@@ -67,6 +67,16 @@ class TestEpisodeManager:
     def test_step_basic(self):
         """Test basic step functionality."""
         manager = EpisodeManager()
+
+        # Create mock task with episode config
+        from unittest.mock import MagicMock
+        mock_task = MagicMock()
+        mock_task.task_id = "test_task"
+        mock_task.episode_config = {"max_steps": 10}
+
+        # Configure episode manager for task
+        manager.configure_for_task("test_session", mock_task)
+
         episode = manager.start_episode("test_session", "test_task")
 
         action = Action(tool_name="test_tool", parameters={"key": "value"})
@@ -78,8 +88,13 @@ class TestEpisodeManager:
             metadata={"output": "Test output", "file_type": "PE32"},
         )
 
-        step = manager.step("test_session", action, command_result)
+        step_result = manager.step("test_session", action, command_result)
 
+        assert hasattr(step_result, 'step')
+        assert hasattr(step_result, 'should_terminate')
+        assert hasattr(step_result, 'termination_reason')
+
+        step = step_result.step
         assert isinstance(step, Step)
         assert step.action == action
         assert step.response["exit_code"] == 0  # Success is exit_code == 0
@@ -103,18 +118,28 @@ class TestEpisodeManager:
     def test_step_increments_step_number(self):
         """Test that step numbers increment correctly."""
         manager = EpisodeManager()
+
+        # Create mock task with episode config
+        from unittest.mock import MagicMock
+        mock_task = MagicMock()
+        mock_task.task_id = "test_task"
+        mock_task.episode_config = {"max_steps": 10}
+
+        # Configure episode manager for task
+        manager.configure_for_task("test_session", mock_task)
+
         manager.start_episode("test_session", "test_task")
 
         action = Action(tool_name="test_tool", parameters={})
         command_result = CommandResult(exit_code=0, stdout="", stderr="", execution_time=0.1)
 
-        step1 = manager.step("test_session", action, command_result)
-        step2 = manager.step("test_session", action, command_result)
-        step3 = manager.step("test_session", action, command_result)
+        step_result1 = manager.step("test_session", action, command_result)
+        step_result2 = manager.step("test_session", action, command_result)
+        step_result3 = manager.step("test_session", action, command_result)
 
-        assert step1.step_number == 0
-        assert step2.step_number == 1
-        assert step3.step_number == 2
+        assert step_result1.step.step_number == 0
+        assert step_result2.step.step_number == 1
+        assert step_result3.step.step_number == 2
 
     def test_end_episode_success(self):
         """Test successfully ending an episode."""

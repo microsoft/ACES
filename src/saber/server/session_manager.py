@@ -279,6 +279,12 @@ class SessionManager:
         # Configure execution manager with task object only
         self.execution_manager.configure_for_task(session_id, task)
 
+        # Configure policy manager with task object
+        self.policy_manager.configure_for_task(session_id, task)
+
+        # Configure episode manager with task object
+        self.episode_manager.configure_for_task(session_id, task)
+
         session.current_episode_id = episode.episode_id
         session.current_task_id = task_id
 
@@ -353,11 +359,8 @@ class SessionManager:
             except Exception as e:
                 logger.warning(f"Failed to log action: {e}")
 
-            # Check for episode termination conditions (max steps, timeouts, etc.)
-            should_terminate, termination_reason = self.is_episode_over(session_id)
-
-            # End episode if step indicates completion OR if termination conditions are met
-            if step_result.done:
+            # End episode if step indicates completion OR if EpisodeManager indicates termination
+            if step_result.step.done:
                 self.episode_manager.end_episode(session_id, "completed")
                 session.current_episode_id = None
                 session.current_task_id = None
@@ -365,15 +368,17 @@ class SessionManager:
                     await self.evaluation_manager.log_episode_end(session_id, "completed")
                 except Exception as e:
                     logger.warning(f"Failed to log episode end: {e}")
-            elif should_terminate:
-                self.episode_manager.end_episode(session_id, termination_reason)
+            elif step_result.should_terminate:
+                self.episode_manager.end_episode(session_id, step_result.termination_reason or "terminated")
                 session.current_episode_id = None
                 session.current_task_id = None
                 try:
-                    await self.evaluation_manager.log_episode_end(session_id, termination_reason)
+                    await self.evaluation_manager.log_episode_end(
+                        session_id, step_result.termination_reason or "terminated"
+                    )
                 except Exception as e:
                     logger.warning(f"Failed to log episode end: {e}")
-                logger.info(f"Episode ended due to termination condition: {termination_reason}")
+                logger.info(f"Episode ended due to termination condition: {step_result.termination_reason}")
 
             return command_result
 
@@ -447,88 +452,7 @@ class SessionManager:
         session = self._get_session(session_id)
         session.update_activity()
 
-        # Get timeout from current task if available
-        timeout_seconds = 60  # Default fallback
-        if session.current_task_id:
-            try:
-                task = self.task_manager.get_task(session.current_task_id)
-                if task and task.execution_config:
-                    timeout_seconds = task.execution_config.get("timeout", 60)
-                    logger.debug(f"Using timeout {timeout_seconds}s from task {session.current_task_id} for policy")
-            except Exception as e:
-                logger.warning(f"Failed to get timeout from current task: {e}, using default 60s")
-
         return self.policy_manager.get_policy()
-
-    def is_episode_over(self, session_id: str) -> tuple[bool, str]:
-        """
-        Check if the current episode should be terminated.
-
-        Args:
-            session_id: ID of the client session
-
-        Returns:
-            Tuple of (should_terminate, reason)
-        """
-        episode = self.episode_manager.get_current_episode(session_id)
-        if not episode:
-            return True, "no_active_episode"
-
-        if episode.is_complete:
-            return True, episode.completion_reason or "completed"
-
-        # Get task configuration for episode limits
-        try:
-            task = self.task_manager.get_task(episode.task_id)
-            episode_config = task.episode_config
-
-            # Check max steps
-            max_steps = episode_config.get("max_steps", 20)  # Default to 20
-            current_steps = len(episode.steps)
-
-            if current_steps >= max_steps:
-                return True, f"max_steps_reached ({current_steps}/{max_steps})"
-
-            # Could add more termination conditions here:
-            # - episode timeout
-            # - step timeout
-            # - resource limits
-            # etc.
-
-        except Exception as e:
-            logger.warning(f"Failed to check episode termination conditions: {e}")
-            # Don't terminate on configuration errors
-            pass
-
-        return False, ""
-
-    def get_episode_config(self, session_id: str) -> Dict[str, Any]:
-        """
-        Get episode configuration for the current episode.
-
-        Args:
-            session_id: ID of the client session
-
-        Returns:
-            Episode configuration dictionary with defaults
-        """
-        episode = self.episode_manager.get_current_episode(session_id)
-        if not episode:
-            return {"max_steps": 20}  # Default config
-
-        try:
-            task = self.task_manager.get_task(episode.task_id)
-            config = task.episode_config.copy()
-
-            # Apply defaults for missing values
-            config.setdefault("max_steps", 20)
-            config.setdefault("step_timeout_seconds", 300)
-            config.setdefault("episode_timeout_minutes", 30)
-
-            return config
-        except Exception as e:
-            logger.warning(f"Failed to get episode configuration: {e}")
-            return {"max_steps": 20}
 
     def _get_session(self, session_id: str) -> ClientSession:
         """

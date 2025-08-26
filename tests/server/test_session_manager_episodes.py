@@ -60,8 +60,10 @@ class TestSessionManagerEpisodes:
         mock_task_manager = MagicMock()
         mock_execution_manager = MagicMock()
         mock_execution_manager.step = AsyncMock()
+        mock_execution_manager.configure_for_task = MagicMock()
         mock_policy_manager = MagicMock()
         mock_policy_manager.get_policy = AsyncMock()
+        mock_policy_manager.configure_for_task = MagicMock()
         mock_evaluation_manager = MagicMock()
         mock_evaluation_manager.log_session_start = AsyncMock()
         mock_evaluation_manager.log_episode_start = AsyncMock()
@@ -72,6 +74,7 @@ class TestSessionManagerEpisodes:
         mock_episode_manager.start_episode = MagicMock()
         mock_episode_manager.end_episode = MagicMock()
         mock_episode_manager.get_episode = MagicMock()
+        mock_episode_manager.configure_for_task = MagicMock()
 
         with (
             patch("saber.server.session_manager.TaskManager", return_value=mock_task_manager),
@@ -121,6 +124,12 @@ class TestSessionManagerEpisodes:
             session_id, mock_episode.episode_id, task_id
         )
 
+        # Verify PolicyManager configure_for_task was called
+        manager.policy_manager.configure_for_task.assert_called_once_with(session_id, mock_task)
+
+        # Verify EpisodeManager configure_for_task was called
+        manager.episode_manager.configure_for_task.assert_called_once_with(session_id, mock_task)
+
     @pytest.mark.asyncio
     async def test_start_episode_invalid_session(self, session_manager_with_session):
         """Test starting episode with invalid session."""
@@ -152,7 +161,15 @@ class TestSessionManagerEpisodes:
         # Mock execution and episode manager responses
         command_result = CommandResult(exit_code=0, stdout="test output", stderr="", execution_time=0.1)
         manager.execution_manager.step.return_value = command_result
-        manager.episode_manager.step.return_value = mock_step
+
+        # Create StepResult mock that matches the new return type
+        from saber.server.episodes.episode_manager import StepResult
+        step_result = StepResult(
+            step=mock_step,
+            should_terminate=False,
+            termination_reason=None
+        )
+        manager.episode_manager.step.return_value = step_result
 
         # Execute command
         action = Action(tool_name="cli", parameters={"arguments": "file test.txt", "param": "value"})
@@ -219,7 +236,15 @@ class TestSessionManagerEpisodes:
         # Mock execution and episode manager responses
         command_result = CommandResult(exit_code=0, stdout="completed", stderr="", execution_time=0.1)
         manager.execution_manager.step.return_value = command_result
-        manager.episode_manager.step.return_value = mock_step
+
+        # Create StepResult mock that indicates completion
+        from saber.server.episodes.episode_manager import StepResult
+        step_result = StepResult(
+            step=mock_step,
+            should_terminate=False,
+            termination_reason=None
+        )
+        manager.episode_manager.step.return_value = step_result
 
         # Execute command
         action = Action(tool_name="cli", parameters={"arguments": "final command"})
