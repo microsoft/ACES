@@ -376,3 +376,57 @@ class TestExecutionManager:
         assert len(commands) == 2
         assert any(cmd["executor_type"] == "cli" for cmd in commands)
         assert any(cmd["executor_type"] == "python" for cmd in commands)
+
+    def test_timeout_configuration_flow(self, registry):
+        """Test that timeout configuration flows from task to executors."""
+        # Create a mock task with custom timeout
+        mock_task = MagicMock()
+        mock_task.environment = None  # Skip environment resolution for this test
+        mock_task.execution_config = {"timeout": 150, "allowed_executors": ["cli", "python"]}
+        mock_task.allowed_executors = ["cli", "python"]
+        mock_task.cli_config = None
+        mock_task.python_config = None
+
+        # Configure ExecutionManager with the task
+        registry.configure_for_task("timeout_test_session", mock_task, None)
+
+        # Verify timeout was set in configuration
+        assert registry._configuration["timeout"] == 150
+
+        # Test CLI executor timeout
+        if "cli" in registry.get_available_executors():
+            cli_executor = registry.get_executor("cli")
+            assert cli_executor.get_timeout() == 150.0, f"CLI executor should use task timeout 150, got {cli_executor.get_timeout()}"
+
+        # Test Python executor timeout
+        if "python" in registry.get_available_executors():
+            python_executor = registry.get_executor("python")
+            assert python_executor.get_timeout() == 150.0, f"Python executor should use task timeout 150, got {python_executor.get_timeout()}"
+
+    def test_default_timeout_behavior(self, registry):
+        """Test that executors use default timeouts when no task timeout is specified."""
+        # Create a mock task without timeout configuration
+        mock_task = MagicMock()
+        mock_task.environment = None
+        mock_task.execution_config = {"allowed_executors": ["cli", "python"]}  # No timeout field
+        mock_task.allowed_executors = ["cli", "python"]
+        mock_task.cli_config = None
+        mock_task.python_config = None
+
+        # Configure ExecutionManager with the task
+        registry.configure_for_task("default_timeout_session", mock_task, None)
+
+        # Verify no global timeout is set
+        assert "timeout" not in registry._configuration
+
+        # Test that executors use their default timeouts
+        if "cli" in registry.get_available_executors():
+            cli_executor = registry.get_executor("cli")
+            # CLI executor default is 60.0 (from get_default_config)
+            assert cli_executor.get_timeout() == 60.0, f"CLI executor should use default timeout 60, got {cli_executor.get_timeout()}"
+
+        if "python" in registry.get_available_executors():
+            python_executor = registry.get_executor("python")
+            # Python executor default is higher (from get_default_config)
+            default_timeout = python_executor.get_timeout()
+            assert default_timeout > 60.0, f"Python executor should use default timeout > 60, got {default_timeout}"

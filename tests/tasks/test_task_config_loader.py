@@ -160,3 +160,95 @@ tasks:
                 loader.load_tasks_from_file(temp_path)
         finally:
             os.unlink(temp_path)
+
+    def test_load_tasks_with_execution_timeout_config(self):
+        """Test loading tasks with execution timeout configuration."""
+        yaml_content = """
+domain: test_domain
+tasks:
+  - task_id: timeout_task
+    title: Task with Custom Timeout
+    description: A task with custom execution timeout
+    environment: test_env
+    execution_config:
+      allowed_executors: ["cli", "python"]
+      timeout: 180
+    episode_config:
+      max_steps: 25
+    subtasks:
+      - subtask_id: test_subtask
+        title: Test Subtask
+        description: Test subtask with timeout
+        objective: Complete with custom timeout
+"""
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml_content)
+            temp_path = f.name
+
+        try:
+            loader = TaskConfigLoader("test_domain")
+            tasks = loader.load_tasks_from_file(temp_path)
+
+            assert "timeout_task" in tasks
+            task = tasks["timeout_task"]
+
+            # Verify basic task properties
+            assert task.task_id == "timeout_task"
+            assert task.title == "Task with Custom Timeout"
+            assert task.environment == "test_env"
+
+            # Verify execution config contains timeout
+            assert task.execution_config is not None
+            assert "timeout" in task.execution_config
+            assert task.execution_config["timeout"] == 180
+            assert task.execution_config["allowed_executors"] == ["cli", "python"]
+
+            # Verify episode config
+            assert task.episode_config is not None
+            assert task.episode_config["max_steps"] == 25
+
+            # Verify subtask
+            assert len(task.subtasks) == 1
+            subtask = task.subtasks[0]
+            assert subtask.subtask_id == "test_subtask"
+            assert subtask.title == "Test Subtask"
+
+        finally:
+            os.unlink(temp_path)
+
+    def test_load_tasks_without_execution_timeout_config(self):
+        """Test loading tasks without execution timeout (should use defaults)."""
+        yaml_content = """
+domain: test_domain
+tasks:
+  - task_id: default_timeout_task
+    title: Task with Default Timeout
+    description: A task without custom timeout configuration
+    execution_config:
+      allowed_executors: ["cli"]
+    subtasks:
+      - subtask_id: test_subtask
+        title: Test Subtask
+        description: Test subtask
+        objective: Complete with default timeout
+"""
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml_content)
+            temp_path = f.name
+
+        try:
+            loader = TaskConfigLoader("test_domain")
+            tasks = loader.load_tasks_from_file(temp_path)
+
+            assert "default_timeout_task" in tasks
+            task = tasks["default_timeout_task"]
+
+            # Verify execution config exists but has no timeout
+            assert task.execution_config is not None
+            assert "timeout" not in task.execution_config
+            assert task.execution_config["allowed_executors"] == ["cli"]
+
+        finally:
+            os.unlink(temp_path)
