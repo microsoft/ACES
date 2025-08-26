@@ -136,6 +136,62 @@ class SessionRestAPI:
             stats: Dict[str, Any] = self.session_manager.get_session_stats()
             return stats
 
+        @self.app.get("/debug/cleanup-history")
+        async def get_cleanup_history() -> Dict[str, Any]:
+            """Get complete cleanup history for debugging."""
+            if hasattr(self.session_manager, "cleanup_manager"):
+                history = self.session_manager.cleanup_manager.get_cleanup_history()
+                stats = self.session_manager.cleanup_manager.get_cleanup_stats()
+                return {
+                    "history": [
+                        {
+                            "session_id": op.session_id,
+                            "reason": str(op.reason),
+                            "context": op.context,
+                            "start_time": op.start_time.isoformat(),
+                            "end_time": op.end_time.isoformat() if op.end_time else None,
+                            "success": op.success,
+                            "error": op.error,
+                            "duration_seconds": op.duration_seconds,
+                            "steps_completed": op.steps_completed,
+                        }
+                        for op in history
+                    ],
+                    "stats": stats,
+                }
+            return {"error": "Cleanup manager not available"}
+
+        @self.app.get("/debug/cleanup-history/{session_id}")
+        async def get_session_cleanup_history(session_id: str) -> Dict[str, Any]:
+            """Get cleanup history for a specific session."""
+            if hasattr(self.session_manager, "cleanup_manager"):
+                history = self.session_manager.cleanup_manager.get_cleanup_history(session_id)
+                return {
+                    "session_id": session_id,
+                    "history": [
+                        {
+                            "reason": str(op.reason),
+                            "context": op.context,
+                            "start_time": op.start_time.isoformat(),
+                            "end_time": op.end_time.isoformat() if op.end_time else None,
+                            "success": op.success,
+                            "error": op.error,
+                            "duration_seconds": op.duration_seconds,
+                            "steps_completed": op.steps_completed,
+                        }
+                        for op in history
+                    ],
+                }
+            return {"error": "Cleanup manager not available"}
+
+        @self.app.get("/debug/active-cleanups")
+        async def get_active_cleanups() -> Dict[str, Any]:
+            """Get currently active cleanup operations."""
+            if hasattr(self.session_manager, "cleanup_manager"):
+                active = self.session_manager.cleanup_manager.get_active_cleanups()
+                return {"active_cleanup_count": len(active), "active_session_ids": list(active)}
+            return {"error": "Cleanup manager not available"}
+
     async def get_events_stream(self, session_id: str, request: Request) -> StreamingResponse:
         """
         SSE endpoint for real-time updates.
