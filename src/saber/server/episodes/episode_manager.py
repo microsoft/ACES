@@ -3,12 +3,20 @@
 from dataclasses import asdict
 from datetime import datetime
 from logging import getLogger
-from typing import Any, Dict, Optional
+from typing import Any, Dict, NamedTuple, Optional
 
 from ..base import Action, CommandResult, Episode, EpisodeState, Step
 from .exceptions import EpisodeNotFoundException
 
 logger = getLogger(__name__)
+
+
+class StepResult(NamedTuple):
+    """Result from executing a step, including termination information."""
+
+    step: Step
+    should_terminate: bool
+    termination_reason: Optional[str] = None
 
 
 class EpisodeManager:
@@ -21,7 +29,81 @@ class EpisodeManager:
 
     def __init__(self) -> None:
         """Initialize the EpisodeManager."""
-        self.active_episodes: Dict[str, Episode] = {}  # session_id -> active Episode
+        self.active_episodes: Dict[str, Episode] = {}  # session_id -> Episode
+        self.episode_configs: Dict[str, Dict[str, Any]] = {}  # session_id -> episode config from task
+
+    def configure_for_task(self, session_id: str, task: Any) -> None:
+        """
+        Configure EpisodeManager for a specific task/session.
+
+        Args:
+            session_id: Session identifier
+            task: Task object containing episode configuration
+        """
+        # Extract episode configuration from task
+        episode_config = {}
+        if task and task.episode_config:
+            episode_config = task.episode_config.copy()
+            logger.debug(f"Using episode config from task {task.task_id}: {episode_config}")
+
+        # Validate required configuration values
+        if "max_steps" not in episode_config:
+            logger.error(f"Task {task.task_id if task else 'None'} missing required episode_config.max_steps")
+            raise ValueError(
+                f"Task {task.task_id if task else 'None'} episode_config missing required 'max_steps' value"
+            )
+
+        # Apply defaults for optional values
+        episode_config.setdefault("step_timeout_seconds", 300)
+        episode_config.setdefault("episode_timeout_minutes", 30)
+
+        # Store configuration for this session
+        self.episode_configs[session_id] = episode_config
+
+        logger.info(f"EpisodeManager configured for session {session_id} with task {task.task_id if task else 'None'}")
+
+    def should_terminate_episode(self, session_id: str) -> tuple[bool, str]:
+        """
+        Check if the current episode should be terminated based on configured limits.
+
+        Args:
+            session_id: ID of the session
+
+        Returns:
+            Tuple of (should_terminate, reason)
+        """
+        episode = self.get_current_episode(session_id)
+        if not episode:
+            return True, "no_active_episode"
+
+        if episode.is_complete:
+            return True, episode.completion_reason or "completed"
+
+        # Get episode configuration for this session
+        episode_config = self.episode_configs.get(session_id)
+        if not episode_config:
+            logger.error(f"No episode configuration found for session {session_id}")
+            return True, f"configuration_error: No episode configuration found for session {session_id}"
+
+        try:
+            # Check max steps
+            max_steps = episode_config["max_steps"]
+            current_steps = len(episode.steps)
+
+            if current_steps >= max_steps:
+                return True, f"max_steps_reached ({current_steps}/{max_steps})"
+
+            # Could add more termination conditions here:
+            # - episode timeout based on episode_config["episode_timeout_minutes"]
+            # - step timeout based on episode_config["step_timeout_seconds"]
+            # - resource limits
+            # etc.
+
+        except Exception as e:
+            logger.error(f"Failed to check episode termination conditions for session {session_id}: {e}")
+            return True, f"configuration_error: {e}"
+
+        return False, ""
 
     def start_episode(self, session_id: str, task_id: str, initial_context: Optional[Dict[str, Any]] = None) -> Episode:
         """
@@ -59,7 +141,7 @@ class EpisodeManager:
         session_id: str,
         action: Action,
         command_result: CommandResult,
-    ) -> Step:
+    ) -> StepResult:
         """
         Execute an RL-style step in the current episode.
 
@@ -69,7 +151,7 @@ class EpisodeManager:
             command_result: CommandResult from command execution
 
         Returns:
-            Step object with all step information
+            StepResult object with step information and termination status
 
         Raises:
             EpisodeNotFoundException: If session has no active episode
@@ -89,7 +171,10 @@ class EpisodeManager:
         # Add step to episode
         episode.add_step(step)
 
-        return step
+        # Check if episode should terminate after this step
+        should_terminate, termination_reason = self.should_terminate_episode(session_id)
+
+        return StepResult(step=step, should_terminate=should_terminate, termination_reason=termination_reason)
 
     def end_episode(self, session_id: str, reason: str) -> Episode:
         """

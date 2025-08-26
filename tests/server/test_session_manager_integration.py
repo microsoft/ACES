@@ -94,8 +94,11 @@ class TestSessionManagerIntegration:
         manager.episode_manager.start_episode.return_value = mock_episode
         # Also mock get_current_episode for execute_action calls
         manager.episode_manager.get_current_episode.return_value = mock_episode
-        # Mock step method to return the proper steps
-        manager.episode_manager.step.side_effect = [mock_step1, mock_step2]
+        # Mock step method to return the proper StepResult objects
+        from saber.server.episodes.episode_manager import StepResult
+        step_result1 = StepResult(step=mock_step1, should_terminate=False, termination_reason=None)
+        step_result2 = StepResult(step=mock_step2, should_terminate=False, termination_reason=None)
+        manager.episode_manager.step.side_effect = [step_result1, step_result2]
 
         command_result1 = CommandResult(exit_code=0, stdout="step1", stderr="", execution_time=0.1)
         command_result2 = CommandResult(exit_code=0, stdout="step2", stderr="", execution_time=0.1)
