@@ -26,6 +26,8 @@ from .api.session_rest_api import SessionRestAPI
 from .base import Action, CommandResult
 from .episodes.episode_manager import EpisodeManager
 from .evaluation.evaluation_manager import EvaluationManager
+from .execution.cleanup.cleanup_manager import ContainerCleanupManager
+from .execution.cleanup.cleanup_reason import CleanupReason
 from .execution.execution_manager import ExecutionManager
 from .policy.policy_manager import PolicyDocument, PolicyManager
 from .tasks.task_manager import TaskManager
@@ -111,6 +113,9 @@ class SessionManager:
         self.execution_manager = ExecutionManager(config_dir)
         self.policy_manager = PolicyManager(domain_name)
         self.evaluation_manager = EvaluationManager()
+
+        # Initialize unified cleanup manager
+        self.cleanup_manager = ContainerCleanupManager(self.execution_manager._sandbox_manager)
 
         # Initialize protocol handlers
         self.rest_api = SessionRestAPI(self, host, port)
@@ -230,12 +235,18 @@ class SessionManager:
         except Exception as e:
             logger.warning(f"Failed to log session end: {str(e)}")
 
-        # Cleanup execution resources (Docker containers)
+        # Cleanup execution resources (Docker containers) using unified cleanup manager
         try:
-            log_operation_start(logger, "Execution resource cleanup", session_id)
-            self.execution_manager.cleanup_session(session_id)
+            log_operation_start(logger, "Unified container cleanup", session_id)
+            cleanup_success = self.cleanup_manager.cleanup_session(
+                session_id, CleanupReason.SESSION_TERMINATED, {"manual_termination": True}
+            )
+            if cleanup_success:
+                log_operation_success(logger, "Unified container cleanup", session_id)
+            else:
+                logger.warning(f"Unified container cleanup reported failure for session {session_id}")
         except Exception as e:
-            logger.warning(f"Failed to cleanup execution resources: {e}")
+            log_operation_failure(logger, "Unified container cleanup", str(e), session_id)
 
         # Remove session from active sessions
         logger.info(f"Session {session_id} removed from active sessions")
@@ -369,14 +380,24 @@ class SessionManager:
         except Exception as e:
             logger.error(f"Command execution failed in session {session_id}: {e}")
 
-            # Remove episode tracking immediately on any error - containers will self-terminate
+            # Remove episode tracking and trigger immediate cleanup on any error
             try:
                 self.episode_manager.remove_episode_on_error(session_id, e)
                 session.current_episode_id = None
                 session.current_task_id = None
-                logger.info("Episode removed from tracking due to error - containers will self-terminate")
+                logger.info("Episode removed from tracking due to error")
+
+                # Trigger immediate container cleanup using unified cleanup manager
+                cleanup_success = self.cleanup_manager.cleanup_session(
+                    session_id, CleanupReason.ERROR_TRIGGERED, {"error": str(e), "error_type": type(e).__name__}
+                )
+                if cleanup_success:
+                    logger.info("Error-triggered container cleanup completed successfully")
+                else:
+                    logger.warning("Error-triggered container cleanup reported failure")
+
             except Exception as cleanup_error:
-                logger.error(f"Failed to remove episode on error: {cleanup_error}")
+                logger.error(f"Failed to handle error cleanup: {cleanup_error}")
 
             return CommandResult.error_result(error=str(e))
 

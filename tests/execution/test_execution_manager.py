@@ -318,15 +318,6 @@ class TestExecutionManager:
         expected_params = {"arguments": "print('hello')"}
         mock_executor.assert_called_once_with(expected_params, context)
 
-    def test_cleanup_all_sessions(self, registry):
-        """Test cleanup of all sessions."""
-        with patch.object(registry._sandbox_manager, "cleanup_all_sessions") as mock_cleanup_sandbox:
-            with patch.object(registry._executor_factory, "cleanup_all_executors") as mock_cleanup_executors:
-                registry.cleanup_all_sessions()
-
-        mock_cleanup_sandbox.assert_called_once()
-        mock_cleanup_executors.assert_called_once()
-
     def test_list_commands(self, registry):
         """Test listing all available commands."""
         mock_commands = [

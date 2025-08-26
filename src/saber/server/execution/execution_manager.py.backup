@@ -275,6 +275,66 @@ class ExecutionManager:
         """
         return self._executor_factory.get_all_mcp_tools()
 
+    def cleanup_session(self, session_id: str) -> None:
+        """
+        DEPRECATED: Clean up execution resources for a session.
+
+        This method is deprecated. Use ContainerCleanupManager.cleanup_session() instead.
+        This method will be removed in a future version.
+
+        Args:
+            session_id: Session identifier to clean up
+        """
+        logger.warning(
+            f"� DEPRECATED METHOD: ExecutionManager.cleanup_session() called for session {session_id}. "
+            f"Use ContainerCleanupManager.cleanup_session() instead."
+        )
+        try:
+            # Cancel any active executions for this session
+            if session_id in self._active_executions:
+                logger.warning(
+                    f"🔥 ACTIVE EXECUTION CANCEL: Cancelling {self._active_executions[session_id]} "
+                    f"active executions for session {session_id}"
+                )
+                del self._active_executions[session_id]
+
+            logger.warning(
+                f"🔥 SANDBOX CLEANUP: About to call sandbox_manager.cleanup_session() for session {session_id}"
+            )
+            self._sandbox_manager.cleanup_session(session_id)
+            logger.info(f"Cleaned up execution resources for session {session_id}")
+        except Exception as e:
+            logger.error(f"Error cleaning up execution resources for session {session_id}: {e}")
+
+    def cleanup_all_sessions(self) -> None:
+        """
+        DEPRECATED: Clean up all execution resources.
+
+        This method is deprecated. Use ContainerCleanupManager.cleanup_all_sessions() instead.
+        This method will be removed in a future version.
+        """
+        logger.warning(
+            "� DEPRECATED METHOD: ExecutionManager.cleanup_all_sessions() called. "
+            "Use ContainerCleanupManager.cleanup_all_sessions() instead."
+        )
+        try:
+            logger.warning("🔥 SANDBOX CLEANUP ALL: About to call sandbox_manager.cleanup_all_sessions()")
+            self._sandbox_manager.cleanup_all_sessions()
+            logger.warning("🔥 EXECUTOR CLEANUP ALL: About to call executor_factory.cleanup_all_executors()")
+            self._executor_factory.cleanup_all_executors()
+            logger.info("Cleaned up all execution resources")
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
+
+    def to_mcp_tools(self) -> List[Dict[str, Any]]:
+        """
+        Convert all available executors to MCP format.
+
+        Returns:
+            List containing MCP tool definitions for all executors
+        """
+        return self._executor_factory.get_all_mcp_tools()
+
     def list_commands(self) -> List[Dict[str, Any]]:
         """
         List all available commands from all executors.
