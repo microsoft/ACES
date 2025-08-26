@@ -25,7 +25,7 @@ class TestSessionManagerAPI:
         mock_execution_manager = MagicMock()
         mock_execution_manager.step = AsyncMock()
         mock_policy_manager = MagicMock()
-        mock_policy_doc = PolicyDocument(domain="test_domain")
+        mock_policy_doc = PolicyDocument(prompt="Test domain policy prompt")
         mock_policy_manager.get_policy = MagicMock(return_value=mock_policy_doc)
         mock_evaluation_manager = MagicMock()
         mock_evaluation_manager.log_session_start = AsyncMock()
@@ -196,10 +196,8 @@ class TestSessionManagerAPI:
 
         assert response.status_code == 200
         data = response.json()
-        assert data["domain"] == "test_domain"
-        assert "available_commands" in data
-        assert "guidelines" in data
-        assert "constraints" in data
+        assert "prompt" in data
+        assert data["prompt"] == "Test domain policy prompt"
 
     def test_events_endpoint_structure(self, session_manager_app):
         """Test SSE events endpoint structure (without async streaming)."""

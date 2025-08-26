@@ -25,7 +25,7 @@ import os
 import signal
 import subprocess
 import sys
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Union
 
 import httpx
 
@@ -81,18 +81,33 @@ class EpisodeContainerOrchestrator:
         """Setup logging for the orchestrator with episode category."""
         # Create log directory if it doesn't exist
         log_dir = "/tmp/saber-orchestrator-logs"
-        os.makedirs(log_dir, exist_ok=True)
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+            log_file = f"{log_dir}/orchestrator-{self.session_id}.log"
 
-        log_file = f"{log_dir}/orchestrator-{self.session_id}.log"
+            handlers: List[Union[logging.StreamHandler, logging.FileHandler]] = [
+                logging.StreamHandler(sys.stdout),
+            ]
+
+            # Try to add file handlers, but don't fail if we can't
+            try:
+                handlers.append(logging.FileHandler(log_file, mode="a"))
+            except (PermissionError, OSError):
+                pass  # Continue without file logging
+
+            try:
+                handlers.append(logging.FileHandler("/tmp/saber_orchestrator.log", mode="a"))
+            except (PermissionError, OSError):
+                pass  # Continue without file logging
+
+        except (PermissionError, OSError):
+            # Fallback to just console logging
+            handlers = [logging.StreamHandler(sys.stdout)]
 
         logging.basicConfig(
             level=logging.INFO,
             format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            handlers=[
-                logging.StreamHandler(sys.stdout),
-                logging.FileHandler(log_file, mode="a"),
-                logging.FileHandler("/tmp/saber_orchestrator.log", mode="a"),  # Keep old location too
-            ],
+            handlers=handlers,
         )
         # Return a SaberLogger with the episode category
         return SaberLogger("saber.episode.orchestrator", LogCategory.EPISODE)
