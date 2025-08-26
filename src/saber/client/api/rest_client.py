@@ -156,7 +156,9 @@ class SABERRestClient:
         logger.info(f"📡 Starting episode monitoring via SSE: {sse_url}")
 
         try:
-            async with aiohttp.ClientSession() as session:
+            # Create timeout configuration for long-running episode monitoring
+            timeout = aiohttp.ClientTimeout(total=None)  # No timeout for SSE monitoring
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 logger.info(f"🔗 DEBUG: Opening SSE connection to {sse_url}")
                 async with session.get(sse_url, headers={"Accept": "text/event-stream"}) as response:
                     logger.info(f"🔗 DEBUG: SSE Response status: {response.status}, headers: {dict(response.headers)}")

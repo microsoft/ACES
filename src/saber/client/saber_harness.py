@@ -34,7 +34,7 @@ class SABERHarnessConfig:
     server_url: str = "http://localhost:8000"
     mcp_url: str = "http://localhost:8001"
     max_steps: int = 100
-    request_timeout: float = 30.0
+    request_timeout: float = 300.0  # Increased to 5 minutes for agent execution
     log_level: str = "INFO"
     task_id: str = "default_task"
     client_id: str = "saber-client"

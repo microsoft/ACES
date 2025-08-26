@@ -481,8 +481,12 @@ class SessionManager:
             task = self.task_manager.get_task(episode.task_id)
             episode_config = task.episode_config
 
-            # Check max steps
-            max_steps = episode_config.get("max_steps", 20)  # Default to 20
+            # Check max steps - require explicit configuration
+            if not episode_config or "max_steps" not in episode_config:
+                logger.error(f"Task {episode.task_id} missing required episode_config.max_steps")
+                return True, f"configuration_error: Task {episode.task_id} missing episode_config.max_steps"
+
+            max_steps = episode_config["max_steps"]
             current_steps = len(episode.steps)
 
             if current_steps >= max_steps:
@@ -495,9 +499,8 @@ class SessionManager:
             # etc.
 
         except Exception as e:
-            logger.warning(f"Failed to check episode termination conditions: {e}")
-            # Don't terminate on configuration errors
-            pass
+            logger.error(f"Failed to check episode termination conditions: {e}")
+            return True, f"configuration_error: {e}"
 
         return False, ""
 
@@ -509,25 +512,34 @@ class SessionManager:
             session_id: ID of the client session
 
         Returns:
-            Episode configuration dictionary with defaults
+            Episode configuration dictionary from task configuration
+
+        Raises:
+            ValueError: If no episode or task configuration found
         """
         episode = self.episode_manager.get_current_episode(session_id)
         if not episode:
-            return {"max_steps": 20}  # Default config
+            raise ValueError(f"No active episode found for session {session_id}")
 
         try:
             task = self.task_manager.get_task(episode.task_id)
+            if not task.episode_config:
+                raise ValueError(f"Task {episode.task_id} has no episode_config defined")
+
             config = task.episode_config.copy()
 
-            # Apply defaults for missing values
-            config.setdefault("max_steps", 20)
+            # Validate required configuration values
+            if "max_steps" not in config:
+                raise ValueError(f"Task {episode.task_id} episode_config missing required 'max_steps' value")
+
+            # Apply defaults only for optional values
             config.setdefault("step_timeout_seconds", 300)
             config.setdefault("episode_timeout_minutes", 30)
 
             return config
         except Exception as e:
-            logger.warning(f"Failed to get episode configuration: {e}")
-            return {"max_steps": 20}
+            logger.error(f"Failed to get episode configuration for session {session_id}: {e}")
+            raise
 
     def _get_session(self, session_id: str) -> ClientSession:
         """
