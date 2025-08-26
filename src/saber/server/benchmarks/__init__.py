@@ -1,5 +1,7 @@
-"""Task management system for SABER security benchmarking."""
+"""Benchmark management system for SABER security benchmarking."""
 
+from .benchmark_config_loader import BenchmarkConfigLoader
+from .benchmark_manager import BenchmarkManager
 from .exceptions import (
     InvalidTaskDefinitionException,
     SubTaskNotFoundException,
@@ -8,15 +10,13 @@ from .exceptions import (
 )
 from .subtask import SubTask
 from .task import Task
-from .task_config_loader import TaskConfigLoader
-from .task_manager import TaskManager
 
 __all__ = [
-    # Task Management
-    "TaskManager",
+    # Benchmark Management
+    "BenchmarkManager",
     "Task",
     "SubTask",
-    "TaskConfigLoader",
+    "BenchmarkConfigLoader",
     # Exceptions
     "InvalidTaskDefinitionException",
     "SubTaskNotFoundException",

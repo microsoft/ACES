@@ -1,6 +1,6 @@
 """SABER server components."""
 
-from . import api, execution, tasks
+from . import api, benchmarks, execution
 from .api import SessionMCPAPI, SessionRestAPI
 from .base import (
     Action,
@@ -18,7 +18,7 @@ from .session_manager import SessionManager
 
 __all__ = [
     "execution",
-    "tasks",
+    "benchmarks",
     "api",
     "SessionManager",
     "SessionRestAPI",

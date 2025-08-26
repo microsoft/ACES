@@ -40,7 +40,7 @@ class TestSessionRestAPI:
         mock_episode_manager.get_episode = MagicMock()
 
         with (
-            patch("saber.server.session_manager.TaskManager", return_value=mock_task_manager),
+            patch("saber.server.session_manager.BenchmarkManager", return_value=mock_task_manager),
             patch("saber.server.session_manager.ExecutionManager", return_value=mock_execution_manager),
             patch("saber.server.session_manager.PolicyManager", return_value=mock_policy_manager),
             patch("saber.server.session_manager.EvaluationManager", return_value=mock_evaluation_manager),
@@ -154,7 +154,7 @@ class TestSessionRestAPI:
         # Mock task with proper initial_context
         mock_task = MagicMock()
         mock_task.initial_context = {"initial_data": "test"}
-        manager.task_manager.get_task.return_value = mock_task
+        manager.benchmark_manager.get_task.return_value = mock_task
 
         # Mock episode
         mock_episode = MagicMock()
@@ -202,7 +202,7 @@ class TestSessionRestAPI:
         mock_task.description = "Test description"
 
         manager.episode_manager.get_current_episode.return_value = mock_episode
-        manager.task_manager.get_task.return_value = mock_task
+        manager.benchmark_manager.get_task.return_value = mock_task
 
         # Get current task
         response = client.get(f"/session/{session_id}/current-task")

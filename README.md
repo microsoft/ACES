@@ -5,7 +5,7 @@ A distributed system for benchmarking agentic workflows in cybersecurity domains
 ## Features
 
 - **Domain-Specific Tasks**: Complex multi-step security workflows (malware analysis, threat investigation, etc.)
-- **Task Management**: YAML-driven task definitions with dependency management and context propagation
+- **Benchmark Management**: YAML-driven benchmark definitions with multiple episode orchestration and pass@k evaluation
 - **Session Management**: Stateful execution tracking with progress monitoring
 - **Secure Command Execution**: Security-first command registry with command validation and sandboxing
 - **Flexible Configuration**: YAML-based configuration for commands, security policies, and execution limits
@@ -24,7 +24,7 @@ SABER implements a distributed server-client architecture designed for security 
 ### Key Components
 
 - **SessionManager**: Unified endpoint for all client interactions
-- **TaskManager**: Handles complex multi-step security workflows
+- **BenchmarkManager**: Handles complex multi-step security workflows and benchmark orchestration
 - **Command Registry**: Secure execution of domain-specific security commands
 - **Evaluation Framework**: Action tracking and performance analysis
 
@@ -32,7 +32,7 @@ For detailed architecture documentation, see [docs/README.md](docs/README.md).
 
 ## Module Documentation
 
-- **[Task Management](src/saber/server/tasks/README.md)**: Multi-step security task orchestration
+- **[Benchmark Management](src/saber/server/benchmarks/README.md)**: Multi-step security benchmark orchestration
 - **[Command Registry](src/saber/server/execution/README.md)**: Secure command execution framework
 - **[System Architecture](docs/README.md)**: Detailed architecture documentation
 

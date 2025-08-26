@@ -6,7 +6,7 @@ Tests meaningful validation functionality - pruned basic data structure tests.
 
 import pytest
 
-from saber.server.tasks.subtask import SubTask
+from saber.server.benchmarks.subtask import SubTask
 
 
 class TestSubTask:

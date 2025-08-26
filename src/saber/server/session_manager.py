@@ -24,13 +24,13 @@ from ..logging_config import (
 from .api.session_mcp_api import SessionMCPAPI
 from .api.session_rest_api import SessionRestAPI
 from .base import Action, CommandResult
+from .benchmarks.benchmark_manager import BenchmarkManager
 from .episodes.episode_manager import EpisodeManager
 from .evaluation.evaluation_manager import EvaluationManager
 from .execution.cleanup.cleanup_manager import ContainerCleanupManager
 from .execution.cleanup.cleanup_reason import CleanupReason
 from .execution.execution_manager import ExecutionManager
 from .policy.policy_manager import PolicyDocument, PolicyManager
-from .tasks.task_manager import TaskManager
 
 logger = get_session_manager_logger(__name__)
 cleanup_logger = get_cleanup_logger(__name__)
@@ -107,7 +107,7 @@ class SessionManager:
         # Initialize server components
         logger.info(f"Initializing SessionManager for domain '{domain_name}' with config_dir '{config_dir}'")
 
-        self.task_manager = TaskManager(domain_name, config_dir)
+        self.benchmark_manager = BenchmarkManager(domain_name, config_dir)
 
         self.episode_manager = EpisodeManager()
         self.execution_manager = ExecutionManager(config_dir)
@@ -269,7 +269,7 @@ class SessionManager:
         session.update_activity()
 
         # Get the task object to access its configuration
-        task = self.task_manager.get_task(task_id)
+        task = self.benchmark_manager.get_task(task_id)
 
         # Start episode through episode manager
         episode = self.episode_manager.start_episode(
@@ -427,7 +427,7 @@ class SessionManager:
         if not episode:
             raise HTTPException(status_code=400, detail="No active episode found")
 
-        task = self.task_manager.get_task(episode.task_id)
+        task = self.benchmark_manager.get_task(episode.task_id)
 
         return {
             "task_id": task.task_id,

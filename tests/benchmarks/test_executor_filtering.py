@@ -1,5 +1,5 @@
 """
-Tests for executor filtering feature in TaskConfigLoader.
+Tests for executor filtering feature in BenchmarkConfigLoader.
 """
 
 import tempfile
@@ -9,8 +9,8 @@ from unittest.mock import Mock, patch
 import pytest
 import yaml
 
-from saber.server.tasks.exceptions import InvalidTaskDefinitionException
-from saber.server.tasks.task_config_loader import TaskConfigLoader
+from saber.server.benchmarks.exceptions import InvalidTaskDefinitionException
+from saber.server.benchmarks.benchmark_config_loader import BenchmarkConfigLoader
 
 
 class TestExecutorFiltering:
@@ -21,6 +21,9 @@ class TestExecutorFiltering:
         """Sample tasks configuration with executor restrictions."""
         return {
             "domain": "test_domain",
+            "benchmark_config": {
+                "episode_attempts": 2
+            },
             "executors": ["cli", "python"],
             "tasks": [
                 {
@@ -44,6 +47,9 @@ class TestExecutorFiltering:
         """Sample tasks configuration without executor restrictions."""
         return {
             "domain": "test_domain",
+            "benchmark_config": {
+                "episode_attempts": 1
+            },
             "tasks": [
                 {
                     "task_id": "test_task",
@@ -68,7 +74,7 @@ class TestExecutorFiltering:
             temp_path = f.name
 
         try:
-            loader = TaskConfigLoader("test_domain")
+            loader = BenchmarkConfigLoader("test_domain")
             tasks = loader.load_tasks_from_file(temp_path)
             allowed_executors = loader.get_allowed_executors()
 
@@ -86,7 +92,7 @@ class TestExecutorFiltering:
             temp_path = f.name
 
         try:
-            loader = TaskConfigLoader("test_domain")
+            loader = BenchmarkConfigLoader("test_domain")
             tasks = loader.load_tasks_from_file(temp_path)
             allowed_executors = loader.get_allowed_executors()
 
@@ -101,6 +107,9 @@ class TestExecutorFiltering:
         """Test that invalid executors field type raises exception."""
         invalid_config = {
             "domain": "test_domain",
+            "benchmark_config": {
+                "episode_attempts": 1
+            },
             "executors": "not_a_list",  # Should be a list
             "tasks": [
                 {
@@ -124,7 +133,7 @@ class TestExecutorFiltering:
             temp_path = f.name
 
         try:
-            loader = TaskConfigLoader("test_domain")
+            loader = BenchmarkConfigLoader("test_domain")
             with pytest.raises(InvalidTaskDefinitionException, match="Executors must be a list"):
                 loader.load_tasks_from_file(temp_path)
 
@@ -135,6 +144,9 @@ class TestExecutorFiltering:
         """Test loading tasks with empty executors list."""
         config_with_empty_executors = {
             "domain": "test_domain",
+            "benchmark_config": {
+                "episode_attempts": 1
+            },
             "executors": [],  # Empty list
             "tasks": [
                 {
@@ -158,7 +170,7 @@ class TestExecutorFiltering:
             temp_path = f.name
 
         try:
-            loader = TaskConfigLoader("test_domain")
+            loader = BenchmarkConfigLoader("test_domain")
             tasks = loader.load_tasks_from_file(temp_path)
             allowed_executors = loader.get_allowed_executors()
 
@@ -171,6 +183,6 @@ class TestExecutorFiltering:
 
     def test_get_allowed_executors_before_loading(self):
         """Test getting allowed executors before loading any configuration."""
-        loader = TaskConfigLoader("test_domain")
+        loader = BenchmarkConfigLoader("test_domain")
         allowed_executors = loader.get_allowed_executors()
         assert allowed_executors is None

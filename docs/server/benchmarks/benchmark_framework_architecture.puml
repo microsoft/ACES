@@ -1,7 +1,7 @@
-@startuml SABER Task Framework Architecture - Detailed
+@startuml SABER Benchmark Framework Architecture - Detailed
 
 !theme plain
-title SABER Task Framework - Detailed Architecture
+title SABER Benchmark Framework - Detailed Architecture
 
 skinparam class {
     BackgroundColor lightblue
@@ -10,26 +10,32 @@ skinparam class {
     FontSize 10
 }
 
-package "Task Framework Core" {
+package "Benchmark Framework Core" {
 
-    class TaskManager {
+    class BenchmarkManager {
         +domain: str
         +tasks: Dict[str, Task]
-        +config_loader: TaskConfigLoader
+        +config_loader: BenchmarkConfigLoader
+        +benchmark_config: Dict[str, Any]
         --
         +get_task(task_id): Task
         +get_subtask(task_id, subtask_id): SubTask
         +list_tasks(): List[Dict]
+        +start_benchmark(benchmark_config): BenchmarkSession
+        +get_benchmark_config(): Dict[str, Any]
+        +list_benchmark_tasks(): List[Dict]
         +load_tasks_from_yaml(): void
     }
 
-    class TaskConfigLoader {
+    class BenchmarkConfigLoader {
         +domain: str
         --
         +load_tasks_from_file(): Dict[str, Task]
+        +load_benchmark_config(): Dict[str, Any]
         +get_allowed_executors(): List[str]
         +_parse_task(): Task
         +_parse_subtask(): SubTask
+        +_parse_benchmark_config(): Dict[str, Any]
     }
 
     class Task {
@@ -41,11 +47,13 @@ package "Task Framework Core" {
         +allowed_executors: List[str]
         +initial_context: Dict[str, Any]
         +subtasks: List[SubTask]
+        +benchmark_config: Dict[str, Any]
         --
         +add_subtask(): void
         +get_subtask_by_id(): SubTask?
         +is_complete(): bool
         +get_all_subtask_ids(): Set[str]
+        +get_episode_attempts(): int
     }
 
     class SubTask {
@@ -120,11 +128,11 @@ package "Episode Management" {
 }
 
 ' Relationships
-TaskManager *-- TaskConfigLoader
-TaskManager *-- Task
+BenchmarkManager *-- BenchmarkConfigLoader
+BenchmarkManager *-- Task
 
-TaskConfigLoader ..> Task : creates
-TaskConfigLoader ..> SubTask : creates
+BenchmarkConfigLoader ..> Task : creates
+BenchmarkConfigLoader ..> SubTask : creates
 
 Task *-- SubTask
 
@@ -133,20 +141,21 @@ Episode *-- Step
 Step *-- Action
 Episode ..> EpisodeState
 
-note top of TaskManager
-**Task Definition Manager**
-Simplified to focus only on task definition management.
-No longer manages episodes or provides RL interfaces.
-Only responsible for task configuration loading and lookup.
-Task objects now contain all execution configuration (flexible environment, allowed_executors).
+note top of BenchmarkManager
+**Benchmark Orchestration Manager**
+Enhanced to focus on benchmark orchestration and task definition management.
+Manages multiple episode attempts for pass@k evaluation.
+Responsible for task configuration loading, lookup, and benchmark coordination.
+Task objects now contain all execution configuration and benchmark settings.
 end note
 
 note top of Task
-**Enhanced Task Definition**
-Tasks now contain complete execution configuration including flexible environment specification and allowed_executors.
+**Enhanced Task Definition with Benchmark Configuration**
+Tasks now contain complete execution configuration including flexible environment specification,
+allowed_executors, and benchmark-specific settings (episode_attempts).
 Environment can be: string template reference, dict with granular config, or hybrid approach.
 No longer requires separate calls to get execution configuration.
-Contains all parameters needed by other SABER components.
+Contains all parameters needed by other SABER components including benchmark orchestration.
 Subtasks are retained for informational purposes only.
 end note
 
@@ -158,12 +167,13 @@ Handles episode state transitions and completion detection.
 Single source of truth for episode operations.
 end note
 
-note top of TaskConfigLoader
-**YAML Configuration Loader**
-Enhanced to load complete task configuration including execution parameters.
-Parses allowed_executors from YAML and includes in Task objects.
+note top of BenchmarkConfigLoader
+**YAML Configuration Loader with Benchmark Support**
+Enhanced to load complete task configuration including execution parameters and benchmark settings.
+Parses allowed_executors and episode_attempts from YAML and includes in Task objects.
+Loads domain-level benchmark configuration for orchestration settings.
 No dependency validation or progression logic.
-Single responsibility: YAML parsing and complete Task object creation.
+Single responsibility: YAML parsing and complete Task object creation with benchmark data.
 end note
 
 note bottom of Episode
