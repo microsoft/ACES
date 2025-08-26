@@ -265,31 +265,11 @@ class SessionManager:
             session_id=session_id, task_id=task_id, initial_context=task.initial_context.copy()
         )
 
-        # Get the cleanup token for orchestrator coordination
-        cleanup_token = self.episode_manager.get_cleanup_token(session_id)
-
-        # Configure execution manager with task object and cleanup token
-        # Construct server URL for orchestrator connectivity
-        import os
-
-        # Use simple naming convention: saber-{domain}-network
-        server_network = f"saber-{self.domain_name.replace('_', '-')}-network"
-
-        # If we're running in a container, use the container name; otherwise use host:port
-        if os.path.exists("/.dockerenv"):
-            # We're in a container - use the server container name
-            server_container_name = f"saber-{self.domain_name.replace('_', '-')}-server"
-            saber_host_url = f"http://{server_container_name}:{self.port}"
-        else:
-            # Running natively - use the host
-            saber_host_url = f"http://{self.host}:{self.port}"
-
-        self.execution_manager.configure_for_task(session_id, task, cleanup_token, saber_host_url, server_network)
+        # Configure execution manager with task object only
+        self.execution_manager.configure_for_task(session_id, task)
 
         session.current_episode_id = episode.episode_id
         session.current_task_id = task_id
-
-        logger.debug(f"Episode cleanup token for session {session_id}: {cleanup_token}")
 
         # Log episode start with evaluation manager (ignore failures)
         try:
@@ -481,12 +461,8 @@ class SessionManager:
             task = self.task_manager.get_task(episode.task_id)
             episode_config = task.episode_config
 
-            # Check max steps - require explicit configuration
-            if not episode_config or "max_steps" not in episode_config:
-                logger.error(f"Task {episode.task_id} missing required episode_config.max_steps")
-                return True, f"configuration_error: Task {episode.task_id} missing episode_config.max_steps"
-
-            max_steps = episode_config["max_steps"]
+            # Check max steps
+            max_steps = episode_config.get("max_steps", 20)  # Default to 20
             current_steps = len(episode.steps)
 
             if current_steps >= max_steps:
@@ -499,8 +475,9 @@ class SessionManager:
             # etc.
 
         except Exception as e:
-            logger.error(f"Failed to check episode termination conditions: {e}")
-            return True, f"configuration_error: {e}"
+            logger.warning(f"Failed to check episode termination conditions: {e}")
+            # Don't terminate on configuration errors
+            pass
 
         return False, ""
 
@@ -512,34 +489,25 @@ class SessionManager:
             session_id: ID of the client session
 
         Returns:
-            Episode configuration dictionary from task configuration
-
-        Raises:
-            ValueError: If no episode or task configuration found
+            Episode configuration dictionary with defaults
         """
         episode = self.episode_manager.get_current_episode(session_id)
         if not episode:
-            raise ValueError(f"No active episode found for session {session_id}")
+            return {"max_steps": 20}  # Default config
 
         try:
             task = self.task_manager.get_task(episode.task_id)
-            if not task.episode_config:
-                raise ValueError(f"Task {episode.task_id} has no episode_config defined")
-
             config = task.episode_config.copy()
 
-            # Validate required configuration values
-            if "max_steps" not in config:
-                raise ValueError(f"Task {episode.task_id} episode_config missing required 'max_steps' value")
-
-            # Apply defaults only for optional values
+            # Apply defaults for missing values
+            config.setdefault("max_steps", 20)
             config.setdefault("step_timeout_seconds", 300)
             config.setdefault("episode_timeout_minutes", 30)
 
             return config
         except Exception as e:
-            logger.error(f"Failed to get episode configuration for session {session_id}: {e}")
-            raise
+            logger.warning(f"Failed to get episode configuration: {e}")
+            return {"max_steps": 20}
 
     def _get_session(self, session_id: str) -> ClientSession:
         """

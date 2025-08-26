@@ -101,18 +101,8 @@ Docker container lifecycle management:
 - **Container Health Monitoring**: Tracks container status and health
 - **Automatic Cleanup**: Handles container destruction when sessions end
 - **Configuration Management**: Manages Docker container security settings
-- **Orchestrator Integration**: Coordinates with external Episode Container Orchestrator for robust cleanup
 - **Dynamic Image Building**: Builds required Docker images on server initialization if missing
-- **Cleanup Token Coordination**: Passes cleanup tokens to orchestrator containers for self-termination
-
-### Episode Container Orchestrator (`../episodes/episode_orchestrator.py`)
-External orchestrator for robust container cleanup across all failure modes:
-- **Episode Monitoring**: Polls SABER server to detect episode termination via cleanup token validation
-- **Multi-Strategy Cleanup**: Implements fallback cleanup strategies (graceful → force → nuclear)
-- **Failure Recovery**: Handles cleanup even when main SABER process fails or becomes unresponsive
-- **Docker Compose Integration**: Manages complete multi-container environments using docker-compose
-- **Signal Handling**: Responds to SIGTERM/SIGINT for graceful shutdown
-- **Container Labeling**: Uses SABER session labels to identify and cleanup orphaned containers
+- **Multi-Strategy Cleanup**: Implements fallback cleanup strategies for robust container termination
 
 ### DockerSandboxEnvironment (`sandbox/docker_sandbox_environment.py`)
 Individual Docker container management:
@@ -170,28 +160,17 @@ The system provides robust container cleanup across all episode termination scen
 3. **Error-Triggered Termination**:
    - Command execution failures (any exception during action execution)
    - Episode tracking errors (failures in episode management)
-   - Orchestrator polling failures (max failures threshold reached)
+   - Container health check failures
 
-4. **Orchestrator-Detected Failures**:
-   - Episode becomes inactive (detected via polling)
-   - Container orchestrator receives termination signals (SIGTERM/SIGINT)
-
-#### Cleanup Token System
-- **Token Generation**: Each episode gets a unique cleanup token for orchestrator coordination
-- **Token Distribution**: Cleanup tokens are passed to orchestrator containers via environment variables
-- **Token Validation**: Orchestrator polls `/session/{id}/episode-status/{token}` to verify episode status
-- **Token Removal**: When episode ends (any reason), token is immediately deleted, triggering cleanup
-
-#### Multi-Strategy Container Cleanup
-The Episode Container Orchestrator implements multiple fallback cleanup strategies:
+#### Container Cleanup Strategies
+SABER implements multiple fallback cleanup strategies:
 
 1. **Graceful Stop**: `docker compose stop` with configurable timeout (default: 30s)
 2. **Force Cleanup**: `docker compose down --remove-orphans --volumes --timeout 10`
-3. **Nuclear Option**: Find containers by SABER session labels and force remove individually
+3. **Orphaned Resource Cleanup**: Find containers by SABER session labels and force remove individually
 
 This design ensures containers are properly cleaned up even when:
-- Main SABER process crashes or becomes unresponsive
-- Network connectivity issues occur
+- Session cleanup fails due to errors
 - Docker daemon experiences problems
 - Manual intervention is required
 

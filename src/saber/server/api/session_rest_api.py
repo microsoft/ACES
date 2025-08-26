@@ -104,25 +104,6 @@ class SessionRestAPI:
             result: StreamingResponse = await self.get_episode_events_stream(session_id, episode_id, request)
             return result
 
-        @self.app.get("/internal/episode-status/{session_id}")
-        async def check_episode_status_endpoint(session_id: str, token: str) -> Dict[str, bool]:
-            """
-            Internal endpoint for container polling - check if episode is still active.
-
-            Containers use this endpoint to determine if they should continue running.
-            If this returns {"active": false}, containers should self-terminate.
-
-            Args:
-                session_id: Session identifier
-                token: Cleanup token for authentication
-
-            Returns:
-                {"active": true/false} indicating if episode is active
-            """
-            is_active = self.session_manager.episode_manager.is_episode_active(session_id, token)
-            result: Dict[str, bool] = {"active": is_active}
-            return result
-
         @self.app.get("/health")
         async def health_check() -> Dict[str, str]:
             """Health check endpoint."""

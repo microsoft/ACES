@@ -100,12 +100,12 @@ class TestExecutionManager:
             mock_sandbox_instance = MagicMock()
             mock_sandbox_class.return_value = mock_sandbox_instance
 
-            registry.configure_for_task("session123", mock_task, None)
+            registry.configure_for_task("session123", mock_task)
 
             # Should have created sandbox manager and called environment creation
             mock_sandbox_class.assert_called_with({})
             mock_sandbox_instance.create_session_environment.assert_called_once_with(
-                "session123", mock_env_spec, None, "http://localhost:8000", None
+                "session123", mock_env_spec
             )
 
         # Should have updated configuration (only cli config should be present since python_config is None)
@@ -388,7 +388,7 @@ class TestExecutionManager:
         mock_task.python_config = None
 
         # Configure ExecutionManager with the task
-        registry.configure_for_task("timeout_test_session", mock_task, None)
+        registry.configure_for_task("timeout_test_session", mock_task)
 
         # Verify timeout was set in configuration
         assert registry._configuration["timeout"] == 150
@@ -414,7 +414,7 @@ class TestExecutionManager:
         mock_task.python_config = None
 
         # Configure ExecutionManager with the task
-        registry.configure_for_task("default_timeout_session", mock_task, None)
+        registry.configure_for_task("default_timeout_session", mock_task)
 
         # Verify no global timeout is set
         assert "timeout" not in registry._configuration

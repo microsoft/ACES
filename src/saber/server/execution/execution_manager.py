@@ -201,9 +201,6 @@ class ExecutionManager:
         self,
         session_id: str,
         task: Any,
-        cleanup_token: Optional[str] = None,
-        saber_host_url: Optional[str] = None,
-        server_network: Optional[str] = None,
     ) -> None:
         """
         Configure ExecutionManager for a specific task/session.
@@ -211,9 +208,6 @@ class ExecutionManager:
         Args:
             session_id: Session identifier
             task: Task object containing execution parameters and environment specification
-            cleanup_token: Optional cleanup token for container self-termination coordination
-            saber_host_url: Optional SABER server URL for orchestrator connectivity
-            server_network: Optional server network name for orchestrator connectivity
         """
         # Resolve environment if specified in task
         environment_spec = None
@@ -231,14 +225,6 @@ class ExecutionManager:
 
         # Start with task's execution config
         execution_config = task.execution_config.copy()
-
-        # Add cleanup token to environment variables if provided
-        if cleanup_token:
-            if "environment" not in execution_config:
-                execution_config["environment"] = {}
-            execution_config["environment"]["SABER_CLEANUP_TOKEN"] = cleanup_token
-            execution_config["environment"]["SABER_SESSION_ID"] = session_id
-            logger.debug(f"Added cleanup coordination environment variables for session {session_id}")
 
         # Add executor-specific configurations generically
         # Look for any config key that ends with "_config" and maps to an executor type
@@ -258,33 +244,9 @@ class ExecutionManager:
         if environment_spec:
             self._sandbox_manager = SandboxManager({})
 
-            # Use provided SABER host URL or sensible defaults
-            if not saber_host_url:
-                import os
-
-                # Option 1: Use explicit environment variable if set
-                if os.environ.get("SABER_ORCHESTRATOR_HOST_URL"):
-                    saber_host_url = os.environ.get("SABER_ORCHESTRATOR_HOST_URL")
-                # Option 2: Default based on environment
-                elif os.path.exists("/.dockerenv"):
-                    # For containers, use Docker bridge gateway as fallback
-                    port = os.environ.get("SABER_PORT", "8000")
-                    saber_host_url = f"http://172.17.0.1:{port}"
-                else:
-                    # Default for non-containerized environments
-                    saber_host_url = "http://localhost:8000"
-
-            logger.info(f"Using SABER host URL for orchestrator: {saber_host_url}")
-            if server_network:
-                logger.info(f"Using server network for orchestrator: {server_network}")
-
-            # Create the session environment immediately with orchestrator integration
-            self._sandbox_manager.create_session_environment(
-                session_id, environment_spec, cleanup_token, saber_host_url, server_network
-            )
+            # Create the session environment immediately
+            self._sandbox_manager.create_session_environment(session_id, environment_spec)
             logger.info(f"Created sandbox environment for session {session_id}")
-            if cleanup_token:
-                logger.info(f"Episode orchestrator will auto-start for session {session_id}")
         else:
             self._sandbox_manager = SandboxManager({})
 

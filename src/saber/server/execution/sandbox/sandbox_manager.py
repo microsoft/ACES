@@ -11,8 +11,6 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import docker
-
 from ....logging_config import get_execution_logger
 from ..exceptions import SandboxExecutionError
 from .docker_sandbox_environment import DockerSandboxEnvironment
@@ -49,9 +47,6 @@ class SandboxManager:
         logger.info("SandboxManager initializing...")
 
         try:
-            # Ensure core SABER infrastructure images are available
-            self._ensure_orchestrator_image_exists()
-
             # Mark as ready once initialization is complete
             self._is_ready = True
             logger.info("SandboxManager initialized and ready for session creation")
@@ -71,29 +66,11 @@ class SandboxManager:
         Raises:
             SandboxExecutionError: If image building fails
         """
-        # For MVP: Orchestrator image is built during initialization
+        # For MVP: Skip image building during initialization
         # TODO: In the future, dynamically discover and build other images from environments.yaml
-        # For now, we assume other images (saber-execution, saber-webapp, etc.) exist or
+        # For now, we assume images (saber-execution, saber-webapp, etc.) exist or
         # will be handled by the environment setup process
         pass
-
-    def _ensure_orchestrator_image_exists(self) -> None:
-        """
-        Ensure the SABER orchestrator image exists, building it if necessary.
-
-        Raises:
-            SandboxExecutionError: If orchestrator image building fails
-        """
-        docker_client = docker.from_env()  # type: ignore
-        orchestrator_image = "saber-orchestrator:latest"
-
-        try:
-            # Check if orchestrator image exists
-            docker_client.images.get(orchestrator_image)
-            logger.info(f"Docker image {orchestrator_image} already exists")
-        except docker.errors.ImageNotFound:  # type: ignore
-            logger.info(f"Building Docker image {orchestrator_image}...")
-            self._build_docker_image(orchestrator_image, "docker/Dockerfile.orchestrator")
 
     def _build_docker_image(self, image_name: str, dockerfile_path: str) -> None:
         """
@@ -168,9 +145,6 @@ class SandboxManager:
         self,
         session_id: str,
         environment_spec: EnvironmentSpec,
-        cleanup_token: Optional[str] = None,
-        saber_host_url: Optional[str] = None,
-        server_network: Optional[str] = None,
     ) -> DockerSandboxEnvironment:
         """
         Create a new Docker sandbox environment for a session.
@@ -178,9 +152,6 @@ class SandboxManager:
         Args:
             session_id: Unique identifier for the session
             environment_spec: Environment specification for container orchestration
-            cleanup_token: Optional cleanup token for orchestrator coordination
-            saber_host_url: Optional SABER server URL for orchestrator polling
-            server_network: Optional server network name for orchestrator connectivity
 
         Returns:
             DockerSandboxEnvironment instance
@@ -199,20 +170,16 @@ class SandboxManager:
             # Ensure required Docker images exist (build if necessary)
             self._ensure_docker_images_exist(environment_spec)
 
-            # Create new environment with specification and orchestrator info
-            environment = DockerSandboxEnvironment(
-                session_id, environment_spec, cleanup_token, saber_host_url, server_network
-            )
+            # Create new environment with specification
+            environment = DockerSandboxEnvironment(session_id, environment_spec)
 
-            # Start the environment (orchestrator will auto-start)
+            # Start the environment
             environment.start()
 
             # Track the session
             self.active_sessions[session_id] = environment
 
             logger.info(f"Created Docker sandbox environment for session {session_id}")
-            if cleanup_token:
-                logger.info(f"Orchestrator auto-started for session {session_id}")
             return environment
 
         except Exception as e:

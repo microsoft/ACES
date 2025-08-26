@@ -104,7 +104,7 @@ class TestDockerSandboxEnvironment:
 
         mock_client.containers.list.return_value = [mock_container1, mock_container2]
 
-        env = DockerSandboxEnvironment("test_session", sample_environment_spec, cleanup_token="test_cleanup_token")
+        env = DockerSandboxEnvironment("test_session", sample_environment_spec)
 
         # Mock service health checks
         with patch.object(env, "is_service_healthy", return_value=True):
