@@ -14,6 +14,10 @@ tasks:
     # Simple template reference
     environment: "dvwa_pentest"
 
+    # Execution configuration with custom timeout
+    execution_config:
+      timeout: 90  # Custom timeout for this task (in seconds)
+
     subtasks:
       - subtask_id: "file_analysis"
         title: "File Analysis"
@@ -35,6 +39,10 @@ tasks:
           container: "dvwa_database"
         - name: "ftp"
           container: "vulnerable_ftp"
+
+    # Execution configuration with longer timeout for Python tasks
+    execution_config:
+      timeout: 180  # Longer timeout for data processing tasks
 
     subtasks:
       - subtask_id: "python_analysis"
