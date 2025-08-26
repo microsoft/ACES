@@ -76,6 +76,10 @@ def sample_task_yaml():
     """Sample YAML content for task configuration testing."""
     return """
 domain: "malware_classification"
+
+benchmark_config:
+  episode_attempts: 3
+
 tasks:
   - task_id: "malware_family_analysis"
     title: "Malware Family Classification and Analysis"
@@ -104,6 +108,10 @@ def sample_task_with_environment_yaml():
     """Sample YAML content for task configuration with environment specification."""
     return """
 domain: "malware_classification"
+
+benchmark_config:
+  episode_attempts: 5
+
 tasks:
   - task_id: "malware_analysis_with_env"
     title: "Malware Analysis with Environment"
@@ -199,3 +207,84 @@ def docker_cleanup():
                 logger.debug("Cleaned up all sessions from execution manager")
         except Exception as e:
             logger.warning(f"Failed to cleanup execution manager: {e}")
+
+
+# Additional fixtures for benchmark configuration testing
+
+
+@pytest.fixture
+def sample_task_with_task_level_benchmark_config_yaml():
+    """Sample YAML content with task-level benchmark configuration override."""
+    return """
+domain: "webapp_pentest"
+
+benchmark_config:
+  episode_attempts: 3
+
+tasks:
+  - task_id: "xss_detection"
+    title: "XSS Detection Task"
+    description: "Detect cross-site scripting vulnerabilities"
+    benchmark_config:
+      episode_attempts: 10
+    subtasks:
+      - subtask_id: "input_analysis"
+        title: "Input Analysis"
+        description: "Analyze input fields for XSS vulnerabilities"
+        objective: "Identify potential XSS injection points"
+  - task_id: "sql_injection"
+    title: "SQL Injection Task"
+    description: "Detect SQL injection vulnerabilities"
+    subtasks:
+      - subtask_id: "parameter_analysis"
+        title: "Parameter Analysis"
+        description: "Analyze parameters for SQL injection"
+        objective: "Identify SQL injection vulnerabilities"
+"""
+
+
+@pytest.fixture
+def sample_yaml_missing_benchmark_config():
+    """Sample YAML content missing benchmark_config section (should fail)."""
+    return """
+domain: "malware_classification"
+tasks:
+  - task_id: "test_task"
+    title: "Test Task"
+    description: "A test task without benchmark config"
+    subtasks: []
+"""
+
+
+@pytest.fixture
+def sample_yaml_missing_episode_attempts():
+    """Sample YAML content missing episode_attempts (should fail)."""
+    return """
+domain: "malware_classification"
+
+benchmark_config:
+  other_setting: true
+
+tasks:
+  - task_id: "test_task"
+    title: "Test Task"
+    description: "A test task without episode_attempts"
+    subtasks: []
+"""
+
+
+@pytest.fixture
+def sample_yaml_invalid_episode_attempts():
+    """Sample YAML content with invalid episode_attempts (should fail)."""
+    return """
+domain: "malware_classification"
+
+benchmark_config:
+  episode_attempts: 0
+
+tasks:
+  - task_id: "test_task"
+    title: "Test Task"
+    description: "A test task with invalid episode_attempts"
+    subtasks: []
+"""

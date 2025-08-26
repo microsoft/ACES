@@ -1,5 +1,5 @@
 """
-Unit tests for SessionManage        with patch('saber.server.session_manager.TaskManager', return_value=mock_task_manager), \
+Unit tests for SessionManage        with patch('saber.server.session_manager.BenchmarkManager', return_value=mock_task_manager), \
              patch('saber.server.session_manager.ExecutionManager', return_value=mock_execution_manager), \
              patch('saber.server.session_manager.PolicyManager', return_value=mock_policy_manager), \
              patch('saber.server.session_manager.EvaluationManager', return_value=mock_evaluation_manager):
@@ -48,7 +48,7 @@ class TestSessionManagerIntegration:
         mock_episode_manager.get_episode = MagicMock()
 
         with (
-            patch("saber.server.session_manager.TaskManager", return_value=mock_task_manager),
+            patch("saber.server.session_manager.BenchmarkManager", return_value=mock_task_manager),
             patch("saber.server.session_manager.ExecutionManager", return_value=mock_execution_manager),
             patch("saber.server.session_manager.PolicyManager", return_value=mock_policy_manager),
             patch("saber.server.session_manager.EvaluationManager", return_value=mock_evaluation_manager),
@@ -90,7 +90,7 @@ class TestSessionManagerIntegration:
         mock_task = MagicMock()
         mock_task.initial_context = {"test": "data"}
         mock_task.episode_config = {"max_steps": 20}  # Add episode_config to prevent early termination
-        manager.task_manager.get_task.return_value = mock_task
+        manager.benchmark_manager.get_task.return_value = mock_task
         manager.episode_manager.start_episode.return_value = mock_episode
         # Also mock get_current_episode for execute_action calls
         manager.episode_manager.get_current_episode.return_value = mock_episode
@@ -163,7 +163,7 @@ class TestSessionManagerIntegration:
     async def test_component_initialization_order(self):
         """Test that components are initialized in the correct order."""
         with (
-            patch("saber.server.session_manager.TaskManager") as mock_tm,
+            patch("saber.server.session_manager.BenchmarkManager") as mock_tm,
             patch("saber.server.session_manager.ExecutionManager") as mock_em,
             patch("saber.server.session_manager.PolicyManager") as mock_pm,
             patch("saber.server.session_manager.EvaluationManager") as mock_eval,
@@ -202,7 +202,7 @@ class TestSessionManagerErrorHandling:
         mock_episode_manager.get_episode = MagicMock()
 
         with (
-            patch("saber.server.session_manager.TaskManager", return_value=mock_task_manager),
+            patch("saber.server.session_manager.BenchmarkManager", return_value=mock_task_manager),
             patch("saber.server.session_manager.ExecutionManager", return_value=mock_execution_manager),
             patch("saber.server.session_manager.PolicyManager", return_value=mock_policy_manager),
             patch("saber.server.session_manager.EvaluationManager", return_value=mock_evaluation_manager),
@@ -223,7 +223,7 @@ class TestSessionManagerErrorHandling:
         session.current_episode_id = "episode_123"
 
         # Mock episode ending to raise exception
-        manager.task_manager.end_episode.side_effect = Exception("Episode end failed")
+        manager.benchmark_manager.end_episode.side_effect = Exception("Episode end failed")
 
         # Should not raise exception, but log warning
         await manager.terminate_session(session.session_id)
@@ -252,7 +252,7 @@ class TestSessionManagerErrorHandling:
 
     @pytest.mark.asyncio
     async def test_step_task_manager_failure(self, error_test_manager):
-        """Test step execution when TaskManager fails."""
+        """Test step execution when BenchmarkManager fails."""
         manager = error_test_manager
 
         # Create session with episode
@@ -303,7 +303,7 @@ class TestSessionManagerErrorHandling:
         mock_step = MagicMock()
         mock_step.step_number = 1
         mock_step.done = False
-        manager.task_manager.step.return_value = mock_step
+        manager.benchmark_manager.step.return_value = mock_step
 
         # This should still work despite evaluation manager failures
         action = Action(tool_name="cli", parameters={"arguments": "command"})

@@ -7,7 +7,7 @@ participant "AgentUnderTest" as Agent
 participant "SessionManager" as SM
 participant "SessionRestAPI" as REST
 participant "SessionMCPAPI" as MCP
-participant "TaskManager" as TM
+participant "BenchmarkManager" as TM
 participant "EpisodeManager" as EM
 participant "Task" as T
 participant "PolicyManager" as PM

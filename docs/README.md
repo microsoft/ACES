@@ -13,7 +13,7 @@ The SABER system architecture is documented in several PlantUML diagrams organiz
 
 ### Server Architecture
 - **[Server Detailed Architecture](server/session/server_detailed_architecture.puml)**: Main server architecture with simplified framework views
-- **[Task Framework Architecture](server/tasks/task_framework_architecture.puml)**: Detailed Task Management system design
+- **[Benchmark Framework Architecture](server/benchmarks/benchmark_framework_architecture.puml)**: Detailed Benchmark Management system design
 - **[Command Execution Architecture](server/execution/command_execution_architecture.puml)**: Detailed Command Execution framework design
 - **[Episode Workflow Sequence](server/episodes/episode_workflow_sequence.puml)**: Episode lifecycle and RL workflow
 - **[Enhanced Sandbox Sequence](server/execution/enhanced_sandbox_sequence.puml)**: Enhanced sandbox environment setup sequence
@@ -60,23 +60,27 @@ Model Context Protocol handler component managed by SessionManager:
 - **Session Context**: Maintains session mapping between MCP clients and SessionManager sessions
 - **Focused Scope**: ONLY handles tool discovery and execution via MCP protocol
 
-#### TaskManager
-Simplified task definition management:
+#### BenchmarkManager
+Enhanced benchmark orchestration and task management:
 - **Task Configuration**: Loads and manages task definitions from YAML configuration files
+- **Benchmark Orchestration**: Manages multiple episode attempts for pass@k evaluation
 - **Task Lookup**: Provides task object retrieval by task ID with complete configuration
+- **Episode Coordination**: Orchestrates multiple episode runs across all benchmark tasks
 - **Configuration Containment**: Task objects now contain all execution parameters (environment, allowed_executors)
-- **Focused Responsibility**: Only handles task definition parsing and lookup - no episode management
+- **Benchmark Configuration**: Manages domain-level and task-specific benchmark settings
 
-##### TaskConfigLoader
+##### BenchmarkConfigLoader
 Enhanced YAML configuration management:
 - **Complete Task Loading**: Parses task definitions including execution configuration (allowed_executors, environment)
+- **Benchmark Configuration**: Loads domain-level and task-specific benchmark settings (episode_attempts, etc.)
 - **Task Validation**: Ensures proper YAML structure, required fields, and execution parameters
 - **Object Creation**: Creates Task objects with complete configuration needed by other components
 - **Single Source**: Only component that reads task configuration files
 
-##### Task Framework
-Enhanced Task objects with complete execution configuration:
+##### Benchmark Framework
+Enhanced Task objects with complete execution and benchmark configuration:
 - **Complete Configuration**: Tasks contain environment, allowed_executors, and all execution parameters
+- **Benchmark Settings**: Tasks include benchmark-specific configuration (episode_attempts, success_criteria)
 - **Self-Contained**: No need for separate configuration lookups - all parameters in Task object
 - **Subtask Information**: Contains subtasks for informational purposes only
 - **Component Integration**: Provides all configuration needed by ExecutionManager and other components
@@ -142,11 +146,11 @@ Context-aware prompt generation:
 ### Connection Flow
 
 1. Client connects to SessionManager via HTTP for session management
-2. SessionManager creates ClientSession and delegates TaskSession creation to TaskManager
+2. SessionManager creates ClientSession and delegates Benchmark creation to BenchmarkManager
 3. Client establishes MCP connection to MCPSessionManager for tool access
 4. Establishes SSE connection for real-time communication
-5. SessionManager coordinates with TaskManager to assign initial subtask with context
+5. SessionManager coordinates with BenchmarkManager to assign initial subtask with context
 6. Client discovers available tools via MCP protocol and executes commands through MCP tool calls
 7. MCPSessionManager delegates tool execution to SessionManager's ExecutionManager
-8. Results logged via EvaluationManager and next subtask assigned via TaskManager
+8. Results logged via EvaluationManager and next subtask assigned via BenchmarkManager
 9. Process continues until task completion with dual protocol communication

@@ -25,6 +25,7 @@ class Task:
         allowed_executors: Optional[List[str]] = None,
         execution_config: Optional[Dict[str, Any]] = None,
         episode_config: Optional[Dict[str, Any]] = None,
+        benchmark_config: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize a task.
@@ -43,6 +44,7 @@ class Task:
             allowed_executors: List of allowed executor types for this task
             execution_config: Direct execution configuration (timeouts, limits, etc.)
             episode_config: Episode-specific configuration (max_steps, timeouts, etc.)
+            benchmark_config: Benchmark-specific configuration (episode_attempts, etc.)
         """
         self.task_id = task_id
         self.domain = domain
@@ -54,6 +56,7 @@ class Task:
         self.allowed_executors = allowed_executors
         self.execution_config = execution_config or {}
         self.episode_config = episode_config or {}
+        self.benchmark_config = benchmark_config or {}
 
         # Create lookup map for efficient subtask access
         self._subtask_map = {st.subtask_id: st for st in self.subtasks}
@@ -103,3 +106,20 @@ class Task:
         # Placeholder implementation - tasks are not self-completing
         # Completion is determined by evaluation logic external to the task
         return False
+
+    def get_episode_attempts(self) -> int:
+        """
+        Get the number of episode attempts configured for this task.
+
+        Returns:
+            Number of episode attempts (guaranteed to be configured by BenchmarkConfigLoader)
+
+        Raises:
+            KeyError: If episode_attempts is not configured (should not happen with proper validation)
+        """
+        if "episode_attempts" not in self.benchmark_config:
+            raise KeyError(
+                f"Task '{self.task_id}' does not have episode_attempts configured. "
+                "This indicates a validation error in BenchmarkConfigLoader."
+            )
+        return int(self.benchmark_config["episode_attempts"])

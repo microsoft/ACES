@@ -6,8 +6,8 @@ Tests meaningful task functionality - pruned basic data structure tests.
 
 import pytest
 
-from saber.server.tasks.subtask import SubTask
-from saber.server.tasks.task import Task
+from saber.server.benchmarks.subtask import SubTask
+from saber.server.benchmarks.task import Task
 
 
 class TestTask:

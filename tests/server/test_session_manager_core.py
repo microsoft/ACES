@@ -18,7 +18,7 @@ class TestSessionManagerCore:
 
     @pytest.fixture
     def mock_task_manager(self):
-        """Mock TaskManager for testing."""
+        """Mock BenchmarkManager for testing."""
         mock = MagicMock()
         mock.domain = "test_domain"
         return mock
@@ -70,7 +70,7 @@ class TestSessionManagerCore:
     ):
         """Create SessionManager with mocked dependencies."""
         with (
-            patch("saber.server.session_manager.TaskManager", return_value=mock_task_manager),
+            patch("saber.server.session_manager.BenchmarkManager", return_value=mock_task_manager),
             patch("saber.server.session_manager.ExecutionManager", return_value=mock_execution_manager),
             patch("saber.server.session_manager.PolicyManager", return_value=mock_policy_manager),
             patch("saber.server.session_manager.EvaluationManager", return_value=mock_evaluation_manager),

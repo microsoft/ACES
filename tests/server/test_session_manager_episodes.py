@@ -77,7 +77,7 @@ class TestSessionManagerEpisodes:
         mock_episode_manager.configure_for_task = MagicMock()
 
         with (
-            patch("saber.server.session_manager.TaskManager", return_value=mock_task_manager),
+            patch("saber.server.session_manager.BenchmarkManager", return_value=mock_task_manager),
             patch("saber.server.session_manager.ExecutionManager", return_value=mock_execution_manager),
             patch("saber.server.session_manager.PolicyManager", return_value=mock_policy_manager),
             patch("saber.server.session_manager.EvaluationManager", return_value=mock_evaluation_manager),
@@ -100,7 +100,7 @@ class TestSessionManagerEpisodes:
         # Mock task with proper initial_context
         mock_task = MagicMock()
         mock_task.initial_context = {"initial_data": "test"}
-        manager.task_manager.get_task.return_value = mock_task
+        manager.benchmark_manager.get_task.return_value = mock_task
 
         # Mock episode manager to return episode
         manager.episode_manager.start_episode.return_value = mock_episode
@@ -112,7 +112,7 @@ class TestSessionManagerEpisodes:
         assert session.current_episode_id == mock_episode.episode_id
 
         # Verify task manager was called to get task
-        manager.task_manager.get_task.assert_called_once_with(task_id)
+        manager.benchmark_manager.get_task.assert_called_once_with(task_id)
 
         # Verify episode manager was called
         manager.episode_manager.start_episode.assert_called_once_with(
@@ -289,7 +289,7 @@ class TestSessionManagerEpisodes:
 
         # Mock episode manager and task manager responses
         manager.episode_manager.get_current_episode.return_value = mock_episode
-        manager.task_manager.get_task.return_value = mock_task
+        manager.benchmark_manager.get_task.return_value = mock_task
 
         # Get current task
         task_info = await manager.get_current_task(session_id)
@@ -302,7 +302,7 @@ class TestSessionManagerEpisodes:
 
         # Verify episode manager and task manager were called
         manager.episode_manager.get_current_episode.assert_called_once_with(session_id)
-        manager.task_manager.get_task.assert_called_once_with("task_456")
+        manager.benchmark_manager.get_task.assert_called_once_with("task_456")
 
     @pytest.mark.asyncio
     async def test_get_current_task_no_episode(self, session_manager_with_session):

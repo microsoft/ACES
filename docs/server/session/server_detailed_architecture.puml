@@ -15,7 +15,7 @@ package "Domain Server Core" {
     class SessionManager {
         +domain_name: str
         +active_sessions: Dict[str, ClientSession]
-        +task_manager: TaskManager
+        +benchmark_manager: BenchmarkManager
         +episode_manager: EpisodeManager
         +execution_manager: ExecutionManager
         +policy_manager: PolicyManager
@@ -86,16 +86,20 @@ package "Domain Server Core" {
     }
 }
 
-package "Task Management" {
+package "Benchmark Management" {
 
-    class TaskManager {
+    class BenchmarkManager {
         +domain: str
         +tasks: Dict[str, Task]
-        +config_loader: TaskConfigLoader
+        +config_loader: BenchmarkConfigLoader
+        +benchmark_config: Dict[str, Any]
         --
         +get_task(): Task
         +get_subtask(): SubTask
         +list_tasks(): List[Dict]
+        +start_benchmark(): BenchmarkSession
+        +get_benchmark_config(): Dict[str, Any]
+        +list_benchmark_tasks(): List[Dict]
         +load_tasks_from_yaml(): void
     }
 
@@ -108,8 +112,10 @@ package "Task Management" {
         +allowed_executors: List[str]
         +initial_context: Dict[str, Any]
         +subtasks: List[SubTask]
+        +benchmark_config: Dict[str, Any]
         --
         +get_all_subtask_ids(): Set[str]
+        +get_episode_attempts(): int
     }
 }
 
@@ -251,7 +257,7 @@ package "Policy and Evaluation" {
 
 ' Relationships
 SessionManager *-- ClientSession
-SessionManager *-- TaskManager
+SessionManager *-- BenchmarkManager
 SessionManager *-- EpisodeManager
 SessionManager *-- ExecutionManager
 SessionManager *-- PolicyManager
@@ -262,7 +268,7 @@ SessionManager *-- SessionMCPAPI
 SessionRestAPI ..> SessionManager : delegates to
 SessionMCPAPI ..> SessionManager : delegates to
 
-TaskManager *-- Task
+BenchmarkManager *-- Task
 Task ..> EpisodeState
 EpisodeManager *-- Episode
 
@@ -308,13 +314,14 @@ note right of SessionRestAPI
 - Delegates all business logic to SessionManager
 end note
 
-note top of TaskManager
-**Task Definition Manager**
-Simplified to only manage task definitions and configuration.
-Parses YAML configuration and provides task object lookup.
-No longer manages episodes - focus on task data only.
-Task objects contain execution_config and flexible environment specification.
+note top of BenchmarkManager
+**Benchmark Orchestration & Task Definition Manager**
+Enhanced to focus on benchmark orchestration and task definition management.
+Manages multiple episode attempts for pass@k evaluation and complex benchmarking scenarios.
+Parses YAML configuration and provides task object lookup with benchmark settings.
+Task objects contain execution_config, benchmark_config, and flexible environment specification.
 Environment can be string template reference, granular dict config, or hybrid approach.
+Coordinates with SessionManager for multi-episode benchmark execution.
 end note
 
 note top of EpisodeManager

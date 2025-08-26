@@ -26,7 +26,7 @@ package "SABER Server Side" {
     class SessionManager {
         +domain_name: str
         +active_sessions: Dict[str, ClientSession]
-        +task_manager: TaskManager
+        +benchmark_manager: BenchmarkManager
         +episode_manager: EpisodeManager
         +execution_manager: ExecutionManager
         +policy_manager: PolicyManager
@@ -44,14 +44,18 @@ package "SABER Server Side" {
         +get_policy(): PolicyDocument
     }
 
-    class TaskManager {
+    class BenchmarkManager {
         +domain: str
         +tasks: Dict[str, Task]
-        +config_loader: TaskConfigLoader
+        +config_loader: BenchmarkConfigLoader
+        +benchmark_config: Dict[str, Any]
         --
         +get_task(): Task
         +get_subtask(): SubTask
         +list_tasks(): List[Dict]
+        +start_benchmark(): BenchmarkSession
+        +get_benchmark_config(): Dict[str, Any]
+        +list_benchmark_tasks(): List[Dict]
         +load_tasks_from_yaml(): void
     }
 
