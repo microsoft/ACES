@@ -104,7 +104,9 @@ class TestExecutionManager:
 
             # Should have created sandbox manager and called environment creation
             mock_sandbox_class.assert_called_with({})
-            mock_sandbox_instance.create_session_environment.assert_called_once_with("session123", mock_env_spec, None)
+            mock_sandbox_instance.create_session_environment.assert_called_once_with(
+                "session123", mock_env_spec, None, "http://localhost:8000", None
+            )
 
         # Should have updated configuration (only cli config should be present since python_config is None)
         assert registry._configuration["timeout"] == 120.0

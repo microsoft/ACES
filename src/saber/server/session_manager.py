@@ -6,7 +6,6 @@ and coordinating all server components. REST API functionality is handled by Ses
 """
 
 import asyncio
-import logging
 import uuid
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
@@ -14,6 +13,14 @@ from typing import Any, Dict, Optional
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
+from ..logging_config import (
+    get_cleanup_logger,
+    get_session_manager_logger,
+    log_operation_failure,
+    log_operation_start,
+    log_operation_success,
+    log_session_end,
+)
 from .api.session_mcp_api import SessionMCPAPI
 from .api.session_rest_api import SessionRestAPI
 from .base import Action, CommandResult
@@ -23,7 +30,8 @@ from .execution.execution_manager import ExecutionManager
 from .policy.policy_manager import PolicyDocument, PolicyManager
 from .tasks.task_manager import TaskManager
 
-logger = logging.getLogger(__name__)
+logger = get_session_manager_logger(__name__)
+cleanup_logger = get_cleanup_logger(__name__)
 
 
 class ClientSession(BaseModel):
@@ -95,7 +103,7 @@ class SessionManager:
         self.shutdown_event = asyncio.Event()
 
         # Initialize server components
-        logger.info(f"Initializing SessionManager for domain '{domain_name}' with config dir: {config_dir}")
+        logger.info(f"Initializing SessionManager for domain '{domain_name}' with config_dir '{config_dir}'")
 
         self.task_manager = TaskManager(domain_name, config_dir)
 
@@ -132,7 +140,7 @@ class SessionManager:
 
     async def shutdown(self) -> None:
         """Shutdown the SessionManager and cleanup resources."""
-        logger.info(f"Shutting down SessionManager for domain '{self.domain_name}'")
+        logger.info(f"Shutting down SessionManager for domain {self.domain_name}")
 
         # Signal shutdown to stop cleanup loop
         self.shutdown_event.set()
@@ -150,12 +158,11 @@ class SessionManager:
 
         # Cleanup all active sessions
         session_ids = list(self.active_sessions.keys())
-        logger.warning(
-            f"🔥 SHUTDOWN CLEANUP: SessionManager.shutdown() cleaning up {len(session_ids)} "
-            f"active sessions: {session_ids}"
+        cleanup_logger.info(
+            f"Shutdown cleanup initiated: active_sessions_count={len(session_ids)}, session_list={session_ids}"
         )
         for session_id in session_ids:
-            logger.warning(f"🔥 SHUTDOWN SESSION: Terminating session {session_id} during shutdown")
+            cleanup_logger.info(f"Terminating session {session_id} during shutdown")
             await self.terminate_session(session_id)
 
         logger.info("SessionManager shutdown complete")
@@ -188,9 +195,9 @@ class SessionManager:
         try:
             await self.evaluation_manager.log_session_start(session_id, client_id)
         except Exception as e:
-            logger.warning(f"Failed to log session start: {e}")
+            logger.warning(f"Failed to log session start: {str(e)}")
 
-        logger.info(f"Created new session {session_id} for client {client_id}")
+        logger.info(f"Session created {session_id} for client {client_id}")
         return session
 
     async def terminate_session(self, session_id: str) -> None:
@@ -200,39 +207,38 @@ class SessionManager:
         Args:
             session_id: ID of the session to terminate
         """
-        logger.warning(f"🔥 SESSION TERMINATION: SessionManager.terminate_session() called for session {session_id}")
+        log_session_end(logger, session_id, "SessionManager termination")
         session = self._get_session(session_id)
         session.is_active = False
 
         # End any active episode
         if session.current_episode_id:
             try:
-                logger.warning(
-                    f"🔥 EPISODE END: Ending active episode {session.current_episode_id} for session {session_id}"
+                logger.info(
+                    f"Ending active episode {session.current_episode_id} during session termination "
+                    f"for session {session_id}"
                 )
                 self.episode_manager.end_episode(session_id, "session_terminated")
                 session.current_episode_id = None
                 session.current_task_id = None
             except Exception as e:
-                logger.warning(f"Error ending episode during session termination: {e}")
+                logger.warning(f"Error ending episode during session termination: {str(e)}")
 
         # Log session end with evaluation manager (ignore failures)
         try:
             await self.evaluation_manager.log_session_end(session_id)
         except Exception as e:
-            logger.warning(f"Failed to log session end: {e}")
+            logger.warning(f"Failed to log session end: {str(e)}")
 
         # Cleanup execution resources (Docker containers)
         try:
-            logger.warning(
-                f"🔥 EXECUTION CLEANUP: About to call execution_manager.cleanup_session() for session {session_id}"
-            )
+            log_operation_start(logger, "Execution resource cleanup", session_id)
             self.execution_manager.cleanup_session(session_id)
         except Exception as e:
             logger.warning(f"Failed to cleanup execution resources: {e}")
 
         # Remove session from active sessions
-        logger.warning(f"🔥 SESSION REMOVAL: Removing session {session_id} from active_sessions dict")
+        logger.info(f"Session {session_id} removed from active sessions")
         del self.active_sessions[session_id]
 
         logger.info(f"Terminated session {session_id}")
@@ -332,24 +338,18 @@ class SessionManager:
             return CommandResult.error_result(error="No active episode in session")
 
         try:
-            # 🔥 ACTION EXECUTION START: Log action execution start
-            logger.warning(
-                f"🔥 ACTION EXECUTION START: session={session_id}, tool={action.tool_name}, "
-                f"episode={session.current_episode_id}"
+            log_operation_start(
+                logger, "Action execution", session_id, tool=action.tool_name, episode=session.current_episode_id
             )
 
             # Execute command through execution manager with session context
             context = {"session_id": session_id}
             command_result = await self.execution_manager.step(action, context)
 
-            # 🔥 ACTION EXECUTION RESULT: Log command result
             if command_result.success:
-                logger.warning(f"🔥 ACTION EXECUTION SUCCESS: session={session_id}, tool={action.tool_name}")
+                log_operation_success(logger, "Action execution", session_id, tool=action.tool_name)
             else:
-                logger.warning(
-                    f"🔥 ACTION EXECUTION FAILED: session={session_id}, tool={action.tool_name}, "
-                    f"error='{command_result.error}'"
-                )
+                log_operation_failure(logger, "Action execution", command_result.error or "Unknown error", session_id)
 
             # Execute step through episode manager
             step_result = self.episode_manager.step(session_id, action, command_result)
@@ -362,7 +362,10 @@ class SessionManager:
             except Exception as e:
                 logger.warning(f"Failed to log action: {e}")
 
-            # End episode if step indicates completion
+            # Check for episode termination conditions (max steps, timeouts, etc.)
+            should_terminate, termination_reason = self.is_episode_over(session_id)
+
+            # End episode if step indicates completion OR if termination conditions are met
             if step_result.done:
                 self.episode_manager.end_episode(session_id, "completed")
                 session.current_episode_id = None
@@ -371,6 +374,15 @@ class SessionManager:
                     await self.evaluation_manager.log_episode_end(session_id, "completed")
                 except Exception as e:
                     logger.warning(f"Failed to log episode end: {e}")
+            elif should_terminate:
+                self.episode_manager.end_episode(session_id, termination_reason)
+                session.current_episode_id = None
+                session.current_task_id = None
+                try:
+                    await self.evaluation_manager.log_episode_end(session_id, termination_reason)
+                except Exception as e:
+                    logger.warning(f"Failed to log episode end: {e}")
+                logger.info(f"Episode ended due to termination condition: {termination_reason}")
 
             return command_result
 
@@ -433,6 +445,17 @@ class SessionManager:
         """
         session = self._get_session(session_id)
         session.update_activity()
+
+        # Get timeout from current task if available
+        timeout_seconds = 60  # Default fallback
+        if session.current_task_id:
+            try:
+                task = self.task_manager.get_task(session.current_task_id)
+                if task and task.execution_config:
+                    timeout_seconds = task.execution_config.get("timeout", 60)
+                    logger.debug(f"Using timeout {timeout_seconds}s from task {session.current_task_id} for policy")
+            except Exception as e:
+                logger.warning(f"Failed to get timeout from current task: {e}, using default 60s")
 
         return self.policy_manager.get_policy()
 
@@ -571,7 +594,7 @@ class SessionManager:
         # Cleanup identified sessions
         for session_id in sessions_to_cleanup:
             try:
-                logger.warning(f"🔥 TIMEOUT CLEANUP: Cleaning up inactive session {session_id} due to timeout")
+                cleanup_logger.info(f"Cleaning up inactive session {session_id} due to timeout")
                 await self.terminate_session(session_id)
                 logger.info(f"Cleaned up inactive session {session_id}")
             except Exception as e:

@@ -136,7 +136,7 @@ class TestToolsIntegration:
         assert result.stdout == "hello world\n"
 
         # Verify Docker step was called with shell format
-        mock_env.execute_command.assert_called_once_with(command=["/bin/sh", "-c", "echo 'hello world'"], timeout=300)
+        mock_env.execute_command.assert_called_once_with(command=["/bin/sh", "-c", "echo 'hello world'"], timeout=60)
 
     def test_security_validator_configuration_integration(self, registry):
         """Test that security validator is properly configured at executor level."""

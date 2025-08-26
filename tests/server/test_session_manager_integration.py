@@ -67,6 +67,8 @@ class TestSessionManagerIntegration:
         mock_episode = MagicMock()
         mock_episode.episode_id = "episode_123"
         mock_episode.task_id = "task_456"
+        mock_episode.is_complete = False
+        mock_episode.steps = []  # Start with empty steps
 
         mock_step1 = MagicMock()
         mock_step1.step_number = 1
@@ -87,6 +89,7 @@ class TestSessionManagerIntegration:
         # Configure mocks - use proper task/episode flow
         mock_task = MagicMock()
         mock_task.initial_context = {"test": "data"}
+        mock_task.episode_config = {"max_steps": 20}  # Add episode_config to prevent early termination
         manager.task_manager.get_task.return_value = mock_task
         manager.episode_manager.start_episode.return_value = mock_episode
         # Also mock get_current_episode for execute_action calls
