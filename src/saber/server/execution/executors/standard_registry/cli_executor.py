@@ -200,18 +200,21 @@ class CLIExecutor(DockerExecutor):
             # Execute command via shell (shell handles all command sequences naturally)
             command_args = self.build_command(parameters, context)
 
-            result = await environment.execute_command(command=command_args, timeout=timeout)
-
-            # Check if this was a timeout result (exit code 124 is standard timeout exit code)
-            if result.exit_code == 124 and "timed out" in result.stderr:
-                logger.warning(
-                    f"🔥 CLI COMMAND TIMEOUT: session={session_id}, timeout={timeout}s, command='{command_str[:50]}...'"
-                )
-            else:
+            try:
+                result = await environment.execute_command(command=command_args, timeout=timeout)
                 logger.warning(
                     f"🔥 CLI COMMAND SUCCESS: session={session_id}, exit_code={result.exit_code}, "
                     f"execution_time={result.execution_time:.2f}s"
                 )
+            except Exception as e:
+                if "timed out" in str(e).lower():
+                    logger.warning(
+                        f"🔥 CLI COMMAND TIMEOUT: session={session_id}, timeout={timeout}s, "
+                        f"command='{command_str[:50]}...' - {str(e)}"
+                    )
+                else:
+                    logger.warning(f"🔥 CLI COMMAND ERROR: session={session_id}, error='{str(e)}'")
+                raise
 
             # Parse output using existing logic
             tool_result = self.parse_output(result.stdout, result.stderr, result.exit_code)

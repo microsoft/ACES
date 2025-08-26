@@ -8,6 +8,7 @@ injected into agents for configurable LLM access.
 
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -81,10 +82,17 @@ class AzureOpenAIClient:
             assert self.endpoint is not None
             assert self.api_version is not None
 
+            # Create OpenAI client with aggressive retry configuration
             self._client = openai.AzureOpenAI(
-                api_key=self.api_key, azure_endpoint=self.endpoint, api_version=self.api_version
+                api_key=self.api_key,
+                azure_endpoint=self.endpoint,
+                api_version=self.api_version,
+                max_retries=10,  # More retries at OpenAI level
+                timeout=60.0,  # Shorter timeout for faster failure detection
             )
-            logger.info(f"🤖 Azure OpenAI client initialized with deployment: {self.deployment}")
+            logger.info(
+                f"🤖 Azure OpenAI client initialized with deployment: {self.deployment} (10 retries, 60s timeout)"
+            )
         except ImportError:
             raise ImportError("openai library not installed. Install with: uv add openai")
         except Exception as e:
@@ -114,7 +122,7 @@ class AzureOpenAIClient:
         **kwargs: Any,
     ) -> Any:
         """
-        Create a chat completion with standardized parameters.
+        Create a chat completion with standardized parameters and aggressive retry logic.
 
         Args:
             messages: Conversation messages
@@ -127,26 +135,45 @@ class AzureOpenAIClient:
         Returns:
             OpenAI completion response
         """
-        try:
-            completion_args = {
-                "model": self.deployment,
-                "messages": messages,
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-                **kwargs,
-            }
+        max_app_retries = 5  # Application-level retries on top of client retries
+        base_delay = 1.0  # Start with 1 second delay
 
-            if tools:
-                completion_args["tools"] = tools
-                completion_args["tool_choice"] = tool_choice
+        for attempt in range(max_app_retries):
+            try:
+                completion_args = {
+                    "model": self.deployment,
+                    "messages": messages,
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                    **kwargs,
+                }
 
-            if self._client is None:
-                raise RuntimeError("Azure OpenAI client not initialized")
-            return self._client.chat.completions.create(**completion_args)
+                if tools:
+                    completion_args["tools"] = tools
+                    completion_args["tool_choice"] = tool_choice
 
-        except Exception as e:
-            logger.error(f"❌ Azure OpenAI completion failed: {e}")
-            raise
+                if self._client is None:
+                    raise RuntimeError("Azure OpenAI client not initialized")
+
+                # Log retry attempt for visibility
+                if attempt > 0:
+                    logger.info(f"🔄 OpenAI completion retry attempt {attempt + 1}/{max_app_retries}")
+
+                return self._client.chat.completions.create(**completion_args)
+
+            except Exception as e:
+                is_last_attempt = attempt == max_app_retries - 1
+
+                if is_last_attempt:
+                    logger.error(f"❌ Azure OpenAI completion failed after {max_app_retries} attempts: {e}")
+                    raise
+                else:
+                    # Simple exponential backoff without jitter
+                    delay = min(base_delay * (2**attempt), 8.0)  # Cap at 8 seconds
+
+                    logger.warning(f"⚠️ OpenAI completion failed (attempt {attempt + 1}/{max_app_retries}): {e}")
+                    logger.info(f"⏳ Retrying in {delay:.1f} seconds...")
+                    time.sleep(delay)
 
     def __getattr__(self, name: str) -> Any:
         """Delegate any other attributes to the underlying client."""

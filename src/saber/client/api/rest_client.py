@@ -9,6 +9,7 @@ Handles all REST API communication with SABER server including:
 - Event monitoring via SSE
 """
 
+import asyncio
 import json
 import logging
 from typing import Any, Callable, Dict, Optional, cast
@@ -156,7 +157,9 @@ class SABERRestClient:
 
         try:
             async with aiohttp.ClientSession() as session:
+                logger.info(f"🔗 DEBUG: Opening SSE connection to {sse_url}")
                 async with session.get(sse_url, headers={"Accept": "text/event-stream"}) as response:
+                    logger.info(f"🔗 DEBUG: SSE Response status: {response.status}, headers: {dict(response.headers)}")
                     if response.status != 200:
                         logger.error(f"❌ Failed to connect to episode events: {response.status}")
                         return
@@ -164,23 +167,39 @@ class SABERRestClient:
                     logger.info("✅ Connected to episode event stream")
 
                     current_event_type = None
+                    line_count = 0
                     async for line in response.content:
+                        line_count += 1
                         line_str = line.decode("utf-8").strip()
+
+                        if line_count % 10 == 0:  # Log every 10 lines to track activity
+                            logger.debug(f"🔗 DEBUG: SSE line {line_count}: {line_str[:100]}...")
 
                         if line_str.startswith("event:"):
                             current_event_type = line_str[6:].strip()
+                            logger.debug(f"🔗 DEBUG: SSE event type: {current_event_type}")
                         elif line_str.startswith("data:") and current_event_type:
                             try:
                                 data_str = line_str[5:].strip()
                                 if data_str:
                                     event_data = json.loads(data_str)
+                                    logger.debug(f"🔗 DEBUG: SSE event data received for {current_event_type}")
                                     if event_handler:
                                         await event_handler(event_data)
                             except json.JSONDecodeError:
                                 logger.warning(f"Failed to parse event data: {line_str}")
 
+                    logger.warning(f"🔗 DEBUG: SSE stream ended normally after {line_count} lines")
+
+        except asyncio.TimeoutError as e:
+            logger.error(f"❌ Episode monitoring failed due to timeout: {e}")
+        except aiohttp.ClientError as e:
+            logger.error(f"❌ Episode monitoring failed due to client error: {e}")
         except Exception as e:
-            logger.error(f"❌ Episode monitoring failed: {e}")
+            logger.error(f"❌ Episode monitoring failed with unexpected error: {type(e).__name__}: {e}")
+            import traceback
+
+            logger.error(f"❌ Episode monitoring traceback: {traceback.format_exc()}")
 
     async def health_check(self) -> Dict[str, Any]:
         """Perform health check against the server."""
