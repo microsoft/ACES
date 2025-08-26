@@ -29,6 +29,7 @@ class BenchmarkConfigLoader:
         self.domain = domain
         self.allowed_executors: Optional[list[str]] = None
         self.benchmark_config: Dict[str, Any] = {}
+        self.global_defaults: Dict[str, Any] = {}
         self.yaml_data: Optional[Dict[str, Any]] = None
 
     def load_tasks_from_file(self, tasks_file_path: str) -> Dict[str, Task]:
@@ -68,6 +69,9 @@ class BenchmarkConfigLoader:
                     f"Domain mismatch: expected '{self.domain}', got '{yaml_domain}'",
                     str(tasks_path),
                 )
+
+            # Parse global defaults configuration (optional)
+            self._parse_global_defaults()
 
             # Parse benchmark configuration (optional)
             self._parse_benchmark_config()
@@ -131,44 +135,96 @@ class BenchmarkConfigLoader:
         """
         return self.benchmark_config.copy()
 
+    def get_global_defaults(self) -> Dict[str, Any]:
+        """
+        Get the loaded global defaults configuration.
+
+        Returns:
+            Global defaults configuration for all tasks
+        """
+        return self.global_defaults.copy()
+
+    def _parse_global_defaults(self) -> None:
+        """
+        Parse global defaults configuration from YAML data.
+
+        Global defaults provide fallback values for execution_config, episode_config,
+        and benchmark_config when not specified at task level.
+        """
+        if self.yaml_data is None:
+            return
+
+        global_defaults_data = self.yaml_data.get("global_defaults")
+
+        if global_defaults_data is None:
+            # No global defaults specified - use empty dict
+            self.global_defaults = {}
+            logger.info("No global_defaults section found, using empty defaults")
+            return
+
+        if not isinstance(global_defaults_data, dict):
+            raise InvalidTaskDefinitionException("global_defaults must be a dictionary")
+
+        # Validate structure of global defaults
+        valid_sections = ["execution_config", "episode_config", "benchmark_config"]
+        for section_name in global_defaults_data:
+            if section_name not in valid_sections:
+                raise InvalidTaskDefinitionException(
+                    f"Invalid section '{section_name}' in global_defaults. " f"Valid sections are: {valid_sections}"
+                )
+
+            if not isinstance(global_defaults_data[section_name], dict):
+                raise InvalidTaskDefinitionException(f"global_defaults.{section_name} must be a dictionary")
+
+        # Store global defaults
+        self.global_defaults = global_defaults_data.copy()
+        logger.info(f"Loaded global defaults configuration: {self.global_defaults}")
+
     def _parse_benchmark_config(self) -> None:
         """
         Parse benchmark configuration from YAML data.
 
-        Requires explicit episode_attempts configuration - no defaults provided.
+        Uses global defaults as fallback if no explicit benchmark_config is provided.
+        If global_defaults.benchmark_config exists, it will be used when domain-level
+        benchmark_config is missing.
 
         Raises:
-            InvalidTaskDefinitionException: If benchmark_config or episode_attempts is missing
+            InvalidTaskDefinitionException: If neither benchmark_config nor global defaults provide episode_attempts
         """
         if self.yaml_data is None:
             raise InvalidTaskDefinitionException("No YAML data loaded")
 
         benchmark_data = self.yaml_data.get("benchmark_config")
+        global_benchmark_defaults = self.global_defaults.get("benchmark_config", {})
 
-        if benchmark_data is None:
+        # Merge global defaults with domain-level configuration
+        merged_config = {}
+
+        # Start with global defaults
+        if global_benchmark_defaults:
+            merged_config.update(global_benchmark_defaults)
+
+        # Override with domain-level configuration if provided
+        if benchmark_data is not None:
+            if not isinstance(benchmark_data, dict):
+                raise InvalidTaskDefinitionException("benchmark_config must be a dictionary")
+            merged_config.update(benchmark_data)
+
+        # Ensure we have episode_attempts configured
+        if "episode_attempts" not in merged_config:
             raise InvalidTaskDefinitionException(
-                "Missing required 'benchmark_config' section in YAML. "
-                "Benchmark configuration with 'episode_attempts' is required for benchmarking."
+                "Missing required 'episode_attempts' in benchmark configuration. "
+                "You must specify episode_attempts either in benchmark_config or global_defaults.benchmark_config."
             )
 
-        if not isinstance(benchmark_data, dict):
-            raise InvalidTaskDefinitionException("benchmark_config must be a dictionary")
-
-        # Require explicit episode_attempts configuration
-        if "episode_attempts" not in benchmark_data:
-            raise InvalidTaskDefinitionException(
-                "Missing required 'episode_attempts' in benchmark_config. "
-                "You must explicitly specify the number of episode attempts for benchmarking."
-            )
-
-        episode_attempts = benchmark_data["episode_attempts"]
+        episode_attempts = merged_config["episode_attempts"]
         if not isinstance(episode_attempts, int) or episode_attempts < 1:
             raise InvalidTaskDefinitionException(
                 f"episode_attempts must be a positive integer, got: {episode_attempts}"
             )
 
-        # Store benchmark configuration (no defaults)
-        self.benchmark_config = benchmark_data.copy()
+        # Store final benchmark configuration
+        self.benchmark_config = merged_config
 
         logger.info(f"Loaded benchmark configuration: {self.benchmark_config}")
 
@@ -198,14 +254,29 @@ class BenchmarkConfigLoader:
         # Get environment string (resolution happens in execution layer)
         environment = task_data.get("environment")
 
-        # Get execution configuration
-        execution_config = task_data.get("execution_config", {})
+        # Get execution configuration with global defaults fallback
+        task_execution_config = task_data.get("execution_config", {})
+        global_execution_defaults = self.global_defaults.get("execution_config", {})
 
-        # Get episode configuration
-        episode_config = task_data.get("episode_config", {})
+        # Merge global defaults with task-specific config (task-specific takes precedence)
+        execution_config = {**global_execution_defaults, **task_execution_config}
 
-        # Get task-level benchmark configuration (optional, but validated)
+        # Handle allowed_executors: task-level > global defaults > domain-level executors
+        if "allowed_executors" not in execution_config:
+            if self.allowed_executors is not None:
+                execution_config["allowed_executors"] = self.allowed_executors
+
+        # Get episode configuration with global defaults fallback
+        task_episode_config = task_data.get("episode_config", {})
+        global_episode_defaults = self.global_defaults.get("episode_config", {})
+
+        # Merge global defaults with task-specific config (task-specific takes precedence)
+        episode_config = {**global_episode_defaults, **task_episode_config}
+
+        # Get task-level benchmark configuration with global defaults fallback
         task_benchmark_config = task_data.get("benchmark_config", {})
+        global_benchmark_defaults = self.global_defaults.get("benchmark_config", {})
+
         if not isinstance(task_benchmark_config, dict):
             raise InvalidTaskDefinitionException(f"Task '{task_id}' benchmark_config must be a dictionary if provided")
 
@@ -217,8 +288,14 @@ class BenchmarkConfigLoader:
                     f"Task '{task_id}' episode_attempts must be a positive integer, got: {episode_attempts}"
                 )
 
-        # Merge domain-level and task-level benchmark config (task-level takes precedence)
-        merged_benchmark_config = {**self.benchmark_config, **task_benchmark_config}
+        # Merge configurations in order of precedence:
+        # 1. Global defaults (lowest priority)
+        # 2. Domain-level benchmark_config
+        # 3. Task-level benchmark_config (highest priority)
+        merged_benchmark_config = {}
+        merged_benchmark_config.update(global_benchmark_defaults)
+        merged_benchmark_config.update(self.benchmark_config)
+        merged_benchmark_config.update(task_benchmark_config)
 
         # Ensure final config has valid episode_attempts
         if "episode_attempts" not in merged_benchmark_config or merged_benchmark_config["episode_attempts"] < 1:
@@ -246,7 +323,7 @@ class BenchmarkConfigLoader:
             subtasks=subtasks,
             initial_context=initial_context,
             environment=environment,
-            allowed_executors=self.allowed_executors,
+            allowed_executors=execution_config.get("allowed_executors", self.allowed_executors),
             execution_config=execution_config,
             episode_config=episode_config,
             benchmark_config=merged_benchmark_config,
