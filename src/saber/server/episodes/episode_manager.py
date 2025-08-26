@@ -125,7 +125,15 @@ class EpisodeManager:
 
         # Update episode state
         episode.end_time = datetime.utcnow()
-        episode.state = EpisodeState.COMPLETED if "success" in reason.lower() else EpisodeState.FAILED
+
+        # Consider episode successful if:
+        # 1. Reason contains "success" OR
+        # 2. Agent voluntarily completed (agent_completed) OR
+        # 3. Episode completed normally (completed)
+        success_indicators = ["success", "agent_completed", "completed"]
+        is_successful = any(indicator in reason.lower() for indicator in success_indicators)
+
+        episode.state = EpisodeState.COMPLETED if is_successful else EpisodeState.FAILED
         episode.completion_reason = reason
 
         # Remove from active episodes
