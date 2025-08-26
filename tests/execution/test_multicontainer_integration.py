@@ -109,12 +109,12 @@ class TestMultiContainerIntegration:
         env = None
 
         try:
-            # Create and start environment WITHOUT cleanup token (no orchestrator for basic testing)
-            env = DockerSandboxEnvironment(session_id, simple_environment_spec, cleanup_token=None)
+            # Create and start environment
+            env = DockerSandboxEnvironment(session_id, simple_environment_spec)
             env.start()
 
-            # Verify environment is running (no orchestrator in this test)
-            assert len(env.active_services) == 2  # execution + nginx (no orchestrator)
+            # Verify environment is running
+            assert len(env.active_services) == 2  # execution + nginx
             assert "ubuntu_executor" in env.active_services
             assert "nginx" in env.active_services
 
@@ -179,12 +179,12 @@ class TestMultiContainerIntegration:
         env = None
 
         try:
-            # Create and start environment WITHOUT cleanup token (no orchestrator for basic testing)
-            env = DockerSandboxEnvironment(session_id, complex_environment_spec, cleanup_token=None)
+            # Create and start environment
+            env = DockerSandboxEnvironment(session_id, complex_environment_spec)
             env.start()
 
-            # Verify all services are running (no orchestrator in this test)
-            assert len(env.active_services) == 3  # execution + redis + nginx (no orchestrator)
+            # Verify all services are running
+            assert len(env.active_services) == 3  # execution + redis + nginx
             assert "ubuntu_executor" in env.active_services
             assert "redis" in env.active_services
             assert "nginx" in env.active_services
@@ -263,7 +263,7 @@ class TestMultiContainerIntegration:
         session_id = "test_lifecycle_session"
 
         # First lifecycle
-        env1 = DockerSandboxEnvironment(session_id + "_1", simple_environment_spec, cleanup_token=None)
+        env1 = DockerSandboxEnvironment(session_id + "_1", simple_environment_spec)
         try:
             env1.start()
 
@@ -285,7 +285,7 @@ class TestMultiContainerIntegration:
             raise
 
         # Second lifecycle - should work independently
-        env2 = DockerSandboxEnvironment(session_id + "_2", simple_environment_spec, cleanup_token=None)
+        env2 = DockerSandboxEnvironment(session_id + "_2", simple_environment_spec)
         try:
             env2.start()
 
@@ -313,8 +313,8 @@ class TestMultiContainerIntegration:
         env = None
 
         try:
-            # Create and start environment WITHOUT cleanup token (no orchestrator for basic testing)
-            env = DockerSandboxEnvironment(session_id, simple_environment_spec, cleanup_token=None)
+            # Create and start environment
+            env = DockerSandboxEnvironment(session_id, simple_environment_spec)
             env.start()
 
             # Test creating and reading files in container
@@ -361,14 +361,9 @@ class TestMultiContainerIntegration:
             target_services=[],
         )
 
-        env = DockerSandboxEnvironment("test_error_session", invalid_spec, cleanup_token="test_error_token")
+        env = DockerSandboxEnvironment("test_error_session", invalid_spec, )
 
         with pytest.raises(ContainerCreationError):
             env.start()
 
         print("✓ Error handling test passed")
-
-    # NOTE: For orchestrator integration testing with cleanup_token != None,
-    # a real SABER server needs to be running on port 8000 to handle
-    # episode status polling from the orchestrator container.
-    # This enables full end-to-end testing of the episode lifecycle.

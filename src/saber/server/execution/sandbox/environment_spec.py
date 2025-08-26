@@ -2,35 +2,7 @@
 Environment specification classes for multi-container orchestration.
 
 This module defines specifications for Docker Compose-based execution environments,
-supporting both template referen                              "restart": "unless-stopped",
-                "networks": [self.network.name],  # Session-specific network for accessing execution containers
-            }
-
-            # 🔥 ORCHESTRATOR NETWORKS: Log network configuration
-            logger.warning(
-                f"🔥 ORCHESTRATOR NETWORKS: Initial networks=[{self.network.name}], "
-                f"server_network={server_network}, session_network={self.network.name}"
-            )
-
-            # Add server network for orchestrator connectivity if provided
-            if server_network and server_network != self.network.name:
-                networks_list = orchestrator_config["networks"]
-                if isinstance(networks_list, list):
-                    networks_list.append(server_network)"unless-stopped",
-                "networks        # Build networks configuration
-        networks_config = {self.network.name: network_config}
-
-        # Add server network as external if orchestrator needs it
-        if server_network and server_network != self.network.name:
-            networks_config[server_network] = {
-                "external": True,
-                "name": server_network
-            }ork.name],  # Session-specific network for accessing execution containers
-            }
-
-            # Add server network for orchestrator connectivity if provided
-            if server_network and server_network != self.network.name:
-                orchestrator_config["networks"].append(server_network)nular container configuration.
+supporting both template references and granular container configuration.
 """
 
 import logging
@@ -173,76 +145,14 @@ class EnvironmentSpec:
     def to_compose_dict(
         self,
         session_id: Optional[str] = None,
-        cleanup_token: Optional[str] = None,
-        saber_host_url: Optional[str] = None,
-        server_network: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Generate complete Docker Compose configuration.
 
         Args:
-            session_id: Session identifier for orchestrator integration
-            cleanup_token: Cleanup token for orchestrator authentication
-            saber_host_url: SABER server URL for orchestrator polling
-            server_network: Optional server network name for orchestrator connectivity
-
-        Raises:
-            ValueError: If session_id is provided but cleanup_token is missing
+            session_id: Session identifier for container labeling
         """
-        # Validate orchestrator requirements - only add orchestrator if both session_id and cleanup_token are provided
-        # If cleanup_token is None, the orchestrator will be skipped (useful for testing or simplified deployments)
-
         services = {}
-
-        # Add SABER orchestrator service (only if both session_id and cleanup_token are provided)
-        if session_id and cleanup_token:
-            orchestrator_config = {
-                "image": "saber-orchestrator:latest",
-                "container_name": f"saber-orchestrator-{session_id}",
-                "environment": [
-                    f"SABER_SESSION_ID={session_id}",
-                    f"SABER_CLEANUP_TOKEN={cleanup_token}",
-                    f"SABER_HOST_URL={saber_host_url or 'http://host.docker.internal:8000'}",
-                    "SABER_POLL_INTERVAL=30",
-                    f"SABER_COMPOSE_PROJECT=saber-session-{session_id}",
-                ],
-                "volumes": [
-                    "/var/run/docker.sock:/var/run/docker.sock",
-                    ".:/app",
-                    "/tmp/saber-orchestrator-logs:/tmp/saber-orchestrator-logs",
-                ],
-                "labels": [
-                    f"saber.session_id={session_id}",
-                    "saber.role=orchestrator",
-                    f"saber.cleanup_token={cleanup_token}",
-                ],
-                "restart": "unless-stopped",
-                "networks": list([self.network.name]),  # Session-specific network for accessing execution containers
-            }
-
-            # 🔥 ORCHESTRATOR NETWORKS: Log network configuration
-            logger.warning(
-                f"🔥 ORCHESTRATOR NETWORKS: Initial networks=[{self.network.name}], "
-                f"server_network={server_network}, session_network={self.network.name}"
-            )
-
-            # Add server network for orchestrator connectivity if provided
-            if server_network and server_network != self.network.name:
-                networks_list = orchestrator_config.get("networks", [])
-                if isinstance(networks_list, list):
-                    networks_list.append(server_network)
-                    orchestrator_config["networks"] = networks_list
-                logger.warning(
-                    f"🔥 ORCHESTRATOR NETWORKS: Added server network, "
-                    f"final networks={orchestrator_config['networks']}"
-                )
-            else:
-                logger.warning(
-                    f"🔥 ORCHESTRATOR NETWORKS: No server network added - "
-                    f"server_network={server_network}, same_as_session={server_network == self.network.name}"
-                )
-
-            services["saber-orchestrator"] = orchestrator_config
 
         # Add execution service
         exec_config = self.execution_config.copy()
@@ -255,12 +165,8 @@ class EnvironmentSpec:
                 [
                     f"saber.session_id={session_id}",
                     "saber.role=execution",
-                    f"saber.cleanup_token={cleanup_token}" if cleanup_token else f"saber.session_id={session_id}",
                 ]
             )
-            # Add dependency on orchestrator only if orchestrator is being created
-            if cleanup_token:
-                exec_config["depends_on"] = ["saber-orchestrator"]
         services[self.execution_service] = exec_config
 
         # Add target services
@@ -275,14 +181,8 @@ class EnvironmentSpec:
                     [
                         f"saber.session_id={session_id}",
                         "saber.role=target",
-                        f"saber.cleanup_token={cleanup_token}" if cleanup_token else f"saber.session_id={session_id}",
                     ]
                 )
-                # Add dependency on orchestrator only if orchestrator is being created
-                if cleanup_token:
-                    if "depends_on" not in service_config:
-                        service_config["depends_on"] = []
-                    service_config["depends_on"].append("saber-orchestrator")
             services[service_spec.name] = service_config
 
         # Add SABER labels to network
@@ -294,19 +194,6 @@ class EnvironmentSpec:
 
         # Build networks configuration
         networks_config = {self.network.name: network_config}
-
-        # 🔥 EXTERNAL NETWORKS: Log external network configuration
-        logger.warning(f"🔥 EXTERNAL NETWORKS: server_network={server_network}, session_network={self.network.name}")
-
-        # Add server network as external if orchestrator needs it
-        if server_network and server_network != self.network.name:
-            networks_config[server_network] = {"external": True, "name": server_network}
-            logger.warning(f"🔥 EXTERNAL NETWORKS: Added external network {server_network} to compose config")
-        else:
-            logger.warning(
-                f"🔥 EXTERNAL NETWORKS: No external network added - "
-                f"server_network={server_network}, same_as_session={server_network == self.network.name}"
-            )
 
         compose_config = {
             "version": "3.8",
