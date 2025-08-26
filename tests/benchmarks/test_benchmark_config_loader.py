@@ -365,7 +365,9 @@ tasks:
             with pytest.raises(InvalidTaskDefinitionException) as exc_info:
                 loader.load_tasks_from_file(temp_path)
 
-            assert "Missing required 'benchmark_config' section" in str(exc_info.value)
+            # Updated error message reflects the new global defaults system
+            assert "Missing required 'episode_attempts' in benchmark configuration" in str(exc_info.value)
+            assert "global_defaults.benchmark_config" in str(exc_info.value)
 
         finally:
             os.unlink(temp_path)
@@ -484,6 +486,175 @@ tasks:
                 loader.load_tasks_from_file(temp_path)
 
             assert "Task 'test_task' episode_attempts must be a positive integer" in str(exc_info.value)
+
+        finally:
+            os.unlink(temp_path)
+
+    def test_global_defaults_configuration(self):
+        """Test global defaults configuration loading and merging."""
+        yaml_content = """
+domain: test_domain
+
+global_defaults:
+  execution_config:
+    allowed_executors: ["cli", "python"]
+    timeout: 60
+  episode_config:
+    max_steps: 100
+  benchmark_config:
+    episode_attempts: 3
+
+benchmark_config:
+  episode_attempts: 5  # Domain-level override
+
+tasks:
+  - task_id: test_task_minimal
+    title: Test Task with Minimal Config
+    description: A task that should inherit global defaults
+    subtasks: []
+
+  - task_id: test_task_with_overrides
+    title: Test Task with Overrides
+    description: A task that overrides some defaults
+    execution_config:
+      timeout: 30  # Override global default
+    episode_config:
+      max_steps: 50  # Override global default
+    benchmark_config:
+      episode_attempts: 10  # Override domain-level config
+    subtasks: []
+"""
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml_content)
+            temp_path = f.name
+
+        try:
+            loader = BenchmarkConfigLoader("test_domain")
+            tasks = loader.load_tasks_from_file(temp_path)
+
+            # Test global defaults are loaded
+            global_defaults = loader.get_global_defaults()
+            assert global_defaults["execution_config"]["timeout"] == 60
+            assert global_defaults["execution_config"]["allowed_executors"] == ["cli", "python"]
+            assert global_defaults["episode_config"]["max_steps"] == 100
+            assert global_defaults["benchmark_config"]["episode_attempts"] == 3
+
+            # Test minimal task inherits all global defaults
+            minimal_task = tasks["test_task_minimal"]
+            assert minimal_task.execution_config["timeout"] == 60
+            assert minimal_task.execution_config["allowed_executors"] == ["cli", "python"]
+            assert minimal_task.episode_config["max_steps"] == 100
+            assert minimal_task.benchmark_config["episode_attempts"] == 5  # Domain-level override
+
+            # Test task with overrides
+            override_task = tasks["test_task_with_overrides"]
+            assert override_task.execution_config["timeout"] == 30  # Task override
+            assert override_task.execution_config["allowed_executors"] == ["cli", "python"]  # From global defaults
+            assert override_task.episode_config["max_steps"] == 50  # Task override
+            assert override_task.benchmark_config["episode_attempts"] == 10  # Task override
+
+        finally:
+            os.unlink(temp_path)
+
+    def test_global_defaults_missing_section(self):
+        """Test that missing global_defaults section works correctly."""
+        yaml_content = """
+domain: test_domain
+
+benchmark_config:
+  episode_attempts: 3
+
+tasks:
+  - task_id: test_task
+    title: Test Task
+    description: A test task without global defaults
+    subtasks: []
+"""
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml_content)
+            temp_path = f.name
+
+        try:
+            loader = BenchmarkConfigLoader("test_domain")
+            tasks = loader.load_tasks_from_file(temp_path)
+
+            # Test that empty global defaults work
+            global_defaults = loader.get_global_defaults()
+            assert global_defaults == {}
+
+            # Test task loads correctly without global defaults
+            task = tasks["test_task"]
+            assert task.execution_config == {}
+            assert task.episode_config == {}
+            assert task.benchmark_config["episode_attempts"] == 3
+
+        finally:
+            os.unlink(temp_path)
+
+    def test_global_defaults_invalid_structure(self):
+        """Test validation of global_defaults structure."""
+        yaml_content = """
+domain: test_domain
+
+global_defaults:
+  invalid_section:
+    some_value: true
+  execution_config:
+    timeout: 60
+
+benchmark_config:
+  episode_attempts: 3
+
+tasks:
+  - task_id: test_task
+    title: Test Task
+    description: A test task
+    subtasks: []
+"""
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml_content)
+            temp_path = f.name
+
+        try:
+            loader = BenchmarkConfigLoader("test_domain")
+            with pytest.raises(InvalidTaskDefinitionException) as exc_info:
+                loader.load_tasks_from_file(temp_path)
+
+            assert "Invalid section 'invalid_section' in global_defaults" in str(exc_info.value)
+
+        finally:
+            os.unlink(temp_path)
+
+    def test_global_defaults_only_no_domain_benchmark_config(self):
+        """Test that global defaults can provide benchmark_config when domain-level is missing."""
+        yaml_content = """
+domain: test_domain
+
+global_defaults:
+  benchmark_config:
+    episode_attempts: 3
+
+tasks:
+  - task_id: test_task
+    title: Test Task
+    description: A test task using only global benchmark defaults
+    subtasks: []
+"""
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml_content)
+            temp_path = f.name
+
+        try:
+            loader = BenchmarkConfigLoader("test_domain")
+            tasks = loader.load_tasks_from_file(temp_path)
+
+            # Should work with only global defaults
+            task = tasks["test_task"]
+            assert task.benchmark_config["episode_attempts"] == 3
 
         finally:
             os.unlink(temp_path)

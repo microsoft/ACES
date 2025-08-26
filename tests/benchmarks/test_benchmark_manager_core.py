@@ -349,7 +349,9 @@ tasks:
         with pytest.raises(InvalidTaskDefinitionException) as exc_info:
             BenchmarkManager("malware_classification", str(tmp_path))
 
-        assert "Missing required 'benchmark_config' section" in str(exc_info.value)
+        # Updated error message reflects the new global defaults system
+        assert "Missing required 'episode_attempts' in benchmark configuration" in str(exc_info.value)
+        assert "global_defaults.benchmark_config" in str(exc_info.value)
 
     def test_missing_episode_attempts_fails(self, sample_yaml_missing_episode_attempts, tmp_path):
         """Test that missing episode_attempts causes failure."""
