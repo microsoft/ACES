@@ -8,7 +8,7 @@ policy, status, and events. Tool execution is handled by SessionMCPAPI.
 import asyncio
 import logging
 from datetime import datetime
-from typing import Any, AsyncGenerator, Dict
+from typing import Any, AsyncGenerator, Dict, cast
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -68,29 +68,24 @@ class SessionRestAPI:
             result: Dict[str, str] = {"message": "Session terminated successfully"}
             return result
 
-        @self.app.post("/session/{session_id}/start-episode")
-        async def start_episode_endpoint(session_id: str, task_id: str) -> Dict[str, Any]:
-            """Initialize episode for a task."""
-            episode = await self.session_manager.start_episode(session_id, task_id)
-            result: Dict[str, Any] = {
-                "episode_id": episode.episode_id,
-                "task_id": episode.task_id,
-                "message": "Episode started successfully",
-            }
-            return result
-
         @self.app.get("/session/{session_id}/current-task")
         async def get_current_task_endpoint(session_id: str) -> Dict[str, Any]:
             """Get current task information."""
-            task_info: Dict[str, Any] = await self.session_manager.get_current_task(session_id)
-            return task_info
+            task = await self.session_manager.get_current_task(session_id)
+            task_dict = cast(Dict[str, Any], task.to_dict())
+
+            # Add episode context
+            episode_config = self.session_manager.get_episode_config(session_id)
+            task_dict["episode_context"] = episode_config
+
+            return task_dict
 
         @self.app.get("/session/{session_id}/policy")
         async def get_policy_endpoint(session_id: str) -> Dict[str, Any]:
             """Get domain policy document."""
             policy = self.session_manager.get_policy(session_id)
-            policy_dict: Dict[str, Any] = policy.to_dict()
-            return policy_dict
+            policy_dict = policy.to_dict()
+            return dict(policy_dict) if policy_dict else {}
 
         @self.app.get("/session/{session_id}/events")
         async def get_events_endpoint(session_id: str, request: Request) -> StreamingResponse:
@@ -102,6 +97,26 @@ class SessionRestAPI:
         async def get_episode_events_endpoint(session_id: str, episode_id: str, request: Request) -> StreamingResponse:
             """SSE endpoint for episode-specific real-time events."""
             result: StreamingResponse = await self.get_episode_events_stream(session_id, episode_id, request)
+            return result
+
+        @self.app.post("/session/{session_id}/start-benchmark")
+        async def start_benchmark_endpoint(session_id: str, benchmark_config: Dict[str, Any] = {}) -> Dict[str, Any]:
+            """Start a full benchmark with all tasks for the session."""
+            benchmark_session = await self.session_manager.start_benchmark(session_id, benchmark_config)
+            result: Dict[str, Any] = {
+                "benchmark_session": benchmark_session,
+                "message": "Benchmark started successfully",
+            }
+            return result
+
+        @self.app.get("/tasks")
+        async def list_tasks_endpoint() -> Dict[str, Any]:
+            """List all available tasks for benchmarking."""
+            tasks = self.session_manager.benchmark_manager.list_benchmark_tasks()
+            result: Dict[str, Any] = {
+                "tasks": tasks,
+                "total_tasks": len(tasks),
+            }
             return result
 
         @self.app.get("/health")
@@ -268,112 +283,54 @@ class SessionRestAPI:
             )
 
         async def episode_event_generator() -> AsyncGenerator[str, None]:
-            """Generate SSE events for the episode."""
+            """Generate SSE events for the episode - simplified for essential termination signaling."""
             try:
-                # Get episode configuration from SessionManager
-                episode_config = self.session_manager.get_episode_config(session_id)
-                max_steps = episode_config["max_steps"]
-                last_step_count = 0
-
-                logger.info(
-                    f"🔗 DEBUG: SSE Started episode monitoring for {session_id}/{episode_id} (max_steps: {max_steps})"
-                )
-                loop_count = 0
+                logger.info(f"🔗 SSE: Monitoring episode {episode_id} for session {session_id}")
 
                 while session.is_active:
-                    loop_count += 1
-
                     # Check if client disconnected
                     if await request.is_disconnected():
-                        logger.warning(
-                            f"🔗 DEBUG: SSE Client disconnected after {loop_count} loops for {session_id}/{episode_id}"
-                        )
+                        logger.info(f"🔗 SSE: Client disconnected for {session_id}/{episode_id}")
                         break
 
-                    # Check if episode should be terminated using SessionManager logic
-                    should_terminate, termination_reason = self.session_manager.is_episode_over(session_id)
-
+                    # Check if episode should be terminated by server
+                    should_terminate, reason = self.session_manager.should_terminate_episode(session_id)
                     if should_terminate:
-                        logger.warning(
-                            f"🔥 SSE EPISODE TERMINATION: Episode {episode_id} for session {session_id} "
-                            f"should terminate - reason: {termination_reason} (loop {loop_count})"
+                        logger.warning(f"🔗 SSE: Server terminating episode {episode_id} - {reason}")
+                        # Let the session manager handle the actual termination
+                        await self.session_manager.end_episode(session_id, reason)
+                        yield (
+                            f"event: episode_terminated\n"
+                            f'data: {{"episode_id": "{episode_id}", "reason": "{reason}"}}\n\n'
                         )
-                        if termination_reason.startswith("max_steps_reached"):
-                            yield (
-                                f"event: max_steps_reached\n"
-                                f'data: {{"current_steps": {last_step_count}, "max_steps": {max_steps}, '
-                                f'"episode_id": "{episode_id}"}}\n\n'
-                            )
-                            # End the episode
-                            logger.warning(
-                                f"🔥 SSE MAX STEPS END: Ending episode {episode_id} for session {session_id} "
-                                f"due to max steps"
-                            )
-                            self.session_manager.episode_manager.end_episode(session_id, termination_reason)
-                        else:
-                            yield (
-                                f"event: episode_complete\n"
-                                f'data: {{"episode_id": "{episode_id}", "reason": "{termination_reason}"}}\n\n'
-                            )
                         break
 
-                    # Get current episode (refresh in case it was updated)
+                    # Check if episode still exists (client may have ended it naturally)
                     current_episode = self.session_manager.episode_manager.get_current_episode(session_id)
                     if not current_episode or current_episode.episode_id != episode_id:
-                        # Episode ended or changed
-                        logger.warning(
-                            f"🔗 DEBUG: SSE Episode ended or changed for {session_id}/{episode_id} (loop {loop_count})"
-                        )
+                        logger.info(f"🔗 SSE: Episode {episode_id} ended naturally")
                         yield (
                             f"event: episode_complete\n"
-                            f'data: {{"episode_id": "{episode_id}", "reason": "episode_ended"}}\n\n'
+                            f'data: {{"episode_id": "{episode_id}", "reason": "completed"}}\n\n'
                         )
                         break
 
+                    # Send heartbeat every 10 seconds
                     current_steps = len(current_episode.steps)
-
-                    # Send step count update if it changed
-                    if current_steps != last_step_count:
-                        logger.debug(
-                            f"🔗 DEBUG: SSE Step count changed from {last_step_count} to {current_steps} "
-                            f"for {session_id}/{episode_id}"
-                        )
-                        yield (
-                            f"event: step_count_update\n"
-                            f'data: {{"current_steps": {current_steps}, "max_steps": {max_steps}, '
-                            f'"episode_id": "{episode_id}"}}\n\n'
-                        )
-                        last_step_count = current_steps
-
-                    # Send periodic heartbeat
                     timestamp = datetime.utcnow().isoformat()
-                    if loop_count % 5 == 0:  # Log every 5th heartbeat
-                        logger.debug(
-                            f"🔗 DEBUG: SSE Heartbeat #{loop_count} for {session_id}/{episode_id} "
-                            f"- steps: {current_steps}"
-                        )
                     yield (
                         f"event: heartbeat\n"
-                        f'data: {{"timestamp": "{timestamp}", "episode_id": "{episode_id}", '
-                        f'"steps": {current_steps}}}\n\n'
+                        f'data: {{"episode_id": "{episode_id}", "steps": {current_steps}, '
+                        f'"timestamp": "{timestamp}"}}\n\n'
                     )
 
-                    # Wait before next check
-                    await asyncio.sleep(2)  # Check every 2 seconds for responsiveness
+                    await asyncio.sleep(10)  # Check every 10 seconds
 
             except Exception as e:
-                logger.error(
-                    f"🔗 DEBUG: SSE Episode SSE stream error for {session_id}/{episode_id}: {type(e).__name__}: {e}"
-                )
-                import traceback
-
-                logger.error(f"🔗 DEBUG: SSE Traceback: {traceback.format_exc()}")
-                yield f'event: error\ndata: {{"message": "Stream error: {str(e)}"}}\n\n'
+                logger.error(f"🔗 SSE: Episode monitoring error for {session_id}/{episode_id}: {e}")
+                yield f'event: error\ndata: {{"message": "Monitoring error: {str(e)}"}}\n\n'
             finally:
-                logger.info(
-                    f"🔗 DEBUG: SSE Episode SSE stream ended for {session_id}/{episode_id} "
-                    f"(total loops: {loop_count if 'loop_count' in locals() else 'unknown'})"
-                )
+                logger.info(f"🔗 SSE: Stopped monitoring episode {episode_id}")
 
         return StreamingResponse(
             episode_event_generator(),

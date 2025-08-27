@@ -12,7 +12,7 @@ Handles all REST API communication with SABER server including:
 import asyncio
 import json
 import logging
-from typing import Any, Callable, Dict, Optional, cast
+from typing import Any, Callable, Dict, List, Optional, cast
 
 import aiohttp
 
@@ -84,6 +84,35 @@ class SABERRestClient:
                 else:
                     error_text = await response.text()
                     raise Exception(f"Failed to start episode: {response.status} - {error_text}")
+
+    async def start_benchmark(
+        self, session_id: Optional[str] = None, task_ids: Optional[List[str]] = None, episode_attempts: int = 1
+    ) -> Dict[str, Any]:
+        """Start benchmark mode with specified tasks and episode attempts."""
+        session_id = session_id or self.session_id
+        if not session_id:
+            raise Exception("No active session")
+
+        url = f"{self.base_url}/session/{session_id}/start-benchmark"
+
+        # Build benchmark configuration
+        benchmark_config: Dict[str, Any] = {"episode_attempts": episode_attempts}
+        if task_ids:
+            benchmark_config["task_ids"] = task_ids
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=benchmark_config, timeout=self.request_timeout) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    task_desc = f"tasks: {task_ids}" if task_ids else "all available tasks"
+                    logger.info(
+                        f"✅ Started benchmark mode for session: {session_id} "
+                        f"({task_desc}, {episode_attempts} episodes each)"
+                    )
+                    return cast(Dict[str, Any], data)
+                else:
+                    error_text = await response.text()
+                    raise Exception(f"Failed to start benchmark: {response.status} - {error_text}")
 
     async def get_task_info(self, session_id: Optional[str] = None) -> Dict[str, Any]:
         """Get current task information."""
@@ -159,9 +188,8 @@ class SABERRestClient:
             # Create timeout configuration for long-running episode monitoring
             timeout = aiohttp.ClientTimeout(total=None)  # No timeout for SSE monitoring
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                logger.info(f"🔗 DEBUG: Opening SSE connection to {sse_url}")
+                logger.info(f"🔗: Opening SSE connection to {sse_url}")
                 async with session.get(sse_url, headers={"Accept": "text/event-stream"}) as response:
-                    logger.info(f"🔗 DEBUG: SSE Response status: {response.status}, headers: {dict(response.headers)}")
                     if response.status != 200:
                         logger.error(f"❌ Failed to connect to episode events: {response.status}")
                         return
@@ -175,23 +203,23 @@ class SABERRestClient:
                         line_str = line.decode("utf-8").strip()
 
                         if line_count % 10 == 0:  # Log every 10 lines to track activity
-                            logger.debug(f"🔗 DEBUG: SSE line {line_count}: {line_str[:100]}...")
+                            logger.debug(f"🔗 SSE line {line_count}: {line_str[:100]}...")
 
                         if line_str.startswith("event:"):
                             current_event_type = line_str[6:].strip()
-                            logger.debug(f"🔗 DEBUG: SSE event type: {current_event_type}")
+                            logger.debug(f"🔗 SSE event type: {current_event_type}")
                         elif line_str.startswith("data:") and current_event_type:
                             try:
                                 data_str = line_str[5:].strip()
                                 if data_str:
                                     event_data = json.loads(data_str)
-                                    logger.debug(f"🔗 DEBUG: SSE event data received for {current_event_type}")
+                                    logger.debug(f"🔗 SSE event data received for {current_event_type}")
                                     if event_handler:
                                         await event_handler(event_data)
                             except json.JSONDecodeError:
                                 logger.warning(f"Failed to parse event data: {line_str}")
 
-                    logger.warning(f"🔗 DEBUG: SSE stream ended normally after {line_count} lines")
+                    logger.warning(f"🔗 SSE stream ended normally after {line_count} lines")
 
         except asyncio.TimeoutError as e:
             logger.error(f"❌ Episode monitoring failed due to timeout: {e}")

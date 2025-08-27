@@ -5,7 +5,9 @@ from datetime import datetime
 from logging import getLogger
 from typing import Any, Dict, NamedTuple, Optional
 
+from ...base import SSEEventType
 from ..base import Action, CommandResult, Episode, EpisodeState, Step
+from .constants import EpisodeTerminationReason
 from .exceptions import EpisodeNotFoundException
 
 logger = getLogger(__name__)
@@ -77,7 +79,7 @@ class EpisodeManager:
             return True, "no_active_episode"
 
         if episode.is_complete:
-            return True, episode.completion_reason or "completed"
+            return True, episode.completion_reason or EpisodeTerminationReason.COMPLETED
 
         # Get episode configuration for this session
         episode_config = self.episode_configs.get(session_id)
@@ -91,7 +93,7 @@ class EpisodeManager:
             current_steps = len(episode.steps)
 
             if current_steps >= max_steps:
-                return True, f"max_steps_reached ({current_steps}/{max_steps})"
+                return True, f"{SSEEventType.MAX_STEPS_REACHED} ({current_steps}/{max_steps})"
 
             # Could add more termination conditions here:
             # - episode timeout based on episode_config["episode_timeout_minutes"]
@@ -209,7 +211,11 @@ class EpisodeManager:
         # 1. Reason contains "success" OR
         # 2. Agent voluntarily completed (agent_completed) OR
         # 3. Episode completed normally (completed)
-        success_indicators = ["success", "agent_completed", "completed"]
+        success_indicators = [
+            EpisodeTerminationReason.SUCCESS,
+            EpisodeTerminationReason.AGENT_COMPLETED,
+            EpisodeTerminationReason.COMPLETED,
+        ]
         is_successful = any(indicator in reason.lower() for indicator in success_indicators)
 
         episode.state = EpisodeState.COMPLETED if is_successful else EpisodeState.FAILED

@@ -271,13 +271,18 @@ tasks:
         )
 
         manager = BenchmarkManager("webapp_pentest", str(tmp_path))
-        benchmark_session = manager.start_benchmark({"custom_param": "value"})
+        session_id = "test_session"
+        benchmark_config = {"custom_param": "value"}
+        benchmark_session = manager.start_benchmark(session_id, benchmark_config)
 
-        assert benchmark_session["domain"] == "webapp_pentest"
-        assert benchmark_session["total_tasks"] == 2
-        assert "task1" in benchmark_session["tasks"]
-        assert "task2" in benchmark_session["tasks"]
-        assert benchmark_session["benchmark_config"]["custom_param"] == "value"
+        # Convert to dict for assertions
+        result = benchmark_session.to_api_response("webapp_pentest")
+
+        assert result["domain"] == "webapp_pentest"
+        assert result["total_tasks"] == 2
+        assert "task1" in [task["task_id"] for task in result["tasks"]]
+        assert "task2" in [task["task_id"] for task in result["tasks"]]
+        assert result["benchmark_config"]["custom_param"] == "value"
 
     def test_list_benchmark_tasks_with_episode_attempts(self, tmp_path):
         """Test listing tasks with episode attempts information."""

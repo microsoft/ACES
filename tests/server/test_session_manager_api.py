@@ -48,7 +48,7 @@ class TestSessionManagerAPI:
         ):
 
             manager = SessionManager(domain_name="test_domain", config_dir="/tmp", host="127.0.0.1", port=8003)
-            return manager, TestClient(manager.app)
+            return manager, TestClient(manager.rest_api.app)
 
     def test_health_endpoint(self, session_manager_app):
         """Test health check endpoint."""
@@ -118,7 +118,7 @@ class TestSessionManagerAPI:
         assert response.status_code == 404
 
     def test_start_episode_endpoint(self, session_manager_app):
-        """Test starting episode endpoint."""
+        """Test starting benchmark (which starts episodes) endpoint."""
         manager, client = session_manager_app
 
         # Mock task with proper initial_context
@@ -126,24 +126,29 @@ class TestSessionManagerAPI:
         mock_task.initial_context = {"initial_data": "test"}
         manager.benchmark_manager.get_task.return_value = mock_task
 
-        # Mock episode
-        mock_episode = MagicMock()
-        mock_episode.episode_id = "episode_123"
-        mock_episode.task_id = "task_456"
-        manager.episode_manager.start_episode.return_value = mock_episode
+        # Mock benchmark session
+        mock_benchmark_session = MagicMock()
+        mock_benchmark_session.to_api_response.return_value = {
+            "session_id": "test_session",
+            "first_task_id": "task_456",
+            "current_episode_id": "episode_123",
+            "domain": "test_domain"
+        }
+        manager.benchmark_manager.start_benchmark.return_value = mock_benchmark_session
 
         # Create session first
         create_response = client.post("/session?client_id=test_client")
         session_id = create_response.json()["session_id"]
 
-        # Start episode
-        response = client.post(f"/session/{session_id}/start-episode?task_id=task_456")
+        # Start benchmark (which will start episodes)
+        response = client.post(f"/session/{session_id}/start-benchmark", json={"task_ids": ["task_456"]})
 
         assert response.status_code == 200
         data = response.json()
-        assert data["episode_id"] == "episode_123"
-        assert data["task_id"] == "task_456"
-        assert data["message"] == "Episode started successfully"
+        assert data["benchmark_session"]["current_episode_id"] == "episode_123"
+        assert data["benchmark_session"]["first_task_id"] == "task_456"
+        assert data["benchmark_session"]["domain"] == "test_domain"
+        assert data["message"] == "Benchmark started successfully"
 
     def test_get_current_task_endpoint(self, session_manager_app):
         """Test get current task endpoint."""
@@ -170,6 +175,11 @@ class TestSessionManagerAPI:
         mock_task.task_id = "task_456"
         mock_task.title = "Test Task"
         mock_task.description = "Test description"
+        mock_task.to_dict.return_value = {
+            "task_id": "task_456",
+            "title": "Test Task",
+            "description": "Test description"
+        }
 
         manager.episode_manager.get_current_episode.return_value = mock_episode
         manager.benchmark_manager.get_task.return_value = mock_task
@@ -181,7 +191,8 @@ class TestSessionManagerAPI:
         data = response.json()
         assert data["task_id"] == "task_456"
         assert data["title"] == "Test Task"
-        assert data["episode_id"] == "episode_123"
+        assert "episode_context" in data
+        assert data["episode_context"]["session_id"] == session_id
 
     def test_get_policy_endpoint(self, session_manager_app):
         """Test get policy endpoint."""
@@ -210,7 +221,7 @@ class TestSessionManagerAPI:
         # Just test that the endpoint exists by checking it's registered
         # We can't easily test SSE streaming with TestClient without hanging
         # Instead, verify the route exists in the app
-        routes = [route.path for route in manager.app.routes]
+        routes = [route.path for route in manager.rest_api.app.routes]
         assert f"/session/{{session_id}}/events" in routes or "/session/{session_id}/events" in [
             r.path_regex.pattern for r in manager.app.routes if hasattr(r, "path_regex")
         ]

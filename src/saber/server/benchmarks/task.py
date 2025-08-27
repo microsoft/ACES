@@ -123,3 +123,26 @@ class Task:
                 "This indicates a validation error in BenchmarkConfigLoader."
             )
         return int(self.benchmark_config["episode_attempts"])
+
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Convert task to dictionary representation for serialization.
+
+        Returns:
+            Dictionary representation of the task
+        """
+        return {
+            "task_id": self.task_id,
+            "domain": self.domain,
+            "title": self.title,
+            "description": self.description,
+            "subtasks": [subtask.to_dict() if hasattr(subtask, "to_dict") else subtask for subtask in self.subtasks],
+            "initial_context": self.initial_context,
+            "environment": self.environment,
+            "allowed_executors": self.allowed_executors,
+            "execution_config": self.execution_config,
+            "episode_config": self.episode_config,
+            "benchmark_config": self.benchmark_config,
+            "subtask_count": len(self.subtasks),
+            "episode_attempts": self.get_episode_attempts(),
+        }
