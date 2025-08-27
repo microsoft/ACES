@@ -24,7 +24,7 @@ note right: Headers: X-SABER-Session-ID, X-SABER-Task-ID, X-SABER-Client-ID
 Client -> MCP: connect(headers)
 MCP -> MCP: _handle_mcp_connection(connection_id, headers)
 MCP -> SM: create_session() or map_existing_session()
-MCP -> SM: start_episode(task_id) if provided
+note right: MCP connection maps to existing benchmark session\ncreated via REST API
 MCP -> MCP: map connection_id → session_id
 MCP -> Client: mcp_connected
 

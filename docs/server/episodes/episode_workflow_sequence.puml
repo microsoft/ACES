@@ -16,14 +16,18 @@ participant "ExecutionManager" as EM_EXEC
 
 == Episode Initialization ==
 
-Client -> REST: POST /session/{session_id}/start-episode\n{task_id: "malware_analysis_001"}
-REST -> SM: start_episode(session_id, task_id)
-SM -> TM: get_task(task_id)
-TM --> SM: task_object
-SM -> EM: start_episode(session_id, task_id, task.initial_context)
+Client -> REST: POST /session/{session_id}/start-benchmark\n{task_ids: ["malware_analysis_001"], episode_attempts: 1}
+REST -> SM: start_benchmark(session_id, task_ids, episode_attempts)
+SM -> TM: create_benchmark_session(session_id, task_ids)
+TM --> SM: benchmark_session
+SM -> TM: start_benchmark(session_id, benchmark_session)
+TM -> TM: get first task from benchmark_session
+TM -> EM: start_episode(session_id, task_id, task.initial_context)
 EM -> EM: create Episode object
 EM -> EM: store in active_episodes[session_id]
-EM --> SM: episode
+EM --> TM: episode
+TM -> TM: benchmark_session.set_current_episode(episode.episode_id)
+TM --> SM: benchmark_session
 
 == Task Context & Policy Gathering ==
 
@@ -142,10 +146,10 @@ alt if episode not complete
     end note
 else episode complete (step.done = true)
     Agent -> Agent: finalize episode completion
-    Client -> REST: POST /session/{session_id}/start-episode\n{task_id: "next_task_id"} [optional: start new episode]
     note right of Client
-      Client can start a new episode
-      in the same session or end session via REST API
+      In benchmark mode, the server automatically
+      advances to the next task or completes the benchmark.
+      Single-task mode completes after one episode.
     end note
 end
 

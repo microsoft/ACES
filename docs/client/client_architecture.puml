@@ -44,10 +44,11 @@ package "Server Communication" {
         --
         +create_session(client_id: str): str
         +close_session(): void
-        +start_episode(task_id: str): EpisodeInfo
+        +start_benchmark(task_ids: List[str], episode_attempts: int): BenchmarkInfo
         +get_current_task(): TaskInfo
         +get_policy(): PolicyInfo
         +health_check(): Dict[str, Any]
+        +list_tasks(): List[TaskInfo]
         +connect_mcp(): void
         +disconnect_mcp(): void
         +list_tools(): List[MCPTool]

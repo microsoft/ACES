@@ -12,9 +12,10 @@ import inspect
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlparse
 
+from ..base import SSEEventType
 from .api import SABERMCPClient, SABERRestClient
 from .llm import create_llm_client
 
@@ -36,8 +37,11 @@ class SABERHarnessConfig:
     max_steps: int = 100
     request_timeout: float = 300.0  # Increased to 5 minutes for agent execution
     log_level: str = "INFO"
-    task_id: str = "default_task"
+    task_id: str = "default_task"  # Deprecated: use task_ids instead
     client_id: str = "saber-client"
+    # Unified benchmark configuration
+    task_ids: Optional[List[str]] = None  # Specific tasks to run (None = all available)
+    episode_attempts: int = 1  # Number of episodes per task
     llm_provider: Optional[str] = None  # Auto-detect if None
     llm_config: Dict[str, Any] = field(default_factory=dict)
     agent_config: Dict[str, Any] = field(default_factory=dict)
@@ -87,6 +91,18 @@ class SABERHarness:
         self.episode_terminated = asyncio.Event()
         self.termination_reason: Optional[str] = None
 
+        # SSE Event Handler Registry
+        self._event_handlers = {
+            SSEEventType.ENVIRONMENT_RESET: self._handle_environment_reset,
+            SSEEventType.MAX_STEPS_REACHED: self._handle_termination_event,
+            SSEEventType.EPISODE_TIMEOUT: self._handle_termination_event,
+            SSEEventType.MANUAL_TERMINATION: self._handle_termination_event,
+            SSEEventType.EPISODE_COMPLETED: self._handle_termination_event,
+            SSEEventType.EPISODE_FAILED: self._handle_termination_event,
+            SSEEventType.EPISODE_STARTED: self._handle_progress_event,
+            SSEEventType.EPISODE_PROGRESS: self._handle_progress_event,
+        }
+
         # Configure logging
         logging.getLogger().setLevel(getattr(logging, self.config.log_level.upper()))
 
@@ -119,6 +135,17 @@ class SABERHarness:
 
         logger.info("✅ SABER harness initialized successfully")
 
+    def register_event_handler(self, event_type: SSEEventType, handler: Callable) -> None:
+        """Register a custom handler for a specific SSE event type."""
+        self._event_handlers[event_type] = handler
+        logger.debug(f"📝 Registered custom handler for {event_type}")
+
+    def unregister_event_handler(self, event_type: SSEEventType) -> None:
+        """Remove a custom handler for a specific SSE event type."""
+        if event_type in self._event_handlers:
+            del self._event_handlers[event_type]
+            logger.debug(f"🗑️ Unregistered handler for {event_type}")
+
     async def run_test(self, task_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Run a complete test of the agent against SABER framework.
@@ -130,15 +157,65 @@ class SABERHarness:
             Test results and metrics
         """
         try:
-            task_id = task_id or self.config.task_id
-            logger.info(f"🚀 Starting SABER Agent Test - Task: {task_id}")
+            # Determine execution mode based on configuration
+            if self.config.task_ids or self.config.episode_attempts > 1:
+                # Unified benchmark mode (custom tasks or multiple episodes)
+                logger.info("🚀 Starting SABER Unified Benchmark Mode")
+                if self.config.task_ids:
+                    logger.info(f"🎯 Specific tasks: {self.config.task_ids}")
+                else:
+                    logger.info("🎯 All available tasks")
+                logger.info(f"🔄 Episodes per task: {self.config.episode_attempts}")
+            else:
+                # Legacy single task mode (backward compatibility)
+                task_id = task_id or self.config.task_id
+                logger.info(f"🚀 Starting SABER Single Task Mode - Task: {task_id}")
+                # Convert to benchmark format for unified handling
+                self.config.task_ids = [task_id]
+                self.config.episode_attempts = 1
+
             logger.info("=" * 60)
 
             if not self.rest_client:
                 raise RuntimeError("REST client not initialized")
 
             self.session_id = await self.rest_client.create_session()
-            self.episode_id = await self.rest_client.start_episode(task_id)
+
+            # Always use benchmark mode now (unified approach)
+            benchmark_data = await self.rest_client.start_benchmark(
+                task_ids=self.config.task_ids, episode_attempts=self.config.episode_attempts
+            )
+
+            # Debug: Log the benchmark response structure
+            logger.debug(f"🔍 Benchmark response: {benchmark_data}")
+
+            # Extract the initial episode ID from benchmark response
+            self.episode_id = benchmark_data.get("current_episode_id")
+
+            # If not found at top level, check other possible locations
+            if not self.episode_id:
+                # Try nested in benchmark_session
+                benchmark_session = benchmark_data.get("benchmark_session", {})
+                self.episode_id = benchmark_session.get("current_episode_id")
+
+            # Log benchmark details
+            benchmark_session = benchmark_data.get("benchmark_session", {})
+            tasks = benchmark_session.get("tasks", [])
+            logger.info(f"📋 Benchmark Tasks: {len(tasks)}")
+            for task in tasks:
+                logger.info(f"   - {task['task_id']}: {task['title']}")
+            current_task = benchmark_session.get("current_task_id")
+            if current_task:
+                logger.info(f"🚀 Starting with task: {current_task}")
+                task_id = current_task  # Use the current benchmark task for MCP client
+
+            if self.episode_id:
+                logger.info(f"📝 Initial episode ID: {self.episode_id}")
+            else:
+                logger.warning("⚠️ No episode ID returned from benchmark start")
+                logger.debug(f"🔍 Available keys in response: {list(benchmark_data.keys())}")
+                if benchmark_session:
+                    logger.debug(f"🔍 Available keys in benchmark_session: {list(benchmark_session.keys())}")
 
             self.mcp_client = SABERMCPClient(
                 base_url=f"http://{self.mcp_host}:{self.mcp_port}",
@@ -270,40 +347,84 @@ class SABERHarness:
 
     async def _monitor_episode_status(self) -> None:
         """Monitor episode status via Server-Sent Events for termination signals."""
-        if not self.session_id or not self.episode_id:
-            logger.warning("⚠️ Cannot monitor episode: missing session/episode ID")
+        if not self.session_id:
+            logger.warning("⚠️ Cannot monitor episode: missing session ID")
             return
 
         if not self.rest_client:
             logger.warning("⚠️ Cannot monitor episode: REST client not initialized")
             return
 
-        # Use REST client for episode monitoring
+        if not self.episode_id:
+            logger.warning("⚠️ Cannot monitor episode: missing episode ID")
+            return
+
+        # Monitor the current episode (works for both regular and benchmark modes)
         await self.rest_client.monitor_episode_events(
             episode_id=self.episode_id, session_id=self.session_id, event_handler=self._handle_episode_event
         )
 
     async def _handle_episode_event(self, event_data: Dict[str, Any]) -> None:
-        """Handle incoming episode events from the server."""
+        """Handle incoming episode events from the server using event handler registry."""
         event_type = event_data.get("type")
 
-        if self._should_terminate_episode(event_data):
-            self.termination_reason = event_data.get("reason", f"Episode terminated: {event_type}")
-            logger.info(f"🛑 Episode termination signal received: {self.termination_reason}")
-            self.episode_terminated.set()
-        else:
-            logger.debug(f"📡 Episode event: {event_type} - {event_data.get('message', '')}")
+        # Look up handler in registry
+        if event_type is not None:
+            handler = self._event_handlers.get(event_type)
 
-    def _should_terminate_episode(self, event_data: Dict[str, Any]) -> bool:
-        """Determine if episode should be terminated based on server event."""
-        termination_events = {
-            "max_steps_reached",
-            "episode_timeout",
-            "manual_termination",
-            "episode_completed",
-            "episode_failed",
-        }
-        return event_data.get("type") in termination_events
+            if handler:
+                try:
+                    await handler(event_data)
+                except Exception as e:
+                    logger.error(f"❌ Error handling {event_type} event: {e}")
+            else:
+                # Unknown event type - just log it
+                logger.debug(f"📡 Unknown episode event: {event_type} - {event_data.get('message', '')}")
+
+    async def _handle_termination_event(self, event_data: Dict[str, Any]) -> None:
+        """Handle episode termination events."""
+        event_type = event_data.get("type")
+        self.termination_reason = event_data.get("reason", f"Episode terminated: {event_type}")
+        logger.info(f"🛑 Episode termination signal received: {self.termination_reason}")
+        self.episode_terminated.set()
+
+    async def _handle_progress_event(self, event_data: Dict[str, Any]) -> None:
+        """Handle episode progress/informational events."""
+        event_type = event_data.get("type")
+        message = event_data.get("message", "")
+        logger.debug(f"📡 Episode event: {event_type} - {message}")
+
+    async def _handle_environment_reset(self, event_data: Dict[str, Any]) -> None:
+        """Handle environment reset events from server."""
+        data = event_data.get("data", {})
+        context_hint = data.get("context_hint", "Environment has changed")
+
+        logger.info(f"🔄 {context_hint}")
+
+        # Reset agent state if the agent supports it
+        if self.agent is not None and hasattr(self.agent, "reset_for_environment_change"):
+            try:
+                await self.agent.reset_for_environment_change(data)
+                logger.info("✅ Agent state reset for environment change")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to reset agent state: {e}")
+        elif self.agent is not None and hasattr(self.agent, "reset_conversation_state"):
+            try:
+                self.agent.reset_conversation_state()
+                logger.info("✅ Agent conversation state reset")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to reset agent conversation: {e}")
+        else:
+            logger.info("ℹ️ Agent does not support automatic state reset")
+
+        # Optionally refresh task context
+        try:
+            if self.rest_client and self.session_id:
+                # Get fresh policy/context for new environment
+                await self.rest_client.get_policy_info(self.session_id)
+                logger.debug("🔄 Refreshed policy context for new environment")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to refresh policy context: {e}")
 
     async def _cleanup_session(self) -> None:
         """Clean up SABER session and clients."""

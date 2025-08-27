@@ -17,14 +17,35 @@ package "Benchmark Framework Core" {
         +tasks: Dict[str, Task]
         +config_loader: BenchmarkConfigLoader
         +benchmark_config: Dict[str, Any]
+        +active_benchmarks: Dict[str, BenchmarkSession]
         --
         +get_task(task_id): Task
         +get_subtask(task_id, subtask_id): SubTask
         +list_tasks(): List[Dict]
-        +start_benchmark(benchmark_config): BenchmarkSession
+        +create_benchmark_session(session_id, task_ids): BenchmarkSession
+        +start_benchmark(session_id, config): BenchmarkSession
+        +advance_benchmark(session_id, completed_task_id, success): str?
         +get_benchmark_config(): Dict[str, Any]
+        +get_episode_config(task_id): Dict[str, Any]
         +list_benchmark_tasks(): List[Dict]
         +load_tasks_from_yaml(): void
+    }
+
+    class BenchmarkSession {
+        +session_id: str
+        +task_queue: List[str]
+        +completed_tasks: List[str]
+        +failed_tasks: List[str]
+        +current_task_id: str?
+        +current_episode_id: str?
+        +created_at: datetime
+        --
+        +get_next_task(): str?
+        +mark_task_completed(task_id: str): void
+        +mark_task_failed(task_id: str): void
+        +set_current_episode(episode_id: str): void
+        +to_api_response(domain: str): Dict[str, Any]
+        +is_complete(): bool
     }
 
     class BenchmarkConfigLoader {
@@ -130,6 +151,7 @@ package "Episode Management" {
 ' Relationships
 BenchmarkManager *-- BenchmarkConfigLoader
 BenchmarkManager *-- Task
+BenchmarkManager *-- BenchmarkSession
 
 BenchmarkConfigLoader ..> Task : creates
 BenchmarkConfigLoader ..> SubTask : creates
@@ -143,10 +165,19 @@ Episode ..> EpisodeState
 
 note top of BenchmarkManager
 **Benchmark Orchestration Manager**
-Enhanced to focus on benchmark orchestration and task definition management.
-Manages multiple episode attempts for pass@k evaluation.
+Enhanced to focus on benchmark orchestration and task queue management.
+Manages BenchmarkSession objects that track task progression through episodes.
+Coordinates automatic task advancement when episodes complete successfully.
 Responsible for task configuration loading, lookup, and benchmark coordination.
 Task objects now contain all execution configuration and benchmark settings.
+end note
+
+note top of BenchmarkSession
+**Benchmark Task Queue Manager**
+Manages the progression of tasks within a benchmark session.
+Tracks current task, completed tasks, and failed tasks.
+Provides clean API for task advancement and completion checking.
+Eliminates need for complex session state management in other components.
 end note
 
 note top of Task

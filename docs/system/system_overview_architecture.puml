@@ -38,7 +38,7 @@ package "SABER Server Side" {
         +shutdown(): void
         +create_session(): ClientSession
         +terminate_session(): void
-        +start_episode(): Episode
+        +start_benchmark(): BenchmarkSession
         +execute_action(): CommandResult
         +get_current_task(): Dict[str, Any]
         +get_policy(): PolicyDocument
@@ -53,7 +53,9 @@ package "SABER Server Side" {
         +get_task(): Task
         +get_subtask(): SubTask
         +list_tasks(): List[Dict]
+        +create_benchmark_session(): BenchmarkSession
         +start_benchmark(): BenchmarkSession
+        +advance_benchmark(): str?
         +get_benchmark_config(): Dict[str, Any]
         +list_benchmark_tasks(): List[Dict]
         +load_tasks_from_yaml(): void

@@ -16,6 +16,8 @@ import sys
 from pathlib import Path
 from typing import Any, List, Optional
 
+import httpx
+
 from .saber_harness import SABERHarness, SABERHarnessConfig
 
 
@@ -55,6 +57,174 @@ def load_agent_from_path(agent_path: str, agent_class: Optional[str] = None) -> 
     return candidates[0]  # Return first candidate
 
 
+async def run_unified_benchmark(
+    agent_path: str,
+    task_ids: Optional[List[str]] = None,
+    episode_attempts: int = 1,
+    agent_class: Optional[str] = None,
+    server_url: Optional[str] = None,
+    mcp_url: Optional[str] = None,
+    env_file: Optional[str] = None,
+    log_level: str = "INFO",
+) -> None:
+    """Run unified benchmark mode - supports single tasks, multiple tasks, or full benchmarks."""
+
+    # Set up logging
+    logging.basicConfig(level=getattr(logging, log_level.upper()), format="%(asctime)s - %(levelname)s - %(message)s")
+
+    try:
+        # Load agent
+        print(f"🤖 Loading agent from {agent_path}")
+        agent = load_agent_from_path(agent_path, agent_class)
+        print(f"✅ Agent loaded: {getattr(agent, '__name__', type(agent).__name__)}")
+
+        # Auto-detect environment file if not provided
+        if not env_file:
+            # Look for .env file in agent directory
+            agent_dir = Path(agent_path).parent
+            potential_env = agent_dir / ".env"
+            if potential_env.exists():
+                env_file = str(potential_env)
+                print(f"📄 Found .env file: {env_file}")
+
+        # Configure URLs from environment if not provided
+        final_server_url: str = server_url or os.getenv("SABER_SERVER_URL") or "http://localhost:8000"
+        final_mcp_url: str = mcp_url or os.getenv("SABER_MCP_URL") or "http://localhost:8001"
+
+        # Create unified configuration
+        config = SABERHarnessConfig(
+            server_url=final_server_url,
+            mcp_url=final_mcp_url,
+            task_ids=task_ids,
+            episode_attempts=episode_attempts,
+            log_level=log_level,
+        )
+
+        print(f"🔗 Connecting to SABER server: {final_server_url}")
+        print(f"🔗 MCP server: {final_mcp_url}")
+
+        if task_ids:
+            if len(task_ids) == 1:
+                print(f"🎯 Single task mode: {task_ids[0]}")
+            else:
+                print(f"🎯 Multi-task mode: {task_ids}")
+        else:
+            print("🎯 Full benchmark mode: all available tasks")
+
+        print(f"🔄 Episodes per task: {episode_attempts}")
+
+        # Run unified test
+        harness = SABERHarness(config)
+        env_path = Path(env_file) if env_file else None
+        await harness.initialize(agent, env_file=env_path)
+
+        print("🚀 Starting agent execution...")
+        results = await harness.run_test()
+
+        # Simple results display
+        print("\n" + "=" * 50)
+        if results["success"]:
+            print("🎉 EXECUTION COMPLETE!")
+            if results.get("flag"):
+                print(f"🏁 Final Flag: {results['flag']}")
+        else:
+            print("❌ EXECUTION FAILED")
+            if results.get("error"):
+                print(f"Error: {results['error']}")
+
+        if results.get("iterations"):
+            print(f"📊 Total Iterations: {results['iterations']}")
+
+        print("=" * 50)
+
+    except KeyboardInterrupt:
+        print("\n⏹️ Interrupted by user")
+        sys.exit(0)
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        sys.exit(1)
+
+
+async def run_benchmark_test(
+    agent_path: str,
+    agent_class: Optional[str] = None,
+    server_url: Optional[str] = None,
+    mcp_url: Optional[str] = None,
+    env_file: Optional[str] = None,
+    log_level: str = "INFO",
+) -> None:
+    """Run benchmark test - let server determine available tasks."""
+
+    # Set up logging
+    logging.basicConfig(level=getattr(logging, log_level.upper()), format="%(asctime)s - %(levelname)s - %(message)s")
+
+    try:
+        # Load agent
+        print(f"🤖 Loading agent from {agent_path}")
+        agent = load_agent_from_path(agent_path, agent_class)
+        print(f"✅ Agent loaded: {getattr(agent, '__name__', type(agent).__name__)}")
+
+        # Auto-detect environment file if not provided
+        if not env_file:
+            # Look for .env file in agent directory
+            agent_dir = Path(agent_path).parent
+            potential_env = agent_dir / ".env"
+            if potential_env.exists():
+                env_file = str(potential_env)
+                print(f"📄 Found .env file: {env_file}")
+
+        # Configure URLs from environment if not provided
+        final_server_url: str = server_url or os.getenv("SABER_SERVER_URL") or "http://localhost:8000"
+        final_mcp_url: str = mcp_url or os.getenv("SABER_MCP_URL") or "http://localhost:8001"
+
+        print(f"🔗 Connecting to SABER server: {final_server_url}")
+        print(f"🔗 MCP server: {final_mcp_url}")
+        print("🎯 Starting benchmark mode...")
+
+        # Create configuration for benchmark mode
+        config = SABERHarnessConfig(
+            server_url=final_server_url,
+            mcp_url=final_mcp_url,
+            task_ids=None,  # None = all available tasks
+            episode_attempts=1,  # Default to 1 episode per task for testing
+            log_level=log_level,
+        )
+
+        # Run benchmark test - harness will handle session creation and benchmark start
+        harness = SABERHarness(config)
+        env_path = Path(env_file) if env_file else None
+        await harness.initialize(agent, env_file=env_path)
+
+        print("🚀 Starting agent execution in benchmark mode...")
+        results = await harness.run_test()
+
+        # Simple results display
+        print("\n" + "=" * 50)
+        if results["success"]:
+            print("� BENCHMARK COMPLETE!")
+            if results.get("flag"):
+                print(f"🏁 Final Flag: {results['flag']}")
+        else:
+            print("❌ BENCHMARK FAILED")
+            if results.get("error"):
+                print(f"Error: {results['error']}")
+
+        if results.get("iterations"):
+            print(f"📊 Total Iterations: {results['iterations']}")
+
+        print("=" * 50)
+
+    except KeyboardInterrupt:
+        print("\n⏹️ Interrupted by user")
+        sys.exit(0)
+    except httpx.HTTPStatusError as e:
+        print(f"❌ HTTP Error {e.response.status_code}: {e.response.text}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        sys.exit(1)
+
+
 async def run_agent_test(
     agent_path: str,
     task_id: str = "default_task",
@@ -88,11 +258,12 @@ async def run_agent_test(
         final_server_url: str = server_url or os.getenv("SABER_SERVER_URL") or "http://localhost:8000"
         final_mcp_url: str = mcp_url or os.getenv("SABER_MCP_URL") or "http://localhost:8001"
 
-        # Create simple configuration
+        # Create configuration for single task mode
         config = SABERHarnessConfig(
             server_url=final_server_url,
             mcp_url=final_mcp_url,
-            task_id=task_id,
+            task_ids=[task_id],  # Single task
+            episode_attempts=1,  # Single episode
             log_level=log_level,
         )
 
@@ -135,19 +306,33 @@ async def run_agent_test(
 def main() -> None:
     """Simple CLI entry point."""
     parser = argparse.ArgumentParser(
-        description="SABER Client - Simple Agent Testing",
+        description="SABER Client - Unified Agent Testing",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python -m saber.client --agent ./my_agent.py --task xss_flag_capture
-  python -m saber.client --agent ./agents/red_agent.py --task web_pentest
-  python -m saber.client --agent ./agent.py --task default_task --env-file .env
+  # Single task execution (1 episode)
+  python -m saber.client --agent ./my_agent.py --tasks xss_flag_capture
+
+  # Multiple specific tasks (1 episode each)
+  python -m saber.client --agent ./my_agent.py --tasks xss_flag_capture,sql_injection
+
+  # Full benchmark (all available tasks, 1 episode each)
+  python -m saber.client --agent ./my_agent.py
+
+  # Custom benchmark (all tasks, 3 episodes each for pass@3 evaluation)
+  python -m saber.client --agent ./my_agent.py --episodes 3
+
+  # Focused benchmark (specific tasks, multiple episodes)
+  python -m saber.client --agent ./my_agent.py --tasks xss_flag_capture --episodes 2
         """,
     )
 
     # Required arguments
     parser.add_argument("--agent", required=True, help="Path to agent file (.py)")
-    parser.add_argument("--task", required=True, help="Task ID to execute")
+
+    # Benchmark configuration (all optional - defaults to full benchmark)
+    parser.add_argument("--tasks", help="Comma-separated task IDs to run (default: all available tasks)")
+    parser.add_argument("--episodes", type=int, default=1, help="Number of episodes per task (default: 1)")
 
     # Optional arguments with smart defaults
     parser.add_argument("--agent-class", help="Specific agent class name (auto-detected if not provided)")
@@ -172,11 +357,17 @@ Examples:
         print(f"❌ Agent file not found: {args.agent}")
         sys.exit(1)
 
-    # Run the test
+    # Parse task IDs if provided
+    task_ids = None
+    if args.tasks:
+        task_ids = [task.strip() for task in args.tasks.split(",")]
+
+    # Run unified benchmark mode
     asyncio.run(
-        run_agent_test(
+        run_unified_benchmark(
             agent_path=args.agent,
-            task_id=args.task,
+            task_ids=task_ids,
+            episode_attempts=args.episodes,
             agent_class=args.agent_class,
             server_url=args.server_url,
             mcp_url=args.mcp_url,

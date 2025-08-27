@@ -27,9 +27,12 @@ package "Domain Server Core" {
         +shutdown(): void
         +create_session(): ClientSession
         +terminate_session(): void
-        +start_episode(): Episode
+        +start_benchmark(): BenchmarkSession
+        +end_episode(): Dict[str, Any]
         +execute_action(): CommandResult
-        +get_current_task(): Dict[str, Any]
+        +get_current_task(): Task
+        +get_episode_config(): Dict[str, Any]
+        +should_terminate_episode(): bool
         +get_policy(): PolicyDocument
         +_get_session(): ClientSession
     }
@@ -47,10 +50,11 @@ package "Domain Server Core" {
             **REST API Endpoints**
             +POST /session
             +DELETE /session/{id}
-            +POST /session/{id}/start-episode
+            +POST /session/{id}/start-benchmark
             +GET /session/{id}/current-task
             +GET /session/{id}/policy
             +GET /session/{id}/events
+            +GET /tasks
             +GET /health
             +GET /sessions
         }
@@ -93,14 +97,35 @@ package "Benchmark Management" {
         +tasks: Dict[str, Task]
         +config_loader: BenchmarkConfigLoader
         +benchmark_config: Dict[str, Any]
+        +active_benchmarks: Dict[str, BenchmarkSession]
         --
         +get_task(): Task
         +get_subtask(): SubTask
         +list_tasks(): List[Dict]
+        +create_benchmark_session(): BenchmarkSession
         +start_benchmark(): BenchmarkSession
+        +advance_benchmark(): str?
         +get_benchmark_config(): Dict[str, Any]
+        +get_episode_config(): Dict[str, Any]
         +list_benchmark_tasks(): List[Dict]
         +load_tasks_from_yaml(): void
+    }
+
+    class BenchmarkSession {
+        +session_id: str
+        +task_queue: List[str]
+        +completed_tasks: List[str]
+        +failed_tasks: List[str]
+        +current_task_id: str?
+        +current_episode_id: str?
+        +created_at: datetime
+        --
+        +get_next_task(): str?
+        +mark_task_completed(): void
+        +mark_task_failed(): void
+        +set_current_episode(): void
+        +to_api_response(): Dict[str, Any]
+        +is_complete(): bool
     }
 
     class Task {
@@ -116,6 +141,7 @@ package "Benchmark Management" {
         --
         +get_all_subtask_ids(): Set[str]
         +get_episode_attempts(): int
+        +to_dict(): Dict[str, Any]
     }
 }
 
@@ -269,6 +295,7 @@ SessionRestAPI ..> SessionManager : delegates to
 SessionMCPAPI ..> SessionManager : delegates to
 
 BenchmarkManager *-- Task
+BenchmarkManager *-- BenchmarkSession
 Task ..> EpisodeState
 EpisodeManager *-- Episode
 

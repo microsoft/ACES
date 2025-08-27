@@ -86,7 +86,7 @@ class TestSessionManagerCore:
         assert session_manager.host == "127.0.0.1"
         assert session_manager.port == 8001
         assert session_manager.active_sessions == {}
-        assert session_manager.app is not None
+        assert session_manager.rest_api.app is not None
 
     @pytest.mark.asyncio
     async def test_create_session(self, session_manager):

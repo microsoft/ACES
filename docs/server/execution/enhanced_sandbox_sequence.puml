@@ -15,19 +15,21 @@ participant "Target Services" as TS
 
 == Episode Initialization with Multi-Container Environment ==
 
-Agent -> SM: POST /session/{id}/start-episode\n{task_id: "dvwa_sql_injection"}
+Agent -> SM: POST /session/{id}/start-benchmark\n{task_ids: ["dvwa_sql_injection"], episode_attempts: 1}
 activate SM
 
-SM -> TM: get_task(task_id)
+SM -> TM: create_benchmark_session(session_id, task_ids)
 activate TM
 
 note over TM
-TaskManager loads task configuration
-including environment specification
-with target services
+BenchmarkManager creates benchmark session
+and loads task configuration including
+environment specification with target services
 end note
 
-TM -> SM: task_object
+TM -> SM: benchmark_session
+SM -> TM: start_benchmark(session_id, benchmark_session)
+TM -> TM: get first task from benchmark_session
 deactivate TM
 
 SM -> EM: configure_for_task(session_id, task_object)
