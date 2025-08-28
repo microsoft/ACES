@@ -18,13 +18,14 @@ from .executor_registry import (
 )
 
 # Re-export the standard executors for backward compatibility
-from .standard_registry import CLIExecutor, PythonExecutor
+from .standard_registry import CLIExecutor, PythonExecutor, SQLExecutor
 
 __all__ = [
     "CommandExecutor",
     "DockerExecutor",
     "CLIExecutor",
     "PythonExecutor",
+    "SQLExecutor",
     "ExecutorFactory",
     "executor_registry",
     "register_executor",

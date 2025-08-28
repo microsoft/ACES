@@ -141,13 +141,15 @@ class SQLExecutor(DockerExecutor):
             )
         )
 
+        # Get max_rows from config instead of using self._max_rows since the attribute may not be initialized yet
+        max_rows = config.get("max_rows", 1000)
         self.add_parameter(
             Parameter(
                 name="max_rows",
                 type=ParameterType.INTEGER,
                 description="Maximum number of rows to return",
                 required=False,
-                default=self._max_rows,
+                default=max_rows,
             )
         )
 
