@@ -6,7 +6,7 @@ API clients for SABER server communication:
 - MCP API for secure tool execution
 """
 
-from .mcp_client import SABERMCPClient
+from .mcp_client import MCPClient, MCPMonitorCallback, SABERMCPClient
 from .rest_client import SABERRestClient
 
-__all__ = ["SABERMCPClient", "SABERRestClient"]
+__all__ = ["MCPClient", "SABERMCPClient", "MCPMonitorCallback", "SABERRestClient"]

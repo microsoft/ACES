@@ -84,35 +84,26 @@ class SessionRestAPI:
             policy_dict = policy.to_dict()
             return dict(policy_dict) if policy_dict else {}
 
-        @self.app.post("/session/{session_id}/start-benchmark")
-        async def start_benchmark_endpoint(session_id: str, benchmark_config: Dict[str, Any] = {}) -> Dict[str, Any]:
-            """Start a full benchmark with all tasks for the session."""
-            try:
-                await self.session_manager.start_benchmark(session_id, benchmark_config)
-                # Return a simple success response instead of the full benchmark session
-                result: Dict[str, Any] = {
-                    "message": "Benchmark started successfully",
-                    "session_id": session_id,
-                }
-                return result
-            except Exception as e:
-                logger.error(f"Failed to start benchmark for session {session_id}: {e}")
-                # Return error details for debugging
-                error_result: Dict[str, Any] = {
-                    "error": str(e),
-                    "message": "Benchmark start failed",
-                }
-                return error_result
-
-        @self.app.get("/tasks")
-        async def list_tasks_endpoint() -> Dict[str, Any]:
-            """List all available tasks for benchmarking."""
-            tasks = self.session_manager.benchmark_manager.list_benchmark_tasks()
+        @self.app.post("/session/{session_id}/start-episode")
+        async def start_episode_endpoint(session_id: str, task_id: str) -> Dict[str, Any]:
+            """Start an episode for a specific task."""
+            episode = await self.session_manager.start_episode(session_id, task_id)
             result: Dict[str, Any] = {
-                "tasks": tasks,
-                "total_tasks": len(tasks),
+                "episode_id": episode.episode_id,
+                "task_id": task_id,
+                "session_id": session_id,
+                "message": "Episode started successfully",
             }
             return result
+
+        @self.app.get("/benchmark")
+        async def get_benchmark_endpoint() -> Dict[str, Any]:
+            """
+            Get complete benchmark task list with episode attempts for client orchestration.
+            Each task reports its own configured episode_attempts.
+            """
+            benchmark_info = self.session_manager.get_benchmark_info()
+            return cast(Dict[str, Any], benchmark_info.to_dict())
 
         @self.app.get("/health")
         async def health_check() -> Dict[str, str]:

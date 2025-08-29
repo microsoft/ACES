@@ -24,6 +24,7 @@ from ..logging_config import (
 from .api.session_mcp_api import SessionMCPAPI
 from .api.session_rest_api import SessionRestAPI
 from .base import Action, CommandResult
+from .benchmarks.benchmark_info import BenchmarkInfo
 from .benchmarks.benchmark_manager import BenchmarkManager
 from .episodes.constants import EpisodeResponseKeys, EpisodeTerminationReason
 from .episodes.episode_manager import EpisodeManager
@@ -245,11 +246,6 @@ class SessionManager:
             except Exception as e:
                 logger.warning(f"Error ending episode during session termination: {str(e)}")
 
-        # End any active benchmark
-        if self.benchmark_manager.is_benchmark_active(session_id):
-            self.benchmark_manager.end_benchmark(session_id)
-            logger.info(f"Ended active benchmark during session termination for {session_id}")
-
         # Log session end with evaluation manager (ignore failures)
         try:
             await self.evaluation_manager.log_session_end(session_id)
@@ -274,50 +270,6 @@ class SessionManager:
         del self.active_sessions[session_id]
 
         logger.info(f"Terminated session {session_id}")
-
-    async def start_benchmark(
-        self, session_id: str, benchmark_config: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
-        """
-        Start a full benchmark with all available tasks for the session.
-        Delegates orchestration to BenchmarkManager and starts first episode.
-
-        Args:
-            session_id: ID of the client session
-            benchmark_config: Optional benchmark configuration parameters
-
-        Returns:
-            Benchmark session information with task list and configuration
-        """
-        session = self._get_session(session_id)
-        session.update_activity()
-
-        if benchmark_config is None:
-            benchmark_config = {}
-
-        benchmark_session = self.benchmark_manager.start_benchmark(session_id, benchmark_config)
-
-        # Store benchmark_session in session context
-        session.context["benchmark_session"] = benchmark_session
-
-        # Get the first task that was already set by start_benchmark
-        first_task_id = benchmark_session.current_task_id
-
-        # Validate that benchmark has tasks to execute
-        if not first_task_id:
-            raise HTTPException(
-                status_code=400,
-                detail="No tasks available for benchmark execution. Check benchmark configuration or task definitions.",
-            )
-
-        # Start the first episode automatically
-        episode = await self.start_episode(session_id, first_task_id)
-        benchmark_session.set_current_episode(episode.episode_id)
-
-        logger.info(f"Started benchmark for session {session_id} with first task: {first_task_id}")
-
-        # Return API response format for REST clients
-        return benchmark_session.to_api_response(self.domain_name)
 
     async def start_episode(self, session_id: str, task_id: str) -> Any:
         """
@@ -362,12 +314,20 @@ class SessionManager:
         logger.info(f"Started episode {episode.episode_id} for task {task_id} in session {session_id}")
         return episode
 
+    def get_benchmark_info(self) -> BenchmarkInfo:
+        """
+        Get complete benchmark information for client-side orchestration.
+
+        Returns:
+            BenchmarkInfo object with all tasks and their episode attempt configurations
+        """
+        return self.benchmark_manager.get_benchmark_info()
+
     async def end_episode(
         self, session_id: str, reason: str = EpisodeTerminationReason.COMPLETED, result: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         End the current episode for a session.
-        Automatically advance to next task in benchmark.
 
         Args:
             session_id: ID of the client session
@@ -375,7 +335,7 @@ class SessionManager:
             result: Optional result/submission from the episode (e.g., captured flag)
 
         Returns:
-            Dictionary with episode transition information including next episode details if applicable
+            Dictionary with episode termination information
         """
         session = self._get_session(session_id)
         session.update_activity()
@@ -392,40 +352,13 @@ class SessionManager:
 
         logger.info(f"Ended episode for session {session_id} with reason: {reason}")
 
-        # All calls come through benchmark endpoint, so advance to next task
-        # Only advance if we have a completed task ID
-        next_task_id = None
-        if completed_task_id:
-            next_task_id = self.benchmark_manager.advance_benchmark(session_id, completed_task_id, success)
-
-        # Build response info
+        # Build response info - client handles orchestration now
         response: Dict[str, Any] = {
             EpisodeResponseKeys.EPISODE_ENDED.value: True,
             EpisodeResponseKeys.PREVIOUS_TASK_ID.value: completed_task_id,
             EpisodeResponseKeys.SUCCESS.value: success,
             EpisodeResponseKeys.REASON.value: reason,
         }
-
-        if next_task_id:
-            # Start the next episode
-            next_episode = await self.start_episode(session_id, next_task_id)
-            logger.info(f"Advanced benchmark to next task {next_task_id} for session {session_id}")
-
-            # Add next episode info to result
-            response.update(
-                {
-                    EpisodeResponseKeys.BENCHMARK_CONTINUES.value: True,
-                    EpisodeResponseKeys.NEXT_TASK_ID.value: next_task_id,
-                    EpisodeResponseKeys.NEXT_EPISODE_ID.value: next_episode.episode_id,
-                    EpisodeResponseKeys.ENVIRONMENT_CHANGED.value: True,
-                }
-            )
-        else:
-            # Benchmark is complete
-            logger.info(f"Benchmark completed for session {session_id}")
-            response.update(
-                {EpisodeResponseKeys.BENCHMARK_CONTINUES: False, EpisodeResponseKeys.BENCHMARK_COMPLETE: True}
-            )
 
         return response
 
@@ -473,23 +406,30 @@ class SessionManager:
                 self.episode_manager.end_episode(session_id, EpisodeTerminationReason.COMPLETED)
                 session.current_episode_id = None
                 session.current_task_id = None
+                # Add termination metadata to command result
+                if not hasattr(command_result, "metadata") or command_result.metadata is None:
+                    command_result.metadata = {}
+                command_result.metadata["episode_terminated"] = True
+                command_result.metadata["termination_reason"] = EpisodeTerminationReason.COMPLETED
                 try:
                     await self.evaluation_manager.log_episode_end(session_id, EpisodeTerminationReason.COMPLETED)
                 except Exception as e:
                     logger.warning(f"Failed to log episode end: {e}")
             elif step_result.should_terminate:
-                self.episode_manager.end_episode(
-                    session_id, step_result.termination_reason or EpisodeTerminationReason.TERMINATED
-                )
+                termination_reason = step_result.termination_reason or EpisodeTerminationReason.TERMINATED
+                self.episode_manager.end_episode(session_id, termination_reason)
                 session.current_episode_id = None
                 session.current_task_id = None
+                # Add termination metadata to command result
+                if not hasattr(command_result, "metadata") or command_result.metadata is None:
+                    command_result.metadata = {}
+                command_result.metadata["episode_terminated"] = True
+                command_result.metadata["termination_reason"] = termination_reason
                 try:
-                    await self.evaluation_manager.log_episode_end(
-                        session_id, step_result.termination_reason or EpisodeTerminationReason.TERMINATED
-                    )
+                    await self.evaluation_manager.log_episode_end(session_id, termination_reason)
                 except Exception as e:
                     logger.warning(f"Failed to log episode end: {e}")
-                logger.info(f"Episode ended due to termination condition: {step_result.termination_reason}")
+                logger.info(f"🏗️ Episode ended due to termination condition: {termination_reason}")
 
             return command_result
 

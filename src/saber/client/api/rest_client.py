@@ -61,6 +61,22 @@ class SABERRestClient:
                     error_text = await response.text()
                     raise Exception(f"Failed to create session: {response.status} - {error_text}")
 
+    async def get_benchmark(self) -> Dict[str, Any]:
+        """Get complete benchmark task list for client-orchestrated execution."""
+        url = f"{self.base_url}/get-benchmark"
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=self.request_timeout) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    logger.info(
+                        f"✅ Retrieved benchmark: {data['total_episodes']} episodes for {data['total_tasks']} tasks"
+                    )
+                    return cast(Dict[str, Any], data)
+                else:
+                    error_text = await response.text()
+                    raise Exception(f"Failed to get benchmark: {response.status} - {error_text}")
+
     async def start_episode(self, task_id: str, session_id: Optional[str] = None) -> str:
         """Start episode for the given task and return episode ID."""
         session_id = session_id or self.session_id
@@ -125,20 +141,39 @@ class SABERRestClient:
                 else:
                     raise Exception(f"Failed to get task info: {response.status}")
 
-    async def get_policy_info(self, session_id: Optional[str] = None) -> Dict[str, Any]:
-        """Get policy information."""
+    async def get_policy_info(self, session_id: Optional[str] = None, task_id: Optional[str] = None) -> Dict[str, Any]:
+        """Get policy information for a specific task."""
         session_id = session_id or self.session_id
         if not session_id:
             raise Exception("No active session")
+        if not task_id:
+            raise Exception("Task ID required for policy retrieval")
 
         url = f"{self.base_url}/session/{session_id}/policy"
+        params = {"task_id": task_id}
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, params=params, timeout=self.request_timeout) as response:
+                if response.status == 200:
+                    return cast(Dict[str, Any], await response.json())
+                else:
+                    error_text = await response.text()
+                    raise Exception(f"Failed to get policy info: {response.status} - {error_text}")
+
+    async def list_tasks(self) -> List[Dict[str, Any]]:
+        """List all available tasks."""
+        url = f"{self.base_url}/get-benchmark"
 
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=self.request_timeout) as response:
                 if response.status == 200:
-                    return cast(Dict[str, Any], await response.json())
+                    data = await response.json()
+                    tasks = cast(List[Dict[str, Any]], data.get("tasks", []))
+                    logger.info(f"✅ Retrieved {len(tasks)} available tasks")
+                    return tasks
                 else:
-                    raise Exception(f"Failed to get policy info: {response.status}")
+                    error_text = await response.text()
+                    raise Exception(f"Failed to list tasks: {response.status} - {error_text}")
 
     async def terminate_session(self, session_id: Optional[str] = None) -> bool:
         """Terminate the session."""

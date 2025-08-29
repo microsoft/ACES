@@ -148,7 +148,7 @@ class TestSessionRestAPI:
         assert response.status_code == 404
 
     def test_start_episode_endpoint(self, session_manager_app):
-        """Test starting benchmark (which starts episodes) endpoint."""
+        """Test starting individual episodes endpoint."""
         manager, client = session_manager_app
 
         # Mock task with proper initial_context
@@ -156,29 +156,84 @@ class TestSessionRestAPI:
         mock_task.initial_context = {"initial_data": "test"}
         manager.benchmark_manager.get_task.return_value = mock_task
 
-        # Mock benchmark session
-        mock_benchmark_session = MagicMock()
-        mock_benchmark_session.to_api_response.return_value = {
-            "session_id": "test_session",
-            "first_task_id": "task_456",
-            "current_episode_id": "episode_123",
-            "domain": "test_domain"
-        }
-        manager.benchmark_manager.start_benchmark.return_value = mock_benchmark_session
+        # Mock episode
+        mock_episode = MagicMock()
+        mock_episode.episode_id = "episode_123"
 
         # Create session first
         create_response = client.post("/session?client_id=test_client")
         session_id = create_response.json()["session_id"]
 
-        # Start benchmark (which will start episodes)
-        response = client.post(f"/session/{session_id}/start-benchmark", json={"task_ids": ["task_456"]})
+        # Mock the start_episode method
+        with patch.object(manager, 'start_episode', return_value=mock_episode):
+            # Start individual episode
+            response = client.post(f"/session/{session_id}/start-episode?task_id=task_456")
 
-        assert response.status_code == 200
-        data = response.json()
-        assert data["benchmark_session"]["current_episode_id"] == "episode_123"
-        assert data["benchmark_session"]["first_task_id"] == "task_456"
-        assert data["benchmark_session"]["domain"] == "test_domain"
-        assert data["message"] == "Benchmark started successfully"
+            assert response.status_code == 200
+            data = response.json()
+            assert data["episode_id"] == "episode_123"
+            assert data["task_id"] == "task_456"
+            assert data["session_id"] == session_id
+            assert data["message"] == "Episode started successfully"
+
+    def test_get_benchmark_endpoint(self, session_manager_app):
+        """Test get benchmark endpoint for client orchestration."""
+        manager, client = session_manager_app
+
+        # Import the BenchmarkInfo and TaskInfo classes
+        from saber.server.benchmarks.benchmark_info import BenchmarkInfo, TaskInfo
+
+        # Create mock BenchmarkInfo object
+        mock_tasks = [
+            TaskInfo(
+                task_id="task_1",
+                title="Test Task 1",
+                description="First test task",
+                episode_attempts=2,
+                subtask_count=3
+            ),
+            TaskInfo(
+                task_id="task_2",
+                title="Test Task 2",
+                description="Second test task",
+                episode_attempts=1,
+                subtask_count=2
+            )
+        ]
+
+        mock_benchmark_info = BenchmarkInfo(
+            domain="test_domain",
+            tasks=mock_tasks,
+            total_tasks=2,
+            total_episodes=3
+        )
+
+        # Mock the get_benchmark_info method
+        with patch.object(manager, 'get_benchmark_info', return_value=mock_benchmark_info):
+            # Call get benchmark endpoint
+            response = client.get("/get-benchmark")
+
+            assert response.status_code == 200
+            data = response.json()
+
+            # Verify the new structure
+            assert data["domain"] == "test_domain"
+            assert data["total_tasks"] == 2
+            assert data["total_episodes"] == 3
+            assert len(data["tasks"]) == 2
+
+            # Verify task structure
+            task_1 = data["tasks"][0]
+            assert task_1["task_id"] == "task_1"
+            assert task_1["title"] == "Test Task 1"
+            assert task_1["episode_attempts"] == 2
+            assert task_1["subtask_count"] == 3
+
+            task_2 = data["tasks"][1]
+            assert task_2["task_id"] == "task_2"
+            assert task_2["title"] == "Test Task 2"
+            assert task_2["episode_attempts"] == 1
+            assert task_2["subtask_count"] == 2
 
     def test_get_current_task_endpoint(self, session_manager_app):
         """Test get current task endpoint."""

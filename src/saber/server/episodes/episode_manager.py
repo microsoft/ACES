@@ -91,7 +91,15 @@ class EpisodeManager:
             max_steps = episode_config["max_steps"]
             current_steps = len(episode.steps)
 
+            logger.info(
+                f"🔍 STEP COUNT CHECK: session={session_id}, current_steps={current_steps}, "
+                f"max_steps={max_steps}, should_terminate={current_steps >= max_steps}"
+            )
+
             if current_steps >= max_steps:
+                logger.info(
+                    f"🛑 TERMINATING EPISODE: session={session_id}, reached max steps ({current_steps}/{max_steps})"
+                )
                 return True, f"{EpisodeTerminationReason.MAX_STEPS_REACHED} ({current_steps}/{max_steps})"
 
             # Could add more termination conditions here:
@@ -163,6 +171,22 @@ class EpisodeManager:
 
         logger.debug(f"Executing step {len(episode.steps) + 1} for episode '{episode.episode_id}'")
 
+        # Check if this step will cause termination BEFORE adding it
+        current_steps = len(episode.steps)
+        will_terminate_after_this_step = False
+        termination_reason = None
+
+        # Get episode config to check max_steps
+        episode_config = self.episode_configs.get(session_id)
+        if episode_config and "max_steps" in episode_config:
+            max_steps = episode_config["max_steps"]
+            if current_steps + 1 >= max_steps:  # This step will reach the limit
+                will_terminate_after_this_step = True
+                termination_reason = f"{EpisodeTerminationReason.MAX_STEPS_REACHED} ({current_steps + 1}/{max_steps})"
+                logger.info(
+                    f"🔍 FINAL STEP: This will be step {current_steps + 1}/{max_steps} - episode will terminate"
+                )
+
         # Record tool execution and create step
         step = self.create_step(episode, action, command_result)
 
@@ -172,10 +196,10 @@ class EpisodeManager:
         # Add step to episode
         episode.add_step(step)
 
-        # Check if episode should terminate after this step
-        should_terminate, termination_reason = self.should_terminate_episode(session_id)
-
-        return StepResult(step=step, should_terminate=should_terminate, termination_reason=termination_reason)
+        # Return result with termination info determined in advance
+        return StepResult(
+            step=step, should_terminate=will_terminate_after_this_step, termination_reason=termination_reason
+        )
 
     def end_episode(self, session_id: str, reason: str, result: Optional[str] = None) -> Episode:
         """
