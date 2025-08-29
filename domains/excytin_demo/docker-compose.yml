@@ -1,0 +1,74 @@
+version: '3.8'
+
+services:
+  # SABER Server for excytin_demo domain
+  saber-excytin-server:
+    image: saber-excytin-server:latest
+    container_name: saber-excytin-server
+    ports:
+      - "8000:8000"  # REST API
+      - "8001:8001"  # MCP API
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock  # Docker-in-Docker for dynamic container creation
+      - ./server/config:/app/config  # Mount excytin_demo config directory
+      - ../../src:/app/src  # Mount SABER source code
+      - ./server/logs:/app/logs:rw  # Mount logs directory for enhanced container debugging
+    environment:
+      - SABER_DOMAIN=excytin_demo
+      - SABER_CONFIG_DIR=/app/config
+      - SABER_HOST=0.0.0.0
+      - SABER_PORT=8000
+      - SABER_MCP_PORT=8001
+      - PYTHONPATH=/app/src
+      - SABER_LOG_LEVEL=DEBUG
+      - SABER_LOGS_DIRECTORY=/app/logs  # Enable enhanced container logging
+      - SABER_ENABLE_CONTAINER_LOGGING=true  # Enable container debug logging
+    networks:
+      - saber-excytin-network
+
+  # Excytin Demo Client for testing enhanced logging
+  saber-excytin-client:
+    image: saber-excytin-client:latest
+    container_name: saber-excytin-client
+    volumes:
+      - ./client:/app/client  # Mount client code for development
+      - ../../src:/app/src  # Mount SABER source code for shared constants
+    environment:
+      - SABER_REST_URL=http://saber-excytin-server:8000
+      - SABER_MCP_URL=http://saber-excytin-server:8001
+      - PYTHONPATH=/app/src  # Add src to Python path for shared imports
+      - DOCKER_SABER_SERVER=1  # Auto-detect Docker environment
+    networks:
+      - saber-excytin-network
+    depends_on:
+      - saber-excytin-server
+    working_dir: /app/client
+    command: tail -f /dev/null  # Keep container running for manual execution
+
+  # # Red Agent Client for XSS flag capture
+  # saber-webapp-pentest-client:
+  #   image: saber-red-agent-client:latest
+  #   container_name: saber-webapp-pentest-client
+  #   volumes:
+  #     - ./client:/app/client  # Mount client code for development
+  #     - ../../src:/app/src  # Mount SABER source code for shared constants
+  #     - ${HOME}/.azure:/root/.azure:ro  # Mount Azure credentials (optional)
+  #   environment:
+  #     - SABER_REST_URL=http://saber-webapp-pentest-server:8000
+  #     - SABER_MCP_URL=http://saber-webapp-pentest-server:8001
+  #     - OPENAI_API_KEY=${OPENAI_API_KEY:-}  # Pass through from host environment
+  #     - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY:-}
+  #     - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT:-}
+  #     - AZURE_OPENAI_DEPLOYMENT=${AZURE_OPENAI_DEPLOYMENT:-}
+  #     - PYTHONPATH=/app/src  # Add src to Python path for shared imports
+  #     - DOCKER_SABER_SERVER=1  # Auto-detect Docker environment
+  #   networks:
+  #     - saber-webapp-pentest-network
+  #   depends_on:
+  #     - saber-webapp-pentest-server
+  #   working_dir: /app/client
+  #   command: tail -f /dev/null  # Keep container running for manual execution
+
+networks:
+  saber-excytin-network:
+    driver: bridge

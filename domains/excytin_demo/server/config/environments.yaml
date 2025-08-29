@@ -1,0 +1,36 @@
+# Red Agent Pentesting Environment Configuration
+# Defines containers, networks, and environment templates for XSS CTF challenges
+
+# Container Templates
+containers:
+  saber-excytin-incident-5:
+    image: saber-excytin-mysql:latest
+    container_name: saber-excytin-incident-5
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: admin
+      MYSQL_DATABASE: env_monitor_db
+      MYSQL_ROOT_HOST: "%"
+    command: --secure-file-priv=/var/lib/mysql-files --bind-address=0.0.0.0
+
+# Network Templates
+networks:
+  # Isolated network for Excytin challenges
+  excytin_isolated:
+    driver: "bridge"
+    internal: true
+    ipam:
+      config:
+        - subnet: "172.20.0.0/16"
+
+# Environment Compositions
+environments:
+  # Excytin Incident 5
+  excytin_incident_5:
+    network: "excytin_isolated"
+    execution: "saber-excytin-incident-5"
+    resource_limits:
+      total_memory: "2.5g"
+      total_cpu: "1.5"
+      execution_timeout: 900
