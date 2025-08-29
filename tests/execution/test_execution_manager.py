@@ -51,24 +51,31 @@ class TestExecutionManager:
         executor_registry._registered_executors = original_registry
 
     @pytest.fixture
-    def registry(self, sample_config, cleanup_factory):
+    def temp_config_dir(self, tmp_path):
+        """Create a temporary config directory for testing."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        return str(config_dir)
+
+    @pytest.fixture
+    def registry(self, sample_config, cleanup_factory, temp_config_dir):
         """Create an ExecutionManager instance for testing."""
         with patch("saber.server.execution.execution_manager.SandboxEnvironmentManager"):
-            return ExecutionManager()
+            return ExecutionManager(temp_config_dir)
 
-    def test_initialization_with_valid_config(self, sample_config):
+    def test_initialization_with_valid_config(self, sample_config, temp_config_dir):
         """Test initialization with valid sandbox configuration."""
         with patch("saber.server.execution.execution_manager.SandboxEnvironmentManager") as mock_sandbox:
-            registry = ExecutionManager()
+            registry = ExecutionManager(temp_config_dir)
 
         assert isinstance(registry._configuration, dict)
         assert isinstance(registry._executor_factory, ExecutorFactory)
         assert registry._sandbox_manager == mock_sandbox.return_value
 
-    def test_initialization_with_config(self, sample_config):
+    def test_initialization_with_config(self, sample_config, temp_config_dir):
         """Test initialization with default configuration."""
         with patch("saber.server.execution.execution_manager.SandboxEnvironmentManager"):
-            registry = ExecutionManager()
+            registry = ExecutionManager(temp_config_dir)
 
         # Should have default timeout since no config provided during initialization
         assert 300.0 == 300.0
@@ -224,12 +231,12 @@ class TestExecutionManager:
         assert python_tool["description"] == "Execute Python scripts in Docker containers"
         assert "arguments" in python_tool["inputSchema"]["properties"]
 
-    def test_to_mcp_tools_with_cli_config(self, sample_config):
+    def test_to_mcp_tools_with_cli_config(self, sample_config, temp_config_dir):
         """Test MCP tools conversion with CLI configuration."""
         sample_config["cli"]["default_shell_mode"] = True
 
         with patch("saber.server.execution.execution_manager.SandboxEnvironmentManager"):
-            registry = ExecutionManager()
+            registry = ExecutionManager(temp_config_dir)
 
         # Mock the factory's response
         mock_tools = [

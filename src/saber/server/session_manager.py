@@ -112,19 +112,21 @@ class SessionManager:
 
         self.benchmark_manager = BenchmarkManager(domain_name, config_dir)
         self.episode_manager = EpisodeManager()
-        self.execution_manager = ExecutionManager(config_dir)
-        self.policy_manager = PolicyManager(domain_name)
-        self.evaluation_manager = EvaluationManager()
-        self.cleanup_manager = ContainerCleanupManager(self.execution_manager._sandbox_manager)
 
         # Initialize permanent environment manager with enhanced logging config
         permanent_config = {
             "domain": domain_name,
             "config_dir": config_dir,
-            "logs_directory": "/app/logs",  # Ensure this is mounted to host
             "enable_logging": True,
         }
         self.permanent_environment_manager = PermanentEnvironmentManager(permanent_config)
+
+        # Initialize execution manager with permanent environment manager for network connectivity
+        self.execution_manager = ExecutionManager(config_dir, self.permanent_environment_manager)
+
+        self.policy_manager = PolicyManager(domain_name)
+        self.evaluation_manager = EvaluationManager()
+        self.cleanup_manager = ContainerCleanupManager(self.execution_manager._sandbox_manager)
 
         # Initialize protocol handlers
         self.rest_api = SessionRestAPI(self, host, port)
@@ -170,7 +172,7 @@ class SessionManager:
         if self.permanent_environment_manager.is_running():
             logger.info("Stopping permanent environment...")
             try:
-                self.permanent_environment_manager.stop_permanent_environment()
+                self.permanent_environment_manager.cleanup_on_server_shutdown()
                 logger.info("Permanent environment stopped successfully")
             except Exception as e:
                 logger.error(f"Error stopping permanent environment: {e}")
@@ -631,7 +633,7 @@ class SessionManager:
         return self.episode_manager.should_terminate_episode(session_id)
 
     async def _start_permanent_environment(self) -> None:
-        """Start permanent environment if configured."""
+        """Start permanent environment if configured with lifecycle management."""
         permanent_env_name = self.benchmark_manager.config_loader.get_permanent_environment()
         if not permanent_env_name:
             logger.info("No permanent environment configured")
@@ -647,8 +649,8 @@ class SessionManager:
                 permanent_env_name
             )
 
-            # Start the permanent environment
-            self.permanent_environment_manager.start_permanent_environment(permanent_env_spec)
+            # Ensure permanent environments are current with configuration change detection
+            self.permanent_environment_manager.ensure_permanent_environments_current(permanent_env_spec)
 
             logger.info(f"Permanent environment '{permanent_env_name}' started successfully")
 

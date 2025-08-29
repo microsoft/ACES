@@ -173,7 +173,11 @@ class TestSessionManagerIntegration:
 
             # Verify initialization order and parameters
             mock_tm.assert_called_once_with("test_domain", "/tmp")
-            mock_em.assert_called_once_with("/tmp")
+            # ExecutionManager now takes config_dir and permanent_environment_manager
+            assert mock_em.call_count == 1
+            call_args = mock_em.call_args[0]
+            assert call_args[0] == "/tmp"  # config_dir
+            assert call_args[1] is not None  # permanent_environment_manager
             mock_pm.assert_called_once_with("test_domain")
             mock_eval.assert_called_once()
 

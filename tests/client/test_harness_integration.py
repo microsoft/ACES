@@ -6,6 +6,7 @@ Creates a simple test agent and validates the harness can run it.
 """
 
 import asyncio
+import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 from saber.client import SABERHarness, SABERHarnessConfig
@@ -68,29 +69,30 @@ def create_mock_rest_client():
 
 def create_mock_mcp_client():
     """Create a mock MCP client for testing."""
-    mock_mcp = AsyncMock()
 
-    # Mock tool listing
-    mock_mcp.list_tools.return_value = [
-        {"name": "test_tool", "description": "A test tool"}
-    ]
+    class MockMCPClient:
+        def __init__(self):
+            self.episode_terminated = False
+            self.termination_reason = None
+            self._step_count = 0
+            self.step_count = 0  # Also provide step_count property
 
-    # Mock tool calls
-    mock_mcp.call_tool.return_value = {
-        "content": [{"type": "text", "text": "Tool executed successfully"}]
-    }
+        async def list_tools(self):
+            return [{"name": "test_tool", "description": "A test tool"}]
 
-    # Mock connection
-    mock_mcp.connect.return_value = None
-    mock_mcp.disconnect.return_value = None
+        async def call_tool(self, tool_name, arguments):
+            return {"content": [{"type": "text", "text": "Tool executed successfully"}]}
 
-    # Mock termination properties
-    mock_mcp.episode_terminated = False
-    mock_mcp.termination_reason = None
+        async def connect(self):
+            return None
 
-    return mock_mcp
+        async def disconnect(self):
+            return None
+
+    return MockMCPClient()
 
 
+@pytest.mark.asyncio
 async def test_harness_integration():
     """Test complete harness functionality with mocked dependencies."""
     print("🧪 Starting SABER harness integration test...")
@@ -146,6 +148,7 @@ async def test_harness_integration():
     print(f"🎯 Episode details: {episode_result.task_id} - {episode_result.termination_reason}")
 
 
+@pytest.mark.asyncio
 async def test_harness_with_multiple_tasks():
     """Test harness with multiple tasks (parallelism=1)."""
     print("\n🧪 Testing harness with multiple tasks...")

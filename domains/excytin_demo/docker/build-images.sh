@@ -24,10 +24,16 @@ cd ../../../
 docker build -f domains/excytin_demo/docker/Dockerfile.client -t saber-excytin-client:latest domains/excytin_demo/
 cd "$CURRENT_DIR"
 
+# Build Excytin Demo sandbox
+echo "📦 Building Excytin Demo sandbox..."
+cd ../../../
+docker build -f domains/excytin_demo/docker/Dockerfile.sandbox -t saber-excytin-sandbox:latest domains/excytin_demo/
+cd "$CURRENT_DIR"
+
 # Build custom MySQL image with SQL files
 echo "📦 Building custom MySQL image with SQL data..."
 cd ../../../
-docker build -f domains/excytin_demo/docker/db/Dockerfile.incident_5 -t saber-excytin-mysql:latest domains/excytin_demo/
+docker build -f domains/excytin_demo/docker/db/Dockerfile.incident_5 -t saber-excytin-incident-5:latest domains/excytin_demo/
 cd "$CURRENT_DIR"
 
 # Verify images were built
@@ -40,7 +46,8 @@ echo ""
 echo "Available images:"
 echo "  • saber-excytin-server:latest  - SABER server for excytin domain"
 echo "  • saber-excytin-client:latest  - Demo client for testing enhanced logging"
-echo "  • saber-excytin-mysql:latest   - Custom MySQL with SQL data (Docker-in-Docker workaround)"
+echo "  • saber-excytin-sandbox:latest  - Sandbox execution environment with mysql client"
+echo "  • saber-excytin-incident-5:latest   - Custom MySQL with SQL data (Docker-in-Docker workaround)"
 echo ""
 echo "Next steps:"
 echo "  • Run: docker-compose up -d"

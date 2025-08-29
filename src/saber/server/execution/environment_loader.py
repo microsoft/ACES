@@ -9,7 +9,7 @@ import hashlib
 import logging
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import yaml
 
@@ -24,6 +24,9 @@ from ..execution.sandbox.environment_spec import (
     ServiceSpec,
 )
 
+if TYPE_CHECKING:
+    from ..execution.sandbox.permanent_environment_manager import PermanentEnvironmentManager
+
 logger = logging.getLogger(__name__)
 
 
@@ -34,17 +37,23 @@ class EnvironmentLoader:
     Supports template references, granular configuration, and hybrid approaches.
     """
 
-    def __init__(self, environments_file_path: str):
+    def __init__(
+        self, environments_file_path: str, permanent_environment_manager: Optional["PermanentEnvironmentManager"] = None
+    ):
         """
         Initialize EnvironmentLoader with configuration file.
 
         Args:
             environments_file_path: Path to environments.yaml configuration file
+            permanent_environment_manager: Optional permanent environment manager for network connectivity
         """
         self.environments_file_path = Path(environments_file_path)
+        self.permanent_environment_manager = permanent_environment_manager
         self._templates_cache: Optional[Dict[str, Any]] = None
 
         logger.info(f"EnvironmentLoader initialized with config: {self.environments_file_path}")
+        if permanent_environment_manager:
+            logger.info("Permanent environment connectivity enabled")
 
     def resolve_environment(self, task_env_config: Any) -> EnvironmentSpec:
         """
@@ -110,15 +119,18 @@ class EnvironmentLoader:
         if not network_config:
             raise InvalidEnvironmentSpecException("Network must be specified in granular config")
 
+        # Check for permanent environment connectivity option
+        use_permanent_networks = config.get("permanent_environment_connectivity", False)
+
         network_specs = []
         if isinstance(network_config, str):
             # Single network
-            network_spec = self._resolve_network(network_config, templates)
+            network_spec = self._resolve_network(network_config, templates, use_permanent_networks)
             network_specs.append(network_spec)
         elif isinstance(network_config, list):
             # Multiple networks
             for network_name in network_config:
-                network_spec = self._resolve_network(network_name, templates)
+                network_spec = self._resolve_network(network_name, templates, use_permanent_networks)
                 network_specs.append(network_spec)
         else:
             raise InvalidEnvironmentSpecException("Network must be a string or list of strings")
@@ -220,10 +232,22 @@ class EnvironmentLoader:
 
         network_config = network_templates[network_name]
 
+        # Ensure boolean fields are properly typed
+        internal_val = network_config.get("internal", False)
+        external_val = network_config.get("external", False)
+
+        # Convert string boolean values to actual booleans
+        if isinstance(internal_val, str):
+            internal_val = internal_val.lower() in ("true", "1", "yes", "on")
+        if isinstance(external_val, str):
+            external_val = external_val.lower() in ("true", "1", "yes", "on")
+
         return PermanentNetworkSpec(
             name=network_name,
             driver=network_config.get("driver", "bridge"),
-            internal=network_config.get("internal", False),
+            internal=bool(internal_val),
+            external=bool(external_val),
+            external_name=network_config.get("name"),  # Explicit external network name
             ipam_config=network_config.get("ipam", {}),
         )
 
@@ -265,6 +289,8 @@ class EnvironmentLoader:
             volumes=container_config.get("volumes", []),
             health_check=health_check,
             resource_limits=container_config.get("resource_limits", {}),
+            container_name=container_config.get("container_name"),  # Extract container_name
+            command=container_config.get("command"),  # Extract command
         )
 
     def _merge_template_with_additions(self, config: Dict[str, Any]) -> EnvironmentSpec:
@@ -306,6 +332,9 @@ class EnvironmentLoader:
         self, template_config: Dict[str, Any], templates: Dict[str, Any]
     ) -> EnvironmentSpec:
         """Build EnvironmentSpec from template configuration."""
+        # Check for permanent environment connectivity option
+        use_permanent_networks = template_config.get("permanent_environment_connectivity", False)
+
         # Get network configuration (support both single network and list of networks)
         network_config = template_config.get("network")
         if not network_config:
@@ -314,12 +343,12 @@ class EnvironmentLoader:
         network_specs = []
         if isinstance(network_config, str):
             # Single network
-            network_spec = self._resolve_network(network_config, templates)
+            network_spec = self._resolve_network(network_config, templates, use_permanent_networks)
             network_specs.append(network_spec)
         elif isinstance(network_config, list):
             # Multiple networks
             for network_name in network_config:
-                network_spec = self._resolve_network(network_name, templates)
+                network_spec = self._resolve_network(network_name, templates, use_permanent_networks)
                 network_specs.append(network_spec)
         else:
             raise InvalidEnvironmentSpecException("Network must be a string or list of strings")
@@ -348,8 +377,35 @@ class EnvironmentLoader:
             resource_limits=resource_limits,
         )
 
-    def _resolve_network(self, network_name: str, templates: Dict[str, Any]) -> NetworkSpec:
+    def _resolve_network(
+        self, network_name: str, templates: Dict[str, Any], use_permanent_networks: bool = False
+    ) -> NetworkSpec:
         """Resolve network configuration by name with dynamic subnet allocation."""
+        # Check if we should use permanent environment networks
+        if use_permanent_networks and self.permanent_environment_manager:
+            permanent_networks = self.permanent_environment_manager.get_permanent_networks()
+            if network_name in permanent_networks:
+                logger.info(f"Using permanent network '{network_name}' for sandbox connectivity")
+                # Get the permanent network spec to extract external name
+                permanent_network_spec = self.permanent_environment_manager.get_permanent_network_spec(network_name)
+                external_name = permanent_network_spec.external_name if permanent_network_spec else None
+
+                # Create a NetworkSpec that uses the external permanent network
+                return NetworkSpec(
+                    name=network_name,
+                    driver="bridge",
+                    internal=False,
+                    external=True,  # Mark as external since it's managed by permanent environment
+                    external_name=external_name,  # Use the proper external name
+                    ipam_config={},  # No IPAM needed for external networks
+                    options={},
+                )
+            else:
+                logger.warning(
+                    f"Permanent network '{network_name}' not found in permanent environment, "
+                    "falling back to regular network creation"
+                )
+
         networks = templates.get("networks", {})
         if network_name not in networks:
             raise InvalidEnvironmentSpecException(f"Network '{network_name}' not found in configuration")
@@ -371,10 +427,15 @@ class EnvironmentLoader:
         network_config["ipam"]["config"][0]["subnet"] = unique_subnet
         logger.info(f"Allocated dynamic subnet {unique_subnet} for network {network_name}")
 
+        # Ensure boolean fields are properly typed
+        internal_val = network_config.get("internal", False)
+        if isinstance(internal_val, str):
+            internal_val = internal_val.lower() in ("true", "1", "yes", "on")
+
         return NetworkSpec(
             name=network_name,
             driver=network_config.get("driver", "bridge"),
-            internal=network_config.get("internal", False),
+            internal=bool(internal_val),
             ipam_config=network_config.get("ipam", {}),
             options=network_config.get("options", {}),
         )
@@ -488,6 +549,8 @@ class EnvironmentLoader:
 
         if "image" in container_config:
             compose_config["image"] = container_config["image"]
+        if "container_name" in container_config:
+            compose_config["container_name"] = container_config["container_name"]
         if "command" in container_config:
             compose_config["command"] = container_config["command"]
         if "working_dir" in container_config:
