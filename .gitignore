@@ -46,3 +46,6 @@ bin/
 **/data/
 
 **/.archive
+
+# Ignore log files
+**/logs

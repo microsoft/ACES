@@ -12,9 +12,10 @@ import os
 import sys
 from typing import Optional
 
+from ..logging_config import setup_file_logging
 from .session_manager import SessionManager
 
-# Configure logging
+# Configure basic logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
 logger = logging.getLogger(__name__)
@@ -118,6 +119,9 @@ async def start_server(args: argparse.Namespace) -> None:
     """Start the SABER server with the given arguments."""
 
     try:
+        # Setup file logging early in the startup process
+        setup_file_logging()
+
         # Find and validate configuration
         config_dir = find_config_directory(args.domain, args.config_dir)
         tasks_config, environments_config = validate_config_files(config_dir)

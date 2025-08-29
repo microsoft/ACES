@@ -53,7 +53,7 @@ class TestMultiContainerIntegration:
         )
 
         return EnvironmentSpec(
-            network=network,
+            networks=[network],
             execution_service="ubuntu_executor",
             execution_config={
                 "image": "ubuntu:latest",
@@ -94,7 +94,7 @@ class TestMultiContainerIntegration:
         )
 
         return EnvironmentSpec(
-            network=network,
+            networks=[network],
             execution_service="ubuntu_executor",
             execution_config={"image": "ubuntu:latest", "working_dir": "/workspace", "command": ["sleep", "3600"]},
             target_services=[redis_service, nginx_service],
@@ -355,7 +355,7 @@ class TestMultiContainerIntegration:
         # Test with invalid image
         network = NetworkSpec(name="test_error_network")
         invalid_spec = EnvironmentSpec(
-            network=network,
+            networks=[network],
             execution_service="invalid_executor",
             execution_config={"image": "nonexistent:image"},
             target_services=[],

@@ -39,12 +39,12 @@ from saber.server.base import CommandResult
 from saber.server.execution.base import Parameter, ParameterType
 from saber.server.execution.executors.executor_registry import register_executor
 from saber.server.execution.executors.docker_executor import DockerExecutor
-from saber.server.execution.sandbox.sandbox_manager import SandboxManager
+from saber.server.execution.sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 
 class TestIntegrationExecutor(DockerExecutor):
     """Test executor for integration testing."""
 
-    def __init__(self, sandbox_manager: SandboxManager, docker_config: Optional[Dict[str, Any]] = None):
+    def __init__(self, sandbox_manager: SandboxEnvironmentManager, docker_config: Optional[Dict[str, Any]] = None):
         super().__init__(sandbox_manager, docker_config)
 
     @classmethod
@@ -77,8 +77,8 @@ register_executor("integration_test", TestIntegrationExecutor, "test")
 '''
             executor_file.write_text(executor_code)
 
-            # Mock SandboxManager to avoid Docker dependencies in tests
-            with patch("saber.server.execution.execution_manager.SandboxManager") as mock_sandbox:
+            # Mock SandboxEnvironmentManager to avoid Docker dependencies in tests
+            with patch("saber.server.execution.execution_manager.SandboxEnvironmentManager") as mock_sandbox:
                 mock_sandbox_instance = MagicMock()
                 mock_sandbox.return_value = mock_sandbox_instance
 
@@ -108,8 +108,8 @@ register_executor("integration_test", TestIntegrationExecutor, "test")
         if not pentest_demo_path.exists():
             pytest.skip("Pentest demo directory not found")
 
-        # Mock SandboxManager to avoid Docker dependencies
-        with patch("saber.server.execution.execution_manager.SandboxManager") as mock_sandbox:
+        # Mock SandboxEnvironmentManager to avoid Docker dependencies
+        with patch("saber.server.execution.execution_manager.SandboxEnvironmentManager") as mock_sandbox:
             mock_sandbox_instance = MagicMock()
             mock_sandbox.return_value = mock_sandbox_instance
 
@@ -209,8 +209,8 @@ register_executor("schema_test", SchemaTestExecutor)
 """
             executor_file.write_text(executor_code)
 
-            # Mock SandboxManager
-            with patch("saber.server.execution.execution_manager.SandboxManager") as mock_sandbox:
+            # Mock SandboxEnvironmentManager
+            with patch("saber.server.execution.execution_manager.SandboxEnvironmentManager") as mock_sandbox:
                 mock_sandbox_instance = MagicMock()
                 mock_sandbox.return_value = mock_sandbox_instance
 
@@ -283,7 +283,7 @@ register_executor("factory_test", FactoryTestExecutor)
 """
             executor_file.write_text(executor_code)
 
-            with patch("saber.server.execution.execution_manager.SandboxManager") as mock_sandbox:
+            with patch("saber.server.execution.execution_manager.SandboxEnvironmentManager") as mock_sandbox:
                 mock_sandbox_instance = MagicMock()
                 mock_sandbox.return_value = mock_sandbox_instance
 

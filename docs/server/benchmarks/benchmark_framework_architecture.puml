@@ -53,6 +53,7 @@ package "Benchmark Framework Core" {
         --
         +load_tasks_from_file(): Dict[str, Task]
         +load_benchmark_config(): Dict[str, Any]
+        +get_permanent_environment(task_id: str): Optional[str]
         +get_allowed_executors(): List[str]
         +_parse_task(): Task
         +_parse_subtask(): SubTask
@@ -64,7 +65,8 @@ package "Benchmark Framework Core" {
         +domain: str
         +title: str
         +description: str
-        +environment: Union[str, Dict[str, Any]]
+        +sandbox_environment: Union[str, Dict[str, Any]]
+        +permanent_environment: Optional[str]
         +allowed_executors: List[str]
         +initial_context: Dict[str, Any]
         +subtasks: List[SubTask]

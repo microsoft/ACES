@@ -24,13 +24,13 @@ from saber.server.execution.executors.executor_registry import (
     register_executor,
     register_executor_from_file,
 )
-from saber.server.execution.sandbox.sandbox_manager import SandboxManager
+from saber.server.execution.sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 
 
 class TestCustomExecutor(DockerExecutor):
     """Test executor for unit testing."""
 
-    def __init__(self, sandbox_manager: SandboxManager, docker_config: Dict[str, Any] = None):
+    def __init__(self, sandbox_manager: SandboxEnvironmentManager, docker_config: Dict[str, Any] = None):
         super().__init__(sandbox_manager, docker_config)
 
     @classmethod
@@ -64,7 +64,7 @@ class TestExecutorRegistry:
     @pytest.fixture
     def mock_sandbox_manager(self):
         """Create a mock SandboxManager."""
-        mock = MagicMock(spec=SandboxManager)
+        mock = MagicMock(spec=SandboxEnvironmentManager)
         return mock
 
     @pytest.fixture

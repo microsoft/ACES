@@ -30,6 +30,7 @@ class BenchmarkConfigLoader:
         self.allowed_executors: Optional[list[str]] = None
         self.benchmark_config: Dict[str, Any] = {}
         self.global_defaults: Dict[str, Any] = {}
+        self.permanent_environment: Optional[str] = None
         self.yaml_data: Optional[Dict[str, Any]] = None
 
     def load_tasks_from_file(self, tasks_file_path: str) -> Dict[str, Task]:
@@ -69,6 +70,13 @@ class BenchmarkConfigLoader:
                     f"Domain mismatch: expected '{self.domain}', got '{yaml_domain}'",
                     str(tasks_path),
                 )
+
+            # Parse permanent environment configuration (optional)
+            self.permanent_environment = self.yaml_data.get("permanent_environment")
+            if self.permanent_environment:
+                logger.info(f"Found permanent environment configuration: {self.permanent_environment}")
+            else:
+                logger.info("No permanent environment configuration found")
 
             # Parse global defaults configuration (optional)
             self._parse_global_defaults()
@@ -134,6 +142,15 @@ class BenchmarkConfigLoader:
             Domain-level benchmark configuration
         """
         return self.benchmark_config.copy()
+
+    def get_permanent_environment(self) -> Optional[str]:
+        """
+        Get the permanent environment configuration.
+
+        Returns:
+            Permanent environment name, or None if not configured
+        """
+        return self.permanent_environment
 
     def get_global_defaults(self) -> Dict[str, Any]:
         """
@@ -251,8 +268,14 @@ class BenchmarkConfigLoader:
 
         logger.debug(f"Parsing task '{task_id}': {title}")
 
-        # Get environment string (resolution happens in execution layer)
-        environment = task_data.get("environment")
+        # Get sandbox environment string (resolution happens in execution layer)
+        # Support both 'environment' and 'sandbox_environment' for flexibility
+        sandbox_environment = task_data.get("environment") or task_data.get("sandbox_environment")
+
+        # 🔍 DEBUG: Log what environment was parsed
+        logger.info(f"🔍 DEBUG: Task '{task_id}' environment from YAML: {sandbox_environment}")
+        logger.info(f"🔍 DEBUG: Raw task_data environment field: {task_data.get('environment')}")
+        logger.info(f"🔍 DEBUG: Raw task_data sandbox_environment field: {task_data.get('sandbox_environment')}")
 
         # Get execution configuration with global defaults fallback
         task_execution_config = task_data.get("execution_config", {})
@@ -322,7 +345,7 @@ class BenchmarkConfigLoader:
             description=description,
             subtasks=subtasks,
             initial_context=initial_context,
-            environment=environment,
+            environment=sandbox_environment,
             allowed_executors=execution_config.get("allowed_executors", self.allowed_executors),
             execution_config=execution_config,
             episode_config=episode_config,

@@ -1,54 +1,71 @@
 @startuml Enhanced Sandbox Environment Setup Sequence
 
 !theme plain
-title SABER Enhanced Docker Sandbox Environment Setup - Multi-Container Support
+title SABER Enhanced Docker Environment Setup - Permanent & Ephemeral Container Support
 
 actor Agent
 participant "SessionManager" as SM
-participant "TaskManager" as TM
+participant "BenchmarkManager" as BM
 participant "EpisodeManager" as EM_EP
 participant "ExecutionManager" as EM
-participant "SandboxManager" as SBMGR
+participant "SandboxEnvironmentManager" as SBMGR
+participant "PermanentEnvironmentManager" as PMGR
 participant "DockerSandboxEnvironment" as DSE
 participant "Docker Compose" as DC
 participant "Target Services" as TS
 
-== Episode Initialization with Multi-Container Environment ==
+== Episode Initialization with Permanent & Ephemeral Environments ==
 
 Agent -> SM: POST /session/{id}/start-benchmark\n{task_ids: ["dvwa_sql_injection"], episode_attempts: 1}
 activate SM
 
-SM -> TM: create_benchmark_session(session_id, task_ids)
-activate TM
+SM -> BM: create_benchmark_session(session_id, task_ids)
+activate BM
 
-note over TM
+note over BM
 BenchmarkManager creates benchmark session
 and loads task configuration including
-environment specification with target services
+sandbox_environment and permanent_environment
+specifications
 end note
 
-TM -> SM: benchmark_session
-SM -> TM: start_benchmark(session_id, benchmark_session)
-TM -> TM: get first task from benchmark_session
-deactivate TM
+BM -> SM: benchmark_session
+SM -> BM: start_benchmark(session_id, benchmark_session)
+BM -> BM: get first task from benchmark_session
+deactivate BM
 
 SM -> EM: configure_for_task(session_id, task_object)
 activate EM
 
 note over EM
-ExecutionManager extracts environment_spec
-from task object and configures sandbox
-Environment spec includes:
+ExecutionManager extracts sandbox_environment
+and permanent_environment from task object
+and configures both ephemeral and permanent environments.
+Sandbox environment spec includes:
 - execution container config
-- target services (DVWA + MySQL)
-- network configuration
+- target services (if ephemeral)
+- multi-network configuration
 - resource limits
+Permanent environment provides persistent services
 end note
 
-EM -> SBMGR: create_session_environment(session_id, environment_spec)
+EM -> PMGR: ensure_permanent_environment_running(permanent_env_name)
+activate PMGR
+
+note over PMGR
+PermanentEnvironmentManager checks if
+permanent services are already running.
+If not, starts them on the permanent network.
+Services like persistent databases, monitoring
+end note
+
+PMGR -> EM: permanent_services_ready
+deactivate PMGR
+
+EM -> SBMGR: create_session_environment(session_id, sandbox_env_spec)
 activate SBMGR
 
-SBMGR -> DSE: new DockerSandboxEnvironment(session_id, environment_spec)
+SBMGR -> DSE: new DockerSandboxEnvironment(session_id, sandbox_env_spec)
 activate DSE
 
 SM -> EM_EP: start_episode(session_id, task_id, initial_context)
@@ -59,45 +76,49 @@ deactivate EM_EP
 
 note over DSE
 DockerSandboxEnvironment detects
-multi-container configuration and
-prepares Docker Compose setup
+multi-network configuration and
+prepares Docker Compose setup with
+connections to both isolated and permanent networks
 end note
 
 DSE -> DSE: analyze_environment_spec()
-DSE -> DSE: is_multi_container() -> True
+DSE -> DSE: is_multi_network() -> True
 
-== Multi-Container Environment Setup ==
+== Multi-Network Environment Setup ==
 
 DSE -> DSE: generate_compose_config()
 
 note over DSE
 Generates docker-compose.yml with:
-- dvwa_webapp service (vulnerable web app)
-- dvwa_database service (MySQL)
-- pentesting_sandbox service (execution env)
-- Internal network with no external access
+- execution container (red team tools)
+- optional ephemeral services
+- Network connections to both:
+  * Episode-specific isolated network
+  * Permanent bridge network (for shared services)
 - Health checks and dependencies
 end note
 
 DSE -> DC: docker-compose up -d
 activate DC
 
-DC -> TS: Start MySQL database
-activate TS
+DSE -> PMGR: connect_to_permanent_network(execution_container)
+activate PMGR
 
-note over TS
-MySQL container starts with:
-- DVWA database setup
-- Vulnerable configuration
-- Health checks enabled
+note over PMGR
+Connects the execution container to the permanent
+network so it can access persistent services like
+shared databases, monitoring, or target applications
 end note
 
-DC -> TS: Start DVWA web application
-note over TS
-DVWA container starts with:
-- Depends on database
-- Exposed on port 80 (internal network)
-- Health checks verify web server
+PMGR -> DSE: network_connection_established
+deactivate PMGR
+
+note over DC, TS
+Episode execution container now connected to:
+1. Its own isolated network (episode-specific)
+2. Permanent bridge network (shared services)
+Can access both ephemeral and permanent services
+end note
 end note
 
 DC -> DSE: Start execution container

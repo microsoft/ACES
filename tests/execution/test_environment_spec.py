@@ -225,14 +225,14 @@ class TestEnvironmentSpec:
         service = ServiceSpec(name="webapp", container="nginx_container")
 
         env_spec = EnvironmentSpec(
-            network=network,
+            networks=[network],
             execution_service="execution",
             execution_config={"image": "ubuntu:latest"},
             target_services=[service],
             resource_limits={"total_memory": "2g"},
         )
 
-        assert env_spec.network == network
+        assert env_spec.get_primary_network() == network
         assert env_spec.execution_service == "execution"
         assert env_spec.execution_config == {"image": "ubuntu:latest"}
         assert env_spec.target_services == [service]
@@ -243,7 +243,7 @@ class TestEnvironmentSpec:
         network = NetworkSpec(name="test_network")
 
         env_spec = EnvironmentSpec(
-            network=network, execution_service="execution", execution_config={"image": "ubuntu:latest"}
+            networks=[network], execution_service="execution", execution_config={"image": "ubuntu:latest"}
         )
 
         assert env_spec.target_services == []
@@ -253,7 +253,7 @@ class TestEnvironmentSpec:
         """Test getting execution service name."""
         network = NetworkSpec(name="test_network")
         env_spec = EnvironmentSpec(
-            network=network, execution_service="my_executor", execution_config={"image": "ubuntu:latest"}
+            networks=[network], execution_service="my_executor", execution_config={"image": "ubuntu:latest"}
         )
 
         assert env_spec.get_execution_service() == "my_executor"
@@ -265,7 +265,7 @@ class TestEnvironmentSpec:
         service2 = ServiceSpec(name="database", container="mysql")
 
         env_spec = EnvironmentSpec(
-            network=network,
+            networks=[network],
             execution_service="execution",
             execution_config={"image": "ubuntu:latest"},
             target_services=[service1, service2],
@@ -281,7 +281,7 @@ class TestEnvironmentSpec:
         service2 = ServiceSpec(name="database", container="mysql")
 
         env_spec = EnvironmentSpec(
-            network=network,
+            networks=[network],
             execution_service="execution",
             execution_config={"image": "ubuntu:latest"},
             target_services=[service1, service2],
@@ -299,7 +299,7 @@ class TestEnvironmentSpec:
         service = ServiceSpec(name="webapp", container="nginx", image="nginx:latest", ports=["80"])
 
         env_spec = EnvironmentSpec(
-            network=network,
+            networks=[network],
             execution_service="execution",
             execution_config={"image": "ubuntu:latest", "working_dir": "/workspace"},
             target_services=[service],
@@ -339,7 +339,7 @@ class TestEnvironmentSpec:
         service = ServiceSpec(name="webapp", container="nginx")
 
         env_spec = EnvironmentSpec(
-            network=network,
+            networks=[network],
             execution_service="execution",
             execution_config={"image": "ubuntu:latest"},
             target_services=[service],
@@ -352,7 +352,7 @@ class TestEnvironmentSpec:
         """Test validation with missing execution service."""
         network = NetworkSpec(name="test_network")
 
-        env_spec = EnvironmentSpec(network=network, execution_service="", execution_config={"image": "ubuntu:latest"})
+        env_spec = EnvironmentSpec(networks=[network], execution_service="", execution_config={"image": "ubuntu:latest"})
 
         with pytest.raises(InvalidEnvironmentSpecException, match="Execution service must be specified"):
             env_spec.validate()
@@ -362,7 +362,7 @@ class TestEnvironmentSpec:
         network = NetworkSpec(name="")
 
         env_spec = EnvironmentSpec(
-            network=network, execution_service="execution", execution_config={"image": "ubuntu:latest"}
+            networks=[network], execution_service="execution", execution_config={"image": "ubuntu:latest"}
         )
 
         with pytest.raises(InvalidEnvironmentSpecException, match="Network name must be specified"):
@@ -375,7 +375,7 @@ class TestEnvironmentSpec:
         service2 = ServiceSpec(name="webapp", container="nginx2")  # Duplicate name
 
         env_spec = EnvironmentSpec(
-            network=network,
+            networks=[network],
             execution_service="webapp",  # Also duplicate
             execution_config={"image": "ubuntu:latest"},
             target_services=[service1, service2],
@@ -390,7 +390,7 @@ class TestEnvironmentSpec:
         service = ServiceSpec(name="webapp", container="nginx", depends_on=["nonexistent_service"])
 
         env_spec = EnvironmentSpec(
-            network=network,
+            networks=[network],
             execution_service="execution",
             execution_config={"image": "ubuntu:latest"},
             target_services=[service],
@@ -408,7 +408,7 @@ class TestEnvironmentSpec:
         webapp_service = ServiceSpec(name="webapp", container="nginx", depends_on=["database"])
 
         env_spec = EnvironmentSpec(
-            network=network,
+            networks=[network],
             execution_service="execution",
             execution_config={"image": "ubuntu:latest"},
             target_services=[db_service, webapp_service],

@@ -1,5 +1,5 @@
 """
-Sandbox manager for Docker execution environments.
+Sandbox environment manager for Docker execution environments.
 
 This module manages Docker sandbox environments across sessions,
 providing lifecycle management and cleanup capabilities for both
@@ -14,12 +14,12 @@ from typing import Any, Dict, List, Optional
 from ....logging_config import get_execution_logger
 from ..exceptions import SandboxExecutionError
 from .docker_sandbox_environment import DockerSandboxEnvironment
-from .environment_spec import EnvironmentSpec
+from .environment_spec import SandboxEnvironmentSpec
 
 logger = get_execution_logger(__name__)
 
 
-class SandboxManager:
+class SandboxEnvironmentManager:
     """
     Manager for Docker-based sandbox execution environments.
 
@@ -56,7 +56,7 @@ class SandboxManager:
             self._is_ready = False
             raise
 
-    def _ensure_docker_images_exist(self, environment_spec: EnvironmentSpec) -> None:
+    def _ensure_docker_images_exist(self, environment_spec: SandboxEnvironmentSpec) -> None:
         """
         Ensure all required Docker images exist, building them if necessary.
 
@@ -144,7 +144,7 @@ class SandboxManager:
     def create_session_environment(
         self,
         session_id: str,
-        environment_spec: EnvironmentSpec,
+        environment_spec: SandboxEnvironmentSpec,
     ) -> DockerSandboxEnvironment:
         """
         Create a new Docker sandbox environment for a session.
@@ -170,8 +170,21 @@ class SandboxManager:
             # Ensure required Docker images exist (build if necessary)
             self._ensure_docker_images_exist(environment_spec)
 
-            # Create new environment with specification
-            environment = DockerSandboxEnvironment(session_id, environment_spec)
+            # Prepare container logging configuration
+            container_logging_config = self.sandbox_config.copy()
+            container_logging_config.update(
+                {
+                    "domain": self.sandbox_config.get("domain", "sandbox"),
+                    "session_id": session_id,
+                    "logs_directory": self.sandbox_config.get("logs_directory", "/app/logs"),
+                    "enable_logging": self.sandbox_config.get("enable_container_logging", True),
+                }
+            )
+
+            # Create new environment with specification and logging config
+            environment = DockerSandboxEnvironment(
+                session_id, environment_spec, container_logging_config=container_logging_config
+            )
 
             # Start the environment
             environment.start()
@@ -401,3 +414,7 @@ class SandboxManager:
             Copy of sandbox configuration dictionary
         """
         return dict(self.sandbox_config)
+
+
+# Compatibility alias
+SandboxManager = SandboxEnvironmentManager

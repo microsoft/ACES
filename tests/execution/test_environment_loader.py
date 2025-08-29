@@ -147,7 +147,7 @@ class TestEnvironmentLoader:
 
         assert isinstance(env_spec, EnvironmentSpec)
         assert env_spec.execution_service == "execution_container"
-        assert env_spec.network.name == "test_network"
+        assert env_spec.get_primary_network().name == "test_network"
         assert len(env_spec.target_services) == 1
         assert env_spec.target_services[0].name == "webapp"
 
@@ -180,7 +180,7 @@ class TestEnvironmentLoader:
 
         assert isinstance(env_spec, EnvironmentSpec)
         assert env_spec.execution_service == "execution_container"
-        assert env_spec.network.name == "test_network"
+        assert env_spec.get_primary_network().name == "test_network"
         assert len(env_spec.target_services) == 1
 
     def test_resolve_environment_hybrid_config(self, temp_environments_file):
@@ -332,7 +332,7 @@ class TestEnvironmentLoader:
         assert "database" in service_names
 
         # Check network override was applied
-        assert env_spec.network.internal is False
+        assert env_spec.get_primary_network().internal is False
 
         # Check resource limits were merged
         assert "total_memory" in env_spec.resource_limits

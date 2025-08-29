@@ -23,7 +23,8 @@ package "Execution Management" {
     class ExecutionManager {
         +_configuration: Dict[str, Any]
         +_executor_factory: ExecutorFactory
-        +_sandbox_manager: SandboxManager
+        +_sandbox_env_manager: SandboxEnvironmentManager
+        +_permanent_env_manager: PermanentEnvironmentManager
         +_environment_loader: EnvironmentLoader
         +_execution_lock: Semaphore
         --
@@ -40,7 +41,7 @@ package "Execution Management" {
 
     class ExecutorFactory {
         +_executor_registry: Dict[str, Type[CommandExecutor]]
-        +_sandbox_manager: SandboxManager
+        +_sandbox_env_manager: SandboxEnvironmentManager
         --
         +register_executor(executor_type: str, executor_class: Type): void
         +get_executor(executor_type: str): CommandExecutor
@@ -61,7 +62,7 @@ package "Execution Management" {
     }
 
     class DockerExecutor {
-        +_sandbox_manager: SandboxManager
+        +_sandbox_env_manager: SandboxEnvironmentManager
         +_config: Dict[str, Any]
         --
         {abstract} +execute(): CommandResult
@@ -104,11 +105,12 @@ package "Execution Management" {
         +environments_file_path: Path
         +_templates_cache: Optional[Dict[str, Any]]
         --
-        +resolve_environment(task_env_config: Any): EnvironmentSpec
-        +load_template(template_name: str): EnvironmentSpec
-        +build_from_granular(config: Dict[str, Any]): EnvironmentSpec
-        +_merge_template_with_additions(config: Dict[str, Any]): EnvironmentSpec
-        +_resolve_network(network_name: str, templates: Dict): NetworkSpec
+        +resolve_sandbox_environment(task_env_config: Any): SandboxEnvironmentSpec
+        +resolve_permanent_environment(env_name: str): PermanentEnvironmentSpec
+        +load_template(template_name: str): SandboxEnvironmentSpec
+        +build_from_granular(config: Dict[str, Any]): SandboxEnvironmentSpec
+        +_merge_template_with_additions(config: Dict[str, Any]): SandboxEnvironmentSpec
+        +_resolve_networks(network_names: List[str], templates: Dict): List[NetworkSpec]
         +_resolve_container_config(container_name: str, templates: Dict): Dict[str, Any]
         +_resolve_service_config(service_config: Dict, templates: Dict): ServiceSpec
         +_allocate_unique_subnet(): str
@@ -184,7 +186,7 @@ package "Execution Management" {
 
 package "Docker Sandbox" <<stereototype S>> {
 
-    class SandboxManager {
+    class SandboxEnvironmentManager {
         +sandbox_config: Dict[str, Any]
         +active_sessions: Dict[str, DockerSandboxEnvironment]
         --
@@ -197,13 +199,28 @@ package "Docker Sandbox" <<stereototype S>> {
         +get_sandbox_config(): Dict[str, Any]
     }
 
+    class PermanentEnvironmentManager {
+        +permanent_config: Dict[str, Any]
+        +permanent_services: Dict[str, PermanentService]
+        +permanent_network: DockerNetwork
+        --
+        +start_permanent_services(env_spec: PermanentEnvironmentSpec): void
+        +stop_permanent_services(): void
+        +get_service_endpoints(service_name: str): ServiceEndpoints
+        +connect_sandbox_to_permanent(sandbox_env: DockerSandboxEnvironment): void
+        +is_service_healthy(service_name: str): bool
+        +list_permanent_services(): List[str]
+        +get_permanent_network_info(): Dict[str, Any]
+    }
+
     class DockerSandboxEnvironment {
         +session_id: str
-        +environment_spec: EnvironmentSpec
+        +environment_spec: SandboxEnvironmentSpec
         +compose_project: ComposeProject
         +docker_client: DockerClient
         +compose_client: ComposeClient
         +active_services: Dict[str, Container]
+        +connected_networks: List[str]
         --
         +start(): void
         +stop(): void
@@ -212,6 +229,7 @@ package "Docker Sandbox" <<stereototype S>> {
         +copy_from_container(): void
         +get_execution_container(): Container
         +get_service_container(service_name: str): Optional[Container]
+        +connect_to_networks(networks: List[str]): void
         +list_active_services(): List[str]
         +is_healthy(): bool
         +is_service_healthy(service_name: str): bool
@@ -221,10 +239,10 @@ package "Docker Sandbox" <<stereototype S>> {
         +_track_service_containers(): void
     }
 
-    class EnvironmentSpec {
+    class SandboxEnvironmentSpec {
         +execution_config: Dict[str, Any]
         +target_services: List[ServiceSpec]
-        +network_config: NetworkSpec
+        +networks: List[NetworkSpec]
         +template_name: Optional[str]
         +overrides: Dict[str, Any]
         --
@@ -232,9 +250,32 @@ package "Docker Sandbox" <<stereototype S>> {
         +get_all_services(): List[str]
         +get_service_count(): int
         +to_compose_dict(): Dict[str, Any]
-        +from_template_reference(template_name: str): EnvironmentSpec
-        +from_granular_config(config: Dict): EnvironmentSpec
+        +from_template_reference(template_name: str): SandboxEnvironmentSpec
+        +from_granular_config(config: Dict): SandboxEnvironmentSpec
         +apply_overrides(overrides: Dict): void
+    }
+
+    class PermanentEnvironmentSpec {
+        +permanent_services: List[PermanentServiceSpec]
+        +networks: List[NetworkSpec]
+        +environment_name: str
+        --
+        +get_all_services(): List[str]
+        +get_service_endpoints(service_name: str): ServiceEndpoints
+        +to_compose_dict(): Dict[str, Any]
+        +validate(): ValidationResult
+    }
+
+    class PermanentServiceSpec {
+        +name: str
+        +image: str
+        +ports: List[str]
+        +environment: Dict[str, str]
+        +volumes: List[str]
+        +health_check: Optional[HealthCheck]
+        +restart_policy: str
+        --
+        +to_compose_service(): Dict[str, Any]
     }
 
     class ServiceSpec {
@@ -250,11 +291,13 @@ package "Docker Sandbox" <<stereototype S>> {
     }
 
     class NetworkSpec {
-        +mode: str
-        +isolation: str
-        +dns_config: Optional[Dict[str, Any]]
+        +name: str
+        +driver: str
+        +ipam_config: Optional[Dict[str, Any]]
+        +is_permanent: bool
         --
         +to_compose_networks(): Dict[str, Any]
+        +get_subnet(): str
     }
 
     class HealthCheck {
@@ -274,18 +317,23 @@ DockerExecutor <|-- PythonExecutor
 ' Execution Manager composition relationships
 ExecutionManager *-- ExecutorFactory
 ExecutionManager *-- EnvironmentLoader
-ExecutionManager *-- SandboxManager
+ExecutionManager *-- SandboxEnvironmentManager
+ExecutionManager *-- PermanentEnvironmentManager
 
 ' Factory relationships
-ExecutorFactory *-- SandboxManager
+ExecutorFactory *-- SandboxEnvironmentManager
 
 ' Sandbox relationships
-SandboxManager *-- DockerSandboxEnvironment
-DockerSandboxEnvironment *-- EnvironmentSpec
-EnvironmentSpec *-- ServiceSpec
-EnvironmentSpec *-- NetworkSpec
+SandboxEnvironmentManager *-- DockerSandboxEnvironment
+PermanentEnvironmentManager *-- PermanentServiceSpec
+DockerSandboxEnvironment *-- SandboxEnvironmentSpec
+SandboxEnvironmentSpec *-- ServiceSpec
+SandboxEnvironmentSpec *-- NetworkSpec
+PermanentEnvironmentSpec *-- PermanentServiceSpec
+PermanentEnvironmentSpec *-- NetworkSpec
 ServiceSpec *-- HealthCheck
-DockerExecutor *-- SandboxManager
+PermanentServiceSpec *-- HealthCheck
+DockerExecutor *-- SandboxEnvironmentManager
 DockerSandboxEnvironment ..> CommandResult
 
 ' Executor-specific relationships
@@ -314,7 +362,7 @@ Central hub for all command execution components:
 - No command analysis needed - MCP tools map directly to executor types
 end note
 
-note right of EnvironmentSpec
+note right of SandboxEnvironmentSpec
 **Task Environment Specification**
 Declarative configuration for complete task execution environment:
 - Execution container configuration (CLI tools, security settings)
@@ -325,10 +373,11 @@ Declarative configuration for complete task execution environment:
 - Service dependency declarations for proper startup ordering
 end note
 
-note bottom of SandboxManager
-**Docker Compose Sandbox Manager**
-Manages complete sandbox environments using Docker Compose orchestration:
-- Creates DockerSandboxEnvironment instances from EnvironmentSpec
+note bottom of SandboxEnvironmentManager
+**Docker Compose Sandbox Environment Manager**
+Manages ephemeral sandbox environments using Docker Compose orchestration:
+- Creates DockerSandboxEnvironment instances from SandboxEnvironmentSpec
+- Session-scoped lifecycle management for isolated execution environments
 - Docker Compose orchestration for all sandbox environments
 - Session lifecycle management with proper cleanup
 - Health monitoring across all sandbox services
@@ -336,12 +385,25 @@ Manages complete sandbox environments using Docker Compose orchestration:
 - Network isolation and security boundaries
 end note
 
+note bottom of PermanentEnvironmentManager
+**Permanent Environment Manager**
+Manages server-scoped persistent services that remain active across episodes:
+- Creates and manages long-lived Docker services on server startup
+- Provides permanent network bridge for cross-episode service sharing
+- Service health monitoring and automatic recovery
+- Service endpoint discovery for connecting sandbox environments
+- Graceful shutdown coordination with server lifecycle
+- Persistent storage and configuration management
+end note
+
 note left of EnvironmentLoader
 **Environment Configuration Resolver**
-Flexible environment specification resolution:
-- Template reference resolution (string → EnvironmentSpec)
-- Granular configuration building (dict → EnvironmentSpec)
+Flexible environment specification resolution supporting both ephemeral and permanent environments:
+- Sandbox environment template reference resolution (string → SandboxEnvironmentSpec)
+- Permanent environment reference resolution (string → PermanentEnvironmentSpec)
+- Granular configuration building (dict → SandboxEnvironmentSpec)
 - Hybrid template + additions approach
+- Multi-network configuration support
 - Dynamic subnet allocation for network isolation
 - YAML template caching and validation
 - Multi-container orchestration support

@@ -10,7 +10,7 @@ import pytest
 
 from saber.server.execution.execution_manager import ExecutionManager
 from saber.server.execution.executors.executor_factory import ExecutorFactory
-from saber.server.execution.sandbox.sandbox_manager import SandboxManager
+from saber.server.execution.sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 from saber.server.execution.utils.security_validator import SecurityValidator
 
 
@@ -125,7 +125,7 @@ class TestRealDockerIntegration:
         # Create a simple action that should work in the container
         from saber.server.base import Action
 
-        action = Action(tool_name="cli", parameters={"arguments": "echo 'real container test'"})
+        action = Action(tool_name="cli", parameters={"command": "echo 'real container test'"})
         context = {"session_id": session_id}
 
         try:

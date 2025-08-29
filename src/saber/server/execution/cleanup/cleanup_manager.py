@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
 from ....logging_config import get_cleanup_logger
-from ..sandbox.sandbox_manager import SandboxManager
+from ..sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 from .cleanup_reason import CleanupReason
 
 logger = get_cleanup_logger(__name__)
@@ -45,7 +45,7 @@ class ContainerCleanupManager:
     in SABER, providing unified logging, state tracking, and debugging capabilities.
     """
 
-    def __init__(self, sandbox_manager: SandboxManager):
+    def __init__(self, sandbox_manager: SandboxEnvironmentManager):
         """
         Initialize the cleanup manager.
 

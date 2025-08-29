@@ -17,7 +17,7 @@ from saber.server.execution.exceptions import ExecutionManagerError
 from saber.server.execution.execution_manager import ExecutionManager
 from saber.server.execution.executors.executor_factory import ExecutorFactory
 from saber.server.execution.executors.standard_registry.cli_executor import CLIExecutor
-from saber.server.execution.sandbox.sandbox_manager import SandboxManager
+from saber.server.execution.sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 from saber.server.execution.utils.security_validator import SecurityValidator
 
 
@@ -53,12 +53,12 @@ class TestExecutionManager:
     @pytest.fixture
     def registry(self, sample_config, cleanup_factory):
         """Create an ExecutionManager instance for testing."""
-        with patch("saber.server.execution.execution_manager.SandboxManager"):
+        with patch("saber.server.execution.execution_manager.SandboxEnvironmentManager"):
             return ExecutionManager()
 
     def test_initialization_with_valid_config(self, sample_config):
         """Test initialization with valid sandbox configuration."""
-        with patch("saber.server.execution.execution_manager.SandboxManager") as mock_sandbox:
+        with patch("saber.server.execution.execution_manager.SandboxEnvironmentManager") as mock_sandbox:
             registry = ExecutionManager()
 
         assert isinstance(registry._configuration, dict)
@@ -67,7 +67,7 @@ class TestExecutionManager:
 
     def test_initialization_with_config(self, sample_config):
         """Test initialization with default configuration."""
-        with patch("saber.server.execution.execution_manager.SandboxManager"):
+        with patch("saber.server.execution.execution_manager.SandboxEnvironmentManager"):
             registry = ExecutionManager()
 
         # Should have default timeout since no config provided during initialization
@@ -96,14 +96,18 @@ class TestExecutionManager:
         registry._environment_loader.resolve_environment.return_value = mock_env_spec
 
         # Mock SandboxManager class to avoid environment creation issues
-        with patch("saber.server.execution.execution_manager.SandboxManager") as mock_sandbox_class:
+        with patch("saber.server.execution.execution_manager.SandboxEnvironmentManager") as mock_sandbox_class:
             mock_sandbox_instance = MagicMock()
             mock_sandbox_class.return_value = mock_sandbox_instance
 
             registry.configure_for_task("session123", mock_task)
 
             # Should have created sandbox manager and called environment creation
-            mock_sandbox_class.assert_called_with({})
+            # Check that sandbox manager was called with logging config containing the domain
+            call_args = mock_sandbox_class.call_args[0][0]
+            assert "domain" in call_args
+            assert "logs_directory" in call_args
+            assert "enable_container_logging" in call_args
             mock_sandbox_instance.create_session_environment.assert_called_once_with(
                 "session123", mock_env_spec
             )
@@ -224,7 +228,7 @@ class TestExecutionManager:
         """Test MCP tools conversion with CLI configuration."""
         sample_config["cli"]["default_shell_mode"] = True
 
-        with patch("saber.server.execution.execution_manager.SandboxManager"):
+        with patch("saber.server.execution.execution_manager.SandboxEnvironmentManager"):
             registry = ExecutionManager()
 
         # Mock the factory's response

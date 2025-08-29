@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 from ....base import CommandResult
 from ...base import Parameter, ParameterType, ValidationResult
 from ...exceptions import SandboxExecutionError
-from ...sandbox.sandbox_manager import SandboxManager
+from ...sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 from ...utils.security_validator import SecurityValidator
 from ..docker_executor import DockerExecutor
 
@@ -56,7 +56,7 @@ class CLIExecutor(DockerExecutor):
     @classmethod
     def create_with_config(
         cls,
-        sandbox_manager: SandboxManager,
+        sandbox_manager: SandboxEnvironmentManager,
         config: Optional[Dict[str, Any]] = None,
         additional_params: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
@@ -88,7 +88,7 @@ class CLIExecutor(DockerExecutor):
 
     def __init__(
         self,
-        sandbox_manager: SandboxManager,
+        sandbox_manager: SandboxEnvironmentManager,
         config: Optional[Dict[str, Any]] = None,
         allowed_commands: Optional[List[str]] = None,
         **kwargs: Any,

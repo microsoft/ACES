@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 from ....base import CommandResult
 from ...base import Parameter, ParameterType, ValidationResult
 from ...exceptions import SandboxExecutionError
-from ...sandbox.sandbox_manager import SandboxManager
+from ...sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 from ...utils.security_validator import SecurityValidator
 from ..docker_executor import DockerExecutor
 
@@ -57,7 +57,7 @@ class SQLExecutor(DockerExecutor):
     @classmethod
     def create_with_config(
         cls,
-        sandbox_manager: SandboxManager,
+        sandbox_manager: SandboxEnvironmentManager,
         config: Optional[Dict[str, Any]] = None,
         additional_params: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
@@ -89,7 +89,7 @@ class SQLExecutor(DockerExecutor):
 
     def __init__(
         self,
-        sandbox_manager: SandboxManager,
+        sandbox_manager: SandboxEnvironmentManager,
         config: Optional[Dict[str, Any]] = None,
         sql_config: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
@@ -110,7 +110,7 @@ class SQLExecutor(DockerExecutor):
 
         # Initialize SQL configuration
         self._sql_config = sql_config or {}
-        
+
         # Extract connection string or defaults
         self._connection_string = self._sql_config.get("connection_string", "mysql://root:admin@localhost:3306/mysql")
         self._allow_schema_queries = self._config.get("allow_schema_queries", True)
@@ -162,7 +162,7 @@ class SQLExecutor(DockerExecutor):
 
         Returns:
             Dictionary with connection components
-        
+
         Raises:
             ValueError: If connection string format is invalid
         """
@@ -170,37 +170,37 @@ class SQLExecutor(DockerExecutor):
             # Parse the connection string
             if "://" not in connection_string:
                 raise ValueError("Connection string must include protocol (e.g., mysql://)")
-            
+
             protocol, rest = connection_string.split("://", 1)
-            
+
             # Parse authentication and host information
             if "@" in rest:
                 auth, host_part = rest.split("@", 1)
             else:
                 auth = "root:admin"  # Default credentials
                 host_part = rest
-            
+
             # Parse username and password
             if ":" in auth:
                 username, password = auth.split(":", 1)
             else:
                 username = auth
                 password = ""  # Empty password
-            
+
             # Parse host, port, and database
             if "/" in host_part:
                 host_port, database = host_part.split("/", 1)
             else:
                 host_port = host_part
                 database = ""  # No database specified
-            
+
             # Parse host and port
             if ":" in host_port:
                 host, port = host_port.split(":", 1)
             else:
                 host = host_port
                 port = "3306"  # Default MySQL port
-            
+
             return {
                 "protocol": protocol,
                 "username": username,
@@ -226,29 +226,29 @@ class SQLExecutor(DockerExecutor):
         # Format the query: add semicolon if missing and wrap in quotes
         if not query.strip().endswith(";"):
             query = f"{query.strip()};"
-        
+
         # Build mysql command with proper escaping
         mysql_cmd = [
             "mysql",
-            "-h", connection_info["host"],
-            "-P", connection_info["port"],
-            "-u", connection_info["username"],
+            "-h",
+            connection_info["host"],
+            "-P",
+            connection_info["port"],
+            "-u",
+            connection_info["username"],
         ]
-        
+
         # Add password if provided
         if connection_info["password"]:
             mysql_cmd.extend([f"-p{connection_info['password']}"])
-        
+
         # Add database if provided
         if connection_info["database"]:
             mysql_cmd.extend([connection_info["database"]])
-        
+
         # Add query execution flags
-        mysql_cmd.extend([
-            "--table",  # Table format output
-            "-e", query  # Execute query
-        ])
-        
+        mysql_cmd.extend(["--table", "-e", query])  # Table format output  # Execute query
+
         return mysql_cmd
 
     def validate_sql_query(self, query: str) -> ValidationResult:
@@ -287,7 +287,7 @@ class SQLExecutor(DockerExecutor):
 
         # Only allow schema queries if explicitly enabled
         schema_patterns = ["SHOW TABLES", "DESCRIBE ", "DESC ", "SHOW COLUMNS", "INFORMATION_SCHEMA"]
-        
+
         if not self._allow_schema_queries:
             for pattern in schema_patterns:
                 if pattern.upper() in query.upper():
@@ -337,13 +337,13 @@ class SQLExecutor(DockerExecutor):
 
             # Get SQL query
             query = parameters.get("query", "").strip()
-            
+
             # Get connection string (parameter overrides default)
             connection_string = parameters.get("connection_string", self._connection_string)
-            
+
             # Parse connection string
             connection_info = self.parse_connection_string(connection_string)
-            
+
             # Build command based on database type
             if connection_info["protocol"].lower() in ["mysql", "mariadb"]:
                 command_args = self.build_mysql_command(query, connection_info)
@@ -381,13 +381,15 @@ class SQLExecutor(DockerExecutor):
             container = environment.get_execution_container()
             container_id = container.id[:12] if container else "unknown"
 
-            tool_result.metadata.update({
-                "container_id": container_id,
-                "session_id": session_id,
-                "execution_time": result.execution_time,
-                "query": query,
-                "database": connection_info["database"],
-            })
+            tool_result.metadata.update(
+                {
+                    "container_id": container_id,
+                    "session_id": session_id,
+                    "execution_time": result.execution_time,
+                    "query": query,
+                    "database": connection_info["database"],
+                }
+            )
 
             return tool_result
 
@@ -456,7 +458,7 @@ class SQLExecutor(DockerExecutor):
             Query type as string (SELECT, INSERT, UPDATE, etc.)
         """
         query_upper = query.upper().strip()
-        
+
         if query_upper.startswith("SELECT"):
             return "SELECT"
         elif query_upper.startswith("INSERT"):
@@ -503,9 +505,7 @@ class SQLExecutor(DockerExecutor):
         # Validate the SQL query
         sql_validation = self.validate_sql_query(query.strip())
         if not sql_validation.valid:
-            return ValidationResult.failure(
-                [f"SQL validation failed: {', '.join(sql_validation.errors)}"]
-            )
+            return ValidationResult.failure([f"SQL validation failed: {', '.join(sql_validation.errors)}"])
 
         # Add any SQL warnings to the validation result
         if sql_validation.warnings:
@@ -531,14 +531,14 @@ class SQLExecutor(DockerExecutor):
         """
         # Get Docker-specific information from parent class
         docker_info = self.get_docker_info()
-        
+
         # Add SQL-specific security information
         sql_info = {
             "allow_schema_queries": self._allow_schema_queries,
             "max_rows": self._max_rows,
             "connection_type": self.parse_connection_string(self._connection_string)["protocol"],
         }
-        
+
         return {**docker_info, **sql_info}
 
 

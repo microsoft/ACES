@@ -14,7 +14,7 @@ from saber.server.base import CommandResult
 from saber.server.execution.base import ParameterType, ValidationResult
 from saber.server.execution.exceptions import SandboxExecutionError
 from saber.server.execution.executors.standard_registry.cli_executor import CLIExecutor
-from saber.server.execution.sandbox.sandbox_manager import SandboxManager
+from saber.server.execution.sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 from saber.server.execution.utils.security_validator import SecurityValidator
 
 
@@ -32,8 +32,8 @@ class TestCLIExecutor:
 
     @pytest.fixture
     def mock_sandbox_manager(self):
-        """Create a mock SandboxManager."""
-        manager = MagicMock(spec=SandboxManager)
+        """Create a mock SandboxEnvironmentManager."""
+        manager = MagicMock(spec=SandboxEnvironmentManager)
         manager.get_sandbox_config.return_value = {
             "image": "saber/base-sandbox:latest",
             "network_mode": "none",
@@ -274,8 +274,8 @@ class TestCLIExecutorIntegration:
 
     @pytest.fixture
     def mock_sandbox_manager_with_env(self, mock_docker_sandbox_environment):
-        """Create a mock SandboxManager that returns a Docker environment."""
-        manager = MagicMock(spec=SandboxManager)
+        """Create a mock SandboxEnvironmentManager that returns a Docker environment."""
+        manager = MagicMock(spec=SandboxEnvironmentManager)
         manager.get_sandbox_config.return_value = {
             "image": "saber/base-sandbox:latest",
             "network_mode": "none",

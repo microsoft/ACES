@@ -38,7 +38,7 @@ class TestDockerSandboxEnvironment:
         )
 
         return EnvironmentSpec(
-            network=network,
+            networks=[network],
             execution_service="execution",
             execution_config={"image": "ubuntu:latest", "working_dir": "/workspace", "user": "user:user"},
             target_services=[webapp_service],
@@ -75,7 +75,7 @@ class TestDockerSandboxEnvironment:
         # Create invalid spec (missing execution service)
         network = NetworkSpec(name="test_network")
         invalid_spec = EnvironmentSpec(
-            network=network, execution_service="", execution_config={}  # Invalid empty string
+            networks=[network], execution_service="", execution_config={}  # Invalid empty string
         )
 
         with pytest.raises(InvalidEnvironmentSpecException):
