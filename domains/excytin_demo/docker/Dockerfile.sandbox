@@ -1,0 +1,28 @@
+FROM python:3.11-slim
+
+# Install system packages for networking and database connectivity
+RUN apt-get update && \
+    apt-get install -y \
+        curl \
+        wget \
+        netcat-traditional \
+        default-mysql-client \
+        iputils-ping \
+        && rm -rf /var/lib/apt/lists/*
+
+# Install Python packages commonly used for testing
+RUN pip install --no-cache-dir \
+    requests \
+    pymysql \
+    sqlalchemy \
+    pandas
+
+# Set working directory
+WORKDIR /workspace
+
+# Set environment variables
+ENV PYTHONPATH=/workspace
+ENV PYTHONUNBUFFERED=1
+
+# Keep container running
+CMD ["tail", "-f", "/dev/null"]

@@ -48,13 +48,12 @@ class TestContainerLoggingManager:
         assert manager.domain == "test_domain"
         assert manager.logs_directory == Path(logging_config["logs_directory"])
 
-        # Check subdirectories were created
+        # Check base subdirectories were created
+        # Note: Environment-specific subdirectories (permanent-environments, etc.)
+        # are created on-demand when needed
         expected_subdirs = [
             "compose-configs",
-            "container-logs",
-            "permanent-environments",
-            "sandbox-environments",
-            "server-client-logs"
+            "container-logs"
         ]
 
         for subdir in expected_subdirs:

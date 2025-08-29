@@ -33,10 +33,17 @@ def test_config():
 class TestComponentIntegration:
     """Test component initialization and configuration integration."""
 
-    def test_component_initialization_integration(self, test_config):
+    @pytest.fixture
+    def temp_config_dir(self, tmp_path):
+        """Create a temporary config directory for testing."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        return str(config_dir)
+
+    def test_component_initialization_integration(self, test_config, temp_config_dir):
         """Test that all components can be initialized together."""
         # Test that ExecutionManager can be created with configuration
-        execution_manager = ExecutionManager()
+        execution_manager = ExecutionManager(temp_config_dir)
 
         # Verify initialization
         assert execution_manager._configuration is not None
@@ -91,10 +98,17 @@ class TestRealDockerIntegration:
     """Real Docker integration tests - only run with --integration flag."""
 
     @pytest.fixture
-    def real_registry(self, test_config):
+    def temp_config_dir(self, tmp_path):
+        """Create a temporary config directory for testing."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        return str(config_dir)
+
+    @pytest.fixture
+    def real_registry(self, test_config, temp_config_dir):
         """Create ExecutionManager with real Docker components."""
         # Use the full config, not just the execution section
-        return ExecutionManager()
+        return ExecutionManager(temp_config_dir)
 
     @pytest.fixture
     def docker_cleanup(self):

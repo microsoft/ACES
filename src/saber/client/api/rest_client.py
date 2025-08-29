@@ -162,7 +162,7 @@ class SABERRestClient:
 
     async def list_tasks(self) -> List[Dict[str, Any]]:
         """List all available tasks."""
-        url = f"{self.base_url}/get-benchmark"
+        url = f"{self.base_url}/benchmark"
 
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=self.request_timeout) as response:

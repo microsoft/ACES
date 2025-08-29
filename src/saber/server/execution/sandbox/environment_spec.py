@@ -124,23 +124,32 @@ class NetworkSpec:
     name: str
     driver: str = "bridge"
     internal: bool = False
+    external: bool = False
+    external_name: Optional[str] = None
     ipam_config: Dict[str, Any] = field(default_factory=dict)
     options: Dict[str, str] = field(default_factory=dict)
 
     def to_compose_network(self) -> Dict[str, Any]:
         """Convert to Docker Compose network definition."""
-        network_config = {
+        if self.external:
+            # For external networks, only specify external property and name
+            external_config: Dict[str, Any] = {"external": True}
+            if self.external_name:
+                external_config["name"] = self.external_name
+            return external_config
+
+        standard_config: Dict[str, Any] = {
             "driver": self.driver,
             "internal": self.internal,
         }
 
         if self.ipam_config:
-            network_config["ipam"] = self.ipam_config
+            standard_config["ipam"] = self.ipam_config
 
         if self.options:
-            network_config["driver_opts"] = self.options
+            standard_config["driver_opts"] = self.options
 
-        return network_config
+        return standard_config
 
     def to_dict(self) -> dict:
         """Convert to dictionary."""
@@ -148,6 +157,8 @@ class NetworkSpec:
             "name": self.name,
             "driver": self.driver,
             "internal": self.internal,
+            "external": self.external,
+            "external_name": self.external_name,
             "ipam_config": self.ipam_config,
             "options": self.options,
         }
@@ -164,6 +175,8 @@ class PermanentServiceSpec:
     volumes: List[str] = field(default_factory=list)
     health_check: Optional[HealthCheck] = None
     resource_limits: Dict[str, Any] = field(default_factory=dict)
+    container_name: Optional[str] = None  # Add container_name support
+    command: Optional[str] = None  # Add command support
 
     def to_compose_service(self) -> Dict[str, Any]:
         """Convert to Docker Compose service definition."""
@@ -171,6 +184,12 @@ class PermanentServiceSpec:
             "image": self.image,
             "restart": "unless-stopped",  # Permanent services should restart
         }
+
+        if self.container_name:
+            service_config["container_name"] = self.container_name
+
+        if self.command:
+            service_config["command"] = self.command
 
         if self.ports:
             service_config["ports"] = self.ports
@@ -203,6 +222,10 @@ class PermanentServiceSpec:
             "volumes": self.volumes,
             "resource_limits": self.resource_limits,
         }
+        if self.container_name:
+            result["container_name"] = self.container_name
+        if self.command:
+            result["command"] = self.command
         if self.health_check:
             result["healthcheck"] = self.health_check.to_dict()
         return result
@@ -215,15 +238,24 @@ class PermanentNetworkSpec:
     name: str
     driver: str = "bridge"
     internal: bool = False
+    external: bool = False
+    external_name: Optional[str] = None
     ipam_config: Dict[str, Any] = field(default_factory=dict)
 
     def to_compose_network(self) -> Dict[str, Any]:
         """Convert to Docker Compose network definition."""
-        return {
-            "driver": self.driver,
-            "internal": self.internal,
-            "ipam": self.ipam_config,
-        }
+        if self.external:
+            # For external networks, only specify external property and name
+            external_config: Dict[str, Any] = {"external": True}
+            if self.external_name:
+                external_config["name"] = self.external_name
+            return external_config
+        else:
+            return {
+                "driver": self.driver,
+                "internal": self.internal,
+                "ipam": self.ipam_config,
+            }
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary representation."""
@@ -231,6 +263,8 @@ class PermanentNetworkSpec:
             "name": self.name,
             "driver": self.driver,
             "internal": self.internal,
+            "external": self.external,
+            "external_name": self.external_name,
             "ipam": self.ipam_config,
         }
 
@@ -268,7 +302,13 @@ class PermanentEnvironmentSpec:
 
         # Add services
         for service_name, service_spec in self.services.items():
-            compose_config["services"][service_name] = service_spec.to_compose_service()
+            service_config = service_spec.to_compose_service()
+
+            # Connect service to all available networks
+            if self.networks:
+                service_config["networks"] = list(self.networks.keys())
+
+            compose_config["services"][service_name] = service_config
 
         # Add networks
         for network_name, network_spec in self.networks.items():

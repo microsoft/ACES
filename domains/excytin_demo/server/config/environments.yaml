@@ -3,8 +3,9 @@
 
 # Container Templates
 containers:
+  # Permanent database container - runs for server lifetime
   saber-excytin-incident-5:
-    image: saber-excytin-mysql:latest
+    image: saber-excytin-incident-5:latest
     container_name: saber-excytin-incident-5
     ports:
       - "3306:3306"
@@ -14,23 +15,42 @@ containers:
       MYSQL_ROOT_HOST: "%"
     command: --secure-file-priv=/var/lib/mysql-files --bind-address=0.0.0.0
 
-# Network Templates
-networks:
-  # Isolated network for Excytin challenges
-  excytin_isolated:
-    driver: "bridge"
-    internal: true
-    ipam:
-      config:
-        - subnet: "172.20.0.0/16"
+  # Lightweight Python sandbox container - created per episode
+  saber-python-sandbox:
+    image: saber-python-sandbox:latest
+    container_name: saber-python-sandbox
+    working_dir: /workspace
+    environment:
+      PYTHONPATH: /workspace
+      PYTHONUNBUFFERED: "1"
 
 # Environment Compositions
 environments:
-  # Excytin Incident 5
+  # Permanent database environment - runs for server lifetime
   excytin_incident_5:
-    network: "excytin_isolated"
-    execution: "saber-excytin-incident-5"
+    network: "excytin-shared-network"  # Use shared network to connect to sandbox
+    permanent: true  # This marks it as a permanent environment
+    services:
+      - name: "incident-5-db"
+        container: "saber-excytin-incident-5"
     resource_limits:
-      total_memory: "2.5g"
-      total_cpu: "1.5"
+      total_memory: "1g"
+      total_cpu: "0.5"
+      execution_timeout: null  # No timeout for permanent environments
+
+  # Lightweight Python sandbox - created per episode
+  python_sandbox:
+    network: "excytin-shared-network"  # Use shared network to connect to permanent DB
+    permanent_environment_connectivity: true  # Enable automatic connection to permanent networks
+    execution: "saber-python-sandbox"
+    resource_limits:
+      total_memory: "512m"
+      total_cpu: "0.5"
       execution_timeout: 900
+
+# Network Templates
+networks:
+  excytin-shared-network:
+    driver: bridge
+    external: true
+    name: excytin-shared-network

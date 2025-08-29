@@ -77,6 +77,8 @@ cd /home/ms_test/repos/saber_chillin/domains/excytin_demo
 This builds:
 - `saber-excytin-server:latest` - SABER server for excytin_demo domain
 - `saber-excytin-client:latest` - Demo client for testing
+- `saber-excytin-sandbox:latest`  - Sandbox execution environment with mysql client"
+- `saber-excytin-incident-5:latest`   - Custom MySQL with SQL data (Docker-in-Docker workaround)"
 
 ### 3. Start Environment
 
@@ -87,6 +89,8 @@ docker-compose up -d
 
 This starts:
 - `saber-excytin-server` - Main SABER server (ports 8000/8001)
+- `saber-excytin-incident-5` - Permanent database container that is tied to the server lifecycle
+ - NOTE: This is docker composed from WITHIN the server, not in the domain docker compose. Look in server/logs/comopse-configs/permanent-environments for the latest compose setup
 - `saber-excytin-client` - Demo client container
 
 ### 4. Verify Server is Running

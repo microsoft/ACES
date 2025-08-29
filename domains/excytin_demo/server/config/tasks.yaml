@@ -2,6 +2,9 @@
 # Designed to test enhanced container logging capabilities
 domain: "excytin_demo"
 
+# Permanent environment - runs for the lifetime of the SABER server
+permanent_environment: "excytin_incident_5"
+
 # Global configuration defaults - applied to all tasks unless overridden
 global_defaults:
   # Default execution configuration for all tasks
@@ -22,8 +25,9 @@ tasks:
     title: "Basic Container Logging Demo"
     description: "Simple task to demonstrate basic sandbox container logging functionality"
 
-    # Use the Excytin Incident 5 environment for sandbox logging
-    environment: "excytin_incident_5"
+    # Use a lightweight Python environment for sandbox execution
+    # Note: environment: <> also works
+    sandbox_environment: "python_sandbox"
 
     # Task breakdown for testing logging
     subtasks:

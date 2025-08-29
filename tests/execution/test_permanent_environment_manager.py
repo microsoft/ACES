@@ -25,6 +25,12 @@ class TestPermanentEnvironmentManager:
     """Test PermanentEnvironmentManager functionality."""
 
     @pytest.fixture
+    def temp_config_dir(self):
+        """Create a temporary directory for config storage."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            yield tmp_dir
+
+    @pytest.fixture
     def sample_permanent_spec(self):
         """Create a sample permanent environment specification."""
         # Create network spec
@@ -50,9 +56,9 @@ class TestPermanentEnvironmentManager:
             networks={"permanent_bridge": network_spec}
         )
 
-    def test_init(self):
+    def test_init(self, temp_config_dir):
         """Test PermanentEnvironmentManager initialization."""
-        config = {"domain": "test_domain", "config_dir": "/test/config"}
+        config = {"domain": "test_domain", "config_dir": temp_config_dir}
         manager = PermanentEnvironmentManager(config)
 
         assert manager.config == config
@@ -63,10 +69,10 @@ class TestPermanentEnvironmentManager:
     @patch('saber.server.execution.sandbox.permanent_environment_manager.Path.unlink')
     @patch('saber.server.execution.sandbox.permanent_environment_manager.subprocess.run')
     @patch('saber.server.execution.sandbox.permanent_environment_manager.tempfile.NamedTemporaryFile')
-    def test_start_permanent_environment_success(self, mock_temp_file, mock_subprocess, mock_unlink, sample_permanent_spec):
+    def test_start_permanent_environment_success(self, mock_temp_file, mock_subprocess, mock_unlink, sample_permanent_spec, temp_config_dir):
         """Test successful permanent environment startup."""
         # Setup mocks
-        config = {"domain": "test_domain"}
+        config = {"domain": "test_domain", "config_dir": temp_config_dir}
         manager = PermanentEnvironmentManager(config)
 
         mock_file = Mock()
@@ -82,19 +88,20 @@ class TestPermanentEnvironmentManager:
         assert manager._is_running
         assert manager.permanent_spec == sample_permanent_spec
 
-        # Verify docker-compose was called
+        # Verify docker compose was called (new format, not docker-compose)
         mock_subprocess.assert_called_once()
         call_args = mock_subprocess.call_args[0][0]
-        assert "docker-compose" in call_args
+        assert "docker" in call_args
+        assert "compose" in call_args
         assert "-p" in call_args
         assert "saber-permanent" in call_args
         assert "up" in call_args
         assert "-d" in call_args
 
     @patch('saber.server.execution.sandbox.permanent_environment_manager.subprocess.run')
-    def test_start_permanent_environment_failure(self, mock_subprocess, sample_permanent_spec):
+    def test_start_permanent_environment_failure(self, mock_subprocess, sample_permanent_spec, temp_config_dir):
         """Test permanent environment startup failure."""
-        config = {"domain": "test_domain"}
+        config = {"domain": "test_domain", "config_dir": temp_config_dir}
         manager = PermanentEnvironmentManager(config)
 
         # Mock subprocess failure
@@ -109,9 +116,9 @@ class TestPermanentEnvironmentManager:
         assert not manager._is_running
         # Note: permanent_spec is set before the error occurs, so it won't be None
 
-    def test_start_permanent_environment_already_running(self, sample_permanent_spec):
+    def test_start_permanent_environment_already_running(self, sample_permanent_spec, temp_config_dir):
         """Test starting permanent environment when already running."""
-        config = {"domain": "test_domain"}
+        config = {"domain": "test_domain", "config_dir": temp_config_dir}
         manager = PermanentEnvironmentManager(config)
         manager._is_running = True
 
@@ -123,9 +130,9 @@ class TestPermanentEnvironmentManager:
         assert manager.permanent_spec is None
 
     @patch('saber.server.execution.sandbox.permanent_environment_manager.subprocess.run')
-    def test_stop_permanent_environment_success(self, mock_subprocess):
+    def test_stop_permanent_environment_success(self, mock_subprocess, temp_config_dir):
         """Test successful permanent environment stop."""
-        config = {"domain": "test_domain"}
+        config = {"domain": "test_domain", "config_dir": temp_config_dir}
         manager = PermanentEnvironmentManager(config)
         manager._is_running = True
         manager.permanent_spec = Mock()
@@ -139,18 +146,19 @@ class TestPermanentEnvironmentManager:
         assert not manager._is_running
         assert manager.permanent_spec is None
 
-        # Verify docker-compose was called
+        # Verify docker compose was called (new format, not docker-compose)
         mock_subprocess.assert_called_once()
         call_args = mock_subprocess.call_args[0][0]
-        assert "docker-compose" in call_args
+        assert "docker" in call_args
+        assert "compose" in call_args
         assert "-p" in call_args
         assert "saber-permanent" in call_args
         assert "down" in call_args
         assert "-v" in call_args
 
-    def test_stop_permanent_environment_not_running(self):
+    def test_stop_permanent_environment_not_running(self, temp_config_dir):
         """Test stopping permanent environment when not running."""
-        config = {"domain": "test_domain"}
+        config = {"domain": "test_domain", "config_dir": temp_config_dir}
         manager = PermanentEnvironmentManager(config)
 
         # Should not raise error, just log warning
@@ -161,9 +169,9 @@ class TestPermanentEnvironmentManager:
         assert manager.permanent_spec is None
 
     @patch('saber.server.execution.sandbox.permanent_environment_manager.subprocess.run')
-    def test_get_service_endpoints_success(self, mock_subprocess, sample_permanent_spec):
+    def test_get_service_endpoints_success(self, mock_subprocess, sample_permanent_spec, temp_config_dir):
         """Test successful service endpoints retrieval."""
-        config = {"domain": "test_domain"}
+        config = {"domain": "test_domain", "config_dir": temp_config_dir}
         manager = PermanentEnvironmentManager(config)
         manager._is_running = True
         manager.permanent_spec = sample_permanent_spec
@@ -198,17 +206,17 @@ class TestPermanentEnvironmentManager:
         assert "permanent_bridge" in endpoints["endpoints"]
         assert endpoints["endpoints"]["permanent_bridge"]["ip_address"] == "172.30.0.2"
 
-    def test_get_service_endpoints_not_running(self, sample_permanent_spec):
+    def test_get_service_endpoints_not_running(self, sample_permanent_spec, temp_config_dir):
         """Test getting service endpoints when environment not running."""
-        config = {"domain": "test_domain"}
+        config = {"domain": "test_domain", "config_dir": temp_config_dir}
         manager = PermanentEnvironmentManager(config)
 
         with pytest.raises(SandboxExecutionError, match="Permanent environment is not running"):
             manager.get_service_endpoints("test_service")
 
-    def test_get_service_endpoints_service_not_found(self, sample_permanent_spec):
+    def test_get_service_endpoints_service_not_found(self, sample_permanent_spec, temp_config_dir):
         """Test getting endpoints for non-existent service."""
-        config = {"domain": "test_domain"}
+        config = {"domain": "test_domain", "config_dir": temp_config_dir}
         manager = PermanentEnvironmentManager(config)
         manager._is_running = True
         manager.permanent_spec = sample_permanent_spec
@@ -216,9 +224,9 @@ class TestPermanentEnvironmentManager:
         with pytest.raises(SandboxExecutionError, match="Permanent service 'nonexistent' not found"):
             manager.get_service_endpoints("nonexistent")
 
-    def test_is_running(self):
+    def test_is_running(self, temp_config_dir):
         """Test is_running status check."""
-        config = {"domain": "test_domain"}
+        config = {"domain": "test_domain", "config_dir": temp_config_dir}
         manager = PermanentEnvironmentManager(config)
 
         assert not manager.is_running()
@@ -226,9 +234,9 @@ class TestPermanentEnvironmentManager:
         manager._is_running = True
         assert manager.is_running()
 
-    def test_get_permanent_services(self, sample_permanent_spec):
+    def test_get_permanent_services(self, sample_permanent_spec, temp_config_dir):
         """Test getting list of permanent services."""
-        config = {"domain": "test_domain"}
+        config = {"domain": "test_domain", "config_dir": temp_config_dir}
         manager = PermanentEnvironmentManager(config)
 
         # No spec loaded
@@ -239,9 +247,9 @@ class TestPermanentEnvironmentManager:
         services = manager.get_permanent_services()
         assert services == ["test_service"]
 
-    def test_get_permanent_networks(self, sample_permanent_spec):
+    def test_get_permanent_networks(self, sample_permanent_spec, temp_config_dir):
         """Test getting list of permanent networks."""
-        config = {"domain": "test_domain"}
+        config = {"domain": "test_domain", "config_dir": temp_config_dir}
         manager = PermanentEnvironmentManager(config)
 
         # No spec loaded

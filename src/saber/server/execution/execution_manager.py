@@ -6,12 +6,16 @@ security validation capabilities.
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from ..base import Action, CommandResult
 from .executors.docker_executor import DockerExecutor
 from .executors.executor_factory import ExecutorFactory
 from .sandbox.sandbox_environment_manager import SandboxEnvironmentManager
+
+if TYPE_CHECKING:
+    from .sandbox.permanent_environment_manager import PermanentEnvironmentManager
 
 logger = logging.getLogger(__name__)
 
@@ -24,17 +28,19 @@ class ExecutionManager:
     with security validation and Docker isolation. Commands are executed sequentially.
     """
 
-    def __init__(self, config_dir: Optional[str] = None):
+    def __init__(self, config_dir: str, permanent_environment_manager: Optional["PermanentEnvironmentManager"] = None):
         """
-        Initialize the execution manager
+        Initialize ExecutionManager with executor factory and configuration.
 
         Args:
             config_dir: Path to configuration directory for environment resolution
+            permanent_environment_manager: Optional permanent environment manager for network connectivity
 
         Task-specific configuration will be provided when sessions are created.
         """
         self._config_dir = config_dir
         self._environment_loader = None
+        self._permanent_environment_manager = permanent_environment_manager
 
         # Initialize environment loader if config directory is provided
         if config_dir:
@@ -44,8 +50,10 @@ class ExecutionManager:
             if environments_path.exists():
                 from .environment_loader import EnvironmentLoader
 
-                self._environment_loader = EnvironmentLoader(str(environments_path))
+                self._environment_loader = EnvironmentLoader(str(environments_path), permanent_environment_manager)
                 logger.info(f"Environment loader initialized with: {environments_path}")
+                if permanent_environment_manager:
+                    logger.info("Environment loader configured with permanent environment connectivity")
 
             # Load custom executors from the same directory
             self._load_custom_executors(config_dir)
@@ -55,7 +63,7 @@ class ExecutionManager:
         # Initialize sandbox manager with basic logging config (will be updated per session)
         initial_sandbox_config = {
             "domain": "execution",
-            "logs_directory": "/app/logs",
+            "logs_directory": str(Path(config_dir) / "logs"),
             "enable_container_logging": True,
         }
         self._sandbox_manager = SandboxEnvironmentManager(initial_sandbox_config)
@@ -256,7 +264,7 @@ class ExecutionManager:
         # Update sandbox manager with resolved environment spec and logging config
         sandbox_config = {
             "domain": getattr(task, "domain", "unknown"),
-            "logs_directory": "/app/logs",
+            "logs_directory": str(Path(self._config_dir) / "logs"),
             "enable_container_logging": True,
         }
 

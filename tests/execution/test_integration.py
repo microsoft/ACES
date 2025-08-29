@@ -39,15 +39,22 @@ class TestToolsIntegration:
         }
 
     @pytest.fixture
-    def registry(self, test_config):
-        """Create ExecutionManager for integration testing."""
-        with patch("saber.server.execution.execution_manager.SandboxEnvironmentManager"):
-            return ExecutionManager()
+    def temp_config_dir(self, tmp_path):
+        """Create a temporary config directory for testing."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        return str(config_dir)
 
     @pytest.fixture
-    def real_registry(self, test_config, docker_cleanup):
+    def registry(self, test_config, temp_config_dir):
+        """Create ExecutionManager for integration testing."""
+        with patch("saber.server.execution.execution_manager.SandboxEnvironmentManager"):
+            return ExecutionManager(temp_config_dir)
+
+    @pytest.fixture
+    def real_registry(self, test_config, docker_cleanup, temp_config_dir):
         """Create ExecutionManager with real Docker containers for integration testing."""
-        execution_manager = ExecutionManager()
+        execution_manager = ExecutionManager(temp_config_dir)
         # Register for cleanup
         docker_cleanup(execution_manager)
         return execution_manager
@@ -290,10 +297,10 @@ class TestToolsIntegration:
             assert result.exit_code != 0, f"Dangerous command should be blocked: {cmd}"
             assert "Command security validation failed" in result.error
 
-    def test_component_initialization_integration(self, test_config):
+    def test_component_initialization_integration(self, test_config, temp_config_dir):
         """Test that all components are properly initialized together."""
         with patch("saber.server.execution.sandbox.sandbox_environment_manager.SandboxManager"):
-            registry = ExecutionManager()
+            registry = ExecutionManager(temp_config_dir)
 
         # Verify all components exist and are correct types
         assert hasattr(registry, "_configuration")

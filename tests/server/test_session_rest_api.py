@@ -39,12 +39,17 @@ class TestSessionRestAPI:
         mock_episode_manager.end_episode = MagicMock()
         mock_episode_manager.get_episode = MagicMock()
 
+        mock_permanent_environment_manager = MagicMock()
+        mock_container_cleanup_manager = MagicMock()
+
         with (
             patch("saber.server.session_manager.BenchmarkManager", return_value=mock_task_manager),
             patch("saber.server.session_manager.ExecutionManager", return_value=mock_execution_manager),
             patch("saber.server.session_manager.PolicyManager", return_value=mock_policy_manager),
             patch("saber.server.session_manager.EvaluationManager", return_value=mock_evaluation_manager),
             patch("saber.server.session_manager.EpisodeManager", return_value=mock_episode_manager),
+            patch("saber.server.session_manager.PermanentEnvironmentManager", return_value=mock_permanent_environment_manager),
+            patch("saber.server.session_manager.ContainerCleanupManager", return_value=mock_container_cleanup_manager),
         ):
 
             manager = SessionManager(domain_name="test_domain", config_dir="/tmp", host="127.0.0.1", port=8003)
