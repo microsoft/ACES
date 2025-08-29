@@ -5,7 +5,6 @@ from datetime import datetime
 from logging import getLogger
 from typing import Any, Dict, NamedTuple, Optional
 
-from ...base import SSEEventType
 from ..base import Action, CommandResult, Episode, EpisodeState, Step
 from .constants import EpisodeTerminationReason
 from .exceptions import EpisodeNotFoundException
@@ -93,7 +92,7 @@ class EpisodeManager:
             current_steps = len(episode.steps)
 
             if current_steps >= max_steps:
-                return True, f"{SSEEventType.MAX_STEPS_REACHED} ({current_steps}/{max_steps})"
+                return True, f"{EpisodeTerminationReason.MAX_STEPS_REACHED} ({current_steps}/{max_steps})"
 
             # Could add more termination conditions here:
             # - episode timeout based on episode_config["episode_timeout_minutes"]
@@ -178,13 +177,14 @@ class EpisodeManager:
 
         return StepResult(step=step, should_terminate=should_terminate, termination_reason=termination_reason)
 
-    def end_episode(self, session_id: str, reason: str) -> Episode:
+    def end_episode(self, session_id: str, reason: str, result: Optional[str] = None) -> Episode:
         """
         End the current episode for a session.
 
         Args:
             session_id: ID of the session
             reason: Reason for ending the episode
+            result: Optional result/submission from the episode (e.g., captured flag)
 
         Returns:
             Episode with completion information
@@ -199,10 +199,26 @@ class EpisodeManager:
         if not episode:
             raise EpisodeNotFoundException(session_id)
 
-        logger.info(
-            f"Ending episode '{episode.episode_id}'\
-                    for session '{session_id}': {reason}"
-        )
+        logger.info(f"Ending episode '{episode.episode_id}' for session '{session_id}': {reason}")
+
+        # Create a final step if the agent provided a result/submission
+        if result:
+            logger.info(f"Creating final step for episode result: {result}")
+
+            # Create an action representing the agent's submission
+            submission_action = Action(
+                tool_name="submission", parameters={"result": result, "submission": result, "episode_completed": True}
+            )
+
+            # Create a successful command result for the submission
+            submission_result = CommandResult.success_result(
+                data={"submission": result, "message": f"Episode completed with result: {result}"}, execution_time=0.0
+            )
+
+            # Create and add the final step
+            final_step = self.create_step(episode, submission_action, submission_result)
+            episode.steps.append(final_step)
+            logger.info(f"Added final step {final_step.step_number} with submission: {result}")
 
         # Update episode state
         episode.end_time = datetime.utcnow()

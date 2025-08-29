@@ -18,7 +18,7 @@ SABER implements a distributed server-client architecture designed for security 
 
 - **Server Side**: Domain servers host security capabilities, tasks, and commands
 - **Client Side**: Security agents connect to execute multi-step security workflows  
-- **Communication**: Real-time bidirectional communication via HTTP/SSE
+- **Communication**: Real-time bidirectional communication via HTTP/REST and MCP
 - **Evaluation**: Comprehensive action tracking and trajectory analysis
 
 ### Key Components

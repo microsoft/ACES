@@ -105,9 +105,9 @@ async def run_unified_benchmark(
 
         if task_ids:
             if len(task_ids) == 1:
-                print(f"🎯 Single task mode: {task_ids[0]}")
+                print(f"🎯 Specific task: {task_ids[0]}")
             else:
-                print(f"🎯 Multi-task mode: {task_ids}")
+                print(f"🎯 Multiple tasks: {task_ids}")
         else:
             print("🎯 Full benchmark mode: all available tasks")
 
@@ -258,11 +258,11 @@ async def run_agent_test(
         final_server_url: str = server_url or os.getenv("SABER_SERVER_URL") or "http://localhost:8000"
         final_mcp_url: str = mcp_url or os.getenv("SABER_MCP_URL") or "http://localhost:8001"
 
-        # Create configuration for single task mode
+        # Create configuration for specific task
         config = SABERHarnessConfig(
             server_url=final_server_url,
             mcp_url=final_mcp_url,
-            task_ids=[task_id],  # Single task
+            task_ids=[task_id],  # Specific task
             episode_attempts=1,  # Single episode
             log_level=log_level,
         )
