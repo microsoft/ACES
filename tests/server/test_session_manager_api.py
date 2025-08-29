@@ -210,22 +210,6 @@ class TestSessionManagerAPI:
         assert "prompt" in data
         assert data["prompt"] == "Test domain policy prompt"
 
-    def test_events_endpoint_structure(self, session_manager_app):
-        """Test SSE events endpoint structure (without async streaming)."""
-        manager, client = session_manager_app
-
-        # Create session
-        create_response = client.post("/session?client_id=test_client")
-        session_id = create_response.json()["session_id"]
-
-        # Just test that the endpoint exists by checking it's registered
-        # We can't easily test SSE streaming with TestClient without hanging
-        # Instead, verify the route exists in the app
-        routes = [route.path for route in manager.rest_api.app.routes]
-        assert f"/session/{{session_id}}/events" in routes or "/session/{session_id}/events" in [
-            r.path_regex.pattern for r in manager.app.routes if hasattr(r, "path_regex")
-        ]
-
     def test_invalid_session_endpoints(self, session_manager_app):
         """Test endpoints with invalid session IDs."""
         manager, client = session_manager_app

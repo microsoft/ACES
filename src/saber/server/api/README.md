@@ -20,7 +20,6 @@ FastAPI-based REST server that handles HTTP requests for session and episode man
 - Episode management (start, end, status)
 - Policy document access
 - Health checks and system status
-- Server-Sent Events for real-time updates
 - Administrative operations
 
 **Key Endpoints:**
@@ -29,7 +28,6 @@ FastAPI-based REST server that handles HTTP requests for session and episode man
 - `POST /session/{id}/start-episode` - Start episode with task
 - `GET /session/{id}/current-task` - Get current task information
 - `GET /session/{id}/policy` - Get domain policy document
-- `GET /session/{id}/events` - SSE stream for real-time updates
 - `GET /health` - Health check
 - `GET /sessions` - List active sessions
 
@@ -70,8 +68,7 @@ Client Requests
 ├── REST API (Session Management)
 │   ├── Session CRUD operations
 │   ├── Episode lifecycle
-│   ├── System administration
-│   └── Real-time events (SSE)
+│   └── System administration
 └── MCP API (Tool Execution)
     ├── Tool discovery
     ├── Command execution
@@ -129,12 +126,6 @@ session_id = response.json()["session_id"]
 # Start episode
 await client.post(f"/session/{session_id}/start-episode", 
                   json={"task_id": "webapp_pentest_1"})
-
-# Monitor via SSE
-async with client.stream("GET", f"/session/{session_id}/events") as stream:
-    async for line in stream.aiter_lines():
-        event = json.loads(line)
-        print(f"Event: {event}")
 ```
 
 ### MCP Client
@@ -142,7 +133,7 @@ async with client.stream("GET", f"/session/{session_id}/events") as stream:
 from mcp import Client
 
 # Connect with session headers
-client = await Client.connect_sse(
+client = await Client.connect(
     "http://localhost:8001",
     headers={
         "X-SABER-Task-ID": "webapp_pentest_1",

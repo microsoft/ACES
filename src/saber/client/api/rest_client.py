@@ -6,13 +6,10 @@ Handles all REST API communication with SABER server including:
 - Session management
 - Episode lifecycle
 - Task and policy information retrieval
-- Event monitoring via SSE
 """
 
-import asyncio
-import json
 import logging
-from typing import Any, Callable, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional, cast
 
 import aiohttp
 
@@ -27,7 +24,6 @@ class SABERRestClient:
     - Session lifecycle management
     - Episode management
     - Task and policy data retrieval
-    - Server-Sent Events monitoring
     """
 
     def __init__(
@@ -162,74 +158,6 @@ class SABERRestClient:
                 else:
                     logger.warning(f"⚠️ Failed to terminate session: {response.status}")
                     return False
-
-    async def monitor_episode_events(
-        self,
-        episode_id: str,
-        session_id: Optional[str] = None,
-        event_handler: Optional[Callable[[Dict[str, Any]], Any]] = None,
-    ) -> None:
-        """
-        Monitor episode status via Server-Sent Events.
-
-        Args:
-            episode_id: Episode ID to monitor
-            session_id: Session ID (uses instance session_id if not provided)
-            event_handler: Optional callback for handling events
-        """
-        session_id = session_id or self.session_id
-        if not session_id:
-            raise Exception("No active session")
-
-        sse_url = f"{self.base_url}/session/{session_id}/episodes/{episode_id}/events"
-        logger.info(f"📡 Starting episode monitoring via SSE: {sse_url}")
-
-        try:
-            # Create timeout configuration for long-running episode monitoring
-            timeout = aiohttp.ClientTimeout(total=None)  # No timeout for SSE monitoring
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                logger.info(f"🔗: Opening SSE connection to {sse_url}")
-                async with session.get(sse_url, headers={"Accept": "text/event-stream"}) as response:
-                    if response.status != 200:
-                        logger.error(f"❌ Failed to connect to episode events: {response.status}")
-                        return
-
-                    logger.info("✅ Connected to episode event stream")
-
-                    current_event_type = None
-                    line_count = 0
-                    async for line in response.content:
-                        line_count += 1
-                        line_str = line.decode("utf-8").strip()
-
-                        if line_count % 10 == 0:  # Log every 10 lines to track activity
-                            logger.debug(f"🔗 SSE line {line_count}: {line_str[:100]}...")
-
-                        if line_str.startswith("event:"):
-                            current_event_type = line_str[6:].strip()
-                            logger.debug(f"🔗 SSE event type: {current_event_type}")
-                        elif line_str.startswith("data:") and current_event_type:
-                            try:
-                                data_str = line_str[5:].strip()
-                                if data_str:
-                                    event_data = json.loads(data_str)
-                                    logger.debug(f"🔗 SSE event data received for {current_event_type}")
-                                    if event_handler:
-                                        await event_handler(event_data)
-                            except json.JSONDecodeError:
-                                logger.warning(f"Failed to parse event data: {line_str}")
-
-                    logger.warning(f"🔗 SSE stream ended normally after {line_count} lines")
-
-        except asyncio.TimeoutError as e:
-            logger.error(f"❌ Episode monitoring failed due to timeout: {e}")
-        except aiohttp.ClientError as e:
-            logger.error(f"❌ Episode monitoring failed due to client error: {e}")
-        except Exception as e:
-            logger.error(f"❌ Episode monitoring failed with unexpected error: {type(e).__name__}: {e}")
-            import traceback
-
-            logger.error(f"❌ Episode monitoring traceback: {traceback.format_exc()}")
 
     async def health_check(self) -> Dict[str, Any]:
         """Perform health check against the server."""

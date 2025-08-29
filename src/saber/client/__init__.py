@@ -8,7 +8,6 @@ Key Features:
 - Autonomous agent execution with MCP tool integration
 - Session and episode management via REST API
 - LLM client factory with extensible provider support
-- Episode status monitoring via SSE
 - Comprehensive logging and error handling
 - Flexible agent adaptation
 

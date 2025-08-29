@@ -47,8 +47,7 @@ The central orchestrator for each security domain, responsible for:
 
 #### SessionRestAPI
 REST protocol handler that processes HTTP endpoints and delegates to SessionManager:
-- **HTTP Endpoints**: FastAPI-based REST API with endpoints for session management, episode management, and status monitoring
-- **Server-Sent Events**: Real-time streaming updates for session events and command execution progress  
+- **HTTP Endpoints**: FastAPI-based REST API with endpoints for session management, episode management, and status monitoring  
 - **Request Delegation**: Converts HTTP requests to SessionManager method calls with proper error handling
 - **API Documentation**: Auto-generated OpenAPI/Swagger documentation for client integration
 
@@ -123,7 +122,6 @@ REST API client for server communication:
 - **HTTP Communication**: Handles all REST API communication with SABER server with proper error handling and timeouts
 - **Session Management**: Manages client-side session state and maintains connection with server sessions
 - **Rich UI Integration**: Provides console UI components for progress tracking, panels, and status displays
-- **Event Streaming**: Supports Server-Sent Events for real-time updates from server operations
 
 #### AgentWrapper
 Automatic agent adaptation system:
@@ -151,8 +149,7 @@ Context-aware prompt generation:
 1. Client connects to SessionManager via HTTP for session management
 2. SessionManager creates ClientSession and delegates Benchmark creation to BenchmarkManager
 3. Client establishes MCP connection to MCPSessionManager for tool access
-4. Establishes SSE connection for real-time communication
-5. SessionManager coordinates with BenchmarkManager to assign initial subtask with context
+4. SessionManager coordinates with BenchmarkManager to assign initial subtask with context
 6. Client discovers available tools via MCP protocol and executes commands through MCP tool calls
 7. MCPSessionManager delegates tool execution to SessionManager's ExecutionManager
 8. Results logged via EvaluationManager and next subtask assigned via BenchmarkManager

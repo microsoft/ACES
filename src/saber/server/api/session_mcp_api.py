@@ -295,24 +295,25 @@ class SessionMCPAPI:
             if "parameters" in arguments and isinstance(arguments["parameters"], dict):
                 result = arguments["parameters"].get("submission", "")
 
-            # If a result was provided, save it as an action in the episode
+            # If there's a result, record it as an action before ending the episode
             if result:
-                logger.info(f"Episode ending with result: {result}")
-                # Create an action to record the discovered result
+                logger.info(f"Recording episode result: {result}")
+
+                # Create an action to record the episode result
                 result_action = Action(
-                    tool_name="episode_result",
-                    parameters={
-                        "submission": result,
-                        "episode_end": True,
-                        "arguments": f"Episode completed with result: {result}",
-                    },
+                    tool_name="episode_result", parameters={"submission": result, "episode_end": True}
                 )
-                # Execute the result action to save it in the episode
+
+                # Execute the action to record it
                 await self.session_manager.execute_action(session_id, result_action)
 
-            # End the episode through SessionManager
+            # End the episode through SessionManager, passing the result
             logger.warning(f"🔥 MCP END EPISODE: Agent called end_episode tool for session {session_id}")
-            self.session_manager.end_episode(session_id, "agent_completed")
+            if result:
+                logger.info(f"Episode ending with result: {result}")
+                await self.session_manager.end_episode(session_id, "agent_completed", result)
+            else:
+                await self.session_manager.end_episode(session_id, "agent_completed")
 
             # Prepare success message
             success_message = "Episode ended successfully"

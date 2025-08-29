@@ -45,7 +45,6 @@ package "Domain Server Core" {
             +port: int
             --
             +start_server(): void
-            +get_events_stream(): StreamingResponse
             --
             **REST API Endpoints**
             +POST /session
@@ -53,7 +52,6 @@ package "Domain Server Core" {
             +POST /session/{id}/start-benchmark
             +GET /session/{id}/current-task
             +GET /session/{id}/policy
-            +GET /session/{id}/events
             +GET /tasks
             +GET /health
             +GET /sessions
@@ -350,7 +348,6 @@ note right of SessionRestAPI
 **REST Protocol Handler**
 - FastAPI-based REST endpoints for session management
 - Handles session lifecycle, episodes, policy access
-- Server-Sent Events for real-time updates
 - OpenAPI documentation generation
 - Delegates all business logic to SessionManager
 end note

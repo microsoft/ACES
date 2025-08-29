@@ -178,7 +178,7 @@ class TestSessionMCPAPI:
         assert action.parameters["episode_end"] is True
 
         # Verify end_episode was called
-        mcp_api.session_manager.end_episode.assert_called_once_with("session_123", "agent_completed")
+        mcp_api.session_manager.end_episode.assert_called_once_with("session_123", "agent_completed", "flag{test_flag_found}")
 
     @pytest.mark.asyncio
     async def test_handle_end_episode_call_missing_session(self, mcp_api):

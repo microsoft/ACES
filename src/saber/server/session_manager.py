@@ -28,7 +28,6 @@ from .benchmarks.benchmark_manager import BenchmarkManager
 from .episodes.constants import EpisodeResponseKeys, EpisodeTerminationReason
 from .episodes.episode_manager import EpisodeManager
 from .evaluation.evaluation_manager import EvaluationManager
-from .events.sse_decorators import broadcast_environment_transition
 from .execution.cleanup.cleanup_manager import ContainerCleanupManager
 from .execution.cleanup.cleanup_reason import CleanupReason
 from .execution.execution_manager import ExecutionManager
@@ -298,8 +297,11 @@ class SessionManager:
 
         benchmark_session = self.benchmark_manager.start_benchmark(session_id, benchmark_config)
 
-        # TEMPORARY FIX: Hardcode the first task ID for excytin demo
-        first_task_id = "basic_logging_demo"
+        # Store benchmark_session in session context
+        session.context["benchmark_session"] = benchmark_session
+
+        # Get the first task that was already set by start_benchmark
+        first_task_id = benchmark_session.current_task_id
 
         # Validate that benchmark has tasks to execute
         if not first_task_id:
@@ -360,12 +362,9 @@ class SessionManager:
         logger.info(f"Started episode {episode.episode_id} for task {task_id} in session {session_id}")
         return episode
 
-    @broadcast_environment_transition(
-        old_task_key=EpisodeResponseKeys.PREVIOUS_TASK_ID,
-        new_task_key=EpisodeResponseKeys.NEXT_TASK_ID,
-        condition_key=EpisodeResponseKeys.ENVIRONMENT_CHANGED,
-    )
-    async def end_episode(self, session_id: str, reason: str = EpisodeTerminationReason.COMPLETED) -> Dict[str, Any]:
+    async def end_episode(
+        self, session_id: str, reason: str = EpisodeTerminationReason.COMPLETED, result: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         End the current episode for a session.
         Automatically advance to next task in benchmark.
@@ -373,6 +372,7 @@ class SessionManager:
         Args:
             session_id: ID of the client session
             reason: Reason for episode termination (use EpisodeTerminationReason enum values)
+            result: Optional result/submission from the episode (e.g., captured flag)
 
         Returns:
             Dictionary with episode transition information including next episode details if applicable
@@ -383,8 +383,8 @@ class SessionManager:
         completed_task_id = session.current_task_id
         success = EpisodeTerminationReason.is_success(reason)
 
-        # End episode through episode manager
-        self.episode_manager.end_episode(session_id, reason)
+        # End episode through episode manager, passing the result
+        self.episode_manager.end_episode(session_id, reason, result)
 
         # Clear current episode and task from session
         session.current_episode_id = None
@@ -399,7 +399,7 @@ class SessionManager:
             next_task_id = self.benchmark_manager.advance_benchmark(session_id, completed_task_id, success)
 
         # Build response info
-        result: Dict[str, Any] = {
+        response: Dict[str, Any] = {
             EpisodeResponseKeys.EPISODE_ENDED.value: True,
             EpisodeResponseKeys.PREVIOUS_TASK_ID.value: completed_task_id,
             EpisodeResponseKeys.SUCCESS.value: success,
@@ -412,7 +412,7 @@ class SessionManager:
             logger.info(f"Advanced benchmark to next task {next_task_id} for session {session_id}")
 
             # Add next episode info to result
-            result.update(
+            response.update(
                 {
                     EpisodeResponseKeys.BENCHMARK_CONTINUES.value: True,
                     EpisodeResponseKeys.NEXT_TASK_ID.value: next_task_id,
@@ -423,11 +423,11 @@ class SessionManager:
         else:
             # Benchmark is complete
             logger.info(f"Benchmark completed for session {session_id}")
-            result.update(
+            response.update(
                 {EpisodeResponseKeys.BENCHMARK_CONTINUES: False, EpisodeResponseKeys.BENCHMARK_COMPLETE: True}
             )
 
-        return result
+        return response
 
     async def execute_action(self, session_id: str, action: Action) -> CommandResult:
         """
@@ -655,7 +655,7 @@ class SessionManager:
 
     def get_episode_config(self, session_id: str) -> Dict[str, Any]:
         """
-        Get episode configuration for SSE monitoring.
+        Get episode configuration for monitoring.
 
         Args:
             session_id: Session ID

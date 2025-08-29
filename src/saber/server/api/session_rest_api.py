@@ -5,14 +5,11 @@ The SessionRestAPI handles REST API endpoints for session management, episodes,
 policy, status, and events. Tool execution is handled by SessionMCPAPI.
 """
 
-import asyncio
 import logging
-from datetime import datetime
-from typing import Any, AsyncGenerator, Dict, cast
+from typing import Any, Dict, cast
 
 import uvicorn
-from fastapi import FastAPI, Request
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI
 
 logger = logging.getLogger(__name__)
 
@@ -86,18 +83,6 @@ class SessionRestAPI:
             policy = self.session_manager.get_policy(session_id)
             policy_dict = policy.to_dict()
             return dict(policy_dict) if policy_dict else {}
-
-        @self.app.get("/session/{session_id}/events")
-        async def get_events_endpoint(session_id: str, request: Request) -> StreamingResponse:
-            """SSE endpoint for real-time updates."""
-            result: StreamingResponse = await self.get_events_stream(session_id, request)
-            return result
-
-        @self.app.get("/session/{session_id}/episodes/{episode_id}/events")
-        async def get_episode_events_endpoint(session_id: str, episode_id: str, request: Request) -> StreamingResponse:
-            """SSE endpoint for episode-specific real-time events."""
-            result: StreamingResponse = await self.get_episode_events_stream(session_id, episode_id, request)
-            return result
 
         @self.app.post("/session/{session_id}/start-benchmark")
         async def start_benchmark_endpoint(session_id: str, benchmark_config: Dict[str, Any] = {}) -> Dict[str, Any]:
@@ -216,142 +201,6 @@ class SessionRestAPI:
                 active = self.session_manager.cleanup_manager.get_active_cleanups()
                 return {"active_cleanup_count": len(active), "active_session_ids": list(active)}
             return {"error": "Cleanup manager not available"}
-
-    async def get_events_stream(self, session_id: str, request: Request) -> StreamingResponse:
-        """
-        SSE endpoint for real-time updates.
-
-        Args:
-            session_id: ID of the client session
-            request: FastAPI request object
-
-        Returns:
-            StreamingResponse with SSE events
-        """
-        session = self.session_manager._get_session(session_id)
-
-        async def event_generator() -> AsyncGenerator[str, None]:
-            """Generate SSE events for the session."""
-            try:
-                while session.is_active:
-                    # Check if client disconnected
-                    if await request.is_disconnected():
-                        break
-
-                    # Send heartbeat event
-                    yield f'event: heartbeat\ndata: {{"timestamp": "{datetime.utcnow().isoformat()}"}}\n\n'
-
-                    # Wait before next heartbeat
-                    await asyncio.sleep(30)
-
-            except Exception as e:
-                logger.error(f"SSE stream error for session {session_id}: {e}")
-            finally:
-                logger.info(f"SSE stream ended for session {session_id}")
-
-        return StreamingResponse(
-            event_generator(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Headers": "Cache-Control",
-            },
-        )
-
-    async def get_episode_events_stream(self, session_id: str, episode_id: str, request: Request) -> StreamingResponse:
-        """
-        SSE endpoint for episode-specific real-time events.
-
-        Args:
-            session_id: ID of the client session
-            episode_id: ID of the episode to monitor
-            request: FastAPI request object
-
-        Returns:
-            StreamingResponse with episode SSE events
-        """
-        session = self.session_manager._get_session(session_id)
-        episode = self.session_manager.episode_manager.get_current_episode(session_id)
-
-        if not episode or episode.episode_id != episode_id:
-            # Return empty stream if episode not found or doesn't match
-            async def empty_generator() -> AsyncGenerator[str, None]:
-                yield 'event: error\ndata: {"message": "Episode not found or inactive"}\n\n'
-                return
-
-            return StreamingResponse(
-                empty_generator(),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive",
-                    "Access-Control-Allow-Origin": "*",
-                    "Access-Control-Allow-Headers": "Cache-Control",
-                },
-            )
-
-        async def episode_event_generator() -> AsyncGenerator[str, None]:
-            """Generate SSE events for the episode - simplified for essential termination signaling."""
-            try:
-                logger.info(f"🔗 SSE: Monitoring episode {episode_id} for session {session_id}")
-
-                while session.is_active:
-                    # Check if client disconnected
-                    if await request.is_disconnected():
-                        logger.info(f"🔗 SSE: Client disconnected for {session_id}/{episode_id}")
-                        break
-
-                    # Check if episode should be terminated by server
-                    should_terminate, reason = self.session_manager.should_terminate_episode(session_id)
-                    if should_terminate:
-                        logger.warning(f"🔗 SSE: Server terminating episode {episode_id} - {reason}")
-                        # Let the session manager handle the actual termination
-                        await self.session_manager.end_episode(session_id, reason)
-                        yield (
-                            f"event: episode_terminated\n"
-                            f'data: {{"episode_id": "{episode_id}", "reason": "{reason}"}}\n\n'
-                        )
-                        break
-
-                    # Check if episode still exists (client may have ended it naturally)
-                    current_episode = self.session_manager.episode_manager.get_current_episode(session_id)
-                    if not current_episode or current_episode.episode_id != episode_id:
-                        logger.info(f"🔗 SSE: Episode {episode_id} ended naturally")
-                        yield (
-                            f"event: episode_complete\n"
-                            f'data: {{"episode_id": "{episode_id}", "reason": "completed"}}\n\n'
-                        )
-                        break
-
-                    # Send heartbeat every 10 seconds
-                    current_steps = len(current_episode.steps)
-                    timestamp = datetime.utcnow().isoformat()
-                    yield (
-                        f"event: heartbeat\n"
-                        f'data: {{"episode_id": "{episode_id}", "steps": {current_steps}, '
-                        f'"timestamp": "{timestamp}"}}\n\n'
-                    )
-
-                    await asyncio.sleep(10)  # Check every 10 seconds
-
-            except Exception as e:
-                logger.error(f"🔗 SSE: Episode monitoring error for {session_id}/{episode_id}: {e}")
-                yield f'event: error\ndata: {{"message": "Monitoring error: {str(e)}"}}\n\n'
-            finally:
-                logger.info(f"🔗 SSE: Stopped monitoring episode {episode_id}")
-
-        return StreamingResponse(
-            episode_event_generator(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Headers": "Cache-Control",
-            },
-        )
 
     async def start_server(self) -> None:
         """Start the SessionRestAPI server."""

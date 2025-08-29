@@ -26,7 +26,10 @@ class EpisodeTerminationReason(str, Enum):
     @classmethod
     def is_success(cls, reason: str) -> bool:
         """Check if a termination reason indicates success."""
-        return reason in cls.get_success_reasons()
+        # Check if any success reason is contained in the reason string
+        # This handles cases where the reason includes extra formatting like "(30/30)"
+        success_reasons = cls.get_success_reasons()
+        return any(success_reason in reason.lower() for success_reason in success_reasons)
 
 
 class EpisodeResponseKeys(str, Enum):
