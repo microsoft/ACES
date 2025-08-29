@@ -1,0 +1,43 @@
+# Excytin Demo Tasks Configuration
+# Designed to test enhanced container logging capabilities
+domain: "excytin_demo"
+
+# Global configuration defaults - applied to all tasks unless overridden
+global_defaults:
+  # Default execution configuration for all tasks
+  execution_config:
+    allowed_executors: ["cli", "python"]  # Default executors available
+    timeout: 30  # Default command timeout in seconds
+
+  # Default episode configuration for all tasks
+  episode_config:
+    max_steps: 5  # Allow more steps for demo purposes
+
+  # Default benchmark configuration for all tasks
+  benchmark_config:
+    episode_attempts: 2  # Number of episode attempts for testing logging
+
+tasks:
+  - task_id: "basic_logging_demo"
+    title: "Basic Container Logging Demo"
+    description: "Simple task to demonstrate basic sandbox container logging functionality"
+
+    # Use the Excytin Incident 5 environment for sandbox logging
+    environment: "excytin_incident_5"
+
+    # Task breakdown for testing logging
+    subtasks:
+      - subtask_id: "container_startup"
+        title: "Container Environment Setup"
+        description: "Initialize the sandbox environment and verify logging"
+        objective: "Start sandbox containers and verify logs are captured"
+
+      - subtask_id: "database_interaction"
+        title: "Database Operations"
+        description: "Perform database operations to generate container logs"
+        objective: "Connect to MySQL database and run queries to generate activity"
+
+      - subtask_id: "log_verification"
+        title: "Log Generation Test"
+        description: "Execute commands that will generate logs for testing"
+        objective: "Run various commands to ensure comprehensive log collection"
