@@ -8,7 +8,7 @@ of command executors, supporting scaling to many executor types.
 import logging
 from typing import Any, Dict, List, Optional
 
-from ..sandbox.sandbox_manager import SandboxManager
+from ..sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 from .docker_executor import DockerExecutor
 from .executor_registry import executor_registry
 
@@ -25,7 +25,7 @@ class ExecutorFactory:
 
     def __init__(
         self,
-        sandbox_manager: SandboxManager,
+        sandbox_manager: SandboxEnvironmentManager,
         configuration: Optional[Dict[str, Any]] = None,
         allowed_executors: Optional[list[str]] = None,
     ):

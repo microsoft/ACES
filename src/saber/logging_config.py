@@ -6,7 +6,10 @@ for improved readability and module identification in SABER logs.
 """
 
 import logging
+import os
+from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from typing import Any, Optional
 
 
@@ -121,6 +124,58 @@ def get_logger(name: str, category: LogCategory) -> SaberLogger:
         SaberLogger instance
     """
     return SaberLogger(name, category)
+
+
+def setup_file_logging(logs_directory: Optional[str] = None, enable_file_logging: Optional[bool] = None) -> None:
+    """
+    Configure file logging for all SABER Python application logs.
+
+    Args:
+        logs_directory: Directory to store log files (defaults to SABER_LOGS_DIRECTORY env var or './logs')
+        enable_file_logging: Whether to enable file logging (defaults to SABER_ENABLE_FILE_LOGGING env var or True)
+    """
+    # Check if file logging is enabled
+    if enable_file_logging is None:
+        enable_file_logging = os.getenv("SABER_ENABLE_FILE_LOGGING", "true").lower() == "true"
+
+    if not enable_file_logging:
+        return
+
+    # Determine logs directory
+    if logs_directory is None:
+        logs_directory = os.getenv("SABER_LOGS_DIRECTORY", "./logs")
+
+    logs_path = Path(logs_directory)
+    server_logs_path = logs_path / "server-logs"
+    server_logs_path.mkdir(parents=True, exist_ok=True)
+
+    # Create timestamped log file
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    log_file = server_logs_path / f"saber-server-{timestamp}.log"
+
+    # Configure file handler for root logger
+    root_logger = logging.getLogger()
+
+    # Remove existing file handlers to avoid duplicates
+    for handler in root_logger.handlers[:]:
+        if isinstance(handler, logging.FileHandler):
+            root_logger.removeHandler(handler)
+
+    # Create file handler with detailed formatting
+    file_handler = logging.FileHandler(log_file, mode="a", encoding="utf-8")
+    file_handler.setLevel(logging.DEBUG)
+
+    # Create formatter that includes all details
+    formatter = logging.Formatter(
+        fmt="%(asctime)s - %(name)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+    )
+    file_handler.setFormatter(formatter)
+
+    # Add handler to root logger
+    root_logger.addHandler(file_handler)
+
+    # Log initialization message
+    logging.getLogger(__name__).info(f"📁 File logging initialized: {log_file}")
 
 
 # Convenience functions for common logging patterns

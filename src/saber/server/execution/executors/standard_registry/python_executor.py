@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional
 from ....base import CommandResult
 from ...base import Parameter, ParameterType, ValidationResult
 from ...exceptions import SandboxExecutionError
-from ...sandbox.sandbox_manager import SandboxManager
+from ...sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 from ..docker_executor import DockerExecutor
 
 logger = logging.getLogger(__name__)
@@ -68,7 +68,7 @@ class PythonExecutor(DockerExecutor):
     @classmethod
     def create_with_config(
         cls,
-        sandbox_manager: SandboxManager,
+        sandbox_manager: SandboxEnvironmentManager,
         config: Optional[Dict[str, Any]] = None,
         additional_params: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
@@ -91,7 +91,9 @@ class PythonExecutor(DockerExecutor):
 
         return cls(sandbox_manager=sandbox_manager, config=config, **merged_kwargs)
 
-    def __init__(self, sandbox_manager: SandboxManager, config: Optional[Dict[str, Any]] = None, **kwargs: Any) -> None:
+    def __init__(
+        self, sandbox_manager: SandboxEnvironmentManager, config: Optional[Dict[str, Any]] = None, **kwargs: Any
+    ) -> None:
         """
         Initialize Python executor.
 

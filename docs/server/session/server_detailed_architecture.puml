@@ -132,7 +132,8 @@ package "Benchmark Management" {
         +task_id: str
         +title: str
         +description: str
-        +environment: Union[str, Dict[str, Any]]
+        +sandbox_environment: Union[str, Dict[str, Any]]
+        +permanent_environment: Optional[str]
         +execution_config: Dict[str, Any]
         +allowed_executors: List[str]
         +initial_context: Dict[str, Any]
@@ -181,7 +182,8 @@ package "Command Execution Framework" {
 
     class ExecutionManager {
         +_executor_factory: ExecutorFactory
-        +_sandbox_manager: SandboxManager
+        +_sandbox_env_manager: SandboxEnvironmentManager
+        +_permanent_env_manager: PermanentEnvironmentManager
         +_environment_loader: EnvironmentLoader
         +_execution_lock: asyncio.Lock
         --
@@ -196,7 +198,7 @@ package "Command Execution Framework" {
 
     class ExecutorFactory {
         +_executor_registry: Dict[str, Type[CommandExecutor]]
-        +_sandbox_manager: SandboxManager
+        +_sandbox_env_manager: SandboxEnvironmentManager
         --
         +get_executor(executor_type: str): CommandExecutor
         +get_available_executors(): List[str]
@@ -204,7 +206,7 @@ package "Command Execution Framework" {
     }
 
     class CLIExecutor {
-        +_sandbox_manager: SandboxManager
+        +_sandbox_env_manager: SandboxEnvironmentManager
         +_config: Dict[str, Any]
         --
         +execute(action: Action): CommandResult
@@ -213,7 +215,7 @@ package "Command Execution Framework" {
     }
 
     class PythonExecutor {
-        +_sandbox_manager: SandboxManager
+        +_sandbox_env_manager: SandboxEnvironmentManager
         +_config: Dict[str, Any]
         --
         +execute(action: Action): CommandResult
@@ -221,12 +223,23 @@ package "Command Execution Framework" {
         +to_mcp_schema(): Dict[str, Any]
     }
 
-    class SandboxManager {
+    class SandboxEnvironmentManager {
         +active_sessions: Dict[str, DockerSandboxEnvironment]
         --
         +create_session_environment(): DockerSandboxEnvironment
         +cleanup_session(): void
         +cleanup_all_sessions(): void
+    }
+
+    class PermanentEnvironmentManager {
+        +permanent_services: Dict[str, PermanentService]
+        +permanent_network: DockerNetwork
+        --
+        +start_permanent_services(): void
+        +stop_permanent_services(): void
+        +get_service_endpoints(service_name: str): ServiceEndpoints
+        +connect_sandbox_to_permanent(sandbox_env: DockerSandboxEnvironment): void
+        +is_service_healthy(service_name: str): bool
     }
 }
 
@@ -300,7 +313,8 @@ Task ..> EpisodeState
 EpisodeManager *-- Episode
 
 ExecutionManager *-- ExecutorFactory
-ExecutionManager *-- SandboxManager
+ExecutionManager *-- SandboxEnvironmentManager
+ExecutionManager *-- PermanentEnvironmentManager
 
 ExecutorFactory ..> CLIExecutor : creates
 ExecutorFactory ..> PythonExecutor : creates
@@ -360,14 +374,15 @@ Manages RL-compatible episode state transitions.
 end note
 
 note top of ExecutionManager
-**Enhanced Docker Sandbox Execution Manager**
-Integrated task-based configuration with environment resolution:
-- configure_for_task() method handles Task objects directly
-- EnvironmentLoader resolves flexible environment specifications
-- Automatic environment creation during task configuration
-- Docker Compose orchestration for multi-service environments
-- Sequential execution with concurrency control
-- Enhanced security validation and executor management
+**Enhanced Docker Sandbox Execution Manager with Permanent Environment Support**
+Now manages both ephemeral and permanent container environments:
+- SandboxEnvironmentManager: Handles session-scoped, ephemeral containers
+- PermanentEnvironmentManager: Handles server-scoped, persistent containers
+- configure_for_task() method handles Task objects with both sandbox_environment and permanent_environment
+- Automatic network bridging between ephemeral and permanent environments
+- EnvironmentLoader resolves flexible environment specifications for both types
+- Enhanced security validation and multi-network executor management
+- Permanent services start with server boot and persist across all episodes
 See command_execution_architecture.puml for complete detailed design.
 end note
 

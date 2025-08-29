@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 from ..base import Action, CommandResult
 from .executors.docker_executor import DockerExecutor
 from .executors.executor_factory import ExecutorFactory
-from .sandbox.sandbox_manager import SandboxManager
+from .sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +52,13 @@ class ExecutionManager:
 
         self._configuration: Dict[str, Any] = {}
 
-        # Initialize sandbox manager with empty config (will be updated per session)
-        self._sandbox_manager = SandboxManager({})
+        # Initialize sandbox manager with basic logging config (will be updated per session)
+        initial_sandbox_config = {
+            "domain": "execution",
+            "logs_directory": "/app/logs",
+            "enable_container_logging": True,
+        }
+        self._sandbox_manager = SandboxEnvironmentManager(initial_sandbox_config)
 
         # Initialize executor factory with minimal configuration
         self._executor_factory = ExecutorFactory(
@@ -211,17 +216,25 @@ class ExecutionManager:
         """
         # Resolve environment if specified in task
         environment_spec = None
+        logger.info(f"🔍 DEBUG: Task object: {task}")
+        logger.info(f"🔍 DEBUG: Task environment attribute: {getattr(task, 'environment', 'NOT_FOUND')}")
+
         if task.environment:
+            logger.info(f"🔍 DEBUG: Task has environment: {task.environment}")
             if not self._environment_loader:
                 logger.error(f"Environment specified but no environment loader available for session {session_id}")
                 raise RuntimeError("Environment loader not initialized but environment specified in task")
 
             try:
+                logger.info(f"🔍 DEBUG: About to resolve environment: {task.environment}")
                 environment_spec = self._environment_loader.resolve_environment(task.environment)
-                logger.debug(f"Resolved environment for session {session_id}: {task.environment}")
+                logger.info(f"✅ Resolved environment for session {session_id}: {task.environment}")
+                logger.info(f"🔍 DEBUG: Environment spec: {environment_spec}")
             except Exception as e:
-                logger.error(f"Failed to resolve environment for session {session_id}: {e}")
+                logger.error(f"❌ Failed to resolve environment for session {session_id}: {e}")
                 raise
+        else:
+            logger.warning("⚠️ DEBUG: Task has no environment specified")
 
         # Start with task's execution config
         execution_config = task.execution_config.copy()
@@ -240,15 +253,34 @@ class ExecutionManager:
         # Create new configuration for this task
         self._configuration = execution_config
 
-        # Update sandbox manager with resolved environment spec
+        # Update sandbox manager with resolved environment spec and logging config
+        sandbox_config = {
+            "domain": getattr(task, "domain", "unknown"),
+            "logs_directory": "/app/logs",
+            "enable_container_logging": True,
+        }
+
+        logger.info(f"🔍 DEBUG: About to check environment_spec. Value: {environment_spec}")
+
         if environment_spec:
-            self._sandbox_manager = SandboxManager({})
+            logger.info(
+                f"🔍 DEBUG: Environment spec found, creating SandboxEnvironmentManager with config: {sandbox_config}"
+            )
+            self._sandbox_manager = SandboxEnvironmentManager(sandbox_config)
 
             # Create the session environment immediately
-            self._sandbox_manager.create_session_environment(session_id, environment_spec)
-            logger.info(f"Created sandbox environment for session {session_id}")
+            logger.info(f"🔍 DEBUG: About to call create_session_environment for session {session_id}")
+            try:
+                self._sandbox_manager.create_session_environment(session_id, environment_spec)
+                logger.info(f"✅ Created sandbox environment for session {session_id}")
+            except Exception as e:
+                logger.error(f"❌ FAILED to create sandbox environment for session {session_id}: {e}")
+                logger.error(f"❌ Environment spec was: {environment_spec}")
+                logger.error(f"❌ Sandbox config was: {sandbox_config}")
+                raise
         else:
-            self._sandbox_manager = SandboxManager({})
+            logger.warning("⚠️ No environment_spec found, creating SandboxEnvironmentManager without environment")
+            self._sandbox_manager = SandboxEnvironmentManager(sandbox_config)
 
         allowed_executors = task.allowed_executors
         self._executor_factory = ExecutorFactory(
@@ -342,3 +374,17 @@ class ExecutionManager:
             "max_concurrent_per_session": self._max_concurrent_per_session,
             "session_execution_counts": self._active_executions.copy(),
         }
+
+    def cleanup_session(self, session_id: str) -> None:
+        """
+        Clean up session resources including Docker containers.
+
+        Args:
+            session_id: The session ID to clean up
+        """
+        if self._sandbox_manager:
+            self._sandbox_manager.cleanup_session(session_id)
+
+        # Also clean up our tracking
+        if session_id in self._active_executions:
+            del self._active_executions[session_id]

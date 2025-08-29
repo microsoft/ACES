@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 from ...base import CommandResult
 from ..base import ValidationResult
 from ..exceptions import SandboxExecutionError
-from ..sandbox.sandbox_manager import SandboxManager
+from ..sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 from .base_executors import CommandExecutor
 
 if TYPE_CHECKING:
@@ -32,7 +32,9 @@ class DockerExecutor(CommandExecutor):
     - Post-execution cleanup
     """
 
-    def __init__(self, sandbox_manager: SandboxManager, config: Optional[Dict[str, Any]] = None, **kwargs: Any) -> None:
+    def __init__(
+        self, sandbox_manager: SandboxEnvironmentManager, config: Optional[Dict[str, Any]] = None, **kwargs: Any
+    ) -> None:
         """
         Initialize Docker executor.
 
@@ -54,7 +56,7 @@ class DockerExecutor(CommandExecutor):
     @classmethod
     def create_with_config(
         cls,
-        sandbox_manager: SandboxManager,
+        sandbox_manager: SandboxEnvironmentManager,
         config: Optional[Dict[str, Any]] = None,
         additional_params: Optional[Dict[str, Any]] = None,
         **kwargs: Any,

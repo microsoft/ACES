@@ -14,7 +14,15 @@ from typing import Any, Dict, Optional
 import yaml
 
 from ..execution.exceptions import InvalidEnvironmentSpecException
-from ..execution.sandbox.environment_spec import EnvironmentSpec, HealthCheck, NetworkSpec, ServiceSpec
+from ..execution.sandbox.environment_spec import (
+    EnvironmentSpec,
+    HealthCheck,
+    NetworkSpec,
+    PermanentEnvironmentSpec,
+    PermanentNetworkSpec,
+    PermanentServiceSpec,
+    ServiceSpec,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -97,12 +105,23 @@ class EnvironmentLoader:
         """
         templates = self._load_templates()
 
-        # Get network configuration
-        network_name = config.get("network")
-        if not network_name:
+        # Get network configuration (support both single network and list of networks)
+        network_config = config.get("network")
+        if not network_config:
             raise InvalidEnvironmentSpecException("Network must be specified in granular config")
 
-        network_spec = self._resolve_network(network_name, templates)
+        network_specs = []
+        if isinstance(network_config, str):
+            # Single network
+            network_spec = self._resolve_network(network_config, templates)
+            network_specs.append(network_spec)
+        elif isinstance(network_config, list):
+            # Multiple networks
+            for network_name in network_config:
+                network_spec = self._resolve_network(network_name, templates)
+                network_specs.append(network_spec)
+        else:
+            raise InvalidEnvironmentSpecException("Network must be a string or list of strings")
 
         # Get execution service
         execution_service = config.get("execution")
@@ -121,11 +140,131 @@ class EnvironmentLoader:
         resource_limits = config.get("resource_limits", {})
 
         return EnvironmentSpec(
-            network=network_spec,
+            networks=network_specs,
             execution_service=execution_service,
             execution_config=execution_config,
             target_services=target_services,
             resource_limits=resource_limits,
+        )
+
+    def load_permanent_environment(self, template_name: str) -> PermanentEnvironmentSpec:
+        """
+        Load permanent environment specification by template name.
+
+        Args:
+            template_name: Name of the permanent environment template
+
+        Returns:
+            PermanentEnvironmentSpec instance
+
+        Raises:
+            InvalidEnvironmentSpecException: If template not found or invalid
+        """
+        templates = self._load_templates()
+
+        if template_name not in templates.get("environments", {}):
+            raise InvalidEnvironmentSpecException(f"Permanent environment template '{template_name}' not found")
+
+        template_config = templates["environments"][template_name]
+
+        # Validate this is a permanent environment
+        if not template_config.get("permanent", False):
+            raise InvalidEnvironmentSpecException(f"Environment '{template_name}' is not marked as permanent")
+
+        return self._build_permanent_environment_spec(template_config, templates)
+
+    def _build_permanent_environment_spec(
+        self, config: Dict[str, Any], templates: Dict[str, Any]
+    ) -> PermanentEnvironmentSpec:
+        """
+        Build PermanentEnvironmentSpec from configuration.
+
+        Args:
+            config: Permanent environment configuration
+            templates: All available templates
+
+        Returns:
+            PermanentEnvironmentSpec instance
+        """
+        services = {}
+        networks = {}
+
+        # Get network configuration (support both singular and plural)
+        network_name = config.get("network")
+        network_names = config.get("networks", [])
+
+        if network_name:
+            network_spec = self._resolve_permanent_network(network_name, templates)
+            networks[network_name] = network_spec
+
+        for network_name in network_names:
+            if network_name not in networks:  # Avoid duplicates
+                network_spec = self._resolve_permanent_network(network_name, templates)
+                networks[network_name] = network_spec
+
+        # Get services
+        for service_config in config.get("services", []):
+            service_spec = self._resolve_permanent_service_config(service_config, templates)
+            services[service_spec.name] = service_spec
+
+        return PermanentEnvironmentSpec(
+            services=services,
+            networks=networks,
+        )
+
+    def _resolve_permanent_network(self, network_name: str, templates: Dict[str, Any]) -> PermanentNetworkSpec:
+        """Resolve permanent network configuration by name."""
+        network_templates = templates.get("networks", {})
+        if network_name not in network_templates:
+            raise InvalidEnvironmentSpecException(f"Network '{network_name}' not found in templates")
+
+        network_config = network_templates[network_name]
+
+        return PermanentNetworkSpec(
+            name=network_name,
+            driver=network_config.get("driver", "bridge"),
+            internal=network_config.get("internal", False),
+            ipam_config=network_config.get("ipam", {}),
+        )
+
+    def _resolve_permanent_service_config(
+        self, service_config: Dict[str, Any], templates: Dict[str, Any]
+    ) -> PermanentServiceSpec:
+        """Resolve permanent service configuration."""
+        service_name = service_config.get("name")
+        container_name = service_config.get("container")
+
+        if not service_name or not container_name:
+            raise InvalidEnvironmentSpecException("Service config must have 'name' and 'container' fields")
+
+        # Get container configuration
+        container_config = self._resolve_container_config(container_name, templates)
+
+        # Build health check if present (support both 'healthcheck' and 'health_check')
+        health_check = None
+        hc_config = container_config.get("healthcheck") or container_config.get("health_check")
+        if hc_config:
+            health_check = HealthCheck(
+                test=hc_config.get("test", []),
+                interval=hc_config.get("interval", "30s"),
+                timeout=hc_config.get("timeout", "10s"),
+                retries=hc_config.get("retries", 3),
+                start_period=hc_config.get("start_period", "30s"),
+            )
+
+        # Get the image and ensure it's not None
+        image = container_config.get("image")
+        if image is None:
+            raise InvalidEnvironmentSpecException(f"Container '{container_name}' must specify an image")
+
+        return PermanentServiceSpec(
+            name=service_name,
+            image=image,
+            ports=container_config.get("ports", []),
+            environment=container_config.get("environment", []),
+            volumes=container_config.get("volumes", []),
+            health_check=health_check,
+            resource_limits=container_config.get("resource_limits", {}),
         )
 
     def _merge_template_with_additions(self, config: Dict[str, Any]) -> EnvironmentSpec:
@@ -149,11 +288,12 @@ class EnvironmentLoader:
             service_spec = self._resolve_service_config(service_config, templates)
             base_spec.target_services.append(service_spec)
 
-        # Apply network overrides
+        # Apply network overrides (apply to the primary network)
         network_overrides = config.get("network_overrides", {})
         if network_overrides:
+            primary_network = base_spec.get_primary_network()
             for key, value in network_overrides.items():
-                setattr(base_spec.network, key, value)
+                setattr(primary_network, key, value)
 
         # Apply resource limit overrides
         resource_overrides = config.get("resource_limits", {})
@@ -166,12 +306,23 @@ class EnvironmentLoader:
         self, template_config: Dict[str, Any], templates: Dict[str, Any]
     ) -> EnvironmentSpec:
         """Build EnvironmentSpec from template configuration."""
-        # Get network
-        network_name = template_config.get("network")
-        if not network_name:
+        # Get network configuration (support both single network and list of networks)
+        network_config = template_config.get("network")
+        if not network_config:
             raise InvalidEnvironmentSpecException("Template must specify network")
 
-        network_spec = self._resolve_network(network_name, templates)
+        network_specs = []
+        if isinstance(network_config, str):
+            # Single network
+            network_spec = self._resolve_network(network_config, templates)
+            network_specs.append(network_spec)
+        elif isinstance(network_config, list):
+            # Multiple networks
+            for network_name in network_config:
+                network_spec = self._resolve_network(network_name, templates)
+                network_specs.append(network_spec)
+        else:
+            raise InvalidEnvironmentSpecException("Network must be a string or list of strings")
 
         # Get execution service
         execution_service = template_config.get("execution")
@@ -190,7 +341,7 @@ class EnvironmentLoader:
         resource_limits = template_config.get("resource_limits", {})
 
         return EnvironmentSpec(
-            network=network_spec,
+            networks=network_specs,
             execution_service=execution_service,
             execution_config=execution_config,
             target_services=target_services,
@@ -349,6 +500,10 @@ class EnvironmentLoader:
             compose_config["volumes"] = container_config["volumes"]
         if "ports" in container_config:
             compose_config["ports"] = container_config["ports"]
+        if "healthcheck" in container_config:
+            compose_config["healthcheck"] = container_config["healthcheck"]
+        if "health_check" in container_config:
+            compose_config["health_check"] = container_config["health_check"]
 
         # Resource limits
         resource_limits = container_config.get("resource_limits", {})
@@ -377,10 +532,10 @@ class EnvironmentLoader:
 
         container_config = containers[container_name]
 
-        # Create health check if specified
+        # Create health check if specified (support both 'healthcheck' and 'health_check')
         health_check = None
-        if "health_check" in container_config:
-            hc_config = container_config["health_check"]
+        hc_config = container_config.get("healthcheck") or container_config.get("health_check")
+        if hc_config:
             health_check = HealthCheck(
                 test=hc_config["test"],
                 interval=hc_config.get("interval", "30s"),

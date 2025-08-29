@@ -34,6 +34,16 @@ class HealthCheck:
             "start_period": self.start_period,
         }
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary representation."""
+        return {
+            "test": self.test,
+            "interval": self.interval,
+            "timeout": self.timeout,
+            "retries": self.retries,
+            "start_period": self.start_period,
+        }
+
 
 @dataclass
 class ServiceSpec:
@@ -88,6 +98,24 @@ class ServiceSpec:
 
         return service_config
 
+    def to_dict(self) -> dict:
+        """Convert to dictionary."""
+        result = {
+            "name": self.name,
+            "container": self.container,
+            "image": self.image,
+            "ports": self.ports,
+            "environment": self.environment,
+            "volumes": self.volumes,
+            "depends_on": self.depends_on,
+            "working_dir": self.working_dir,
+            "user": self.user,
+            "resource_limits": self.resource_limits,
+        }
+        if self.health_check:
+            result["health_check"] = self.health_check.to_dict()
+        return result
+
 
 @dataclass
 class NetworkSpec:
@@ -114,16 +142,173 @@ class NetworkSpec:
 
         return network_config
 
+    def to_dict(self) -> dict:
+        """Convert to dictionary."""
+        return {
+            "name": self.name,
+            "driver": self.driver,
+            "internal": self.internal,
+            "ipam_config": self.ipam_config,
+            "options": self.options,
+        }
+
 
 @dataclass
-class EnvironmentSpec:
-    """Main environment specification for multi-container orchestration."""
+class PermanentServiceSpec:
+    """Specification for a permanent service that persists across episodes."""
 
-    network: NetworkSpec
+    name: str
+    image: str
+    ports: List[str] = field(default_factory=list)
+    environment: List[str] = field(default_factory=list)
+    volumes: List[str] = field(default_factory=list)
+    health_check: Optional[HealthCheck] = None
+    resource_limits: Dict[str, Any] = field(default_factory=dict)
+
+    def to_compose_service(self) -> Dict[str, Any]:
+        """Convert to Docker Compose service definition."""
+        service_config: Dict[str, Any] = {
+            "image": self.image,
+            "restart": "unless-stopped",  # Permanent services should restart
+        }
+
+        if self.ports:
+            service_config["ports"] = self.ports
+
+        if self.environment:
+            service_config["environment"] = self.environment
+
+        if self.volumes:
+            service_config["volumes"] = self.volumes
+
+        if self.health_check:
+            service_config["healthcheck"] = self.health_check.to_compose_health_check()
+
+        # Add resource limits
+        if self.resource_limits:
+            if "memory" in self.resource_limits:
+                service_config["mem_limit"] = self.resource_limits["memory"]
+            if "cpu" in self.resource_limits:
+                service_config["cpus"] = str(self.resource_limits["cpu"])
+
+        return service_config
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary."""
+        result = {
+            "name": self.name,
+            "image": self.image,
+            "ports": self.ports,
+            "environment": self.environment,
+            "volumes": self.volumes,
+            "resource_limits": self.resource_limits,
+        }
+        if self.health_check:
+            result["healthcheck"] = self.health_check.to_dict()
+        return result
+
+
+@dataclass
+class PermanentNetworkSpec:
+    """Network specification for permanent networks."""
+
+    name: str
+    driver: str = "bridge"
+    internal: bool = False
+    ipam_config: Dict[str, Any] = field(default_factory=dict)
+
+    def to_compose_network(self) -> Dict[str, Any]:
+        """Convert to Docker Compose network definition."""
+        return {
+            "driver": self.driver,
+            "internal": self.internal,
+            "ipam": self.ipam_config,
+        }
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary representation."""
+        return {
+            "name": self.name,
+            "driver": self.driver,
+            "internal": self.internal,
+            "ipam": self.ipam_config,
+        }
+
+
+@dataclass
+class PermanentEnvironmentSpec:
+    """Specification for permanent environment that persists across episodes."""
+
+    services: Dict[str, PermanentServiceSpec] = field(default_factory=dict)
+    networks: Dict[str, PermanentNetworkSpec] = field(default_factory=dict)
+
+    def get_service(self, name: str) -> Optional[PermanentServiceSpec]:
+        """Get permanent service by name."""
+        return self.services.get(name)
+
+    def get_network(self, name: str) -> Optional[PermanentNetworkSpec]:
+        """Get permanent network by name."""
+        return self.networks.get(name)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary representation."""
+        return {
+            "services": {name: service.to_dict() for name, service in self.services.items()},
+            "networks": {name: network.to_dict() for name, network in self.networks.items()},
+        }
+
+    def to_compose_dict(self) -> Dict[str, Any]:
+        """Generate Docker Compose configuration for permanent services."""
+        compose_config: Dict[str, Any] = {
+            "version": "3.8",
+            "services": {},
+            "networks": {},
+            "volumes": {},
+        }
+
+        # Add services
+        for service_name, service_spec in self.services.items():
+            compose_config["services"][service_name] = service_spec.to_compose_service()
+
+        # Add networks
+        for network_name, network_spec in self.networks.items():
+            compose_config["networks"][network_name] = network_spec.to_compose_network()
+
+        # Extract volume definitions from services
+        volumes = set()
+        for service_spec in self.services.values():
+            for volume in service_spec.volumes:
+                if ":" in volume:
+                    volume_name = volume.split(":")[0]
+                    if not volume_name.startswith("/"):  # Named volume, not host bind mount
+                        volumes.add(volume_name)
+
+        # Add volume definitions
+        for volume in volumes:
+            compose_config["volumes"][volume] = {}
+
+        return compose_config
+
+
+@dataclass
+class SandboxEnvironmentSpec:
+    """Main sandbox environment specification for multi-container orchestration."""
+
+    networks: List[NetworkSpec]  # List of networks to connect to
     execution_service: str  # Name of service used for command execution
     execution_config: Dict[str, Any]  # Configuration for execution container
     target_services: List[ServiceSpec] = field(default_factory=list)
     resource_limits: Dict[str, Any] = field(default_factory=dict)
+
+    def get_primary_network(self) -> NetworkSpec:
+        """Get the primary (first) network."""
+        if not self.networks:
+            raise InvalidEnvironmentSpecException("At least one network must be specified")
+        return self.networks[0]
+
+    def get_network_names(self) -> List[str]:
+        """Get names of all networks."""
+        return [network.name for network in self.networks]
 
     def get_execution_service(self) -> str:
         """Get the name of the execution service."""
@@ -156,7 +341,7 @@ class EnvironmentSpec:
 
         # Add execution service
         exec_config = self.execution_config.copy()
-        exec_config["networks"] = [self.network.name]
+        exec_config["networks"] = self.get_network_names()
         # Add SABER labels to execution service
         if session_id:
             if "labels" not in exec_config:
@@ -172,7 +357,7 @@ class EnvironmentSpec:
         # Add target services
         for service_spec in self.target_services:
             service_config = service_spec.to_compose_service()
-            service_config["networks"] = [self.network.name]
+            service_config["networks"] = self.get_network_names()
             # Add SABER labels to target services
             if session_id:
                 if "labels" not in service_config:
@@ -185,20 +370,15 @@ class EnvironmentSpec:
                 )
             services[service_spec.name] = service_config
 
-        # Add SABER labels to network
-        network_config = self.network.to_compose_network()
-        if session_id:
-            if "labels" not in network_config:
-                network_config["labels"] = []
-            network_config["labels"].append(f"saber.session_id={session_id}")
-
         # Build networks configuration
-        networks_config = {self.network.name: network_config}
+        networks = {}
+        for network_spec in self.networks:
+            networks[network_spec.name] = network_spec.to_compose_network()
 
         compose_config = {
             "version": "3.8",
             "services": services,
-            "networks": networks_config,
+            "networks": networks,
         }
 
         return compose_config
@@ -208,8 +388,12 @@ class EnvironmentSpec:
         if not self.execution_service:
             raise InvalidEnvironmentSpecException("Execution service must be specified")
 
-        if not self.network.name:
-            raise InvalidEnvironmentSpecException("Network name must be specified")
+        if not self.networks:
+            raise InvalidEnvironmentSpecException("At least one network must be specified")
+
+        for network in self.networks:
+            if not network.name:
+                raise InvalidEnvironmentSpecException("Network name must be specified")
 
         # Validate service names are unique
         all_services = self.get_all_services()
@@ -224,3 +408,19 @@ class EnvironmentSpec:
                     raise InvalidEnvironmentSpecException(
                         f"Service '{service.name}' depends on '{dep}' which is not defined"
                     )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary representation."""
+        result = {
+            "networks": {network.name: network.to_dict() for network in self.networks},
+            "execution_service": self.execution_service,
+            "execution_config": self.execution_config,
+            "target_services": [service.to_dict() for service in self.target_services],
+        }
+        if self.resource_limits:
+            result["resource_limits"] = self.resource_limits
+        return result
+
+
+# Compatibility alias
+EnvironmentSpec = SandboxEnvironmentSpec

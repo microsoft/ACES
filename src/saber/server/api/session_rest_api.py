@@ -102,12 +102,22 @@ class SessionRestAPI:
         @self.app.post("/session/{session_id}/start-benchmark")
         async def start_benchmark_endpoint(session_id: str, benchmark_config: Dict[str, Any] = {}) -> Dict[str, Any]:
             """Start a full benchmark with all tasks for the session."""
-            benchmark_session = await self.session_manager.start_benchmark(session_id, benchmark_config)
-            result: Dict[str, Any] = {
-                "benchmark_session": benchmark_session,
-                "message": "Benchmark started successfully",
-            }
-            return result
+            try:
+                await self.session_manager.start_benchmark(session_id, benchmark_config)
+                # Return a simple success response instead of the full benchmark session
+                result: Dict[str, Any] = {
+                    "message": "Benchmark started successfully",
+                    "session_id": session_id,
+                }
+                return result
+            except Exception as e:
+                logger.error(f"Failed to start benchmark for session {session_id}: {e}")
+                # Return error details for debugging
+                error_result: Dict[str, Any] = {
+                    "error": str(e),
+                    "message": "Benchmark start failed",
+                }
+                return error_result
 
         @self.app.get("/tasks")
         async def list_tasks_endpoint() -> Dict[str, Any]:

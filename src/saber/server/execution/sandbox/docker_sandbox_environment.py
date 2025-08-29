@@ -35,6 +35,7 @@ from ....logging_config import (
 )
 from ...base import CommandResult
 from ..exceptions import ContainerCreationError, SandboxExecutionError
+from ..logging import ContainerLoggingManager
 from .environment_spec import EnvironmentSpec
 
 logger = get_docker_logger(__name__)
@@ -52,6 +53,7 @@ class DockerSandboxEnvironment:
         self,
         session_id: str,
         environment_spec: EnvironmentSpec,
+        container_logging_config: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
         Initialize Docker sandbox environment.
@@ -59,6 +61,7 @@ class DockerSandboxEnvironment:
         Args:
             session_id: Unique session identifier
             environment_spec: Environment specification for container orchestration
+            container_logging_config: Configuration for container logging
 
         Raises:
             ContainerCreationError: If Docker client cannot be initialized
@@ -68,6 +71,14 @@ class DockerSandboxEnvironment:
         self.active_services: Dict[str, Container] = {}
         self.compose_project_name = f"saber-session-{session_id}"
         self.compose_file_path: Optional[str] = None
+
+        # Initialize container logging manager
+        if container_logging_config:
+            self.container_logger = ContainerLoggingManager(container_logging_config)
+        else:
+            # Use default config with session-specific identifier
+            default_config = {"domain": "sandbox", "session_id": session_id, "logs_directory": "/app/logs"}
+            self.container_logger = ContainerLoggingManager(default_config)
 
         try:
             self.docker_client = docker.from_env()  # type: ignore
@@ -93,6 +104,30 @@ class DockerSandboxEnvironment:
             # Set project name
             compose_config["name"] = self.compose_project_name
 
+            # Log the docker-compose configuration for debugging
+            self.container_logger.log_compose_config(
+                compose_config=compose_config,
+                config_type="sandbox",
+                identifier=self.session_id,
+                additional_metadata={
+                    "environment_spec_type": type(self.environment_spec).__name__,
+                    "services_count": len(compose_config.get("services", {})),
+                    "networks_count": len(compose_config.get("networks", {})),
+                    "project_name": self.compose_project_name,
+                },
+            )
+
+            # Log container lifecycle event
+            self.container_logger.log_container_lifecycle_event(
+                event_type="start_attempt",
+                container_info={
+                    "session_id": self.session_id,
+                    "project_name": self.compose_project_name,
+                    "config_type": "sandbox",
+                    "services": list(compose_config.get("services", {}).keys()),
+                },
+            )
+
             # Write compose file to temporary location
             self.compose_file_path = self._write_compose_file(compose_config)
 
@@ -105,9 +140,40 @@ class DockerSandboxEnvironment:
             # Wait for services to be healthy
             self._wait_for_services_healthy()
 
+            # Log successful start and collect initial logs
+            self.container_logger.log_container_lifecycle_event(
+                event_type="start_success",
+                container_info={
+                    "session_id": self.session_id,
+                    "project_name": self.compose_project_name,
+                    "config_type": "sandbox",
+                },
+            )
+
+            # Collect initial container logs
+            self.container_logger.log_all_project_containers(
+                project_name=self.compose_project_name, config_type="sandbox"
+            )
+
             logger.info("Docker sandbox environment started", self.session_id)
 
         except Exception as e:
+            # Log the failure
+            self.container_logger.log_container_lifecycle_event(
+                event_type="start_failure",
+                container_info={
+                    "session_id": self.session_id,
+                    "project_name": self.compose_project_name,
+                    "config_type": "sandbox",
+                },
+                additional_data={"error": str(e)},
+            )
+
+            # Try to collect any available logs even on failure
+            self.container_logger.log_all_project_containers(
+                project_name=self.compose_project_name, config_type="sandbox"
+            )
+
             self._cleanup_compose_file()
             raise ContainerCreationError(f"Failed to start sandbox environment: {e}")
 
@@ -396,6 +462,22 @@ class DockerSandboxEnvironment:
 
         cleanup_logger.info("Docker environment stop initiated", self.session_id)
         try:
+            # Log stop attempt
+            self.container_logger.log_container_lifecycle_event(
+                event_type="stop_attempt",
+                container_info={
+                    "session_id": self.session_id,
+                    "project_name": self.compose_project_name,
+                    "config_type": "sandbox",
+                },
+            )
+
+            # Collect final logs before stopping containers
+            cleanup_logger.info("Collecting final container logs", self.session_id)
+            self.container_logger.log_all_project_containers(
+                project_name=self.compose_project_name, config_type="sandbox"
+            )
+
             cleanup_logger.info("Stopping Docker Compose services", self.session_id)
             # Stop Docker Compose services
             self._stop_compose_services()
@@ -408,9 +490,30 @@ class DockerSandboxEnvironment:
             # Clean up compose file
             self._cleanup_compose_file()
 
+            # Log successful stop
+            self.container_logger.log_container_lifecycle_event(
+                event_type="stop_success",
+                container_info={
+                    "session_id": self.session_id,
+                    "project_name": self.compose_project_name,
+                    "config_type": "sandbox",
+                },
+            )
+
             logger.info("Docker sandbox environment stopped", self.session_id)
 
         except Exception as e:
+            # Log the failure
+            self.container_logger.log_container_lifecycle_event(
+                event_type="stop_failure",
+                container_info={
+                    "session_id": self.session_id,
+                    "project_name": self.compose_project_name,
+                    "config_type": "sandbox",
+                },
+                additional_data={"error": str(e)},
+            )
+
             log_operation_failure(cleanup_logger, "Docker environment stop", str(e), self.session_id)
             raise SandboxExecutionError(f"Failed to stop environment: {e}")
 

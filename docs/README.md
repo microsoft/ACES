@@ -62,11 +62,11 @@ Model Context Protocol handler component managed by SessionManager:
 
 #### BenchmarkManager
 Enhanced benchmark orchestration and task management:
-- **Task Configuration**: Loads and manages task definitions from YAML configuration files
+- **Task Configuration**: Loads and manages task definitions from YAML configuration files with support for both sandbox and permanent environments
 - **Benchmark Orchestration**: Manages multiple episode attempts for pass@k evaluation
-- **Task Lookup**: Provides task object retrieval by task ID with complete configuration
+- **Task Lookup**: Provides task object retrieval by task ID with complete configuration including permanent_environment references
 - **Episode Coordination**: Orchestrates multiple episode runs across all benchmark tasks
-- **Configuration Containment**: Task objects now contain all execution parameters (environment, allowed_executors)
+- **Configuration Containment**: Task objects now contain all execution parameters (sandbox_environment, permanent_environment, allowed_executors)
 - **Benchmark Configuration**: Manages domain-level and task-specific benchmark settings
 
 ##### BenchmarkConfigLoader
@@ -79,11 +79,12 @@ Enhanced YAML configuration management:
 
 ##### Benchmark Framework
 Enhanced Task objects with complete execution and benchmark configuration:
-- **Complete Configuration**: Tasks contain environment, allowed_executors, and all execution parameters
+- **Complete Configuration**: Tasks contain sandbox_environment, permanent_environment references, allowed_executors, and all execution parameters
 - **Benchmark Settings**: Tasks include benchmark-specific configuration (episode_attempts, success_criteria)
+- **Dual Environment Support**: Tasks can specify both ephemeral sandbox environments and references to permanent shared services
 - **Self-Contained**: No need for separate configuration lookups - all parameters in Task object
 - **Subtask Information**: Contains subtasks for informational purposes only
-- **Component Integration**: Provides all configuration needed by ExecutionManager and other components
+- **Component Integration**: Provides all configuration needed by ExecutionManager and environment managers
 
 #### EpisodeManager
 Moved to SessionManager for better separation of concerns:
@@ -94,9 +95,11 @@ Moved to SessionManager for better separation of concerns:
 
 #### ExecutionManager
 Docker sandbox execution manager for MCP integration:
-- **Sandbox Management**: Orchestrates Docker-based isolated execution environments for secure command processing
+- **Environment Management**: Orchestrates both ephemeral and permanent Docker environments for secure command processing
+- **Dual Manager Architecture**: Uses SandboxEnvironmentManager for session-scoped containers and PermanentEnvironmentManager for server-scoped persistent services
 - **Executor Factory**: Manages multiple executor types (CLI, Python) with dynamic selection based on command requirements
 - **Security Validation**: Implements comprehensive security validation and command filtering before execution
+- **Multi-Network Support**: Enables containers to connect to both isolated episode networks and permanent service networks
 - **MCP Integration**: Provides MCP (Model Context Protocol) tool interfaces for agent command execution
 
 #### EvaluationManager

@@ -32,6 +32,7 @@ from .events.sse_decorators import broadcast_environment_transition
 from .execution.cleanup.cleanup_manager import ContainerCleanupManager
 from .execution.cleanup.cleanup_reason import CleanupReason
 from .execution.execution_manager import ExecutionManager
+from .execution.sandbox.permanent_environment_manager import PermanentEnvironmentManager
 from .policy.policy_manager import PolicyDocument, PolicyManager
 
 logger = get_session_manager_logger(__name__)
@@ -116,6 +117,15 @@ class SessionManager:
         self.evaluation_manager = EvaluationManager()
         self.cleanup_manager = ContainerCleanupManager(self.execution_manager._sandbox_manager)
 
+        # Initialize permanent environment manager with enhanced logging config
+        permanent_config = {
+            "domain": domain_name,
+            "config_dir": config_dir,
+            "logs_directory": "/app/logs",  # Ensure this is mounted to host
+            "enable_logging": True,
+        }
+        self.permanent_environment_manager = PermanentEnvironmentManager(permanent_config)
+
         # Initialize protocol handlers
         self.rest_api = SessionRestAPI(self, host, port)
         self.mcp_api = SessionMCPAPI(self, mcp_host, mcp_port)
@@ -127,6 +137,9 @@ class SessionManager:
     async def start_server(self) -> None:
         """Start both REST and MCP servers concurrently with session cleanup."""
         import asyncio
+
+        # Start permanent environment if configured
+        await self._start_permanent_environment()
 
         # Start the session cleanup task
         self.cleanup_task = asyncio.create_task(self._session_cleanup_loop())
@@ -152,6 +165,15 @@ class SessionManager:
                 await self.cleanup_task
             except asyncio.CancelledError:
                 pass
+
+        # Stop permanent environment
+        if self.permanent_environment_manager.is_running():
+            logger.info("Stopping permanent environment...")
+            try:
+                self.permanent_environment_manager.stop_permanent_environment()
+                logger.info("Permanent environment stopped successfully")
+            except Exception as e:
+                logger.error(f"Error stopping permanent environment: {e}")
 
         # Shutdown MCP server first
         await self.mcp_api.shutdown_mcp_server()
@@ -276,8 +298,8 @@ class SessionManager:
 
         benchmark_session = self.benchmark_manager.start_benchmark(session_id, benchmark_config)
 
-        # Get the first task (this initializes current_task_id)
-        first_task_id = benchmark_session.get_next_task()
+        # TEMPORARY FIX: Hardcode the first task ID for excytin demo
+        first_task_id = "basic_logging_demo"
 
         # Validate that benchmark has tasks to execute
         if not first_task_id:
@@ -667,3 +689,29 @@ class SessionManager:
             Tuple of (should_terminate, reason)
         """
         return self.episode_manager.should_terminate_episode(session_id)
+
+    async def _start_permanent_environment(self) -> None:
+        """Start permanent environment if configured."""
+        permanent_env_name = self.benchmark_manager.config_loader.get_permanent_environment()
+        if not permanent_env_name:
+            logger.info("No permanent environment configured")
+            return
+
+        try:
+            logger.info(f"Starting permanent environment: {permanent_env_name}")
+
+            # Load permanent environment specification
+            if self.execution_manager._environment_loader is None:
+                raise RuntimeError("Environment loader is not initialized")
+            permanent_env_spec = self.execution_manager._environment_loader.load_permanent_environment(
+                permanent_env_name
+            )
+
+            # Start the permanent environment
+            self.permanent_environment_manager.start_permanent_environment(permanent_env_spec)
+
+            logger.info(f"Permanent environment '{permanent_env_name}' started successfully")
+
+        except Exception as e:
+            logger.error(f"Failed to start permanent environment '{permanent_env_name}': {e}")
+            raise

@@ -16,7 +16,7 @@ from saber.server.execution.base import ValidationResult
 from saber.server.execution.execution_manager import ExecutionManager
 from saber.server.execution.executors.executor_factory import ExecutorFactory
 from saber.server.execution.executors.standard_registry.cli_executor import CLIExecutor
-from saber.server.execution.sandbox.sandbox_manager import SandboxManager
+from saber.server.execution.sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 from saber.server.execution.utils.security_validator import SecurityValidator
 
 
@@ -41,7 +41,7 @@ class TestToolsIntegration:
     @pytest.fixture
     def registry(self, test_config):
         """Create ExecutionManager for integration testing."""
-        with patch("saber.server.execution.execution_manager.SandboxManager"):
+        with patch("saber.server.execution.execution_manager.SandboxEnvironmentManager"):
             return ExecutionManager()
 
     @pytest.fixture
@@ -292,7 +292,7 @@ class TestToolsIntegration:
 
     def test_component_initialization_integration(self, test_config):
         """Test that all components are properly initialized together."""
-        with patch("saber.server.execution.sandbox.sandbox_manager.SandboxManager"):
+        with patch("saber.server.execution.sandbox.sandbox_environment_manager.SandboxManager"):
             registry = ExecutionManager()
 
         # Verify all components exist and are correct types
@@ -308,7 +308,7 @@ class TestToolsIntegration:
         assert "cli" in available_executors
         assert "python" in available_executors
 
-        assert isinstance(registry._sandbox_manager, SandboxManager)
+        assert isinstance(registry._sandbox_manager, SandboxEnvironmentManager)
 
     @pytest.mark.asyncio
     async def test_realistic_malware_analysis_scenario(self, registry):

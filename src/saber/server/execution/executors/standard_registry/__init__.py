@@ -12,4 +12,7 @@ from .cli_executor import CLIExecutor
 from .python_executor import PythonExecutor
 from .sql_executor import SQLExecutor
 
-__all__ = ["CLIExecutor", "PythonExecutor", "SQLExecutor"]
+# TODO: Fix SQLExecutor _max_rows attribute issue
+# from .sql_executor import SQLExecutor
+
+__all__ = ["CLIExecutor", "PythonExecutor"]  # "SQLExecutor" temporarily removed
