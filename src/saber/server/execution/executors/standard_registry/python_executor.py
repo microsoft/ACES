@@ -144,7 +144,7 @@ class PythonExecutor(DockerExecutor):
             Parameter(
                 name="working_dir",
                 type=ParameterType.STRING,
-                description="Working directory for script execution",
+                description="Working directory for script execution, must be an absolute path",
                 required=False,
                 default="/workspace",
             )

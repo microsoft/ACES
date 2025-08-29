@@ -347,20 +347,29 @@ class SessionMCPAPI:
 
     def _convert_to_mcp_result(self, command_result: CommandResult) -> Dict[str, Any]:
         """
-        Convert CommandResult to MCP-compatible result.
+        Convert CommandResult to MCP-compatible result with episode termination signals.
 
         Args:
             command_result: Result from command execution
 
         Returns:
-            MCP-formatted result dictionary
+            MCP-formatted result dictionary with optional termination metadata
         """
         if command_result.success:
+            # Check if we need to add episode termination signals
+            result_text = str(command_result.data) if command_result.data else "Command executed successfully"
+
+            # Add episode termination signal if present in command result metadata
+            if hasattr(command_result, "metadata") and command_result.metadata:
+                if command_result.metadata.get("episode_terminated"):
+                    termination_reason = command_result.metadata.get("termination_reason", "server_terminated")
+                    result_text += f"\n[EPISODE_TERMINATED: {termination_reason}]"
+
             return {
                 "content": [
                     {
                         "type": "text",
-                        "text": str(command_result.data) if command_result.data else "Command executed successfully",
+                        "text": result_text,
                     }
                 ],
                 "isError": False,
