@@ -8,11 +8,25 @@ This document describes the enhanced YAML configuration format for SABER benchma
 # Domain-level configuration
 domain: "security_domain_name"
 
-# Benchmark configuration at domain level (optional)
-benchmark_config:
-  episode_attempts: 5  # Default number of episode attempts for pass@k evaluation
+# Permanent environment (optional) - runs for server lifetime
+permanent_environment: "permanent_env_name"
 
-# Executor configuration (optional)
+# Global defaults applied to all tasks (optional)
+global_defaults:
+  # Default execution configuration for all tasks
+  execution_config:
+    allowed_executors: ["cli", "python"]
+    timeout: 30  # Default command timeout in seconds
+
+  # Default episode configuration for all tasks
+  episode_config:
+    max_steps: 50
+
+  # Default benchmark configuration for all tasks
+  benchmark_config:
+    episode_attempts: 5  # Default number of episode attempts for pass@k evaluation
+
+# Executor configuration (optional) - deprecated, use global_defaults.execution_config instead
 executors:
   - "cli"
   - "python"
@@ -23,33 +37,59 @@ tasks:
     title: "Task Title"
     description: "Task description"
 
-    # Environment specification
-    environment: "environment_template_name"
+    # Environment specification (choose one)
+    sandbox_environment: "sandbox_template_name"  # For ephemeral environments
+    # OR
+    environment: "environment_template_name"      # Alternative syntax
 
-    # Execution configuration
+    # Execution configuration (overrides global defaults)
     execution_config:
       timeout: 120
       allowed_executors: ["cli", "python"]
 
-    # Episode configuration
+    # Episode configuration (overrides global defaults)
     episode_config:
       max_steps: 50
 
-    # Task-specific benchmark configuration (optional)
+    # Task-specific benchmark configuration (overrides global defaults)
     benchmark_config:
-      episode_attempts: 3  # Override domain default for this task
+      episode_attempts: 3  # Override global default for this task
 
     # Subtasks and other existing configuration...
-    subtasks: []
+    subtasks:
+      - subtask_id: "subtask_name"
+        title: "Subtask Title"
+        description: "Subtask description"
+        objective: "What this subtask accomplishes"
 ```
 
 ## Benchmark Configuration
 
-### Domain-Level Configuration
+### Global Defaults Configuration
 
-The `benchmark_config` section at the domain level provides default settings for all tasks in the domain:
+The `global_defaults` section provides default settings for all tasks in the domain:
+
+- `execution_config`: Default execution settings (timeout, allowed_executors)
+- `episode_config`: Default episode settings (max_steps, etc.)
+- `benchmark_config`: Default benchmark settings (episode_attempts for pass@k evaluation)
+
+### Task-Level Configuration
+
+Individual tasks can override global defaults by specifying the same configuration sections:
 
 - `episode_attempts`: Default number of episode attempts for pass@k evaluation (default: 1)
+
+### Environment Configuration
+
+Tasks can specify environments in two ways:
+
+- `sandbox_environment`: Reference to an ephemeral environment (created per episode)
+- `environment`: Alternative syntax for environment specification
+- `permanent_environment`: Domain-level permanent environment (server lifetime)
+
+### Task-Level Configuration
+
+Individual tasks can override global defaults by specifying the same configuration sections:
 
 ### Task-Level Configuration
 
@@ -60,52 +100,83 @@ tasks:
   - task_id: "complex_task"
     # ... other task configuration ...
 
-    # Override domain default
+    # Override global defaults
+    execution_config:
+      timeout: 180  # Longer timeout for complex task
+
+    episode_config:
+      max_steps: 100  # More steps allowed
+
     benchmark_config:
       episode_attempts: 10  # This task needs more attempts
 ```
 
 ## Backward Compatibility
 
-- Existing YAML files without `benchmark_config` will continue to work
+- Existing YAML files without `global_defaults` will continue to work
 - Missing `episode_attempts` defaults to 1 (single episode execution)
 - All existing task configuration remains unchanged
+- Legacy `benchmark_config` at domain level is supported but `global_defaults.benchmark_config` is preferred
 
 ## Example Configurations
 
-### Simple Domain Configuration
+### Simple Domain Configuration with Global Defaults
 ```yaml
 domain: "malware_analysis"
 
-benchmark_config:
-  episode_attempts: 5
+global_defaults:
+  episode_config:
+    max_steps: 30
+
+  benchmark_config:
+    episode_attempts: 5
 
 tasks:
   - task_id: "basic_analysis"
-    # This task will use 5 episode attempts
+    sandbox_environment: "python_sandbox"
+    # This task will use global defaults: 5 attempts, 30 max steps
 ```
 
-### Mixed Configuration
+### Complex Configuration with Permanent Environment
 ```yaml
 domain: "webapp_pentest"
 
-benchmark_config:
-  episode_attempts: 3  # Domain default
+# Permanent database runs for server lifetime
+permanent_environment: "vulnerable_webapp_db"
+
+global_defaults:
+  execution_config:
+    allowed_executors: ["cli", "python"]
+    timeout: 60
+
+  episode_config:
+    max_steps: 20
+
+  benchmark_config:
+    episode_attempts: 3  # Global default
 
 tasks:
   - task_id: "simple_xss"
-    # Uses domain default: 3 attempts
+    sandbox_environment: "browser_sandbox"
+    # Uses global defaults: 3 attempts
 
   - task_id: "complex_exploit"
+    sandbox_environment: "full_pentest_env"
+    # Override for difficult task
+    episode_config:
+      max_steps: 50
     benchmark_config:
-      episode_attempts: 7  # Override for difficult task
+      episode_attempts: 7
 ```
 
 ## Integration with BenchmarkManager
 
 The BenchmarkManager uses this configuration to:
 
-1. Load domain-level benchmark settings
-2. Create multiple episodes per task based on `episode_attempts`
-3. Coordinate with SessionManager for episode execution
-4. Enable pass@k evaluation through EvaluationManager
+1. Load global defaults and apply them to all tasks
+2. Parse task-specific configuration overrides
+3. Support both sandbox and permanent environment specifications
+4. Provide task and episode configuration to SessionManager and EpisodeManager
+5. Enable pass@k evaluation through client-side orchestration
+
+**Note**: The BenchmarkManager focuses on task definition management. Actual benchmark orchestration (multiple episode execution) is handled client-side by the SABERHarness.

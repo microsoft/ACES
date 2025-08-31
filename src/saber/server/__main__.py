@@ -9,6 +9,7 @@ import argparse
 import asyncio
 import logging
 import os
+import signal
 import sys
 from typing import Optional
 
@@ -117,6 +118,37 @@ def validate_config_files(config_dir: str) -> tuple[str, str]:
 
 async def start_server(args: argparse.Namespace) -> None:
     """Start the SABER server with the given arguments."""
+    session_manager: Optional[SessionManager] = None
+    shutdown_event = asyncio.Event()
+
+    async def shutdown_handler() -> None:
+        """Handle graceful shutdown."""
+        logger.info("Shutdown signal received, initiating graceful shutdown...")
+        if session_manager:
+            try:
+                await session_manager.shutdown()
+                logger.info("Graceful shutdown completed")
+            except Exception as e:
+                logger.error(f"Error during graceful shutdown: {e}")
+        shutdown_event.set()
+
+    # Setup signal handlers for graceful shutdown using asyncio
+    loop = asyncio.get_running_loop()
+
+    def signal_handler() -> None:
+        logger.info("Signal received, scheduling shutdown...")
+        asyncio.create_task(shutdown_handler())
+
+    # Register signal handlers (only available on Unix systems)
+    try:
+        if hasattr(signal, "SIGTERM"):
+            loop.add_signal_handler(signal.SIGTERM, signal_handler)
+        if hasattr(signal, "SIGINT"):
+            loop.add_signal_handler(signal.SIGINT, signal_handler)
+        logger.info("Signal handlers registered for graceful shutdown")
+    except NotImplementedError:
+        # Windows doesn't support add_signal_handler
+        logger.warning("Signal handlers not available on this platform")
 
     try:
         # Setup file logging early in the startup process
@@ -147,12 +179,34 @@ async def start_server(args: argparse.Namespace) -> None:
 
         # Start the server
         logger.info("Starting SABER server...")
-        await session_manager.start_server()
+
+        # Create a task for the server so we can wait for either server completion or shutdown signal
+        server_task = asyncio.create_task(session_manager.start_server())
+
+        # Wait for either the server to complete or a shutdown signal
+        done, pending = await asyncio.wait(
+            [server_task, asyncio.create_task(shutdown_event.wait())], return_when=asyncio.FIRST_COMPLETED
+        )
+
+        # Cancel any remaining tasks
+        for task in pending:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     except KeyboardInterrupt:
         logger.info("Received shutdown signal, stopping server...")
+        if session_manager:
+            await session_manager.shutdown()
     except Exception as e:
         logger.error(f"Failed to start SABER server: {e}")
+        if session_manager:
+            try:
+                await session_manager.shutdown()
+            except Exception as shutdown_error:
+                logger.error(f"Error during emergency shutdown: {shutdown_error}")
         sys.exit(1)
 
 

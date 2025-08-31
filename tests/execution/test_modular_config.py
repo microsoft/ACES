@@ -25,7 +25,7 @@ class TestModularConfiguration:
         """Create a mock SandboxEnvironmentManager."""
         manager = MagicMock(spec=SandboxEnvironmentManager)
         manager.get_sandbox_config.return_value = {
-            "image": "saber/base-sandbox:latest",
+            "image": "saber/sandbox:latest",
             "network_mode": "none",
             "read_only_root": True,
             "user": "tooluser:tooluser",
@@ -39,7 +39,7 @@ class TestModularConfiguration:
             # Manager-level configuration
             "execution": {"timeout": 300.0, "max_concurrent": 5},
             "security": {"allowed_commands": ["file", "strings", "cat", "echo"], "max_command_length": 10000},
-            "sandbox": {"image": "saber/base-sandbox:latest", "network_mode": "none"},
+            "sandbox": {"image": "saber/sandbox:latest", "network_mode": "none"},
             # Executor-specific configurations
             "cli": {"default_shell_mode": True, "timeout": 120.0},  # Override global timeout
             "python": {

@@ -1,17 +1,8 @@
-# Excytin Demo Client for SABER with uv package management
-FROM python:3.11-slim
+# Excytin Demo Client for SABER
+# Extends the generic SABER client base
+FROM saber/client:latest
 
-# Install system dependencies and uv
-RUN apt-get update && apt-get install -y \
-    curl \
-    git \
-    && rm -rf /var/lib/apt/lists/* \
-    && pip install uv
-
-# Set working directory
-WORKDIR /app
-
-# Copy client code and pyproject.toml
+# Copy client code and dependencies
 COPY client/ /app/client/
 
 # Install Python dependencies using uv
@@ -20,6 +11,3 @@ RUN uv venv && uv sync
 
 # Set working directory back to app root
 WORKDIR /app
-
-# Default command - keep container running for manual execution
-CMD ["tail", "-f", "/dev/null"]

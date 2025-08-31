@@ -1,7 +1,7 @@
 @startuml Command Execution Architecture
 
 !theme plain
-title SABER Docker Sandbox Command Execution Framework - Detailed Architecture
+title SABER Docker Sandbox Command Execution Framework - Actual Implementation
 
 skinparam class {
     BackgroundColor lightblue
@@ -21,58 +21,83 @@ skinparam stereotype {
 package "Execution Management" {
 
     class ExecutionManager {
+        +_config_dir: str
         +_configuration: Dict[str, Any]
         +_executor_factory: ExecutorFactory
-        +_sandbox_env_manager: SandboxEnvironmentManager
-        +_permanent_env_manager: PermanentEnvironmentManager
-        +_environment_loader: EnvironmentLoader
-        +_execution_lock: Semaphore
+        +_sandbox_manager: SandboxEnvironmentManager
+        +_permanent_environment_manager: Optional[PermanentEnvironmentManager]
+        +_environment_loader: Optional[EnvironmentLoader]
+        +_cleanup_manager: ContainerCleanupManager
+        +_active_executions: Dict[str, int]
+        +_max_concurrent_per_session: int
         --
-        +step(action: Action): CommandResult
+        +step(action: Action, context?: Dict): CommandResult
         +configure_for_task(session_id: str, task: Task): void
+        +initialize_permanent_environment(permanent_manager: PermanentEnvironmentManager): void
         +cleanup_session(session_id: str): void
         +cleanup_all_sessions(): void
-        +get_security_info(): Dict[str, Any]
-        +list_commands(): List[Dict[str, Any]]
-        +get_execution_stats(): Dict[str, Any]
+        +is_sandbox_ready(): bool
         +to_mcp_tools(): List[Dict[str, Any]]
         +get_executor(executor_type: str): DockerExecutor
+        +get_available_executors(): List[str]
+        +_load_custom_executors(config_dir: str): void
     }
 
     class ExecutorFactory {
-        +_executor_registry: Dict[str, Type[CommandExecutor]]
-        +_sandbox_env_manager: SandboxEnvironmentManager
+        +_sandbox_manager: SandboxEnvironmentManager
+        +_configuration: Dict[str, Any]
+        +_executor_instances: Dict[str, DockerExecutor]
+        +_allowed_executors: List[str]
         --
-        +register_executor(executor_type: str, executor_class: Type): void
-        +get_executor(executor_type: str): CommandExecutor
         +get_available_executors(): List[str]
+        +get_executor(executor_type: str, force_new?: bool): DockerExecutor
+        +create_executor(executor_type: str): DockerExecutor
+        +update_configuration(config: Dict): void
+        +clear_instances(): void
+    }
+
+    class ExecutorRegistry {
+        +_registered_executors: Dict[str, Type[DockerExecutor]]
+        +_registration_sources: Dict[str, str]
+        --
+        +register_executor_class(executor_type: str, executor_class: Type[DockerExecutor], source?: str): void
+        +register_executor_from_file(executor_type: str, file_path: str, class_name: str): void
+        +get_executor_class(executor_type: str): Type[DockerExecutor]
+        +get_available_executors(): List[str]
+        +is_registered(executor_type: str): bool
+        +load_executors_from_directory(directory: str): Dict[str, str]
+        +_validate_executor_class(executor_class: Type): void
     }
 
     class CommandExecutor {
         +_config: Dict[str, Any]
         +_parameters: Dict[str, Parameter]
         --
-        {abstract} +execute(): CommandResult
         {abstract} +setup_parameters(config: Dict[str, Any]): void
+        {abstract} +execute(parameters: Dict, context: Dict): CommandResult
         {static} +get_default_config(): Dict[str, Any]
         +get_timeout(): float
-        +validate_parameters(): ValidationResult
+        +add_parameter(parameter: Parameter): void
+        +validate_parameters(parameters: Dict): ValidationResult
         +to_mcp_schema(): Dict[str, Any]
         +get_executor_type(): str
     }
 
     class DockerExecutor {
-        +_sandbox_env_manager: SandboxEnvironmentManager
-        +_config: Dict[str, Any]
+        +_sandbox_manager: SandboxEnvironmentManager
         --
-        {abstract} +execute(): CommandResult
+        {abstract} +execute(parameters: Dict, context: Dict): CommandResult
         +setup_parameters(config: Dict[str, Any]): void
-        +get_session_environment(): DockerSandboxEnvironment
-        +ensure_container_ready(): void
-        +cleanup_execution(): void
-        +get_container_logs(): str
-        +validate_docker_parameters(): ValidationResult
+        +get_session_environment(session_id: str): DockerSandboxEnvironment
+        +ensure_container_ready(session_id: str): void
+        +cleanup_execution(session_id: str): void
+        +get_container_logs(session_id: str): str
+        +create_with_config(sandbox_manager, config?, additional_params?, **kwargs): DockerExecutor
+        +_validate_docker_environment(session_id: str): ValidationResult
     }
+}
+
+package "Standard Executors (standard_registry/)" {
 
     class CLIExecutor {
         +_executor_metadata: Dict
@@ -80,29 +105,44 @@ package "Execution Management" {
         --
         +setup_parameters(config: Dict[str, Any]): void
         +build_command(command: str): List[str]
-        +parse_output(stdout: str, stderr: str, exit_code: int): CommandResult
-        +execute(action: Action): CommandResult
-        +validate_parameters(action: Action): ValidationResult
+        +execute(parameters: Dict, context: Dict): CommandResult
+        +validate_command_string(command: str): ValidationResult
         +get_security_info(): Dict[str, Any]
         +to_mcp_schema(): Dict[str, Any]
+        +create_with_config(sandbox_manager, config?, additional_params?, **kwargs): CLIExecutor
     }
 
     class PythonExecutor {
         +_script_templates: Dict[str, str]
         +_allowed_modules: Set[str]
+        +_requirements_cache: Dict[str, bool]
         --
         +setup_parameters(config: Dict[str, Any]): void
-        +build_python_script(code: str, requirements: List[str]): str
+        +build_python_script(code: str, requirements?: List[str]): str
         +validate_python_code(code: str): ValidationResult
-        +execute(action: Action): CommandResult
+        +execute(parameters: Dict, context: Dict): CommandResult
         +get_python_environment(): Dict[str, Any]
         +install_requirements(requirements: List[str]): CommandResult
-        +get_security_info(): Dict[str, Any]
         +to_mcp_schema(): Dict[str, Any]
+        +create_with_config(sandbox_manager, config?, additional_params?, **kwargs): PythonExecutor
+    }
+
+    class SQLExecutor {
+        +_connection_manager: Dict[str, Any]
+        +_query_templates: Dict[str, str]
+        --
+        +setup_parameters(config: Dict[str, Any]): void
+        +execute_query(query: str, connection_params: Dict): CommandResult
+        +validate_sql_query(query: str): ValidationResult
+        +execute(parameters: Dict, context: Dict): CommandResult
+        +get_database_info(): Dict[str, Any]
+        +to_mcp_schema(): Dict[str, Any]
+        +create_with_config(sandbox_manager, config?, additional_params?, **kwargs): SQLExecutor
     }
 
     class EnvironmentLoader {
         +environments_file_path: Path
+        +_permanent_manager: Optional[PermanentEnvironmentManager]
         +_templates_cache: Optional[Dict[str, Any]]
         --
         +resolve_sandbox_environment(task_env_config: Any): SandboxEnvironmentSpec
@@ -118,14 +158,17 @@ package "Execution Management" {
     }
 
     class SecurityValidator {
-        +allowed_commands: Set[str]
+        +allowed_commands: Optional[Set[str]]
+        +_base_allowed_commands: Set[str]
         --
-        +validate_base_command(): void
-        +validate_command_string(): ValidationResult
-        +validate_arguments(): ValidationResult
-        +validate_full_command(): ValidationResult
-        +is_safe_path(): bool
+        +validate_command_string(command: str): ValidationResult
+        +validate_base_command(command: str): ValidationResult
+        +validate_arguments(args: List[str]): ValidationResult
+        +validate_full_command(command_parts: List[str]): ValidationResult
+        +is_safe_path(path: str): bool
         +get_security_info(): Dict[str, Any]
+        +_is_dangerous_pattern(text: str): bool
+        +_contains_shell_metacharacters(text: str): bool
     }
 
     class SecurityConstants <<static>> {
@@ -135,6 +178,7 @@ package "Execution Management" {
         +SENSITIVE_DIRECTORIES: List[str]
         +SUSPICIOUS_EXTENSIONS: List[str]
         +DEFAULT_SECURITY_SETTINGS: Dict[str, Any]
+        +BASE_ALLOWED_COMMANDS: Set[str]
     }
 
     class Parameter {
@@ -313,15 +357,20 @@ package "Docker Sandbox" <<stereototype S>> {
 CommandExecutor <|-- DockerExecutor
 DockerExecutor <|-- CLIExecutor
 DockerExecutor <|-- PythonExecutor
+DockerExecutor <|-- SQLExecutor
 
 ' Execution Manager composition relationships
 ExecutionManager *-- ExecutorFactory
 ExecutionManager *-- EnvironmentLoader
 ExecutionManager *-- SandboxEnvironmentManager
-ExecutionManager *-- PermanentEnvironmentManager
+ExecutionManager *-- ContainerCleanupManager
+ExecutionManager ..> PermanentEnvironmentManager : optional
 
-' Factory relationships
-ExecutorFactory *-- SandboxEnvironmentManager
+' Factory and Registry relationships
+ExecutorFactory ..> ExecutorRegistry : uses
+ExecutorRegistry o-- CLIExecutor : registers
+ExecutorRegistry o-- PythonExecutor : registers
+ExecutorRegistry o-- SQLExecutor : registers
 
 ' Sandbox relationships
 SandboxEnvironmentManager *-- DockerSandboxEnvironment
@@ -338,32 +387,43 @@ DockerSandboxEnvironment ..> CommandResult
 
 ' Executor-specific relationships
 CLIExecutor *-- SecurityValidator
+SecurityValidator ..> SecurityConstants
 
 ' Component relationships
 CommandExecutor *-- Parameter
 Parameter ..> ParameterType
-SecurityValidator ..> SecurityConstants
 
 ' Usage relationships
 CommandExecutor ..> CommandResult
 CommandExecutor ..> ValidationResult
 
 note top of ExecutionManager
-**Docker Compose Execution Manager**
-Central hub for all command execution components:
-- Task-based configuration with environment resolution via EnvironmentLoader
-- Generic factory-based executor management for scalable executor types
-- Docker Compose orchestration for all sandbox environments
-- Environment creation integrated with task configuration process
-- Dynamic MCP tool schema generation for agent discovery
-- Sequential execution with concurrency control
-- MCP tools integration bridging executors to MCP protocol
-- Security validation delegated to individual executors for separation of concerns
-- No command analysis needed - MCP tools map directly to executor types
+**Docker Compose Execution Manager - Actual Implementation**
+Central hub with registry-based executor discovery:
+- Optional permanent environment manager (initialized separately)
+- Concurrent execution tracking per session (max_concurrent_per_session = 3)
+- Custom executor loading from config directory
+- Registry-based executor discovery and instantiation
+- Task-based configuration with environment resolution
+- Container cleanup manager for unified resource management
+- Session-scoped container lifecycle management
+- MCP tools integration with dynamic schema generation
+- Async execution pattern with context passing
+end note
+
+note top of ExecutorRegistry
+**Global Executor Registration System**
+Self-registering executor pattern:
+- Executors register themselves on import via register_executor()
+- Standard executors in standard_registry/ auto-register
+- Custom executors loaded from config directory
+- Validation of executor classes during registration
+- Source tracking for debugging and conflict resolution
+- Thread-safe registration process
 end note
 
 note right of SandboxEnvironmentSpec
-**Task Environment Specification**
+**Task Environment Specification - Unchanged**
 Declarative configuration for complete task execution environment:
 - Execution container configuration (CLI tools, security settings)
 - Target service specifications (vulnerable web apps, databases, etc.)
@@ -374,7 +434,7 @@ Declarative configuration for complete task execution environment:
 end note
 
 note bottom of SandboxEnvironmentManager
-**Docker Compose Sandbox Environment Manager**
+**Docker Compose Sandbox Environment Manager - Unchanged**
 Manages ephemeral sandbox environments using Docker Compose orchestration:
 - Creates DockerSandboxEnvironment instances from SandboxEnvironmentSpec
 - Session-scoped lifecycle management for isolated execution environments
@@ -386,7 +446,7 @@ Manages ephemeral sandbox environments using Docker Compose orchestration:
 end note
 
 note bottom of PermanentEnvironmentManager
-**Permanent Environment Manager**
+**Permanent Environment Manager - Unchanged**
 Manages server-scoped persistent services that remain active across episodes:
 - Creates and manages long-lived Docker services on server startup
 - Provides permanent network bridge for cross-episode service sharing
@@ -397,13 +457,13 @@ Manages server-scoped persistent services that remain active across episodes:
 end note
 
 note left of EnvironmentLoader
-**Environment Configuration Resolver**
-Flexible environment specification resolution supporting both ephemeral and permanent environments:
+**Environment Configuration Resolver - Enhanced**
+Flexible environment specification resolution with permanent environment integration:
 - Sandbox environment template reference resolution (string → SandboxEnvironmentSpec)
 - Permanent environment reference resolution (string → PermanentEnvironmentSpec)
 - Granular configuration building (dict → SandboxEnvironmentSpec)
 - Hybrid template + additions approach
-- Multi-network configuration support
+- Multi-network configuration support including permanent networks
 - Dynamic subnet allocation for network isolation
 - YAML template caching and validation
 - Multi-container orchestration support
@@ -411,7 +471,7 @@ Flexible environment specification resolution supporting both ephemeral and perm
 end note
 
 note top of DockerSandboxEnvironment
-**Docker Compose Environment**
+**Docker Compose Environment - Unchanged**
 Unified Docker Compose orchestration for all sandbox environments:
 - Always uses Docker Compose workflow (1 to many containers)
 - Tracks all service containers (execution + target services)
@@ -424,13 +484,48 @@ Unified Docker Compose orchestration for all sandbox environments:
 end note
 
 note top of CommandExecutor
-Base command execution framework:
+**Base Command Execution Framework - Updated**
+Async execution with registry integration:
+- Async execute method with parameters and context
 - Config-based parameter management during initialization
 - Abstract setup_parameters method for executor-specific configuration
 - Default configuration provider for standardized config handling
 - Parameter validation and MCP schema generation
-- Abstract execute method for command-specific implementation
+- create_with_config factory method for standardized instantiation
 - Timeout configuration from config dictionary
+end note
+
+note right of CLIExecutor
+**Standard CLI Executor**
+Registered as "cli" executor:
+- Located in standard_registry/cli_executor.py
+- Auto-registers on import: register_executor("cli", CLIExecutor, "standard")
+- Shell execution mode with security validation
+- Command chaining and timeout enforcement
+- Working directory and environment variable support
+- Comprehensive security validation via SecurityValidator
+end note
+
+note right of PythonExecutor
+**Standard Python Executor**
+Registered as "python" executor:
+- Located in standard_registry/python_executor.py
+- Auto-registers on import: register_executor("python", PythonExecutor, "standard")
+- Python code execution with requirements management
+- Script template system for common patterns
+- Module whitelisting and code validation
+- Requirements caching and installation
+end note
+
+note right of SQLExecutor
+**Standard SQL Executor**
+Registered as "sql" executor:
+- Located in standard_registry/sql_executor.py
+- Auto-registers on import: register_executor("sql", SQLExecutor, "standard")
+- SQL query execution with connection management
+- Multi-database support (MySQL, PostgreSQL, SQLite)
+- Query validation and result formatting
+- Connection pooling and timeout handling
 end note
 
 @enduml

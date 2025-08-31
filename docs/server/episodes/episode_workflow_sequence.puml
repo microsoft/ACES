@@ -1,77 +1,95 @@
 @startuml Episode Management Workflow
 !theme plain
-title SABER Episode Management Workflow
+title SABER Episode Management Workflow - Actual Implementation
 
 actor Client
 participant "AgentUnderTest" as Agent
 participant "SessionManager" as SM
 participant "SessionRestAPI" as REST
 participant "SessionMCPAPI" as MCP
-participant "BenchmarkManager" as TM
+participant "BenchmarkManager" as BM
 participant "EpisodeManager" as EM
 participant "Task" as T
 participant "PolicyManager" as PM
 participant "EvaluationManager" as EVAL_M
 participant "ExecutionManager" as EM_EXEC
 
+== Client-Side Benchmark Orchestration ==
+
+Client -> REST: GET /benchmark
+REST -> SM: get_benchmark_info()
+SM -> BM: get_benchmark_info()
+BM --> SM: BenchmarkInfo
+SM --> REST: BenchmarkInfo
+REST -> Client: BenchmarkInfo (with tasks & episode_attempts)
+
+note right of Client
+Client receives complete benchmark information:
+- List of all tasks with episode_attempts
+- Total episodes across all tasks
+- Client decides task order and orchestration
+end note
+
 == Episode Initialization ==
 
-Client -> REST: POST /session/{session_id}/start-benchmark\n{task_ids: ["malware_analysis_001"], episode_attempts: 1}
-REST -> SM: start_benchmark(session_id, task_ids, episode_attempts)
-SM -> TM: create_benchmark_session(session_id, task_ids)
-TM --> SM: benchmark_session
-SM -> TM: start_benchmark(session_id, benchmark_session)
-TM -> TM: get first task from benchmark_session
-TM -> EM: start_episode(session_id, task_id, task.initial_context)
-EM -> EM: create Episode object
+Client -> REST: POST /session/{session_id}/start-episode?task_id=malware_analysis_001
+REST -> SM: start_episode(session_id, task_id)
+SM -> BM: get_task(task_id)
+BM --> SM: Task (with environment, allowed_executors, episode_config, etc.)
+
+== Task Configuration & Episode Setup ==
+
+SM -> EM: start_episode(session_id, task_id, initial_context)
+EM -> EM: create Episode object (state=ACTIVE)
 EM -> EM: store in active_episodes[session_id]
-EM --> TM: episode
-TM -> TM: benchmark_session.set_current_episode(episode.episode_id)
-TM --> SM: benchmark_session
+EM --> SM: Episode
 
-== Task Context & Policy Gathering ==
+SM -> EM_EXEC: configure_for_task(session_id, task)
+SM -> PM: configure_for_task(session_id, task)
+SM -> EM: configure_for_task(session_id, task)
 
-SM -> TM: get_task(task_id)
-TM --> SM: task_object (with environment_spec, allowed_executors, etc.)
-SM -> EVAL_M: initialize_evaluation(task_object)
-EVAL_M --> SM: evaluation_ready
-SM -> PM: get_policy()
-PM --> SM: policy_document
-
-note right of SM
-  SessionManager gathers:
-  - Complete task object with all configuration
-  - Domain policy document
-
-  Task object now contains:
-  - environment (flexible specification)
-  - allowed_executors
-  - initial_context
-  - subtasks (informational)
+note right of EM
+EpisodeManager stores episode_config from task:
+- max_steps (required)
+- step_timeout_seconds (default: 300)
+- episode_timeout_minutes (default: 30)
 end note
 
+SM -> EVAL_M: log_episode_start(session_id, episode_id, task_id)
 note right of EVAL_M
-  EvaluationManager initialization:
-  - Sets up evaluation context for the task
-  - Prepares trajectory tracking
-  - Initializes performance baselines
-  - Configures task-specific metrics
+EvaluationManager is currently a stub:
+Only logs events, no actual evaluation logic
 end note
 
-SM -> REST: episode_info, task_context, policy
-REST -> Client: HTTP 200 OK\n{episode_info, task_context, policy}
+SM -> SM: update session (current_episode_id, current_task_id)
+SM --> REST: Episode
+REST -> Client: {episode_id, task_id, session_id, message}
 
-== Agent Initialization ==
+== Policy and Task Context Retrieval ==
 
-Client -> Agent: Prompt(task_context + policy)
-Agent --> Client: command_string
+Client -> REST: GET /session/{session_id}/policy
+REST -> SM: get_policy(session_id)
+SM -> PM: get_current_policy()
+PM --> SM: PolicyDocument(prompt)
+SM --> REST: policy_document
+REST -> Client: {prompt: "..."}
 
-== MCP Connection Setup ==
+Client -> REST: GET /session/{session_id}/current-task
+REST -> SM: get_current_task(session_id)
+SM -> BM: get_task(task_id)
+BM --> SM: Task
+SM --> REST: task_info
+REST -> Client: task_context
 
-Client -> MCP: connect_mcp(session_id)
-MCP -> SM: map_session_context(session_id)
-SM -> MCP: session_context
-MCP -> Client: mcp_connected
+== Agent Initialization & MCP Setup ==
+
+Client -> Agent: initialize(task_context + policy)
+Agent --> Client: ready
+
+Client -> MCP: connect(session_id, task_id, client_id via headers)
+MCP -> SM: _get_session_from_headers()
+SM --> MCP: session_context
+MCP -> Client: connected
 
 Client -> MCP: list_tools()
 MCP -> SM: get_execution_manager()
@@ -79,129 +97,131 @@ SM -> EM_EXEC: to_mcp_tools()
 EM_EXEC -> MCP: tool_schemas[]
 MCP -> Client: available_tools[]
 
-== Command Execution & RL Step ==
+== RL Episode Step Execution ==
 
-Agent -> Agent: generate next command
-Agent -> Client: tool_call_request(tool_name: "cli", args: {arguments: "file malware.exe"})
-Client -> MCP: call_tool(tool_name: "cli", arguments: {arguments: "file malware.exe"})
+Agent -> Agent: decide_next_action()
+Agent -> Client: tool_request("cli", {command: "file malware.exe"})
+Client -> MCP: call_tool("cli", {command: "file malware.exe"})
 MCP -> SM: execute_action(session_id, action)
-SM -> SM: create Action(arguments, parameters)
-SM -> EM_EXEC: step(action)
-EM_EXEC --> SM: CommandResult
 
-note right of SM
-  Integration Point:
-  Action + CommandResult
-end note
+SM -> EM_EXEC: step(action, context)
+EM_EXEC --> SM: CommandResult
 
 SM -> EM: step(session_id, action, command_result)
 
 == EpisodeManager Step Processing ==
 
 EM -> EM: get_current_episode(session_id)
+EM -> EM: check termination (current_steps + 1 >= max_steps)
 EM -> EM: create_step(episode, action, command_result)
-EM -> EM: extract arguments from action
-EM -> EM: create Step object
-EM -> EM: add step to episode
+EM -> EM: add_step(episode)
 EM -> EM: update_episode_state(episode, step)
-EM --> SM: Step
+EM --> SM: StepResult(step, should_terminate, termination_reason)
 
-SM -> MCP: command_result + step_info
-MCP -> Client: mcp_result(success, data, metadata)
+note right of EM
+StepResult includes:
+- step: Step object with action/response
+- should_terminate: bool
+- termination_reason: Optional[str]
 
-== Step Evaluation ==
-
-SM -> EVAL_M: evaluate_step(step, episode_context)
-EVAL_M -> EVAL_M: analyze step effectiveness for subtask progress
-EVAL_M -> EVAL_M: update trajectory metrics
-EVAL_M --> SM: step_evaluation_result
-
-note right of EVAL_M
-  EvaluationManager evaluates:
-  - Step effectiveness for subtask progress
-  - Progress toward task completion
-  - Trajectory metrics
-  - Performance indicators
+Episode automatically terminates when max_steps reached
 end note
 
-alt if episode not complete (determined externally)
-    note over Client, Agent: Episode continues - agent processes MCP result
-else episode complete (determined externally)
-    note over Client, Agent: Episode done - agent completes current task
-end
+SM -> MCP: CommandResult
+MCP -> Client: mcp_result
+Client -> Agent: execution_result
 
-== Agent Response & Next Command Generation ==
+== Episode Continuation or Termination ==
 
-Client -> Agent: mcp_result + step_info
-Agent -> Agent: analyze command results
-Agent -> Agent: update internal state
-Agent -> Agent: assess task progress
+alt StepResult.should_terminate == False
+    Agent -> Agent: process_result()
+    Agent -> Agent: plan_next_action()
+    note right of Agent: Continue episode with next action
+else StepResult.should_terminate == True
+    note over EM: Episode terminated due to max_steps reached
+    EM -> EM: episode.state = COMPLETED/FAILED
+    EM -> EM: episode.end_time = now()
+    EM -> EM: episode.completion_reason = termination_reason
 
-alt if episode not complete
-    Agent -> Agent: generate next command
-    Agent -> Client: tool_call_request
-    note right of Agent
-      Agent continues with next command
-      in the same episode using MCP tools
-    end note
-else episode complete (step.done = true)
-    Agent -> Agent: finalize episode completion
+    SM -> EVAL_M: log_episode_end(session_id, completion_reason)
+
     note right of Client
-      In benchmark mode, the server automatically
-      advances to the next task or completes the benchmark.
-      Single-task mode completes after one episode.
+    Client responsible for episode termination handling:
+    - Can start new episode for same task (if episode_attempts remaining)
+    - Can move to next task in benchmark
+    - Can end session
     end note
 end
 
-== Episode Completion (External Component) ==
+== Manual Episode Termination (Agent Completion) ==
 
-note over SM, EM
-  Episode completion will be determined by an external
-  evaluation component, not by the task framework.
-  The step.done flag will be set by this external component.
+alt Agent decides episode complete
+    Agent -> Client: end_episode_request(submission="flag{found}")
+    Client -> MCP: call_tool("end_episode", {submission: "flag{found}"})
+    MCP -> SM: end_episode(session_id, "agent_completed", submission)
+    SM -> EM: end_episode(session_id, "agent_completed", submission)
+    EM -> EM: episode.state = COMPLETED
+    EM -> EM: episode.completion_reason = "agent_completed"
+    EM -> EM: remove from active_episodes
+    EM --> SM: Episode
+    SM -> EVAL_M: log_episode_end(session_id, "agent_completed")
+    SM --> MCP: success_result
+    MCP -> Client: episode_ended
+end
+
+== Client-Side Orchestration (Multiple Episodes) ==
+
+note over Client
+Client now handles benchmark orchestration:
+1. Gets BenchmarkInfo with all tasks and episode_attempts
+2. For each task:
+   - Starts episodes up to episode_attempts limit
+   - Handles episode termination (max_steps or agent completion)
+   - Decides when to move to next task
+3. Completes benchmark when all tasks attempted
 end note
 
-== Session Termination (Client Initiated) ==
-
-note over Client, SM
-  Sessions can contain multiple episodes.
-  Client terminates session when done with all work.
-end note
+== Session Cleanup ==
 
 Client -> MCP: disconnect()
-MCP -> SM: cleanup_mcp_session()
+MCP -> SM: session cleanup (automatic on disconnect)
 Client -> REST: DELETE /session/{session_id}
 REST -> SM: terminate_session(session_id)
-SM -> TM: end_episode(session_id, "session_ended") [if active episode exists]
-TM -> EM: get_current_episode(session_id)
-EM --> TM: episode [if exists]
-TM -> EM: end_episode(session_id, "session_ended") [if episode exists]
-EM -> EM: episode.end_time = now() [if episode exists]
-EM -> EM: episode.state = COMPLETED/FAILED [if episode exists]
-EM -> EM: episode.completion_reason = "session_ended" [if episode exists]
-EM -> EM: delete from active_episodes [if episode exists]
-EM --> TM: episode [if exists]
-TM --> SM: episode [if exists]
-SM -> REST: session_ended_successfully
-REST -> Client: HTTP 200 OK\n{message: "Session ended successfully"}
-Client -> Agent: cleanup()
+SM -> EM: cleanup_session(session_id)
+EM -> EM: remove any remaining active episodes
+SM -> EVAL_M: log_session_end(session_id)
+SM --> REST: session_terminated
+REST -> Client: HTTP 200 OK
 
 note over Client, Agent
-  Clear interface boundaries:
-  - Client handles all server communication via dual protocols
-  - REST API: session management, episodes, policy access
-  - MCP API: tool discovery and command execution only
-  - AgentUnderTest focuses on task execution using MCP tools
-  - Agent receives structured context and generates tool calls
-  - Client manages session lifecycle (multiple episodes per session)
-  - Episode completion signaled via external evaluation component
-  - Sessions can contain multiple sequential episodes
-  - No subtask progression tracking or state management
-  - EvaluationManager provides continuous assessment of agent performance
-  - Task-specific evaluation metrics are initialized at episode start
-  - Step-by-step evaluation tracks trajectory and progress indicators
-  - Tool execution flows through MCP protocol for dynamic discovery
-  - Session and episode management remains on REST API
+**Actual Implementation Architecture**
+
+**Clear Separation of Concerns:**
+- REST API: Session lifecycle, episode management, policy/task access
+- MCP API: Clean tool execution with header-based session context
+- Client: Complete benchmark orchestration and episode management
+- EpisodeManager: RL-style episode execution with automatic termination
+- Agent: Task execution using MCP tools, can trigger early completion
+
+**Key Implementation Details:**
+- No server-side benchmark sessions or task queues
+- Episode termination based on max_steps configuration
+- StepResult provides termination information for each step
+- EvaluationManager is currently a logging stub
+- Client handles all task progression and episode attempts
+- Sessions can contain multiple sequential episodes
+- Policy and task context retrieved separately via REST
+- Episode configuration (max_steps) required from task definition
+- Automatic cleanup of episodes and sessions
+- Header-based session mapping for MCP tools
+
+**Episode Lifecycle:**
+1. Client orchestrates task selection and episode attempts
+2. Episode starts with task configuration (max_steps required)
+3. Agent executes actions via MCP tools
+4. EpisodeManager tracks steps and enforces limits
+5. Episode terminates automatically (max_steps) or manually (agent)
+6. Client decides next action (retry episode, next task, or end)
 end note
 
 @enduml

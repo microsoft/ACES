@@ -1,0 +1,211 @@
+@startuml Sandbox Environment Setup Sequence
+
+!theme plain
+title SABER Docker Sandbox Environment Setup - Actual Implementation
+
+actor Agent
+participant "SessionManager" as SM
+participant "BenchmarkManager" as BM
+participant "EpisodeManager" as EM_EP
+participant "ExecutionManager" as EM
+participant "EnvironmentLoader" as EL
+participant "SandboxEnvironmentManager" as SBMGR
+participant "PermanentEnvironmentManager" as PMGR
+participant "DockerSandboxEnvironment" as DSE
+participant "Docker Compose" as DC
+
+== Episode Initialization (Actual Flow) ==
+
+Agent -> SM: POST /session/{id}/start-episode?task_id=dvwa_sql_injection
+activate SM
+
+SM -> BM: get_task(task_id)
+activate BM
+
+BM --> SM: Task (with environment, execution_config, episode_config)
+deactivate BM
+
+SM -> EM_EP: start_episode(session_id, task_id, initial_context)
+activate EM_EP
+
+EM_EP -> EM_EP: create Episode object (state=ACTIVE)
+EM_EP --> SM: Episode
+deactivate EM_EP
+
+== Task Configuration and Environment Setup ==
+
+SM -> EM: configure_for_task(session_id, task)
+activate EM
+
+note over EM
+ExecutionManager configures from task object:
+- Resolves task.environment via EnvironmentLoader
+- Creates/updates SandboxEnvironmentManager
+- Configures ExecutorFactory with task config
+- No complex permanent environment coordination
+end note
+
+EM -> EL: resolve_environment(task.environment)
+activate EL
+
+note over EL
+EnvironmentLoader handles:
+- Template reference (string → SandboxEnvironmentSpec)
+- Granular config (dict → SandboxEnvironmentSpec)
+- Hybrid template + additions
+- Network configuration
+end note
+
+EL --> EM: SandboxEnvironmentSpec
+deactivate EL
+
+EM -> EM: update _sandbox_manager with resolved environment
+EM -> EM: update _configuration with task.execution_config
+EM --> SM: configuration_complete
+deactivate EM
+
+== Additional Component Configuration ==
+
+SM -> SM: policy_manager.configure_for_task(session_id, task)
+SM -> SM: episode_manager.configure_for_task(session_id, task)
+SM -> SM: update session (current_episode_id, current_task_id)
+
+SM --> Agent: {episode_id, task_id, session_id, message}
+deactivate SM
+
+== Command Execution with Lazy Environment Creation ==
+
+Agent -> SM: MCP tool call: cli(command="nmap dvwa_webapp")
+activate SM
+
+SM -> EM: execute_action(session_id, action)
+activate EM
+
+EM -> SBMGR: get_session_environment(session_id)
+activate SBMGR
+
+alt Environment not yet created
+    SBMGR -> SBMGR: create_session_environment(session_id, environment_spec)
+    SBMGR -> DSE: new DockerSandboxEnvironment(session_id, environment_spec)
+    activate DSE
+
+    note over DSE
+    Environment creation happens on first command:
+    - Generate Docker Compose configuration
+    - Start all required services (execution + targets)
+    - Wait for health checks
+    - Set up networking
+    end note
+
+    DSE -> DC: docker-compose up -d
+    activate DC
+
+    DC -> DC: Start execution container + target services
+    DC -> DC: Wait for all health checks
+    DC --> DSE: All services healthy
+    deactivate DC
+
+    DSE -> DSE: verify_environment_health()
+    DSE --> SBMGR: DockerSandboxEnvironment ready
+    deactivate DSE
+else Environment already exists
+    SBMGR --> SBMGR: return existing environment
+end
+
+SBMGR --> EM: DockerSandboxEnvironment
+deactivate SBMGR
+
+EM -> DSE: execute_command(["nmap", "dvwa_webapp"])
+activate DSE
+
+note over DSE
+Command executes in execution container
+with network access to target services
+via Docker Compose internal networking
+end note
+
+DSE -> DSE: run_in_execution_container()
+DSE --> EM: CommandResult(success=True, data="Host dvwa_webapp is up...")
+deactivate DSE
+
+EM --> SM: CommandResult
+deactivate EM
+
+SM --> Agent: MCP result with nmap output
+deactivate SM
+
+== Optional: Permanent Environment Integration ==
+
+note over PMGR
+Permanent Environment Manager is optional:
+- Initialized separately via initialize_permanent_environment_manager()
+- Provides persistent services across episodes
+- Sandbox environments can connect to permanent networks
+- Not required for basic sandbox functionality
+end note
+
+== Environment Cleanup ==
+
+Agent -> SM: DELETE /session/{id}
+activate SM
+
+SM -> EM: cleanup_session(session_id)
+activate EM
+
+EM -> SBMGR: cleanup_session(session_id)
+activate SBMGR
+
+SBMGR -> DSE: stop()
+activate DSE
+
+DSE -> DC: docker-compose down --volumes
+activate DC
+
+DC -> DC: Stop and remove all containers, networks, volumes
+DC --> DSE: Environment cleaned up
+deactivate DC
+
+DSE --> SBMGR: Cleanup complete
+deactivate DSE
+
+SBMGR --> EM: Session cleaned up
+deactivate SBMGR
+
+EM --> SM: Cleanup complete
+deactivate EM
+
+SM --> Agent: 200 OK - Session terminated
+deactivate SM
+
+note over Agent, DC
+**Actual Sandbox Environment Implementation**
+
+**Key Architecture Principles:**
+- Lazy environment creation: Sandbox created on first command execution
+- Simple task-based configuration via task.environment
+- Docker Compose orchestration for all environments (single or multi-container)
+- Optional permanent environment integration
+- Session-scoped environment lifecycle
+
+**Environment Resolution:**
+- task.environment can be string template reference or dict config
+- EnvironmentLoader resolves to SandboxEnvironmentSpec
+- SandboxEnvironmentManager creates DockerSandboxEnvironment
+- Docker Compose handles all container orchestration
+
+**Execution Flow:**
+1. Episode starts with task configuration
+2. ExecutionManager configures from task object
+3. Environment creation deferred until first command
+4. Commands execute in dedicated execution container
+5. Target services available via Docker Compose networking
+6. Complete cleanup on session termination
+
+**No Complex Orchestration:**
+- No benchmark session management
+- No complex permanent/ephemeral coordination during episode start
+- Simple REST endpoint: POST /session/{id}/start-episode
+- Client-side benchmark orchestration
+end note
+
+@enduml

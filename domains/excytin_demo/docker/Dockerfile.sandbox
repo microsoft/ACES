@@ -1,28 +1,24 @@
-FROM python:3.11-slim
+# SABER Sandbox for Excytin Demo Domain
+# Extends the minimal SABER sandbox base with MySQL client for database testing
+FROM saber/sandbox:latest
 
-# Install system packages for networking and database connectivity
+# Switch to root to install packages
+USER root
+
+# Install MySQL client for database connectivity testing
 RUN apt-get update && \
     apt-get install -y \
-        curl \
-        wget \
-        netcat-traditional \
         default-mysql-client \
-        iputils-ping \
         && rm -rf /var/lib/apt/lists/*
 
-# Install Python packages commonly used for testing
+# Install Python packages needed for MySQL connectivity
 RUN pip install --no-cache-dir \
-    requests \
     pymysql \
-    sqlalchemy \
-    pandas
+    sqlalchemy
 
-# Set working directory
-WORKDIR /workspace
+# Switch back to non-root user
+USER saber
 
-# Set environment variables
-ENV PYTHONPATH=/workspace
-ENV PYTHONUNBUFFERED=1
-
-# Keep container running
-CMD ["tail", "-f", "/dev/null"]
+# Domain-specific environment variables
+ENV MYSQL_HOST=saber-excytin-incident-5
+ENV MYSQL_PORT=3306

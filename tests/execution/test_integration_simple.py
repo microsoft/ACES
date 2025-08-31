@@ -22,7 +22,7 @@ def test_config():
         "security": {"allowed_commands": ["echo", "cat", "ls"], "max_command_length": 1000},
         "cli": {"default_shell_mode": False},
         "sandbox": {
-            "image": "saber/base-sandbox:latest",
+            "image": "saber/sandbox:latest",
             "network_mode": "none",
             "read_only_root": True,
             "user": "tooluser:tooluser",

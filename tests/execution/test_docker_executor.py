@@ -31,7 +31,7 @@ class TestDockerExecutor:
         """Create a mock SandboxEnvironmentManager."""
         manager = MagicMock(spec=SandboxEnvironmentManager)
         manager.get_sandbox_config.return_value = {
-            "image": "saber/base-sandbox:latest",
+            "image": "saber/sandbox:latest",
             "network_mode": "none",
             "read_only_root": True,
             "user": "tooluser:tooluser",
@@ -220,7 +220,7 @@ class TestDockerExecutor:
 
         # Check sandbox config details
         docker_config = info["docker_config"]
-        assert docker_config["image"] == "saber/base-sandbox:latest"
+        assert docker_config["image"] == "saber/sandbox:latest"
         assert docker_config["network_mode"] == "none"
         assert docker_config["read_only_root"] is True
         assert docker_config["user"] == "tooluser:tooluser"

@@ -18,6 +18,12 @@ from saber.server.execution.execution_manager import ExecutionManager
 from saber.server.execution.executors.executor_factory import ExecutorFactory
 from saber.server.execution.executors.standard_registry.cli_executor import CLIExecutor
 from saber.server.execution.sandbox.sandbox_environment_manager import SandboxEnvironmentManager
+from saber.server.execution.sandbox.environment_spec import (
+    PermanentEnvironmentSpec,
+    PermanentNetworkSpec,
+    PermanentServiceSpec,
+)
+from saber.server.execution.cleanup.cleanup_reason import CleanupReason
 from saber.server.execution.utils.security_validator import SecurityValidator
 
 
@@ -32,7 +38,7 @@ class TestExecutionManager:
             "security": {"allowed_commands": ["file", "strings"]},
             "cli": {"default_shell_mode": False},
             "sandbox": {
-                "image": "saber/base-sandbox:latest",
+                "image": "saber/sandbox:latest",
                 "network_mode": "none",
                 "read_only_root": True,
                 "user": "tooluser:tooluser",
@@ -432,3 +438,359 @@ class TestExecutionManager:
             # Python executor default is higher (from get_default_config)
             default_timeout = python_executor.get_timeout()
             assert default_timeout > 60.0, f"Python executor should use default timeout > 60, got {default_timeout}"
+
+
+class TestExecutionManagerPermanentEnvironment:
+    """Test cases for ExecutionManager permanent environment management."""
+
+    @pytest.fixture
+    def execution_manager_config(self):
+        """Configuration for ExecutionManager testing."""
+        return "/test/config"
+
+    @pytest.fixture
+    def sample_permanent_spec(self):
+        """Create a sample permanent environment specification."""
+        service_spec = PermanentServiceSpec(
+            name="test_service",
+            image="test_image:latest",
+            ports=["8080:8080"],
+            environment=["TEST_VAR=test_value"],
+            volumes=[],
+        )
+
+        network_spec = PermanentNetworkSpec(
+            name="test_network",
+            driver="bridge",
+            ipam_config={"subnet": "172.20.0.0/16"},
+        )
+
+        return PermanentEnvironmentSpec(
+            services={"test_service": service_spec},
+            networks={"test_network": network_spec},
+        )
+
+    @pytest.fixture
+    def permanent_config(self):
+        """Configuration for permanent environment manager."""
+        return {
+            "domain": "test_domain",
+            "config_dir": "/test/config",
+            "enable_logging": True,
+        }
+
+    @patch('saber.server.execution.execution_manager.EnvironmentLoader')
+    @patch('saber.server.execution.execution_manager.SandboxEnvironmentManager')
+    @patch('saber.server.execution.execution_manager.ContainerCleanupManager')
+    def test_execution_manager_initialization(
+        self,
+        mock_cleanup_manager,
+        mock_sandbox_manager,
+        mock_env_loader,
+        execution_manager_config,
+    ):
+        """Test ExecutionManager initialization with permanent environment support."""
+        # Mock environment loader initialization
+        mock_env_loader_instance = MagicMock()
+        mock_env_loader.return_value = mock_env_loader_instance
+
+        # Mock the existence of environments.yaml
+        with patch('pathlib.Path.exists', return_value=True):
+            execution_manager = ExecutionManager(execution_manager_config)
+
+        # Verify components are initialized
+        assert execution_manager._config_dir == execution_manager_config
+        assert execution_manager._environment_loader == mock_env_loader_instance
+        assert execution_manager._permanent_environment_manager is None  # Not initialized yet
+        mock_cleanup_manager.assert_called_once()
+
+    @patch('saber.server.execution.execution_manager.EnvironmentLoader')
+    @patch('saber.server.execution.execution_manager.SandboxEnvironmentManager')
+    @patch('saber.server.execution.execution_manager.ContainerCleanupManager')
+    @patch('saber.server.execution.execution_manager.PermanentEnvironmentManager')
+    def test_initialize_permanent_environment_manager(
+        self,
+        mock_perm_env_manager_class,
+        mock_cleanup_manager,
+        mock_sandbox_manager,
+        mock_env_loader,
+        execution_manager_config,
+        permanent_config,
+    ):
+        """Test initializing permanent environment manager through ExecutionManager."""
+        # Setup mocks
+        mock_perm_env_manager = MagicMock()
+        mock_perm_env_manager_class.return_value = mock_perm_env_manager
+        mock_cleanup_manager_instance = MagicMock()
+        mock_cleanup_manager.return_value = mock_cleanup_manager_instance
+        mock_env_loader_instance = MagicMock()
+        mock_env_loader.return_value = mock_env_loader_instance
+
+        with patch('pathlib.Path.exists', return_value=True):
+            execution_manager = ExecutionManager(execution_manager_config)
+
+        # Initialize permanent environment manager
+        execution_manager.initialize_permanent_environment_manager(permanent_config)
+
+        # Verify permanent environment manager was created
+        mock_perm_env_manager_class.assert_called_once_with(permanent_config)
+        assert execution_manager._permanent_environment_manager == mock_perm_env_manager
+
+        # Verify cleanup manager was updated with permanent manager
+        assert mock_cleanup_manager_instance.permanent_manager == mock_perm_env_manager
+
+        # Verify environment loader was updated
+        assert mock_env_loader_instance.permanent_environment_manager == mock_perm_env_manager
+
+    @patch('saber.server.execution.execution_manager.EnvironmentLoader')
+    @patch('saber.server.execution.execution_manager.SandboxEnvironmentManager')
+    @patch('saber.server.execution.execution_manager.ContainerCleanupManager')
+    @patch('saber.server.execution.execution_manager.PermanentEnvironmentManager')
+    def test_start_permanent_environment_success(
+        self,
+        mock_perm_env_manager_class,
+        mock_cleanup_manager,
+        mock_sandbox_manager,
+        mock_env_loader,
+        execution_manager_config,
+        permanent_config,
+        sample_permanent_spec,
+    ):
+        """Test successful permanent environment startup through ExecutionManager."""
+        # Setup mocks
+        mock_perm_env_manager = MagicMock()
+        mock_perm_env_manager_class.return_value = mock_perm_env_manager
+        mock_cleanup_manager_instance = MagicMock()
+        mock_cleanup_manager.return_value = mock_cleanup_manager_instance
+
+        with patch('pathlib.Path.exists', return_value=True):
+            execution_manager = ExecutionManager(execution_manager_config)
+
+        # Initialize and start permanent environment
+        execution_manager.initialize_permanent_environment_manager(permanent_config)
+        execution_manager.start_permanent_environment(sample_permanent_spec)
+
+        # Verify permanent environment was started through PermanentEnvironmentManager
+        mock_perm_env_manager.ensure_permanent_environments_current.assert_called_once_with(sample_permanent_spec)
+
+    @patch('saber.server.execution.execution_manager.EnvironmentLoader')
+    @patch('saber.server.execution.execution_manager.SandboxEnvironmentManager')
+    @patch('saber.server.execution.execution_manager.ContainerCleanupManager')
+    def test_start_permanent_environment_not_initialized(
+        self,
+        mock_cleanup_manager,
+        mock_sandbox_manager,
+        mock_env_loader,
+        execution_manager_config,
+        sample_permanent_spec,
+    ):
+        """Test starting permanent environment when manager is not initialized."""
+        with patch('pathlib.Path.exists', return_value=True):
+            execution_manager = ExecutionManager(execution_manager_config)
+
+        # Try to start permanent environment without initializing manager
+        with pytest.raises(RuntimeError, match="Permanent environment manager not initialized"):
+            execution_manager.start_permanent_environment(sample_permanent_spec)
+
+    @patch('saber.server.execution.execution_manager.EnvironmentLoader')
+    @patch('saber.server.execution.execution_manager.SandboxEnvironmentManager')
+    @patch('saber.server.execution.execution_manager.ContainerCleanupManager')
+    @patch('saber.server.execution.execution_manager.PermanentEnvironmentManager')
+    def test_start_permanent_environment_failure(
+        self,
+        mock_perm_env_manager_class,
+        mock_cleanup_manager,
+        mock_sandbox_manager,
+        mock_env_loader,
+        execution_manager_config,
+        permanent_config,
+        sample_permanent_spec,
+    ):
+        """Test permanent environment startup failure through ExecutionManager."""
+        # Setup mocks
+        mock_perm_env_manager = MagicMock()
+        mock_perm_env_manager_class.return_value = mock_perm_env_manager
+        mock_perm_env_manager.ensure_permanent_environments_current.side_effect = Exception("Startup failed")
+
+        with patch('pathlib.Path.exists', return_value=True):
+            execution_manager = ExecutionManager(execution_manager_config)
+
+        # Initialize permanent environment manager
+        execution_manager.initialize_permanent_environment_manager(permanent_config)
+
+        # Try to start permanent environment - should raise RuntimeError
+        with pytest.raises(RuntimeError, match="Failed to start permanent environment"):
+            execution_manager.start_permanent_environment(sample_permanent_spec)
+
+    @patch('saber.server.execution.execution_manager.EnvironmentLoader')
+    @patch('saber.server.execution.execution_manager.SandboxEnvironmentManager')
+    @patch('saber.server.execution.execution_manager.ContainerCleanupManager')
+    @patch('saber.server.execution.execution_manager.PermanentEnvironmentManager')
+    def test_stop_permanent_environment_success(
+        self,
+        mock_perm_env_manager_class,
+        mock_cleanup_manager,
+        mock_sandbox_manager,
+        mock_env_loader,
+        execution_manager_config,
+        permanent_config,
+    ):
+        """Test successful permanent environment shutdown through ExecutionManager."""
+        # Setup mocks
+        mock_cleanup_manager_instance = MagicMock()
+        mock_cleanup_manager.return_value = mock_cleanup_manager_instance
+        mock_cleanup_manager_instance.stop_permanent_environment.return_value = True
+
+        with patch('pathlib.Path.exists', return_value=True):
+            execution_manager = ExecutionManager(execution_manager_config)
+
+        # Initialize permanent environment manager
+        execution_manager.initialize_permanent_environment_manager(permanent_config)
+
+        # Stop permanent environment
+        execution_manager.stop_permanent_environment()
+
+        # Verify stop was called through cleanup manager
+        mock_cleanup_manager_instance.stop_permanent_environment.assert_called_once()
+
+    @patch('saber.server.execution.execution_manager.EnvironmentLoader')
+    @patch('saber.server.execution.execution_manager.SandboxEnvironmentManager')
+    @patch('saber.server.execution.execution_manager.ContainerCleanupManager')
+    @patch('saber.server.execution.execution_manager.PermanentEnvironmentManager')
+    def test_stop_permanent_environment_failure(
+        self,
+        mock_perm_env_manager_class,
+        mock_cleanup_manager,
+        mock_sandbox_manager,
+        mock_env_loader,
+        execution_manager_config,
+        permanent_config,
+    ):
+        """Test permanent environment shutdown failure through ExecutionManager."""
+        # Setup mocks
+        mock_cleanup_manager_instance = MagicMock()
+        mock_cleanup_manager.return_value = mock_cleanup_manager_instance
+        mock_cleanup_manager_instance.stop_permanent_environment.return_value = False
+
+        with patch('pathlib.Path.exists', return_value=True):
+            execution_manager = ExecutionManager(execution_manager_config)
+
+        # Initialize permanent environment manager
+        execution_manager.initialize_permanent_environment_manager(permanent_config)
+
+        # Try to stop permanent environment - should raise RuntimeError
+        with pytest.raises(RuntimeError, match="Failed to stop permanent environment"):
+            execution_manager.stop_permanent_environment()
+
+    @patch('saber.server.execution.execution_manager.EnvironmentLoader')
+    @patch('saber.server.execution.execution_manager.SandboxEnvironmentManager')
+    @patch('saber.server.execution.execution_manager.ContainerCleanupManager')
+    @patch('saber.server.execution.execution_manager.PermanentEnvironmentManager')
+    def test_is_permanent_environment_running(
+        self,
+        mock_perm_env_manager_class,
+        mock_cleanup_manager,
+        mock_sandbox_manager,
+        mock_env_loader,
+        execution_manager_config,
+        permanent_config,
+    ):
+        """Test checking if permanent environment is running."""
+        # Setup mocks
+        mock_cleanup_manager_instance = MagicMock()
+        mock_cleanup_manager.return_value = mock_cleanup_manager_instance
+        mock_cleanup_manager_instance.is_permanent_environment_running.return_value = True
+
+        with patch('pathlib.Path.exists', return_value=True):
+            execution_manager = ExecutionManager(execution_manager_config)
+
+        # Initialize permanent environment manager
+        execution_manager.initialize_permanent_environment_manager(permanent_config)
+
+        # Check if running
+        result = execution_manager.is_permanent_environment_running()
+
+        # Verify result
+        assert result is True
+        mock_cleanup_manager_instance.is_permanent_environment_running.assert_called_once()
+
+    @patch('saber.server.execution.execution_manager.EnvironmentLoader')
+    @patch('saber.server.execution.execution_manager.SandboxEnvironmentManager')
+    @patch('saber.server.execution.execution_manager.ContainerCleanupManager')
+    @patch('saber.server.execution.execution_manager.PermanentEnvironmentManager')
+    def test_cleanup_all_containers(
+        self,
+        mock_perm_env_manager_class,
+        mock_cleanup_manager,
+        mock_sandbox_manager,
+        mock_env_loader,
+        execution_manager_config,
+        permanent_config,
+    ):
+        """Test cleanup of all containers through ExecutionManager."""
+        # Setup mocks
+        mock_cleanup_manager_instance = MagicMock()
+        mock_cleanup_manager.return_value = mock_cleanup_manager_instance
+        expected_result = {
+            "ephemeral_sessions_cleaned": 3,
+            "permanent_environment_stopped": True,
+            "total_cleanup_success": True,
+        }
+        mock_cleanup_manager_instance.cleanup_all_containers.return_value = expected_result
+
+        with patch('pathlib.Path.exists', return_value=True):
+            execution_manager = ExecutionManager(execution_manager_config)
+
+        # Initialize permanent environment manager
+        execution_manager.initialize_permanent_environment_manager(permanent_config)
+
+        # Cleanup all containers
+        result = execution_manager.cleanup_all_containers(CleanupReason.SERVER_SHUTDOWN, {"test": "context"})
+
+        # Verify cleanup was delegated to cleanup manager
+        assert result == expected_result
+        mock_cleanup_manager_instance.cleanup_all_containers.assert_called_once_with(
+            CleanupReason.SERVER_SHUTDOWN, {"test": "context"}
+        )
+
+    @patch('saber.server.execution.execution_manager.EnvironmentLoader')
+    @patch('saber.server.execution.execution_manager.SandboxEnvironmentManager')
+    @patch('saber.server.execution.execution_manager.ContainerCleanupManager')
+    @patch('saber.server.execution.execution_manager.PermanentEnvironmentManager')
+    def test_cleanup_session_with_new_interface(
+        self,
+        mock_perm_env_manager_class,
+        mock_cleanup_manager,
+        mock_sandbox_manager,
+        mock_env_loader,
+        execution_manager_config,
+        permanent_config,
+    ):
+        """Test session cleanup through ExecutionManager with enhanced interface."""
+        # Setup mocks
+        mock_cleanup_manager_instance = MagicMock()
+        mock_cleanup_manager.return_value = mock_cleanup_manager_instance
+        mock_cleanup_manager_instance.cleanup_session.return_value = True
+
+        with patch('pathlib.Path.exists', return_value=True):
+            execution_manager = ExecutionManager(execution_manager_config)
+
+        # Initialize permanent environment manager
+        execution_manager.initialize_permanent_environment_manager(permanent_config)
+
+        # Add active execution tracking
+        execution_manager._active_executions["test_session"] = 2
+
+        # Cleanup session
+        result = execution_manager.cleanup_session(
+            "test_session", CleanupReason.SESSION_TERMINATED, {"manual": True}
+        )
+
+        # Verify cleanup was delegated to cleanup manager
+        assert result is True
+        mock_cleanup_manager_instance.cleanup_session.assert_called_once_with(
+            "test_session", CleanupReason.SESSION_TERMINATED, {"manual": True}
+        )
+
+        # Verify execution tracking was cleaned up
+        assert "test_session" not in execution_manager._active_executions

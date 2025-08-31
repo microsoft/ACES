@@ -29,10 +29,8 @@ from .benchmarks.benchmark_manager import BenchmarkManager
 from .episodes.constants import EpisodeResponseKeys, EpisodeTerminationReason
 from .episodes.episode_manager import EpisodeManager
 from .evaluation.evaluation_manager import EvaluationManager
-from .execution.cleanup.cleanup_manager import ContainerCleanupManager
 from .execution.cleanup.cleanup_reason import CleanupReason
 from .execution.execution_manager import ExecutionManager
-from .execution.sandbox.permanent_environment_manager import PermanentEnvironmentManager
 from .policy.policy_manager import PolicyDocument, PolicyManager
 
 logger = get_session_manager_logger(__name__)
@@ -113,20 +111,19 @@ class SessionManager:
         self.benchmark_manager = BenchmarkManager(domain_name, config_dir)
         self.episode_manager = EpisodeManager()
 
-        # Initialize permanent environment manager with enhanced logging config
+        # Initialize execution manager first
+        self.execution_manager = ExecutionManager(config_dir)
+
+        # Initialize permanent environment manager through ExecutionManager for unified container lifecycle
         permanent_config = {
             "domain": domain_name,
             "config_dir": config_dir,
             "enable_logging": True,
         }
-        self.permanent_environment_manager = PermanentEnvironmentManager(permanent_config)
-
-        # Initialize execution manager with permanent environment manager for network connectivity
-        self.execution_manager = ExecutionManager(config_dir, self.permanent_environment_manager)
+        self.execution_manager.initialize_permanent_environment_manager(permanent_config)
 
         self.policy_manager = PolicyManager(domain_name)
         self.evaluation_manager = EvaluationManager()
-        self.cleanup_manager = ContainerCleanupManager(self.execution_manager._sandbox_manager)
 
         # Initialize protocol handlers
         self.rest_api = SessionRestAPI(self, host, port)
@@ -168,11 +165,11 @@ class SessionManager:
             except asyncio.CancelledError:
                 pass
 
-        # Stop permanent environment
-        if self.permanent_environment_manager.is_running():
+        # Stop permanent environment through ExecutionManager
+        if self.execution_manager.is_permanent_environment_running():
             logger.info("Stopping permanent environment...")
             try:
-                self.permanent_environment_manager.cleanup_on_server_shutdown()
+                self.execution_manager.stop_permanent_environment()
                 logger.info("Permanent environment stopped successfully")
             except Exception as e:
                 logger.error(f"Error stopping permanent environment: {e}")
@@ -254,10 +251,10 @@ class SessionManager:
         except Exception as e:
             logger.warning(f"Failed to log session end: {str(e)}")
 
-        # Cleanup execution resources (Docker containers) using unified cleanup manager
+        # Cleanup execution resources (Docker containers) through ExecutionManager
         try:
             log_operation_start(logger, "Unified container cleanup", session_id)
-            cleanup_success = self.cleanup_manager.cleanup_session(
+            cleanup_success = self.execution_manager.cleanup_session(
                 session_id, CleanupReason.SESSION_TERMINATED, {"manual_termination": True}
             )
             if cleanup_success:
@@ -445,8 +442,8 @@ class SessionManager:
                 session.current_task_id = None
                 logger.info("Episode removed from tracking due to error")
 
-                # Trigger immediate container cleanup using unified cleanup manager
-                cleanup_success = self.cleanup_manager.cleanup_session(
+                # Trigger immediate container cleanup through ExecutionManager
+                cleanup_success = self.execution_manager.cleanup_session(
                     session_id, CleanupReason.ERROR_TRIGGERED, {"error": str(e), "error_type": type(e).__name__}
                 )
                 if cleanup_success:
@@ -633,7 +630,7 @@ class SessionManager:
         return self.episode_manager.should_terminate_episode(session_id)
 
     async def _start_permanent_environment(self) -> None:
-        """Start permanent environment if configured with lifecycle management."""
+        """Start permanent environment if configured through ExecutionManager lifecycle management."""
         permanent_env_name = self.benchmark_manager.config_loader.get_permanent_environment()
         if not permanent_env_name:
             logger.info("No permanent environment configured")
@@ -642,15 +639,15 @@ class SessionManager:
         try:
             logger.info(f"Starting permanent environment: {permanent_env_name}")
 
-            # Load permanent environment specification
+            # Load permanent environment specification through ExecutionManager
             if self.execution_manager._environment_loader is None:
                 raise RuntimeError("Environment loader is not initialized")
             permanent_env_spec = self.execution_manager._environment_loader.load_permanent_environment(
                 permanent_env_name
             )
 
-            # Ensure permanent environments are current with configuration change detection
-            self.permanent_environment_manager.ensure_permanent_environments_current(permanent_env_spec)
+            # Start permanent environment through ExecutionManager
+            self.execution_manager.start_permanent_environment(permanent_env_spec)
 
             logger.info(f"Permanent environment '{permanent_env_name}' started successfully")
 

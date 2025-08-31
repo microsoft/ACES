@@ -1,104 +1,145 @@
 @startuml MCP Integration Workflow
 
 !theme plain
-title SABER MCP Integration - Connection-Based Session Mapping (MCP Compliant)
+title SABER MCP Integration - Header-Based Session Mapping (MCP Compliant)
 
 actor Agent
-participant "ServerClient" as Client
+participant "SABERMCPClient" as MCPClient
+participant "MCPClient\n(Raw)" as RawMCP
+participant "SABERRestClient" as RESTClient
 participant "SessionRestAPI\n(REST)" as REST
 participant "SessionMCPAPI\n(MCP Component)" as MCP
 participant "SessionManager" as SM
 participant "ExecutionManager" as EM_EXEC
 participant "EpisodeManager" as EM_EP
-participant "TaskManager" as TM
+participant "MCPToolGenerator" as ToolGen
 
-== Session Initialization ==
-Agent -> Client: initialize()
-Client -> REST: POST /session
-REST -> SM: create_session()
-SM -> Client: session_id
+== Session Initialization (REST First) ==
+Agent -> RESTClient: create_session(client_id)
+RESTClient -> REST: POST /session
+REST -> SM: create_session(client_id)
+SM -> REST: ClientSession
+REST -> RESTClient: session_id
+RESTClient -> Agent: session_id
 
-== MCP Connection with Headers ==
-Agent -> Client: connect_mcp_with_headers()
+== MCP Connection with Session Headers ==
+Agent -> MCPClient: connect()
+note right: MCPClient initialized with:\n- session_id from REST\n- task_id (optional)\n- client_id
+MCPClient -> RawMCP: connect(sse_url, headers)
 note right: Headers: X-SABER-Session-ID, X-SABER-Task-ID, X-SABER-Client-ID
-Client -> MCP: connect(headers)
-MCP -> MCP: _handle_mcp_connection(connection_id, headers)
-MCP -> SM: create_session() or map_existing_session()
-note right: MCP connection maps to existing benchmark session\ncreated via REST API
-MCP -> MCP: map connection_id → session_id
-MCP -> Client: mcp_connected
+RawMCP -> MCP: SSE connection with headers
+MCP -> MCP: _get_session_from_headers()
+note right: Extracts session_id from headers\nNo session creation - maps to existing session
+MCP -> RawMCP: connection established
+RawMCP -> MCPClient: connected
 
-== Tool Discovery (Clean MCP Tools) ==
-Agent -> Client: get_available_tools()
-Client -> MCP: list_tools()
+== Tool Discovery (Dynamic Registration) ==
+Agent -> MCPClient: list_tools()
+MCPClient -> RawMCP: list_tools()
+RawMCP -> MCP: handle_list_tools()
 MCP -> SM: get_execution_manager()
 SM -> EM_EXEC: to_mcp_tools()
-note right of EM_EXEC: Returns clean tool schemas:\n- execute_python(code)\n- execute_cli(command)\n- end_episode(submission)
-EM_EXEC -> MCP: clean_tool_schemas[]
-MCP -> Client: mcp_tools[]
-Client -> Agent: available_tools[]
+EM_EXEC -> ToolGen: get_available_executors()
+ToolGen -> EM_EXEC: dynamic_tool_schemas[]
+note right of EM_EXEC: Returns clean tool schemas:\n- python(code)\n- cli(command)\n- end_episode(submission)
+EM_EXEC -> MCP: executor_tools + hardcoded_tools
+MCP -> RawMCP: mcp_tools[]
+RawMCP -> MCPClient: available_tools[]
+MCPClient -> Agent: tools_list[]
 
-== Command Execution (No Session Context in Tools) ==
-Agent -> Client: execute_python(code="print('hello')")
-Client -> MCP: call_tool("execute_python", {code: "print('hello')"})
-MCP -> MCP: get_session_from_connection(connection_id)
+== Command Execution (Header-Based Session Context) ==
+Agent -> MCPClient: python(code="print('hello')")
+MCPClient -> MCPClient: check_episode_terminated()
+note right: HARD TERMINATION:\nBlocks all calls if episode ended
+MCPClient -> RawMCP: call_tool("python", {code: "print('hello')"})
+RawMCP -> MCP: handle_call_tool("python", args)
+MCP -> MCP: _get_session_from_headers()
+note right: Session context retrieved\nfrom HTTP headers,\nnot tool parameters
+MCP -> MCP: _convert_to_action(tool_name, args)
 MCP -> SM: execute_action(session_id, action)
-note right of MCP: Session context handled\nat connection level,\nnot in tool parameters
 SM -> EM_EXEC: step(action, context)
-EM_EXEC -> SM: command_result
+EM_EXEC -> SM: CommandResult
 SM -> EM_EP: step(session_id, action, result)
 EM_EP -> SM: step_result
-SM -> MCP: execution_result
-MCP -> Client: mcp_result
-Client -> Agent: command_result
+SM -> MCP: CommandResult
+MCP -> MCP: _convert_to_mcp_result(CommandResult)
+MCP -> RawMCP: mcp_result
+RawMCP -> MCPClient: tool_response
+MCPClient -> MCPClient: _monitor_response(response)
+note right: Monitors for episode termination\nsignals and updates internal state
+MCPClient -> Agent: command_result
 
-== Episode End (Clean Tool) ==
-Agent -> Client: end_episode(submission="flag{found}")
-Client -> MCP: call_tool("end_episode", {submission: "flag{found}"})
-MCP -> MCP: get_session_from_connection(connection_id)
-MCP -> SM: end_episode(session_id, submission)
-SM -> MCP: episode_ended
-MCP -> Client: success_result
-Client -> Agent: episode_completed
+== Episode End (Clean Tool + Monitoring) ==
+Agent -> MCPClient: end_episode(submission="flag{found}")
+MCPClient -> RawMCP: call_tool("end_episode", {submission: "flag{found}"})
+RawMCP -> MCP: _handle_end_episode_call(args)
+MCP -> MCP: _get_session_from_headers()
+MCP -> SM: execute_action(session_id, result_action)
+note right: Records submission first
+MCP -> SM: end_episode(session_id, "agent_completed", result)
+SM -> EM_EP: end_current_episode()
+EM_EP -> SM: episode_ended
+SM -> MCP: CommandResult(success)
+MCP -> RawMCP: success_result
+RawMCP -> MCPClient: episode_ended_response
+MCPClient -> MCPClient: _episode_terminated = True
+MCPClient -> Agent: episode_completed
 
 == Session Cleanup ==
-Agent -> Client: disconnect_mcp()
-MCP -> MCP: _cleanup_connection(connection_id)
-MCP -> SM: terminate_session(session_id)
-Client -> REST: DELETE /session/{id} (optional)
-REST -> SM: terminate_session() (if needed)
+Agent -> MCPClient: disconnect()
+MCPClient -> RawMCP: disconnect()
+RawMCP -> MCP: connection_closed
+Agent -> RESTClient: terminate_session() (optional)
+RESTClient -> REST: DELETE /session/{id}
+REST -> SM: terminate_session(session_id)
+SM -> SM: cleanup_session_resources()
 
 note right of MCP
 **MCP Compliance Achieved**
 ✅ Clean tool schemas (no session_id)
-✅ Connection-based session mapping
+✅ Header-based session mapping
 ✅ Pure functional parameters
 ✅ Standard MCP client compatibility
-✅ Semantic parameter names
+✅ SSE transport with headers
 
-**Tool Examples:**
-- execute_python(code: str)
-- execute_cli(command: str)
+**Actual Tool Examples:**
+- python(code: str)
+- cli(command: str)
 - end_episode(submission?: str)
+
+**Key Implementation Details:**
+- Uses fastmcp.server.dependencies.get_http_headers()
+- Dynamic tool registration via MCPToolGenerator
+- Episode termination monitoring in SABERMCPClient
 end note
 
 note right of REST
 **SessionRestAPI Responsibilities**
-- Session lifecycle management
-- Episode management
-- Policy access
-- Status monitoring
-- Event streaming
-- Health checks
+- Session lifecycle management (create/terminate)
+- Episode management (start/end)
+- Task configuration and policies
+- Benchmark information access
+- Health checks and status
+- Event streaming (SSE)
 end note
 
 note right of SM
-**Dual Protocol Support**
-- REST API for session management
-- MCP API for tool execution
-- Connection → Session mapping
-- Automatic session creation
-- Resource cleanup on disconnect
+**Dual Protocol Architecture**
+- REST API for session/episode management
+- MCP API for clean tool execution
+- Header-based session context mapping
+- Separate client types: SABERRestClient + SABERMCPClient
+- No automatic session creation via MCP
+- Resource cleanup on session termination
+end note
+
+note right of MCPClient
+**SABERMCPClient Features**
+- Wraps raw MCPClient for enhanced functionality
+- Episode termination monitoring (_episode_terminated)
+- Hard termination: blocks calls after episode ends
+- Optional monitoring callbacks for harness integration
+- Session context passed via HTTP headers only
 end note
 
 @enduml
