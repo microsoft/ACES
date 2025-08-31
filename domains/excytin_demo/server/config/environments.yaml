@@ -5,7 +5,7 @@
 containers:
   # Permanent database container - runs for server lifetime
   saber-excytin-incident-5:
-    image: saber-excytin-incident-5:latest
+    image: saber/excytin-incident-5:latest
     container_name: saber-excytin-incident-5
     ports:
       - "3306:3306"
@@ -15,10 +15,10 @@ containers:
       MYSQL_ROOT_HOST: "%"
     command: --secure-file-priv=/var/lib/mysql-files --bind-address=0.0.0.0
 
-  # Lightweight Python sandbox container - created per episode
-  saber-python-sandbox:
-    image: saber-python-sandbox:latest
-    container_name: saber-python-sandbox
+  # Lightweight sandbox container - created per episode
+  saber-sandbox:
+    image: saber/sandbox:latest
+    container_name: saber-sandbox
     working_dir: /workspace
     environment:
       PYTHONPATH: /workspace
@@ -38,11 +38,11 @@ environments:
       total_cpu: "0.5"
       execution_timeout: null  # No timeout for permanent environments
 
-  # Lightweight Python sandbox - created per episode
-  python_sandbox:
+  # Lightweight sandbox - created per episode
+  sandbox:
     network: "excytin-shared-network"  # Use shared network to connect to permanent DB
     permanent_environment_connectivity: true  # Enable automatic connection to permanent networks
-    execution: "saber-python-sandbox"
+    execution: "saber-sandbox"
     resource_limits:
       total_memory: "512m"
       total_cpu: "0.5"

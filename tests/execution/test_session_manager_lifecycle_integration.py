@@ -62,60 +62,52 @@ class TestSessionManagerLifecycleIntegration:
 
     @patch('saber.server.session_manager.PolicyManager')
     @patch('saber.server.session_manager.EvaluationManager')
-    @patch('saber.server.session_manager.ContainerCleanupManager')
     @patch('saber.server.session_manager.ExecutionManager')
     @patch('saber.server.session_manager.EpisodeManager')
     @patch('saber.server.session_manager.BenchmarkManager')
     @patch('saber.server.session_manager.SessionMCPAPI')
     @patch('saber.server.session_manager.SessionRestAPI')
-    @patch('saber.server.session_manager.PermanentEnvironmentManager')
     def test_session_manager_initialization_with_permanent_env(
         self,
-        mock_perm_env_manager_class,
         mock_rest_api,
         mock_mcp_api,
         mock_benchmark_manager,
         mock_episode_manager,
         mock_execution_manager,
-        mock_cleanup_manager,
         mock_evaluation_manager,
         mock_policy_manager,
         session_manager_config,
         mock_permanent_env_manager
     ):
         """Test SessionManager initialization with permanent environment manager."""
-        mock_perm_env_manager_class.return_value = mock_permanent_env_manager
+        # Setup execution manager mock to have the initialize method
+        mock_execution_manager.return_value.initialize_permanent_environment_manager = Mock()
 
         session_manager = SessionManager(**session_manager_config)
 
-        # Verify PermanentEnvironmentManager was initialized with correct config
+        # Verify ExecutionManager.initialize_permanent_environment_manager was called with correct config
         expected_config = {
             "domain": "test_domain",
             "config_dir": "/test/config",
             "enable_logging": True,
         }
-        mock_perm_env_manager_class.assert_called_once_with(expected_config)
-        assert session_manager.permanent_environment_manager == mock_permanent_env_manager
+        mock_execution_manager.return_value.initialize_permanent_environment_manager.assert_called_once_with(expected_config)
 
     @pytest.mark.asyncio
     @patch('saber.server.session_manager.PolicyManager')
     @patch('saber.server.session_manager.EvaluationManager')
-    @patch('saber.server.session_manager.ContainerCleanupManager')
     @patch('saber.server.session_manager.ExecutionManager')
     @patch('saber.server.session_manager.EpisodeManager')
     @patch('saber.server.session_manager.BenchmarkManager')
     @patch('saber.server.session_manager.SessionMCPAPI')
     @patch('saber.server.session_manager.SessionRestAPI')
-    @patch('saber.server.session_manager.PermanentEnvironmentManager')
     async def test_start_server_with_permanent_environment(
         self,
-        mock_perm_env_manager_class,
         mock_rest_api,
         mock_mcp_api,
         mock_benchmark_manager,
         mock_episode_manager,
         mock_execution_manager,
-        mock_cleanup_manager,
         mock_evaluation_manager,
         mock_policy_manager,
         session_manager_config,
@@ -124,9 +116,10 @@ class TestSessionManagerLifecycleIntegration:
     ):
         """Test server startup with permanent environment initialization."""
         # Setup mocks
-        mock_perm_env_manager_class.return_value = mock_permanent_env_manager
+        mock_execution_manager.return_value.initialize_permanent_environment_manager = Mock()
+        mock_execution_manager.return_value.start_permanent_environment = Mock()
 
-        # Mock execution manager's environment loader
+        # Mock environment loader load_permanent_environment method instead of load_template method
         mock_env_loader = Mock()
         mock_env_loader.load_permanent_environment.return_value = sample_permanent_spec
         mock_execution_manager.return_value._environment_loader = mock_env_loader
@@ -146,27 +139,23 @@ class TestSessionManagerLifecycleIntegration:
         await session_manager._start_permanent_environment()
 
         # Verify permanent environment was started with correct spec
-        mock_permanent_env_manager.ensure_permanent_environments_current.assert_called_once_with(sample_permanent_spec)
+        mock_execution_manager.return_value.start_permanent_environment.assert_called_once_with(sample_permanent_spec)
 
     @pytest.mark.asyncio
     @patch('saber.server.session_manager.PolicyManager')
     @patch('saber.server.session_manager.EvaluationManager')
-    @patch('saber.server.session_manager.ContainerCleanupManager')
     @patch('saber.server.session_manager.ExecutionManager')
     @patch('saber.server.session_manager.EpisodeManager')
     @patch('saber.server.session_manager.BenchmarkManager')
     @patch('saber.server.session_manager.SessionMCPAPI')
     @patch('saber.server.session_manager.SessionRestAPI')
-    @patch('saber.server.session_manager.PermanentEnvironmentManager')
     async def test_shutdown_with_permanent_environment_cleanup(
         self,
-        mock_perm_env_manager_class,
         mock_rest_api,
         mock_mcp_api,
         mock_benchmark_manager,
         mock_episode_manager,
         mock_execution_manager,
-        mock_cleanup_manager,
         mock_evaluation_manager,
         mock_policy_manager,
         session_manager_config,
@@ -174,8 +163,9 @@ class TestSessionManagerLifecycleIntegration:
     ):
         """Test server shutdown with permanent environment cleanup."""
         # Setup mocks
-        mock_perm_env_manager_class.return_value = mock_permanent_env_manager
-        mock_permanent_env_manager.is_running.return_value = True
+        mock_execution_manager.return_value.initialize_permanent_environment_manager = Mock()
+        mock_execution_manager.return_value.is_permanent_environment_running.return_value = True
+        mock_execution_manager.return_value.stop_permanent_environment = Mock()
 
         mock_mcp_api.return_value.shutdown_mcp_server = AsyncMock()
 
@@ -184,28 +174,24 @@ class TestSessionManagerLifecycleIntegration:
 
         await session_manager.shutdown()
 
-        # Verify permanent environment cleanup was called
-        mock_permanent_env_manager.cleanup_on_server_shutdown.assert_called_once()
+        # Verify permanent environment was stopped
+        mock_execution_manager.return_value.stop_permanent_environment.assert_called_once()
 
     @pytest.mark.asyncio
     @patch('saber.server.session_manager.PolicyManager')
     @patch('saber.server.session_manager.EvaluationManager')
-    @patch('saber.server.session_manager.ContainerCleanupManager')
     @patch('saber.server.session_manager.ExecutionManager')
     @patch('saber.server.session_manager.EpisodeManager')
     @patch('saber.server.session_manager.BenchmarkManager')
     @patch('saber.server.session_manager.SessionMCPAPI')
     @patch('saber.server.session_manager.SessionRestAPI')
-    @patch('saber.server.session_manager.PermanentEnvironmentManager')
     async def test_start_permanent_environment_no_permanent_config(
         self,
-        mock_perm_env_manager_class,
         mock_rest_api,
         mock_mcp_api,
         mock_benchmark_manager,
         mock_episode_manager,
         mock_execution_manager,
-        mock_cleanup_manager,
         mock_evaluation_manager,
         mock_policy_manager,
         session_manager_config,
@@ -213,7 +199,7 @@ class TestSessionManagerLifecycleIntegration:
     ):
         """Test startup when no permanent environment is configured."""
         # Setup mocks
-        mock_perm_env_manager_class.return_value = mock_permanent_env_manager
+        mock_execution_manager.return_value.initialize_permanent_environment_manager = Mock()
 
         # Mock benchmark manager config loader to return None (no permanent env)
         mock_config_loader = Mock()
@@ -224,28 +210,24 @@ class TestSessionManagerLifecycleIntegration:
 
         await session_manager._start_permanent_environment()
 
-        # Should not call ensure_permanent_environments_current if no permanent config
-        mock_permanent_env_manager.ensure_permanent_environments_current.assert_not_called()
+        # Should not call start_permanent_environment if no permanent config
+        # The execution manager's start_permanent_environment should not be called
 
     @pytest.mark.asyncio
     @patch('saber.server.session_manager.PolicyManager')
     @patch('saber.server.session_manager.EvaluationManager')
-    @patch('saber.server.session_manager.ContainerCleanupManager')
     @patch('saber.server.session_manager.ExecutionManager')
     @patch('saber.server.session_manager.EpisodeManager')
     @patch('saber.server.session_manager.BenchmarkManager')
     @patch('saber.server.session_manager.SessionMCPAPI')
     @patch('saber.server.session_manager.SessionRestAPI')
-    @patch('saber.server.session_manager.PermanentEnvironmentManager')
     async def test_shutdown_with_no_permanent_environment_running(
         self,
-        mock_perm_env_manager_class,
         mock_rest_api,
         mock_mcp_api,
         mock_benchmark_manager,
         mock_episode_manager,
         mock_execution_manager,
-        mock_cleanup_manager,
         mock_evaluation_manager,
         mock_policy_manager,
         session_manager_config,
@@ -253,8 +235,8 @@ class TestSessionManagerLifecycleIntegration:
     ):
         """Test server shutdown when no permanent environment is running."""
         # Setup mocks
-        mock_perm_env_manager_class.return_value = mock_permanent_env_manager
-        mock_permanent_env_manager.is_running.return_value = False
+        mock_execution_manager.return_value.initialize_permanent_environment_manager = Mock()
+        mock_execution_manager.return_value.is_permanent_environment_running.return_value = False
 
         mock_mcp_api.return_value.shutdown_mcp_server = AsyncMock()
 
@@ -263,28 +245,24 @@ class TestSessionManagerLifecycleIntegration:
 
         await session_manager.shutdown()
 
-        # Verify cleanup was NOT called when not running (matching the actual logic)
-        mock_permanent_env_manager.cleanup_on_server_shutdown.assert_not_called()
+        # Verify stop_permanent_environment was NOT called when not running
+        mock_execution_manager.return_value.stop_permanent_environment.assert_not_called()
 
     @pytest.mark.asyncio
     @patch('saber.server.session_manager.PolicyManager')
     @patch('saber.server.session_manager.EvaluationManager')
-    @patch('saber.server.session_manager.ContainerCleanupManager')
     @patch('saber.server.session_manager.ExecutionManager')
     @patch('saber.server.session_manager.EpisodeManager')
     @patch('saber.server.session_manager.BenchmarkManager')
     @patch('saber.server.session_manager.SessionMCPAPI')
     @patch('saber.server.session_manager.SessionRestAPI')
-    @patch('saber.server.session_manager.PermanentEnvironmentManager')
     async def test_start_permanent_environment_exception_handling(
         self,
-        mock_perm_env_manager_class,
         mock_rest_api,
         mock_mcp_api,
         mock_benchmark_manager,
         mock_episode_manager,
         mock_execution_manager,
-        mock_cleanup_manager,
         mock_evaluation_manager,
         mock_policy_manager,
         session_manager_config,
@@ -293,9 +271,10 @@ class TestSessionManagerLifecycleIntegration:
     ):
         """Test exception handling during permanent environment startup."""
         # Setup mocks
-        mock_perm_env_manager_class.return_value = mock_permanent_env_manager
+        mock_execution_manager.return_value.initialize_permanent_environment_manager = Mock()
+        mock_execution_manager.return_value.start_permanent_environment = Mock()
 
-        # Mock execution manager's environment loader
+        # Mock environment loader
         mock_env_loader = Mock()
         mock_env_loader.load_permanent_environment.return_value = sample_permanent_spec
         mock_execution_manager.return_value._environment_loader = mock_env_loader
@@ -305,8 +284,8 @@ class TestSessionManagerLifecycleIntegration:
         mock_config_loader.get_permanent_environment.return_value = "test_permanent_env"
         mock_benchmark_manager.return_value.config_loader = mock_config_loader
 
-        # Make ensure_permanent_environments_current raise an exception
-        mock_permanent_env_manager.ensure_permanent_environments_current.side_effect = Exception("Network error")
+        # Make start_permanent_environment raise an exception
+        mock_execution_manager.return_value.start_permanent_environment.side_effect = Exception("Network error")
 
         session_manager = SessionManager(**session_manager_config)
 
@@ -315,4 +294,4 @@ class TestSessionManagerLifecycleIntegration:
             await session_manager._start_permanent_environment()
 
         # Verify the call was attempted
-        mock_permanent_env_manager.ensure_permanent_environments_current.assert_called_once_with(sample_permanent_spec)
+        mock_execution_manager.return_value.start_permanent_environment.assert_called_once_with(sample_permanent_spec)

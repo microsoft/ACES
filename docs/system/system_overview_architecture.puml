@@ -1,7 +1,7 @@
 @startuml SABER System Overview
 
 !theme plain
-title Security Agent Benchmarking System - System Overview
+title SABER System Architecture Overview - Actual Implementation
 
 skinparam class {
     BackgroundColor lightblue
@@ -25,6 +25,7 @@ package "SABER Server Side" {
 
     class SessionManager {
         +domain_name: str
+        +config_dir: str
         +active_sessions: Dict[str, ClientSession]
         +benchmark_manager: BenchmarkManager
         +episode_manager: EpisodeManager
@@ -36,49 +37,53 @@ package "SABER Server Side" {
         --
         +start_server(): void
         +shutdown(): void
-        +create_session(): ClientSession
-        +terminate_session(): void
-        +start_benchmark(): BenchmarkSession
-        +execute_action(): CommandResult
-        +get_current_task(): Dict[str, Any]
-        +get_policy(): PolicyDocument
+        +create_session(client_id: str): ClientSession
+        +terminate_session(session_id: str): void
+        +execute_action(session_id: str, action: Action): CommandResult
+        +get_current_task(session_id: str): Any
+        +get_policy(session_id: str): PolicyDocument
+        +end_episode(session_id: str, reason: str): Dict[str, Any]
     }
 
     class BenchmarkManager {
         +domain: str
+        +config_dir: Path
         +tasks: Dict[str, Task]
         +config_loader: BenchmarkConfigLoader
         +benchmark_config: Dict[str, Any]
         --
-        +get_task(): Task
-        +get_subtask(): SubTask
-        +list_tasks(): List[Dict]
-        +create_benchmark_session(): BenchmarkSession
-        +start_benchmark(): BenchmarkSession
-        +advance_benchmark(): str?
+        +get_task(task_id: str): Task
+        +get_subtask(task_id: str, subtask_id: str): SubTask
+        +list_tasks(): List[Dict[str, Any]]
         +get_benchmark_config(): Dict[str, Any]
-        +list_benchmark_tasks(): List[Dict]
+        +get_episode_config(task_id: str): Dict[str, Any]
+        +list_benchmark_tasks(): List[Dict[str, Any]]
         +load_tasks_from_yaml(): void
     }
 
     class EpisodeManager {
         +active_episodes: Dict[str, Episode]
+        +episode_configs: Dict[str, Dict[str, Any]]
         --
-        +start_episode(): Episode
-        +step(): Step
-        +end_episode(): Episode
-        +get_current_episode(): Episode?
+        +configure_for_task(session_id: str, task: Any): void
+        +start_episode(session_id: str, task_id: str, initial_context: Optional[Dict]): Episode
+        +step(session_id: str, action: Action, result: CommandResult): StepResult
+        +end_episode(session_id: str, reason: str, result: Optional[str]): Episode
+        +get_current_episode(session_id: str): Optional[Episode]
     }
 
     class ExecutionManager {
+        +_executor_factory: ExecutorFactory
+        +_sandbox_env_manager: SandboxEnvironmentManager
+        +_permanent_env_manager: PermanentEnvironmentManager
+        +_environment_loader: EnvironmentLoader
         --
-        +step(): CommandResult
-        +configure_for_task(): void
-        +cleanup_session(): void
+        +step(action: Action): CommandResult
+        +configure_for_task(session_id: str, task: Task): void
+        +cleanup_session(session_id: str): void
         +cleanup_all_sessions(): void
         +list_commands(): List[Dict[str, Any]]
         +get_security_info(): Dict[str, Any]
-        +get_execution_stats(): Dict[str, Any]
         +to_mcp_tools(): List[Dict[str, Any]]
     }
 
@@ -86,127 +91,162 @@ package "SABER Server Side" {
         +domain_policy: PolicyDocument
         --
         +get_policy(): PolicyDocument
-        +validate_action(): bool
     }
 
     class EvaluationManager {
         --
-        +log_session_start(): void
-        +log_session_end(): void
-        +log_episode_start(): void
-        +log_episode_end(): void
-        +log_action(): void
-        +get_trajectory(): List[Any]
+        +log_session_start(session_id: str, client_id: str): void
+        +log_session_end(session_id: str): void
+        +log_episode_start(session_id: str, episode_id: str, task_id: str): void
+        +log_episode_end(session_id: str, episode_id: str, reason: str): void
+        +log_action(session_id: str, action: Action, result: CommandResult): void
     }
 }
 
 package "SABER Client Side" {
 
-    class TestHarness {
-        +config: TestHarnessConfig
-        +server_client: ServerClient
-        +agent: Any
-        +session_id: str?
+    class SABERHarness {
+        +config: SABERHarnessConfig
+        +session_id: Optional[str]
+        +rest_client: SABERRestClient
+        +agent_wrapper: AgentWrapper
+        +llm_client: TerminationAwareLLMClient
         --
-        +initialize(agent: Any): void
-        +run_test(): Dict[str, Any]
-        +shutdown(): void
+        +initialize(agent: Any, env_file: Optional[Path]): void
+        +run(): HarnessRunResult
+        +_resolve_tasks(): List[Dict[str, Any]]
+        +_execute_episodes(episodes: List[tuple]): List[EpisodeResult]
+        +_run_single_episode(task_id: str, attempt: int): EpisodeResult
+        +_create_mcp_client(task_id: str): SABERMCPClient
+        +_cleanup_session(): void
     }
 
-    class ServerClient {
-        +rest_api_url: str
-        +mcp_api_url: str
-        +session_id: str?
-        +mcp_client: MCPClient?
+    class SABERRestClient {
+        +base_url: str
+        +client_id: str
+        +session_id: Optional[str]
         --
         +create_session(): str
-        +start_episode(): EpisodeInfo
-        +get_current_task(): TaskInfo
-        +get_policy(): PolicyInfo
-        +close_session(): void
-        +connect_mcp(): void
-        +list_tools(): List[MCPTool]
-        +call_tool(): MCPResult
+        +get_benchmark(): Dict[str, Any]
+        +start_episode(task_id: str): str
+        +get_task_info(): Dict[str, Any]
+        +get_policy_info(): Dict[str, Any]
+        +list_tasks(): List[Dict[str, Any]]
+        +terminate_session(): bool
+        +health_check(): Dict[str, Any]
+    }
+
+    class SABERMCPClient {
+        +session_id: str
+        +base_mcp_client: MCPClient
+        +monitor_callback: Optional[MCPMonitorCallback]
+        --
+        +connect(): void
+        +disconnect(): void
+        +list_tools(): List[Dict[str, Any]]
+        +call_tool(name: str, arguments: Dict): Any
+        +get_termination_signal(): bool
+        +get_step_count(): int
+    }
+
+    class MCPClient {
+        +base_url: str
+        +session_headers: Dict[str, str]
+        +client: Client
+        --
+        +connect(): void
+        +disconnect(): void
+        +list_tools(): List[Dict[str, Any]]
+        +call_tool(name: str, arguments: Dict): Any
     }
 
     class AgentWrapper {
-        +agent: Any
-        +process_method: Callable
-        +is_async: bool
+        +user_agent: Any
+        +mcp_client: Any
+        +llm_client: Optional[Any]
+        +agent_instance: Optional[Any]
+        +agent_callable: Optional[Callable]
         --
-        +process_prompt(): str
+        +execute_async(input_data: Any): Any
+        +shutdown(): void
         +reset(): void
-    }
-
-    class AgentLoader {
-        --
-        +load_from_path(): AgentWrapper
-        +load_from_module(): AgentWrapper
+        +_detect_agent_interface(): void
     }
 
     class CLI {
         --
         +main(): void
+        +_load_agent_from_path(agent_path: Path): Any
+        +_parse_arguments(): argparse.Namespace
     }
 }
 
 ' Server Internal Relationships
-SessionManager *-- TaskManager
+SessionManager *-- BenchmarkManager
 SessionManager *-- EpisodeManager
 SessionManager *-- ExecutionManager
 SessionManager *-- PolicyManager
 SessionManager *-- EvaluationManager
 
 ' Client Internal Relationships
-TestHarness *-- ServerClient
-TestHarness *-- AgentWrapper
-AgentLoader ..> AgentWrapper : creates
-CLI ..> TestHarness : orchestrates
+SABERHarness *-- SABERRestClient
+SABERHarness *-- AgentWrapper
+SABERHarness ..> SABERMCPClient : creates per episode
+SABERMCPClient *-- MCPClient
+CLI ..> SABERHarness : orchestrates
 
 ' Client-Server Communication
-ServerClient ..> SessionManager : "HTTP REST API"
-TestHarness ..> SessionManager : "via ServerClient"
+SABERRestClient ..> SessionManager : "HTTP REST API"
+SABERMCPClient ..> SessionManager : "MCP Protocol"
+SABERHarness ..> SessionManager : "via REST + MCP clients"
 
 note top of SessionManager
 **SABER Domain Server & Session Manager**
 - Hosts one security domain (horizontally scalable)
-- Manages multiple concurrent client sessions
-- Single unified entry point for all client interactions
-- Integrates ExecutionManager for Docker sandbox command execution
-- Coordinates task execution and command processing
-- Provides dual protocol handlers: REST API for session management, MCP API for tool execution
-- Built for horizontal scaling with load balancing
+- Manages multiple concurrent client sessions with automatic timeout and cleanup
+- Single unified entry point for all client interactions via REST and MCP APIs
+- Integrates ExecutionManager for Docker sandbox command execution with security validation
+- Coordinates task execution and command processing across multiple server components
+- Provides dual protocol handlers: REST API for session/episode management, MCP API for tool execution
+- Built for horizontal scaling with load balancing and stateless design
+- Session management includes cleanup tasks and proper resource management
 end note
 
 note top of ExecutionManager
-**Command Execution Manager**
-- Factory-based executor management supporting CLI and Python execution
-- Manages Docker-based command execution with security validation
-- Provides command listing and security information
-- Handles execution statistics and performance monitoring
-- Scalable architecture supporting multiple executor types
+**Command Execution Manager with Dual Environment Support**
+- Factory-based executor management supporting CLI, Python, and custom executors via registry
+- Manages both Docker sandbox (ephemeral) and permanent environment containers
+- Provides command listing, security information, and MCP tool schema generation
+- Handles execution with security validation and resource management
+- Environment loader supports flexible environment specifications (string refs, dict configs)
+- Automatic network bridging between sandbox and permanent environments
+- Scalable architecture supporting multiple executor types and environments
 - See command_execution_architecture.puml for detailed design
 end note
 
-note left of TestHarness
-**SABER Test Harness & Client**
-- Orchestrates agent testing workflow
-- Manages server communication via ServerClient
-- Wraps customer agents via AgentWrapper
-- Handles session lifecycle and test execution
-- Provides clean separation between agent logic and communication
-- CLI provides command-line interface for test execution
+note left of SABERHarness
+**SABER Test Harness - Client-Side Orchestration**
+- Orchestrates agent testing workflow with client-side episode management
+- Manages server communication via dedicated REST and MCP clients
+- Wraps arbitrary agent implementations via universal AgentWrapper
+- Handles session lifecycle, task resolution, and multi-episode execution
+- Supports thread-based parallelism for concurrent episode execution
+- Provides clean separation between agent logic and server communication
+- CLI provides command-line interface for agent testing and evaluation
+- Implements pass@k evaluation with configurable episode attempts per task
 end note
 
 note top of AgentWrapper
-**Agent Under Test Interface**
-- Wraps customer-provided AI agent implementations
-- Configurable LLM provider (OpenAI, Anthropic, etc.)
-- Domain-specific reasoning and planning capabilities
-- Receives task context, policy, and guidelines
-- Generates commands based on security analysis
-- Processes results and adapts strategy
-- Isolated from server communication details
+**Universal Agent Adapter**
+- Wraps arbitrary customer-provided AI agent implementations without code changes
+- Automatic interface detection and normalization (sync/async, callable/instance)
+- Provides MCP client access for tool execution and LLM client integration
+- Configurable LLM provider support (OpenAI, Anthropic, Azure, etc.) via TerminationAwareLLMClient
+- Domain-agnostic reasoning and planning capabilities
+- Receives task context, policy prompts, and guidelines from server
+- Generates commands based on security analysis and task requirements
+- Thread-safe execution with graceful shutdown and reset capabilities
+- Completely isolated from server communication - pure agent logic wrapper
 end note
 
 @enduml

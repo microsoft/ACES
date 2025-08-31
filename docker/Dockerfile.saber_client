@@ -1,0 +1,20 @@
+# Generic SABER Client Base Image
+# This file provides a common base for all SABER domain clients
+FROM python:3.11-slim
+
+# Install system dependencies and uv
+RUN apt-get update && apt-get install -y \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install uv
+
+# Set working directory
+WORKDIR /app
+
+# Create standard directories
+RUN mkdir -p /app/client
+
+# Default command - keep container running for manual execution
+# Can be overridden by domain-specific Dockerfiles
+CMD ["tail", "-f", "/dev/null"]

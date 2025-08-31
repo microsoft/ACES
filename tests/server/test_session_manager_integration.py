@@ -168,16 +168,17 @@ class TestSessionManagerIntegration:
             patch("saber.server.session_manager.PolicyManager") as mock_pm,
             patch("saber.server.session_manager.EvaluationManager") as mock_eval,
         ):
+            # Set up ExecutionManager mock to have the required method
+            mock_em.return_value.initialize_permanent_environment_manager = MagicMock()
 
             manager = SessionManager(domain_name="test_domain", config_dir="/tmp")
 
             # Verify initialization order and parameters
             mock_tm.assert_called_once_with("test_domain", "/tmp")
-            # ExecutionManager now takes config_dir and permanent_environment_manager
+            # ExecutionManager now takes only config_dir
             assert mock_em.call_count == 1
             call_args = mock_em.call_args[0]
             assert call_args[0] == "/tmp"  # config_dir
-            assert call_args[1] is not None  # permanent_environment_manager
             mock_pm.assert_called_once_with("test_domain")
             mock_eval.assert_called_once()
 

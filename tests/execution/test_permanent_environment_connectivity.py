@@ -37,9 +37,9 @@ class TestPermanentEnvironmentConnectivity:
         """Create a temporary environments.yaml config file."""
         config_content = """
 containers:
-  saber-python-sandbox:
-    image: saber-python-sandbox:latest
-    container_name: saber-python-sandbox
+  saber-sandbox:
+    image: saber/sandbox:latest
+    container_name: saber-sandbox
     working_dir: /workspace
     environment:
       PYTHONPATH: /workspace
@@ -47,29 +47,29 @@ containers:
 
 environments:
   # Environment with permanent connectivity enabled
-  python_sandbox_with_permanent:
+  sandbox_with_permanent:
     network: "excytin-shared-network"
     permanent_environment_connectivity: true
-    execution: "saber-python-sandbox"
+    execution: "saber-sandbox"
     resource_limits:
       total_memory: "512m"
       total_cpu: "0.5"
       execution_timeout: 900
 
   # Environment with permanent connectivity disabled
-  python_sandbox_without_permanent:
+  sandbox_without_permanent:
     network: "excytin-shared-network"
     permanent_environment_connectivity: false
-    execution: "saber-python-sandbox"
+    execution: "saber-sandbox"
     resource_limits:
       total_memory: "512m"
       total_cpu: "0.5"
       execution_timeout: 900
 
   # Environment without permanent connectivity option (defaults to false)
-  python_sandbox_default:
+  sandbox_default:
     network: "excytin-shared-network"
-    execution: "saber-python-sandbox"
+    execution: "saber-sandbox"
     resource_limits:
       total_memory: "512m"
       total_cpu: "0.5"
@@ -91,7 +91,7 @@ networks:
         loader = EnvironmentLoader(environments_config, mock_permanent_manager)
 
         # Load environment with permanent connectivity enabled
-        env_spec = loader.load_template("python_sandbox_with_permanent")
+        env_spec = loader.load_template("sandbox_with_permanent")
 
         # Verify the network is configured as external
         assert len(env_spec.networks) == 1
@@ -111,7 +111,7 @@ networks:
 
         # Mock the subnet allocation to avoid Docker calls
         with patch.object(loader, '_allocate_unique_subnet', return_value="172.20.1.0/24"):
-            env_spec = loader.load_template("python_sandbox_without_permanent")
+            env_spec = loader.load_template("sandbox_without_permanent")
 
         # Verify the network is configured as internal (not external)
         assert len(env_spec.networks) == 1
@@ -128,7 +128,7 @@ networks:
 
         # Mock the subnet allocation to avoid Docker calls
         with patch.object(loader, '_allocate_unique_subnet', return_value="172.20.2.0/24"):
-            env_spec = loader.load_template("python_sandbox_default")
+            env_spec = loader.load_template("sandbox_default")
 
         # Verify the network is configured as internal (not external)
         assert len(env_spec.networks) == 1
@@ -144,7 +144,7 @@ networks:
 
         # Mock the subnet allocation to avoid Docker calls
         with patch.object(loader, '_allocate_unique_subnet', return_value="172.20.3.0/24"):
-            env_spec = loader.load_template("python_sandbox_with_permanent")
+            env_spec = loader.load_template("sandbox_with_permanent")
 
         # Verify the network is configured as internal (permanent connectivity is ignored)
         assert len(env_spec.networks) == 1
@@ -163,7 +163,7 @@ networks:
 
         # Mock the subnet allocation to avoid Docker calls
         with patch.object(loader, '_allocate_unique_subnet', return_value="172.20.4.0/24"):
-            env_spec = loader.load_template("python_sandbox_with_permanent")
+            env_spec = loader.load_template("sandbox_with_permanent")
 
         # Verify it falls back to regular network creation
         assert len(env_spec.networks) == 1
@@ -179,7 +179,7 @@ networks:
         granular_config = {
             "network": "excytin-shared-network",
             "permanent_environment_connectivity": True,
-            "execution": "saber-python-sandbox",
+            "execution": "saber-sandbox",
             "services": [],
             "resource_limits": {
                 "total_memory": "512m",
@@ -224,7 +224,7 @@ networks:
         granular_config = {
             "network": ["excytin-shared-network", "another-network"],
             "permanent_environment_connectivity": True,
-            "execution": "saber-python-sandbox",
+            "execution": "saber-sandbox",
             "services": [],
             "resource_limits": {"total_memory": "512m"}
         }

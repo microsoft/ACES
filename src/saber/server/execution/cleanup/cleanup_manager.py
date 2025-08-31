@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
 from ....logging_config import get_cleanup_logger
+from ..sandbox.permanent_environment_manager import PermanentEnvironmentManager
 from ..sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 from .cleanup_reason import CleanupReason
 
@@ -45,19 +46,27 @@ class ContainerCleanupManager:
     in SABER, providing unified logging, state tracking, and debugging capabilities.
     """
 
-    def __init__(self, sandbox_manager: SandboxEnvironmentManager):
+    def __init__(
+        self,
+        sandbox_manager: SandboxEnvironmentManager,
+        permanent_manager: Optional[PermanentEnvironmentManager] = None,
+    ):
         """
         Initialize the cleanup manager.
 
         Args:
-            sandbox_manager: The sandbox manager to use for actual cleanup operations
+            sandbox_manager: The sandbox manager to use for ephemeral container cleanup operations
+            permanent_manager: Optional permanent environment manager for persistent container lifecycle
         """
         self.sandbox_manager = sandbox_manager
+        self.permanent_manager = permanent_manager
         self._active_cleanups: Set[str] = set()
         self._cleanup_history: List[CleanupOperation] = []
         self._max_history_size = 1000  # Keep last 1000 cleanup operations
 
         logger.info("🧹 ContainerCleanupManager initialized")
+        if permanent_manager:
+            logger.info("🧹 ContainerCleanupManager configured with permanent environment support")
 
     def cleanup_session(self, session_id: str, reason: CleanupReason, context: Optional[Dict[str, Any]] = None) -> bool:
         """
@@ -220,6 +229,104 @@ class ContainerCleanupManager:
         )
 
         return successful_cleanups
+
+    def start_permanent_environment(self, environment_spec: Any) -> bool:
+        """
+        Start permanent environment through unified lifecycle management.
+
+        Args:
+            environment_spec: Permanent environment specification
+
+        Returns:
+            True if permanent environment started successfully, False otherwise
+        """
+        if not self.permanent_manager:
+            logger.error("🧹 PERMANENT ENV ERROR: No permanent environment manager configured")
+            return False
+
+        try:
+            logger.info("🧹 PERMANENT ENV START: Starting permanent environment services")
+            # Use ensure_permanent_environments_current for configuration change detection
+            self.permanent_manager.ensure_permanent_environments_current(environment_spec)
+            logger.info("🧹 PERMANENT ENV SUCCESS: Permanent environment started successfully")
+            return True
+
+        except Exception as e:
+            logger.error(f"🧹 PERMANENT ENV FAILED: Failed to start permanent environment: {e}")
+            return False
+
+    def stop_permanent_environment(self) -> bool:
+        """
+        Stop permanent environment through unified lifecycle management.
+
+        Returns:
+            True if permanent environment stopped successfully, False otherwise
+        """
+        if not self.permanent_manager:
+            logger.warning("🧹 PERMANENT ENV WARNING: No permanent environment manager configured")
+            return True  # Return True since there's nothing to stop
+
+        if not self.permanent_manager.is_running():
+            logger.info("🧹 PERMANENT ENV INFO: Permanent environment not running")
+            return True
+
+        try:
+            logger.info("🧹 PERMANENT ENV STOP: Stopping permanent environment services")
+            self.permanent_manager.stop_permanent_environment()
+            logger.info("🧹 PERMANENT ENV STOPPED: Permanent environment stopped successfully")
+            return True
+
+        except Exception as e:
+            logger.error(f"🧹 PERMANENT ENV STOP FAILED: Failed to stop permanent environment: {e}")
+            return False
+
+    def is_permanent_environment_running(self) -> bool:
+        """
+        Check if permanent environment is running.
+
+        Returns:
+            True if permanent environment is running, False otherwise
+        """
+        if not self.permanent_manager:
+            return False
+        return self.permanent_manager.is_running()
+
+    def cleanup_all_containers(self, reason: CleanupReason, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Clean up all containers (both ephemeral and permanent) for server shutdown.
+
+        Args:
+            reason: Standardized reason for cleanup (typically SERVER_SHUTDOWN)
+            context: Additional context for debugging
+
+        Returns:
+            Dictionary with cleanup results for both ephemeral and permanent containers
+        """
+        if context is None:
+            context = {}
+
+        logger.info("🧹 FULL CLEANUP START: Starting cleanup of all containers (ephemeral + permanent)")
+
+        # Clean up all ephemeral session containers
+        ephemeral_cleaned = self.cleanup_all_sessions(reason, context)
+
+        # Clean up permanent environment
+        permanent_cleaned = self.stop_permanent_environment()
+
+        result = {
+            "ephemeral_sessions_cleaned": ephemeral_cleaned,
+            "permanent_environment_stopped": permanent_cleaned,
+            "total_cleanup_success": permanent_cleaned,  # Overall success depends on both
+            "reason": reason,
+            "context": context,
+        }
+
+        logger.info(
+            f"🧹 FULL CLEANUP COMPLETE: Ephemeral sessions: {ephemeral_cleaned}, "
+            f"Permanent stopped: {permanent_cleaned}, Overall success: {result['total_cleanup_success']}"
+        )
+
+        return result
 
     def get_cleanup_history(self, session_id: Optional[str] = None) -> List[CleanupOperation]:
         """

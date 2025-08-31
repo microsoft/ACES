@@ -1,7 +1,7 @@
 @startuml SABER Server Architecture - Detailed
 
 !theme plain
-title Security Agent Benchmarking System - Detailed Server Architecture
+title SABER Server Architecture - Detailed Implementation
 
 skinparam class {
     BackgroundColor lightblue
@@ -14,6 +14,13 @@ package "Domain Server Core" {
 
     class SessionManager {
         +domain_name: str
+        +config_dir: str
+        +host: str
+        +port: int
+        +mcp_host: str
+        +mcp_port: int
+        +session_timeout_minutes: int
+        +cleanup_interval_minutes: int
         +active_sessions: Dict[str, ClientSession]
         +benchmark_manager: BenchmarkManager
         +episode_manager: EpisodeManager
@@ -22,19 +29,20 @@ package "Domain Server Core" {
         +evaluation_manager: EvaluationManager
         +rest_api: SessionRestAPI
         +mcp_api: SessionMCPAPI
+        +cleanup_task: Optional[asyncio.Task]
+        +shutdown_event: asyncio.Event
         --
         +start_server(): void
         +shutdown(): void
-        +create_session(): ClientSession
-        +terminate_session(): void
-        +start_benchmark(): BenchmarkSession
-        +end_episode(): Dict[str, Any]
-        +execute_action(): CommandResult
-        +get_current_task(): Task
-        +get_episode_config(): Dict[str, Any]
-        +should_terminate_episode(): bool
-        +get_policy(): PolicyDocument
-        +_get_session(): ClientSession
+        +create_session(client_id: str): ClientSession
+        +terminate_session(session_id: str): void
+        +end_episode(session_id: str, reason: str): Dict[str, Any]
+        +execute_action(session_id: str, action: Action): CommandResult
+        +get_current_task(session_id: str): Any
+        +get_episode_config(session_id: str): Dict[str, Any]
+        +should_terminate_episode(session_id: str): tuple[bool, str]
+        +get_policy(session_id: str): PolicyDocument
+        +_get_session(session_id: str): ClientSession
     }
 
     package "Protocol Handlers" {
@@ -48,29 +56,33 @@ package "Domain Server Core" {
             --
             **REST API Endpoints**
             +POST /session
-            +DELETE /session/{id}
-            +POST /session/{id}/start-benchmark
-            +GET /session/{id}/current-task
-            +GET /session/{id}/policy
-            +GET /tasks
+            +DELETE /session/{session_id}
+            +GET /session/{session_id}/current-task
+            +GET /session/{session_id}/policy
+            +POST /session/{session_id}/start-episode
+            +GET /benchmark
             +GET /health
             +GET /sessions
+            +GET /sessions/stats
+            +GET /debug/cleanup-history
+            +GET /debug/cleanup-history/{session_id}
+            +GET /debug/active-cleanups
         }
 
         class SessionMCPAPI {
             +session_manager: SessionManager
-            +mcp_server: FastMCPServer
-            +active_mcp_sessions: Dict[str, str]
             +host: str
             +port: int
+            +mcp_server: Optional[FastMCP]
+            +tool_generator: MCPToolGenerator
             --
             +start_mcp_server(): void
             +shutdown_mcp_server(): void
             +handle_list_tools(): List[MCPTool]
             +handle_call_tool(): MCPResult
-            +_map_session_context(): Dict[str, Any]
-            +_convert_to_action(): Action
-            +_convert_to_mcp_result(): MCPResult
+            +_get_session_from_headers(): Optional[str]
+            +_convert_action_parameters(action_name: str, arguments: Dict): Action
+            +_convert_command_result_to_mcp(result: CommandResult): List[MCPContent]
         }
     }
 
@@ -92,38 +104,29 @@ package "Benchmark Management" {
 
     class BenchmarkManager {
         +domain: str
+        +config_dir: Path
+        +tasks_file_path: Path
         +tasks: Dict[str, Task]
-        +config_loader: BenchmarkConfigLoader
         +benchmark_config: Dict[str, Any]
-        +active_benchmarks: Dict[str, BenchmarkSession]
+        +config_loader: BenchmarkConfigLoader
         --
-        +get_task(): Task
-        +get_subtask(): SubTask
-        +list_tasks(): List[Dict]
-        +create_benchmark_session(): BenchmarkSession
-        +start_benchmark(): BenchmarkSession
-        +advance_benchmark(): str?
+        +get_task(task_id: str): Task
+        +get_subtask(task_id: str, subtask_id: str): SubTask
+        +list_tasks(): List[Dict[str, Any]]
         +get_benchmark_config(): Dict[str, Any]
-        +get_episode_config(): Dict[str, Any]
-        +list_benchmark_tasks(): List[Dict]
+        +get_episode_config(task_id: str): Dict[str, Any]
+        +list_benchmark_tasks(): List[Dict[str, Any]]
         +load_tasks_from_yaml(): void
     }
 
     class BenchmarkSession {
         +session_id: str
-        +task_queue: List[str]
-        +completed_tasks: List[str]
-        +failed_tasks: List[str]
-        +current_task_id: str?
-        +current_episode_id: str?
-        +created_at: datetime
+        +benchmark_info: BenchmarkInfo
+        +config: Dict[str, Any]
         --
-        +get_next_task(): str?
-        +mark_task_completed(): void
-        +mark_task_failed(): void
-        +set_current_episode(): void
-        +to_api_response(): Dict[str, Any]
-        +is_complete(): bool
+        +to_api_response(domain: str): Dict[str, Any]
+        +domain: str @property
+        +total_tasks: int @property
     }
 
     class Task {
@@ -148,11 +151,15 @@ package "Episode Management" {
 
     class EpisodeManager {
         +active_episodes: Dict[str, Episode]
+        +episode_configs: Dict[str, Dict[str, Any]]
         --
-        +start_episode(): Episode
-        +step(): Step
-        +end_episode(): Episode
-        +get_current_episode(): Episode?
+        +configure_for_task(session_id: str, task: Any): void
+        +start_episode(session_id: str, task_id: str, initial_context: Optional[Dict]): Episode
+        +step(session_id: str, action: Action, result: CommandResult): StepResult
+        +end_episode(session_id: str, reason: str, result: Optional[str]): Episode
+        +get_current_episode(session_id: str): Optional[Episode]
+        +should_terminate_episode(session_id: str): tuple[bool, str]
+        +cleanup_session(session_id: str): void
     }
 
     class Episode {
@@ -247,24 +254,21 @@ package "Policy and Evaluation" {
         +domain_policy: PolicyDocument
         --
         +get_policy(): PolicyDocument
-        +validate_action(): bool
     }
 
     class PolicyDocument {
-        +domain: str
-        +available_commands: List[CommandDescription]
-        +guidelines: str
-        +constraints: List[str]
+        +prompt: str
         --
-        +to_mcp_resource(): MCPResource
+        +to_dict(): Dict[str, Any]
     }
 
     class EvaluationManager {
-        +trajectory_store: TrajectoryStore
-        +action_tracker: ActionTracker
         --
-        +log_action(): void
-        +get_trajectory(): List[ActionRecord]
+        +log_session_start(session_id: str, client_id: str): void
+        +log_session_end(session_id: str): void
+        +log_episode_start(session_id: str, episode_id: str, task_id: str): void
+        +log_episode_end(session_id: str, episode_id: str, reason: str): void
+        +log_action(session_id: str, action: Action, result: CommandResult): void
     }
 
     class ActionTracker {
@@ -290,6 +294,12 @@ package "Policy and Evaluation" {
         +save_trajectory(): void
         +load_trajectory(): List[ActionRecord]
     }
+
+    class StepResult {
+        +step: Step
+        +should_terminate: bool
+        +termination_reason: Optional[str]
+    }
 }
 
 ' Relationships
@@ -307,8 +317,8 @@ SessionMCPAPI ..> SessionManager : delegates to
 
 BenchmarkManager *-- Task
 BenchmarkManager *-- BenchmarkSession
-Task ..> EpisodeState
 EpisodeManager *-- Episode
+EpisodeManager ..> StepResult : returns
 
 ExecutionManager *-- ExecutorFactory
 ExecutionManager *-- SandboxEnvironmentManager
@@ -318,56 +328,65 @@ ExecutorFactory ..> CLIExecutor : creates
 ExecutorFactory ..> PythonExecutor : creates
 
 PolicyManager *-- PolicyDocument
-EvaluationManager *-- TrajectoryStore
-EvaluationManager *-- ActionTracker
+EvaluationManager ..> ActionTracker : uses (stub)
+EvaluationManager ..> TrajectoryStore : uses (stub)
 ActionTracker *-- ActionRecord
 
 note top of SessionManager
 **SABER Domain Server & Session Manager**
 - Hosts one security domain (scalable to multiple instances)
-- Manages multiple concurrent client sessions
-- Single point of access for all client interactions
-- Orchestrates task execution and command processing
-- Handles server lifecycle (start/shutdown)
-- Coordinates all server components
-- Built for horizontal scaling with load balancing
-- Provides dual protocol handlers: REST API for session management, MCP API for tool execution
+- Manages multiple concurrent client sessions with timeout and cleanup
+- Single point of access for all client interactions via REST and MCP APIs
+- Orchestrates task execution and command processing through ExecutionManager
+- Handles server lifecycle (start/shutdown) with graceful cleanup
+- Coordinates all server components with proper initialization order
+- Built for horizontal scaling with load balancing capabilities
+- Session timeout management with automatic cleanup of inactive sessions
+- Dual protocol handlers: REST API for session/episode management, MCP API for tool execution
 end note
 
 note left of SessionMCPAPI
 **MCP Protocol Handler**
-- Hosts Model Context Protocol server for agent tool access
-- Dynamically discovers tools from ExecutionManager
-- Maps MCP tool calls to SessionManager command execution
-- Maintains session context mapping for MCP clients
+- Hosts Model Context Protocol server for agent tool access using FastMCP
+- Dynamically discovers tools from ExecutionManager via MCPToolGenerator
+- Maps MCP tool calls to SessionManager command execution using headers
+- Session context obtained from HTTP headers (X-SABER-Session-ID)
 - ONLY handles tool discovery and execution via MCP protocol
 - Complements REST API which handles all other operations
+- Uses header-based session mapping instead of maintaining active session state
 end note
 
 note right of SessionRestAPI
 **REST Protocol Handler**
-- FastAPI-based REST endpoints for session management
-- Handles session lifecycle, episodes, policy access
-- OpenAPI documentation generation
+- FastAPI-based REST endpoints for session and episode management
+- Handles session lifecycle, episode start, policy access, benchmark info
+- OpenAPI documentation generation with domain-specific titles
+- Includes debug endpoints for cleanup history and session statistics
+- NO benchmark orchestration endpoints - that's client responsibility
 - Delegates all business logic to SessionManager
 end note
 
 note top of BenchmarkManager
-**Benchmark Orchestration & Task Definition Manager**
-Enhanced to focus on benchmark orchestration and task definition management.
-Manages multiple episode attempts for pass@k evaluation and complex benchmarking scenarios.
-Parses YAML configuration and provides task object lookup with benchmark settings.
-Task objects contain execution_config, benchmark_config, and flexible environment specification.
-Environment can be string template reference, granular dict config, or hybrid approach.
-Coordinates with SessionManager for multi-episode benchmark execution.
+**Task Definition Manager (Client Orchestration Model)**
+- Focuses purely on task definition management and YAML parsing
+- NO server-side benchmark orchestration - that's client responsibility
+- Provides task lookup by ID and task configuration access
+- BenchmarkSession is minimal wrapper around BenchmarkInfo for API responses
+- Task objects contain execution_config, episode_config, and environment specifications
+- Environment can be string reference, dict config, or hybrid approach
+- BenchmarkConfigLoader handles YAML parsing and validation
+- Supports episode configuration extraction for EpisodeManager setup
 end note
 
 note top of EpisodeManager
-**Episode Manager**
-Moved from TaskManager to SessionManager for better separation.
-Focuses on episode lifecycle management and step creation.
-Returns Step objects directly from step() method.
-Manages RL-compatible episode state transitions.
+**RL-Style Episode Manager**
+- Manages gym-compatible episode lifecycle with automatic termination
+- Returns StepResult objects from step() method containing termination signals
+- Tracks episode state transitions and step-by-step action history
+- Configures episode settings per task from task.episode_config
+- Supports max_steps termination and custom termination conditions
+- Session-scoped episode tracking with cleanup on session termination
+- Validates episode configuration and provides default fallbacks
 end note
 
 note top of ExecutionManager
@@ -381,6 +400,14 @@ Now manages both ephemeral and permanent container environments:
 - Enhanced security validation and multi-network executor management
 - Permanent services start with server boot and persist across all episodes
 See command_execution_architecture.puml for complete detailed design.
+end note
+
+note bottom of EvaluationManager
+**Stub Implementation**
+- Minimal stub implementation for development support
+- Currently only provides logging methods for session and episode events
+- Full trajectory tracking and evaluation features to be implemented later
+- ActionTracker and TrajectoryStore shown for future implementation reference
 end note
 
 @enduml

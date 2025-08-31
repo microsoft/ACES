@@ -1,0 +1,31 @@
+# Minimal SABER Sandbox Environment
+# Base sandbox with only Python and essential tools
+FROM python:3.11-slim
+
+# Install only essential system packages
+RUN apt-get update && \
+    apt-get install -y \
+        curl \
+        wget \
+        && rm -rf /var/lib/apt/lists/*
+
+# Install minimal Python packages for basic execution
+RUN pip install --no-cache-dir \
+    requests
+
+# Set working directory
+WORKDIR /workspace
+
+# Set environment variables
+ENV PYTHONPATH=/workspace
+ENV PYTHONUNBUFFERED=1
+
+# Create non-root user for security
+RUN groupadd --gid 1000 saber && \
+    useradd --uid 1000 --gid saber --shell /bin/bash --create-home saber && \
+    chown saber:saber /workspace
+
+USER saber
+
+# Keep container running
+CMD ["tail", "-f", "/dev/null"]

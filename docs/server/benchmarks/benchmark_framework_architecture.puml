@@ -1,7 +1,7 @@
-@startuml SABER Benchmark Framework Architecture - Detailed
+@startuml SABER Benchmark Framework Architecture - Actual Implementation
 
 !theme plain
-title SABER Benchmark Framework - Detailed Architecture
+title SABER Benchmark Framework - Task Definition Management (Client-Side Orchestration)
 
 skinparam class {
     BackgroundColor lightblue
@@ -14,50 +14,68 @@ package "Benchmark Framework Core" {
 
     class BenchmarkManager {
         +domain: str
+        +config_dir: Path
+        +tasks_file_path: Path
         +tasks: Dict[str, Task]
-        +config_loader: BenchmarkConfigLoader
         +benchmark_config: Dict[str, Any]
-        +active_benchmarks: Dict[str, BenchmarkSession]
+        +config_loader: BenchmarkConfigLoader
         --
-        +get_task(task_id): Task
-        +get_subtask(task_id, subtask_id): SubTask
-        +list_tasks(): List[Dict]
-        +create_benchmark_session(session_id, task_ids): BenchmarkSession
-        +start_benchmark(session_id, config): BenchmarkSession
-        +advance_benchmark(session_id, completed_task_id, success): str?
-        +get_benchmark_config(): Dict[str, Any]
-        +get_episode_config(task_id): Dict[str, Any]
-        +list_benchmark_tasks(): List[Dict]
         +load_tasks_from_yaml(): void
+        +get_benchmark_info(): BenchmarkInfo
+        +get_task(task_id: str): Task
+        +get_subtask(task_id: str, subtask_id: str): SubTask
+        +list_tasks(): List[Dict[str, Any]]
+        +get_benchmark_config(): Dict[str, Any]
+        +get_episode_config(task_id: str): Dict[str, Any]
+        +get_permanent_environment(): Optional[str]
     }
 
     class BenchmarkSession {
         +session_id: str
-        +task_queue: List[str]
-        +completed_tasks: List[str]
-        +failed_tasks: List[str]
-        +current_task_id: str?
-        +current_episode_id: str?
-        +created_at: datetime
+        +benchmark_info: BenchmarkInfo
+        +config: Dict[str, Any]
         --
-        +get_next_task(): str?
-        +mark_task_completed(task_id: str): void
-        +mark_task_failed(task_id: str): void
-        +set_current_episode(episode_id: str): void
         +to_api_response(domain: str): Dict[str, Any]
-        +is_complete(): bool
+        +domain: str (property)
+        +total_tasks: int (property)
+        +total_episodes: int (property)
+    }
+
+    class BenchmarkInfo {
+        +domain: str
+        +tasks: List[TaskInfo]
+        +total_tasks: int
+        +total_episodes: int
+        --
+        +to_dict(): Dict[str, Any]
+        +get_task_by_id(task_id: str): TaskInfo?
+        +get_task_ids(): List[str]
+    }
+
+    class TaskInfo {
+        +task_id: str
+        +title: str
+        +description: str
+        +episode_attempts: int
+        +subtask_count: int
     }
 
     class BenchmarkConfigLoader {
         +domain: str
+        +allowed_executors: Optional[List[str]]
+        +benchmark_config: Dict[str, Any]
+        +global_defaults: Dict[str, Any]
+        +permanent_environment: Optional[str]
+        +yaml_data: Optional[Dict[str, Any]]
         --
-        +load_tasks_from_file(): Dict[str, Task]
+        +load_tasks_from_file(tasks_file_path: str): Dict[str, Task]
         +load_benchmark_config(): Dict[str, Any]
         +get_permanent_environment(task_id: str): Optional[str]
         +get_allowed_executors(): List[str]
-        +_parse_task(): Task
-        +_parse_subtask(): SubTask
-        +_parse_benchmark_config(): Dict[str, Any]
+        +_parse_task(task_data: Dict): Task
+        +_parse_subtask(subtask_data: Dict): SubTask
+        +_parse_benchmark_config(yaml_data: Dict): Dict[str, Any]
+        +_parse_permanent_environment(yaml_data: Dict): Optional[str]
     }
 
     class Task {
@@ -65,18 +83,21 @@ package "Benchmark Framework Core" {
         +domain: str
         +title: str
         +description: str
-        +sandbox_environment: Union[str, Dict[str, Any]]
-        +permanent_environment: Optional[str]
-        +allowed_executors: List[str]
-        +initial_context: Dict[str, Any]
         +subtasks: List[SubTask]
+        +initial_context: Dict[str, Any]
+        +environment: Union[str, Dict[str, Any]]
+        +allowed_executors: Optional[List[str]]
+        +execution_config: Dict[str, Any]
+        +episode_config: Dict[str, Any]
         +benchmark_config: Dict[str, Any]
+        +_subtask_map: Dict[str, SubTask]
         --
-        +add_subtask(): void
-        +get_subtask_by_id(): SubTask?
+        +add_subtask(subtask: SubTask): void
+        +get_subtask_by_id(subtask_id: str): Optional[SubTask]
         +is_complete(): bool
         +get_all_subtask_ids(): Set[str]
         +get_episode_attempts(): int
+        +get_environment_config(): Dict[str, Any]
     }
 
     class SubTask {
@@ -85,25 +106,29 @@ package "Benchmark Framework Core" {
         +title: str
         +description: str
         +objective: str
+        +dependencies: Optional[List[str]]
         --
-        +is_dependent_on(): bool
+        +is_dependent_on(subtask_id: str): bool
     }
 }
 
-package "Episode Management" {
+package "Episode Management (Pydantic Models in base.py)" {
 
     class EpisodeManager {
         +active_episodes: Dict[str, Episode]
+        +episode_configs: Dict[str, Dict[str, Any]]
         --
-        +start_episode(session_id, task_id, initial_context?): Episode
-        +step(session_id, action, command_result): Step
-        +end_episode(session_id, reason): Episode
-        +reset_episode(session_id, task_id): Episode
-        +get_episode_state(session_id): EpisodeState?
-        +get_current_episode(session_id): Episode?
-        +create_step(episode, action, response): Step
-        +update_episode_state(episode, step): void
-        +cleanup_session(session_id): void
+        +configure_for_task(session_id: str, task: Task): void
+        +should_terminate_episode(session_id: str): tuple[bool, str]
+        +start_episode(session_id: str, task_id: str, initial_context?: Dict): Episode
+        +step(session_id: str, action: Action, command_result: CommandResult): StepResult
+        +end_episode(session_id: str, reason: str): Episode
+        +reset_episode(session_id: str, task_id: str): Episode
+        +get_episode_state(session_id: str): Optional[EpisodeState]
+        +get_current_episode(session_id: str): Optional[Episode]
+        +create_step(episode: Episode, action: Action, response: Dict): Step
+        +update_episode_state(episode: Episode, step: Step): void
+        +cleanup_session(session_id: str): void
     }
 
     class Episode {
@@ -118,7 +143,7 @@ package "Episode Management" {
         +metadata: Dict[str, Any]
         +completion_reason: Optional[str]
         --
-        +add_step(): void
+        +add_step(step: Step): void
         +get_executed_commands(): List[str]
         +is_complete: bool (property)
         +duration: Optional[float] (property)
@@ -137,7 +162,12 @@ package "Episode Management" {
         +tool_name: str
         +parameters: Dict[str, Any]
         +timestamp: datetime
-        +arguments: Optional[str]
+    }
+
+    class StepResult {
+        +step: Step
+        +should_terminate: bool
+        +termination_reason: Optional[str]
     }
 
     enum EpisodeState {
@@ -153,10 +183,14 @@ package "Episode Management" {
 ' Relationships
 BenchmarkManager *-- BenchmarkConfigLoader
 BenchmarkManager *-- Task
-BenchmarkManager *-- BenchmarkSession
+BenchmarkManager ..> BenchmarkInfo : creates
+BenchmarkManager ..> BenchmarkSession : creates
 
 BenchmarkConfigLoader ..> Task : creates
 BenchmarkConfigLoader ..> SubTask : creates
+
+BenchmarkSession *-- BenchmarkInfo
+BenchmarkInfo *-- TaskInfo
 
 Task *-- SubTask
 
@@ -164,57 +198,65 @@ EpisodeManager *-- Episode
 Episode *-- Step
 Step *-- Action
 Episode ..> EpisodeState
+EpisodeManager ..> StepResult : returns
 
 note top of BenchmarkManager
-**Benchmark Orchestration Manager**
-Enhanced to focus on benchmark orchestration and task queue management.
-Manages BenchmarkSession objects that track task progression through episodes.
-Coordinates automatic task advancement when episodes complete successfully.
-Responsible for task configuration loading, lookup, and benchmark coordination.
-Task objects now contain all execution configuration and benchmark settings.
+**Task Definition Manager (Not Orchestrator)**
+Simplified to focus on YAML parsing and task lookup.
+No longer handles server-side benchmark sessions or task queues.
+Client-side orchestration responsibility moved to harness implementations.
+Provides BenchmarkInfo for client-side task management.
+Supports permanent environment configuration for network connectivity.
+Enhanced Task objects contain complete execution and episode configuration.
 end note
 
 note top of BenchmarkSession
-**Benchmark Task Queue Manager**
-Manages the progression of tasks within a benchmark session.
-Tracks current task, completed tasks, and failed tasks.
-Provides clean API for task advancement and completion checking.
-Eliminates need for complex session state management in other components.
+**Simple Session Wrapper**
+Lightweight wrapper around BenchmarkInfo with optional config.
+No task queue management or progression logic.
+Pure data container for API responses.
+Task orchestration moved to client responsibility.
 end note
 
 note top of Task
-**Enhanced Task Definition with Benchmark Configuration**
-Tasks now contain complete execution configuration including flexible environment specification,
-allowed_executors, and benchmark-specific settings (episode_attempts).
-Environment can be: string template reference, dict with granular config, or hybrid approach.
-No longer requires separate calls to get execution configuration.
-Contains all parameters needed by other SABER components including benchmark orchestration.
-Subtasks are retained for informational purposes only.
+**Complete Task Configuration Container**
+Enhanced with flexible environment specification:
+- String: Template reference (e.g., "dvwa_pentest")
+- Dict: Full environment config or hybrid approach
+Includes execution_config, episode_config, and benchmark_config.
+No longer uses "sandbox_environment" field name.
+Contains all parameters needed by ExecutionManager and EpisodeManager.
+Supports permanent environment integration for network tasks.
 end note
 
 note top of EpisodeManager
-**Episode Lifecycle Manager**
-Manages RL-style episodes with gym-compatible interfaces.
-Returns Step objects directly from step() method.
-Handles episode state transitions and completion detection.
+**RL Episode Lifecycle Manager**
+Configured per task with episode_config validation.
+Returns StepResult tuples with termination information.
+Manages episode state transitions and step tracking.
 Single source of truth for episode operations.
+Task-specific configuration (max_steps, timeouts) required.
 end note
 
 note top of BenchmarkConfigLoader
-**YAML Configuration Loader with Benchmark Support**
-Enhanced to load complete task configuration including execution parameters and benchmark settings.
-Parses allowed_executors and episode_attempts from YAML and includes in Task objects.
-Loads domain-level benchmark configuration for orchestration settings.
-No dependency validation or progression logic.
-Single responsibility: YAML parsing and complete Task object creation with benchmark data.
+**Enhanced YAML Parser with Permanent Environment Support**
+Parses complete task configuration including:
+- Environment specifications (flexible format)
+- Execution configuration (timeouts, limits)
+- Episode configuration (max_steps, timeouts)
+- Benchmark configuration (episode_attempts)
+- Permanent environment settings for network connectivity
+Validates domain consistency and required fields.
+Single responsibility: YAML → Task object conversion.
 end note
 
 note bottom of Episode
-**RL Episode State**
-Contains complete action-response history for RL training.
-No subtask progression tracking or state management.
-Provides properties for current state access.
-Includes completion information and metadata.
+**Pydantic Model in base.py**
+All episode-related models are Pydantic BaseModel classes.
+Provides JSON serialization and validation.
+Complete action-response history for RL training.
+Properties for computed values (duration, is_complete).
+No subtask progression tracking - pure episode data.
 end note
 
 @enduml

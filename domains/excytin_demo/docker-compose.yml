@@ -3,7 +3,7 @@ version: '3.8'
 services:
   # SABER Server for excytin_demo domain
   saber-excytin-server:
-    image: saber-excytin-server:latest
+    image: saber/excytin-server:latest
     container_name: saber-excytin-server
     ports:
       - "8000:8000"  # REST API
@@ -28,7 +28,7 @@ services:
 
   # Excytin Demo Client for testing enhanced logging
   saber-excytin-client:
-    image: saber-excytin-client:latest
+    image: saber/excytin-client:latest
     container_name: saber-excytin-client
     volumes:
       - ./client:/app/client  # Mount client code for development

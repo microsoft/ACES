@@ -24,6 +24,7 @@ class TestSessionRestAPI:
         mock_task_manager = MagicMock()
         mock_execution_manager = MagicMock()
         mock_execution_manager.step = AsyncMock()
+        mock_execution_manager.initialize_permanent_environment_manager = MagicMock()
         mock_policy_manager = MagicMock()
         mock_policy_doc = PolicyDocument(prompt="Test domain policy prompt")
         mock_policy_manager.get_policy = MagicMock(return_value=mock_policy_doc)
@@ -48,8 +49,6 @@ class TestSessionRestAPI:
             patch("saber.server.session_manager.PolicyManager", return_value=mock_policy_manager),
             patch("saber.server.session_manager.EvaluationManager", return_value=mock_evaluation_manager),
             patch("saber.server.session_manager.EpisodeManager", return_value=mock_episode_manager),
-            patch("saber.server.session_manager.PermanentEnvironmentManager", return_value=mock_permanent_environment_manager),
-            patch("saber.server.session_manager.ContainerCleanupManager", return_value=mock_container_cleanup_manager),
         ):
 
             manager = SessionManager(domain_name="test_domain", config_dir="/tmp", host="127.0.0.1", port=8003)
@@ -216,7 +215,7 @@ class TestSessionRestAPI:
         # Mock the get_benchmark_info method
         with patch.object(manager, 'get_benchmark_info', return_value=mock_benchmark_info):
             # Call get benchmark endpoint
-            response = client.get("/get-benchmark")
+            response = client.get("/benchmark")
 
             assert response.status_code == 200
             data = response.json()
