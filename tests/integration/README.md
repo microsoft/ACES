@@ -56,7 +56,7 @@ uv run pytest  # Excludes integration tests by default
 
 Integration tests require:
 - Docker daemon running locally
-- Container images built (`saber-mcp-sidecar`, `saber-agent-runner`)
+- Container images built (`saber/mcp-sidecar`, `saber/agent-runner`)
 - Network connectivity for container communication
 
 ## Test Architecture
@@ -78,8 +78,8 @@ cd docker/
 ```
 
 This creates:
-- `saber-mcp-sidecar:latest` (295MB)
-- `saber-agent-runner:latest` (458MB)
+- `saber/mcp-sidecar:latest` (295MB)
+- `saber/agent-runner:latest` (458MB)
 
 ## Test Configuration
 

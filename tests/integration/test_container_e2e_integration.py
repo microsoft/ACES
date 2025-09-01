@@ -352,9 +352,9 @@ class TestContainerE2EIntegration:
 
         # Check if required images exist
         try:
-            docker_client.images.get("saber-mcp-sidecar:latest")
+            docker_client.images.get("saber/mcp-sidecar:latest")
         except docker.errors.ImageNotFound:
-            pytest.skip("saber-mcp-sidecar:latest image not found - run docker/build_images.sh")
+            pytest.skip("saber/mcp-sidecar:latest image not found - run docker/build_images.sh")
 
         try:
             docker_client.images.get("saber-agent-runner:latest")
@@ -498,9 +498,9 @@ class TestContainerE2EIntegration:
             pytest.skip(f"Docker not available: {e}")
 
         try:
-            docker_client.images.get("saber-mcp-sidecar:latest")
+            docker_client.images.get("saber/mcp-sidecar:latest")
         except docker.errors.ImageNotFound:
-            pytest.skip("saber-mcp-sidecar:latest image not found")
+            pytest.skip("saber/mcp-sidecar:latest image not found")
 
         sidecar_config = SidecarConfig(
             container_name="test-health-sidecar",
