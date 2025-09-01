@@ -220,6 +220,6 @@ note top of SABERHarness : Entry Point\nMain client orchestrator\nSupports dual 
 
 note top of ContainerMode : Recommended Architecture\n✅ Standard MCP compatibility\n✅ Agent isolation & resource limits\n✅ Robust termination & cleanup\n✅ Zero-code-change agent integration
 
-note bottom of Docker : Container Infrastructure\nsaber-mcp-sidecar:latest (295MB)\nsaber-agent-runner:latest (458MB)\nIsolated networks & resource limits
+note bottom of Docker : Container Infrastructure\nsaber/mcp-sidecar:latest (295MB)\nsaber/agent-runner:latest (458MB)\nIsolated networks & resource limits
 
 @enduml

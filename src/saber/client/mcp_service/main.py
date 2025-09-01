@@ -188,7 +188,12 @@ def create_app(saber_mcp_url: Optional[str] = None, timeout: float = 30.0) -> Fa
             raise HTTPException(status_code=503, detail="Service not ready")
 
         # Readiness should not depend on server health
-        return {"status": "ready", "message": "MCP Service is ready", "saber_mcp_url": app.state.saber_mcp_url}
+        return {
+            "status": "ready",
+            "ready": True,
+            "message": "MCP Service is ready",
+            "saber_mcp_url": app.state.saber_mcp_url,
+        }
 
     # Session management endpoints
     @app.post("/admin/sessions", response_model=SessionRegistrationResponse)
