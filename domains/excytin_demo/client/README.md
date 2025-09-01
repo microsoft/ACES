@@ -67,7 +67,7 @@ server/logs/
 - Check Docker daemon is running
 - Verify environment configurations in `../server/config/environments.yaml`
 
-This demo validates that the enhanced logging system successfully captures:
+This demo validates that the Excytin system successfully captures:
 - Docker compose configurations used to create containers
-- Container logs during execution and shutdown
+- Container execution and communication
 - Container lifecycle events with timestamps and metadata

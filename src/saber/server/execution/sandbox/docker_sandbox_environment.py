@@ -14,9 +14,8 @@ import tempfile
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-import yaml
-
 import docker
+import yaml
 
 if TYPE_CHECKING:
     from docker.models.containers import Container

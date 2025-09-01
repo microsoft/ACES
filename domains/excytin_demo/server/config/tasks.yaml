@@ -1,5 +1,5 @@
 # Excytin Demo Tasks Configuration
-# Designed to test enhanced container logging capabilities
+# Designed to test Excytin container execution capabilities
 domain: "excytin_demo"
 
 # Permanent environment - runs for the lifetime of the SABER server
@@ -18,30 +18,30 @@ global_defaults:
 
   # Default benchmark configuration for all tasks
   benchmark_config:
-    episode_attempts: 2  # Number of episode attempts for testing logging
+    episode_attempts: 2  # Number of episode attempts for testing
 
 tasks:
-  - task_id: "basic_logging_demo"
-    title: "Basic Container Logging Demo"
-    description: "Simple task to demonstrate basic sandbox container logging functionality"
+  - task_id: "excytin_demo"
+    title: "Excytin Demo"
+    description: "Demonstrate Excytin container execution and MySQL connectivity"
 
     # Use a lightweight sandbox environment for execution
     # Note: environment: <> also works
     sandbox_environment: "sandbox"
 
-    # Task breakdown for testing logging
+    # Task breakdown for testing
     subtasks:
       - subtask_id: "container_startup"
         title: "Container Environment Setup"
-        description: "Initialize the sandbox environment and verify logging"
-        objective: "Start sandbox containers and verify logs are captured"
+        description: "Initialize the sandbox environment and verify connectivity"
+        objective: "Start sandbox containers and verify networking"
 
       - subtask_id: "database_interaction"
         title: "Database Operations"
-        description: "Perform database operations to generate container logs"
-        objective: "Connect to MySQL database and run queries to generate activity"
+        description: "Perform database operations to test container communication"
+        objective: "Connect to MySQL database and run queries"
 
-      - subtask_id: "log_verification"
-        title: "Log Generation Test"
-        description: "Execute commands that will generate logs for testing"
-        objective: "Run various commands to ensure comprehensive log collection"
+      - subtask_id: "connectivity_verification"
+        title: "Connectivity Test"
+        description: "Execute commands to verify container communication"
+        objective: "Run various commands to ensure container networking works"

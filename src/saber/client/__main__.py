@@ -3,20 +3,7 @@
 SABER Client CLI - Simple Entry Point
 
 Simple command-line interface for testing agents against SABER server:
-    python -m saber.client --agent <pat        if results.success:
-            print("🎉 EXECUTION COMPLETE!")
-            print(f"📊 Results: {results.successful_episodes}/{results.total_episodes} episodes successful")
-        else:
-            print("❌ EXECUTION FAILED")
-
-        # Display episode details
-        print("\n📋 Episode Details:")
-        for episode_result in results.episode_results:
-            status = "✅" if episode_result.success else "❌"
-            task_id = episode_result.task_id
-            attempt = episode_result.attempt
-            reason = episode_result.termination_reason or "unknown"
-            print(f"  {status} {task_id} (attempt {attempt}): {reason}")<task_id>
+    python -m saber.client --agent <path_to_agent.py>
 """
 
 import argparse
@@ -153,59 +140,54 @@ async def run_unified_benchmark(
                             print(f"🎯 Running single task: {final_task_ids[0]}")
                         else:
                             print(f"🎯 Running {len(final_task_ids)} tasks: {', '.join(final_task_ids)}")
-
                     except ValueError:
                         print("❌ Invalid input format")
                         return
 
             except Exception as e:
-                print(f"❌ Failed to fetch benchmark info: {e}")
-                return
+                print(f"❌ Failed to fetch benchmark data: {e}")
+                print("Using provided task_ids or exiting...")
+                if not task_ids:
+                    return
 
-        else:
-            if len(task_ids) == 1:
-                print(f"🎯 Specific task: {task_ids[0]}")
+            # Create unified configuration
+            config = SABERHarnessConfig(
+                server_url=final_server_url,
+                mcp_url=final_mcp_url,
+                task_ids=final_task_ids,
+                log_level=log_level,
+            )
+
+            # Run unified test
+            harness = SABERHarness(config)
+            env_path = Path(env_file) if env_file else None
+            await harness.initialize(agent, env_file=env_path)
+
+            print("🚀 Starting agent execution...")
+            results = await harness.run()
+
+            # Results display
+            print("\n" + "=" * 60)
+            if results.success:
+                print("🎉 EXECUTION COMPLETE!")
+                successful = results.successful_episodes
+                total = results.total_episodes
+                print(f"📊 Results: {successful}/{total} episodes successful")
             else:
-                print(f"🎯 Multiple tasks: {task_ids}")
+                print("❌ EXECUTION FAILED")
+                # Note: HarnessRunResult doesn't have an 'error' field, so removing this check
 
-        # Create unified configuration
-        config = SABERHarnessConfig(
-            server_url=final_server_url,
-            mcp_url=final_mcp_url,
-            task_ids=final_task_ids,
-            log_level=log_level,
-        )
+            # Display episode details if available
+            if results.episode_results:
+                print("\n📝 Episode Details:")
+                for episode_result in results.episode_results:
+                    status = "✅" if episode_result.success else "❌"
+                    task_id = episode_result.task_id
+                    attempt = episode_result.attempt
+                    reason = episode_result.termination_reason or "unknown"
+                    print(f"  {status} {task_id} (attempt {attempt}): {reason}")
 
-        # Run unified test
-        harness = SABERHarness(config)
-        env_path = Path(env_file) if env_file else None
-        await harness.initialize(agent, env_file=env_path)
-
-        print("🚀 Starting agent execution...")
-        results = await harness.run()
-
-        # Results display
-        print("\n" + "=" * 60)
-        if results.success:
-            print("🎉 EXECUTION COMPLETE!")
-            successful = results.successful_episodes
-            total = results.total_episodes
-            print(f"📊 Results: {successful}/{total} episodes successful")
-        else:
-            print("❌ EXECUTION FAILED")
-            # Note: HarnessRunResult doesn't have an 'error' field, so removing this check
-
-        # Display episode details if available
-        if results.episode_results:
-            print("\n📝 Episode Details:")
-            for episode_result in results.episode_results:
-                status = "✅" if episode_result.success else "❌"
-                task_id = episode_result.task_id
-                attempt = episode_result.attempt
-                reason = episode_result.termination_reason or "unknown"
-                print(f"  {status} {task_id} (attempt {attempt}): {reason}")
-
-        print("=" * 60)
+            print("=" * 60)
 
     except KeyboardInterrupt:
         print("\n⏹️ Interrupted by user")

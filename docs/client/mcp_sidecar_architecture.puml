@@ -1,0 +1,220 @@
+@startuml SABER MCP Sidecar Architecture
+
+!theme plain
+title SABER MCP Sidecar - Service Architecture & Session Management
+
+skinparam class {
+    BackgroundColor lightblue
+    BorderColor black
+    ArrowColor black
+    FontSize 10
+}
+
+skinparam component {
+    BackgroundColor lightgreen
+    BorderColor black
+    FontSize 10
+}
+
+package "MCP Sidecar Container (295MB)" {
+
+    package "FastAPI Application" {
+
+        class "Main Application" as MainApp {
+            +app: FastAPI
+            +agent_registry: AgentSessionRegistry
+            +mcp_proxy: MCPProxy
+            +shared_http_session: aiohttp.ClientSession
+            --
+            **Lifecycle**
+            +startup_event(): void
+            +shutdown_event(): void
+            +lifespan_context(): AsyncGenerator
+        }
+
+        package "HTTP Endpoints" {
+
+            class "Health Endpoints" as HealthEndpoints {
+                --
+                **GET /ready**
+                +ready_check(): ReadyResponse
+                - Checks: Process up, config loaded
+                - No upstream dependency required
+
+                **GET /health**
+                +health_check(): HealthResponse
+                - Checks: Process + upstream server
+                - Returns degraded if SABER unreachable
+            }
+
+            class "Session Admin Endpoints" as SessionEndpoints {
+                --
+                **POST /admin/sessions**
+                +register_session(request): SessionResponse
+                +unregister_session(request): SessionResponse
+                - Idempotent operations
+                - Session lifecycle management
+            }
+
+            class "MCP Protocol Endpoints" as MCPEndpoints {
+                --
+                **POST /mcp/list_tools**
+                +list_tools(session_header): MCPResponse
+                - Header: X-Saber-Session-Id (required)
+                - Filters: executor_types, names (optional)
+
+                **POST /mcp/call_tool**
+                +call_tool(session_header, request): MCPResponse
+                - Header: X-Saber-Session-Id (required)
+                - Timeout: configurable per tool
+
+                **GET /mcp/list_resources**
+                +list_resources(session_header): MCPResponse
+                - Header: X-Saber-Session-Id (required)
+                - Returns available resources & policies
+            }
+        }
+    }
+
+    package "Core Services" {
+
+        class AgentSessionRegistry {
+            +active_sessions: Dict[str, SessionInfo]
+            +session_metadata: Dict[str, Dict[str, Any]]
+            +last_activity: Dict[str, datetime]
+            --
+            +register_session(agent_id, saber_session_id, metadata): void
+            +unregister_session(agent_id): void
+            +get_saber_session_id(agent_id): Optional[str]
+            +list_active_sessions(): List[SessionInfo]
+            +cleanup_expired_sessions(timeout): int
+            +update_activity(agent_id): void
+            +get_session_metadata(agent_id): Dict[str, Any]
+        }
+
+        class SessionInfo {
+            +agent_id: str
+            +saber_session_id: str
+            +task_id: Optional[str]
+            +harness_id: Optional[str]
+            +registered_at: datetime
+            +last_activity: datetime
+            +metadata: Dict[str, Any]
+        }
+
+        class MCPProxy {
+            +saber_mcp_url: str
+            +session_registry: AgentSessionRegistry
+            +shared_http_session: aiohttp.ClientSession
+            +default_timeout: int = 60
+            +connection_pool_size: int = 10
+            --
+            +proxy_list_tools(agent_id, filters): MCPResponse
+            +proxy_call_tool(agent_id, tool_call): MCPResponse
+            +proxy_list_resources(agent_id): MCPResponse
+            +_inject_session_headers(agent_id): Headers
+            +_forward_request(endpoint, data, headers): Response
+            +_handle_upstream_error(error): MCPErrorResponse
+        }
+
+        package "Request/Response Models" {
+
+            class MCPListToolsRequest {
+                +filters: Optional[Dict[str, Any]]
+                - executor_types: List[str]
+                - names: List[str]
+                - categories: List[str]
+            }
+
+            class MCPCallToolRequest {
+                +name: str
+                +arguments: Dict[str, Any]
+                +timeout_ms: Optional[int] = 60000
+                +context: Optional[Dict[str, Any]]
+            }
+
+            class MCPResponse {
+                +ok: bool
+                +data: Optional[Dict[str, Any]]
+                +error: Optional[MCPError]
+                +request_id: str
+                +latency_ms: int
+                +session_id: Optional[str]
+            }
+
+            class MCPError {
+                +code: str
+                +message: str
+                +details: Optional[Dict[str, Any]]
+                +retry_after: Optional[int]
+            }
+        }
+    }
+
+    package "Configuration & Environment" {
+
+        class SidecarConfig {
+            +saber_mcp_url: str = "http://host.docker.internal:8001"
+            +saber_rest_url: str = "http://host.docker.internal:8000"
+            +bind_host: str = "0.0.0.0"
+            +bind_port: int = 8002
+            +health_check_timeout: int = 5
+            +session_cleanup_interval: int = 300
+            +connection_pool_size: int = 10
+            +request_timeout: int = 60
+            --
+            +from_environment(): SidecarConfig
+            +validate(): void
+        }
+
+        class EnvironmentLoader {
+            --
+            +load_config(): SidecarConfig
+            +validate_required_vars(): void
+            +setup_logging(): void
+            +configure_host_gateway(): void
+        }
+    }
+}
+
+' Application Structure
+MainApp --> AgentSessionRegistry : manages
+MainApp --> MCPProxy : delegates to
+MainApp --> SidecarConfig : configured by
+
+HealthEndpoints --> MainApp : part of
+SessionEndpoints --> MainApp : part of
+MCPEndpoints --> MainApp : part of
+
+MCPEndpoints --> AgentSessionRegistry : validates sessions
+MCPEndpoints --> MCPProxy : forwards requests
+
+MCPProxy --> AgentSessionRegistry : looks up sessions
+MCPProxy --> MCPResponse : returns
+MCPProxy --> MCPError : on failure
+
+SessionEndpoints --> AgentSessionRegistry : manages sessions
+SessionEndpoints --> SessionInfo : creates/updates
+
+SidecarConfig --> EnvironmentLoader : loaded by
+
+' External Communication
+' AgentContainer1 --> MCPEndpoints : HTTP requests
+' AgentContainerN --> MCPEndpoints : HTTP requests
+' MCPProxy --> MCPServer : forwards MCP calls
+' HarnessProcess --> SessionEndpoints : registers sessions
+' HarnessProcess --> HealthEndpoints : monitors health
+
+note top of MainApp : FastAPI Service\nShared MCP sidecar\nHTTP-based MCP proxy (MVP)\nSession-aware routing
+
+note left of AgentSessionRegistry : Session Management\nAgent ID to SABER Session mapping\nMetadata and activity tracking\nCleanup of expired sessions\nMulti-harness support
+
+note right of MCPProxy : MCP Protocol Proxy\nStandard MCP over HTTP\nHeader injection for session routing\nConnection pooling and retries\nError handling and timeouts
+
+' note bottom of AgentContainer1 : Standard MCP Clients\nAnthropics/mcp-python supported\nHTTP transport (MVP)\nZero-code-change integration
+
+' note bottom of MCPServer : Upstream Services\nMCP server with tool execution\nREST API for episode management\nSession-based request routing
+
+note top of SidecarConfig : Environment Configuration\nSABER_MCP_URL from environment\nLinux host.docker.internal mapping\nConfigurable timeouts and limits
+
+@enduml

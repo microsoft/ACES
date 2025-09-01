@@ -20,7 +20,11 @@ The SABER system architecture is documented in several PlantUML diagrams organiz
 - **[MCP Integration Sequence](server/api/mcp_integration_sequence.puml)**: Model Context Protocol integration workflow and dual protocol communication
 
 ### Client Architecture
-- **[Client Architecture](client/client_architecture.puml)**: Client side architecture responsible for attaching to agent and facilitating comms with server
+- **[Client Architecture](client/client_architecture.puml)**: High-level client architecture with dual execution modes (container vs embedded)
+- **[Container Execution Architecture](client/container_execution_architecture.puml)**: Detailed container-based execution system with MCP sidecar
+- **[MCP Sidecar Architecture](client/mcp_sidecar_architecture.puml)**: MCP sidecar service architecture and session management
+- **[Agent Runtime Architecture](client/agent_runtime_architecture.puml)**: Universal agent adapters and container runtime system
+- **[Full E2E Benchmark Sequence](client/full_e2e_benchmark_sequence.puml)**: Complete end-to-end benchmark execution sequence
 
 ### Package Management
 
@@ -117,40 +121,42 @@ Manages domain-specific operational context:
 
 ### Client Side Architecture
 
-#### ServerClient
-REST API client for server communication:
-- **HTTP Communication**: Handles all REST API communication with SABER server with proper error handling and timeouts
-- **Session Management**: Manages client-side session state and maintains connection with server sessions
-- **Rich UI Integration**: Provides console UI components for progress tracking, panels, and status displays
+#### SABERHarness
+Main client orchestrator with dual execution modes:
+- **Dual Execution**: Supports both container-based (recommended) and embedded (legacy) execution modes
+- **Agent Integration**: Provides universal agent compatibility with zero-code-change integration
+- **Session Management**: Manages SABER server sessions and coordinates episode execution
+- **Configuration**: Handles client configuration including parallelism, timeouts, and container settings
 
-#### AgentWrapper
-Automatic agent adaptation system:
-- **Universal Compatibility**: Automatically detects and adapts arbitrary agent implementations to SABER interface
-- **Method Detection**: Discovers agent capabilities (sync/async, method names, parameter conventions)
-- **Interface Standardization**: Provides consistent async interface regardless of underlying agent implementation
-- **Zero-Code Integration**: Enables existing agents to work with SABER without modification
+#### Container Execution System
+Modern containerized agent execution infrastructure:
+- **Container Orchestration**: Manages agent containers with resource isolation and parallel execution
+- **MCP Sidecar**: Shared HTTP proxy service for standard MCP protocol communication
+- **Universal Adapters**: Auto-detects and adapts arbitrary agent interfaces (class/function/async patterns)
+- **Resource Management**: Enforces CPU/memory limits, security policies, and network isolation
 
-#### TestHarness
-Main test execution controller:
-- **Orchestration**: Coordinates server client, agent wrapper, and prompt builder for complete test execution
-- **Logging Framework**: Implements structured logging with JSON formatting and context tracking
-- **Configuration Management**: Handles test configuration, timeouts, and execution parameters
-- **Results Management**: Collects and processes test results with detailed execution tracking
+#### MCP Integration
+Industry-standard Model Context Protocol support:
+- **Standard Compatibility**: Works with anthropic/mcp-python and other standard MCP libraries
+- **HTTP Proxy**: FastAPI-based sidecar providing MCP-over-HTTP endpoints for agent containers
+- **Session Routing**: Maps agent container sessions to SABER server sessions with header injection
+- **Tool Execution**: Proxies MCP tool calls to SABER server while maintaining session context
 
-#### PromptBuilder
-Context-aware prompt generation:
-- **Dynamic Prompts**: Generates context-specific prompts based on task state, episode progress, and domain information
-- **Template System**: Uses configurable templates for consistent prompt structure across different scenarios
-- **Context Integration**: Incorporates task context, policy information, and execution history into prompts
-- **Adaptive Formatting**: Adjusts prompt format based on agent capabilities and task requirements
+#### Agent Runtime System
+Lightweight container runtime for universal agent execution:
+- **Agent Discovery**: Automatic agent loading from environment variables, modules, or files
+- **Interface Adapters**: Universal adapters for different agent patterns with parameter mapping
+- **MCP Client Factory**: Creates standard MCP clients for sidecar communication
+- **Execution Environment**: Minimal 458MB container runtime with security hardening
 
 ### Connection Flow
 
-1. Client connects to SessionManager via HTTP for session management
-2. SessionManager creates ClientSession and delegates Benchmark creation to BenchmarkManager
-3. Client establishes MCP connection to MCPSessionManager for tool access
-4. SessionManager coordinates with BenchmarkManager to assign initial subtask with context
-6. Client discovers available tools via MCP protocol and executes commands through MCP tool calls
-7. MCPSessionManager delegates tool execution to SessionManager's ExecutionManager
-8. Results logged via EvaluationManager and next subtask assigned via BenchmarkManager
-9. Process continues until task completion with dual protocol communication
+1. **Client Initialization**: SABERHarness initializes with container or embedded execution mode
+2. **Infrastructure Setup**: Container mode starts MCP sidecar and creates Docker network isolation
+3. **Session Creation**: Client connects to SABER server via REST API to create session
+4. **Agent Packaging**: Agent code packaged for container execution with universal adapters
+5. **Episode Execution**: Agent containers execute episodes with MCP tool calls through sidecar
+6. **Tool Routing**: MCP sidecar proxies tool calls to SABER server with session mapping
+7. **Command Execution**: SABER server executes commands in ephemeral sandbox environments
+8. **Results Collection**: Episode results collected from multiple channels (container, REST, MCP)
+9. **Cleanup**: Guaranteed container termination and resource cleanup after completion

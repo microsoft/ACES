@@ -1,18 +1,16 @@
-# Excytin Demo Domain - Enhanced Container Logging
+# Excytin Demo Domain
 
 ## Overview
 
-The `excytin_demo` domain is designed to demonstrate and test SABER's enhanced container logging capabilities. This domain showcases how SABER captures:
+The `excytin_demo` domain is designed to demonstrate and test SABER's container-based execution capabilities. This domain showcases how SABER:
 
 1. **Docker Compose configurations** used to spin up environments
-2. **Container logs** from all services in the environment  
+2. **Container networking** and communication between services  
 3. **Container lifecycle events** (start, stop, health checks, failures)
-
-The logging system helps developers debug crashed containers by providing comprehensive visibility into what happened during execution.
 
 ## What We're Testing
 
-- **Container Logging Manager**: Captures docker-compose configs and container logs
+- **Container Management**: SABER's container orchestration and lifecycle management
 - **Environment Creation Flow**: Episodes should create Docker environments with MySQL containers
 - **Volume Mounts**: Host-mounted logs directory (`./server/logs:/app/logs:rw`) for persistent log storage
 - **Multi-container Orchestration**: Testing database + execution container setups
@@ -116,12 +114,11 @@ docker exec -it saber-excytin-client uv run demo_client.py --verbose
 
 ### Successful Flow:
 1. **Session Creation**: Demo client creates a session
-2. **Benchmark Start**: Triggers `basic_logging_demo` task  
+2. **Benchmark Start**: Triggers `excytin_demo` task  
 3. **Episode Creation**: Episode created for the task
 4. **Environment Setup**: MySQL container (`saber-excytin-incident-5`) should be created
-5. **Container Logging**: 
+5. **Container Communication**: 
    - Docker Compose config saved to `./server/logs/`
-   - Container logs captured and saved
    - Lifecycle events logged
 6. **Verification**: Check `./server/logs/` for captured logs
 
@@ -163,7 +160,7 @@ ls -la ./server/logs/
 ## Configuration Files
 
 ### `server/config/tasks.yaml`
-Defines the `basic_logging_demo` task that:
+Defines the `excytin_demo` task that:
 - Uses environment `excytin_incident_5`
 - Has 3 subtasks for container interaction
 - Allows `cli` and `python` executors
@@ -225,7 +222,7 @@ When everything works correctly:
    # Shows: docker-compose.yml, container-logs/, lifecycle-events.json
    ```
 
-4. **Enhanced Logging Works**: Host filesystem contains all debugging information needed to diagnose container issues.
+4. **Container Networking Works**: Host filesystem contains all debugging information needed to diagnose container issues.
 
 ## Docker-in-Docker Limitations
 
@@ -241,4 +238,4 @@ When everything works correctly:
 
 ## Next Steps
 
-Once this domain works correctly, the enhanced logging capabilities can be applied to other domains like `webapp_pentest` for more complex multi-container pentesting scenarios.
+Once this domain works correctly, the Excytin capabilities can be applied to other domains like `webapp_pentest` for more complex multi-container pentesting scenarios.
