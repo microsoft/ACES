@@ -1,164 +1,225 @@
 @startuml SABER Client Architecture
 
 !theme plain
-title Security Agent Benchmarking System - Generic Client Architecture
+title Security Agent Benchmarking System - Client Architecture
 
 skinparam class {
-    BackgroundColor lightgreen
+    BackgroundColor lightblue
     BorderColor black
     ArrowColor black
     FontSize 10
 }
 
-package "Test Harness Core" {
+skinparam component {
+    BackgroundColor lightgreen
+    BorderColor black
+    FontSize 10
+}
 
-    class TestHarness {
-        +config: TestHarnessConfig
-        +server_client: ServerClient
+package "SABER Client Infrastructure" {
+
+    class SABERHarness {
+        +config: SABERHarnessConfig
+        +session_id: str
+        +rest_client: SABERRestClient
         +agent: Any
-        +session_id: str?
+        +container_executor: ContainerEpisodeExecutor?
         --
-        +initialize(agent: Any): void
-        +run_test(): Dict[str, Any]
+        +initialize(agent, env_file): void
+        +run(): HarnessRunResult
         +shutdown(): void
+        --
+        **Dual Execution Modes**
+        +_execute_episodes_container(): List[EpisodeResult]
+        +_execute_episodes_embedded(): List[EpisodeResult]
     }
 
-    class TestHarnessConfig {
-        +server_url: str
-        +log_level: str
-        +log_file: Path?
-        +agent_config: Dict[str, Any]
+    class SABERHarnessConfig {
+        +use_containers: bool = True
+        +parallelism: int = 1
+        +server_url: str = "http://localhost:8000"
+        +mcp_url: str = "http://localhost:8001"
+        +task_ids: List[str]?
+        +log_level: str = "INFO"
+        +timeout_minutes: int = 30
         --
-        +validate(): void
-    }
-}
-
-package "Server Communication" {
-
-    class ServerClient {
-        +rest_api_url: str
-        +mcp_api_url: str
-        +session_id: str?
-        +timeout: float
-        +mcp_client: MCPClient?
-        --
-        +create_session(client_id: str): str
-        +close_session(): void
-        +start_benchmark(task_ids: List[str], episode_attempts: int): BenchmarkInfo
-        +get_current_task(): TaskInfo
-        +get_policy(): PolicyInfo
-        +health_check(): Dict[str, Any]
-        +list_tasks(): List[TaskInfo]
-        +connect_mcp(): void
-        +disconnect_mcp(): void
-        +list_tools(): List[MCPTool]
-        +call_tool(name: str, args: Dict): MCPResult
+        **Container Configuration**
+        +sidecar_port: int = 8002
+        +agent_memory_limit: str = "512m"
+        +agent_cpu_limit: float = 1.0
     }
 
-    class MCPClient {
-        +mcp_url: str
-        +session_context: Dict[str, str]
-        --
-        +connect(): void
-        +disconnect(): void
-        +list_tools(): List[MCPTool]
-        +call_tool(): MCPResult
+    package "Container Execution Mode (Recommended)" as ContainerMode {
+
+        class ContainerEpisodeExecutor {
+            +rest_client: SABERRestClient
+            +session_id: str
+            +parallelism: int
+            +sidecar_manager: SidecarManager
+            +agent_manager: AgentManager
+            +container_factory: ContainerFactory
+            --
+            +initialize(): void
+            +execute_episodes(episodes, agent): List[EpisodeResult]
+            +shutdown(): void
+            --
+            **Execution Strategies**
+            +_execute_sequential(): List[EpisodeResult]
+            +_execute_parallel(): List[EpisodeResult]
+        }
+
+        package "Container Management" {
+            class SidecarManager {
+                +config: SidecarConfig
+                +container: Container?
+                +is_running: bool
+                --
+                +start_sidecar(): bool
+                +stop_sidecar(): void
+                +health_check(): bool
+                +register_agent_session(): str
+                +unregister_agent_session(): void
+            }
+
+            class AgentManager {
+                +docker_client: DockerClient
+                +active_containers: Dict[str, Container]
+                --
+                +execute_agent_container(): AgentExecutionResult
+                +monitor_container(): ContainerStatus
+                +terminate_container(): void
+                +collect_results(): Dict[str, Any]
+            }
+
+            class ContainerFactory {
+                +build_agent_image(): str
+                +package_agent_code(): Path
+                +create_agent_container(): Container
+                +prepare_environment(): Dict[str, str]
+            }
+        }
+
+        package "MCP Sidecar Service" as SidecarService {
+            class MCPProxy {
+                +saber_client: aiohttp.ClientSession
+                +session_registry: AgentSessionRegistry
+                --
+                +proxy_list_tools(): MCPResponse
+                +proxy_call_tool(): MCPResponse
+                +proxy_list_resources(): MCPResponse
+            }
+
+            class AgentSessionRegistry {
+                +active_sessions: Dict[str, SessionInfo]
+                --
+                +register_session(): void
+                +unregister_session(): void
+                +get_session_mapping(): SessionInfo
+                +cleanup_expired_sessions(): void
+            }
+        }
+
+        package "Agent Runtime (In Container)" as AgentRuntime {
+            class AgentExecutor {
+                +agent: Any
+                +mcp_client: StandardMCPClient
+                +agent_adapter: AgentAdapter
+                --
+                +run(): Dict[str, Any]
+                +_discover_and_load_agent(): Any
+                +_initialize_mcp_client(): StandardMCPClient
+                +_execute_agent(): Dict[str, Any]
+            }
+
+            class StandardMCPClient {
+                +sidecar_url: str
+                +session_id: str
+                +http_client: aiohttp.ClientSession
+                --
+                +list_tools(): List[Dict[str, Any]]
+                +call_tool(name, arguments): Dict[str, Any]
+                +list_resources(): List[Dict[str, Any]]
+            }
+
+            package "Universal Agent Adapters" {
+                class AgentAdapterFactory {
+                    +create_adapter(agent, mcp_client): AgentAdapter
+                    +detect_agent_interface(agent): AgentType
+                }
+
+                class ClassBasedAdapter {
+                    +agent_instance: Any
+                    +method_name: str
+                    --
+                    +execute(prompt, context): Dict[str, Any]
+                }
+
+                class FunctionBasedAdapter {
+                    +agent_function: Callable
+                    +parameter_mapping: Dict[str, str]
+                    --
+                    +execute(prompt, context): Dict[str, Any]
+                }
+
+                class AsyncAdapter {
+                    +wrapped_adapter: AgentAdapter
+                    --
+                    +execute(prompt, context): Dict[str, Any]
+                }
+            }
+        }
     }
-}
 
-package "Agent Adaptation" {
+    package "Embedded Execution Mode (Legacy)" as EmbeddedMode {
+        class EmbeddedMCPClient {
+            +server_url: str
+            +session_id: str
+            --
+            +list_tools(): List[Tool]
+            +call_tool(name, args): ToolResult
+            +connect(): void
+            +disconnect(): void
+        }
 
-    class AgentWrapper {
-        +agent: Any
-        +process_method: Callable
-        +reset_method: Callable?
-        +is_async: bool
-        --
-        +process_prompt(prompt: str): str
-        +reset(): void
-        +_detect_process_method(): Callable
-        +_detect_reset_method(): Callable?
+        note right of EmbeddedMCPClient : Legacy Mode\nProcess-based execution\nTight coupling with SABER\nBeing phased out
     }
 
-    class AgentLoader {
-        --
-        +load_from_path(path: str, class?: str): AgentWrapper
-        +load_from_module(module: str, class?: str): AgentWrapper
-        +_extract_agent_from_module(): Any
-    }
-
-    class PromptBuilder {
-        --
-        +build_initial_prompt(): str
-        +build_step_prompt(): str
-        +build_error_prompt(): str
-        +build_completion_prompt(): str
-    }
-}
-
-package "CLI Interface" {
-
-    class CLI {
-        --
-        +main(): void
-        +run_saber_client(): void
+    package "External Dependencies" {
+        class DockerEngine
+        class SABERServer
     }
 }
 
 ' Relationships
-TestHarness *-- TestHarnessConfig
-TestHarness *-- ServerClient
-TestHarness ..> AgentWrapper : uses
-ServerClient *-- MCPClient
-AgentLoader ..> AgentWrapper : creates
-CLI ..> AgentLoader : uses
-CLI ..> TestHarness : uses
+SABERHarness --> SABERHarnessConfig : configured by
+SABERHarness --> ContainerEpisodeExecutor : uses (if use_containers=True)
+SABERHarness --> EmbeddedMCPClient : uses (if use_containers=False)
 
-note top of TestHarness
-**Zero-friction test orchestration**
-Accepts any agent object with callable methods.
-No interface requirements for customers.
-end note
+ContainerEpisodeExecutor --> SidecarManager : manages
+ContainerEpisodeExecutor --> AgentManager : manages
+ContainerEpisodeExecutor --> ContainerFactory : uses
 
-note top of AgentWrapper
-**Generic agent adaptation**
-Automatically detects and adapts to any agent:
-- Sync/async methods
-- Different method names (process, generate, respond, etc.)
-- Different parameter names (prompt, input, message, etc.)
-- Class or function-based agents
-end note
+SidecarManager --> Docker : controls containers
+AgentManager --> Docker : controls containers
 
-note top of CLI
-**Zero-code-change CLI**
-python -m saber.client --agent <path> --task <id> --episodes <n>
-Works with any existing agent code.
-end note
+MCPProxy --> AgentSessionRegistry : uses
+MCPProxy --> MCPProxyHandler : delegates to
 
-note right of ServerClient
-**Dual Protocol Communication**
-- REST API for session, episode, and policy management
-- MCP API for dynamic tool discovery and execution only
-- Agents get tools via MCP API, everything else via REST API
-- Clean separation of tool execution from session management
-end note
+AgentExecutor --> StandardMCPClient : uses
+AgentExecutor --> AgentAdapterFactory : uses
+StandardMCPClient --> MCPProxy : communicates via HTTP
 
-@enduml
-- No logging or evaluation
-end note
+AgentAdapterFactory --> ClassBasedAdapter : creates
+AgentAdapterFactory --> FunctionBasedAdapter : creates
+AgentAdapterFactory --> AsyncAdapter : wraps with
 
-note top of ServerClient
-**Simple REST Client**
-- Direct API communication
-- Minimal error handling
-- Server handles all logic
-end note
+MCPProxyHandler --> SABERServer : proxies to (MCP)
+SABERHarness --> SABERServer : communicates via (REST)
 
-note top of AgentUnderTest
-**Agent Interface**
-- Agent receives prompts
-- Agent returns text responses
-- No knowledge of framework
-end note
+note top of SABERHarness : Entry Point\nMain client orchestrator\nSupports dual execution modes\nBackward compatible
+
+note top of ContainerMode : Recommended Architecture\n✅ Standard MCP compatibility\n✅ Agent isolation & resource limits\n✅ Robust termination & cleanup\n✅ Zero-code-change agent integration
+
+note bottom of Docker : Container Infrastructure\nsaber-mcp-sidecar:latest (295MB)\nsaber-agent-runner:latest (458MB)\nIsolated networks & resource limits
 
 @enduml

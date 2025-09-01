@@ -1,0 +1,315 @@
+@startuml SABER Agent Runtime Architecture
+
+!theme plain
+title SABER Agent Runtime - Universal Agent Adapters & Execution
+
+skinparam class {
+    BackgroundColor lightblue
+    BorderColor black
+    ArrowColor black
+    FontSize 10
+}
+
+skinparam component {
+    BackgroundColor lightgreen
+    BorderColor black
+    FontSize 10
+}
+
+package "Agent Container Runtime (458MB)" {
+
+    package "Agent Executor Core" {
+
+        class AgentExecutor {
+            +agent: Any
+            +mcp_client: StandardMCPClient
+            +agent_adapter: AgentAdapter
+            +task_id: str
+            +episode_id: str
+            +initial_prompt: str
+            +execution_context: Dict[str, Any]
+            --
+            **Main Execution Flow**
+            +run(): Dict[str, Any]
+            +_discover_and_load_agent(): Any
+            +_initialize_mcp_client(): StandardMCPClient
+            +_create_agent_adapter(): AgentAdapter
+            +_execute_agent_workflow(): Dict[str, Any]
+            +_collect_results(): Dict[str, Any]
+            --
+            **Agent Discovery**
+            +_load_from_module(): Any
+            +_load_from_file(): Any
+            +_auto_discover(): Any
+        }
+
+        class ExecutionEnvironment {
+            +agent_module: Optional[str]
+            +agent_class: Optional[str]
+            +agent_file: Optional[str]
+            +agent_function: Optional[str]
+            +sidecar_url: str
+            +session_id: str
+            +task_id: str
+            +episode_id: str
+            --
+            +load_from_environment(): ExecutionEnvironment
+            +validate_agent_config(): bool
+            +prepare_working_directory(): Path
+        }
+    }
+
+    package "Standard MCP Client" {
+
+        class StandardMCPClient {
+            +sidecar_url: str
+            +session_id: str
+            +agent_id: str
+            +http_client: aiohttp.ClientSession
+            +timeout: int = 60
+            +max_retries: int = 3
+            --
+            **MCP Protocol Methods**
+            +list_tools(filters): List[Tool]
+            +call_tool(name, arguments, timeout): ToolResult
+            +list_resources(): List[Resource]
+            --
+            **HTTP Communication**
+            +_make_request(endpoint, data, headers): Response
+            +_handle_response(response): Dict[str, Any]
+            +_retry_on_failure(request_func): Any
+            +_inject_headers(): Dict[str, str]
+        }
+
+        class MCPClientFactory {
+            --
+            +create_standard_client(sidecar_url, session_id): StandardMCPClient
+            +create_anthropic_client(sidecar_url, session_id): AnthropicMCPClient
+            +create_custom_client(client_type, config): MCPClient
+            +detect_preferred_client(): Type[MCPClient]
+        }
+
+        class Tool {
+            +name: str
+            +description: str
+            +schema: Dict[str, Any]
+            +executor_type: str
+            +security_policy: Optional[str]
+        }
+
+        class ToolResult {
+            +success: bool
+            +content: Dict[str, Any]
+            +error: Optional[str]
+            +execution_time: float
+            +resource_usage: Optional[Dict[str, Any]]
+        }
+    }
+
+    package "Universal Agent Adapters" {
+
+        class AgentAdapterFactory {
+            --
+            **Factory Method**
+            +create_adapter(agent, mcp_client): AgentAdapter
+            +detect_agent_interface(agent): AgentInterfaceType
+            +get_adapter_class(interface_type): Type[AgentAdapter]
+            --
+            **Detection Logic**
+            +_check_class_based_interface(agent): bool
+            +_check_function_based_interface(agent): bool
+            +_check_async_interface(agent): bool
+            +_detect_method_signatures(agent): List[str]
+        }
+
+        abstract class AgentAdapter {
+            +agent: Any
+            +mcp_client: StandardMCPClient
+            +adapter_type: AgentInterfaceType
+            --
+            **Abstract Methods**
+            +{abstract} execute(prompt, context): Dict[str, Any]
+            +{abstract} get_parameter_mapping(): Dict[str, str]
+            +{abstract} prepare_agent_input(prompt, context): Any
+            +{abstract} process_agent_output(output): Dict[str, Any]
+            --
+            **Common Functionality**
+            +inject_mcp_client(): void
+            +validate_agent_interface(): bool
+            +handle_execution_error(error): Dict[str, Any]
+        }
+
+        class ClassBasedAdapter {
+            +agent_instance: Any
+            +method_name: str
+            +method_signature: inspect.Signature
+            +parameter_mapping: Dict[str, str]
+            --
+            **Interface Detection**
+            +_find_execution_method(): str
+            +_analyze_method_signature(): inspect.Signature
+            +_map_method_parameters(): Dict[str, str]
+            --
+            **Execution**
+            +execute(prompt, context): Dict[str, Any]
+            +prepare_agent_input(prompt, context): Dict[str, Any]
+            +process_agent_output(output): Dict[str, Any]
+            --
+            **Supported Methods**
+            - run(prompt, tools, context)
+            - process(input, mcp_client)
+            - chat(message, available_tools)
+            - respond(query, context)
+        }
+
+        class FunctionBasedAdapter {
+            +agent_function: Callable
+            +function_signature: inspect.Signature
+            +parameter_mapping: Dict[str, str]
+            +supports_tools: bool
+            --
+            **Interface Analysis**
+            +_analyze_function_signature(): inspect.Signature
+            +_detect_tool_support(): bool
+            +_map_function_parameters(): Dict[str, str]
+            --
+            **Execution**
+            +execute(prompt, context): Dict[str, Any]
+            +prepare_agent_input(prompt, context): Any
+            +process_agent_output(output): Dict[str, Any]
+            --
+            **Supported Signatures**
+            - agent_func(prompt: str) -> str
+            - agent_func(input: str, tools: List) -> dict
+            - agent_func(message: str, context: dict) -> dict
+        }
+
+        class AsyncAdapter {
+            +wrapped_adapter: AgentAdapter
+            +event_loop: Optional[asyncio.AbstractEventLoop]
+            --
+            **Async Handling**
+            +execute(prompt, context): Dict[str, Any]
+            +_run_async_agent(agent_call): Any
+            +_handle_async_execution(): Dict[str, Any]
+            --
+            **Supported Patterns**
+            - async def run(prompt, tools) -> dict
+            - async def process(input, context) -> dict
+            - Wraps sync adapters for async execution
+        }
+
+        enum AgentInterfaceType {
+            CLASS_BASED
+            FUNCTION_BASED
+            ASYNC_CLASS
+            ASYNC_FUNCTION
+            CUSTOM
+        }
+
+        class ParameterMapper {
+            +standard_mappings: Dict[str, List[str]]
+            --
+            +map_prompt_parameter(signature): str
+            +map_tools_parameter(signature): str
+            +map_context_parameter(signature): str
+            +detect_parameter_types(signature): Dict[str, str]
+            --
+            **Standard Mappings**
+            prompt: [prompt, input, message, query, text]
+            tools: [tools, mcp_client, client, available_tools]
+            context: [context, metadata, env, config]
+        }
+    }
+
+    package "Agent Discovery & Loading" {
+
+        class AgentDiscovery {
+            +search_paths: List[Path]
+            +discovery_patterns: List[str]
+            --
+            **Discovery Strategies**
+            +discover_from_environment(): Optional[Any]
+            +discover_from_module(module_name, class_name): Any
+            +discover_from_file(file_path, function_name): Any
+            +auto_discover_in_directory(path): List[Any]
+            --
+            **Pattern Detection**
+            +_find_agent_classes(module): List[Type]
+            +_find_agent_functions(module): List[Callable]
+            +_validate_agent_interface(candidate): bool
+        }
+
+        class AgentLoader {
+            --
+            +load_agent_module(module_path): Any
+            +load_agent_file(file_path): Any
+            +instantiate_agent_class(cls, config): Any
+            +validate_agent_callable(agent): bool
+            +inject_dependencies(agent, dependencies): void
+        }
+
+        class AgentPackage {
+            +agent_code: str
+            +dependencies: List[str]
+            +environment_vars: Dict[str, str]
+            +working_directory: Path
+            +entry_point: str
+            --
+            +package_for_container(): bytes
+            +extract_dependencies(): List[str]
+            +prepare_dockerfile(): str
+        }
+    }
+}
+
+package "Container Environment" {
+    class BaseRuntime
+    class MountedCode
+    class WorkingDir
+}
+
+package "Environment Variables" {
+    class RuntimeConfig
+}
+
+' Core Relationships
+AgentExecutor --> ExecutionEnvironment : configured by
+AgentExecutor --> StandardMCPClient : uses
+AgentExecutor --> AgentAdapterFactory : creates adapter with
+AgentExecutor --> AgentDiscovery : discovers agent with
+
+StandardMCPClient --> MCPClientFactory : created by
+StandardMCPClient --> Tool : lists
+StandardMCPClient --> ToolResult : receives
+
+AgentAdapterFactory --> AgentAdapter : creates
+AgentAdapterFactory --> ClassBasedAdapter : creates
+AgentAdapterFactory --> FunctionBasedAdapter : creates
+AgentAdapterFactory --> AsyncAdapter : wraps with
+
+ClassBasedAdapter --> ParameterMapper : uses
+FunctionBasedAdapter --> ParameterMapper : uses
+AsyncAdapter --> AgentAdapter : wraps
+
+AgentDiscovery --> AgentLoader : loads with
+AgentLoader --> AgentPackage : packages
+
+ExecutionEnvironment --> RuntimeConfig : loads from
+
+' Dependencies
+BaseRuntime --> AgentExecutor : provides environment
+MountedCode --> AgentDiscovery : source for discovery
+WorkingDir --> AgentExecutor : execution context
+
+note top of AgentExecutor : Main Entry Point\nRuns inside agent containers\nUniversal agent compatibility\nZero-code-change integration
+
+note left of StandardMCPClient : Standard MCP Integration\n✅ anthropic/mcp-python compatible\n✅ HTTP transport to sidecar\n✅ Session-aware communication\n✅ Retry logic & error handling
+
+note right of AgentAdapterFactory : Universal Compatibility\n✅ Auto-detects agent interfaces\n✅ Class, function, async patterns\n✅ Parameter mapping & injection\n✅ Standard method discovery
+
+note bottom of AgentDiscovery : Agent Loading Strategies\nEnvironment variable configuration\nModule/class import patterns\nFile/function loading\nAuto-discovery fallbacks
+
+note bottom of RuntimeConfig : Container Configuration\nPassed via environment variables\nConfigurable discovery patterns\nFlexible agent packaging
+
+@enduml

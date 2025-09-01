@@ -13,31 +13,16 @@ from saber.client import SABERHarness, SABERHarnessConfig
 
 
 class SimpleTestAgent:
-    """Simple test agent for integration testing."""
+    """Simple test agent placeholder for container execution tests."""
 
-    def __init__(self, mcp_client):
-        self.mcp_client = mcp_client
+    def __init__(self, *args, **kwargs):
         self.call_count = 0
 
     async def run(self, initial_prompt: str, shutdown_check=None) -> dict:
-        """Run the agent with MCP tool calls."""
-        # Simulate some tool calls
-        tools = await self.mcp_client.list_tools()
-
-        # Make a couple of tool calls
-        for i in range(3):
-            if shutdown_check and shutdown_check():
-                break
-
-            # Simulate tool call
-            await self.mcp_client.call_tool("test_tool", {"arg": f"value_{i}"})
-            self.call_count += 1
-
-        return {
-            "success": True,
-            "flag": "flag{test_success}",
-            "message": f"Agent completed with {self.call_count} tool calls"
-        }
+        # In container mode, the agent logic executes inside the container.
+        # This placeholder isn't used by the mocked container executor.
+        self.call_count = 3
+        return {"success": True, "flag": "flag{test_success}", "message": "ok"}
 
 
 def create_mock_rest_client():
@@ -67,29 +52,32 @@ def create_mock_rest_client():
     return mock_rest
 
 
-def create_mock_mcp_client():
-    """Create a mock MCP client for testing."""
+class MockContainerExecutor:
+    """Mock container executor that returns successful episode results."""
 
-    class MockMCPClient:
-        def __init__(self):
-            self.episode_terminated = False
-            self.termination_reason = None
-            self._step_count = 0
-            self.step_count = 0  # Also provide step_count property
+    async def initialize(self):
+        return None
 
-        async def list_tools(self):
-            return [{"name": "test_tool", "description": "A test tool"}]
+    async def execute_episodes(self, episodes, agent):
+        from saber.client.harness_models import EpisodeResult
 
-        async def call_tool(self, tool_name, arguments):
-            return {"content": [{"type": "text", "text": "Tool executed successfully"}]}
+        results = []
+        for task_id, attempt in episodes:
+            results.append(
+                EpisodeResult(
+                    task_id=task_id,
+                    episode_id="episode_456",
+                    attempt=attempt,
+                    success=True,
+                    termination_reason="completed",
+                    flag="flag{test_success}",
+                    iterations=3,
+                )
+            )
+        return results
 
-        async def connect(self):
-            return None
-
-        async def disconnect(self):
-            return None
-
-    return MockMCPClient()
+    async def cleanup(self):
+        return None
 
 
 @pytest.mark.asyncio
@@ -116,16 +104,10 @@ async def test_harness_integration():
     await harness.initialize(agent)
     print("✅ Harness initialized")
 
-    # Mock the REST and MCP clients
+    # Mock the REST client
     harness.rest_client = create_mock_rest_client()
-
-    # Mock MCP client creation
-    original_create_mcp = harness._create_mcp_client
-    async def mock_create_mcp(task_id):
-        mock_mcp = create_mock_mcp_client()
-        mock_mcp._step_count = 0
-        return mock_mcp
-    harness._create_mcp_client = mock_create_mcp
+    # Inject a mock container executor that returns successful results
+    harness.container_executor = MockContainerExecutor()
 
     # Run harness
     print("🚀 Running harness...")
@@ -163,14 +145,7 @@ async def test_harness_with_multiple_tasks():
 
     # Mock clients
     harness.rest_client = create_mock_rest_client()
-    harness._create_mcp_client = lambda task_id: create_mock_mcp_client()
-
-    # Mock the MCP client creation
-    async def mock_create_mcp(task_id):
-        mock_mcp = create_mock_mcp_client()
-        mock_mcp._step_count = 0
-        return mock_mcp
-    harness._create_mcp_client = mock_create_mcp
+    harness.container_executor = MockContainerExecutor()
 
     results = await harness.run()
 

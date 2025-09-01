@@ -26,7 +26,7 @@ services:
     networks:
       - saber-excytin-network
 
-  # Excytin Demo Client for testing enhanced logging
+  # Excytin Demo Client for testing container functionality
   saber-excytin-client:
     image: saber/excytin-client:latest
     container_name: saber-excytin-client

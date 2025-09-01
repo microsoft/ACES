@@ -1,0 +1,230 @@
+@startuml SABER Container Execution Architecture
+
+!theme plain
+title SABER Client - Container Execution Architecture (Detailed)
+
+skinparam class {
+    BackgroundColor lightblue
+    BorderColor black
+    ArrowColor black
+    FontSize 9
+}
+
+skinparam component {
+    BackgroundColor lightgreen
+    BorderColor black
+    FontSize 9
+}
+
+skinparam cloud {
+    BackgroundColor lightyellow
+    BorderColor black
+}
+
+package "Host System" {
+
+    package "SABER Harness Process" {
+        class ContainerEpisodeExecutor {
+            +rest_client: SABERRestClient
+            +session_id: str
+            +parallelism: int
+            +sidecar_started: bool
+            +active_episodes: Dict[str, Task]
+            --
+            +initialize(): void
+            +execute_episodes(episodes, agent): List[EpisodeResult]
+            +_package_agent(agent): AgentPackage
+            +_execute_single_episode(): EpisodeResult
+            +shutdown(): void
+        }
+
+        class SidecarManager {
+            +config: SidecarConfig
+            +container: Container?
+            +docker_client: DockerClient
+            +is_running: bool
+            +_registered_agent_ids: Set[str]
+            --
+            +start_sidecar(): bool
+            +stop_sidecar(): void
+            +_ensure_network(): void
+            +_wait_for_readiness(): bool
+            +register_agent_session(): str
+            +unregister_agent_session(): void
+            +health_check(): bool
+        }
+
+        class AgentManager {
+            +docker_client: DockerClient
+            +active_containers: Dict[str, Container]
+            --
+            +execute_agent_container(): AgentExecutionResult
+            +_create_agent_container(): Container
+            +_monitor_execution(): ContainerStatus
+            +_collect_container_logs(): str
+            +terminate_container(): void
+            +cleanup_container(): void
+        }
+
+        class ContainerFactory {
+            --
+            +build_agent_image(agent_package): str
+            +package_agent_code(agent): AgentPackage
+            +create_dockerfile(agent_package): str
+            +prepare_agent_environment(): Dict[str, str]
+        }
+    }
+
+    package "Docker Infrastructure" {
+
+        cloud "Docker Network: saber-network" as Network {
+            component "MCP Sidecar Container" as SidecarContainer {
+
+                class "FastAPI Application" as SidecarApp {
+                    +agent_registry: AgentSessionRegistry
+                    +mcp_proxy: MCPProxyHandler
+                    +http_session: aiohttp.ClientSession
+                    --
+                    Endpoints:
+                    GET /ready
+                    GET /health
+                    POST /admin/sessions
+                    POST /mcp/list_tools
+                    POST /mcp/call_tool
+                    GET /mcp/list_resources
+                }
+
+                class AgentSessionRegistry {
+                    +active_sessions: Dict[str, SessionInfo]
+                    +session_mapping: Dict[str, str]
+                    --
+                    +register_session(agent_id, saber_session_id): void
+                    +unregister_session(agent_id): void
+                    +get_saber_session_id(agent_id): str
+                    +cleanup_expired(): void
+                }
+
+                class MCPProxyHandler {
+                    +saber_mcp_url: str
+                    +session_registry: AgentSessionRegistry
+                    +shared_session: aiohttp.ClientSession
+                    --
+                    +proxy_list_tools(agent_id): MCPResponse
+                    +proxy_call_tool(agent_id, tool_call): MCPResponse
+                    +_inject_session_headers(agent_id): Headers
+                    +_forward_to_saber(request): Response
+                }
+            }
+
+            component "Agent Container 1" as AgentContainer1 {
+
+                class "Agent Executor" as AgentExec1 {
+                    +agent: Any
+                    +mcp_client: StandardMCPClient
+                    +agent_adapter: AgentAdapter
+                    +task_id: str
+                    +episode_id: str
+                    --
+                    +run(): Dict[str, Any]
+                    +_discover_agent(): Any
+                    +_initialize_mcp_client(): StandardMCPClient
+                    +_create_agent_adapter(): AgentAdapter
+                    +_execute_agent_workflow(): Dict[str, Any]
+                }
+
+                class "Standard MCP Client" as MCPClient1 {
+                    +sidecar_url: str = "http://saber-mcp-sidecar:8002"
+                    +session_id: str
+                    +agent_id: str
+                    +http_client: aiohttp.ClientSession
+                    --
+                    +list_tools(): List[Tool]
+                    +call_tool(name, args): ToolResult
+                    +list_resources(): List[Resource]
+                    +_make_request(endpoint, data): Response
+                }
+
+                class "Agent Adapter" as Adapter1 {
+                    +agent: Any
+                    +mcp_client: StandardMCPClient
+                    +adapter_type: AgentType
+                    --
+                    +execute(prompt, context): Dict[str, Any]
+                    +_map_parameters(): Dict[str, Any]
+                    +_handle_response(): Dict[str, Any]
+                }
+            }
+
+            component "Agent Container N" as AgentContainerN {
+
+                class "Agent Executor N" as AgentExecN {
+                    +agent: Any
+                    +mcp_client: StandardMCPClient
+                    +agent_adapter: AgentAdapter
+                    --
+                    +run(): Dict[str, Any]
+                }
+
+                class "Standard MCP Client N" as MCPClientN {
+                    +sidecar_url: str = "http://saber-mcp-sidecar:8002"
+                    +session_id: str
+                    --
+                    +list_tools(): List[Tool]
+                    +call_tool(name, args): ToolResult
+                }
+            }
+        }
+    }
+
+    package "External Services" {
+        package "SABER Server" as SABERServer {
+            class RestAPI
+            class MCPServer
+        }
+    }
+}
+
+' Container Lifecycle Relationships
+ContainerEpisodeExecutor --> SidecarManager : manages lifecycle
+ContainerEpisodeExecutor --> AgentManager : orchestrates execution
+ContainerEpisodeExecutor --> ContainerFactory : packages agents
+
+SidecarManager --> SidecarContainer : creates/manages
+AgentManager --> AgentContainer1 : creates/monitors
+AgentManager --> AgentContainerN : creates/monitors
+
+' Container Internal Relationships
+SidecarContainer --> SidecarApp : runs
+SidecarApp --> AgentSessionRegistry : uses
+SidecarApp --> MCPProxyHandler : uses
+
+AgentContainer1 --> AgentExec1 : runs
+AgentExec1 --> MCPClient1 : uses
+AgentExec1 --> Adapter1 : uses
+
+AgentContainerN --> AgentExecN : runs
+AgentExecN --> MCPClientN : uses
+
+' Network Communication
+MCPClient1 --> SidecarApp : HTTP requests
+MCPClientN --> SidecarApp : HTTP requests
+
+MCPProxyHandler --> MCPServer : forwards MCP calls
+
+ContainerEpisodeExecutor --> RestAPI : episode management
+
+' Configuration Flow
+ContainerFactory --> AgentContainer1 : builds with agent code
+ContainerFactory --> AgentContainerN : builds with agent code
+
+note top of ContainerEpisodeExecutor : Orchestration Layer\nManages container lifecycle\nParallel execution with semaphore\nMulti-channel termination monitoring
+
+note left of SidecarContainer : Shared MCP Proxy\n✅ Session-aware routing\n✅ Standard MCP HTTP API\n✅ Connection pooling\n✅ Health monitoring
+
+note right of AgentContainer1 : Lightweight Agent Runtime\n✅ Universal agent adapters\n✅ Standard MCP client libraries\n✅ Zero-code-change integration\n✅ Resource isolation
+
+note bottom of Network : Container Network Isolation\nAgents ↔ Sidecar: Internal network\nSidecar ↔ SABER: Host gateway\nNo direct agent ↔ SABER communication
+
+note bottom of SABERServer : Command Execution\nAgents make MCP tool calls\nCommands execute in SABER sandboxes\nNOT in agent containers
+
+@enduml

@@ -1776,6 +1776,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
+    { name = "click" },
     { name = "docker" },
     { name = "fastapi" },
     { name = "fastmcp" },
@@ -1812,6 +1813,7 @@ dev = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.12.15" },
     { name = "black", marker = "extra == 'dev'", specifier = ">=23.0.0" },
+    { name = "click", specifier = ">=8.0.0" },
     { name = "docker", specifier = ">=7.0.0" },
     { name = "docker", extras = ["compose"], specifier = ">=7.0.0" },
     { name = "fastapi", specifier = ">=0.100.0" },

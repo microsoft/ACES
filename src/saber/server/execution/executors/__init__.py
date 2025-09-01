@@ -18,7 +18,7 @@ from .executor_registry import (
 )
 
 # Re-export the standard executors for backward compatibility
-from .standard_registry import CLIExecutor, PythonExecutor, SQLExecutor
+from .standard_registry import CLIExecutor, PythonExecutor
 
 # TODO: Fix SQLExecutor _max_rows attribute issue
 # from .standard_registry import SQLExecutor

@@ -43,6 +43,7 @@ dependencies = [
     "aiohttp>=3.12.15",
     "python-dotenv>=1.1.1",
     "openai>=1.101.0",
+    "click>=8.0.0",
 ]
 
 [project.optional-dependencies]
@@ -72,6 +73,7 @@ Issues = "https://github.com/saber-team/saber/issues"
 [project.scripts]
 saber-server = "saber.server.cli:main"
 saber-client = "saber.client.cli:main"
+saber-mcp-service = "saber.mcp_service.__main__:cli"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/saber"]
@@ -156,6 +158,10 @@ module = "saber.server.api.session_rest_api"
 disallow_untyped_decorators = false
 
 [[tool.mypy.overrides]]
+module = "saber.client.mcp_service.*"
+disallow_untyped_decorators = false
+
+[[tool.mypy.overrides]]
 module = "saber.server.api.session_mcp_api"
 warn_unused_ignores = false
 
@@ -173,6 +179,7 @@ markers = [
     "integration: marks tests as integration tests (run with -m integration)",
     "unit: marks tests as unit tests",
 ]
+asyncio_mode = "auto"
 
 [tool.coverage.run]
 source = ["src"]
