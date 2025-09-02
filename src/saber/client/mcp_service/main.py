@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from .agent_registry import AgentSessionRegistry
 from .mcp_proxy import MCPProxy
+from .tool_registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -65,16 +66,34 @@ class MCPCallToolResponse(BaseModel):
     id: Optional[str] = None
 
 
+class ToolExecutionRequest(BaseModel):
+    """Request for tool execution via function injection."""
+
+    tool_name: str = Field(..., description="Name of tool to execute")
+    arguments: Dict[str, Any] = Field(default_factory=dict, description="Tool arguments")
+    timeout: Optional[int] = Field(None, description="Execution timeout override")
+
+
+class ToolExecutionResponse(BaseModel):
+    """Response for tool execution."""
+
+    success: bool
+    result: Any = None
+    error: Optional[Dict[str, Any]] = None
+    execution_time: Optional[float] = None
+
+
 # Global service instances
 session_registry: Optional[AgentSessionRegistry] = None
 mcp_proxy: Optional[MCPProxy] = None
+tool_registry: Optional[ToolRegistry] = None
 cleanup_task: Optional[asyncio.Task] = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """FastAPI lifespan context manager for startup/shutdown."""
-    global session_registry, mcp_proxy, cleanup_task
+    global session_registry, mcp_proxy, tool_registry, cleanup_task
 
     # Startup
     logger.info("Starting MCP Service...")
@@ -84,6 +103,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Pass the correct SABER MCP URL from app state
     saber_mcp_url = getattr(app.state, "saber_mcp_url", "http://localhost:8001")
     mcp_proxy = MCPProxy(session_registry, saber_mcp_url=saber_mcp_url)
+
+    # Initialize tool registry
+    tool_registry = ToolRegistry(mcp_proxy)
 
     # Start background cleanup task
     cleanup_task = asyncio.create_task(periodic_cleanup())
@@ -102,6 +124,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             await cleanup_task
         except asyncio.CancelledError:
             pass
+
+    # Cleanup tool registry
+    if tool_registry:
+        # Cancel all refresh tasks
+        for cache_key in list(tool_registry._refresh_tasks.keys()):
+            session_id, episode_id = cache_key
+            await tool_registry.cleanup_session_episode(session_id, episode_id)
 
     # Close shared HTTP client session
     try:
@@ -322,6 +351,129 @@ def create_app(saber_mcp_url: Optional[str] = None, timeout: float = 30.0) -> Fa
         agent_id = await get_agent_id_from_required_session_header(request)
         response = await mcp_proxy.ping(agent_id)
         return JSONResponse(content={"jsonrpc": "2.0", "result": response.result, "error": response.error})
+
+    # Function Injection Endpoints for New Architecture
+    @app.get("/tools")
+    async def get_tools_metadata(request: Request) -> JSONResponse:
+        """Get available tools for the requesting session+episode."""
+        if not tool_registry:
+            raise HTTPException(status_code=503, detail="Tool registry not initialized")
+
+        try:
+            session_id = request.headers.get("X-Saber-Session-Id")
+            if not session_id:
+                raise HTTPException(status_code=400, detail="Missing X-Saber-Session-Id header")
+
+            # Extract episode and task context
+            episode_id = request.headers.get("X-Saber-Episode-Id")
+            task_id = request.headers.get("X-Saber-Task-Id")
+
+            # Check if session is registered
+            if not session_registry:
+                raise HTTPException(status_code=500, detail="Session registry not available")
+
+            agent_id = await session_registry.get_agent_id_by_saber_session(session_id)
+            if not agent_id:
+                raise HTTPException(status_code=404, detail="Session not registered")
+
+            # Get tools for session+episode
+            tools = await tool_registry.get_tools_for_session_episode(
+                session_id=session_id, episode_id=episode_id, task_id=task_id
+            )
+
+            # Convert to API format
+            tools_api = {}
+            for tool_name, metadata in tools.items():
+                tools_api[tool_name] = {
+                    "description": metadata.description,
+                    "parameters": metadata.parameters,
+                    "timeout": metadata.timeout,
+                }
+
+            # Get cached_at timestamp
+            cached_at = None
+            if tools:
+                first_tool = tools[list(tools.keys())[0]]
+                if first_tool.cached_at:
+                    cached_at = first_tool.cached_at.isoformat()
+
+            return JSONResponse(
+                content={
+                    "tools": tools_api,
+                    "refresh_interval": tool_registry.cache_ttl.total_seconds(),
+                    "cached_at": cached_at,
+                }
+            )
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to get tools metadata: {e}")
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    @app.post("/execute_tool")
+    async def execute_tool_endpoint(request: Request, body: ToolExecutionRequest) -> JSONResponse:
+        """Execute a tool for the requesting session+episode."""
+        if not tool_registry:
+            raise HTTPException(status_code=503, detail="Tool registry not initialized")
+
+        try:
+            session_id = request.headers.get("X-Saber-Session-Id")
+            if not session_id:
+                raise HTTPException(status_code=400, detail="Missing X-Saber-Session-Id header")
+
+            # Extract episode context
+            episode_id = request.headers.get("X-Saber-Episode-Id")
+
+            # Execute tool
+            import time
+
+            start_time = time.time()
+
+            result = await tool_registry.execute_tool(
+                session_id=session_id,
+                episode_id=episode_id,
+                tool_name=body.tool_name,
+                arguments=body.arguments,
+                timeout=body.timeout,
+            )
+
+            execution_time = time.time() - start_time
+            result["execution_time"] = execution_time
+
+            return JSONResponse(content=result)
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to execute tool: {e}")
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    @app.post("/tools/refresh")
+    async def refresh_tools(request: Request) -> JSONResponse:
+        """Force refresh of tools for the requesting session+episode."""
+        if not tool_registry:
+            raise HTTPException(status_code=503, detail="Tool registry not initialized")
+
+        try:
+            session_id = request.headers.get("X-Saber-Session-Id")
+            if not session_id:
+                raise HTTPException(status_code=400, detail="Missing X-Saber-Session-Id header")
+
+            # Extract episode context
+            episode_id = request.headers.get("X-Saber-Episode-Id")
+            task_id = request.headers.get("X-Saber-Task-Id")
+
+            # Force refresh
+            tools = await tool_registry.get_tools_for_session_episode(
+                session_id=session_id, episode_id=episode_id, task_id=task_id, force_refresh=True
+            )
+
+            return JSONResponse(content={"refreshed": True, "tool_count": len(tools), "tools": list(tools.keys())})
+
+        except Exception as e:
+            logger.error(f"Failed to refresh tools: {e}")
+            raise HTTPException(status_code=500, detail="Internal server error")
 
     return app
 

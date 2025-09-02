@@ -49,3 +49,6 @@ bin/
 
 # Ignore log files
 **/logs
+
+# Ignore vscode for specific user setups
+**/.vscode

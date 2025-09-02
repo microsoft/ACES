@@ -15,7 +15,7 @@ echo "� Checking for SABER base images..."
 if ! docker images | grep -q 'saber/server'; then
     echo "⚠️  Base images not found. Building base images first..."
     cd ../../../docker
-    ./build-base-images.sh
+    ./build-images.sh
     cd "$SCRIPT_DIR"
 else
     echo "✅ Base images found"

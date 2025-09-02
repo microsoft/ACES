@@ -24,9 +24,9 @@ class ClassBasedAdapter(AgentAdapter):
     - Parameters: prompt, input, message, query, text
     """
 
-    def __init__(self, agent: Any, mcp_client: Any):
+    def __init__(self, agent: Any, tool_injector: Any):
         """Initialize class-based agent adapter."""
-        super().__init__(agent, mcp_client)
+        super().__init__(agent, tool_injector)
         self.agent_method: Optional[Callable] = None
         self.method_params: Optional[Dict[str, Any]] = None
         self._detect_agent_interface()
@@ -97,11 +97,13 @@ class ClassBasedAdapter(AgentAdapter):
             if context_param:
                 kwargs[context_param] = self._prepare_agent_context()
 
-            # Check if we need to inject MCP client in other ways
+            # Check if we need to inject tools in other ways (backwards compatibility)
             if hasattr(self.agent, "mcp_client"):
-                self.agent.mcp_client = self.mcp_client
+                # For backwards compatibility, provide the tool injector
+                self.agent.mcp_client = self.tool_injector
             if hasattr(self.agent, "tools"):
-                self.agent.tools = self.mcp_client
+                # For backwards compatibility, provide the tool injector
+                self.agent.tools = self.tool_injector
 
             # Execute method
             if self.method_params.get("is_async", False):

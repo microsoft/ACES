@@ -1,7 +1,9 @@
-"""Client agents package placeholder.
+"""Client agents package.
 
-In the current architecture, agents run inside containers managed by the harness.
-This package intentionally contains no in-process agent implementations.
+Contains test and demo agents for SABER benchmarking and UI testing.
 """
 
-__all__: list[str] = []
+from .dummy_test_agent import DummyTestAgent
+from .dummy_test_agent import main as dummy_test_agent_main
+
+__all__ = ["DummyTestAgent", "dummy_test_agent_main"]

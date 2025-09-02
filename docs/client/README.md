@@ -117,13 +117,13 @@ Comprehensive sequence diagram showing:
 
 ## Container Images
 
-### MCP Sidecar (`saber-mcp-sidecar:latest`)
+### MCP Sidecar (`saber/mcp-service:latest`)
 - **Size**: 295MB
 - **Purpose**: Shared HTTP proxy for MCP protocol
 - **Dependencies**: FastAPI, aiohttp, minimal Python runtime
 - **Resources**: 256MB RAM, 0.5 CPU limit
 
-### Agent Runtime (`saber-agent-runner:latest`)  
+### Agent Runtime (`saber/agent-runner:latest`)  
 - **Size**: 458MB
 - **Purpose**: Lightweight agent execution environment
 - **Dependencies**: Standard MCP clients, HTTP libraries, Python runtime

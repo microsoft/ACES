@@ -13,9 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
-import yaml
-
 import docker
+import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +35,7 @@ class AgentPackage:
 class ContainerImageConfig:
     """Configuration for building agent container images."""
 
-    base_image: str = "saber-agent-runner:latest"
+    base_image: str = "saber/agent-runner:latest"
     python_version: str = "3.11"
     working_dir: str = "/app"
     agent_dir: str = "/app/agent"

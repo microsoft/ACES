@@ -19,7 +19,17 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .adapters import AgentAdapter, create_agent_adapter
-from .mcp_factory import MCPClientFactory
+
+try:
+    from .tool_injector import ToolInjector
+except ImportError as e:
+    print(f"DEBUG: Import error details: {e}")
+    import saber.client.agent_runtime.tool_injector as ti
+
+    print(f"DEBUG: Available in tool_injector module: {dir(ti)}")
+    print(f"DEBUG: ToolInjector in module: {'ToolInjector' in dir(ti)}")
+    print(f"DEBUG: MCPClientFactory in module: {'MCPClientFactory' in dir(ti)}")
+    raise
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +49,7 @@ class AgentExecutor:
     def __init__(self) -> None:
         """Initialize agent executor."""
         self.agent: Any = None
-        self.mcp_client: Any = None
+        self.tool_injector: Optional[ToolInjector] = None
         self.agent_adapter: Optional[AgentAdapter] = None
         self.shutdown_requested = False
 
@@ -57,12 +67,12 @@ class AgentExecutor:
             self.agent = await self._discover_and_load_agent()
             logger.info("✅ Agent loaded successfully")
 
-            # Step 2: Initialize MCP client
-            self.mcp_client = await self._initialize_mcp_client()
-            logger.info("✅ MCP client connected")
+            # Step 2: Initialize Tool Injector
+            self.tool_injector = await self._initialize_tool_injector()
+            logger.info("✅ Tool injector initialized")
 
             # Step 3: Create agent adapter
-            self.agent_adapter = create_agent_adapter(agent=self.agent, mcp_client=self.mcp_client)
+            self.agent_adapter = create_agent_adapter(agent=self.agent, tool_injector=self.tool_injector)
             logger.info("✅ Agent adapter created")
 
             # Step 4: Get initial prompt from environment
@@ -185,24 +195,24 @@ class AgentExecutor:
 
         raise ValueError("Could not auto-discover agent in module. Specify AGENT_CLASS or AGENT_FUNCTION.")
 
-    async def _initialize_mcp_client(self) -> Any:
-        """Initialize MCP client using standard libraries."""
-        # Get MCP configuration from environment
+    async def _initialize_tool_injector(self) -> ToolInjector:
+        """Initialize Tool Injector for function injection."""
+        # Get configuration from environment
         sidecar_url = os.getenv("MCP_SIDECAR_URL", "http://sidecar:8080")
         session_id = os.getenv("SESSION_ID")
-        task_id = os.getenv("TASK_ID")
+        # task_id and episode_id are available for future use
+        # task_id = os.getenv("TASK_ID")
+        # episode_id = os.getenv("EPISODE_ID")
         client_id = os.getenv("CLIENT_ID", "agent-container")
 
         if not session_id:
             raise ValueError("SESSION_ID environment variable required")
 
-        # Create MCP client using factory
-        factory = MCPClientFactory()
-        mcp_client = await factory.create_client(
-            sidecar_url=sidecar_url, session_id=session_id, task_id=task_id, client_id=client_id
-        )
+        # Create Tool Injector directly
+        tool_injector = ToolInjector(sidecar_url=sidecar_url, session_id=session_id, agent_id=client_id)
 
-        return mcp_client
+        await tool_injector.initialize()
+        return tool_injector
 
     def _get_initial_prompt(self) -> str:
         """Get initial prompt from environment."""
@@ -227,9 +237,9 @@ class AgentExecutor:
     async def _cleanup(self) -> None:
         """Clean up resources."""
         try:
-            if self.mcp_client:
-                await self.mcp_client.disconnect()
-                logger.info("🧹 MCP client disconnected")
+            if self.tool_injector:
+                await self.tool_injector.cleanup()
+                logger.info("🧹 Tool injector cleaned up")
         except Exception as e:
             logger.error(f"Error during cleanup: {e}")
         return

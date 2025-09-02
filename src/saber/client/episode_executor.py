@@ -16,7 +16,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from .api import SABERRestClient
 from .containers import AgentManager, ContainerFactory, SidecarManager
 from .containers.agent_manager import AgentExecutionResult
-from .harness_models import EpisodeResult
+from .containers.sidecar_manager import SidecarConfig
+from .harness_models import EpisodeResult, SABERHarnessConfig
+from .logging import ClientLoggingConfig, ContainerLogManager, SessionLoggingContext
 
 logger = logging.getLogger(__name__)
 
@@ -33,21 +35,102 @@ class ContainerEpisodeExecutor:
     - Collects results from container output
     """
 
-    def __init__(self, rest_client: SABERRestClient, session_id: str, parallelism: int = 1):
+    def __init__(
+        self,
+        rest_client: SABERRestClient,
+        session_id: str,
+        parallelism: int = 1,
+        saber_server_url: Optional[str] = None,
+        saber_mcp_url: Optional[str] = None,
+        harness_config: Optional[SABERHarnessConfig] = None,
+        ui_adapter: Optional[Any] = None,  # Type hint as Any to avoid circular imports
+        session_log_dir: Optional[Path] = None,  # Shared log directory for all session logs
+        harness: Optional[Any] = None,  # Reference to harness for agent file path access
+    ):
         """Initialize container episode executor."""
         self.rest_client = rest_client
         self.session_id = session_id
         self.parallelism = parallelism
+        self.harness_config = harness_config
+        self.ui_adapter = ui_adapter
+        self.session_log_dir = session_log_dir
+        self.harness = harness  # Store harness reference
+
+        # Initialize container logging if enabled
+        self.log_manager: Optional[ContainerLogManager] = None
+        if harness_config and harness_config.enable_container_logging:
+            self._setup_container_logging()
+
+        # Configure sidecar with proper server URLs
+        sidecar_config = SidecarConfig()
+        if saber_server_url:
+            sidecar_config.saber_server_url = saber_server_url
+        if saber_mcp_url:
+            sidecar_config.saber_mcp_url = saber_mcp_url
+
+        # Detect current container's network for sidecar communication
+        # This ensures the sidecar and client are on the same network for DNS resolution
+        try:
+            import socket
+
+            import docker.client
+
+            docker_client = docker.client.DockerClient.from_env()
+
+            # Get the current container (client container)
+            hostname = socket.gethostname()
+            current_container = docker_client.containers.get(hostname)
+
+            # Get the first network (there should typically be only one)
+            networks = list(current_container.attrs["NetworkSettings"]["Networks"].keys())
+            if networks:
+                sidecar_config.network_name = networks[0]
+                logger.info(f"🔍 Detected network for sidecar: {sidecar_config.network_name}")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not detect container network, using default: {e}")
+            # Fall back to default network
 
         # Container managers
-        self.sidecar_manager = SidecarManager()
-        self.agent_manager = AgentManager()
+        self.sidecar_manager = SidecarManager(sidecar_config)
+        self.agent_manager = AgentManager(log_manager=self.log_manager)
         self.container_factory = ContainerFactory()
 
         # State
         self.sidecar_started = False
         self.active_episodes: Dict[str, asyncio.Task] = {}
         self._harness_agent_id: Optional[str] = None
+
+    def _setup_container_logging(self) -> None:
+        """Set up container logging configuration."""
+        try:
+            # Use shared session log directory if provided, otherwise fall back to old behavior
+            if self.session_log_dir:
+                base_log_dir = self.session_log_dir
+            else:
+                client_log_dir = self.harness_config.client_log_dir if self.harness_config else None
+                base_log_dir = client_log_dir if client_log_dir else Path("./client/logs")
+
+            # Create logging configuration from harness config
+            log_config = ClientLoggingConfig(
+                base_log_dir=base_log_dir,
+                enable_container_logging=self.harness_config.enable_container_logging if self.harness_config else True,
+                retention_days=self.harness_config.log_retention_days if self.harness_config else 7,
+                max_log_size_mb=self.harness_config.max_log_size_mb if self.harness_config else 100,
+                compress_old_logs=self.harness_config.compress_old_logs if self.harness_config else True,
+                log_level=self.harness_config.log_level if self.harness_config else "INFO",
+            )
+
+            # Create session context
+            client_id = self.harness_config.client_id if self.harness_config else "saber-client"
+            session_context = SessionLoggingContext(session_id=self.session_id, client_id=client_id)
+
+            # Initialize log manager
+            self.log_manager = ContainerLogManager(log_config, session_context, self.session_log_dir)
+            logger.info(f"📝 Container logging enabled: {log_config.base_log_dir}")
+
+        except Exception as e:
+            logger.error(f"❌ Failed to setup container logging: {e}")
+            self.log_manager = None
 
     async def initialize(self) -> None:
         """Initialize container infrastructure."""
@@ -56,6 +139,12 @@ class ContainerEpisodeExecutor:
         # Start shared MCP sidecar
         await self.sidecar_manager.start_sidecar()
         self.sidecar_started = True
+
+        # Start logging for sidecar container if logging is enabled
+        if self.log_manager and self.sidecar_manager.container:
+            await self.log_manager.start_logging_container(
+                container=self.sidecar_manager.container, log_file_name="mcp_sidecar.log", component_type="sidecar"
+            )
 
         # Register session with sidecar
         # Register harness agent session with sidecar for monitoring (optional)
@@ -143,10 +232,18 @@ class ContainerEpisodeExecutor:
         """Execute a single episode in a container."""
         logger.debug(f"🎬 Starting containerized episode {attempt} for task {task_id}")
 
+        # UI Progress: Episode start
+        if self.ui_adapter:
+            await self._notify_episode_start(task_id, attempt)
+
         try:
             # Step 1: Start episode on server
             episode_id = await self.rest_client.start_episode(task_id)
             logger.debug(f"📍 Started episode: {episode_id}")
+
+            # UI Progress: Episode started
+            if self.ui_adapter:
+                await self._notify_episode_started(task_id, episode_id, attempt)
 
             # Step 2: Get task-specific policy
             policy_data = await self.rest_client.get_policy_info(session_id=self.session_id, task_id=task_id)
@@ -164,7 +261,7 @@ class ContainerEpisodeExecutor:
             # Step 4: Analyze results
             success, flag, termination_reason = self._analyze_container_result(container_result)
 
-            return EpisodeResult(
+            result = EpisodeResult(
                 task_id=task_id,
                 episode_id=episode_id,
                 attempt=attempt,
@@ -174,16 +271,40 @@ class ContainerEpisodeExecutor:
                 iterations=self._extract_step_count(container_result),
             )
 
+            # UI Progress: Episode complete
+            if self.ui_adapter:
+                await self._notify_episode_complete(result)
+
+            return result
+
         except Exception as e:
             logger.error(f"Container episode execution failed: {e}")
-            return EpisodeResult(
+            result = EpisodeResult(
                 task_id=task_id, episode_id="", attempt=attempt, success=False, termination_reason="error", error=str(e)
             )
+
+            # UI Progress: Episode failed
+            if self.ui_adapter:
+                await self._notify_episode_complete(result)
+
+            return result
 
     async def _execute_agent_container(
         self, task_id: str, episode_id: str, agent_package: Path, initial_prompt: str
     ) -> AgentExecutionResult:
         """Execute agent in container with multi-channel termination monitoring."""
+        # Update session context with current task/episode info for logging
+        if self.log_manager:
+            self.log_manager.log_collector.session_context.task_id = task_id
+            self.log_manager.log_collector.session_context.episode_id = episode_id
+
+            # Log container lifecycle event
+            self.log_manager.log_container_lifecycle_event(
+                event_type="agent_execution_start",
+                container_info={"task_id": task_id, "episode_id": episode_id, "agent_package": str(agent_package)},
+                additional_data={"initial_prompt_length": len(initial_prompt), "session_id": self.session_id},
+            )
+
         # Get sidecar URL
         sidecar_url = self.sidecar_manager.get_sidecar_url()
 
@@ -275,9 +396,7 @@ class ContainerEpisodeExecutor:
     async def _package_agent(self, agent: Any) -> Path:
         """Package agent code for container execution.
 
-        Strategy: create a tiny launcher that simply runs AgentExecutor; the actual
-        agent code should be mounted separately or specified via env hints. This
-        avoids embedding a recursive wrapper as the agent itself.
+        Now uses direct file path approach instead of dynamic loading inspection.
         """
         logger.info("📦 Preparing agent launcher for container execution")
 
@@ -295,40 +414,69 @@ class ContainerEpisodeExecutor:
         )
         launcher_file.write_text(launcher_code)
 
-        # Attempt to package the agent's own source file for file-based loading
+        # Use direct file path approach if available from harness
         packaged_agent_path: Optional[str] = None
         agent_module: Optional[str] = None
         agent_class: Optional[str] = None
         agent_function: Optional[str] = None
 
-        try:
-            import inspect
+        # Check if harness provided agent file path directly
+        if (
+            hasattr(self, "harness")
+            and self.harness is not None
+            and hasattr(self.harness, "agent_file_path")
+            and self.harness.agent_file_path
+        ):
+            try:
+                # Copy the agent file directly
+                agent_file_path = Path(self.harness.agent_file_path)
+                if agent_file_path.exists():
+                    pkg_dir = temp_dir / "user_agent"
+                    pkg_dir.mkdir(parents=True, exist_ok=True)
+                    copied = pkg_dir / agent_file_path.name
+                    copied.write_text(agent_file_path.read_text())
+                    packaged_agent_path = f"/app/agent/user_agent/{agent_file_path.name}"
 
-            # Support function-based agents
-            if callable(agent) and hasattr(agent, "__name__") and hasattr(agent, "__module__"):
-                src = inspect.getsourcefile(agent) or inspect.getfile(agent)
-                agent_module = getattr(agent, "__module__", None)
-                agent_function = getattr(agent, "__name__", None)
-            else:
-                # Likely a class instance
-                acls = getattr(agent, "__class__", None)
-                if acls is not None:
-                    src = inspect.getsourcefile(acls) or inspect.getfile(acls)
-                    agent_module = getattr(acls, "__module__", None)
-                    agent_class = getattr(acls, "__name__", None)
+                    # Set module and class information
+                    agent_module = agent_file_path.stem  # filename without extension
+                    agent_class = (
+                        self.harness.agent_class_name if self.harness and self.harness.agent_class_name else "Agent"
+                    )
+
+                    logger.info(f"📁 Packaged agent file: {agent_file_path.name}")
+            except Exception as e:
+                logger.warning(f"Failed to package agent file directly: {e}")
+
+        # If direct file approach failed, try legacy approach with inspection
+        if not packaged_agent_path:
+            try:
+                import inspect
+
+                # Support function-based agents
+                if callable(agent) and hasattr(agent, "__name__") and hasattr(agent, "__module__"):
+                    src = inspect.getsourcefile(agent) or inspect.getfile(agent)
+                    agent_module = getattr(agent, "__module__", None)
+                    agent_function = getattr(agent, "__name__", None)
                 else:
-                    src = None
+                    # Likely a class instance
+                    acls = getattr(agent, "__class__", None)
+                    if acls is not None:
+                        src = inspect.getsourcefile(acls) or inspect.getfile(acls)
+                        agent_module = getattr(acls, "__module__", None)
+                        agent_class = getattr(acls, "__name__", None)
+                    else:
+                        src = None
 
-            if src and Path(src).exists():
-                # Copy source file into package
-                src_path = Path(src)
-                pkg_dir = temp_dir / "user_agent"
-                pkg_dir.mkdir(parents=True, exist_ok=True)
-                copied = pkg_dir / src_path.name
-                copied.write_text(Path(src).read_text())
-                packaged_agent_path = f"/app/agent/user_agent/{src_path.name}"
-        except Exception as e:
-            logger.debug(f"Agent source packaging skipped: {e}")
+                if src and Path(src).exists():
+                    # Copy source file into package
+                    src_path = Path(src)
+                    pkg_dir = temp_dir / "user_agent"
+                    pkg_dir.mkdir(parents=True, exist_ok=True)
+                    copied = pkg_dir / src_path.name
+                    copied.write_text(Path(src).read_text())
+                    packaged_agent_path = f"/app/agent/user_agent/{src_path.name}"
+            except Exception as e:
+                logger.debug(f"Agent source packaging skipped: {e}")
 
         # Metadata to help build env hints
         metadata = {
@@ -408,11 +556,72 @@ class ContainerEpisodeExecutor:
 
         return 0  # Default if not found
 
+    # UI Progress Methods
+    async def _notify_episode_start(self, task_id: str, attempt: int) -> None:
+        """Notify UI adapter that episode is starting."""
+        try:
+            from ..ui.interfaces import SABERTaskState, SABERUITaskInfo
+
+            task_info = SABERUITaskInfo(
+                task_id=task_id,
+                attempt=attempt,
+                state=SABERTaskState.STARTING,
+                episode_id=None,
+                progress_message="Starting episode...",
+            )
+            if self.ui_adapter:
+                await self.ui_adapter.task_start(task_info)
+        except Exception as e:
+            logger.warning(f"UI notification failed (episode_start): {e}")
+
+    async def _notify_episode_started(self, task_id: str, episode_id: str, attempt: int) -> None:
+        """Notify UI adapter that episode has started successfully."""
+        try:
+            from ..ui.interfaces import SABERTaskState, SABERUITaskInfo
+
+            task_info = SABERUITaskInfo(
+                task_id=task_id,
+                attempt=attempt,
+                state=SABERTaskState.RUNNING,
+                episode_id=episode_id,
+                progress_message="Executing agent in container...",
+            )
+            if self.ui_adapter:
+                await self.ui_adapter.task_update(task_info)
+        except Exception as e:
+            logger.warning(f"UI notification failed (episode_started): {e}")
+
+    async def _notify_episode_complete(self, result: EpisodeResult) -> None:
+        """Notify UI adapter that episode has completed."""
+        try:
+            from ..ui.interfaces import SABERTaskState, SABERUITaskResult
+
+            final_state = SABERTaskState.COMPLETED if result.success else SABERTaskState.FAILED
+            task_result = SABERUITaskResult(
+                task_id=result.task_id,
+                episode_id=result.episode_id,
+                attempt=result.attempt,
+                success=result.success,
+                final_state=final_state,
+                termination_reason=result.termination_reason,
+                iterations=result.iterations,
+                error_message=result.error,
+                flag=result.flag,
+            )
+            if self.ui_adapter:
+                await self.ui_adapter.task_complete(task_result)
+        except Exception as e:
+            logger.warning(f"UI notification failed (episode_complete): {e}")
+
     async def cleanup(self) -> None:
         """Clean up container infrastructure."""
         logger.info("🧹 Cleaning up container infrastructure")
 
         try:
+            # Finalize container logging session
+            if self.log_manager:
+                await self.log_manager.cleanup_and_finalize()
+
             # Unregister session
             if self.sidecar_started:
                 if self._harness_agent_id:

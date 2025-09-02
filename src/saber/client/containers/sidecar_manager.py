@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 class SidecarConfig:
     """Configuration for the shared MCP sidecar."""
 
-    image: str = "saber-mcp-sidecar:latest"
+    image: str = "saber/mcp-service:latest"
     container_name: str = "saber-mcp-sidecar"
     network_name: str = "saber-network"
     port: int = 8002
@@ -132,7 +132,8 @@ class SidecarManager:
             return None
 
         try:
-            url = f"http://localhost:{self.config.port}/admin/sessions"
+            # Use container name for network communication instead of localhost
+            url = f"http://{self.config.container_name}:{self.config.port}/admin/sessions"
             agent_identifier = agent_id or f"agent-{session_id}"
             payload = {
                 "agent_id": agent_identifier,
@@ -141,7 +142,7 @@ class SidecarManager:
             }
 
             async with aiohttp.ClientSession() as client:
-                async with client.post(url, json=payload) as response:
+                async with client.post(url, json=payload, timeout=self.config.health_check_timeout) as response:
                     if response.status == 200:
                         result = await response.json()
                         agent_id = result.get("agent_id")
@@ -171,7 +172,8 @@ class SidecarManager:
             return False
 
         try:
-            url = f"http://localhost:{self.config.port}/admin/sessions/{agent_id}"
+            # Use container name for network communication instead of localhost
+            url = f"http://{self.config.container_name}:{self.config.port}/admin/sessions/{agent_id}"
             async with aiohttp.ClientSession() as client:
                 async with client.delete(url) as response:
                     if response.status == 200:
@@ -204,9 +206,9 @@ class SidecarManager:
 
             # Check HTTP readiness endpoint (does not require server health)
             async with aiohttp.ClientSession() as client:
-                async with client.get(
-                    f"http://localhost:{self.config.port}/ready", timeout=aiohttp.ClientTimeout(total=5)
-                ) as response:
+                # Use container name for network communication instead of localhost
+                sidecar_url = f"http://{self.config.container_name}:{self.config.port}/ready"
+                async with client.get(sidecar_url, timeout=aiohttp.ClientTimeout(total=5)) as response:
                     return bool(response.status == 200)
 
         except Exception as e:
@@ -287,18 +289,15 @@ class SidecarManager:
         while time.time() - start_time < self.config.health_check_timeout:
             try:
                 async with aiohttp.ClientSession() as client:
-                    async with client.get(
-                        f"http://localhost:{self.config.port}/ready", timeout=aiohttp.ClientTimeout(total=5)
-                    ) as response:
+                    # Use container name for network communication instead of localhost
+                    sidecar_url = f"http://{self.config.container_name}:{self.config.port}/ready"
+                    async with client.get(sidecar_url, timeout=aiohttp.ClientTimeout(total=5)) as response:
                         if response.status == 200:
                             logger.info("✅ Sidecar is ready")
                             return True
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Readiness check failed: {e}")
                 pass
-            # Fall back to generic health (may be stricter)
-            if await self.health_check():
-                logger.info("✅ Sidecar is ready")
-                return True
 
             await asyncio.sleep(self.config.health_check_interval)
 

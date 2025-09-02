@@ -22,9 +22,9 @@ class AsyncAdapter(ClassBasedAdapter):
     Extends ClassBasedAdapter with async-specific handling and monitoring.
     """
 
-    def __init__(self, agent: Any, mcp_client: Any):
+    def __init__(self, agent: Any, tool_injector: Any):
         """Initialize async agent adapter."""
-        super().__init__(agent, mcp_client)
+        super().__init__(agent, tool_injector)
 
     async def run(self, initial_prompt: str) -> Any:
         """Execute async agent with enhanced monitoring."""

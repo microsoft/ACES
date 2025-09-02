@@ -7,11 +7,11 @@ Provides agent discovery, execution, and result collection for containerized age
 
 from .adapters import AgentAdapter, AsyncAdapter, ClassBasedAdapter, FunctionBasedAdapter
 from .executor import AgentExecutor
-from .mcp_factory import MCPClientFactory
+from .tool_injector import ToolInjector
 
 __all__ = [
     "AgentExecutor",
-    "MCPClientFactory",
+    "ToolInjector",
     "AgentAdapter",
     "ClassBasedAdapter",
     "FunctionBasedAdapter",
