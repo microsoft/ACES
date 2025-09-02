@@ -43,64 +43,62 @@ async def run_demo(verbose: bool = False) -> bool:
 
     # Auto-detect server URLs
     if os.getenv("DOCKER_SABER_SERVER"):
-        rest_base_url = os.getenv("SABER_REST_URL", "http://saber-excytin-server:8000")
-        mcp_base_url = os.getenv("SABER_MCP_URL", "http://saber-excytin-server:8001")
+        server_url = os.getenv("SABER_REST_URL", "http://saber-excytin-server:8000")
+        mcp_url = os.getenv("SABER_MCP_URL", "http://saber-excytin-server:8001")
     else:
-        rest_base_url = "http://localhost:8000"
-        mcp_base_url = "http://localhost:8001"
+        server_url = "http://localhost:8000"
+        mcp_url = "http://localhost:8001"
 
     # Create harness configuration
     config = SABERHarnessConfig(
-        rest_base_url=rest_base_url, mcp_base_url=mcp_base_url, client_id="excytin_demo", request_timeout=30.0
+        server_url=server_url,
+        mcp_url=mcp_url,
+        client_id="excytin_demo",
+        request_timeout=30.0,
+        task_ids=["excytin_demo"],  # Specify the task we want to run
+        log_level="DEBUG" if verbose else "INFO",
+        # Enable container logging for debugging
+        enable_container_logging=True,
+        client_log_dir=Path("/app/logs"),  # Inside container path
+        log_retention_days=7,  # Keep logs for a week
+        max_log_size_mb=10,  # Smaller files for demo
     )
 
     # Create SABER harness
     harness = SABERHarness(config)
 
     try:
-        logger.info("🚀 Initializing SABER harness...")
+        logger.info("🚀 Loading demo agent...")
 
-        # Initialize the harness (starts MCP sidecar)
-        await harness.initialize()
-        logger.info("✅ SABER harness initialized successfully")
-
-        # Get the demo agent code path
+        # Get the demo agent file path directly
         demo_agent_path = Path(__file__).parent / "demo_agent.py"
         if not demo_agent_path.exists():
             raise FileNotFoundError(f"Demo agent not found at {demo_agent_path}")
 
-        logger.info("🤖 Executing Excytin demo agent...")
+        logger.info(f"✅ Agent file located: {demo_agent_path}")
 
-        # Execute the agent using the harness
-        result = await harness.execute_agent(
-            agent_code_path=str(demo_agent_path),
-            task_id="excytin_demo",
-            initial_prompt="Test MySQL connectivity and demonstrate Excytin container capabilities",
-        )
+        # Initialize the harness with the agent file path directly
+        await harness.initialize_with_file(str(demo_agent_path), agent_class="ExcytinDemoAgent")
+        logger.info("✅ SABER harness initialized successfully")
+
+        logger.info("🤖 Running Excytin demo benchmark...")
+
+        # Run the harness (this executes the agent)
+        results = await harness.run()
 
         # Check results
-        if result and result.get("success", False):
-            logger.info("✅ Agent execution completed successfully")
-            logger.info(f"📊 Agent result: {result.get('message', 'No message')}")
+        if results and results.success:
+            logger.info("✅ Demo completed successfully")
+            logger.info(f"📊 Results: {results.successful_episodes}/{results.total_episodes} episodes successful")
             return True
         else:
-            logger.error("❌ Agent execution failed")
-            logger.error(f"📊 Agent result: {result}")
+            logger.error("❌ Demo failed")
+            logger.error(f"📊 Results: {results}")
             return False
 
     except Exception as e:
         logger.error(f"❌ Demo failed with exception: {e}")
         return False
-    finally:
-        # Cleanup harness
-        try:
-            logger.info("🧹 Cleaning up harness resources...")
-            await harness.cleanup()
-            logger.info("✅ Harness cleanup completed")
-        except Exception as e:
-            logger.warning(f"⚠️ Error during harness cleanup: {e}")
-
-    logger.info("=" * 70)
 
 
 def main():

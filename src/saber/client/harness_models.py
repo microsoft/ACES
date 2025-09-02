@@ -6,6 +6,7 @@ Data models and configuration for the SABER test harness.
 """
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
@@ -22,6 +23,13 @@ class SABERHarnessConfig:
     # Logging
     log_level: str = "INFO"
 
+    # Container logging configuration
+    client_log_dir: Optional[Path] = None
+    enable_container_logging: bool = True
+    log_retention_days: int = 30
+    max_log_size_mb: int = 50
+    compress_old_logs: bool = True
+
     # Task configuration
     task_ids: Optional[List[str]] = None  # None → auto-fetch and run all
     parallelism: int = 1  # Number of parallel episodes
@@ -35,6 +43,12 @@ class SABERHarnessConfig:
 
     # Agent configuration (optional)
     agent_config: Dict[str, Any] = field(default_factory=dict)
+
+    # UI Configuration
+    ui_backend: str = "auto"  # auto, console, inspect_ai_rich, inspect_ai_textual, inspect_ai_plain, none
+    ui_enabled: bool = True  # Master switch for UI
+    ui_internal_only: bool = True  # Internal debugging vs external monitoring
+    ui_tool_detail_level: str = "full"  # none, basic, full (input/output capture)
 
 
 @dataclass

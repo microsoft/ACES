@@ -8,7 +8,7 @@ for different agent implementations.
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Dict
+from typing import Any, Dict, cast
 
 logger = logging.getLogger(__name__)
 
@@ -18,19 +18,19 @@ class AgentAdapter(ABC):
     Abstract base class for agent adapters.
 
     Provides unified interface for executing different types of agents
-    (class-based, function-based, async/sync) with MCP client access.
+    (class-based, function-based, async/sync) with tool injection.
     """
 
-    def __init__(self, agent: Any, mcp_client: Any):
+    def __init__(self, agent: Any, tool_injector: Any):
         """
         Initialize agent adapter.
 
         Args:
             agent: Agent object or function to adapt
-            mcp_client: MCP client for tool access
+            tool_injector: Tool injector for function injection
         """
         self.agent = agent
-        self.mcp_client = mcp_client
+        self.tool_injector = tool_injector
         self.shutdown_requested = False
 
     @abstractmethod
@@ -53,13 +53,16 @@ class AgentAdapter(ABC):
 
     def _prepare_agent_context(self) -> Dict[str, Any]:
         """
-        Prepare context for agent execution.
+        Prepare context for agent execution with injected tool functions.
 
         Returns:
-            Context dictionary with MCP client and other utilities
+            Context dictionary with tool functions and utilities
         """
-        return {
-            "mcp_client": self.mcp_client,
-            "tools": self.mcp_client,  # Alias for compatibility
+        context = {
             "shutdown_requested": lambda: self.shutdown_requested,
         }
+
+        # Inject tool functions directly into context
+        context = self.tool_injector.inject_into_context(context)
+
+        return cast(Dict[str, Any], context)

@@ -22,9 +22,9 @@ class FunctionBasedAdapter(AgentAdapter):
     Handles both sync and async functions with automatic parameter detection.
     """
 
-    def __init__(self, agent: Callable, mcp_client: Any):
+    def __init__(self, agent: Callable, tool_injector: Any):
         """Initialize function-based agent adapter."""
-        super().__init__(agent, mcp_client)
+        super().__init__(agent, tool_injector)
         self.function_params = self._analyze_function_signature()
 
     def _analyze_function_signature(self) -> Dict[str, Any]:

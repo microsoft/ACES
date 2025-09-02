@@ -93,7 +93,7 @@ par Episode 1 (task1, attempt 1)
     Executor -> AgentMgr: **Execute agent container**\ntask_id=task1, episode_id=ep_001
     activate AgentMgr
 
-    AgentMgr -> Agent1: **Create & start container**\nsaber-agent-runner:latest\nENV: TASK_ID=task1, EPISODE_ID=ep_001
+    AgentMgr -> Agent1: **Create & start container**\nsaber/agent-runner:latest\nENV: TASK_ID=task1, EPISODE_ID=ep_001
     activate Agent1
 
     Agent1 -> Agent1: **AgentExecutor.run()**\nDiscover agent from environment\nInitialize MCP client

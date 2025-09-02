@@ -64,6 +64,9 @@ async def run_unified_benchmark(
     mcp_url: Optional[str] = None,
     env_file: Optional[str] = None,
     log_level: str = "INFO",
+    ui_backend: str = "auto",
+    ui_enabled: bool = True,
+    ui_tool_detail_level: str = "full",
 ) -> None:
     """Run unified benchmark mode - supports single tasks, multiple tasks, or full benchmarks."""
 
@@ -156,6 +159,9 @@ async def run_unified_benchmark(
                 mcp_url=final_mcp_url,
                 task_ids=final_task_ids,
                 log_level=log_level,
+                ui_backend=ui_backend,
+                ui_enabled=ui_enabled,
+                ui_tool_detail_level=ui_tool_detail_level,
             )
 
             # Run unified test
@@ -242,6 +248,21 @@ Examples:
         help="Logging level (default: INFO)",
     )
 
+    # UI Configuration
+    parser.add_argument(
+        "--ui",
+        choices=["auto", "console", "inspect_ai_rich", "inspect_ai_textual", "inspect_ai_plain", "none"],
+        default="auto",
+        help="UI backend to use (default: auto)",
+    )
+    parser.add_argument("--no-ui", action="store_true", help="Disable UI (equivalent to --ui none)")
+    parser.add_argument(
+        "--ui-tool-detail",
+        choices=["none", "basic", "full"],
+        default="full",
+        help="Level of MCP tool call detail to capture (default: full)",
+    )
+
     args = parser.parse_args()
 
     # Validate agent file exists
@@ -257,6 +278,10 @@ Examples:
         else:
             task_ids = [task.strip() for task in args.tasks.split(",")]
 
+    # Handle UI arguments
+    ui_backend = "none" if args.no_ui else args.ui
+    ui_enabled = not args.no_ui
+
     # Run unified benchmark mode
     asyncio.run(
         run_unified_benchmark(
@@ -267,6 +292,9 @@ Examples:
             mcp_url=args.mcp_url,
             env_file=args.env_file,
             log_level=args.log_level,
+            ui_backend=ui_backend,
+            ui_enabled=ui_enabled,
+            ui_tool_detail_level=args.ui_tool_detail,
         )
     )
 

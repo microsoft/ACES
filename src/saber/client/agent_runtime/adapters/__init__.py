@@ -13,13 +13,13 @@ from .class_adapter import ClassBasedAdapter
 from .function_adapter import FunctionBasedAdapter
 
 
-def create_agent_adapter(agent: Any, mcp_client: Any) -> AgentAdapter:
+def create_agent_adapter(agent: Any, tool_injector: Any) -> AgentAdapter:
     """
     Create appropriate agent adapter based on agent type and interface.
 
     Args:
         agent: Agent object or function
-        mcp_client: MCP client for tool access
+        tool_injector: Tool injector for function injection
 
     Returns:
         Appropriate agent adapter
@@ -31,20 +31,20 @@ def create_agent_adapter(agent: Any, mcp_client: Any) -> AgentAdapter:
         or hasattr(agent, "__call__")
         and not hasattr(agent, "__dict__")
     ):
-        return FunctionBasedAdapter(agent, mcp_client)
+        return FunctionBasedAdapter(agent, tool_injector)
 
     # Check if agent is a class instance with common methods
     if hasattr(agent, "run") or hasattr(agent, "process") or hasattr(agent, "chat") or hasattr(agent, "respond"):
-        return ClassBasedAdapter(agent, mcp_client)
+        return ClassBasedAdapter(agent, tool_injector)
 
     # Check if agent has async methods
     import inspect
 
     if hasattr(agent, "run") and callable(getattr(agent, "run", None)) and inspect.iscoroutinefunction(agent.run):
-        return AsyncAdapter(agent, mcp_client)
+        return AsyncAdapter(agent, tool_injector)
 
     # Default to class-based adapter
-    return ClassBasedAdapter(agent, mcp_client)
+    return ClassBasedAdapter(agent, tool_injector)
 
 
 __all__ = ["AgentAdapter", "ClassBasedAdapter", "FunctionBasedAdapter", "AsyncAdapter", "create_agent_adapter"]

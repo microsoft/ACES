@@ -11,11 +11,14 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import docker
 import docker.errors
 import docker.models.containers
+
+if TYPE_CHECKING:
+    from ..logging import ContainerLogManager
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +28,7 @@ class AgentContainerConfig:
     """Configuration for agent containers."""
 
     # Container settings
-    base_image: str = "saber-agent-runner:latest"
+    base_image: str = "saber/agent-runner:latest"
     memory_limit: str = "1g"
     cpu_limit: float = 1.0
     network_name: str = "saber-network"
@@ -69,9 +72,12 @@ class AgentManager:
     - Handle graceful and forced termination
     """
 
-    def __init__(self, config: Optional[AgentContainerConfig] = None):
+    def __init__(
+        self, config: Optional[AgentContainerConfig] = None, log_manager: Optional["ContainerLogManager"] = None
+    ):
         """Initialize agent manager with configuration."""
         self.config = config or AgentContainerConfig()
+        self.log_manager = log_manager
         self.docker_client = docker.DockerClient.from_env()  # type: ignore
         self.active_containers: Dict[str, Any] = {}
 
@@ -130,12 +136,51 @@ class AgentManager:
                     error="Failed to create agent container",
                 )
 
+            # Start logging for agent container
+            if self.log_manager:
+                log_file_name = f"agent_containers/{task_id}_{episode_id}_attempt_{int(time.time())}.log"
+                await self.log_manager.start_logging_container(
+                    container=container, log_file_name=log_file_name, component_type="agent"
+                )
+
+                # Log container lifecycle event
+                self.log_manager.log_container_lifecycle_event(
+                    event_type="agent_container_start",
+                    container_info={
+                        "name": container_name,
+                        "container_id": container.id[:12],
+                        "image": self.config.base_image,
+                        "task_id": task_id,
+                        "episode_id": episode_id,
+                        "agent_id": agent_id,
+                    },
+                    additional_data={"session_id": session_id, "sidecar_url": sidecar_url},
+                )
+
             # Track active container
             self.active_containers[container_name] = container
 
             try:
                 # Wait for container completion with timeout
                 result = await self._wait_for_container_completion(container, container_name)
+
+                # Log completion event
+                if self.log_manager:
+                    self.log_manager.log_container_lifecycle_event(
+                        event_type="agent_container_complete",
+                        container_info={
+                            "name": container_name,
+                            "container_id": container.id[:12],
+                            "task_id": task_id,
+                            "episode_id": episode_id,
+                        },
+                        additional_data={
+                            "success": result.success,
+                            "exit_code": result.exit_code,
+                            "termination_reason": result.termination_reason,
+                            "execution_time": time.time() - start_time,
+                        },
+                    )
 
                 # Collect logs
                 stdout, stderr = await self._collect_container_logs(container)
@@ -147,12 +192,25 @@ class AgentManager:
                 return result
 
             finally:
+                # Stop logging for container
+                if self.log_manager:
+                    await self.log_manager.stop_logging_container(container.id[:12])
+
                 # Cleanup container
                 await self._cleanup_container(container, container_name)
                 self.active_containers.pop(container_name, None)
 
         except Exception as e:
             logger.error(f"❌ Agent execution failed: {e}")
+
+            # Log error event
+            if self.log_manager:
+                self.log_manager.log_container_lifecycle_event(
+                    event_type="agent_execution_error",
+                    container_info={"name": container_name, "task_id": task_id, "episode_id": episode_id},
+                    additional_data={"error": str(e), "execution_time": time.time() - start_time},
+                )
+
             return AgentExecutionResult(
                 success=False,
                 exit_code=-1,

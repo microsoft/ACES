@@ -59,7 +59,7 @@ class ExcytinDemoAgent:
         Returns:
             Dict with execution results and success status
         """
-        logger.info("🚀 Starting Enhanced Container Logging Demo")
+        logger.info("🚀 Starting Excytin Container Demo")
         logger.info(f"📜 Task prompt: {initial_prompt}")
 
         try:
@@ -81,9 +81,9 @@ class ExcytinDemoAgent:
                 "test_results": test_results,
                 "total_tests": len(test_results),
                 "passed_tests": sum(1 for r in test_results if r["success"]),
-                "agent_type": "enhanced_logging_demo",
+                "agent_type": "excytin_demo",
                 "tools_used": ["cli"],
-                "message": "Container logging demo completed successfully" if success else "Some tests failed",
+                "message": "Excytin demo completed successfully" if success else "Some tests failed",
             }
 
             logger.info(f"🎯 Demo completed with {result['passed_tests']}/{result['total_tests']} tests passed")
@@ -94,7 +94,7 @@ class ExcytinDemoAgent:
             return {
                 "success": False,
                 "error": str(e),
-                "agent_type": "enhanced_logging_demo",
+                "agent_type": "excytin_demo",
                 "message": f"Demo failed: {e}",
             }
 

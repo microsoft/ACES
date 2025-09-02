@@ -31,8 +31,10 @@ services:
     image: saber/excytin-client:latest
     container_name: saber-excytin-client
     volumes:
+      - /var/run/docker.sock:/var/run/docker.sock  # Docker-in-Docker for agent container creation
       - ./client:/app/client  # Mount client code for development
       - ../../src:/app/src  # Mount SABER source code for shared constants
+      - ./client/logs:/app/logs:rw  # Mount logs directory for client-side container logging
     environment:
       - SABER_REST_URL=http://saber-excytin-server:8000
       - SABER_MCP_URL=http://saber-excytin-server:8001

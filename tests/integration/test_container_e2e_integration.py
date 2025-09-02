@@ -357,9 +357,9 @@ class TestContainerE2EIntegration:
             pytest.skip("saber/mcp-sidecar:latest image not found - run docker/build_images.sh")
 
         try:
-            docker_client.images.get("saber-agent-runner:latest")
+            docker_client.images.get("saber/agent-runner:latest")
         except docker.errors.ImageNotFound:
-            pytest.skip("saber-agent-runner:latest image not found - run docker/build_images.sh")
+            pytest.skip("saber/agent-runner:latest image not found - run docker/build_images.sh")
 
         # Test configuration
         sidecar_config = SidecarConfig(
