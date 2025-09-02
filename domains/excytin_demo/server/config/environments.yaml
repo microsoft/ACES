@@ -16,9 +16,9 @@ containers:
     command: --secure-file-priv=/var/lib/mysql-files --bind-address=0.0.0.0
 
   # Lightweight sandbox container - created per episode
-  saber-sandbox:
-    image: saber/sandbox:latest
-    container_name: saber-sandbox
+  excytin-sandbox:
+    image: saber/excytin-sandbox:latest
+    container_name: excytin-sandbox
     working_dir: /workspace
     environment:
       PYTHONPATH: /workspace
@@ -39,10 +39,10 @@ environments:
       execution_timeout: null  # No timeout for permanent environments
 
   # Lightweight sandbox - created per episode
-  sandbox:
+  excytin_sandbox:
     network: "excytin-shared-network"  # Use shared network to connect to permanent DB
     permanent_environment_connectivity: true  # Enable automatic connection to permanent networks
-    execution: "saber-sandbox"
+    execution: "excytin-sandbox"
     resource_limits:
       total_memory: "512m"
       total_cpu: "0.5"

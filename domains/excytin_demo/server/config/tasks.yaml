@@ -25,9 +25,9 @@ tasks:
     title: "Excytin Demo"
     description: "Demonstrate Excytin container execution and MySQL connectivity"
 
-    # Use a lightweight sandbox environment for execution
+    # Use the excytin-specific sandbox environment for execution
     # Note: environment: <> also works
-    sandbox_environment: "sandbox"
+    sandbox_environment: "excytin_sandbox"
 
     # Task breakdown for testing
     subtasks:

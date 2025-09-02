@@ -292,8 +292,8 @@ class SessionManager:
             session_id=session_id, task_id=task_id, initial_context=task.initial_context.copy()
         )
 
-        # Configure execution manager with task object only
-        self.execution_manager.configure_for_task(session_id, task)
+        # Configure execution manager with task object and episode ID for unique container naming
+        self.execution_manager.configure_for_task(session_id, task, episode_id=episode.episode_id)
 
         # Configure policy manager with task object
         self.policy_manager.configure_for_task(session_id, task)

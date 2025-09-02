@@ -376,9 +376,9 @@ def create_app(saber_mcp_url: Optional[str] = None, timeout: float = 30.0) -> Fa
             if not agent_id:
                 raise HTTPException(status_code=404, detail="Session not registered")
 
-            # Get tools for session+episode
+            # Get tools for session+episode using the actual agent_id
             tools = await tool_registry.get_tools_for_session_episode(
-                session_id=session_id, episode_id=episode_id, task_id=task_id
+                session_id=session_id, episode_id=episode_id, task_id=task_id, agent_id=agent_id
             )
 
             # Convert to API format
@@ -422,6 +422,14 @@ def create_app(saber_mcp_url: Optional[str] = None, timeout: float = 30.0) -> Fa
             if not session_id:
                 raise HTTPException(status_code=400, detail="Missing X-Saber-Session-Id header")
 
+            # Check if session is registered and get agent_id
+            if not session_registry:
+                raise HTTPException(status_code=500, detail="Session registry not available")
+
+            agent_id = await session_registry.get_agent_id_by_saber_session(session_id)
+            if not agent_id:
+                raise HTTPException(status_code=404, detail="Session not registered")
+
             # Extract episode context
             episode_id = request.headers.get("X-Saber-Episode-Id")
 
@@ -436,6 +444,7 @@ def create_app(saber_mcp_url: Optional[str] = None, timeout: float = 30.0) -> Fa
                 tool_name=body.tool_name,
                 arguments=body.arguments,
                 timeout=body.timeout,
+                agent_id=agent_id,
             )
 
             execution_time = time.time() - start_time
@@ -460,13 +469,21 @@ def create_app(saber_mcp_url: Optional[str] = None, timeout: float = 30.0) -> Fa
             if not session_id:
                 raise HTTPException(status_code=400, detail="Missing X-Saber-Session-Id header")
 
+            # Check if session is registered and get agent_id
+            if not session_registry:
+                raise HTTPException(status_code=500, detail="Session registry not available")
+
+            agent_id = await session_registry.get_agent_id_by_saber_session(session_id)
+            if not agent_id:
+                raise HTTPException(status_code=404, detail="Session not registered")
+
             # Extract episode context
             episode_id = request.headers.get("X-Saber-Episode-Id")
             task_id = request.headers.get("X-Saber-Task-Id")
 
             # Force refresh
             tools = await tool_registry.get_tools_for_session_episode(
-                session_id=session_id, episode_id=episode_id, task_id=task_id, force_refresh=True
+                session_id=session_id, episode_id=episode_id, task_id=task_id, agent_id=agent_id, force_refresh=True
             )
 
             return JSONResponse(content={"refreshed": True, "tool_count": len(tools), "tools": list(tools.keys())})

@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .api import SABERRestClient
 from .containers import AgentManager, ContainerFactory, SidecarManager
-from .containers.agent_manager import AgentExecutionResult
+from .containers.agent_manager import AgentContainerConfig, AgentExecutionResult
 from .containers.sidecar_manager import SidecarConfig
 from .harness_models import EpisodeResult, SABERHarnessConfig
 from .logging import ClientLoggingConfig, ContainerLogManager, SessionLoggingContext
@@ -92,7 +92,12 @@ class ContainerEpisodeExecutor:
 
         # Container managers
         self.sidecar_manager = SidecarManager(sidecar_config)
-        self.agent_manager = AgentManager(log_manager=self.log_manager)
+
+        # Configure agent manager to use the same network as sidecar
+        agent_config = AgentContainerConfig()
+        agent_config.network_name = sidecar_config.network_name
+        self.agent_manager = AgentManager(config=agent_config, log_manager=self.log_manager)
+
         self.container_factory = ContainerFactory()
 
         # State
@@ -402,8 +407,12 @@ class ContainerEpisodeExecutor:
 
         temp_dir = Path(tempfile.mkdtemp(prefix="saber-agent-"))
 
+        # Create agent subdirectory to match container mount structure
+        agent_dir = temp_dir / "agent"
+        agent_dir.mkdir(parents=True, exist_ok=True)
+
         # Create a minimal launcher script that invokes the AgentExecutor
-        launcher_file = temp_dir / "launch.py"
+        launcher_file = agent_dir / "launch.py"
         launcher_code = (
             "import sys, asyncio\n"
             "sys.path.insert(0, '/agent_runtime')\n"
@@ -414,82 +423,66 @@ class ContainerEpisodeExecutor:
         )
         launcher_file.write_text(launcher_code)
 
-        # Use direct file path approach if available from harness
-        packaged_agent_path: Optional[str] = None
-        agent_module: Optional[str] = None
-        agent_class: Optional[str] = None
-        agent_function: Optional[str] = None
-
-        # Check if harness provided agent file path directly
-        if (
+        # MANDATORY: Get agent file path from harness - no fallbacks!
+        if not (
             hasattr(self, "harness")
             and self.harness is not None
             and hasattr(self.harness, "agent_file_path")
             and self.harness.agent_file_path
         ):
-            try:
-                # Copy the agent file directly
-                agent_file_path = Path(self.harness.agent_file_path)
-                if agent_file_path.exists():
-                    pkg_dir = temp_dir / "user_agent"
-                    pkg_dir.mkdir(parents=True, exist_ok=True)
-                    copied = pkg_dir / agent_file_path.name
-                    copied.write_text(agent_file_path.read_text())
-                    packaged_agent_path = f"/app/agent/user_agent/{agent_file_path.name}"
+            raise RuntimeError(
+                "Agent packaging requires harness.agent_file_path to be set. " "No legacy fallbacks are supported."
+            )
 
-                    # Set module and class information
-                    agent_module = agent_file_path.stem  # filename without extension
-                    agent_class = (
-                        self.harness.agent_class_name if self.harness and self.harness.agent_class_name else "Agent"
-                    )
+        agent_file_path = Path(self.harness.agent_file_path)
+        if not agent_file_path.exists():
+            raise FileNotFoundError(f"Agent file not found: {agent_file_path}")
 
-                    logger.info(f"📁 Packaged agent file: {agent_file_path.name}")
-            except Exception as e:
-                logger.warning(f"Failed to package agent file directly: {e}")
+        # Copy the agent file into agent_dir
+        logger.info(f"📁 Copying agent file: {agent_file_path} -> {agent_dir}")
+        copied = agent_dir / agent_file_path.name
+        copied.write_text(agent_file_path.read_text())
 
-        # If direct file approach failed, try legacy approach with inspection
-        if not packaged_agent_path:
-            try:
-                import inspect
+        # Set the packaged agent path for the container
+        packaged_agent_path = f"/app/agent/{agent_file_path.name}"
 
-                # Support function-based agents
-                if callable(agent) and hasattr(agent, "__name__") and hasattr(agent, "__module__"):
-                    src = inspect.getsourcefile(agent) or inspect.getfile(agent)
-                    agent_module = getattr(agent, "__module__", None)
-                    agent_function = getattr(agent, "__name__", None)
-                else:
-                    # Likely a class instance
-                    acls = getattr(agent, "__class__", None)
-                    if acls is not None:
-                        src = inspect.getsourcefile(acls) or inspect.getfile(acls)
-                        agent_module = getattr(acls, "__module__", None)
-                        agent_class = getattr(acls, "__name__", None)
-                    else:
-                        src = None
+        # Set module and class information
+        agent_module = agent_file_path.stem  # filename without extension
+        agent_class = self.harness.agent_class_name if self.harness and self.harness.agent_class_name else "Agent"
 
-                if src and Path(src).exists():
-                    # Copy source file into package
-                    src_path = Path(src)
-                    pkg_dir = temp_dir / "user_agent"
-                    pkg_dir.mkdir(parents=True, exist_ok=True)
-                    copied = pkg_dir / src_path.name
-                    copied.write_text(Path(src).read_text())
-                    packaged_agent_path = f"/app/agent/user_agent/{src_path.name}"
-            except Exception as e:
-                logger.debug(f"Agent source packaging skipped: {e}")
+        # Verify the file was actually copied
+        if not copied.exists():
+            raise RuntimeError(f"Failed to copy agent file to {copied}")
 
-        # Metadata to help build env hints
+        logger.info(f"✅ Agent file copied successfully: {copied} ({copied.stat().st_size} bytes)")
+
+        # Verify launch.py was created
+        launch_file = agent_dir / "launch.py"
+        if not launch_file.exists():
+            raise RuntimeError(f"Launch script not found at {launch_file}")
+
+        logger.info(f"✅ Launch script created: {launch_file} ({launch_file.stat().st_size} bytes)")
+
+        # Set metadata
+        packaged_agent_path = f"/app/agent/{agent_file_path.name}"
+        agent_module = agent_file_path.stem  # filename without extension
+        agent_class = self.harness.agent_class_name if self.harness and self.harness.agent_class_name else "Agent"
+
+        # Create metadata
         metadata = {
             "launcher": "/app/agent/launch.py",
             "packaged_agent_file": packaged_agent_path,
             "agent_module": agent_module,
             "agent_class": agent_class,
-            "agent_function": agent_function,
+            "agent_function": None,
         }
-        (temp_dir / "metadata.json").write_text(json.dumps(metadata, indent=2))
 
-        logger.info(f"✅ Agent launcher prepared at: {temp_dir}")
-        return temp_dir
+        metadata_file = temp_dir / "metadata.json"
+        metadata_file.write_text(json.dumps(metadata, indent=2))
+        logger.info(f"✅ Metadata created: {metadata_file}")
+
+        logger.info(f"✅ Agent launcher prepared at: {agent_dir}")
+        return agent_dir
 
     def _build_agent_env_hints(self, agent_package: Path) -> Dict[str, str]:
         """Build default environment hints for agent runtime.

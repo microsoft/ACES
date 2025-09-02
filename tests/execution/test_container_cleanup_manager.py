@@ -523,3 +523,115 @@ class TestContainerCleanupManager:
 
         cleanup_all_sig = inspect.signature(cleanup_manager.cleanup_all_sessions)
         assert 'reason' in cleanup_all_sig.parameters
+
+
+class TestContainerCleanupManagerDebugMode:
+    """Test suite for debug mode functionality in ContainerCleanupManager."""
+
+    @pytest.fixture
+    def mock_sandbox_manager(self):
+        """Create a mock sandbox manager for testing."""
+        mock_manager = Mock()
+        mock_manager.active_sessions = {}
+        mock_manager.get_session_environment.return_value = None
+        mock_manager._cleanup_orphaned_session_resources.return_value = None
+        return mock_manager
+
+    @pytest.fixture
+    def mock_environment(self):
+        """Create a mock environment with stop method."""
+        mock_env = Mock()
+        mock_env.stop.return_value = None
+        return mock_env
+
+    @pytest.fixture
+    def debug_cleanup_manager(self, mock_sandbox_manager):
+        """Create a ContainerCleanupManager instance with debug mode enabled."""
+        return ContainerCleanupManager(mock_sandbox_manager, debug_mode=True)
+
+    @pytest.fixture
+    def normal_cleanup_manager(self, mock_sandbox_manager):
+        """Create a ContainerCleanupManager instance with debug mode disabled."""
+        return ContainerCleanupManager(mock_sandbox_manager, debug_mode=False)
+
+    def test_initialization_with_debug_mode_enabled(self, mock_sandbox_manager):
+        """Test that ContainerCleanupManager initializes correctly with debug mode enabled."""
+        cleanup_manager = ContainerCleanupManager(mock_sandbox_manager, debug_mode=True)
+
+        assert cleanup_manager.sandbox_manager == mock_sandbox_manager
+        assert cleanup_manager.debug_mode is True
+        assert cleanup_manager._cleanup_history == []
+
+    def test_initialization_with_debug_mode_disabled(self, mock_sandbox_manager):
+        """Test that ContainerCleanupManager initializes correctly with debug mode disabled."""
+        cleanup_manager = ContainerCleanupManager(mock_sandbox_manager, debug_mode=False)
+
+        assert cleanup_manager.sandbox_manager == mock_sandbox_manager
+        assert cleanup_manager.debug_mode is False
+        assert cleanup_manager._cleanup_history == []
+
+    def test_cleanup_session_skipped_in_debug_mode(self, debug_cleanup_manager, mock_sandbox_manager, mock_environment):
+        """Test that cleanup_session is skipped when debug mode is enabled."""
+        session_id = "test_session_debug_unique"
+        reason = CleanupReason.SESSION_TERMINATED
+
+        # Setup mocks - environment should not be called in debug mode
+        mock_sandbox_manager.get_session_environment.return_value = mock_environment
+        mock_sandbox_manager.active_sessions = {session_id: mock_environment}
+
+        # Perform cleanup
+        result = debug_cleanup_manager.cleanup_session(session_id, reason)
+
+        # Verify cleanup was skipped
+        assert result is True
+
+        # Environment should not have been fetched or stopped in debug mode
+        mock_sandbox_manager.get_session_environment.assert_not_called()
+        mock_environment.stop.assert_not_called()
+
+        # Verify cleanup operation was recorded in history with debug skip
+        all_history = debug_cleanup_manager.get_cleanup_history()
+        session_operations = [op for op in all_history if op.session_id == session_id]
+        assert len(session_operations) >= 1
+
+        # Check the most recent operation for this session was a debug skip
+        latest_operation = session_operations[-1]
+        assert latest_operation.reason == reason
+        assert latest_operation.success is True
+        assert "debug_mode_skip" in latest_operation.steps_completed
+
+    def test_cleanup_session_runs_in_normal_mode(self, normal_cleanup_manager, mock_sandbox_manager, mock_environment):
+        """Test that cleanup_session runs normally when debug mode is disabled."""
+        session_id = "test_session_normal"
+        reason = CleanupReason.SESSION_TERMINATED
+
+        # Setup mocks
+        mock_sandbox_manager.get_session_environment.return_value = mock_environment
+        mock_sandbox_manager.active_sessions = {session_id: mock_environment}
+
+        # Perform cleanup
+        result = normal_cleanup_manager.cleanup_session(session_id, reason)
+
+        # Verify cleanup ran normally
+        assert result is True
+
+        # Environment should have been fetched and stopped
+        mock_sandbox_manager.get_session_environment.assert_called_once_with(session_id)
+        mock_environment.stop.assert_called_once()
+
+    def test_cleanup_all_containers_debug_mode_logging(self, debug_cleanup_manager):
+        """Test that cleanup_all_containers logs debug mode status."""
+        reason = CleanupReason.SERVER_SHUTDOWN
+
+        with patch.object(debug_cleanup_manager, 'cleanup_all_sessions', return_value=0) as mock_cleanup_all:
+            with patch.object(debug_cleanup_manager, 'stop_permanent_environment', return_value=True) as mock_stop_perm:
+                result = debug_cleanup_manager.cleanup_all_containers(reason)
+
+                # Verify methods were called (debug mode only affects individual session cleanup)
+                mock_cleanup_all.assert_called_once_with(reason, {})
+                mock_stop_perm.assert_called_once()
+
+                # Verify result structure
+                assert 'ephemeral_sessions_cleaned' in result
+                assert 'permanent_environment_stopped' in result
+                assert result['reason'] == reason

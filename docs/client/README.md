@@ -1,13 +1,15 @@
 # SABER Client Architecture Documentation
 
-This directory contains PlantUML diagrams documenting the SABER client-side architecture, which has been transformed from an embedded MCP approach to a modern container-based execution system with industry-standard MCP compatibility.
+This directory contains PlantUML diagrams documenting the SABER client-side architecture, which uses container-based execution with industry-standard MCP compatibility.
 
 ## Architecture Overview
 
-The SABER client implements a **dual execution mode architecture** that supports both:
+The SABER client implements a **container-based execution architecture** that provides:
 
-- **Container Mode (Recommended)**: Modern containerized agent execution with MCP sidecar
-- **Embedded Mode (Legacy)**: Process-based execution with embedded MCP client
+- **Container Isolation**: Agents run in isolated Docker containers with resource limits
+- **MCP Sidecar**: Shared HTTP proxy service for standard MCP protocol communication  
+- **Agent Runtime**: Universal adapter system supporting various agent interfaces
+- **Logging Infrastructure**: Comprehensive container log collection and management
 
 ## Diagrams
 
@@ -15,17 +17,18 @@ The SABER client implements a **dual execution mode architecture** that supports
 **High-level client architecture overview**
 
 Shows the complete client infrastructure including:
-- `SABERHarness` - Main client orchestrator with dual execution modes
-- Container execution components (sidecar, agent manager, container factory)
-- MCP sidecar service with FastAPI HTTP proxy
-- Universal agent runtime with adapters
-- Embedded mode components (legacy)
+- `SABERHarness` - Main client orchestrator for container execution
+- `ContainerEpisodeExecutor` - Container lifecycle management and episode orchestration
+- `SidecarManager` - Shared MCP sidecar container management
+- `AgentManager` - Individual agent container execution and monitoring
+- `ContainerFactory` - Agent packaging and container creation
+- Container logging infrastructure for comprehensive execution tracking
 
 **Key Features:**
-- Dual execution modes with seamless switching
-- Container isolation and resource management
-- Standard MCP protocol compatibility
+- Container isolation with Docker networking
+- Standard MCP protocol compatibility via HTTP proxy
 - Universal agent adapter system
+- Comprehensive logging and monitoring
 
 ### 2. [Container Execution Architecture](container_execution_architecture.puml)
 **Detailed container-based execution system**
@@ -38,9 +41,10 @@ Deep dive into the container execution infrastructure:
 - Session management and routing
 
 **Container Details:**
-- **MCP Sidecar**: 295MB, shared HTTP proxy for MCP protocol
-- **Agent Runtime**: 458MB, lightweight with standard MCP clients
-- **Network Isolation**: Agents ↔ Sidecar only, no direct SABER access
+- **MCP Sidecar**: FastAPI HTTP proxy for MCP protocol, shared across episodes
+- **Agent Runtime**: Lightweight containers with standard MCP clients and universal adapters
+- **Network Isolation**: Agent containers communicate only with sidecar, no direct SABER access
+- **Logging System**: Real-time log streaming and file collection for debugging
 
 ### 3. [MCP Sidecar Architecture](mcp_sidecar_architecture.puml)
 **MCP sidecar service architecture and session management**
@@ -95,6 +99,16 @@ Comprehensive sequence diagram showing:
 5. **Results Collection**: Multi-channel result aggregation
 6. **Cleanup**: Guaranteed container termination and resource cleanup
 
+### 6. Container Logging Architecture
+**Comprehensive logging infrastructure for debugging and monitoring**
+
+Features:
+- **Real-time Log Streaming**: Live capture from all containers during execution
+- **File-based Collection**: Persistent logs saved to structured directory hierarchy
+- **Multi-container Support**: Separate logs for sidecar and each agent container
+- **Debug Integration**: Complete execution traces for troubleshooting failures
+- **Session Organization**: Logs grouped by session timestamp for easy correlation
+
 ## Key Architectural Benefits
 
 ### For Agents
@@ -114,17 +128,17 @@ Comprehensive sequence diagram showing:
 - ✅ **Clean process management** without race conditions
 - ✅ **Parallel execution** with container isolation
 - ✅ **Production-ready reliability**
+- ✅ **Comprehensive logging** with real-time streaming and persistent collection
+- ✅ **Debug capabilities** with complete execution traces
 
 ## Container Images
 
 ### MCP Sidecar (`saber/mcp-service:latest`)
-- **Size**: 295MB
 - **Purpose**: Shared HTTP proxy for MCP protocol
 - **Dependencies**: FastAPI, aiohttp, minimal Python runtime
 - **Resources**: 256MB RAM, 0.5 CPU limit
 
 ### Agent Runtime (`saber/agent-runner:latest`)  
-- **Size**: 458MB
 - **Purpose**: Lightweight agent execution environment
 - **Dependencies**: Standard MCP clients, HTTP libraries, Python runtime
 - **Resources**: 512MB RAM, 1.0 CPU limit (configurable)
@@ -135,12 +149,12 @@ Comprehensive sequence diagram showing:
 ```python
 from saber.client import SABERHarness, SABERHarnessConfig
 
-# Container mode (recommended)
+# Container-based execution
 config = SABERHarnessConfig(
-    use_containers=True,        # Enable container execution
     parallelism=4,             # Run 4 agents concurrently
     server_url="http://server:8000",
-    task_ids=["task1", "task2"]
+    task_ids=["task1", "task2"],
+    enable_container_logs=True  # Enable comprehensive logging
 )
 
 harness = SABERHarness(config)
@@ -148,29 +162,19 @@ await harness.initialize(my_agent)
 results = await harness.run()
 ```
 
-## Migration from Embedded Mode
-
-The container architecture provides a seamless migration path:
-
-1. **No Code Changes**: Existing agents work unchanged
-2. **Opt-in**: Set `use_containers=True` in harness config  
-3. **Gradual Migration**: Test with container mode, fallback to embedded
-4. **Docker Required**: Ensure Docker daemon available on execution hosts
-
 ## Implementation Status
 
-**✅ COMPLETED (Phase 3)**:
+**✅ PRODUCTION READY**:
 - Container infrastructure and orchestration
 - MCP sidecar service with HTTP proxy
 - Universal agent runtime and adapters
 - Docker images and build system
-- Dual execution mode harness integration
+- Comprehensive container logging
+- Real-time log streaming and collection
 
-**🎯 READY FOR PRODUCTION**:
-The container architecture is fully implemented and ready for production use with comprehensive testing and validation.
+**🎯 CURRENT ARCHITECTURE**:
+The container architecture is the primary and only execution mode, providing robust isolation, logging, and MCP compatibility.
 
 ---
 
-For implementation details and development history, see:
-- [MCP Sidecar Implementation Plan](../.archive/mcp_sidecar_implementation_plan.md)
-- [MCP Sidecar Implementation Summary](../.archive/mcp_sidecar_implementation_summary.md)
+For implementation details and development history, see the SABER server documentation and source code.

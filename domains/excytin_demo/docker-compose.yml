@@ -23,6 +23,7 @@ services:
       - SABER_LOG_LEVEL=DEBUG
       - SABER_LOGS_DIRECTORY=/app/logs  # Enable enhanced container logging
       - SABER_ENABLE_CONTAINER_LOGGING=true  # Enable container debug logging
+      # - SABER_DEBUG_MODE=true  # Uncomment to skip container cleanup for debugging
     networks:
       - saber-excytin-network
 

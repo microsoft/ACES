@@ -16,6 +16,8 @@ import logging
 import re
 from typing import Any, Dict, List
 
+# Configure logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -192,13 +194,19 @@ class ExcytinDemoAgent:
             Test result dict with success status and details
         """
         try:
-            logger.debug(f"Executing: {test['command']}")
+            logger.info(f"Executing: {test['command']}")
 
             # Execute command via MCP CLI tool
             result = await self.mcp_client.call_tool("cli", {"command": test["command"]})
 
+            # Debug: Log the raw result to understand its structure
+            logger.info(f"Raw tool result: {result}")
+            logger.info(f"Result type: {type(result)}")
+
             # Parse result to determine success
             success, output, error_msg = self._parse_tool_result(result)
+
+            logger.info(f"Parsed result - Success: {success}, Output: '{output}', Error: '{error_msg}'")
 
             if success:
                 # Check if expected content appears in output
@@ -331,6 +339,6 @@ def run_agent(mcp_client: Any, initial_prompt: str) -> Dict[str, Any]:
 
 if __name__ == "__main__":
     # For direct execution (development/testing)
-    print("Excytin Demo Agent")
-    print("This agent is designed to be executed by the SABER harness")
-    print("Use demo_client.py to run the full demo")
+    logger.info("Excytin Demo Agent")
+    logger.info("This agent is designed to be executed by the SABER harness")
+    logger.info("Use demo_client.py to run the full demo")

@@ -200,16 +200,17 @@ class AgentExecutor:
         # Get configuration from environment
         sidecar_url = os.getenv("MCP_SIDECAR_URL", "http://sidecar:8080")
         session_id = os.getenv("SESSION_ID")
-        # task_id and episode_id are available for future use
-        # task_id = os.getenv("TASK_ID")
-        # episode_id = os.getenv("EPISODE_ID")
+        task_id = os.getenv("TASK_ID")
+        episode_id = os.getenv("EPISODE_ID")
         client_id = os.getenv("CLIENT_ID", "agent-container")
 
         if not session_id:
             raise ValueError("SESSION_ID environment variable required")
 
         # Create Tool Injector directly
-        tool_injector = ToolInjector(sidecar_url=sidecar_url, session_id=session_id, agent_id=client_id)
+        tool_injector = ToolInjector(
+            sidecar_url=sidecar_url, session_id=session_id, agent_id=client_id, episode_id=episode_id, task_id=task_id
+        )
 
         await tool_injector.initialize()
         return tool_injector

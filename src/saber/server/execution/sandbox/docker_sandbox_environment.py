@@ -53,6 +53,7 @@ class DockerSandboxEnvironment:
         session_id: str,
         environment_spec: EnvironmentSpec,
         container_logging_config: Optional[Dict[str, Any]] = None,
+        episode_id: Optional[str] = None,
     ) -> None:
         """
         Initialize Docker sandbox environment.
@@ -61,11 +62,13 @@ class DockerSandboxEnvironment:
             session_id: Unique session identifier
             environment_spec: Environment specification for container orchestration
             container_logging_config: Configuration for container logging
+            episode_id: Optional episode identifier for unique container naming
 
         Raises:
             ContainerCreationError: If Docker client cannot be initialized
         """
         self.session_id = session_id
+        self.episode_id = episode_id
         self.environment_spec = environment_spec
         self.active_services: Dict[str, Container] = {}
         self.compose_project_name = f"saber-session-{session_id}"
@@ -98,7 +101,9 @@ class DockerSandboxEnvironment:
         """
         try:
             # Generate Docker Compose configuration
-            compose_config = self.environment_spec.to_compose_dict(session_id=self.session_id)
+            compose_config = self.environment_spec.to_compose_dict(
+                session_id=self.session_id, episode_id=self.episode_id
+            )
 
             # Set project name
             compose_config["name"] = self.compose_project_name
