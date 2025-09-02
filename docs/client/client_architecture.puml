@@ -22,34 +22,45 @@ package "SABER Client Infrastructure" {
         +config: SABERHarnessConfig
         +session_id: str
         +rest_client: SABERRestClient
-        +agent: Any
+        +agent: Any?
+        +agent_file_path: str?
         +container_executor: ContainerEpisodeExecutor?
+        +harness_logger: HarnessExecutionLogger?
+        +session_log_dir: Path?
+        +ui_adapter: SABERUIAdapter?
         --
         +initialize(agent, env_file): void
+        +initialize_with_file(path, class): void
         +run(): HarnessRunResult
         +shutdown(): void
         --
-        **Dual Execution Modes**
+        **Container-Only Execution**
         +_execute_episodes_container(): List[EpisodeResult]
-        +_execute_episodes_embedded(): List[EpisodeResult]
     }
 
     class SABERHarnessConfig {
-        +use_containers: bool = True
-        +parallelism: int = 1
         +server_url: str = "http://localhost:8000"
         +mcp_url: str = "http://localhost:8001"
         +task_ids: List[str]?
         +log_level: str = "INFO"
         +timeout_minutes: int = 30
+        +parallelism: int = 1
         --
         **Container Configuration**
         +sidecar_port: int = 8002
         +agent_memory_limit: str = "512m"
         +agent_cpu_limit: float = 1.0
+        --
+        **UI Configuration**
+        +ui_enabled: bool = False
+        +ui_backend: str = "AUTO"
+        --
+        **Logging Configuration**
+        +enable_container_logs: bool = True
+        +log_container_output: bool = True
     }
 
-    package "Container Execution Mode (Recommended)" as ContainerMode {
+    package "Container Execution Infrastructure" as ContainerMode {
 
         class ContainerEpisodeExecutor {
             +rest_client: SABERRestClient
@@ -58,6 +69,8 @@ package "SABER Client Infrastructure" {
             +sidecar_manager: SidecarManager
             +agent_manager: AgentManager
             +container_factory: ContainerFactory
+            +container_log_manager: ContainerLogManager?
+            +session_log_dir: Path?
             --
             +initialize(): void
             +execute_episodes(episodes, agent): List[EpisodeResult]
@@ -73,29 +86,36 @@ package "SABER Client Infrastructure" {
                 +config: SidecarConfig
                 +container: Container?
                 +is_running: bool
+                +docker_client: DockerClient
                 --
                 +start_sidecar(): bool
                 +stop_sidecar(): void
                 +health_check(): bool
                 +register_agent_session(): str
                 +unregister_agent_session(): void
+                +get_sidecar_url(): str
             }
 
             class AgentManager {
                 +docker_client: DockerClient
                 +active_containers: Dict[str, Container]
+                +container_log_manager: ContainerLogManager?
                 --
                 +execute_agent_container(): AgentExecutionResult
                 +monitor_container(): ContainerStatus
                 +terminate_container(): void
                 +collect_results(): Dict[str, Any]
+                +_save_container_logs_to_file(): void
             }
 
             class ContainerFactory {
+                +docker_client: DockerClient
+                --
                 +build_agent_image(): str
                 +package_agent_code(): Path
                 +create_agent_container(): Container
                 +prepare_environment(): Dict[str, str]
+                +setup_agent_directory(): Path
             }
         }
 
@@ -107,6 +127,7 @@ package "SABER Client Infrastructure" {
                 +proxy_list_tools(): MCPResponse
                 +proxy_call_tool(): MCPResponse
                 +proxy_list_resources(): MCPResponse
+                +health_check(): MCPResponse
             }
 
             class AgentSessionRegistry {
@@ -139,12 +160,27 @@ package "SABER Client Infrastructure" {
                 +list_tools(): List[Dict[str, Any]]
                 +call_tool(name, arguments): Dict[str, Any]
                 +list_resources(): List[Dict[str, Any]]
+                +_make_request(): Dict[str, Any]
             }
 
             package "Universal Agent Adapters" {
                 class AgentAdapterFactory {
                     +create_adapter(agent, mcp_client): AgentAdapter
                     +detect_agent_interface(agent): AgentType
+                }
+
+                class ClassBasedAdapter {
+                    +agent_instance: Any
+                    +method_name: str
+                    --
+                    +execute(prompt, context): Dict[str, Any]
+                }
+
+                class FunctionBasedAdapter {
+                    +agent_function: Callable
+                    +parameter_mapping: Dict[str, str]
+                    --
+                    +execute(prompt, context): Dict[str, Any]
                 }
 
                 class ClassBasedAdapter {
@@ -170,18 +206,46 @@ package "SABER Client Infrastructure" {
         }
     }
 
-    package "Embedded Execution Mode (Legacy)" as EmbeddedMode {
-        class EmbeddedMCPClient {
-            +server_url: str
-            +session_id: str
+    package "UI System" {
+        class SABERUIAdapter {
+            +backend_type: UIBackendType
             --
-            +list_tools(): List[Tool]
-            +call_tool(name, args): ToolResult
-            +connect(): void
-            +disconnect(): void
+            +display_progress(): void
+            +update_status(): void
+            +show_results(): void
+        }
+    }
+
+    package "Logging Infrastructure" {
+        class ContainerLogManager {
+            +session_log_dir: Path
+            +container_logs_dir: Path
+            --
+            +setup_logging_structure(): void
+            +create_log_stream_collector(): LogStreamCollector
+            +get_agent_log_path(): Path
+            +get_sidecar_log_path(): Path
         }
 
-        note right of EmbeddedMCPClient : Legacy Mode\nProcess-based execution\nTight coupling with SABER\nBeing phased out
+        class LogStreamCollector {
+            +container: Container
+            +log_file_path: Path
+            +should_stop: bool
+            --
+            +start_streaming(): void
+            +stop_streaming(): void
+            +_stream_logs(): void
+        }
+
+        class HarnessExecutionLogger {
+            +session_log_dir: Path
+            +log_file: Path
+            --
+            +log_event(event): void
+            +log_infrastructure_event(): void
+            +log_episode_queue(): void
+            +log_execution_complete(): void
+        }
     }
 
     package "External Dependencies" {
@@ -192,19 +256,20 @@ package "SABER Client Infrastructure" {
 
 ' Relationships
 SABERHarness --> SABERHarnessConfig : configured by
-SABERHarness --> ContainerEpisodeExecutor : uses (if use_containers=True)
-SABERHarness --> EmbeddedMCPClient : uses (if use_containers=False)
+SABERHarness --> ContainerEpisodeExecutor : uses
+SABERHarness --> HarnessExecutionLogger : logs to
+SABERHarness --> SABERUIAdapter : displays via
 
 ContainerEpisodeExecutor --> SidecarManager : manages
 ContainerEpisodeExecutor --> AgentManager : manages
 ContainerEpisodeExecutor --> ContainerFactory : uses
+ContainerEpisodeExecutor --> ContainerLogManager : logs with
 
-SidecarManager --> Docker : controls containers
-AgentManager --> Docker : controls containers
+SidecarManager --> DockerEngine : controls containers
+AgentManager --> DockerEngine : controls containers
+AgentManager --> ContainerLogManager : logs via
 
 MCPProxy --> AgentSessionRegistry : uses
-MCPProxy --> MCPProxyHandler : delegates to
-
 AgentExecutor --> StandardMCPClient : uses
 AgentExecutor --> AgentAdapterFactory : uses
 StandardMCPClient --> MCPProxy : communicates via HTTP
@@ -213,13 +278,16 @@ AgentAdapterFactory --> ClassBasedAdapter : creates
 AgentAdapterFactory --> FunctionBasedAdapter : creates
 AgentAdapterFactory --> AsyncAdapter : wraps with
 
-MCPProxyHandler --> SABERServer : proxies to (MCP)
+ContainerLogManager --> LogStreamCollector : creates
+LogStreamCollector --> DockerEngine : streams from
+
+MCPProxy --> SABERServer : proxies to (MCP)
 SABERHarness --> SABERServer : communicates via (REST)
 
-note top of SABERHarness : Entry Point\nMain client orchestrator\nSupports dual execution modes\nBackward compatible
+note top of SABERHarness : Entry Point\nMain client orchestrator\nContainer-only execution\nComprehensive logging
 
-note top of ContainerMode : Recommended Architecture\n✅ Standard MCP compatibility\n✅ Agent isolation & resource limits\n✅ Robust termination & cleanup\n✅ Zero-code-change agent integration
+note top of ContainerMode : Core Architecture\n✅ Standard MCP compatibility\n✅ Agent isolation & resource limits\n✅ Robust termination & cleanup\n✅ Real-time log streaming
 
-note bottom of Docker : Container Infrastructure\nsaber/mcp-sidecar:latest (295MB)\nsaber/agent-runner:latest (458MB)\nIsolated networks & resource limits
+note bottom of DockerEngine : Container Infrastructure\nsaber/mcp-sidecar:latest\nsaber/agent-runner:latest\nIsolated networks & resource limits
 
 @enduml

@@ -370,18 +370,26 @@ class SandboxEnvironmentSpec:
     def to_compose_dict(
         self,
         session_id: Optional[str] = None,
+        episode_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Generate complete Docker Compose configuration.
 
         Args:
             session_id: Session identifier for container labeling
+            episode_id: Episode identifier for unique container naming
         """
         services = {}
 
         # Add execution service
         exec_config = self.execution_config.copy()
         exec_config["networks"] = self.get_network_names()
+
+        # Modify container name to include episode_id for uniqueness
+        if episode_id and "container_name" in exec_config:
+            original_name = exec_config["container_name"]
+            exec_config["container_name"] = f"{original_name}-{episode_id}"
+
         # Add SABER labels to execution service
         if session_id:
             if "labels" not in exec_config:
@@ -392,12 +400,20 @@ class SandboxEnvironmentSpec:
                     "saber.role=execution",
                 ]
             )
+            if episode_id:
+                exec_config["labels"].append(f"saber.episode_id={episode_id}")
         services[self.execution_service] = exec_config
 
         # Add target services
         for service_spec in self.target_services:
             service_config = service_spec.to_compose_service()
             service_config["networks"] = self.get_network_names()
+
+            # Modify container name to include episode_id for uniqueness
+            if episode_id and "container_name" in service_config:
+                original_name = service_config["container_name"]
+                service_config["container_name"] = f"{original_name}-{episode_id}"
+
             # Add SABER labels to target services
             if session_id:
                 if "labels" not in service_config:
@@ -408,6 +424,8 @@ class SandboxEnvironmentSpec:
                         "saber.role=target",
                     ]
                 )
+                if episode_id:
+                    service_config["labels"].append(f"saber.episode_id={episode_id}")
             services[service_spec.name] = service_config
 
         # Build networks configuration

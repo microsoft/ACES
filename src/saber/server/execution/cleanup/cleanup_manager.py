@@ -50,6 +50,7 @@ class ContainerCleanupManager:
         self,
         sandbox_manager: SandboxEnvironmentManager,
         permanent_manager: Optional[PermanentEnvironmentManager] = None,
+        debug_mode: bool = False,
     ):
         """
         Initialize the cleanup manager.
@@ -57,14 +58,18 @@ class ContainerCleanupManager:
         Args:
             sandbox_manager: The sandbox manager to use for ephemeral container cleanup operations
             permanent_manager: Optional permanent environment manager for persistent container lifecycle
+            debug_mode: If True, skip container cleanup to allow manual debugging
         """
         self.sandbox_manager = sandbox_manager
         self.permanent_manager = permanent_manager
+        self.debug_mode = debug_mode
         self._active_cleanups: Set[str] = set()
         self._cleanup_history: List[CleanupOperation] = []
         self._max_history_size = 1000  # Keep last 1000 cleanup operations
 
         logger.info("🧹 ContainerCleanupManager initialized")
+        if debug_mode:
+            logger.warning("🐛 DEBUG MODE ENABLED: Container cleanup will be SKIPPED")
         if permanent_manager:
             logger.info("🧹 ContainerCleanupManager configured with permanent environment support")
 
@@ -108,6 +113,28 @@ class ContainerCleanupManager:
         )
 
         try:
+            # Check if debug mode is enabled - skip cleanup if so
+            if self.debug_mode:
+                logger.warning(
+                    f"🐛 [{session_id}] DEBUG MODE: Skipping container cleanup for session {session_id}, "
+                    f"reason: {reason}. Containers left running for manual debugging.",
+                    session_id,
+                )
+                operation.steps_completed.append("debug_mode_skip")
+                operation.success = True
+                operation.end_time = datetime.utcnow()
+
+                # Still mark cleanup as complete so session tracking is updated
+                self._active_cleanups.discard(session_id)
+                self._add_to_history(operation)
+
+                logger.info(
+                    f"🐛 [{session_id}] DEBUG MODE: Session cleanup skipped successfully. "
+                    f"Containers remain active for debugging purposes.",
+                    session_id,
+                )
+                return True
+
             # Step 1: Check if session has active environment
             operation.steps_completed.append("environment_check")
             environment = self.sandbox_manager.get_session_environment(session_id)
@@ -213,6 +240,12 @@ class ContainerCleanupManager:
             f"reason: {reason}, session_ids: {active_session_ids}"
         )
 
+        if self.debug_mode:
+            logger.warning(
+                f"🐛 DEBUG MODE: cleanup_all_sessions called for {len(active_session_ids)} sessions, "
+                f"but containers will not be cleaned up"
+            )
+
         successful_cleanups = 0
 
         for session_id in active_session_ids:
@@ -306,6 +339,9 @@ class ContainerCleanupManager:
             context = {}
 
         logger.info("🧹 FULL CLEANUP START: Starting cleanup of all containers (ephemeral + permanent)")
+
+        if self.debug_mode:
+            logger.warning("🐛 DEBUG MODE: cleanup_all_containers called but containers will not be cleaned up")
 
         # Clean up all ephemeral session containers
         ephemeral_cleaned = self.cleanup_all_sessions(reason, context)

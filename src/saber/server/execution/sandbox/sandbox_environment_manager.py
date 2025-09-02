@@ -145,6 +145,7 @@ class SandboxEnvironmentManager:
         self,
         session_id: str,
         environment_spec: SandboxEnvironmentSpec,
+        episode_id: Optional[str] = None,
     ) -> DockerSandboxEnvironment:
         """
         Create a new Docker sandbox environment for a session.
@@ -152,6 +153,7 @@ class SandboxEnvironmentManager:
         Args:
             session_id: Unique identifier for the session
             environment_spec: Environment specification for container orchestration
+            episode_id: Optional episode identifier for unique container naming
 
         Returns:
             DockerSandboxEnvironment instance
@@ -183,7 +185,7 @@ class SandboxEnvironmentManager:
 
             # Create new environment with specification and logging config
             environment = DockerSandboxEnvironment(
-                session_id, environment_spec, container_logging_config=container_logging_config
+                session_id, environment_spec, container_logging_config=container_logging_config, episode_id=episode_id
             )
 
             # Start the environment

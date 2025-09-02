@@ -122,7 +122,7 @@ class TestExecutionManager:
             assert "logs_directory" in call_args
             assert "enable_container_logging" in call_args
             mock_sandbox_instance.create_session_environment.assert_called_once_with(
-                "session123", mock_env_spec
+                "session123", mock_env_spec, episode_id=None
             )
 
         # Should have updated configuration (only cli config should be present since python_config is None)
@@ -794,3 +794,108 @@ class TestExecutionManagerPermanentEnvironment:
 
         # Verify execution tracking was cleaned up
         assert "test_session" not in execution_manager._active_executions
+
+
+class TestExecutionManagerDebugMode:
+    """Test cases for ExecutionManager debug mode functionality."""
+
+    @pytest.fixture
+    def mock_cleanup_manager(self):
+        """Mock cleanup manager for testing."""
+        return MagicMock()
+
+    @pytest.fixture
+    def mock_sandbox_manager(self):
+        """Mock sandbox manager for testing."""
+        return MagicMock()
+
+    def test_debug_mode_enabled_from_env_true(self, tmp_path, monkeypatch):
+        """Test that debug mode is enabled when SABER_DEBUG_MODE=true."""
+        # Set environment variable
+        monkeypatch.setenv("SABER_DEBUG_MODE", "true")
+
+        # Create execution manager
+        execution_manager = ExecutionManager(str(tmp_path))
+
+        # Verify debug mode is enabled
+        assert execution_manager.debug_mode is True
+
+    def test_debug_mode_enabled_from_env_1(self, tmp_path, monkeypatch):
+        """Test that debug mode is enabled when SABER_DEBUG_MODE=1."""
+        # Set environment variable
+        monkeypatch.setenv("SABER_DEBUG_MODE", "1")
+
+        # Create execution manager
+        execution_manager = ExecutionManager(str(tmp_path))
+
+        # Verify debug mode is enabled
+        assert execution_manager.debug_mode is True
+
+    def test_debug_mode_disabled_from_env_false(self, tmp_path, monkeypatch):
+        """Test that debug mode is disabled when SABER_DEBUG_MODE=false."""
+        # Set environment variable
+        monkeypatch.setenv("SABER_DEBUG_MODE", "false")
+
+        # Create execution manager
+        execution_manager = ExecutionManager(str(tmp_path))
+
+        # Verify debug mode is disabled
+        assert execution_manager.debug_mode is False
+
+    def test_debug_mode_disabled_by_default(self, tmp_path, monkeypatch):
+        """Test that debug mode is disabled by default when env var is not set."""
+        # Ensure environment variable is not set
+        monkeypatch.delenv("SABER_DEBUG_MODE", raising=False)
+
+        # Create execution manager
+        execution_manager = ExecutionManager(str(tmp_path))
+
+        # Verify debug mode is disabled
+        assert execution_manager.debug_mode is False
+
+    @patch('saber.server.execution.execution_manager.ContainerCleanupManager')
+    def test_debug_mode_passed_to_cleanup_manager(self, mock_cleanup_manager_class, tmp_path, monkeypatch):
+        """Test that debug mode is passed to ContainerCleanupManager."""
+        # Set environment variable
+        monkeypatch.setenv("SABER_DEBUG_MODE", "true")
+
+        # Create execution manager
+        execution_manager = ExecutionManager(str(tmp_path))
+
+        # Verify ContainerCleanupManager was called with debug_mode=True
+        mock_cleanup_manager_class.assert_called_once()
+        call_args = mock_cleanup_manager_class.call_args
+        assert call_args.kwargs.get('debug_mode') is True
+
+    def test_configure_for_task_with_episode_id(self, tmp_path, monkeypatch):
+        """Test configuring ExecutionManager with episode ID for unique container naming."""
+        # Ensure SABER_DEBUG_MODE is not set
+        monkeypatch.delenv("SABER_DEBUG_MODE", raising=False)
+
+        execution_manager = ExecutionManager(str(tmp_path))
+
+        # Create a mock task object
+        mock_task = MagicMock()
+        mock_task.environment = "test_env"
+        mock_task.execution_config = {"timeout": 120.0}
+        mock_task.allowed_executors = ["cli"]
+        mock_task.cli_config = {"default_shell_mode": True}
+        mock_task.python_config = None
+
+        # Mock environment loader
+        mock_env_spec = MagicMock()
+        execution_manager._environment_loader = MagicMock()
+        execution_manager._environment_loader.resolve_environment.return_value = mock_env_spec
+
+        # Mock SandboxManager class
+        with patch("saber.server.execution.execution_manager.SandboxEnvironmentManager") as mock_sandbox_class:
+            mock_sandbox_instance = MagicMock()
+            mock_sandbox_class.return_value = mock_sandbox_instance
+
+            episode_id = "test-episode-123"
+            execution_manager.configure_for_task("session123", mock_task, episode_id=episode_id)
+
+            # Verify episode_id was passed to create_session_environment
+            mock_sandbox_instance.create_session_environment.assert_called_once_with(
+                "session123", mock_env_spec, episode_id=episode_id
+            )

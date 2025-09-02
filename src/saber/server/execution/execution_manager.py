@@ -6,6 +6,7 @@ security validation capabilities.
 """
 
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -42,6 +43,13 @@ class ExecutionManager:
         self._environment_loader = None
         self._permanent_environment_manager: Optional[PermanentEnvironmentManager] = None
 
+        # Check for debug mode from environment variable
+        self._debug_mode = os.getenv("SABER_DEBUG_MODE", "false").lower() in ("true", "1", "yes")
+        if self._debug_mode:
+            logger.info("SABER Debug Mode ENABLED - Containers will not be cleaned up after execution")
+        else:
+            logger.debug("SABER Debug Mode disabled - Normal cleanup behavior")
+
         # Initialize environment loader if config directory is provided
         if config_dir:
             environments_path = Path(config_dir) / "environments.yaml"
@@ -75,6 +83,7 @@ class ExecutionManager:
         self._cleanup_manager = ContainerCleanupManager(
             sandbox_manager=self._sandbox_manager,
             permanent_manager=None,  # Will be set when permanent environment is initialized
+            debug_mode=self._debug_mode,
         )
 
         # Session-based execution tracking for concurrent commands
@@ -217,6 +226,7 @@ class ExecutionManager:
         self,
         session_id: str,
         task: Any,
+        episode_id: Optional[str] = None,
     ) -> None:
         """
         Configure ExecutionManager for a specific task/session.
@@ -224,6 +234,7 @@ class ExecutionManager:
         Args:
             session_id: Session identifier
             task: Task object containing execution parameters and environment specification
+            episode_id: Optional episode identifier for unique container naming
         """
         # Resolve environment if specified in task
         environment_spec = None
@@ -282,7 +293,7 @@ class ExecutionManager:
             # Create the session environment immediately
             logger.info(f"🔍 DEBUG: About to call create_session_environment for session {session_id}")
             try:
-                self._sandbox_manager.create_session_environment(session_id, environment_spec)
+                self._sandbox_manager.create_session_environment(session_id, environment_spec, episode_id=episode_id)
                 logger.info(f"✅ Created sandbox environment for session {session_id}")
             except Exception as e:
                 logger.error(f"❌ FAILED to create sandbox environment for session {session_id}: {e}")
@@ -496,3 +507,13 @@ class ExecutionManager:
             reason = CleanupReason.SERVER_SHUTDOWN
 
         return self._cleanup_manager.cleanup_all_containers(reason, context)
+
+    @property
+    def debug_mode(self) -> bool:
+        """
+        Check if debug mode is enabled.
+
+        Returns:
+            True if debug mode is enabled (containers won't be cleaned up)
+        """
+        return self._debug_mode

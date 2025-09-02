@@ -26,7 +26,7 @@ end box
 
 == Benchmark Initialization ==
 
-User -> Harness: **Initialize benchmark**\nconfig = SABERHarnessConfig(use_containers=True)\nharness.initialize(my_agent)
+User -> Harness: **Initialize benchmark**\nconfig = SABERHarnessConfig()\nharness.initialize(my_agent)
 
 activate Harness
 Harness -> Harness: Load configuration\nValidate agent compatibility

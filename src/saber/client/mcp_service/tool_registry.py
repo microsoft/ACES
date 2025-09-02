@@ -61,6 +61,7 @@ class ToolRegistry:
         session_id: str,
         episode_id: Optional[str] = None,
         task_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
         force_refresh: bool = False,
     ) -> Dict[str, ToolInfo]:
         """
@@ -85,7 +86,7 @@ class ToolRegistry:
 
         # Discover tools from SABER server
         try:
-            tools = await self._discover_tools_from_server(session_id, effective_episode_id, task_id)
+            tools = await self._discover_tools_from_server(session_id, effective_episode_id, task_id, agent_id)
             self._update_cache(cache_key, tools)
 
             # Start auto-refresh task if enabled
@@ -100,29 +101,61 @@ class ToolRegistry:
             return self._tool_cache.get(cache_key, {})
 
     async def _discover_tools_from_server(
-        self, session_id: str, episode_id: str, task_id: Optional[str] = None
+        self, session_id: str, episode_id: str, task_id: Optional[str] = None, agent_id: Optional[str] = None
     ) -> Dict[str, ToolInfo]:
         """Discover tools from SABER MCP server via proxy."""
-        # Create a unique agent_id that includes context for tool discovery
-        agent_id = f"tool-discovery-{session_id}-{episode_id}"
+        # Use the actual registered agent_id, fall back to artificial one for backwards compatibility
+        if agent_id:
+            effective_agent_id = agent_id
+        else:
+            effective_agent_id = f"tool-discovery-{session_id}-{episode_id}"
 
         try:
             # Use MCP proxy to get tools for this session+episode context
-            # The MCPProxy should handle passing the episode context to SABER server
-            response = await self.mcp_proxy.list_tools(agent_id)
+            self.logger.info(
+                f"Discovering tools for session {session_id}, episode {episode_id} via agent_id {effective_agent_id}"
+            )
+            response = await self.mcp_proxy.list_tools(effective_agent_id)
 
+            self.logger.info(f"MCP response: result={type(response.result)}, error={response.error}")
             if response.error:
                 raise RuntimeError(f"MCP error: {response.error}")
 
             tools = {}
-            result_tools = response.result.get("tools", [])
+            # Handle the response format from MCPProxy
+            if isinstance(response.result, list):
+                result_tools = response.result
+            elif isinstance(response.result, dict) and "tools" in response.result:
+                result_tools = response.result["tools"]
+            else:
+                self.logger.warning(f"Unexpected tools response format: {type(response.result)}")
+                result_tools = []
+
+            self.logger.info(f"Parsed {len(result_tools)} tools from response")
 
             for tool_data in result_tools:
+                # Handle both dictionary format and Tool object format
+                if hasattr(tool_data, "name"):
+                    # FastMCP Tool object
+                    tool_name = tool_data.name
+                    tool_description = getattr(tool_data, "description", "")
+                    tool_schema = getattr(tool_data, "inputSchema", {})
+                    if hasattr(tool_schema, "dict"):
+                        tool_schema = tool_schema.dict()
+                elif isinstance(tool_data, dict):
+                    # Dictionary format
+                    tool_name = tool_data["name"]
+                    tool_description = tool_data.get("description", "")
+                    tool_schema = tool_data.get("inputSchema", {})
+                else:
+                    self.logger.warning(f"Unexpected tool format: {type(tool_data)} - {tool_data}")
+                    continue
+
                 metadata = ToolInfo(
-                    name=tool_data["name"],
-                    description=tool_data.get("description", ""),
-                    parameters=tool_data.get("inputSchema", {}),
-                    timeout=tool_data.get("timeout", 30),
+                    name=tool_name,
+                    description=tool_description,
+                    parameters=tool_schema,
+                    timeout=30,  # Default timeout
                     cached_at=datetime.utcnow(),
                 )
                 tools[metadata.name] = metadata
@@ -159,6 +192,7 @@ class ToolRegistry:
         async def refresh_task() -> None:
             await asyncio.sleep(self.cache_ttl.total_seconds())
             try:
+                # Note: refresh task doesn't have access to agent_id, falls back to artificial ID
                 await self.get_tools_for_session_episode(session_id, episode_id, task_id, force_refresh=True)
             except Exception as e:
                 self.logger.warning(f"Auto-refresh failed for session {session_id}, episode {episode_id}: {e}")
@@ -172,6 +206,7 @@ class ToolRegistry:
         tool_name: str,
         arguments: Dict[str, Any],
         timeout: Optional[int] = None,
+        agent_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Execute a tool via MCP proxy.
@@ -187,11 +222,14 @@ class ToolRegistry:
             Tool execution result
         """
         effective_episode_id = episode_id or "default"
-        # cache_key = (session_id, effective_episode_id)  # Available for future caching
-        agent_id = f"tool-executor-{session_id}-{effective_episode_id}"
+        # Use the actual registered agent_id, fall back to artificial one for backwards compatibility
+        if agent_id:
+            effective_agent_id = agent_id
+        else:
+            effective_agent_id = f"tool-executor-{session_id}-{effective_episode_id}"
 
         # Get tool metadata for validation
-        tools = await self.get_tools_for_session_episode(session_id, episode_id)
+        tools = await self.get_tools_for_session_episode(session_id, episode_id, agent_id=agent_id)
         if tool_name not in tools:
             raise ValueError(
                 f"Tool '{tool_name}' not available for session {session_id}, episode {effective_episode_id}"
@@ -203,7 +241,7 @@ class ToolRegistry:
         try:
             # Execute via MCP proxy
             response = await asyncio.wait_for(
-                self.mcp_proxy.call_tool(agent_id, tool_name, arguments), timeout=effective_timeout
+                self.mcp_proxy.call_tool(effective_agent_id, tool_name, arguments), timeout=effective_timeout
             )
 
             if response.error:

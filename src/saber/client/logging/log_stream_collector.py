@@ -117,14 +117,15 @@ class LogStreamCollector:
             def sync_generator_wrapper() -> list[str]:
                 return list(_get_logs_sync())
 
-            # For now, let's use a simpler approach - just get recent logs without following
+            # Use a simpler approach - get all logs after container completes
+            # This avoids blocking issues with follow=True
             logs_generator = container.logs(
-                stream=False,  # Don't follow for now to avoid blocking
-                follow=False,
+                stream=False,  # Don't stream - get all logs at once
+                follow=False,  # Don't follow - container may not be running yet
                 stdout=True,
                 stderr=True,
                 timestamps=True,
-                tail=100,  # Get last 100 lines
+                tail="all",  # Get all logs when available
             )
 
             # Process the logs

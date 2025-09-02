@@ -242,6 +242,18 @@ class ToolInjector:
 
         return context
 
+    async def list_tools(self) -> List[str]:
+        """List available tools - backwards compatibility method."""
+        return list(self.tools.keys())
+
+    async def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
+        """Call a tool - backwards compatibility method."""
+        if tool_name not in self.tools:
+            raise ToolExecutionError(f"Tool '{tool_name}' not available")
+
+        # Call the injected proxy function
+        return await self.tools[tool_name](**arguments)
+
     async def refresh_tools(self) -> None:
         """Refresh tool discovery from sidecar."""
         try:
