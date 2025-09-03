@@ -20,6 +20,9 @@ from .containers.sidecar_manager import SidecarConfig
 from .harness_models import EpisodeResult, SABERHarnessConfig
 from .logging import ClientLoggingConfig, ContainerLogManager, SessionLoggingContext
 
+# Import MessageType for UI notifications
+from .ui.models import MessageType
+
 logger = logging.getLogger(__name__)
 
 
@@ -43,7 +46,7 @@ class ContainerEpisodeExecutor:
         saber_server_url: Optional[str] = None,
         saber_mcp_url: Optional[str] = None,
         harness_config: Optional[SABERHarnessConfig] = None,
-        ui_adapter: Optional[Any] = None,  # Type hint as Any to avoid circular imports
+        ui_manager: Optional[Any] = None,  # Type hint as Any to avoid circular imports
         session_log_dir: Optional[Path] = None,  # Shared log directory for all session logs
         harness: Optional[Any] = None,  # Reference to harness for agent file path access
     ):
@@ -52,7 +55,7 @@ class ContainerEpisodeExecutor:
         self.session_id = session_id
         self.parallelism = parallelism
         self.harness_config = harness_config
-        self.ui_adapter = ui_adapter
+        self.ui_manager = ui_manager
         self.session_log_dir = session_log_dir
         self.harness = harness  # Store harness reference
 
@@ -68,14 +71,19 @@ class ContainerEpisodeExecutor:
         if saber_mcp_url:
             sidecar_config.saber_mcp_url = saber_mcp_url
 
+        # Configure harness URL for progress reporting
+        if harness and hasattr(harness, "progress_server") and harness.progress_server:
+            # Use the actual progress server host/port
+            sidecar_config.harness_url = f"http://host.docker.internal:{harness.progress_server.port}"
+
         # Detect current container's network for sidecar communication
         # This ensures the sidecar and client are on the same network for DNS resolution
         try:
             import socket
 
-            import docker.client
+            import docker
 
-            docker_client = docker.client.DockerClient.from_env()
+            docker_client = docker.from_env()  # type: ignore[attr-defined]
 
             # Get the current container (client container)
             hostname = socket.gethostname()
@@ -157,7 +165,134 @@ class ContainerEpisodeExecutor:
             session_id=self.session_id, task_id=None, agent_id="saber-harness"
         )
 
+        # Start SSE progress stream from sidecar
+        await self._start_sidecar_progress_stream()
+
         logger.info("✅ Container infrastructure initialized")
+
+    async def _start_sidecar_progress_stream(self) -> None:
+        """Start SSE progress stream from sidecar for tool call updates."""
+        if not self.rest_client:
+            logger.warning("No REST client available for progress stream")
+            return
+
+        # Import UI progress adapter
+        from datetime import datetime, timezone
+
+        from .ui.interfaces import MCPToolCall, MCPToolCallStatus, UIProgressAdapter
+
+        # Create UI progress adapter
+        self.progress_adapter = UIProgressAdapter(ui_manager=self.ui_manager)
+
+        def progress_callback(data: Dict[str, Any]) -> None:
+            """Handle progress updates from sidecar SSE stream."""
+            try:
+                logger.info(f"📡 Progress update: {data}")
+                logger.info(f"🚨 CLIENT SSE DEBUG: Received event type: {data.get('type', 'UNKNOWN')}")
+
+                # Parse SSE data into tool call events and schedule async operations
+                event_type = data.get("type")
+
+                if event_type == "connection":
+                    logger.info("🚨 CLIENT SSE DEBUG: Connection event received")
+                    return
+
+                elif event_type == "heartbeat":
+                    logger.info("🚨 CLIENT SSE DEBUG: Heartbeat event received")
+                    return
+
+                elif event_type == "tool_call_start":
+                    logger.info(
+                        f"🚨 CLIENT SSE DEBUG: Tool call start event received for {data.get('tool_name', 'unknown')}"
+                    )
+                    # Create MCPToolCall object from SSE data
+                    tool_call = MCPToolCall(
+                        tool_name=data.get("tool_name", "unknown"),
+                        call_id=data.get("call_id", "unknown"),
+                        status=MCPToolCallStatus.STARTING,
+                        input_args=data.get("input_args", {}),
+                        start_time=datetime.fromisoformat(
+                            data.get("start_time", datetime.now(timezone.utc).isoformat())
+                        ),
+                        agent_id=data.get("agent_id"),
+                        session_id=data.get("session_id"),
+                        task_id=data.get("task_id"),
+                    )
+                    # Schedule the async call
+                    logger.info("🚨 CLIENT SSE DEBUG: Creating async task for tool_call_start")
+                    asyncio.create_task(self.progress_adapter.tool_call_start(tool_call))
+
+                elif event_type == "tool_call_progress":
+                    # Update existing tool call
+                    tool_call = MCPToolCall(
+                        tool_name=data.get("tool_name", "unknown"),
+                        call_id=data.get("call_id", "unknown"),
+                        status=MCPToolCallStatus.RUNNING,
+                        input_args=data.get("input_args", {}),
+                        start_time=datetime.fromisoformat(
+                            data.get("start_time", datetime.now(timezone.utc).isoformat())
+                        ),
+                        progress=data.get("progress", 0.0),
+                        execution_time_ms=data.get("execution_time_ms"),
+                        agent_id=data.get("agent_id"),
+                        session_id=data.get("session_id"),
+                        task_id=data.get("task_id"),
+                    )
+                    # Schedule the async call
+                    asyncio.create_task(self.progress_adapter.tool_call_progress(tool_call))
+
+                elif event_type == "tool_call_complete":
+                    logger.info(
+                        f"🚨 CLIENT SSE DEBUG: Tool call complete event received for {data.get('tool_name', 'unknown')}"
+                    )
+                    # Complete tool call
+                    status_map = {
+                        "completed": MCPToolCallStatus.COMPLETED,
+                        "failed": MCPToolCallStatus.FAILED,
+                        "timeout": MCPToolCallStatus.TIMEOUT,
+                        "cancelled": MCPToolCallStatus.CANCELLED,
+                    }
+
+                    tool_call = MCPToolCall(
+                        tool_name=data.get("tool_name", "unknown"),
+                        call_id=data.get("call_id", "unknown"),
+                        status=status_map.get(data.get("status", "completed"), MCPToolCallStatus.COMPLETED),
+                        input_args=data.get("input_args", {}),
+                        start_time=datetime.fromisoformat(
+                            data.get("start_time", datetime.now(timezone.utc).isoformat())
+                        ),
+                        end_time=datetime.fromisoformat(data.get("end_time", datetime.now(timezone.utc).isoformat())),
+                        execution_time_ms=data.get("execution_time_ms"),
+                        output=data.get("output"),
+                        error=data.get("error"),
+                        progress=1.0,
+                        agent_id=data.get("agent_id"),
+                        session_id=data.get("session_id"),
+                        task_id=data.get("task_id"),
+                    )
+                    # Schedule the async call
+                    logger.info("🚨 CLIENT SSE DEBUG: Creating async task for tool_call_complete")
+                    asyncio.create_task(self.progress_adapter.tool_call_complete(tool_call))
+
+                elif event_type in ["connection", "heartbeat"]:
+                    # Ignore connection/heartbeat events
+                    pass
+                else:
+                    logger.info(f"🚨 CLIENT SSE DEBUG: Unknown event type: {event_type}")
+                    logger.debug(f"🔍 Unknown SSE event type: {event_type}")
+
+            except Exception as e:
+                logger.warning(f"⚠️ Error handling progress update: {e}")
+
+        # Start the SSE stream
+        success = await self.rest_client.start_progress_stream(
+            progress_callback=progress_callback, agent_id="saber-harness"
+        )
+
+        if success:
+            logger.info("✅ SSE progress stream started")
+        else:
+            logger.warning("⚠️ Failed to start SSE progress stream")
 
     async def execute_episodes(
         self, episodes: List[Tuple[str, int]], agent: Any  # [(task_id, attempt), ...]
@@ -238,7 +373,7 @@ class ContainerEpisodeExecutor:
         logger.debug(f"🎬 Starting containerized episode {attempt} for task {task_id}")
 
         # UI Progress: Episode start
-        if self.ui_adapter:
+        if self.ui_manager:
             await self._notify_episode_start(task_id, attempt)
 
         try:
@@ -247,7 +382,7 @@ class ContainerEpisodeExecutor:
             logger.debug(f"📍 Started episode: {episode_id}")
 
             # UI Progress: Episode started
-            if self.ui_adapter:
+            if self.ui_manager:
                 await self._notify_episode_started(task_id, episode_id, attempt)
 
             # Step 2: Get task-specific policy
@@ -277,7 +412,7 @@ class ContainerEpisodeExecutor:
             )
 
             # UI Progress: Episode complete
-            if self.ui_adapter:
+            if self.ui_manager:
                 await self._notify_episode_complete(result)
 
             return result
@@ -289,7 +424,7 @@ class ContainerEpisodeExecutor:
             )
 
             # UI Progress: Episode failed
-            if self.ui_adapter:
+            if self.ui_manager:
                 await self._notify_episode_complete(result)
 
             return result
@@ -300,8 +435,8 @@ class ContainerEpisodeExecutor:
         """Execute agent in container with multi-channel termination monitoring."""
         # Update session context with current task/episode info for logging
         if self.log_manager:
-            self.log_manager.log_collector.session_context.task_id = task_id
-            self.log_manager.log_collector.session_context.episode_id = episode_id
+            self.log_manager.session_context.task_id = task_id
+            self.log_manager.session_context.episode_id = episode_id
 
             # Log container lifecycle event
             self.log_manager.log_container_lifecycle_event(
@@ -549,60 +684,60 @@ class ContainerEpisodeExecutor:
 
         return 0  # Default if not found
 
-    # UI Progress Methods
+    # UI Progress Methods - Updated for new UIManager
     async def _notify_episode_start(self, task_id: str, attempt: int) -> None:
-        """Notify UI adapter that episode is starting."""
+        """Notify UI manager that episode is starting."""
         try:
-            from ..ui.interfaces import SABERTaskState, SABERUITaskInfo
-
-            task_info = SABERUITaskInfo(
-                task_id=task_id,
-                attempt=attempt,
-                state=SABERTaskState.STARTING,
-                episode_id=None,
-                progress_message="Starting episode...",
-            )
-            if self.ui_adapter:
-                await self.ui_adapter.task_start(task_info)
+            if self.ui_manager:
+                task_info = {
+                    "task_id": task_id,
+                    "name": f"Episode {attempt}",
+                    "target": "saber_domain",
+                    "description": f"Starting episode {attempt} for task {task_id}",
+                    "attempt": attempt,
+                }
+                await self.ui_manager.task_start(task_info)
         except Exception as e:
             logger.warning(f"UI notification failed (episode_start): {e}")
 
     async def _notify_episode_started(self, task_id: str, episode_id: str, attempt: int) -> None:
-        """Notify UI adapter that episode has started successfully."""
+        """Notify UI manager that episode has started successfully."""
         try:
-            from ..ui.interfaces import SABERTaskState, SABERUITaskInfo
-
-            task_info = SABERUITaskInfo(
-                task_id=task_id,
-                attempt=attempt,
-                state=SABERTaskState.RUNNING,
-                episode_id=episode_id,
-                progress_message="Executing agent in container...",
-            )
-            if self.ui_adapter:
-                await self.ui_adapter.task_update(task_info)
+            if self.ui_manager:
+                self.ui_manager.update_task_progress(task_id, 0.1)  # 10% progress for started
         except Exception as e:
             logger.warning(f"UI notification failed (episode_started): {e}")
 
     async def _notify_episode_complete(self, result: EpisodeResult) -> None:
-        """Notify UI adapter that episode has completed."""
+        """Notify UI manager that episode has completed."""
         try:
-            from ..ui.interfaces import SABERTaskState, SABERUITaskResult
+            if self.ui_manager:
+                task_result = {
+                    "task_id": result.task_id,
+                    "success": result.success,
+                    "flag": result.flag,
+                    "method": "Container execution",
+                    "vulnerability": f"Task {result.task_id}",
+                    "execution_time": 0.0,  # Could be enhanced to track actual time
+                    "tools_used": [],
+                    "attempt": result.attempt,
+                    "episode_id": result.episode_id,
+                    "termination_reason": result.termination_reason,
+                    "iterations": result.iterations,
+                    "error": result.error,
+                }
+                await self.ui_manager.task_complete(task_result)
 
-            final_state = SABERTaskState.COMPLETED if result.success else SABERTaskState.FAILED
-            task_result = SABERUITaskResult(
-                task_id=result.task_id,
-                episode_id=result.episode_id,
-                attempt=result.attempt,
-                success=result.success,
-                final_state=final_state,
-                termination_reason=result.termination_reason,
-                iterations=result.iterations,
-                error_message=result.error,
-                flag=result.flag,
-            )
-            if self.ui_adapter:
-                await self.ui_adapter.task_complete(task_result)
+                if result.success and result.flag:
+                    self.ui_manager.display_message(f"🚩 Flag captured: {result.flag}", MessageType.SUCCESS)
+                elif result.success:
+                    self.ui_manager.display_message(
+                        f"✅ Task {result.task_id} completed successfully", MessageType.SUCCESS
+                    )
+                else:
+                    self.ui_manager.display_message(
+                        f"❌ Task {result.task_id} failed: {result.termination_reason}", MessageType.ERROR
+                    )
         except Exception as e:
             logger.warning(f"UI notification failed (episode_complete): {e}")
 
@@ -611,6 +746,11 @@ class ContainerEpisodeExecutor:
         logger.info("🧹 Cleaning up container infrastructure")
 
         try:
+            # Stop SSE progress stream
+            if self.rest_client:
+                await self.rest_client.stop_progress_stream()
+                logger.info("✅ SSE progress stream stopped")
+
             # Finalize container logging session
             if self.log_manager:
                 await self.log_manager.cleanup_and_finalize()

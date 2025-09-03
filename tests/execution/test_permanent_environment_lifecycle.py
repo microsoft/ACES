@@ -87,7 +87,12 @@ class TestPermanentEnvironmentLifecycle:
     def manager(self, base_config):
         """Create a PermanentEnvironmentManager instance."""
         with patch('saber.server.execution.sandbox.permanent_environment_manager.ContainerLoggingManager'):
-            return PermanentEnvironmentManager(base_config)
+            manager = PermanentEnvironmentManager(base_config)
+            # Clean up any existing configuration hash file for test isolation
+            hash_file = manager.metadata_dir / "configuration_hash.txt"
+            if hash_file.exists():
+                hash_file.unlink()
+            return manager
 
     def test_configuration_hash_computation(self, manager, permanent_env_spec):
         """Test configuration hash computation is deterministic."""

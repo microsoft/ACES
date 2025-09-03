@@ -11,6 +11,7 @@ Enables debugging of container execution issues with structured, searchable logs
 
 from .config import ClientLoggingConfig, SessionLoggingContext
 from .container_log_manager import ContainerLogManager
+from .docker_log_collector import DockerLogCollector
 from .events import (
     CleanupEvent,
     EpisodeQueueEvent,
@@ -24,14 +25,13 @@ from .events import (
     UIEvent,
 )
 from .harness_execution_logger import HarnessExecutionLogger
-from .log_stream_collector import LogStreamCollector
 
 __all__ = [
     "ClientLoggingConfig",
     "SessionLoggingContext",
     "ContainerLogManager",
     "HarnessExecutionLogger",
-    "LogStreamCollector",
+    "DockerLogCollector",
     # Event classes
     "HarnessInitializationEvent",
     "SessionCreationEvent",

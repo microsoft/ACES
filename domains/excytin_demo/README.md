@@ -68,7 +68,7 @@ Ensure you have:
 From the repository root:
 
 ```bash
-cd /home/ms_test/repos/saber_chillin/domains/excytin_demo
+cd /path/to/SABER/domains/excytin_demo
 ./build-images.sh
 ```
 
@@ -81,7 +81,7 @@ This builds:
 ### 3. Start Environment
 
 ```bash
-cd /home/ms_test/repos/saber_chillin/domains/excytin_demo
+cd /path/to/SABER/domains/excytin_demo
 docker-compose up -d
 ```
 
@@ -105,9 +105,44 @@ docker logs saber-excytin-server --tail 20
 
 ### 5. Run Demo Client
 
+The excytin demo now uses the unified SABER client entry point with enhanced UI integration:
+
+#### Quick Start (Recommended)
 ```bash
-cd /home/ms_test/repos/saber_chillin/domains/excytin_demo
-docker exec -it saber-excytin-client uv run demo_client.py --verbose
+cd /home/ms_test/repos/saber_vibin/domains/excytin_demo/client
+./run_demo.sh
+```
+
+#### Manual Execution
+```bash
+# Plain UI with clean logging (default)
+docker exec -it saber-excytin-client uv run python -m saber.client 
+  --agent /app/client/demo_agent.py 
+  --tasks excytin_demo 
+  --ui plain 
+  --quiet-logs
+
+# Rich UI with progress bars
+docker exec -it saber-excytin-client uv run python -m saber.client 
+  --agent /app/client/demo_agent.py 
+  --tasks excytin_demo 
+  --ui rich 
+  --quiet-logs
+
+# Full interactive textual UI
+docker exec -it saber-excytin-client uv run python -m saber.client 
+  --agent /app/client/demo_agent.py 
+  --tasks excytin_demo 
+  --ui textual 
+  --quiet-logs
+```
+
+#### Script Options
+```bash
+./run_demo.sh --help                    # Show help
+./run_demo.sh --ui rich                 # Rich UI mode
+./run_demo.sh --ui textual --verbose    # Full TUI with debug logs
+./run_demo.sh --console-logs            # Show logs on console
 ```
 
 ## Expected Behavior
@@ -153,8 +188,25 @@ docker ps -a | grep saber-session-
 
 ### Check Logs Directory
 ```bash
-ls -la ./server/logs/
-# Should contain subdirectories per session with container logs
+# Find the latest session logs
+ls -la ./client/logs/
+
+# Check unified logging structure  
+ls -la ./client/logs/{timestamp}/
+# Should contain:
+#   harness-execution/     - Harness execution logs
+#   container-logs/        - All container logs
+#   client-logs/          - Client application logs  
+#   container-events/     - Container lifecycle events
+
+# Check client logs
+tail -f ./client/logs/{timestamp}/client-logs/saber_client.log
+
+# Check agent execution logs
+ls ./client/logs/{timestamp}/container-logs/agent-containers/
+
+# Check container events
+cat ./client/logs/{timestamp}/container-events/container-events-*.jsonl
 ```
 
 ## Configuration Files
@@ -216,13 +268,23 @@ When everything works correctly:
    # Shows: saber-session-[id]-mysql, etc.
    ```
 
-3. **Logs Are Captured**:
+3. **Unified Logs Are Captured**:
    ```bash
-   ls ./server/logs/[session-id]/
-   # Shows: docker-compose.yml, container-logs/, lifecycle-events.json
+   ls ./logs/{timestamp}/
+   # Shows unified logging structure:
+   #   ├── harness-execution/        # Harness execution logs
+   #   ├── container-logs/
+   #   │   ├── agent-containers/     # Agent execution containers  
+   #   │   └── sidecar-containers/   # MCP sidecar containers
+   #   ├── client-logs/              # Client application logs
+   #   ├── container-events/         # Container lifecycle events
+   #   ├── system.log               # System logs
+   #   └── meta.json                # Session metadata
    ```
 
 4. **Container Networking Works**: Host filesystem contains all debugging information needed to diagnose container issues.
+
+5. **Clean UI Output**: Detailed logs saved to files, console shows only essential UI messages and progress.
 
 ## Docker-in-Docker Limitations
 

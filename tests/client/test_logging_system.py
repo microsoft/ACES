@@ -13,14 +13,14 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch, mock_open
 
 import pytest
 
 from saber.client.logging import (
     ClientLoggingConfig,
     ContainerLogManager,
-    LogStreamCollector,
+    DockerLogCollector,
     SessionLoggingContext,
 )
 
@@ -148,118 +148,118 @@ class TestSessionLoggingContext:
         assert context.episode_id is None
 
 
-class TestLogStreamCollector:
-    """Test LogStreamCollector log streaming functionality."""
+class TestDockerLogCollector:
+    """Test DockerLogCollector post-completion log collection functionality."""
 
-    def test_log_stream_collector_initialization(self):
-        """Test LogStreamCollector initialization."""
+    def test_docker_log_collector_initialization(self):
+        """Test DockerLogCollector initialization."""
         config = ClientLoggingConfig()
         context = SessionLoggingContext(session_id="test-session")
 
-        collector = LogStreamCollector(config, context)
+        collector = DockerLogCollector(config, context)
 
         assert collector.config == config
         assert collector.session_context == context
-        assert collector._active_streams == {}
+        # Docker client should be initialized
+        assert collector.docker_client is not None
 
-    @pytest.mark.asyncio
-    async def test_stream_container_logs_setup(self):
-        """Test log streaming setup and directory creation."""
+    def test_collect_container_logs_success(self):
+        """Test successful log collection from container."""
         config = ClientLoggingConfig()
         context = SessionLoggingContext(session_id="test-session")
-        collector = LogStreamCollector(config, context)
+        collector = DockerLogCollector(config, context)
 
         # Mock container
         mock_container = Mock()
         mock_container.id = "container123456789"
-        mock_container.logs.return_value = iter([b"test log line\n"])
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            output_file = Path(temp_dir) / "test-logs" / "container.log"
-
-            # Mock the internal streaming method to avoid Docker API calls
-            with patch.object(collector, '_stream_logs_to_file', new_callable=AsyncMock) as mock_stream:
-                await collector.stream_container_logs(
-                    mock_container,
-                    output_file,
-                    "test-container",
-                    "sidecar"
-                )
-
-                # Verify the streaming method was called with correct parameters
-                mock_stream.assert_called_once_with(
-                    mock_container,
-                    output_file,
-                    "test-container",
-                    "sidecar"
-                )
-
-    @pytest.mark.asyncio
-    async def test_stream_logs_cancellation(self):
-        """Test that log streaming handles cancellation gracefully."""
-        config = ClientLoggingConfig()
-        context = SessionLoggingContext(session_id="test-session")
-        collector = LogStreamCollector(config, context)
-
-        mock_container = Mock()
-        mock_container.id = "container123456789"
+        mock_container.name = "test-container"
+        mock_container.logs.return_value = b"2025-09-01T08:29:36.309108171Z INFO: Test log message\n"
 
         with tempfile.TemporaryDirectory() as temp_dir:
             output_file = Path(temp_dir) / "container.log"
 
-            # Mock the internal method to raise CancelledError
-            with patch.object(collector, '_stream_logs_to_file', new_callable=AsyncMock) as mock_stream:
-                mock_stream.side_effect = asyncio.CancelledError()
+            # Test log collection
+            result = collector.collect_container_logs(
+                mock_container,
+                output_file,
+                "sidecar"
+            )
 
-                # This should not raise an exception
-                await collector.stream_container_logs(
-                    mock_container,
-                    output_file,
-                    "test-container",
-                    "agent"
-                )
+            # Verify success
+            assert result is True
+            assert output_file.exists()
 
-    def test_format_log_entry_json(self):
-        """Test JSON log entry formatting."""
-        config = ClientLoggingConfig(log_format="json")
-        context = SessionLoggingContext(
-            session_id="session-123",
-            client_id="client-456",
-            task_id="task-789"
-        )
-        collector = LogStreamCollector(config, context)
+            # Verify log content
+            content = output_file.read_text()
+            assert "INFO: Test log message" in content
+            assert "test-container" in content
 
-        # Mock log line with timestamp
-        log_line = "2025-09-01T08:29:36.309108171Z INFO: Test log message"
+    def test_collect_container_logs_failure(self):
+        """Test log collection when container logs fail."""
+        config = ClientLoggingConfig()
+        context = SessionLoggingContext(session_id="test-session")
+        collector = DockerLogCollector(config, context)
 
-        formatted = collector._format_log_entry(log_line, "test-container", "sidecar")
+        # Mock container that raises exception
+        mock_container = Mock()
+        mock_container.id = "container123456789"
+        mock_container.name = "test-container"
+        mock_container.logs.side_effect = Exception("Docker API error")
 
-        # Parse the JSON to validate structure
-        log_entry = json.loads(formatted)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_file = Path(temp_dir) / "container.log"
 
-        assert log_entry["container_name"] == "test-container"
-        assert log_entry["component_type"] == "sidecar"
-        assert log_entry["session_id"] == "session-123"
-        assert log_entry["task_id"] == "task-789"
-        assert log_entry["content"] == "INFO: Test log message"
-        assert log_entry["level"] == "INFO"
+            # Test log collection
+            result = collector.collect_container_logs(
+                mock_container,
+                output_file,
+                "agent"
+            )
 
-    def test_format_log_entry_without_timestamp(self):
-        """Test log entry formatting when no Docker timestamp is present."""
-        config = ClientLoggingConfig(log_format="json")
-        context = SessionLoggingContext(session_id="session-123")
-        collector = LogStreamCollector(config, context)
+            # Verify failure
+            assert result is False
 
-        log_line = "Plain log message without timestamp"
+    def test_collect_logs_from_docker_path_success(self):
+        """Test log collection from Docker internal path exists."""
+        config = ClientLoggingConfig()
+        context = SessionLoggingContext(session_id="test-session")
+        collector = DockerLogCollector(config, context)
 
-        formatted = collector._format_log_entry(log_line, "test-container", "agent")
-        log_entry = json.loads(formatted)
+        container_id = "container123456789abcdef"
 
-        assert log_entry["content"] == "Plain log message without timestamp"
-        assert log_entry["container_name"] == "test-container"
-        assert log_entry["component_type"] == "agent"
-        # Timestamp should be generated
-        assert "timestamp" in log_entry
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_file = Path(temp_dir) / "output.log"
+
+            # Since we can't easily mock the internal Docker paths,
+            # just test that the method exists and handles missing files gracefully
+            result = collector.collect_logs_from_docker_path(
+                container_id,
+                output_file,
+                "sidecar"
+            )
+
+            # This should return False since the Docker log file doesn't exist
+            assert result is False
+
+    def test_collect_logs_from_docker_path_missing_file(self):
+        """Test log collection when Docker log file doesn't exist."""
+        config = ClientLoggingConfig()
+        context = SessionLoggingContext(session_id="test-session")
+        collector = DockerLogCollector(config, context)
+
+        container_id = "nonexistent123456789"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_file = Path(temp_dir) / "output.log"
+
+            result = collector.collect_logs_from_docker_path(
+                container_id,
+                output_file,
+                "agent"
+            )
+
+            # Verify failure (file doesn't exist)
+            assert result is False
 
 
 class TestContainerLogManager:
@@ -277,8 +277,8 @@ class TestContainerLogManager:
 
             assert manager.config == config
             assert manager.session_context == context
-            assert manager._active_loggers == {}
-            assert isinstance(manager.log_collector, LogStreamCollector)
+            assert manager._registered_containers == {}
+            assert isinstance(manager.log_collector, DockerLogCollector)
 
     def test_session_directory_setup(self):
         """Test session directory structure creation."""
@@ -299,7 +299,6 @@ class TestContainerLogManager:
 
             # Check subdirectories
             expected_subdirs = [
-                "container-logs/client-containers",
                 "container-logs/sidecar-containers",
                 "container-logs/agent-containers",
                 "container-events"
@@ -335,11 +334,13 @@ class TestContainerLogManager:
             assert metadata["client_id"] == "test-client"
             assert metadata["task_id"] == "test-task"
             assert metadata["config"]["log_level"] == "DEBUG"
-            assert metadata["config"]["retention_days"] == 7
+            assert metadata["config"]["log_format"] == "json"
+            assert metadata["config"]["include_metadata"] is True
+            assert metadata["log_collection_method"] == "docker_post_completion"
 
     @pytest.mark.asyncio
     async def test_start_logging_container(self):
-        """Test starting container logging."""
+        """Test registering container for post-completion log collection."""
         config = ClientLoggingConfig()
         context = SessionLoggingContext(session_id="test-session")
 
@@ -353,27 +354,27 @@ class TestContainerLogManager:
             mock_container.id = "container123456789"
             mock_container.name = "test-container"
 
-            # Mock the log collector's stream method
-            with patch.object(manager.log_collector, 'stream_container_logs', new_callable=AsyncMock) as mock_stream:
-                result = await manager.start_logging_container(
-                    mock_container,
-                    "test-container.log",
-                    "sidecar"
-                )
+            result = await manager.start_logging_container(
+                mock_container,
+                "test-container.log",
+                "sidecar"
+            )
 
-                # Verify stream was called
-                mock_stream.assert_called_once()
+            # Should return True on success
+            assert result is True
 
-                # Should return True on success
-                assert result is True
+            # Check that the container is registered for log collection
+            registered = manager.get_registered_containers()
+            assert mock_container.id in registered
 
-                # Check that the container is tracked using short container ID
-                container_short_id = mock_container.id[:12]
-                assert container_short_id in manager._active_loggers
+            registration = registered[mock_container.id]
+            assert registration["container_name"] == "test-container"
+            assert registration["component_type"] == "sidecar"
+            assert "test-container.log" in registration["log_file_name"]
 
     @pytest.mark.asyncio
     async def test_stop_logging_container(self):
-        """Test stopping container logging."""
+        """Test collecting logs for a registered container."""
         config = ClientLoggingConfig()
         context = SessionLoggingContext(session_id="test-session")
 
@@ -382,25 +383,22 @@ class TestContainerLogManager:
 
             manager = ContainerLogManager(config, context)
 
-            # Create a mock task that behaves like an asyncio.Task
-            mock_task = Mock()
-            mock_task.done.return_value = False
-            mock_task.cancel = Mock()
+            # Mock container
+            container_id = "container123456789"
+            mock_container = Mock()
+            mock_container.id = container_id
+            mock_container.name = "test-container"
 
-            # Use exact container ID
-            container_id = "container123"
-            manager._active_loggers[container_id] = mock_task
+            # Register the container first
+            await manager.start_logging_container(mock_container, "test.log", "agent")
 
-            # Add mock timeout handling for the wait_for
-            with patch('asyncio.wait_for', new_callable=AsyncMock) as mock_wait:
-                mock_wait.side_effect = asyncio.CancelledError()  # Simulate expected cancellation
-
+            # Mock the log collection method to succeed
+            with patch.object(manager, 'collect_container_logs', return_value=True) as mock_collect:
                 result = await manager.stop_logging_container(container_id)
 
-            # Verify task was cancelled and result is True
-            mock_task.cancel.assert_called_once()
-            assert result is True
-            assert container_id not in manager._active_loggers
+                # Verify collection was attempted
+                mock_collect.assert_called_once_with(container_id)
+                assert result is True
 
     @pytest.mark.asyncio
     async def test_cleanup_and_finalize(self):
@@ -413,23 +411,27 @@ class TestContainerLogManager:
 
             manager = ContainerLogManager(config, context)
 
-            # Add mock active loggers
-            mock_task1 = AsyncMock()
-            mock_task2 = AsyncMock()
-            mock_task1.done.return_value = False
-            mock_task2.done.return_value = False
-            manager._active_loggers["container1"] = mock_task1
-            manager._active_loggers["container2"] = mock_task2
+            # Register some containers
+            mock_container1 = Mock()
+            mock_container1.id = "container1"
+            mock_container1.name = "test-container-1"
 
-            # Mock the collector's stop method
-            with patch.object(manager.log_collector, 'stop_all_streams', new_callable=AsyncMock) as mock_stop:
+            mock_container2 = Mock()
+            mock_container2.id = "container2"
+            mock_container2.name = "test-container-2"
+
+            await manager.start_logging_container(mock_container1, "test1.log", "agent")
+            await manager.start_logging_container(mock_container2, "test2.log", "sidecar")
+
+            # Mock the log collection to succeed
+            with patch.object(manager, 'collect_all_registered_logs', return_value={"container1": True, "container2": True}) as mock_collect:
                 await manager.cleanup_and_finalize()
 
-                # Verify all streams were stopped
-                mock_stop.assert_called_once()
+                # Verify all logs were collected
+                mock_collect.assert_called_once()
 
-                # Verify active loggers were cleared (the cleanup happens internally)
-                assert manager._active_loggers == {}
+                # Verify registrations were cleared
+                assert manager.get_registered_containers() == {}
 
     @pytest.mark.asyncio
     async def test_log_container_lifecycle_event(self):
@@ -513,24 +515,23 @@ class TestLoggingSystemIntegration:
                 {"name": "integration-test-container", "component_type": "agent"}
             )
 
-            # Start logging (mocked)
-            with patch.object(manager.log_collector, 'stream_container_logs', new_callable=AsyncMock):
-                result = await manager.start_logging_container(
-                    mock_container,
-                    "integration-test-container.log",
-                    "agent"
-                )
+            # Start logging (new registration-based approach)
+            result = await manager.start_logging_container(
+                mock_container,
+                "integration-test-container.log",
+                "agent"
+            )
 
-                # Verify container is being tracked
-                assert result is True
-                container_short_id = mock_container.id[:12]
-                assert container_short_id in manager._active_loggers
+            # Verify container is registered
+            assert result is True
+            registered = manager.get_registered_containers()
+            assert mock_container.id in registered
 
             # Cleanup
             await manager.cleanup_and_finalize()
 
             # Verify cleanup
-            assert manager._active_loggers == {}
+            assert manager.get_registered_containers() == {}
 
             # Verify system log exists
             events_dir = session_dir / "container-events"

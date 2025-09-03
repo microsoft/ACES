@@ -192,6 +192,8 @@ class ToolInjector:
 
     async def _execute_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a single tool call via sidecar."""
+        self.logger.info(f"🔗 ToolInjector._execute_tool called: {tool_name} via {self.sidecar_url}/execute_tool")
+
         headers = {
             "X-Saber-Session-Id": self.session_id,
             "X-Saber-Agent-Id": self.agent_id,
@@ -205,6 +207,7 @@ class ToolInjector:
             headers["X-Saber-Task-Id"] = self.task_id
 
         payload = {"tool_name": tool_name, "arguments": arguments, "timeout": self.timeout}
+        self.logger.info(f"📤 Sending POST to {self.sidecar_url}/execute_tool with payload: {payload}")
 
         try:
             if not self.session:
@@ -215,8 +218,10 @@ class ToolInjector:
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=self.timeout + 5),  # Add buffer
             ) as response:
+                self.logger.info(f"📥 Received response: HTTP {response.status}")
                 if response.status != 200:
                     error_text = await response.text()
+                    self.logger.error(f"❌ HTTP error: {response.status}: {error_text}")
                     raise aiohttp.ClientResponseError(
                         request_info=response.request_info,
                         history=response.history,
@@ -225,9 +230,11 @@ class ToolInjector:
                     )
 
                 result = await response.json()
+                self.logger.info(f"✅ Tool execution result: {result}")
                 return result if isinstance(result, dict) else {"result": result}
 
         except asyncio.TimeoutError:
+            self.logger.error(f"⏰ Tool {tool_name} timed out after {self.timeout}s")
             raise asyncio.TimeoutError(f"Tool {tool_name} timed out after {self.timeout}s")
 
     def inject_into_context(self, context: Dict[str, Any]) -> Dict[str, Any]:
@@ -248,11 +255,17 @@ class ToolInjector:
 
     async def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
         """Call a tool - backwards compatibility method."""
+        self.logger.info(f"🚀 ToolInjector.call_tool called: {tool_name} with args: {arguments}")
+
         if tool_name not in self.tools:
+            self.logger.error(f"❌ Tool '{tool_name}' not available. Available tools: {list(self.tools.keys())}")
             raise ToolExecutionError(f"Tool '{tool_name}' not available")
 
+        self.logger.info(f"🔧 Calling tool proxy function for {tool_name}")
         # Call the injected proxy function
-        return await self.tools[tool_name](**arguments)
+        result = await self.tools[tool_name](**arguments)
+        self.logger.info(f"✅ Tool {tool_name} execution completed")
+        return result
 
     async def refresh_tools(self) -> None:
         """Refresh tool discovery from sidecar."""
