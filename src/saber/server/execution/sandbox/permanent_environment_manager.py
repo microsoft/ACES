@@ -46,7 +46,17 @@ class PermanentEnvironmentManager:
         self._is_running = False
 
         # Configuration and metadata storage
-        self.logs_dir = Path(config.get("config_dir", "/app/logs"))
+        # Prefer explicit logs_dir; otherwise, infer from config_dir
+        logs_dir = config.get("logs_dir")
+        if not logs_dir:
+            config_dir = config.get("config_dir", "/app/config")
+            # If config_dir ends with "config", replace with "logs"
+            if config_dir.endswith("config"):
+                logs_dir = config_dir[: -len("config")] + "logs"
+            else:
+                # Fallback: put logs as a sibling to config_dir
+                logs_dir = str(Path(config_dir).parent / "logs")
+        self.logs_dir = Path(logs_dir)
         self.compose_configs_dir = self.logs_dir / "compose-configs" / "permanent-environments"
         self.metadata_dir = self.compose_configs_dir / "metadata"
         self.compose_configs_dir.mkdir(parents=True, exist_ok=True)

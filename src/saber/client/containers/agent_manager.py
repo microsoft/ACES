@@ -13,9 +13,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-import docker
 import docker.errors
 import docker.models.containers
+import docker.types
+
+import docker
 
 if TYPE_CHECKING:
     from ..logging import ContainerLogManager
@@ -353,6 +355,14 @@ class AgentManager:
                 cpu_quota=cpu_quota,
                 cpu_period=100000,
                 restart_policy={"Name": "no"},
+                # Docker logging configuration for reliable log collection
+                log_config=docker.types.LogConfig(
+                    type=docker.types.LogConfig.types.JSON,
+                    config={
+                        "max-size": "50m",
+                        "max-file": "3",
+                    },
+                ),
                 labels={
                     "saber.component": "agent",
                     "saber.agent_id": agent_id,
@@ -376,6 +386,14 @@ class AgentManager:
             # Now start the container
             container.start()
             logger.info(f"🚀 Agent container started: {container.id[:12]}")
+
+            # Register container for log collection if log manager is available
+            if self.log_manager:
+                base_name = f"{container.name or container.id[:12]}.log"
+                self.log_manager.register_container(
+                    container=container, log_file_name=base_name, component_type="agent"
+                )
+                logger.debug(f"📝 Registered agent container for log collection: {container.id[:12]}")
 
             return container
 

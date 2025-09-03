@@ -8,6 +8,7 @@ This replaces the old HTTP-based approach with proper FastMCP SSE connections.
 
 import asyncio
 import logging
+import uuid
 from typing import Any, Dict, Optional
 
 from fastmcp import Client
@@ -37,6 +38,7 @@ class MCPProxy:
     - Injecting session headers for proper SABER server routing
     - Response forwarding and error handling
     - Connection management to SABER MCP server using FastMCP
+    - UI adapter integration for real-time tool call monitoring
     """
 
     def __init__(
@@ -56,8 +58,9 @@ class MCPProxy:
         self.session_registry = session_registry
         self.saber_mcp_url = saber_mcp_url
         self.timeout = timeout
-        # FastMCP clients per session for persistent connections
-        self._client_pool: Dict[str, Client] = {}
+        self._client_pool: Dict[str, Client] = {}  # session_id -> Client cache
+
+        logger.info(f"🔧 MCP Proxy initialized: {saber_mcp_url}")
 
     async def aclose(self) -> None:
         """Close all FastMCP client connections."""
@@ -125,17 +128,18 @@ class MCPProxy:
             # Get session for routing
             session = await self.session_registry.get_session(agent_id)
             if not session:
+                logger.error(f"❌ List tools failed: Agent {agent_id} not registered in session registry")
                 return MCPResponse(result=None, error={"code": -32000, "message": f"Agent {agent_id} not registered"})
 
             # Get FastMCP client for this session
             client = await self._get_client_for_session(session)
 
             # Call list_tools using FastMCP
+            logger.debug(f"🔗 Calling SABER server list_tools for session {session.saber_session_id}")
             tools = await client.list_tools()
 
-            logger.debug(
-                f"Listed {len(tools.tools) if hasattr(tools, 'tools') else 'unknown'} tools for agent {agent_id}"
-            )
+            tool_count = len(tools.tools) if hasattr(tools, "tools") else (len(tools) if isinstance(tools, list) else 0)
+            logger.info(f"🔗 SABER server response: {tool_count} tools available for {agent_id}")
 
             # Convert FastMCP response to our MCPResponse format
             if hasattr(tools, "tools"):
@@ -164,19 +168,28 @@ class MCPProxy:
         Returns:
             MCPResponse with tool result or error
         """
+        # Generate unique call ID for tracking
+        call_id = str(uuid.uuid4())
+
+        logger.info("🚨🚨🚨 EXECUTE_TOOL ENDPOINT HIT!!! 🚨🚨🚨")
+        logger.info(f"Tool: {tool_name}, Agent: {agent_id}, Call ID: {call_id}")
+
         try:
             # Get session for routing
             session = await self.session_registry.get_session(agent_id)
             if not session:
+                logger.error(f"❌ Tool call failed: Agent {agent_id} not registered in session registry")
                 return MCPResponse(result=None, error={"code": -32000, "message": f"Agent {agent_id} not registered"})
 
             # Get FastMCP client for this session
             client = await self._get_client_for_session(session)
 
             # Call tool using FastMCP
+            logger.info(f"🔗 Calling SABER server: {tool_name} for session {session.saber_session_id}")
             result = await client.call_tool(tool_name, arguments)
 
-            logger.debug(f"Called tool {tool_name} for agent {agent_id}")
+            result_size = len(str(result)) if result else 0
+            logger.info(f"🔗 SABER server response: {tool_name} completed for {agent_id} ({result_size} chars)")
 
             # Convert FastMCP response to our MCPResponse format
             if hasattr(result, "content"):

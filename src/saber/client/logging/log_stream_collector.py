@@ -7,15 +7,83 @@ Collects and formats log streams from Docker containers with metadata enrichment
 import asyncio
 import json
 import logging
+import queue
 from datetime import datetime
 from pathlib import Path
-from typing import AsyncGenerator, Dict, Generator, TextIO
-
-import docker.models.containers
+from typing import Any, AsyncGenerator, Callable, Dict, Generator, List, TextIO, Tuple, Union
 
 from .config import ClientLoggingConfig, SessionLoggingContext
 
 logger = logging.getLogger(__name__)
+
+
+async def asyncio_stream_wrapper(
+    blocking_generator_func: Callable[[], Generator[Any, None, None]], loop: asyncio.AbstractEventLoop
+) -> AsyncGenerator[Any, None]:
+    """
+    Wrap a blocking generator function to work with asyncio for real-time streaming.
+
+    Args:
+        blocking_generator_func: Function that returns a generator
+        loop: Current event loop
+
+    Yields:
+        Items from the blocking generator in real-time
+    """
+    import threading
+
+    # Create a queue for communication between threads
+    log_queue: queue.Queue[Tuple[str, Any]] = queue.Queue()
+    exception_holder: List[Union[Exception, None]] = [None]
+    finished: List[bool] = [False]
+
+    def producer() -> None:
+        """Producer function to run in separate thread."""
+        try:
+            for item in blocking_generator_func():
+                log_queue.put(("item", item))
+        except Exception as e:
+            exception_holder[0] = e
+            log_queue.put(("error", e))
+        finally:
+            finished[0] = True
+            log_queue.put(("done", None))
+
+    # Start producer thread
+    thread = threading.Thread(target=producer, daemon=True)
+    thread.start()
+
+    try:
+        while True:
+            # Check if we have items in queue
+            try:
+                # Non-blocking get with timeout
+                msg_type, item = log_queue.get_nowait()
+
+                if msg_type == "item":
+                    yield item
+                elif msg_type == "error":
+                    raise item
+                elif msg_type == "done":
+                    break
+
+            except queue.Empty:
+                # No items available, yield control briefly
+                await asyncio.sleep(0.01)  # 10ms delay
+
+                # Check if thread finished
+                if finished[0] and log_queue.empty():
+                    break
+
+                continue
+
+    finally:
+        # Wait for thread to complete (with timeout)
+        thread.join(timeout=1.0)
+
+    # Re-raise any exception that occurred
+    if exception_holder[0]:
+        raise exception_holder[0]
 
 
 class LogStreamCollector:
@@ -29,7 +97,7 @@ class LogStreamCollector:
 
     async def stream_container_logs(
         self,
-        container: docker.models.containers.Container,
+        container: Any,
         output_file: Path,
         container_name: str,
         component_type: str = "unknown",
@@ -71,7 +139,7 @@ class LogStreamCollector:
             self._active_streams.pop(stream_id, None)
 
     async def _stream_logs_to_file(
-        self, container: docker.models.containers.Container, output_file: Path, container_name: str, component_type: str
+        self, container: Any, output_file: Path, container_name: str, component_type: str
     ) -> None:
         """Internal method to stream logs to file."""
         try:
@@ -89,65 +157,47 @@ class LogStreamCollector:
         except Exception as e:
             logger.error(f"❌ Error writing logs to {output_file}: {e}")
 
-    async def _get_log_stream(self, container: docker.models.containers.Container) -> AsyncGenerator[str, None]:
-        """Get log stream from container."""
+    async def _get_log_stream(self, container: Any) -> AsyncGenerator[str, None]:
+        """Get real-time log stream from container - proper streaming approach."""
 
-        def _get_logs_sync() -> Generator[str, None, None]:
-            """Synchronous log streaming function to run in thread."""
+        def get_blocking_log_stream() -> Generator[str, None, None]:
+            """Get blocking log stream in thread executor."""
             try:
-                # Get logs generator (both stdout and stderr)
-                logs_generator = container.logs(stream=True, follow=True, stdout=True, stderr=True, timestamps=True)
+                # Use proper streaming with follow=True for real-time logs
+                log_stream = container.logs(
+                    stream=True,  # Enable streaming
+                    follow=True,  # Follow new logs as they appear
+                    stdout=True,
+                    stderr=True,
+                    timestamps=True,
+                    tail="all",  # Start with existing logs, then stream new ones
+                )
 
-                for log_bytes in logs_generator:
-                    try:
-                        # Decode log line
-                        log_line = log_bytes.decode("utf-8").strip()
-                        if log_line:
-                            yield log_line
-                    except UnicodeDecodeError:
-                        # Handle binary or non-UTF8 content
-                        yield f"[BINARY_CONTENT_LENGTH:{len(log_bytes)}]"
+                # Process streaming logs
+                for log_chunk in log_stream:
+                    if log_chunk:
+                        log_text = log_chunk.decode("utf-8", errors="ignore")
+                        for line in log_text.split("\n"):
+                            if line.strip():
+                                yield line.strip()
 
             except Exception as e:
-                logger.warning(f"⚠️ Container log stream ended: {e}")
+                logger.error(f"❌ Container log stream failed: {e}")
+                raise
 
         try:
-            # Run the synchronous log streaming in a thread to avoid blocking the event loop
-            # Use run_in_executor to run the sync generator in a thread
-            def sync_generator_wrapper() -> list[str]:
-                return list(_get_logs_sync())
+            # Run the blocking stream in a thread executor to avoid blocking asyncio
+            loop = asyncio.get_event_loop()
 
-            # Use a simpler approach - get all logs after container completes
-            # This avoids blocking issues with follow=True
-            logs_generator = container.logs(
-                stream=False,  # Don't stream - get all logs at once
-                follow=False,  # Don't follow - container may not be running yet
-                stdout=True,
-                stderr=True,
-                timestamps=True,
-                tail="all",  # Get all logs when available
-            )
-
-            # Process the logs
-            if isinstance(logs_generator, bytes):
-                for log_line in logs_generator.decode("utf-8").split("\n"):
-                    if log_line.strip():
-                        yield log_line.strip()
-            else:
-                for log_bytes in logs_generator:
-                    try:
-                        log_line = log_bytes.decode("utf-8").strip()
-                        if log_line:
-                            yield log_line
-                    except UnicodeDecodeError:
-                        yield f"[BINARY_CONTENT_LENGTH:{len(log_bytes)}]"
+            # Stream logs from the blocking generator
+            async for line in asyncio_stream_wrapper(get_blocking_log_stream, loop):
+                yield line
 
         except Exception as e:
-            logger.warning(f"⚠️ Container log stream ended: {e}")
+            logger.error(f"❌ Container log stream failed: {e}")
+            raise
 
-    async def _write_session_header(
-        self, f: TextIO, container: docker.models.containers.Container, container_name: str, component_type: str
-    ) -> None:
+    async def _write_session_header(self, f: TextIO, container: Any, container_name: str, component_type: str) -> None:
         """Write session metadata header to log file."""
         if not self.config.include_metadata:
             return
@@ -197,6 +247,10 @@ class LogStreamCollector:
             except (ValueError, IndexError):
                 # Not a valid timestamp, use the whole line as content
                 pass
+
+        # Use plain format for sidecar components to match agent logs
+        if component_type == "sidecar" or self.config.log_format != "json":
+            return content  # Just return the clean log content without extra formatting
 
         if self.config.log_format == "json":
             return json.dumps(

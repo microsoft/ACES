@@ -13,9 +13,11 @@ from dataclasses import dataclass
 from typing import Optional, Set
 
 import aiohttp
+import docker.types
+from docker.models.containers import Container
+
 import docker
 from docker import errors as docker_errors
-from docker.models.containers import Container
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +32,7 @@ class SidecarConfig:
     port: int = 8002
     saber_server_url: str = "http://host.docker.internal:8000"
     saber_mcp_url: str = "http://host.docker.internal:8001"
+    harness_url: str = "http://host.docker.internal:8765"
     health_check_timeout: int = 30
     health_check_interval: float = 0.5
     memory_limit: str = "256m"
@@ -250,6 +253,7 @@ class SidecarManager:
         environment = {
             "SABER_SERVER_URL": self.config.saber_server_url,
             "SABER_MCP_URL": self.config.saber_mcp_url,
+            "HARNESS_URL": self.config.harness_url,
             "PORT": str(self.config.port),
             "LOG_LEVEL": "INFO",
         }
@@ -268,7 +272,7 @@ class SidecarManager:
             environment=environment,
             network=self.config.network_name,
             detach=True,
-            remove=False,  # Keep for debugging
+            remove=False,  # Keep for debugging and log collection
             mem_limit=mem_limit,
             cpu_quota=cpu_quota,
             cpu_period=100000,  # 100ms period
@@ -276,6 +280,14 @@ class SidecarManager:
             labels={"saber.component": "mcp-sidecar", "saber.managed": "true"},
             # Ensure Linux host is reachable using host-gateway alias
             extra_hosts={"host.docker.internal": "host-gateway"},
+            # Docker logging configuration for reliable log collection
+            log_config=docker.types.LogConfig(
+                type=docker.types.LogConfig.types.JSON,
+                config={
+                    "max-size": "50m",
+                    "max-file": "3",
+                },
+            ),
         )
 
         logger.info(f"📦 Container created: {container.id[:12]}")

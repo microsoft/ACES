@@ -20,6 +20,7 @@ RUN pip install --no-cache-dir \
     aiohttp \
     pydantic \
     pyyaml \
+    sse-starlette \
     fastmcp
 
 # Copy only the necessary MCP service files and dependencies
