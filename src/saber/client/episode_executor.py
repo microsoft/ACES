@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .api import SABERRestClient
-from .containers import AgentManager, ContainerFactory, SidecarManager
+from .containers import AgentManager, SidecarManager
 from .containers.agent_manager import AgentContainerConfig, AgentExecutionResult
 from .containers.sidecar_manager import SidecarConfig
 from .harness_models import EpisodeResult, SABERHarnessConfig
@@ -108,6 +108,13 @@ class ContainerEpisodeExecutor:
         agent_config = AgentContainerConfig()
         agent_config.network_name = sidecar_config.network_name
 
+        # Configure custom agent image if specified in harness config
+        if self.harness_config and self.harness_config.agent_config:
+            agent_image = self.harness_config.agent_config.get("image")
+            if agent_image:
+                agent_config.base_image = agent_image
+                logger.info(f"🐳 Using custom agent image: {agent_image}")
+
         # Configure debug mode for agent containers
         agent_config.debug_mode = debug_mode
 
@@ -116,8 +123,6 @@ class ContainerEpisodeExecutor:
             logger.info("🔍 Manual cleanup will be required: docker stop <container> && docker rm <container>")
 
         self.agent_manager = AgentManager(config=agent_config, log_manager=self.log_manager)
-
-        self.container_factory = ContainerFactory()
 
         # State
         self.sidecar_started = False

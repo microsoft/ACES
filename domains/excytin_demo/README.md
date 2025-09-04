@@ -105,7 +105,7 @@ docker logs saber-excytin-server --tail 20
 
 ### 5. Run Demo Client
 
-The excytin demo now uses the unified SABER client entry point with enhanced UI integration:
+The excytin demo uses YAML configuration with the unified SABER client:
 
 #### Quick Start (Recommended)
 ```bash
@@ -115,34 +115,19 @@ cd /home/ms_test/repos/saber_vibin/domains/excytin_demo/client
 
 #### Manual Execution
 ```bash
-# Plain UI with clean logging (default)
-docker exec -it saber-excytin-client uv run python -m saber.client 
-  --agent /app/client/demo_agent.py 
-  --tasks excytin_demo 
-  --ui plain 
-  --quiet-logs
+# Run with configuration file
+docker exec -it saber-excytin-client uv run python -m saber.client --config /app/client/harness.yaml
 
-# Rich UI with progress bars
-docker exec -it saber-excytin-client uv run python -m saber.client 
-  --agent /app/client/demo_agent.py 
-  --tasks excytin_demo 
-  --ui rich 
-  --quiet-logs
-
-# Full interactive textual UI
-docker exec -it saber-excytin-client uv run python -m saber.client 
-  --agent /app/client/demo_agent.py 
-  --tasks excytin_demo 
-  --ui textual 
-  --quiet-logs
+# Auto-detect config in current directory
+docker exec -it saber-excytin-client uv run python -m saber.client
 ```
 
 #### Script Options
 ```bash
-./run_demo.sh --help                    # Show help
-./run_demo.sh --ui rich                 # Rich UI mode
-./run_demo.sh --ui textual --verbose    # Full TUI with debug logs
-./run_demo.sh --console-logs            # Show logs on console
+docker exec -it saber-excytin-client /app/client/run_demo.sh --help                    # Show help
+docker exec -it saber-excytin-client /app/client/run_demo.sh --ui rich                 # Rich UI mode
+docker exec -it saber-excytin-client /app/client/run_demo.sh --ui textual --verbose    # Full TUI with debug logs
+docker exec -it saber-excytin-client /app/client/run_demo.sh --console-logs            # Show logs on console
 ```
 
 ## Expected Behavior

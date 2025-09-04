@@ -13,11 +13,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+import docker
 import docker.errors
 import docker.models.containers
 import docker.types
-
-import docker
 
 if TYPE_CHECKING:
     from ..logging import ContainerLogManager
@@ -86,7 +85,7 @@ class AgentManager:
         self.docker_client = docker.DockerClient.from_env()  # type: ignore
         self.active_containers: Dict[str, Any] = {}
 
-        logger.info("🤖 Agent container manager initialized")
+        logger.info("🤖 Agent container manager initialized with custom image support")
 
     async def execute_agent(
         self,
@@ -342,11 +341,14 @@ class AgentManager:
             mem_limit = self.config.memory_limit
             cpu_quota = int(self.config.cpu_limit * 100000)
 
-            logger.debug(f"📦 Creating container {container_name} with image {self.config.base_image}")
+            # Use the configured base image (which could be a custom agent image)
+            image_to_use = self.config.base_image
+
+            logger.debug(f"📦 Creating container {container_name} with image {image_to_use}")
 
             # Create container (but don't start it yet)
             container = self.docker_client.containers.create(
-                image=self.config.base_image,
+                image=image_to_use,
                 name=container_name,
                 environment=environment,
                 volumes=volumes,

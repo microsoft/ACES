@@ -6,7 +6,6 @@ Enables standard MCP library compatibility while maintaining robust process mana
 """
 
 from .agent_manager import AgentManager
-from .container_factory import ContainerFactory
 from .sidecar_manager import SidecarManager
 
-__all__ = ["SidecarManager", "AgentManager", "ContainerFactory"]
+__all__ = ["SidecarManager", "AgentManager"]
