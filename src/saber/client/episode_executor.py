@@ -9,6 +9,7 @@ Handles agent packaging, container orchestration, and multi-channel termination 
 import asyncio
 import json
 import logging
+import os
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -99,11 +100,21 @@ class ContainerEpisodeExecutor:
             # Fall back to default network
 
         # Container managers
-        self.sidecar_manager = SidecarManager(sidecar_config)
+        # Configure debug mode from environment variable
+        debug_mode = os.getenv("SABER_DEBUG_MODE", "").lower() in ("true", "1", "yes")
+        self.sidecar_manager = SidecarManager(sidecar_config, debug_mode=debug_mode)
 
         # Configure agent manager to use the same network as sidecar
         agent_config = AgentContainerConfig()
         agent_config.network_name = sidecar_config.network_name
+
+        # Configure debug mode for agent containers
+        agent_config.debug_mode = debug_mode
+
+        if debug_mode:
+            logger.info("🔍 Debug mode enabled - containers will not be cleaned up automatically")
+            logger.info("🔍 Manual cleanup will be required: docker stop <container> && docker rm <container>")
+
         self.agent_manager = AgentManager(config=agent_config, log_manager=self.log_manager)
 
         self.container_factory = ContainerFactory()

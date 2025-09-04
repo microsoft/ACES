@@ -48,18 +48,17 @@ class SidecarManager:
     - Health monitoring and readiness checks
     - Session registration coordination
     - Network management
-    - Resource cleanup
     """
 
-    def __init__(self, config: Optional[SidecarConfig] = None):
-        """Initialize sidecar manager with configuration."""
+    def __init__(self, config: Optional[SidecarConfig] = None, debug_mode: bool = False):
+        """Initialize the sidecar manager."""
         self.config = config or SidecarConfig()
         self.docker_client = docker.DockerClient.from_env()  # type: ignore
         self.container: Optional[Container] = None
         self.is_running = False
         self._startup_lock = asyncio.Lock()
-        # Track registered agent IDs for cleanup; use plain set for 3.10 compatibility
         self._registered_agent_ids: Set[str] = set()
+        self.debug_mode = debug_mode
 
         logger.info(f"🔧 Sidecar manager initialized for container: {self.config.container_name}")
 
@@ -105,6 +104,16 @@ class SidecarManager:
     async def stop_sidecar(self) -> None:
         """Stop the shared MCP sidecar container."""
         try:
+            if self.debug_mode:
+                logger.info("🔍 Debug mode enabled - skipping sidecar cleanup")
+                logger.info(
+                    f"🔍 To manually clean up sidecar: docker stop {self.config.container_name} "
+                    f"&& docker rm {self.config.container_name}"
+                )
+                # Mark as not running so we don't try to manage it further
+                self.is_running = False
+                return
+
             logger.info("🛑 Stopping shared MCP sidecar...")
 
             if self.container:

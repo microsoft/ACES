@@ -44,6 +44,9 @@ class AgentContainerConfig:
     execution_timeout: int = 600  # 10 minutes
     termination_grace_period: int = 30  # 30 seconds
 
+    # Debug settings
+    debug_mode: bool = False  # If True, skip container cleanup for debugging
+
     # Environment
     environment: Dict[str, str] = field(default_factory=dict)
 
@@ -550,6 +553,11 @@ class AgentManager:
 
     async def _cleanup_container(self, container: Any, container_name: str) -> None:
         """Clean up a container."""
+        if self.config.debug_mode:
+            logger.info(f"🔍 Debug mode enabled - skipping cleanup for container: {container_name}")
+            logger.info(f"🔍 To manually clean up: docker stop {container_name} && docker rm {container_name}")
+            return
+
         try:
             # Stop if still running
             container.reload()

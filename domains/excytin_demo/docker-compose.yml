@@ -41,6 +41,7 @@ services:
       - SABER_MCP_URL=http://saber-excytin-server:8001
       - PYTHONPATH=/app/src  # Add src to Python path for shared imports
       - DOCKER_SABER_SERVER=1  # Auto-detect Docker environment
+      # - SABER_DEBUG_MODE=true  # Uncomment to keep agent containers for debugging
     networks:
       - saber-excytin-network
     depends_on:
