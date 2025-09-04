@@ -16,6 +16,11 @@ import logging
 import re
 from typing import Any, Dict, List
 
+import autogen
+
+print(f"✅ AutoGen successfully imported - version: {autogen.__version__}")
+print(f"📦 AutoGen module location: {autogen.__file__}")
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)

@@ -1,0 +1,8 @@
+# Requirements for Excytin Demo Agent (used in agent containers)
+httpx>=0.24.0
+pyyaml>=6.0
+pyautogen>=0.2.35
+anthropic
+openai
+azure-identity
+requests

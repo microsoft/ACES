@@ -78,7 +78,7 @@ fi
 echo ""
 
 # Build the command
-CMD="uv run python -m saber.client --agent /app/client/demo_agent.py --tasks excytin_demo --ui $UI_MODE"
+CMD="uv run python -m saber.client --agent /app/client/agent/demo_agent.py --agent-image saber/excytin-agent:latest --tasks excytin_demo --ui $UI_MODE"
 
 if [[ -z "$CONSOLE_LOGS" ]]; then
     CMD="$CMD --quiet-logs"

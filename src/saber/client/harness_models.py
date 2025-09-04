@@ -43,6 +43,7 @@ class SABERHarnessConfig:
 
     # Agent configuration (optional)
     agent_config: Dict[str, Any] = field(default_factory=dict)
+    agent_path: Optional[str] = None
 
     # UI Configuration
     ui_backend: str = "auto"  # auto, console, inspect_ai_rich, inspect_ai_textual, inspect_ai_plain, none

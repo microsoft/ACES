@@ -1,0 +1,47 @@
+# SABER Harness Configuration
+# This file configures the SABER client harness behavior
+
+# Server Connection
+server:
+  url: "http://saber-excytin-server:8000"
+  mcp_url: "http://saber-excytin-server:8001"
+  client_id: "saber-client"
+  request_timeout: 60.0
+
+# Logging Configuration
+logging:
+  level: "INFO"
+  client_log_dir: "./logs"
+  enable_container_logging: true
+  log_retention_days: 30
+  max_log_size_mb: 50
+  compress_old_logs: true
+
+# Task Configuration
+tasks:
+  # List of specific task IDs to run (leave empty for all)
+  task_ids: []
+  parallelism: 1
+
+# Safety Limits
+safety:
+  max_steps_client_safety: 100
+
+# LLM Configuration (optional)
+llm:
+  provider: null
+  config: {}
+
+# Agent Configuration
+agent:
+  # Custom Docker image for agent execution
+  image: "saber/agent-runner:latest"
+  # Additional agent configuration
+  config: {}
+
+# UI Configuration
+ui:
+  backend: "auto"  # auto, textual, rich, plain, none
+  enabled: true
+  internal_only: true
+  tool_detail_level: "full"  # none, basic, full

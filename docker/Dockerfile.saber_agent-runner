@@ -15,16 +15,13 @@ RUN apt-get update && apt-get install -y \
 # Set working directory
 WORKDIR /app
 
-# Install lightweight MCP libraries and agent dependencies
+# Install essential MCP libraries and core runtime dependencies only
 RUN pip install --no-cache-dir \
     httpx \
     aiohttp \
     pydantic \
     pyyaml \
-    anthropic \
-    openai \
-    requests \
-    # Basic agent framework dependencies only
+    # Core agent framework dependencies only
     asyncio-mqtt \
     websockets
 

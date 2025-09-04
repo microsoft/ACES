@@ -1,0 +1,17 @@
+# Excytin Demo Agent Image
+# Custom agent image with all required dependencies pre-installed
+
+FROM saber/agent-runner:latest
+
+# Set working directory
+WORKDIR /app
+
+# Copy agent requirements and install dependencies
+COPY client/agent/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt && rm /tmp/requirements.txt
+
+# Agent code will be copied at runtime by the agent manager
+# This image provides the dependency environment for the agent
+
+# Keep the same user and environment from base image
+USER agent
