@@ -115,6 +115,11 @@ class ContainerEpisodeExecutor:
                 agent_config.base_image = agent_image
                 logger.info(f"🐳 Using custom agent image: {agent_image}")
 
+        # Configure docker commands if specified in harness config
+        if self.harness_config and self.harness_config.docker_commands:
+            agent_config.docker_commands = self.harness_config.docker_commands
+            logger.info(f"📋 Configured {len(self.harness_config.docker_commands)} docker commands for agent setup")
+
         # Configure debug mode for agent containers
         agent_config.debug_mode = debug_mode
 
@@ -565,12 +570,50 @@ class ContainerEpisodeExecutor:
         # Create a minimal launcher script that invokes the AgentExecutor
         launcher_file = agent_dir / "launch.py"
         launcher_code = (
-            "import sys, asyncio\n"
+            "import sys, asyncio, os, signal, subprocess\n"
             "sys.path.insert(0, '/agent_runtime')\n"
             "from saber.client.agent_runtime import AgentExecutor\n"
             "\n"
+            "def get_container_id():\n"
+            '    """Get the current container\'s ID from /proc/self/cgroup"""\n'
+            "    try:\n"
+            "        with open('/proc/self/cgroup', 'r') as f:\n"
+            "            for line in f:\n"
+            "                if 'docker' in line:\n"
+            "                    # Extract container ID from cgroup path\n"
+            "                    parts = line.strip().split('/')\n"
+            "                    for part in parts:\n"
+            "                        if len(part) == 64 and part.isalnum():\n"
+            "                            return part\n"
+            "    except:\n"
+            "        pass\n"
+            "    return None\n"
+            "\n"
+            "def kill_container(container_id):\n"
+            '    """Kill the container using docker command"""\n'
+            "    try:\n"
+            "        print(f'🛑 Killing container {container_id}...', flush=True)\n"
+            "        subprocess.run(['docker', 'kill', container_id], check=False, capture_output=True)\n"
+            "        print(f'✅ Container {container_id} killed successfully', flush=True)\n"
+            "    except Exception as e:\n"
+            "        print(f'⚠️ Failed to kill container: {e}', flush=True)\n"
+            "\n"
             "if __name__ == '__main__':\n"
-            "    asyncio.run(AgentExecutor().run())\n"
+            "    container_id = get_container_id()\n"
+            "    print(f'🐳 Running in container: {container_id}', flush=True)\n"
+            "    \n"
+            "    try:\n"
+            "        print('🚀 Starting agent execution...', flush=True)\n"
+            "        asyncio.run(AgentExecutor().run())\n"
+            "        print('✅ Agent execution completed successfully!', flush=True)\n"
+            "    except Exception as e:\n"
+            "        print(f'❌ Agent execution failed: {e}', flush=True)\n"
+            "        raise\n"
+            "    finally:\n"
+            "        if container_id:\n"
+            "            kill_container(container_id)\n"
+            "        else:\n"
+            "            print('⚠️ Could not determine container ID, cannot self-terminate', flush=True)\n"
         )
         launcher_file.write_text(launcher_code)
 

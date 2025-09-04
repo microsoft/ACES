@@ -19,6 +19,7 @@ import docker.models.containers
 import docker.types
 
 if TYPE_CHECKING:
+    from ..harness_models import DockerCommand
     from ..logging import ContainerLogManager
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,9 @@ class AgentContainerConfig:
 
     # Environment
     environment: Dict[str, str] = field(default_factory=dict)
+
+    # Docker commands to execute during container setup
+    docker_commands: List["DockerCommand"] = field(default_factory=list)
 
 
 @dataclass
@@ -331,8 +335,10 @@ class AgentManager:
 
             # Instead of volume mounting (which fails in Docker-in-Docker),
             # we'll copy the agent files after container creation
-            # Remove volume mounts - we'll copy files manually
-            volumes: Dict[str, str] = {}  # No volume mounts
+            # Mount Docker socket for container self-termination
+            volumes: Dict[str, dict[str, str]] = {
+                "/var/run/docker.sock": {"bind": "/var/run/docker.sock", "mode": "rw"}
+            }
 
             # TMPFS mounts for temporary files
             tmpfs = {mount: "" for mount in self.config.tmpfs_mounts}
@@ -346,7 +352,7 @@ class AgentManager:
 
             logger.debug(f"📦 Creating container {container_name} with image {image_to_use}")
 
-            # Create container (but don't start it yet)
+            # Create container with blocking command to keep it alive for setup
             container = self.docker_client.containers.create(
                 image=image_to_use,
                 name=container_name,
@@ -375,22 +381,45 @@ class AgentManager:
                     "saber.episode_id": episode_id,
                     "saber.managed": "true",
                 },
-                # Security: Drop all capabilities
+                # Security: Drop most capabilities but keep needed ones for setup
                 cap_drop=["ALL"],
+                cap_add=["CHOWN", "DAC_OVERRIDE"],  # Need CHOWN and DAC_OVERRIDE for file permission setup
                 # Security: No new privileges
                 security_opt=["no-new-privileges"],
-                # Command runs the packaged launcher which invokes AgentExecutor
-                command=["python", "/app/agent/launch.py"],
+                # Start with blocking command to keep container alive for setup
+                command=["tail", "-f", "/dev/null"],
             )
 
             logger.info(f"📦 Agent container created: {container.id[:12]}")
 
-            # Copy agent files into the container
+            # Start the container to keep it alive for setup operations
+            container.start()
+            logger.info(f"🚀 Agent container started for setup: {container.id[:12]}")
+
+            # Copy agent files into the running container
             await self._copy_agent_files_to_container(container, agent_code_path)
 
-            # Now start the container
-            container.start()
-            logger.info(f"🚀 Agent container started: {container.id[:12]}")
+            # Execute any additional docker commands while container is running
+            await self._execute_docker_commands(container)
+
+            # Now execute the actual launch.py command to start the agent
+            logger.info(f"🚀 Starting agent execution in container {container.id[:12]}")
+            logger.info("🔍 About to execute: python /app/agent/launch.py (non-blocking)")
+
+            # Use low-level Docker API for proper non-blocking execution with monitoring
+            # Redirect stdout/stderr to container's main process so logs are captured
+            exec_id = self.docker_client.api.exec_create(
+                container.id, ["bash", "-c", "python /app/agent/launch.py 2>&1 | tee /proc/1/fd/1"], user="agent"
+            )["Id"]
+
+            # Start execution in detached mode
+            self.docker_client.api.exec_start(exec_id, detach=True)
+
+            logger.info(f"🔍 Agent execution started in background, exec_id: {exec_id}")
+            logger.info(f"✅ Agent execution launched successfully in container {container.id[:12]}")
+
+            # Store exec_id for potential monitoring (can be used by caller if needed)
+            container.exec_id = exec_id
 
             # Register container for log collection if log manager is available
             if self.log_manager:
@@ -439,53 +468,187 @@ class AgentManager:
             logger.error(f"❌ Failed to copy agent files to container: {e}")
             raise
 
+    async def _execute_docker_commands(self, container: Any) -> None:
+        """Execute additional Docker commands on the container."""
+        if not self.config.docker_commands:
+            logger.debug("No docker commands configured for agent container")
+            return
+
+        logger.info(f"🔧 Executing {len(self.config.docker_commands)} docker commands on container {container.id[:12]}")
+
+        for i, cmd in enumerate(self.config.docker_commands, 1):
+            try:
+                if cmd.description:
+                    logger.info(f"🔧 [{i}/{len(self.config.docker_commands)}] {cmd.description}")
+                else:
+                    logger.info(f"🔧 [{i}/{len(self.config.docker_commands)}] Executing {cmd.type} command")
+
+                if cmd.type == "copy":
+                    await self._execute_docker_copy_command(container, cmd)
+                elif cmd.type == "exec":
+                    await self._execute_docker_exec_command(container, cmd)
+                else:
+                    raise ValueError(f"Unsupported docker command type: {cmd.type}")
+
+                logger.debug(f"✅ Docker command {i} completed successfully")
+
+            except Exception as e:
+                error_msg = f"Docker command {i} failed: {e}"
+                if cmd.description:
+                    error_msg = f"Docker command {i} ({cmd.description}) failed: {e}"
+                logger.error(f"❌ {error_msg}")
+                raise RuntimeError(error_msg) from e
+
+        logger.info(f"✅ All docker commands completed successfully for container {container.id[:12]}")
+
+    async def _execute_docker_copy_command(self, container: Any, cmd: "DockerCommand") -> None:
+        """Execute a docker copy command."""
+        import io
+        import os
+        import tarfile
+        from pathlib import Path
+
+        source_path = Path(cmd.source) if cmd.source is not None else Path("")
+        destination_path = cmd.destination if cmd.destination is not None else ""
+
+        if not source_path.exists():
+            raise FileNotFoundError(f"Source path does not exist: {source_path}")
+
+        logger.debug(f"Copying from {source_path} to container:{destination_path}")
+
+        # Create tar archive of source files/directories
+        tar_buffer = io.BytesIO()
+        with tarfile.open(fileobj=tar_buffer, mode="w") as tar:
+            if source_path.is_file():
+                # Copy single file
+                tar.add(str(source_path), arcname=source_path.name)
+            else:
+                # Copy directory contents
+                for root, dirs, files in os.walk(source_path):
+                    for file in files:
+                        file_path = os.path.join(root, file)
+                        # Calculate relative path from source_path
+                        rel_path = os.path.relpath(file_path, source_path)
+                        tar.add(file_path, arcname=rel_path)
+
+        tar_buffer.seek(0)
+
+        # Extract to destination in container
+        success = container.put_archive(destination_path, tar_buffer.getvalue())
+        if not success:
+            raise RuntimeError(f"Failed to copy {source_path} to container:{destination_path}")
+
+    async def _execute_docker_exec_command(self, container: Any, cmd: "DockerCommand") -> None:
+        """Execute a command inside the container."""
+        if not cmd.command:
+            raise ValueError("Exec command requires 'command' parameter")
+
+        # Use specified user or default to root for setup commands
+        exec_user = cmd.user if cmd.user else "root"
+
+        logger.debug(f"Executing command in container as user '{exec_user}': {' '.join(cmd.command)}")
+
+        # Execute command in container
+        exit_code, output = container.exec_run(
+            cmd=cmd.command,
+            user=exec_user,
+            workdir="/",
+        )
+
+        if exit_code != 0:
+            error_output = output.decode("utf-8", errors="replace") if output else "No output"
+            raise RuntimeError(f"Command failed with exit code {exit_code}: {error_output}")
+
+        logger.debug(f"Command completed successfully: {' '.join(cmd.command)}")
+
     async def _wait_for_container_completion(self, container: Any, container_name: str) -> AgentExecutionResult:
-        """Wait for container to complete execution."""
+        """Wait for container to complete execution by monitoring the exec process."""
         start_time = time.time()
 
         try:
-            # Wait for container with timeout
-            exit_code = container.wait(timeout=self.config.execution_timeout)["StatusCode"]
-            execution_time = time.time() - start_time
+            # Get the exec_id we stored earlier
+            exec_id = getattr(container, "exec_id", None)
+            if not exec_id:
+                raise RuntimeError("No exec_id found - agent execution may not have started properly")
 
-            # Determine termination reason
-            if exit_code == 0:
-                termination_reason = "completed"
-                success = True
-            elif exit_code == 130:  # SIGINT
-                termination_reason = "interrupted"
-                success = False
-            elif exit_code == 137:  # SIGKILL
-                termination_reason = "killed"
-                success = False
-            else:
-                termination_reason = "error"
-                success = False
+            logger.info(f"🔍 Monitoring exec process {exec_id} for completion")
 
-            logger.info(f"🏁 Container {container_name} completed with exit code {exit_code}")
+            # Monitor the exec process until completion
+            while True:
+                try:
+                    # Check if we've exceeded timeout
+                    if time.time() - start_time > self.config.execution_timeout:
+                        logger.warning(f"⏰ Exec process {exec_id} execution timeout")
 
-            return AgentExecutionResult(
-                success=success,
-                exit_code=exit_code,
-                termination_reason=termination_reason,
-                execution_time=execution_time,
-            )
+                        # Kill the container to stop execution
+                        container.stop(timeout=self.config.termination_grace_period)
+
+                        return AgentExecutionResult(
+                            success=False,
+                            exit_code=-1,
+                            termination_reason="timeout",
+                            execution_time=time.time() - start_time,
+                        )
+
+                    # Inspect the exec process
+                    exec_info = self.docker_client.api.exec_inspect(exec_id)
+
+                    if not exec_info["Running"]:
+                        # Exec process has completed
+                        exit_code = exec_info.get("ExitCode", 0)
+                        execution_time = time.time() - start_time
+
+                        # Determine termination reason
+                        if exit_code == 0:
+                            termination_reason = "completed"
+                            success = True
+                        elif exit_code == 130:  # SIGINT
+                            termination_reason = "interrupted"
+                            success = False
+                        elif exit_code == 137:  # SIGKILL
+                            termination_reason = "killed"
+                            success = False
+                        else:
+                            termination_reason = "error"
+                            success = False
+
+                        logger.info(f"🏁 Exec process {exec_id} completed with exit code {exit_code}")
+
+                        # Stop the container since the agent execution is done
+                        try:
+                            container.stop(timeout=5)
+                        except Exception as e:
+                            logger.warning(f"⚠️ Failed to stop container after exec completion: {e}")
+
+                        return AgentExecutionResult(
+                            success=success,
+                            exit_code=exit_code,
+                            termination_reason=termination_reason,
+                            execution_time=execution_time,
+                        )
+
+                    # Process still running, wait a bit before checking again
+                    await asyncio.sleep(1)
+
+                except docker.errors.NotFound:
+                    # Exec process not found - probably completed or container stopped
+                    logger.warning(f"⚠️ Exec process {exec_id} not found - container may have stopped")
+                    return AgentExecutionResult(
+                        success=False,
+                        exit_code=-1,
+                        termination_reason="exec_not_found",
+                        execution_time=time.time() - start_time,
+                    )
 
         except Exception as e:
-            if "timeout" in str(e).lower():
-                logger.warning(f"⏰ Container {container_name} execution timeout")
-
-                # Attempt graceful termination
-                try:
-                    container.stop(timeout=self.config.termination_grace_period)
-                except Exception:
-                    container.kill()  # Force kill if graceful fails
-
-                return AgentExecutionResult(
-                    success=False, exit_code=-1, termination_reason="timeout", execution_time=time.time() - start_time
-                )
-            else:
-                raise
+            logger.error(f"❌ Error monitoring exec process: {e}")
+            return AgentExecutionResult(
+                success=False,
+                exit_code=-1,
+                termination_reason="monitoring_error",
+                execution_time=time.time() - start_time,
+                error=str(e),
+            )
 
     async def _collect_container_logs(self, container: Any) -> tuple[str, str]:
         """Collect stdout and stderr from container."""

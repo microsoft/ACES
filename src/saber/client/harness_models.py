@@ -11,6 +11,36 @@ from typing import Any, Dict, List, Optional
 
 
 @dataclass
+class DockerCommand:
+    """Configuration for additional Docker commands to execute during agent container setup."""
+
+    type: str  # "copy", "exec"
+    description: Optional[str] = None
+
+    # For type="copy"
+    source: Optional[str] = None
+    destination: Optional[str] = None
+
+    # For type="exec"
+    command: Optional[List[str]] = None
+    user: Optional[str] = None  # User to run exec command as (default: container default user)
+
+    def __post_init__(self) -> None:
+        """Validate docker command configuration."""
+        if self.type == "copy":
+            if not self.source or not self.destination:
+                raise ValueError(
+                    f"Docker copy command requires both 'source' and 'destination'. "
+                    f"Got source='{self.source}', destination='{self.destination}'"
+                )
+        elif self.type == "exec":
+            if not self.command or not isinstance(self.command, list):
+                raise ValueError(f"Docker exec command requires 'command' as a list of strings. Got: {self.command}")
+        else:
+            raise ValueError(f"Unsupported docker command type: '{self.type}'. Supported types: 'copy', 'exec'")
+
+
+@dataclass
 class SABERHarnessConfig:
     """Configuration for SABER harness."""
 
@@ -44,6 +74,7 @@ class SABERHarnessConfig:
     # Agent configuration (optional)
     agent_config: Dict[str, Any] = field(default_factory=dict)
     agent_path: Optional[str] = None
+    docker_commands: List[DockerCommand] = field(default_factory=list)  # Additional Docker commands for agent setup
 
     # UI Configuration
     ui_backend: str = "auto"  # auto, console, inspect_ai_rich, inspect_ai_textual, inspect_ai_plain, none

@@ -75,22 +75,28 @@ class ExcytinDemoAgent:
 
             # Step 2: Verify CLI executor is available
             if "cli" not in self.available_tools:
-                raise RuntimeError("CLI executor not available - cannot perform MySQL tests")
+                raise RuntimeError("CLI executor not available - cannot perform tests")
 
-            # Step 3: Run MySQL connectivity tests
-            test_results = await self._run_mysql_connectivity_tests()
+            # Step 3: Test Azure CLI authentication
+            azure_result = await self._test_azure_cli_auth()
 
-            # Step 4: Analyze results and return
-            success = all(result["success"] for result in test_results)
+            # Step 4: Run MySQL connectivity tests
+            mysql_results = await self._run_mysql_connectivity_tests()
+
+            # Step 5: Combine all results
+            all_results = [azure_result] + mysql_results
+            success = all(result["success"] for result in all_results)
 
             result = {
                 "success": success,
-                "test_results": test_results,
-                "total_tests": len(test_results),
-                "passed_tests": sum(1 for r in test_results if r["success"]),
+                "test_results": all_results,
+                "total_tests": len(all_results),
+                "passed_tests": sum(1 for r in all_results if r["success"]),
                 "agent_type": "excytin_demo",
                 "tools_used": ["cli"],
-                "message": "Excytin demo completed successfully" if success else "Some tests failed",
+                "message": (
+                    "Excytin demo with Azure CLI test completed successfully" if success else "Some tests failed"
+                ),
             }
 
             logger.info(f"🎯 Demo completed with {result['passed_tests']}/{result['total_tests']} tests passed")
@@ -130,6 +136,75 @@ class ExcytinDemoAgent:
         except Exception as e:
             logger.error(f"Failed to discover tools: {e}")
             self.available_tools = []
+
+    async def _test_azure_cli_auth(self) -> Dict[str, Any]:
+        """
+        Test Azure CLI authentication.
+
+        Tests if Azure CLI credentials were properly copied and the user is authenticated.
+
+        Returns:
+            Test result dict with success status and details
+        """
+        logger.info("🔍 Testing Azure CLI authentication...")
+
+        try:
+            # Test Azure CLI account status directly in the agent container
+            # Use subprocess to run locally, not through MCP
+            import os
+            import subprocess
+
+            # Set Azure config directory to our copied location
+            env = os.environ.copy()
+            env["AZURE_CONFIG_DIR"] = "/app/.azure"
+
+            command = ["az", "account", "show", "--output", "json"]
+            logger.info(f"Executing directly in agent container: {' '.join(command)}")
+
+            result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=30)
+
+            if result.returncode == 0:
+                # Check if we have valid Azure account info
+                if "subscriptionId" in result.stdout or "tenantId" in result.stdout:
+                    logger.info("    ✅ Azure CLI authentication successful")
+                    return {
+                        "name": "Azure CLI Authentication Test",
+                        "success": True,
+                        "output": result.stdout[:200] + "..." if len(result.stdout) > 200 else result.stdout,
+                        "command": " ".join(command),
+                        "description": "Verified Azure CLI credentials are working in agent container",
+                    }
+                else:
+                    logger.warning("    ⚠️ Azure CLI executed but no valid account found")
+                    return {
+                        "name": "Azure CLI Authentication Test",
+                        "success": False,
+                        "output": result.stdout,
+                        "command": " ".join(command),
+                        "error": "No valid Azure account found - may need to run 'az login'",
+                        "description": "Azure CLI available but not authenticated",
+                    }
+            else:
+                error_msg = result.stderr or f"Command failed with exit code {result.returncode}"
+                logger.error(f"    ❌ Azure CLI test failed: {error_msg}")
+                return {
+                    "name": "Azure CLI Authentication Test",
+                    "success": False,
+                    "command": " ".join(command),
+                    "error": error_msg,
+                    "output": result.stdout,
+                    "description": "Azure CLI command failed in agent container",
+                }
+
+        except Exception as e:
+            logger.error(f"    ❌ Azure CLI test failed with exception: {e}")
+            return {
+                "name": "Azure CLI Authentication Test",
+                "success": False,
+                "command": "az account show",
+                "error": str(e),
+                "description": "Exception during Azure CLI test",
+            }
 
     async def _run_mysql_connectivity_tests(self) -> List[Dict[str, Any]]:
         """

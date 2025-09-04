@@ -10,8 +10,22 @@ WORKDIR /app
 COPY client/agent/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt && rm /tmp/requirements.txt
 
+# Install Azure CLI
+USER root
+RUN apt-get update && \
+    apt-get install -y curl && \
+    curl -sL https://aka.ms/InstallAzureCLIDeb | bash && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create Azure CLI directory
+RUN mkdir -p /app/.azure
+
 # Agent code will be copied at runtime by the agent manager
 # This image provides the dependency environment for the agent
 
 # Keep the same user and environment from base image
 USER agent
+
+# Set the correct HOME directory for the agent user
+ENV HOME=/app
