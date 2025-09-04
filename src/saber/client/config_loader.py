@@ -11,7 +11,7 @@ from typing import Any, Dict
 
 import yaml
 
-from .harness_models import SABERHarnessConfig
+from .harness_models import DockerCommand, SABERHarnessConfig
 
 
 class HarnessConfigLoader:
@@ -76,6 +76,23 @@ class HarnessConfigLoader:
         # Extract agent path for separate handling
         agent_path = agent.get("path")
 
+        # Parse docker_commands configuration
+        docker_commands = []
+        docker_commands_config = agent.get("docker_commands", [])
+        for cmd_config in docker_commands_config:
+            try:
+                # Validate and create DockerCommand object
+                docker_cmd = DockerCommand(
+                    type=cmd_config["type"],
+                    description=cmd_config.get("description"),
+                    source=cmd_config.get("source"),
+                    destination=cmd_config.get("destination"),
+                    command=cmd_config.get("command"),
+                )
+                docker_commands.append(docker_cmd)
+            except Exception as e:
+                raise ValueError(f"Invalid docker command configuration: {cmd_config}. Error: {e}")
+
         # UI configuration
         ui = config_data.get("ui", {})
         ui_backend = ui.get("backend", "auto")
@@ -104,6 +121,7 @@ class HarnessConfigLoader:
             llm_config=llm_config,
             agent_config=agent_config,
             agent_path=agent_path,
+            docker_commands=docker_commands,
             ui_backend=ui_backend,
             ui_enabled=ui_enabled,
             ui_internal_only=ui_internal_only,
@@ -162,6 +180,20 @@ class HarnessConfigLoader:
                 "path": None,
                 "image": "saber/agent-runner:latest",
                 "config": {},
+                "docker_commands": [
+                    # Example: Copy Azure CLI credentials from host to container
+                    # {
+                    #     "type": "copy",
+                    #     "source": "/home/user/.azure",
+                    #     "destination": "/home/agent/.azure",
+                    #     "description": "Copy Azure CLI credentials"
+                    # },
+                    # {
+                    #     "type": "exec",
+                    #     "command": ["chown", "-R", "agent:agent", "/home/agent/.azure"],
+                    #     "description": "Fix Azure credentials ownership"
+                    # }
+                ],
             },
             "ui": {
                 "backend": "auto",

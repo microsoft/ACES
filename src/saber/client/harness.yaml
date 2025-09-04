@@ -39,6 +39,21 @@ agent:
   # Additional agent configuration
   config: {}
 
+# Docker Commands - Additional setup commands to run during agent container creation
+docker_commands:
+  - type: "copy"
+    description: "Copy Azure CLI config from host"
+    source: "/app/.azure/config"
+    destination: "/app/.azure/config"
+  - type: "copy"
+    description: "Copy Azure CLI credentials from host"
+    source: "/app/.azure/credentials"
+    destination: "/app/.azure/credentials"
+  - type: "exec"
+    description: "Fix Azure CLI file permissions"
+    command: ["chown", "-R", "agent:agent", "/app/.azure"]
+    user: "root"
+
 # UI Configuration
 ui:
   backend: "auto"  # auto, textual, rich, plain, none

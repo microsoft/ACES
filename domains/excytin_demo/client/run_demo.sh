@@ -78,15 +78,7 @@ fi
 echo ""
 
 # Build the command
-CMD="uv run python -m saber.client --agent /app/client/agent/demo_agent.py --agent-image saber/excytin-agent:latest --tasks excytin_demo --ui $UI_MODE"
-
-if [[ -z "$CONSOLE_LOGS" ]]; then
-    CMD="$CMD --quiet-logs"
-fi
-
-if [[ -n "$VERBOSE" ]]; then
-    CMD="$CMD $VERBOSE"
-fi
+CMD="uv run python -m saber.client --config /app/client/harness.yaml"
 
 echo "🚀 Executing: docker exec -it saber-excytin-client $CMD"
 echo ""

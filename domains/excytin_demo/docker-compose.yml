@@ -36,6 +36,7 @@ services:
       - ./client:/app/client  # Mount client code for development
       - ../../src:/app/src  # Mount SABER source code for shared constants
       - ./client/logs:/app/logs:rw  # Mount logs directory for client-side container logging
+      - ${HOME}/.azure:/app/.azure:ro  # Mount Azure CLI credentials for agent containers
     environment:
       - SABER_REST_URL=http://saber-excytin-server:8000
       - SABER_MCP_URL=http://saber-excytin-server:8001
