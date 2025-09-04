@@ -10,15 +10,59 @@ import argparse
 import asyncio
 import importlib.util
 import inspect
+import json
 import logging
 import os
 import sys
 import traceback
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .harness_models import SABERHarnessConfig
 from .saber_harness import SABERHarness
+
+
+class JSONFormatter(logging.Formatter):
+    """Minimal JSON log formatter (adds level, logger, message, and extra fields)."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        base: Dict[str, Any] = {
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info:
+            base["exception"] = self.formatException(record.exc_info)
+        # Include any custom attributes (simple heuristic: skip built-ins)
+        for k, v in record.__dict__.items():
+            if k not in {
+                "name",
+                "msg",
+                "args",
+                "levelname",
+                "levelno",
+                "pathname",
+                "filename",
+                "module",
+                "exc_info",
+                "exc_text",
+                "stack_info",
+                "lineno",
+                "funcName",
+                "created",
+                "msecs",
+                "relativeCreated",
+                "thread",
+                "threadName",
+                "processName",
+                "process",
+            } and not k.startswith("_"):
+                try:
+                    json.dumps({k: v})  # ensure serializable
+                    base[k] = v
+                except Exception:
+                    base[k] = str(v)
+        return json.dumps(base, ensure_ascii=False)
 
 
 def setup_client_logging(
@@ -65,8 +109,7 @@ def setup_integrated_logging(harness_log_dir: Path, verbose: bool = False) -> lo
     # File handler - captures everything
     file_handler = logging.FileHandler(log_file)
     file_handler.setLevel(logging.DEBUG)
-    file_formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-    file_handler.setFormatter(file_formatter)
+    file_handler.setFormatter(JSONFormatter())
     root_logger.addHandler(file_handler)
 
     # Console handler - only warnings and errors
@@ -131,17 +174,21 @@ async def run_unified_benchmark(
     ui_enabled: bool = True,
     ui_tool_detail_level: str = "full",
     quiet_logs: bool = False,
+    debug_mode: bool = False,
 ) -> None:
-    """Run unified benchmark mode - supports single tasks, multiple tasks, or full benchmarks."""
+    """Run unified benchmark mode - this is the core async function like inspect-ai's eval_async."""
+
+    # Set environment variable for debug mode before any other initialization
+    if debug_mode:
+        os.environ["SABER_DEBUG_MODE"] = "true"
 
     # Stage 1: Initial logging setup
     logger = setup_client_logging(verbose=(log_level.upper() == "DEBUG"), log_to_file=quiet_logs)
 
     try:
         # Load agent
-        logger.info(f"Loading agent from: {agent_path}")
-        agent = load_agent_from_path(agent_path, agent_class)
-        logger.info(f"✅ Agent loaded: {agent}")
+        logger.info("🚀 Initializing SABER harness with agent file")
+        load_agent_from_path(agent_path, agent_class)
 
         # Create harness configuration
         config = SABERHarnessConfig(
@@ -158,7 +205,6 @@ async def run_unified_benchmark(
         )
 
         # Create harness
-        logger.info("🔧 Initializing SABER harness...")
         harness = SABERHarness(config)
 
         # Initialize with agent
@@ -169,7 +215,7 @@ async def run_unified_benchmark(
             setup_integrated_logging(harness.session_log_dir, verbose=(log_level.upper() == "DEBUG"))
             logger = logging.getLogger("saber.client")  # Get updated logger
 
-        logger.info("✅ Harness initialized successfully")
+        logger.info("✅ SABER harness initialized successfully")
 
         # Auto-detect environment file if not provided
         if not env_file:
@@ -178,9 +224,6 @@ async def run_unified_benchmark(
             potential_env = agent_dir / ".env"
             if potential_env.exists():
                 env_file = str(potential_env)
-                logger.info(f"📄 Found .env file: {env_file}")
-                if not quiet_logs:
-                    print(f"📄 Found .env file: {env_file}")
 
         # Configure URLs from environment if not provided
         final_server_url = server_url or os.getenv("SABER_REST_URL", "http://localhost:8000")
@@ -188,16 +231,11 @@ async def run_unified_benchmark(
 
         logger.info(f"🔗 Connecting to SABER server: {final_server_url}")
         logger.info(f"🔗 MCP server: {final_mcp_url}")
-        if not quiet_logs:
-            print(f"🔗 Connecting to SABER server: {final_server_url}")
-            print(f"🔗 MCP server: {final_mcp_url}")
 
         # If no task_ids provided, fetch benchmark info and prompt user
         final_task_ids = task_ids
         if not task_ids:
             logger.info("📋 Fetching available tasks...")
-            if not quiet_logs:
-                print("📋 Fetching available tasks...")
             # Create a temporary REST client to get benchmark info
             from .api.rest_client import SABERRestClient
 
@@ -251,9 +289,6 @@ async def run_unified_benchmark(
 
             except Exception as e:
                 logger.error(f"❌ Failed to fetch benchmark data: {e}")
-                if not quiet_logs:
-                    print(f"❌ Failed to fetch benchmark data: {e}")
-                    print("Using provided task_ids or exiting...")
                 if not task_ids:
                     return
 
@@ -265,33 +300,21 @@ async def run_unified_benchmark(
             harness.config.mcp_url = final_mcp_url
 
         logger.info("🚀 Starting agent execution...")
-        if not quiet_logs:
-            print("🚀 Starting agent execution...")
 
         results = await harness.run()
 
         # Results display
-        if not quiet_logs:
-            print("\n" + "=" * 60)
         if results.success:
             logger.info("🎉 EXECUTION COMPLETE!")
-            if not quiet_logs:
-                print("🎉 EXECUTION COMPLETE!")
             successful = results.successful_episodes
             total = results.total_episodes
             logger.info(f"📊 Results: {successful}/{total} episodes successful")
-            if not quiet_logs:
-                print(f"📊 Results: {successful}/{total} episodes successful")
         else:
             logger.error("❌ EXECUTION FAILED")
-            if not quiet_logs:
-                print("❌ EXECUTION FAILED")
 
         # Display episode details if available
         if results.episode_results:
             logger.info("📝 Episode Details:")
-            if not quiet_logs:
-                print("\n📝 Episode Details:")
             for episode_result in results.episode_results:
                 status = "✅" if episode_result.success else "❌"
                 task_id = episode_result.task_id
@@ -299,28 +322,19 @@ async def run_unified_benchmark(
                 reason = episode_result.termination_reason or "unknown"
                 detail = f"  {status} {task_id} (attempt {attempt}): {reason}"
                 logger.info(detail)
-                if not quiet_logs:
-                    print(detail)
-
-        if not quiet_logs:
-            print("=" * 60)
 
     except KeyboardInterrupt:
         logger.info("⏹️ Interrupted by user")
-        if not quiet_logs:
-            print("\n⏹️ Interrupted by user")
         sys.exit(0)
     except Exception as e:
         logger.error(f"❌ Error: {e}")
         if log_level.upper() == "DEBUG":
             logger.error(f"🔍 Traceback: {traceback.format_exc()}")
-        if not quiet_logs:
-            print(f"❌ Error: {e}")
         sys.exit(1)
 
 
 def main() -> None:
-    """Simple CLI entry point."""
+    """Simple CLI entry point that matches inspect-ai's pattern exactly."""
     parser = argparse.ArgumentParser(
         description="SABER Client - Unified Agent Testing",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -337,6 +351,9 @@ Examples:
 
   # Full benchmark (all available tasks)
   python -m saber.client --agent ./my_agent.py --tasks all --quiet-logs
+
+  # Debug mode - keep containers for manual inspection
+  python -m saber.client --agent ./my_agent.py --tasks xss_flag_capture --debug-mode
 
   # Excytin demo with textual UI
   python -m saber.client --agent /app/client/demo_agent.py --tasks excytin_demo --ui textual --quiet-logs
@@ -386,8 +403,17 @@ Examples:
         action="store_true",
         help="Save detailed logs to file and show minimal console output for cleaner UI",
     )
+    parser.add_argument(
+        "--debug-mode",
+        action="store_true",
+        help="Enable debug mode - keeps agent containers running for debugging (requires manual cleanup)",
+    )
 
     args = parser.parse_args()
+
+    # NOTE: Interactive task selection below intentionally uses blocking input() before
+    # any concurrent async workload begins. This is deliberate (fail-fast) so that
+    # user intent is resolved before allocating resources / starting sessions.
 
     # Validate agent file exists
     if not Path(args.agent).exists():
@@ -406,9 +432,24 @@ Examples:
     ui_backend = "none" if args.no_ui else args.ui
     ui_enabled = not args.no_ui
 
-    # Run unified benchmark mode
-    asyncio.run(
-        run_unified_benchmark(
+    # Early validation for textual UI (fail fast if dependency missing)
+    if ui_backend == "textual":
+        try:
+            import importlib
+
+            importlib.import_module("inspect_ai._display.textual.display")
+        except Exception as e:  # Broad on purpose to surface ANY missing dep scenario
+            print(
+                "❌ Textual UI requested but inspect-ai textual components not available.\n"
+                "Install dependencies (example): uv add 'inspect-ai[textual]>=0.3.0' OR choose --ui rich/plain/none.\n"
+                f"Underlying import error: {e}"
+            )
+            sys.exit(1)
+
+    # EXACT INSPECT-AI PATTERN - define async function and let display handle everything
+    async def run_task_app() -> None:
+        """All SABER work happens here - just like inspect-ai's eval_async."""
+        await run_unified_benchmark(
             agent_path=args.agent,
             task_ids=task_ids,
             agent_class=args.agent_class,
@@ -420,8 +461,25 @@ Examples:
             ui_enabled=ui_enabled,
             ui_tool_detail_level=args.ui_tool_detail,
             quiet_logs=args.quiet_logs,
+            debug_mode=args.debug_mode,
         )
-    )
+
+    # EXACT INSPECT-AI PATTERN - let task_display handle event loop
+    try:
+        from inspect_ai._display.core.active import display as task_display
+
+        task_display().run_task_app(run_task_app)
+    except ImportError:
+        # Fallback if inspect-ai not available
+        print("⚠️ inspect-ai not available, using basic async mode")
+        asyncio.run(run_task_app())
+    except asyncio.CancelledError:
+        # Normal cleanup - inspect-ai cancels tasks during shutdown
+        # This is expected behavior, don't show as error
+        pass
+    except KeyboardInterrupt:
+        # User interrupted - clean exit
+        sys.exit(0)
 
 
 if __name__ == "__main__":
