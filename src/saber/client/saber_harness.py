@@ -392,12 +392,10 @@ class SABERHarness:
                 )
                 self.harness_logger.log_execution_complete_event(execution_complete_event)
 
-            await self._cleanup_session()
-
-            # Return results
+            # Create results BEFORE cleanup to preserve session_id
             result = self._create_harness_result(all_results, start_time)
 
-            # Complete UI session
+            # Complete UI session BEFORE cleanup to preserve session_id
             if self.ui_manager:
                 successful_episode_results = [r for r in all_results if r.success]
                 session_summary = {
@@ -418,6 +416,9 @@ class SABERHarness:
                     self.ui_manager.display_message("✅ SABER benchmark completed successfully!", MessageType.SUCCESS)
                 else:
                     self.ui_manager.display_message("⚠️ SABER benchmark completed with issues", MessageType.WARNING)
+
+            # Cleanup session AFTER result creation and UI completion
+            await self._cleanup_session()
 
             return result
 
