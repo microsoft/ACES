@@ -145,12 +145,21 @@ class InspectAIBackend(UIBackend):
             raise RuntimeError(f"Failed to initialize inspect-ai display: {e}") from e
 
     def _safe_display_print(self, message: str) -> None:
-        """Safely print to display, handling None case."""
-        if self._display is not None:
-            self._safe_display_print(message)
-        else:
-            # Fallback to logging if display is not available
+        """Print to display - fail fast if display not available."""
+        if self._display is None:
+            raise RuntimeError(
+                "Display backend not initialized. Cannot print message. "
+                "This indicates a critical UI initialization failure."
+            )
+
+        # Call the actual display print method
+        try:
+            self._display.print(message)
+        except AttributeError:
+            # inspect-ai displays may not have print method, use logging as fallback
             logger.info(f"Display: {message}")
+        except Exception as e:
+            raise RuntimeError(f"Display backend failed to print message: {e}") from e
 
     # UIBackend interface implementation
     def display_message(self, message: UIMessage) -> None:
