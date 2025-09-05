@@ -275,7 +275,7 @@ class TestPermanentEphemeralIntegration:
                 image="redis:alpine",
                 name=f"redis_cache_{session_id}",
                 network=network_name,
-                ports={"6379/tcp": 6379},
+                ports={"6379/tcp": None},  # Let Docker assign a random port
                 environment=["REDIS_PASSWORD=testpass"],
                 detach=True,
                 labels={

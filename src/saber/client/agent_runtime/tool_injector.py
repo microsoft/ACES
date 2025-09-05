@@ -13,6 +13,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 import aiohttp
 
+from ...base import MCPHeaders
+
 logger = logging.getLogger(__name__)
 
 
@@ -68,32 +70,80 @@ class ToolInjector:
         self.session = aiohttp.ClientSession()
 
         try:
+            # Register this agent session with the sidecar
+            await self._register_agent_session()
             await self._discover_tools()
             self._generate_proxy_functions()
             self.logger.info(f"Initialized {len(self.tools)} tools for agent {self.agent_id}")
-
         except Exception as e:
-            self.logger.error(f"Failed to initialize tool injector: {e}")
-            if self.session:
-                await self.session.close()
-                self.session = None
+            await self.cleanup()
+            raise SidecarConnectionError(f"Failed to initialize tool injector: {e}")
+
+    async def _register_agent_session(self) -> None:
+        """Register this agent session with the sidecar."""
+        payload = {
+            "agent_id": self.agent_id,
+            "saber_session_id": self.session_id,
+            "saber_episode_id": self.episode_id,
+            "task_id": self.task_id,
+        }
+
+        try:
+            if not self.session:
+                raise SidecarConnectionError("HTTP session not available")
+
+            async with self.session.post(
+                f"{self.sidecar_url}/admin/sessions", json=payload, timeout=aiohttp.ClientTimeout(total=10)
+            ) as response:
+                if response.status == 200:
+                    await response.json()  # Response processed but not stored
+                    self.logger.info(f"✅ Agent session registered: {self.agent_id} (episode: {self.episode_id})")
+                else:
+                    error_text = await response.text()
+                    raise SidecarConnectionError(
+                        f"Failed to register agent session: HTTP {response.status}: {error_text}"
+                    )
+        except Exception as e:
+            self.logger.error(f"❌ Agent session registration failed: {e}")
             raise
 
     async def cleanup(self) -> None:
         """Clean up resources."""
+        try:
+            # Unregister agent session
+            await self._unregister_agent_session()
+        except Exception as e:
+            self.logger.warning(f"Failed to unregister agent session: {e}")
+
         if self.session:
             await self.session.close()
             self.session = None
 
+    async def _unregister_agent_session(self) -> None:
+        """Unregister this agent session from the sidecar."""
+        try:
+            if not self.session:
+                return
+
+            async with self.session.delete(
+                f"{self.sidecar_url}/admin/sessions/{self.agent_id}", timeout=aiohttp.ClientTimeout(total=5)
+            ) as response:
+                if response.status == 200:
+                    self.logger.info(f"✅ Agent session unregistered: {self.agent_id}")
+                else:
+                    self.logger.warning(f"⚠️ Failed to unregister agent session: HTTP {response.status}")
+        except Exception as e:
+            self.logger.warning(f"Failed to unregister agent session: {e}")
+
     async def _discover_tools(self) -> None:
         """Discover available tools from sidecar."""
-        headers = {"X-Saber-Session-Id": self.session_id, "X-Saber-Agent-Id": self.agent_id}
+        headers = {MCPHeaders.SESSION_ID: self.session_id, MCPHeaders.CLIENT_ID: self.agent_id}
 
         # Add episode and task context if available
         if self.episode_id:
-            headers["X-Saber-Episode-Id"] = self.episode_id
+            headers[MCPHeaders.EPISODE_ID] = self.episode_id
         if self.task_id:
-            headers["X-Saber-Task-Id"] = self.task_id
+            headers[MCPHeaders.TASK_ID] = self.task_id
 
         try:
             if not self.session:
@@ -195,16 +245,16 @@ class ToolInjector:
         self.logger.info(f"🔗 ToolInjector._execute_tool called: {tool_name} via {self.sidecar_url}/execute_tool")
 
         headers = {
-            "X-Saber-Session-Id": self.session_id,
-            "X-Saber-Agent-Id": self.agent_id,
+            MCPHeaders.SESSION_ID: self.session_id,
+            MCPHeaders.CLIENT_ID: self.agent_id,
             "Content-Type": "application/json",
         }
 
         # Add episode and task context if available
         if self.episode_id:
-            headers["X-Saber-Episode-Id"] = self.episode_id
+            headers[MCPHeaders.EPISODE_ID] = self.episode_id
         if self.task_id:
-            headers["X-Saber-Task-Id"] = self.task_id
+            headers[MCPHeaders.TASK_ID] = self.task_id
 
         payload = {"tool_name": tool_name, "arguments": arguments, "timeout": self.timeout}
         self.logger.info(f"📤 Sending POST to {self.sidecar_url}/execute_tool with payload: {payload}")

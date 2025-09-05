@@ -3,6 +3,28 @@
 
 set -e
 
+# Parse command line arguments
+FULL_BUILD=false
+for arg in "$@"; do
+    case $arg in
+        --full-build)
+            FULL_BUILD=true
+            shift
+            ;;
+        -h|--help)
+            echo "Usage: $0 [--full-build] [-h|--help]"
+            echo ""
+            echo "  --full-build    Force rebuild of base SABER images first"
+            echo "  -h, --help      Show this help"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $arg"
+            exit 1
+            ;;
+    esac
+done
+
 echo "🔨 Building Excytin Demo Domain Images"
 echo "======================================"
 
@@ -11,8 +33,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
 cd "$SCRIPT_DIR"
 
 # Ensure base images are built first
-echo "� Checking for SABER base images..."
-if ! docker images | grep -q 'saber/server'; then
+if [ "$FULL_BUILD" = true ]; then
+    echo "🔄 Full build requested - rebuilding base SABER images..."
+    cd ../../../docker
+    ./build-images.sh
+    cd "$SCRIPT_DIR"
+elif ! docker images | grep -q 'saber/server'; then
+    echo "🔍 Checking for SABER base images..."
     echo "⚠️  Base images not found. Building base images first..."
     cd ../../../docker
     ./build-images.sh
@@ -60,3 +87,5 @@ echo ""
 echo "Next steps:"
 echo "  • Run: docker-compose up -d"
 echo "  • Test: docker exec -it saber-excytin-client uv run demo_client.py"
+echo ""
+echo "💡 Use --full-build flag to force rebuild of base SABER images"

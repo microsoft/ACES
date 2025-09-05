@@ -59,7 +59,7 @@ class SessionRegistrationRequest(BaseModel):
 
     agent_id: str = Field(..., description="Unique identifier for the agent container")
     saber_session_id: str = Field(..., description="SABER server session ID")
-    saber_episode_id: str = Field(..., description="Episode ID for episode-first execution (REQUIRED)")
+    saber_episode_id: Optional[str] = Field(None, description="Episode ID for episode-first execution (recommended)")
     task_id: Optional[str] = Field(None, description="Optional task ID for context")
 
 
@@ -294,6 +294,10 @@ def create_app(
             raise HTTPException(status_code=503, detail="Session registry not initialized")
 
         try:
+            # EPISODE-FIRST: Validate required episode ID
+            if not request.saber_episode_id:
+                raise HTTPException(status_code=400, detail="saber_episode_id is required for episode-first execution")
+
             # EPISODE-FIRST: Pass saber_episode_id to registration
             session = await session_registry.register_session(
                 agent_id=request.agent_id,

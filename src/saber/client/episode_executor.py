@@ -132,7 +132,6 @@ class ContainerEpisodeExecutor:
         # State
         self.sidecar_started = False
         self.active_episodes: Dict[str, asyncio.Task[None]] = {}
-        self._harness_agent_id: Optional[str] = None
 
     def _setup_container_logging(self) -> None:
         """Set up container logging configuration."""
@@ -180,13 +179,8 @@ class ContainerEpisodeExecutor:
                 container=self.sidecar_manager.container, log_file_name="mcp_sidecar.log", component_type="sidecar"
             )
 
-        # Register session with sidecar
-        # Register harness agent session with sidecar for monitoring (optional)
-        # NOTE: Harness registration uses episode_id=None since it's not episode-specific
-        self._harness_agent_id = await self.sidecar_manager.register_agent_session(
-            session_id=self.session_id, episode_id=None, task_id=None, agent_id="saber-harness"
-        )
-
+        # NOTE: Agent sessions will register themselves when they start up
+        # No need for harness-level registration in episode-first architecture
         logger.info("✅ Container infrastructure initialized")
 
     async def _start_episode_progress_stream(self, episode_id: str) -> None:
@@ -821,10 +815,8 @@ class ContainerEpisodeExecutor:
             if self.log_manager:
                 await self.log_manager.cleanup_and_finalize()
 
-            # Unregister session
-            if self.sidecar_started:
-                if self._harness_agent_id:
-                    await self.sidecar_manager.unregister_agent_session(self._harness_agent_id)
+            # NOTE: Agent sessions unregister themselves when they shut down
+            # No harness-level unregistration needed
 
             # Stop sidecar (only if we're the last session)
             await self.sidecar_manager.stop_sidecar()
