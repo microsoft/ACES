@@ -66,7 +66,7 @@ class TestToolsIntegration:
     async def test_end_to_end_blocked_command_execution(self, registry):
         """Test complete flow for blocked command execution."""
         action = Action(tool_name="cli", parameters={"command": "sudo rm -rf /"})
-        context = {"session_id": f"integration_test_002_{uuid.uuid4().hex[:8]}"}
+        context = {"episode_id": f"integration_test_002_{uuid.uuid4().hex[:8]}"}
 
         result = await registry.step(action, context)
 
@@ -79,7 +79,7 @@ class TestToolsIntegration:
         """Test execution of allowed command in Docker container."""
 
         action = Action(tool_name="cli", parameters={"command": "echo test"})  # Safe command from allowed list
-        context = {"session_id": f"integration_test_003_{uuid.uuid4().hex[:8]}"}
+        context = {"episode_id": f"integration_test_003_{uuid.uuid4().hex[:8]}"}
 
         # Mock Docker environment execution
         mock_env = MagicMock()
@@ -88,7 +88,7 @@ class TestToolsIntegration:
         ))
         mock_env.get_container_id.return_value = "whitelist_container_456"
 
-        with patch.object(registry._sandbox_manager, "get_session_environment", return_value=mock_env):
+        with patch.object(registry._sandbox_manager, "get_episode_environment", return_value=mock_env):
             result = await registry.step(action, context)
 
         assert result.exit_code == 0
@@ -100,7 +100,7 @@ class TestToolsIntegration:
 
         actions_list = [Action(tool_name="cli", parameters={"command": f"echo test{i}"}) for i in range(5)]
 
-        contexts_list = [{"session_id": f"concurrent_test_{i}"} for i in range(5)]
+        contexts_list = [{"episode_id": f"concurrent_test_{i}"} for i in range(5)]
 
         # Mock Docker environment for all commands
         mock_env = MagicMock()
@@ -109,7 +109,7 @@ class TestToolsIntegration:
         ))
         mock_env.get_container_id.return_value = "concurrent_container"
 
-        with patch.object(registry._sandbox_manager, "get_session_environment", return_value=mock_env):
+        with patch.object(registry._sandbox_manager, "get_episode_environment", return_value=mock_env):
             # Execute all commands concurrently
             tasks = [
                 asyncio.create_task(registry.step(action, context))
@@ -127,7 +127,7 @@ class TestToolsIntegration:
 
         # Use a command that would benefit from shell mode but isn't dangerous
         action = Action(tool_name="cli", parameters={"command": "echo 'hello world'", "shell": True})
-        context = {"session_id": f"integration_test_004_{uuid.uuid4().hex[:8]}"}
+        context = {"episode_id": f"integration_test_004_{uuid.uuid4().hex[:8]}"}
 
         # Mock Docker environment execution
         mock_env = MagicMock()
@@ -136,7 +136,7 @@ class TestToolsIntegration:
         ))
         mock_env.get_container_id.return_value = "shell_test_container"
 
-        with patch.object(registry._sandbox_manager, "get_session_environment", return_value=mock_env) as mock_get_env:
+        with patch.object(registry._sandbox_manager, "get_episode_environment", return_value=mock_env) as mock_get_env:
             result = await registry.step(action, context)
 
         assert result.exit_code == 0
@@ -193,12 +193,12 @@ class TestToolsIntegration:
     @pytest.mark.asyncio
     async def test_parameter_validation_integration(self, registry):
         """Test parameter validation integration."""
-        # Use unique session ID to avoid Docker container conflicts
-        unique_session_id = f"test_validation_{uuid.uuid4().hex[:8]}"
+        # Use unique episode ID to avoid Docker container conflicts
+        unique_episode_id = f"test_validation_{uuid.uuid4().hex[:8]}"
 
         # Test missing required parameter (empty command)
         action = Action(tool_name="cli", parameters={"command": "", "shell": True})  # Missing command
-        context = {"session_id": unique_session_id}
+        context = {"episode_id": unique_episode_id}
         result = await registry.step(action, context)
         assert result.exit_code != 0
         # The test should fail during validation or execution, not necessarily with the exact message
@@ -213,59 +213,59 @@ class TestToolsIntegration:
 
     @pytest.mark.asyncio
     async def test_session_isolation_integration(self, registry):
-        """Test that different sessions are properly isolated."""
+        """Test that different episodes are properly isolated."""
 
-        action1 = Action(tool_name="cli", parameters={"command": "echo session1"})
-        action2 = Action(tool_name="cli", parameters={"command": "echo session2"})
-        session_id_1 = f"session_isolation_1_{uuid.uuid4().hex[:8]}"
-        session_id_2 = f"session_isolation_2_{uuid.uuid4().hex[:8]}"
-        context1 = {"session_id": session_id_1}
-        context2 = {"session_id": session_id_2}
+        action1 = Action(tool_name="cli", parameters={"command": "echo episode1"})
+        action2 = Action(tool_name="cli", parameters={"command": "echo episode2"})
+        episode_id_1 = f"episode_isolation_1_{uuid.uuid4().hex[:8]}"
+        episode_id_2 = f"episode_isolation_2_{uuid.uuid4().hex[:8]}"
+        context1 = {"episode_id": episode_id_1}
+        context2 = {"episode_id": episode_id_2}
 
-        # Mock different environments for different sessions
+        # Mock different environments for different episodes
         mock_env1 = MagicMock()
         mock_env1.execute_command = AsyncMock(return_value=CommandResult(
-            exit_code=0, stdout="session1\n", stderr="", execution_time=0.1
+            exit_code=0, stdout="episode1\n", stderr="", execution_time=0.1
         ))
         mock_container1 = MagicMock()
-        mock_container1.id = "session1_container"
+        mock_container1.id = "episode1_container"
         mock_env1.get_execution_container.return_value = mock_container1
 
         mock_env2 = MagicMock()
         mock_env2.execute_command = AsyncMock(return_value=CommandResult(
-            exit_code=0, stdout="session2\n", stderr="", execution_time=0.1
+            exit_code=0, stdout="episode2\n", stderr="", execution_time=0.1
         ))
         mock_container2 = MagicMock()
-        mock_container2.id = "session2_container"
+        mock_container2.id = "episode2_container"
         mock_env2.get_execution_container.return_value = mock_container2
 
-        # Mock sandbox manager to return different environments per session
-        def get_session_env(session_id):
-            if session_id == session_id_1:
+        # Mock sandbox manager to return different environments per episode
+        def get_episode_env(episode_id):
+            if episode_id == episode_id_1:
                 return mock_env1
-            elif session_id == session_id_2:
+            elif episode_id == episode_id_2:
                 return mock_env2
             return None
 
-        with patch.object(registry._sandbox_manager, "get_session_environment", side_effect=get_session_env):
+        with patch.object(registry._sandbox_manager, "get_episode_environment", side_effect=get_episode_env):
             result1 = await registry.step(action1, context1)
             result2 = await registry.step(action2, context2)
 
         # Verify isolation worked
         assert result1.exit_code == 0
-        assert result1.stdout == "session1\n"
-        assert result1.metadata["container_id"] == "session1_con"  # Truncated to 12 chars
+        assert result1.stdout == "episode1\n"
+        assert result1.metadata["container_id"] == "episode1_con"  # Truncated to 12 chars
 
         assert result2.exit_code == 0
-        assert result2.stdout == "session2\n"
-        assert result2.metadata["container_id"] == "session2_con"  # Truncated to 12 chars
+        assert result2.stdout == "episode2\n"
+        assert result2.metadata["container_id"] == "episode2_con"  # Truncated to 12 chars
 
     @pytest.mark.asyncio
     async def test_error_handling_integration(self, registry):
         """Test error handling throughout the Docker system."""
 
         action = Action(tool_name="cli", parameters={"command": "nonexistent_command_xyz"})
-        context = {"session_id": f"error_test_session_{uuid.uuid4().hex[:8]}"}
+        context = {"episode_id": f"error_test_episode_{uuid.uuid4().hex[:8]}"}
 
         # Mock Docker environment returning error
         mock_env = MagicMock()
@@ -274,7 +274,7 @@ class TestToolsIntegration:
         ))
         mock_env.get_container_id.return_value = "error_test_container"
 
-        with patch.object(registry._sandbox_manager, "get_session_environment", return_value=mock_env):
+        with patch.object(registry._sandbox_manager, "get_episode_environment", return_value=mock_env):
             result = await registry.step(action, context)
 
         assert result.exit_code != 0
@@ -291,7 +291,7 @@ class TestToolsIntegration:
 
         for cmd in dangerous_commands:
             action = Action(tool_name="cli", parameters={"command": cmd})
-            context = {"session_id": f"security_test_{uuid.uuid4().hex[:8]}"}
+            context = {"episode_id": f"security_test_{uuid.uuid4().hex[:8]}"}
             result = await registry.step(action, context)
 
             assert result.exit_code != 0, f"Dangerous command should be blocked: {cmd}"
@@ -299,7 +299,7 @@ class TestToolsIntegration:
 
     def test_component_initialization_integration(self, test_config, temp_config_dir):
         """Test that all components are properly initialized together."""
-        with patch("saber.server.execution.sandbox.sandbox_environment_manager.SandboxManager"):
+        with patch("saber.server.execution.sandbox.sandbox_environment_manager.SandboxEnvironmentManager"):
             registry = ExecutionManager(temp_config_dir)
 
         # Verify all components exist and are correct types
@@ -343,9 +343,9 @@ class TestToolsIntegration:
                 exit_code=0, stdout=expected_output, stderr="", execution_time=0.1
             )
 
-            context = {"session_id": f"analysis_session_{i}"}
+            context = {"episode_id": f"analysis_episode_{i}"}
 
-            with patch.object(registry._sandbox_manager, "get_session_environment", return_value=mock_env):
+            with patch.object(registry._sandbox_manager, "get_episode_environment", return_value=mock_env):
                 result = await registry.step(action, context)
                 results.append(result)
 
@@ -361,14 +361,14 @@ class TestToolsIntegration:
     @pytest.mark.asyncio
     async def test_real_docker_container_cleanup(self, real_registry, docker_cleanup):
         """Test that real Docker containers are created and properly cleaned up."""
-        session_id = f"real_container_test_{uuid.uuid4().hex[:8]}"
+        episode_id = f"real_container_test_{uuid.uuid4().hex[:8]}"
 
-        # Register this session for cleanup
-        docker_cleanup(real_registry, session_id)
+        # Register this episode for cleanup
+        docker_cleanup(real_registry, episode_id)
 
         # Create a simple action that should work in the container
         action = Action(tool_name="cli", parameters={"command": "echo 'real container test'"})
-        context = {"session_id": session_id}
+        context = {"episode_id": episode_id}
 
         try:
             # This should create a real Docker container
@@ -389,6 +389,6 @@ class TestToolsIntegration:
             print(f"Docker execution error (expected if image unavailable): {e}")
 
         # Manually test cleanup
-        real_registry.cleanup_session(session_id)
+        real_registry.cleanup_episode(episode_id)
 
         # The actual container cleanup verification happens in the docker_cleanup fixture

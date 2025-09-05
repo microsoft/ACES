@@ -11,6 +11,7 @@ import pytest
 
 from saber.server.execution.executors.docker_executor import DockerExecutor
 from saber.server.execution.executors.executor_factory import ExecutorFactory
+from saber.server.execution.executors.executor_registry import executor_registry
 from saber.server.execution.executors.standard_registry.cli_executor import CLIExecutor
 from saber.server.execution.executors.standard_registry.python_executor import PythonExecutor
 from saber.server.execution.sandbox.sandbox_environment_manager import SandboxEnvironmentManager
@@ -18,6 +19,26 @@ from saber.server.execution.sandbox.sandbox_environment_manager import SandboxEn
 
 class TestExecutorFactory:
     """Test cases for ExecutorFactory."""
+
+    @pytest.fixture(autouse=True)
+    def clean_executor_registry(self):
+        """Ensure clean executor registry state for factory tests."""
+        # Store initial state
+        initial_executors = list(executor_registry.get_available_executors())
+
+        # Clear registry and re-register only standard executors to ensure clean state
+        executor_registry.clear_all_executors()
+
+        # Re-register standard executors
+        from saber.server.execution.executors.executor_registry import register_executor
+        register_executor("cli", CLIExecutor, "standard")
+        register_executor("python", PythonExecutor, "standard")
+
+        yield
+
+        # Cleanup after test - restore to original state if needed
+        # Note: We don't restore the initial state as that would re-introduce the pollution
+        # Instead, we leave it clean for subsequent tests
 
     @pytest.fixture
     def mock_sandbox_manager(self):
@@ -185,7 +206,7 @@ class TestExecutorFactory:
             mock_python._executor_metadata = {"name": "python_script", "description": "Execute Python scripts"}
             mock_python.to_mcp_schema.return_value = {"type": "object", "properties": {"code": {"type": "string"}}}
 
-            def mock_get_executor_side_effect(executor_type):
+            def mock_get_executor_side_effect(executor_type, episode_id=None):
                 if executor_type == "cli":
                     return mock_cli
                 elif executor_type == "python":
@@ -213,7 +234,7 @@ class TestExecutorFactory:
         """Test getting MCP tools when one executor fails."""
         with patch.object(executor_factory, "get_executor") as mock_get_executor:
 
-            def mock_get_executor_side_effect(executor_type):
+            def mock_get_executor_side_effect(executor_type, episode_id=None):
                 if executor_type == "cli":
                     mock_cli = MagicMock()
                     mock_cli._executor_metadata = {"name": "docker_cli", "description": "Execute shell commands"}
@@ -293,3 +314,152 @@ class TestExecutorFactory:
         assert isinstance(python_executor, PythonExecutor)
         assert cli_executor is not python_executor
         assert len(executor_factory._executor_instances) == 2
+
+    def test_multi_episode_configuration_orchestration(self, executor_factory):
+        """Test complex multi-episode orchestration with different executor configurations."""
+        # Setup episode configurations with different allowed executors
+        episodes = [
+            {"id": "pentest-episode-1", "allowed": ["cli"], "config": {"timeout": 300.0, "cli": {"shell_mode": True}}},
+            {"id": "analysis-episode-1", "allowed": ["python"], "config": {"timeout": 120.0, "python": {"enable_networking": False}}},
+            {"id": "hybrid-episode-1", "allowed": ["cli", "python"], "config": {"timeout": 600.0}},
+            {"id": "restricted-episode-1", "allowed": ["cli"], "config": {"timeout": 60.0, "cli": {"shell_mode": False}}},
+        ]
+
+        # Register all episode configurations
+        for episode in episodes:
+            executor_factory.register_episode_configuration(
+                episode["id"],
+                allowed_executors=episode["allowed"],
+                episode_config=episode["config"]
+            )
+
+        # Verify episode-specific executor availability
+        pentest_executors = executor_factory.get_available_executors("pentest-episode-1")
+        assert pentest_executors == ["cli"]
+
+        analysis_executors = executor_factory.get_available_executors("analysis-episode-1")
+        assert analysis_executors == ["python"]
+
+        hybrid_executors = executor_factory.get_available_executors("hybrid-episode-1")
+        assert set(hybrid_executors) == {"cli", "python"}
+
+        # Test episode-specific executor creation
+        cli_executor_pentest = executor_factory.get_executor("cli", episode_id="pentest-episode-1")
+        assert isinstance(cli_executor_pentest, CLIExecutor)
+
+        python_executor_analysis = executor_factory.get_executor("python", episode_id="analysis-episode-1")
+        assert isinstance(python_executor_analysis, PythonExecutor)
+
+        # Test that disallowed executors are rejected
+        with pytest.raises(ValueError, match="Unknown or disabled executor type: python for episode pentest-episode-1"):
+            executor_factory.get_executor("python", episode_id="pentest-episode-1")
+
+        with pytest.raises(ValueError, match="Unknown or disabled executor type: cli for episode analysis-episode-1"):
+            executor_factory.get_executor("cli", episode_id="analysis-episode-1")
+
+        # Test hybrid episode can access both
+        cli_executor_hybrid = executor_factory.get_executor("cli", episode_id="hybrid-episode-1")
+        python_executor_hybrid = executor_factory.get_executor("python", episode_id="hybrid-episode-1")
+        assert isinstance(cli_executor_hybrid, CLIExecutor)
+        assert isinstance(python_executor_hybrid, PythonExecutor)
+
+        # Verify configuration storage
+        assert len(executor_factory._episode_configurations) == 4
+        pentest_config = executor_factory._episode_configurations["pentest-episode-1"]
+        assert pentest_config["allowed_executors"] == ["cli"]
+        assert pentest_config["config"]["timeout"] == 300.0
+
+        # Test partial cleanup - unregister some episodes
+        executor_factory.unregister_episode_configuration("pentest-episode-1")
+        executor_factory.unregister_episode_configuration("analysis-episode-1")
+
+        # Verify remaining configurations
+        assert len(executor_factory._episode_configurations) == 2
+        assert "hybrid-episode-1" in executor_factory._episode_configurations
+        assert "restricted-episode-1" in executor_factory._episode_configurations
+
+        # Test that unregistered episodes fall back to all executors with warning
+        fallback_executors = executor_factory.get_available_executors("pentest-episode-1")
+        assert set(fallback_executors) == {"cli", "python"}  # Should return all available
+
+    def test_episode_executor_isolation_and_mcp_tools(self, executor_factory):
+        """Test episode isolation for executor management and MCP tool generation."""
+        # Setup episodes with different security profiles
+        security_episodes = [
+            {"id": "secure-episode-1", "allowed": ["cli"], "config": {"security_level": "high"}},
+            {"id": "dev-episode-1", "allowed": ["cli", "python"], "config": {"security_level": "low"}},
+            {"id": "python-only-episode", "allowed": ["python"], "config": {"security_level": "medium"}},
+        ]
+
+        # Register episode configurations
+        for episode in security_episodes:
+            executor_factory.register_episode_configuration(
+                episode["id"],
+                allowed_executors=episode["allowed"],
+                episode_config=episode["config"]
+            )
+
+        # Test episode-specific MCP tool generation
+        with patch.object(executor_factory, "get_executor") as mock_get_executor:
+            # Mock CLI executor
+            mock_cli = MagicMock()
+            mock_cli._executor_metadata = {"name": "secure_cli", "description": "Secure CLI execution"}
+            mock_cli.to_mcp_schema.return_value = {"type": "object", "properties": {"command": {"type": "string"}}}
+
+            # Mock Python executor
+            mock_python = MagicMock()
+            mock_python._executor_metadata = {"name": "dev_python", "description": "Development Python execution"}
+            mock_python.to_mcp_schema.return_value = {"type": "object", "properties": {"code": {"type": "string"}}}
+
+            def mock_get_executor_side_effect(executor_type, episode_id=None):
+                if executor_type == "cli":
+                    return mock_cli
+                elif executor_type == "python":
+                    return mock_python
+                else:
+                    raise ValueError(f"Unknown type: {executor_type}")
+
+            mock_get_executor.side_effect = mock_get_executor_side_effect
+
+            # Test MCP tools for secure episode (CLI only)
+            secure_tools = executor_factory.get_all_mcp_tools(episode_id="secure-episode-1")
+            assert len(secure_tools) == 1
+            assert "secure_cli" in secure_tools[0]["name"]
+
+            # Test MCP tools for dev episode (CLI + Python)
+            dev_tools = executor_factory.get_all_mcp_tools(episode_id="dev-episode-1")
+            assert len(dev_tools) == 2
+            tool_names = [tool["name"] for tool in dev_tools]
+            assert any("secure_cli" in name for name in tool_names)
+            assert any("dev_python" in name for name in tool_names)
+
+            # Test MCP tools for Python-only episode
+            python_tools = executor_factory.get_all_mcp_tools(episode_id="python-only-episode")
+            assert len(python_tools) == 1
+            assert "dev_python" in python_tools[0]["name"]
+
+        # Test concurrent episode executor access patterns
+        episodes_to_test = ["secure-episode-1", "dev-episode-1", "python-only-episode"]
+        concurrent_results = {}
+
+        for episode_id in episodes_to_test:
+            available = executor_factory.get_available_executors(episode_id)
+            concurrent_results[episode_id] = available
+
+        # Verify isolation - each episode sees only its configured executors
+        assert concurrent_results["secure-episode-1"] == ["cli"]
+        assert set(concurrent_results["dev-episode-1"]) == {"cli", "python"}
+        assert concurrent_results["python-only-episode"] == ["python"]
+
+        # Test executor info aggregation across episodes
+        executor_info = executor_factory.get_executor_info()
+        assert "available_types" in executor_info
+        assert set(executor_info["available_types"]) == {"cli", "python"}  # All registered types
+        assert "configurations" in executor_info
+
+        # Cleanup all episode configurations
+        for episode in security_episodes:
+            executor_factory.unregister_episode_configuration(episode["id"])
+
+        # Verify clean state
+        assert len(executor_factory._episode_configurations) == 0

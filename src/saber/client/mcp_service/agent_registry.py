@@ -20,6 +20,7 @@ class AgentSession:
 
     agent_id: str
     saber_session_id: str
+    saber_episode_id: str  # REQUIRED: Episode-first architecture requires saber_episode_id
     task_id: Optional[str] = None
     registered_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     last_activity: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -46,7 +47,11 @@ class AgentSessionRegistry:
         self._lock = asyncio.Lock()
 
     async def register_session(
-        self, agent_id: str, saber_session_id: str, task_id: Optional[str] = None
+        self,
+        agent_id: str,
+        saber_session_id: str,
+        saber_episode_id: str,  # REQUIRED: Episode-first architecture requires saber_episode_id
+        task_id: Optional[str] = None,
     ) -> AgentSession:
         """
         Register a new agent container session.
@@ -54,14 +59,18 @@ class AgentSessionRegistry:
         Args:
             agent_id: Unique identifier for the agent container
             saber_session_id: SABER server session ID to route requests to
+            saber_episode_id: Episode ID for episode-first execution (REQUIRED)
             task_id: Optional task ID for context
 
         Returns:
             AgentSession: The registered session object
 
         Raises:
-            ValueError: If agent_id is already registered with different session
+            ValueError: If agent_id is already registered with different session or saber_episode_id is missing
         """
+        if not saber_episode_id:
+            raise ValueError("saber_episode_id is required for episode-first architecture")
+
         async with self._lock:
             if agent_id in self._sessions:
                 existing = self._sessions[agent_id]
@@ -70,19 +79,23 @@ class AgentSessionRegistry:
                         f"Agent {agent_id} already registered with different session "
                         f"{existing.saber_session_id}, cannot register with {saber_session_id}"
                     )
-                # Update existing session
+                # Update existing session with new episode info
+                existing.saber_episode_id = saber_episode_id
                 existing.task_id = task_id
                 existing.update_activity()
                 existing.is_active = True
-                logger.info(f"Updated existing session for agent {agent_id}")
+                logger.info(f"Updated existing session for agent {agent_id} with episode {saber_episode_id}")
                 return existing
 
             # Create new session
-            session = AgentSession(agent_id=agent_id, saber_session_id=saber_session_id, task_id=task_id)
+            session = AgentSession(
+                agent_id=agent_id, saber_session_id=saber_session_id, saber_episode_id=saber_episode_id, task_id=task_id
+            )
             self._sessions[agent_id] = session
 
             logger.info(
-                f"Registered new session: agent={agent_id}, " f"saber_session={saber_session_id}, task={task_id}"
+                f"Registered new session: agent={agent_id}, "
+                f"saber_session={saber_session_id}, episode={saber_episode_id}, task={task_id}"
             )
             return session
 

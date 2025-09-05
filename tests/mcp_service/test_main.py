@@ -86,6 +86,7 @@ class TestSessionManagement:
         response = client.post("/admin/sessions", json={
             "agent_id": "test-agent",
             "saber_session_id": "saber-123",
+            "saber_episode_id": "episode-456",
             "task_id": "task-456"
         })
 
@@ -104,7 +105,8 @@ class TestSessionManagement:
 
         response = client.post("/admin/sessions", json={
             "agent_id": "test-agent",
-            "saber_session_id": "saber-123"
+            "saber_session_id": "saber-123",
+            "saber_episode_id": "episode-456"
         })
 
         assert response.status_code == 400
@@ -190,7 +192,10 @@ class TestMCPEndpoints:
 
             response = client.get(
                 "/tools",
-                headers={"X-Saber-Session-Id": "saber-session-123"}
+                headers={
+                    "X-Saber-Session-Id": "saber-session-123",
+                    "X-SABER-Episode-ID": "test-episode-123"
+                }
             )
 
             assert response.status_code == 200
@@ -212,7 +217,10 @@ class TestMCPEndpoints:
 
             response = client.get(
                 "/tools",
-                headers={"X-Saber-Session-Id": "saber-session-123"}
+                headers={
+                    "X-Saber-Session-Id": "saber-session-123",
+                    "X-SABER-Episode-ID": "test-episode-123"
+                }
             )
 
             assert response.status_code == 500
@@ -228,14 +236,17 @@ class TestMCPEndpoints:
 
         # Mock tool registry response
         with patch('saber.client.mcp_service.main.tool_registry') as mock_tool_registry:
-            mock_tool_registry.execute_tool_for_session_episode = AsyncMock(return_value={
+            mock_tool_registry.execute_tool = AsyncMock(return_value={
                 "output": "Command executed successfully",
                 "success": True
             })
 
             response = client.post(
                 "/execute_tool",
-                headers={"X-Saber-Session-Id": "test-agent"},
+                headers={
+                    "X-Saber-Session-Id": "test-agent",
+                    "X-SABER-Episode-ID": "test-episode-123"
+                },
                 json={
                     "tool_name": "cli_execute",
                     "arguments": {"command": "ls -la"}
@@ -257,7 +268,10 @@ class TestMCPEndpoints:
 
         response = client.post(
             "/execute_tool",
-            headers={"X-Saber-Session-Id": "saber-session-123"},
+            headers={
+                "X-Saber-Session-Id": "saber-session-123",
+                "X-SABER-Episode-ID": "test-episode-123"
+            },
             json={
                 "arguments": {"command": "ls -la"}
             }
@@ -268,51 +282,67 @@ class TestMCPEndpoints:
         data = response.json()
         assert "field required" in str(data).lower() or "missing" in str(data).lower()
 
-
-    def test_ping(self, client, setup_mcp_globals):
-        """Test ping endpoint."""
+    def test_missing_episode_header(self, client, setup_mcp_globals):
+        """Test request without required episode header."""
         mock_registry, mock_proxy = setup_mcp_globals
 
         # Mock session lookup
         mock_registry.get_agent_id_by_saber_session = AsyncMock(return_value="test-agent")
 
-        mock_proxy.ping = AsyncMock(return_value=MCPResponse(
-            result={"pong": True}
-        ))
-
+        # Missing episode header should fail
         response = client.post(
-            "/mcp/ping",
-            headers={"X-Saber-Session-Id": "saber-session-123"}
+            "/execute_tool",
+            headers={"X-Saber-Session-Id": "saber-session-123"},
+            json={
+                "tool_name": "test_tool",
+                "arguments": {"test": "value"}
+            }
         )
 
-        assert response.status_code == 200
-        data = response.json()
-        assert data["jsonrpc"] == "2.0"
-        assert data["result"]["pong"] is True
+        # Should return 400 for missing episode header
+        assert response.status_code == 400
+        assert "Missing required header: X-SABER-Episode-ID" in response.json()["detail"]
+
+
+    # Note: /mcp/ping endpoint was removed in episode-first architecture
+    # Tools are executed via /execute_tool endpoint instead
 
 
 class TestSessionLookup:
     """Test session-based agent lookup functionality."""
 
     def test_session_lookup_success(self, client, setup_mcp_globals):
-        """Test successful session lookup."""
+        """Test successful session lookup via execute_tool endpoint."""
         mock_registry, mock_proxy = setup_mcp_globals
 
         # Mock session lookup
         mock_registry.get_agent_id_by_saber_session = AsyncMock(return_value="test-agent-123")
-        mock_proxy.ping = AsyncMock(return_value=MCPResponse(result={"pong": True}))
 
-        response = client.post(
-            "/mcp/ping",
-            headers={"X-Saber-Session-Id": "saber-session-123"}
-        )
+        # Mock tool execution since that's what we're actually testing
+        with patch('saber.client.mcp_service.main.tool_registry') as mock_tool_registry:
+            mock_tool_registry.execute_tool = AsyncMock(return_value={
+                "output": "test result",
+                "success": True
+            })
 
-        # Verify the session lookup was called correctly
-        mock_registry.get_agent_id_by_saber_session.assert_called_once_with("saber-session-123")
-        # Verify the proxy was called with the resolved agent ID
-        mock_proxy.ping.assert_called_once_with("test-agent-123")
+            response = client.post(
+                "/execute_tool",
+                headers={
+                    "X-Saber-Session-Id": "saber-session-123",
+                    "X-SABER-Episode-ID": "test-episode-123"
+                },
+                json={
+                    "tool_name": "test_tool",
+                    "arguments": {"test": "value"}
+                }
+            )
 
-        assert response.status_code == 200
+            # Verify the session lookup was called correctly
+            mock_registry.get_agent_id_by_saber_session.assert_called_once_with("saber-session-123")
+            # Verify the tool was executed with the resolved agent ID
+            mock_tool_registry.execute_tool.assert_called_once()
+
+            assert response.status_code == 200
 
     def test_session_lookup_not_found(self, client, setup_mcp_globals):
         """Test session lookup when session not found."""
@@ -322,8 +352,15 @@ class TestSessionLookup:
         mock_registry.get_agent_id_by_saber_session = AsyncMock(return_value=None)
 
         response = client.post(
-            "/mcp/ping",
-            headers={"X-Saber-Session-Id": "nonexistent-session"}
+            "/execute_tool",
+            headers={
+                "X-Saber-Session-Id": "nonexistent-session",
+                "X-SABER-Episode-ID": "test-episode-123"
+            },
+            json={
+                "tool_name": "test_tool",
+                "arguments": {"test": "value"}
+            }
         )
 
         # Should return 404 for invalid session
@@ -334,9 +371,14 @@ class TestSessionLookup:
         """Test request without required session header."""
         mock_registry, mock_proxy = setup_mcp_globals
 
-        # No session header provided
-        response = client.post("/mcp/ping", headers={})
+        # No session header provided (but episode header is present)
+        response = client.post("/execute_tool",
+                             headers={"X-SABER-Episode-ID": "test-episode-123"},
+                             json={
+                                 "tool_name": "test_tool",
+                                 "arguments": {"test": "value"}
+                             })
 
         # Should return 400 for missing session header
         assert response.status_code == 400
-        assert "Missing required header: X-Saber-Session-Id" in response.json()["detail"]
+        assert "Missing required header: X-SABER-Session-ID" in response.json()["detail"]

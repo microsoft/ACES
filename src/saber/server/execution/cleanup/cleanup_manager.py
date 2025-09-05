@@ -21,7 +21,8 @@ logger = get_cleanup_logger(__name__)
 class CleanupOperation:
     """Tracks a single cleanup operation for debugging and metrics."""
 
-    session_id: str
+    identifier: str  # episode_id or "all"
+    operation_type: str  # "episode" or "all"
     reason: CleanupReason
     context: Dict[str, Any]
     start_time: datetime
@@ -73,14 +74,14 @@ class ContainerCleanupManager:
         if permanent_manager:
             logger.info("🧹 ContainerCleanupManager configured with permanent environment support")
 
-    def cleanup_session(self, session_id: str, reason: CleanupReason, context: Optional[Dict[str, Any]] = None) -> bool:
+    def cleanup_episode(self, episode_id: str, reason: CleanupReason, context: Optional[Dict[str, Any]] = None) -> bool:
         """
-        Clean up containers for a specific session.
+        Clean up containers for a specific episode.
 
-        This is the single entry point for all session cleanup operations.
+        This is the primary entry point for episode-based cleanup operations.
 
         Args:
-            session_id: ID of the session to clean up
+            episode_id: ID of the episode to clean up
             reason: Standardized reason for cleanup
             context: Additional context for debugging (e.g., error details)
 
@@ -90,73 +91,77 @@ class ContainerCleanupManager:
         if context is None:
             context = {}
 
-        # Prevent duplicate cleanup operations for the same session
-        if session_id in self._active_cleanups:
+        # Prevent duplicate cleanup operations for the same episode
+        if episode_id in self._active_cleanups:
             logger.warning(
-                f"🧹 DUPLICATE CLEANUP PREVENTED: Session {session_id} cleanup already in progress, reason: {reason}",
-                session_id,
+                f"🧹 DUPLICATE CLEANUP PREVENTED: Episode {episode_id} cleanup already in progress, reason: {reason}",
+                episode_id,
             )
             return False
 
         # Create cleanup operation for tracking
         operation = CleanupOperation(
-            session_id=session_id, reason=reason, context=context, start_time=datetime.utcnow()
+            identifier=episode_id,
+            operation_type="episode",
+            reason=reason,
+            context=context,
+            start_time=datetime.utcnow(),
         )
 
         # Mark cleanup as active
-        self._active_cleanups.add(session_id)
+        self._active_cleanups.add(episode_id)
 
         logger.warning(
-            f"🧹 [{session_id}] 🧹 CLEANUP INITIATED: Starting container cleanup for session {session_id}, "
+            f"🧹 [{episode_id}] 🧹 EPISODE CLEANUP INITIATED: Starting container cleanup for episode {episode_id}, "
             f"reason: {reason}, context: {context}, is_error_scenario: {reason.is_error_scenario}",
-            session_id,
+            episode_id,
         )
 
         try:
             # Check if debug mode is enabled - skip cleanup if so
             if self.debug_mode:
                 logger.warning(
-                    f"🐛 [{session_id}] DEBUG MODE: Skipping container cleanup for session {session_id}, "
+                    f"🐛 [{episode_id}] DEBUG MODE: Skipping container cleanup for episode {episode_id}, "
                     f"reason: {reason}. Containers left running for manual debugging.",
-                    session_id,
+                    episode_id,
                 )
                 operation.steps_completed.append("debug_mode_skip")
                 operation.success = True
                 operation.end_time = datetime.utcnow()
 
-                # Still mark cleanup as complete so session tracking is updated
-                self._active_cleanups.discard(session_id)
+                # Still mark cleanup as complete so episode tracking is updated
+                self._active_cleanups.discard(episode_id)
                 self._add_to_history(operation)
 
                 logger.info(
-                    f"🐛 [{session_id}] DEBUG MODE: Session cleanup skipped successfully. "
+                    f"🐛 [{episode_id}] DEBUG MODE: Episode cleanup skipped successfully. "
                     f"Containers remain active for debugging purposes.",
-                    session_id,
+                    episode_id,
                 )
                 return True
 
-            # Step 1: Check if session has active environment
+            # Step 1: Check if episode has active environment
             operation.steps_completed.append("environment_check")
-            environment = self.sandbox_manager.get_session_environment(session_id)
+            environment = self.sandbox_manager.get_episode_environment(episode_id)
 
             if not environment:
                 logger.info(
-                    f"🧹 [{session_id}] 🧹 NO ENVIRONMENT: No active environment found for session {session_id}, "
+                    f"🧹 [{episode_id}] 🧹 NO ENVIRONMENT: No active environment found for episode {episode_id}, "
                     f"checking orphaned resources, reason: {reason}",
-                    session_id,
+                    episode_id,
                 )
                 operation.steps_completed.append("no_environment_found")
 
                 # Step 2: Clean up any orphaned resources
                 operation.steps_completed.append("orphaned_cleanup_start")
-                self.sandbox_manager._cleanup_orphaned_session_resources(session_id)
+                self.sandbox_manager._cleanup_orphaned_episode_resources(episode_id)
                 operation.steps_completed.append("orphaned_cleanup_complete")
 
             else:
                 logger.info(
-                    f"🧹 [{session_id}] 🧹 ENVIRONMENT FOUND: Active environment found for session {session_id}, "
+                    f"🧹 [{episode_id}] 🧹 ENVIRONMENT FOUND: Active environment found for episode {episode_id}, "
                     f"stopping containers, reason: {reason}",
-                    session_id,
+                    episode_id,
                 )
                 operation.steps_completed.append("environment_found")
 
@@ -167,8 +172,8 @@ class ContainerCleanupManager:
 
                 # Step 3: Remove from sandbox manager tracking
                 operation.steps_completed.append("tracking_removal_start")
-                if session_id in self.sandbox_manager.active_sessions:
-                    del self.sandbox_manager.active_sessions[session_id]
+                if episode_id in self.sandbox_manager.active_environments:
+                    del self.sandbox_manager.active_environments[episode_id]
                 operation.steps_completed.append("tracking_removal_complete")
 
             # Mark operation as successful
@@ -176,9 +181,9 @@ class ContainerCleanupManager:
             operation.end_time = datetime.utcnow()
 
             logger.info(
-                f"🧹 [{session_id}] 🧹 CLEANUP SUCCESS: Container cleanup completed for session {session_id}, "
+                f"🧹 [{episode_id}] 🧹 EPISODE CLEANUP SUCCESS: Container cleanup completed for episode {episode_id}, "
                 f"reason: {reason}, duration: {operation.duration_seconds:.3f}s, steps: {operation.steps_completed}",
-                session_id,
+                episode_id,
             )
 
             return True
@@ -189,75 +194,71 @@ class ContainerCleanupManager:
             operation.end_time = datetime.utcnow()
 
             logger.error(
-                f"🧹 [{session_id}] 🧹 CLEANUP FAILED: Container cleanup failed for session {session_id}: {e}, "
+                f"🧹 [{episode_id}] 🧹 EPISODE CLEANUP FAILED: Container cleanup failed for episode {episode_id}: {e}, "
                 f"reason: {reason}, duration: {operation.duration_seconds:.3f}s, steps: {operation.steps_completed}",
-                session_id,
+                episode_id,
             )
 
             # Still try fallback cleanup to remove from tracking
             try:
-                if session_id in self.sandbox_manager.active_sessions:
-                    del self.sandbox_manager.active_sessions[session_id]
-                    logger.warning(
-                        f"🧹 FALLBACK SUCCESS: Removed session {session_id} from tracking after cleanup failure",
-                        session_id,
-                    )
-            except Exception as fallback_error:
-                logger.error(
-                    f"🧹 FALLBACK FAILED: Could not remove session {session_id} from tracking: {fallback_error}",
-                    session_id,
-                )
+                if episode_id in self.sandbox_manager.active_environments:
+                    del self.sandbox_manager.active_environments[episode_id]
+                operation.steps_completed.append("tracking_removal_fallback")
+            except Exception as cleanup_error:
+                logger.error(f"🧹 [{episode_id}] Failed fallback tracking removal: {cleanup_error}", episode_id)
 
             return False
 
         finally:
-            # Always clean up tracking state
-            self._active_cleanups.discard(session_id)
+            # Always remove from active cleanups and add to history
+            self._active_cleanups.discard(episode_id)
             self._add_to_history(operation)
 
-    def cleanup_all_sessions(self, reason: CleanupReason, context: Optional[Dict[str, Any]] = None) -> int:
+    def cleanup_all_episodes(self, reason: CleanupReason, context: Optional[Dict[str, Any]] = None) -> int:
         """
-        Clean up containers for all active sessions.
+        Clean up containers for all active episodes.
 
         Args:
             reason: Standardized reason for cleanup (typically SERVER_SHUTDOWN)
             context: Additional context for debugging
 
         Returns:
-            Number of sessions successfully cleaned up
+            Number of episodes successfully cleaned up
         """
         if context is None:
             context = {}
 
-        active_session_ids = list(self.sandbox_manager.active_sessions.keys())
+        active_episode_ids = list(self.sandbox_manager.active_environments.keys())
 
-        if not active_session_ids:
-            logger.info("🧹 NO SESSIONS: No active sessions to clean up")
+        if not active_episode_ids:
+            logger.info("🧹 NO EPISODES: No active episodes to clean up")
             return 0
 
         logger.warning(
-            f"🧹 MASS CLEANUP INITIATED: Cleaning up {len(active_session_ids)} active sessions, "
-            f"reason: {reason}, session_ids: {active_session_ids}"
+            f"🧹 MASS EPISODE CLEANUP INITIATED: Cleaning up {len(active_episode_ids)} active episodes, "
+            f"reason: {reason}, episode_ids: {active_episode_ids}"
         )
 
         if self.debug_mode:
             logger.warning(
-                f"🐛 DEBUG MODE: cleanup_all_sessions called for {len(active_session_ids)} sessions, "
+                f"🐛 DEBUG MODE: cleanup_all_episodes called for {len(active_episode_ids)} episodes, "
                 f"but containers will not be cleaned up"
             )
 
         successful_cleanups = 0
 
-        for session_id in active_session_ids:
+        for episode_id in active_episode_ids:
             try:
-                logger.info(f"🧹 BATCH CLEANUP: Processing session {session_id}", session_id)
-                if self.cleanup_session(session_id, reason, context):
+                logger.info(f"🧹 BATCH EPISODE CLEANUP: Processing episode {episode_id}", episode_id)
+                if self.cleanup_episode(episode_id, reason, context):
                     successful_cleanups += 1
             except Exception as e:
-                logger.error(f"🧹 BATCH CLEANUP FAILED: Error cleaning up session {session_id}: {e}", session_id)
+                logger.error(
+                    f"🧹 BATCH EPISODE CLEANUP FAILED: Error cleaning up episode {episode_id}: {e}", episode_id
+                )
 
         logger.info(
-            f"🧹 MASS CLEANUP COMPLETE: Cleaned up {successful_cleanups}/{len(active_session_ids)} sessions, "
+            f"🧹 MASS EPISODE CLEANUP COMPLETE: Cleaned up {successful_cleanups}/{len(active_episode_ids)} episodes, "
             f"reason: {reason}"
         )
 
@@ -343,14 +344,14 @@ class ContainerCleanupManager:
         if self.debug_mode:
             logger.warning("🐛 DEBUG MODE: cleanup_all_containers called but containers will not be cleaned up")
 
-        # Clean up all ephemeral session containers
-        ephemeral_cleaned = self.cleanup_all_sessions(reason, context)
+        # Clean up all ephemeral episode containers
+        ephemeral_episodes_cleaned = self.cleanup_all_episodes(reason, context)
 
         # Clean up permanent environment
         permanent_cleaned = self.stop_permanent_environment()
 
         result = {
-            "ephemeral_sessions_cleaned": ephemeral_cleaned,
+            "ephemeral_episodes_cleaned": ephemeral_episodes_cleaned,
             "permanent_environment_stopped": permanent_cleaned,
             "total_cleanup_success": permanent_cleaned,  # Overall success depends on both
             "reason": reason,
@@ -358,24 +359,24 @@ class ContainerCleanupManager:
         }
 
         logger.info(
-            f"🧹 FULL CLEANUP COMPLETE: Ephemeral sessions: {ephemeral_cleaned}, "
+            f"🧹 FULL CLEANUP COMPLETE: Ephemeral episodes: {ephemeral_episodes_cleaned}, "
             f"Permanent stopped: {permanent_cleaned}, Overall success: {result['total_cleanup_success']}"
         )
 
         return result
 
-    def get_cleanup_history(self, session_id: Optional[str] = None) -> List[CleanupOperation]:
+    def get_cleanup_history(self, identifier: Optional[str] = None) -> List[CleanupOperation]:
         """
         Get cleanup history for debugging.
 
         Args:
-            session_id: If provided, filter history to this session only
+            identifier: If provided, filter history to this identifier only (episode_id, session_id, etc.)
 
         Returns:
             List of cleanup operations
         """
-        if session_id:
-            return [op for op in self._cleanup_history if op.session_id == session_id]
+        if identifier:
+            return [op for op in self._cleanup_history if op.identifier == identifier]
         return self._cleanup_history.copy()
 
     def get_active_cleanups(self) -> Set[str]:

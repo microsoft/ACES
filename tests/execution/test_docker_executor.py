@@ -75,87 +75,92 @@ class TestDockerExecutor:
         with pytest.raises(SandboxExecutionError, match="sandbox_manager is required"):
             self.ConcreteDockerExecutor(sandbox_manager=None)
 
-    def test_get_session_environment_existing(self, docker_executor, mock_docker_environment):
-        """Test getting existing session environment."""
-        session_id = "test_session_123"
-
-        docker_executor._sandbox_manager.get_session_environment.return_value = mock_docker_environment
-
-        result = docker_executor.get_session_environment(session_id)
-
-        assert result == mock_docker_environment
-        docker_executor._sandbox_manager.get_session_environment.assert_called_once_with(session_id)
-
-    def test_get_session_environment_existing(self, docker_executor, mock_docker_environment):
-        """Test retrieving existing session environment."""
-        session_id = "test_session_123"
+    def test_get_episode_environment_existing(self, docker_executor, mock_docker_environment):
+        """Test retrieving existing episode environment."""
+        episode_id = "test_episode_123"
 
         # Mock an existing environment
-        docker_executor._sandbox_manager.get_session_environment.return_value = mock_docker_environment
+        docker_executor._sandbox_manager.get_episode_environment.return_value = mock_docker_environment
 
-        result = docker_executor.get_session_environment(session_id)
+        result = docker_executor.get_episode_environment(episode_id)
 
         assert result == mock_docker_environment
-        docker_executor._sandbox_manager.get_session_environment.assert_called_once_with(session_id)
+        docker_executor._sandbox_manager.get_episode_environment.assert_called_once_with(episode_id)
         # Verify create_session_environment was NOT called since environment exists
-        docker_executor._sandbox_manager.create_session_environment.assert_not_called()
+        docker_executor._sandbox_manager.create_episode_environment.assert_not_called()
 
-    def test_get_session_environment_not_found(self, docker_executor):
-        """Test behavior when session environment doesn't exist."""
-        session_id = "test_session_123"
+    def test_get_episode_environment_not_found(self, docker_executor):
+        """Test behavior when episode environment doesn't exist."""
+        episode_id = "test_episode_123"
 
-        docker_executor._sandbox_manager.get_session_environment.return_value = None
+        docker_executor._sandbox_manager.get_episode_environment.return_value = None
 
-        with pytest.raises(SandboxExecutionError, match="No environment found for session test_session_123"):
-            docker_executor.get_session_environment(session_id)
+        with pytest.raises(SandboxExecutionError, match="No environment found for episode"):
+            docker_executor.get_episode_environment(episode_id)
 
-    def test_get_session_environment_failure(self, docker_executor):
-        """Test session environment retrieval failure."""
-        session_id = "test_session_123"
+    def test_get_episode_environment_failure(self, docker_executor):
+        """Test episode environment retrieval failure."""
+        episode_id = "test_episode_123"
 
-        docker_executor._sandbox_manager.get_session_environment.side_effect = Exception("Environment error")
+        docker_executor._sandbox_manager.get_episode_environment.side_effect = Exception("Environment error")
 
-        with pytest.raises(SandboxExecutionError, match="Failed to get session environment"):
-            docker_executor.get_session_environment(session_id)
+        with pytest.raises(SandboxExecutionError, match="Failed to get episode environment"):
+            docker_executor.get_episode_environment(episode_id)
 
     def test_ensure_container_ready_success(self, docker_executor, mock_docker_environment):
         """Test successful container readiness check."""
-        session_id = "test_session_123"
+        episode_id = "test_episode_123"
 
-        docker_executor._sandbox_manager.get_session_environment.return_value = mock_docker_environment
+        docker_executor._sandbox_manager.get_episode_environment.return_value = mock_docker_environment
 
-        result = docker_executor.ensure_container_ready(session_id)
+        result = docker_executor.ensure_container_ready(episode_id)
 
         assert result is True
 
     def test_ensure_container_ready_failure(self, docker_executor):
         """Test container readiness check failure."""
-        session_id = "test_session_123"
+        episode_id = "test_episode_123"
 
-        docker_executor._sandbox_manager.get_session_environment.side_effect = Exception("Container error")
+        docker_executor._sandbox_manager.get_episode_environment.side_effect = Exception("Container error")
 
-        result = docker_executor.ensure_container_ready(session_id)
+    def test_ensure_container_ready_success(self, docker_executor, mock_docker_environment):
+        """Test successful container readiness check."""
+        episode_id = "test_episode_123"
+
+        docker_executor._sandbox_manager.get_episode_environment.return_value = mock_docker_environment
+
+        result = docker_executor.ensure_container_ready(episode_id)
+
+        assert result is True
+
+    def test_ensure_container_ready_failure(self, docker_executor):
+        """Test container readiness check failure."""
+        episode_id = "test_episode_123"
+
+        docker_executor._sandbox_manager.get_episode_environment.side_effect = Exception("Container error")
+
+        result = docker_executor.ensure_container_ready(episode_id)
 
         assert result is False
 
     def test_cleanup_execution_success(self, docker_executor):
         """Test successful execution cleanup."""
-        session_id = "test_session_123"
+        episode_id = "test_episode_123"
 
-        docker_executor.cleanup_execution(session_id)
+        docker_executor.cleanup_execution(episode_id)
 
-        docker_executor._sandbox_manager.cleanup_session.assert_called_once_with(session_id)
+        docker_executor._sandbox_manager.cleanup_episode.assert_called_once_with(episode_id)
 
     def test_cleanup_execution_with_error(self, docker_executor):
         """Test execution cleanup with error (should not raise)."""
-        session_id = "test_session_123"
+        episode_id = "test_episode_123"
 
-        docker_executor._sandbox_manager.cleanup_session.side_effect = Exception("Cleanup error")
+        docker_executor._sandbox_manager.cleanup_episode.side_effect = Exception("Cleanup error")
 
         # Should not raise an exception
-        docker_executor.cleanup_execution(session_id)
+        docker_executor.cleanup_execution(episode_id)
 
-        docker_executor._sandbox_manager.cleanup_session.assert_called_once_with(session_id)
+        docker_executor._sandbox_manager.cleanup_episode.assert_called_once_with(episode_id)
 
     def test_validate_docker_parameters_valid(self, docker_executor):
         """Test validation of valid Docker parameters."""
@@ -273,7 +278,7 @@ class TestDockerExecutor:
     async def test_execute_abstract_method_implemented(self, docker_executor):
         """Test that concrete implementation provides execute method."""
         parameters = {"test": "param"}
-        context = {"session_id": "test"}
+        context = {"episode_id": "test"}
 
         result = await docker_executor(parameters, context)
 
@@ -291,7 +296,7 @@ class TestDockerExecutor:
 
     def test_docker_specific_methods_exist(self, docker_executor):
         """Test that Docker-specific methods are properly defined."""
-        assert hasattr(docker_executor, "get_session_environment")
+        assert hasattr(docker_executor, "get_episode_environment")
         assert hasattr(docker_executor, "ensure_container_ready")
         assert hasattr(docker_executor, "cleanup_execution")
         assert hasattr(docker_executor, "validate_docker_parameters")

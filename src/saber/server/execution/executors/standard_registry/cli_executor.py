@@ -32,7 +32,7 @@ class CLIExecutor(DockerExecutor):
     - Timeout enforcement
     - Shell execution mode (always enabled)
     - Working directory specification
-    - Session-based container management
+    - Episode-based container management
     - Command chaining with semicolons
     """
 
@@ -158,7 +158,7 @@ class CLIExecutor(DockerExecutor):
 
         Args:
             parameters: Tool parameters (must include 'command')
-            context: Execution context including session_id
+            context: Execution context including episode_id
 
         Returns:
             CommandResult with execution results
@@ -181,19 +181,19 @@ class CLIExecutor(DockerExecutor):
                 for warning in validation_result.warnings:
                     logger.warning(f"CLI security warning: {warning}")
 
-            # Extract session ID from context
-            session_id = context.get("session_id")
-            if not session_id:
-                raise SandboxExecutionError("session_id required in context for Docker execution")
+            # Extract episode ID from context
+            episode_id = context.get("episode_id")
+            if not episode_id:
+                raise SandboxExecutionError("episode_id required in context for Docker execution")
 
-            # Get Docker environment for session
-            environment = self.get_session_environment(session_id)
+            # Get Docker environment for episode
+            environment = self.get_episode_environment(episode_id)
             timeout = int(self.get_timeout())
 
             # 🔥 CLI TIMEOUT LOGGING: Log command start with timeout info
             command_str = parameters.get("command", "")
             logger.warning(
-                f"🔥 CLI COMMAND START: session={session_id}, timeout={timeout}s, "
+                f"🔥 CLI COMMAND START: episode={episode_id}, timeout={timeout}s, "
                 f"command='{command_str[:100]}{'...' if len(command_str) > 100 else ''}'"
             )
 
@@ -203,17 +203,17 @@ class CLIExecutor(DockerExecutor):
             try:
                 result = await environment.execute_command(command=command_args, timeout=timeout)
                 logger.warning(
-                    f"🔥 CLI COMMAND SUCCESS: session={session_id}, exit_code={result.exit_code}, "
+                    f"🔥 CLI COMMAND SUCCESS: episode={episode_id}, exit_code={result.exit_code}, "
                     f"execution_time={result.execution_time:.2f}s"
                 )
             except Exception as e:
                 if "timed out" in str(e).lower():
                     logger.warning(
-                        f"🔥 CLI COMMAND TIMEOUT: session={session_id}, timeout={timeout}s, "
+                        f"🔥 CLI COMMAND TIMEOUT: episode={episode_id}, timeout={timeout}s, "
                         f"command='{command_str[:50]}...' - {str(e)}"
                     )
                 else:
-                    logger.warning(f"🔥 CLI COMMAND ERROR: session={session_id}, error='{str(e)}'")
+                    logger.warning(f"🔥 CLI COMMAND ERROR: episode={episode_id}, error='{str(e)}'")
                 raise
 
             # Parse output using existing logic
@@ -226,7 +226,7 @@ class CLIExecutor(DockerExecutor):
             tool_result.metadata.update(
                 {
                     "container_id": container_id,
-                    "session_id": session_id,
+                    "episode_id": episode_id,
                     "execution_time": result.execution_time,
                 }
             )

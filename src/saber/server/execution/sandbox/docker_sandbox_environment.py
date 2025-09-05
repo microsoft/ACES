@@ -14,8 +14,9 @@ import tempfile
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-import docker
 import yaml
+
+import docker
 
 if TYPE_CHECKING:
     from docker.models.containers import Container
@@ -50,36 +51,41 @@ class DockerSandboxEnvironment:
 
     def __init__(
         self,
-        session_id: str,
+        episode_id: str,
         environment_spec: EnvironmentSpec,
         container_logging_config: Optional[Dict[str, Any]] = None,
-        episode_id: Optional[str] = None,
+        session_id: Optional[str] = None,  # Keep for backwards compatibility in logging
     ) -> None:
         """
-        Initialize Docker sandbox environment.
+        Initialize Docker sandbox environment for an episode.
 
         Args:
-            session_id: Unique session identifier
+            episode_id: Unique episode identifier (primary)
             environment_spec: Environment specification for container orchestration
             container_logging_config: Configuration for container logging
-            episode_id: Optional episode identifier for unique container naming
+            session_id: Optional session identifier for compatibility/logging
 
         Raises:
             ContainerCreationError: If Docker client cannot be initialized
         """
-        self.session_id = session_id
         self.episode_id = episode_id
+        self.session_id = session_id or episode_id  # Fallback to episode_id if no session_id
         self.environment_spec = environment_spec
         self.active_services: Dict[str, Container] = {}
-        self.compose_project_name = f"saber-session-{session_id}"
+        self.compose_project_name = f"saber-episode-{episode_id}"
         self.compose_file_path: Optional[str] = None
 
-        # Initialize container logging manager
+        # Initialize container logging manager with episode-first approach
         if container_logging_config:
             self.container_logger = ContainerLoggingManager(container_logging_config)
         else:
-            # Use default config with session-specific identifier
-            default_config = {"domain": "sandbox", "session_id": session_id, "logs_directory": "/app/logs"}
+            # Use default config with episode-specific identifier
+            default_config = {
+                "domain": "sandbox",
+                "episode_id": episode_id,
+                "session_id": self.session_id,  # Include session for compatibility
+                "logs_directory": "/app/logs",
+            }
             self.container_logger = ContainerLoggingManager(default_config)
 
         try:
@@ -90,7 +96,7 @@ class DockerSandboxEnvironment:
         # Validate environment specification
         self.environment_spec.validate()
 
-        logger.info("Docker sandbox environment initialized", session_id)
+        logger.info("Docker sandbox environment initialized", self.episode_id)
 
     def start(self) -> None:
         """
@@ -100,7 +106,7 @@ class DockerSandboxEnvironment:
             ContainerCreationError: If environment cannot be created or started
         """
         try:
-            # Generate Docker Compose configuration
+            # Generate Docker Compose configuration with episode context
             compose_config = self.environment_spec.to_compose_dict(
                 session_id=self.session_id, episode_id=self.episode_id
             )
@@ -112,20 +118,22 @@ class DockerSandboxEnvironment:
             self.container_logger.log_compose_config(
                 compose_config=compose_config,
                 config_type="sandbox",
-                identifier=self.session_id,
+                identifier=self.episode_id,
                 additional_metadata={
                     "environment_spec_type": type(self.environment_spec).__name__,
                     "services_count": len(compose_config.get("services", {})),
                     "networks_count": len(compose_config.get("networks", {})),
                     "project_name": self.compose_project_name,
+                    "episode_id": self.episode_id,
                 },
             )
 
-            # Log container lifecycle event
+            # Log container lifecycle event with episode context
             self.container_logger.log_container_lifecycle_event(
                 event_type="start_attempt",
                 container_info={
-                    "session_id": self.session_id,
+                    "episode_id": self.episode_id,
+                    "session_id": self.session_id,  # Keep for compatibility
                     "project_name": self.compose_project_name,
                     "config_type": "sandbox",
                     "services": list(compose_config.get("services", {}).keys()),
@@ -148,7 +156,8 @@ class DockerSandboxEnvironment:
             self.container_logger.log_container_lifecycle_event(
                 event_type="start_success",
                 container_info={
-                    "session_id": self.session_id,
+                    "episode_id": self.episode_id,
+                    "session_id": self.session_id,  # Keep for compatibility
                     "project_name": self.compose_project_name,
                     "config_type": "sandbox",
                 },
@@ -159,14 +168,15 @@ class DockerSandboxEnvironment:
                 project_name=self.compose_project_name, config_type="sandbox"
             )
 
-            logger.info("Docker sandbox environment started", self.session_id)
+            logger.info("Docker sandbox environment started", self.episode_id)
 
         except Exception as e:
-            # Log the failure
+            # Log the failure with episode context
             self.container_logger.log_container_lifecycle_event(
                 event_type="start_failure",
                 container_info={
-                    "session_id": self.session_id,
+                    "episode_id": self.episode_id,
+                    "session_id": self.session_id,  # Keep for compatibility
                     "project_name": self.compose_project_name,
                     "config_type": "sandbox",
                 },
@@ -209,7 +219,7 @@ class DockerSandboxEnvironment:
             # This prevents blocking the event loop and allows proper timeout handling
             try:
                 log_operation_start(
-                    logger, "Command execution", self.session_id, timeout=timeout, command=" ".join(command)
+                    logger, "Command execution", self.episode_id, timeout=timeout, command=" ".join(command)
                 )
                 loop = asyncio.get_event_loop()
                 result = await asyncio.wait_for(
@@ -228,7 +238,7 @@ class DockerSandboxEnvironment:
                 )
                 execution_time = time.time() - start_time
                 log_operation_success(
-                    logger, "Command execution", self.session_id, execution_time=f"{execution_time:.2f}s"
+                    logger, "Command execution", self.episode_id, execution_time=f"{execution_time:.2f}s"
                 )
             except asyncio.TimeoutError:
                 execution_time = time.time() - start_time
@@ -236,7 +246,7 @@ class DockerSandboxEnvironment:
                     logger,
                     "Command execution",
                     timeout,
-                    self.session_id,
+                    self.episode_id,
                     execution_time=f"{execution_time:.2f}s",
                     command=" ".join(command),
                 )
@@ -464,12 +474,13 @@ class DockerSandboxEnvironment:
 
         cleanup_logger = get_cleanup_logger(__name__)
 
-        cleanup_logger.info("Docker environment stop initiated", self.session_id)
+        cleanup_logger.info("Docker environment stop initiated", self.episode_id)
         try:
             # Log stop attempt
             self.container_logger.log_container_lifecycle_event(
                 event_type="stop_attempt",
                 container_info={
+                    "episode_id": self.episode_id,
                     "session_id": self.session_id,
                     "project_name": self.compose_project_name,
                     "config_type": "sandbox",
@@ -477,20 +488,20 @@ class DockerSandboxEnvironment:
             )
 
             # Collect final logs before stopping containers
-            cleanup_logger.info("Collecting final container logs", self.session_id)
+            cleanup_logger.info("Collecting final container logs", self.episode_id)
             self.container_logger.log_all_project_containers(
                 project_name=self.compose_project_name, config_type="sandbox"
             )
 
-            cleanup_logger.info("Stopping Docker Compose services", self.session_id)
+            cleanup_logger.info("Stopping Docker Compose services", self.episode_id)
             # Stop Docker Compose services
             self._stop_compose_services()
 
-            cleanup_logger.info("Clearing container tracking", self.session_id)
+            cleanup_logger.info("Clearing container tracking", self.episode_id)
             # Clear tracked containers
             self.active_services.clear()
 
-            cleanup_logger.info("Cleaning up temporary files", self.session_id)
+            cleanup_logger.info("Cleaning up temporary files", self.episode_id)
             # Clean up compose file
             self._cleanup_compose_file()
 
@@ -498,19 +509,21 @@ class DockerSandboxEnvironment:
             self.container_logger.log_container_lifecycle_event(
                 event_type="stop_success",
                 container_info={
+                    "episode_id": self.episode_id,
                     "session_id": self.session_id,
                     "project_name": self.compose_project_name,
                     "config_type": "sandbox",
                 },
             )
 
-            logger.info("Docker sandbox environment stopped", self.session_id)
+            logger.info("Docker sandbox environment stopped", self.episode_id)
 
         except Exception as e:
             # Log the failure
             self.container_logger.log_container_lifecycle_event(
                 event_type="stop_failure",
                 container_info={
+                    "episode_id": self.episode_id,
                     "session_id": self.session_id,
                     "project_name": self.compose_project_name,
                     "config_type": "sandbox",
@@ -518,13 +531,13 @@ class DockerSandboxEnvironment:
                 additional_data={"error": str(e)},
             )
 
-            log_operation_failure(cleanup_logger, "Docker environment stop", str(e), self.session_id)
+            log_operation_failure(cleanup_logger, "Docker environment stop", str(e), self.episode_id)
             raise SandboxExecutionError(f"Failed to stop environment: {e}")
 
     def _write_compose_file(self, compose_config: Dict[str, Any]) -> str:
         """Write Docker Compose configuration to temporary file."""
         temp_file = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yml", prefix=f"saber-compose-{self.session_id}-", delete=False
+            mode="w", suffix=".yml", prefix=f"saber-compose-{self.episode_id}-", delete=False
         )
 
         try:
@@ -568,7 +581,7 @@ class DockerSandboxEnvironment:
         cleanup_logger = get_cleanup_logger(__name__)
 
         if not self.compose_file_path:
-            cleanup_logger.warning("No compose file available for cleanup", self.session_id)
+            cleanup_logger.warning("No compose file available for cleanup", self.episode_id)
             return
 
         cmd = [
@@ -582,19 +595,19 @@ class DockerSandboxEnvironment:
             "--remove-orphans",
         ]
 
-        log_operation_start(cleanup_logger, "Docker Compose down", self.session_id, command=" ".join(cmd))
+        log_operation_start(cleanup_logger, "Docker Compose down", self.episode_id, command=" ".join(cmd))
 
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-            log_operation_success(cleanup_logger, "Docker Compose down", self.session_id, return_code=result.returncode)
+            log_operation_success(cleanup_logger, "Docker Compose down", self.episode_id, return_code=result.returncode)
             logger.debug(f"Docker Compose down output: {result.stdout}")
             if result.stderr:
-                cleanup_logger.warning(f"Docker Compose stderr: {result.stderr}", self.session_id)
+                cleanup_logger.warning(f"Docker Compose stderr: {result.stderr}", self.episode_id)
 
         except subprocess.TimeoutExpired:
-            log_timeout(cleanup_logger, "Docker Compose down", 60, self.session_id)
+            log_timeout(cleanup_logger, "Docker Compose down", 60, self.episode_id)
         except Exception as e:
-            log_operation_failure(cleanup_logger, "Docker Compose down", str(e), self.session_id)
+            log_operation_failure(cleanup_logger, "Docker Compose down", str(e), self.episode_id)
 
     def _track_service_containers(self) -> None:
         """Find and track containers for all services."""

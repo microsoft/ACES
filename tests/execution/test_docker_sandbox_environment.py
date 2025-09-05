@@ -52,10 +52,11 @@ class TestDockerSandboxEnvironment:
 
         env = DockerSandboxEnvironment("test_session", sample_environment_spec)
 
-        assert env.session_id == "test_session"
+        assert env.episode_id == "test_session"
+        assert env.session_id == "test_session"  # Should fallback to episode_id
         assert env.environment_spec == sample_environment_spec
         assert env.active_services == {}
-        assert env.compose_project_name == "saber-session-test_session"
+        assert env.compose_project_name == "saber-episode-test_session"
         assert env.docker_client == mock_client
 
     @patch("saber.server.execution.sandbox.docker_sandbox_environment.docker.from_env")

@@ -247,23 +247,23 @@ class PythonExecutor(DockerExecutor):
 
         return "\n".join(setup_lines) + script
 
-    def get_python_environment(self, session_id: str) -> Dict[str, Any]:
+    def get_python_environment(self, episode_id: str) -> Dict[str, Any]:
         """
         Get Python environment information.
 
         Args:
-            session_id: Session identifier
+            episode_id: Episode identifier
 
         Returns:
             Dictionary with Python environment details
         """
         try:
-            environment = self.get_session_environment(session_id)
+            environment = self.get_episode_environment(episode_id)
             # This would need to be implemented by running python --version etc.
             # For now, return basic info
             return {
                 "python_version": "3.x",  # Would be detected from container
-                "session_id": session_id,
+                "episode_id": episode_id,
                 "container_ready": environment is not None,
             }
         except Exception as e:
@@ -321,19 +321,19 @@ class PythonExecutor(DockerExecutor):
 
         Args:
             parameters: Execution parameters including code
-            context: Execution context including session_id
+            context: Execution context including episode_id
 
         Returns:
             CommandResult with execution results
         """
         try:
-            # Extract session ID
-            session_id = context.get("session_id")
-            if not session_id:
-                raise SandboxExecutionError("session_id required in context for Python execution")
+            # Extract episode ID
+            episode_id = context.get("episode_id")
+            if not episode_id:
+                raise SandboxExecutionError("episode_id required in context for Python execution")
 
             # Get Docker environment
-            environment = self.get_session_environment(session_id)
+            environment = self.get_episode_environment(episode_id)
 
             # Validate Python code
             code_validation = self.validate_python_code(parameters["code"])
@@ -350,7 +350,7 @@ class PythonExecutor(DockerExecutor):
             script_content = self.build_python_script(parameters, context)
 
             # Write script to temporary file in container
-            script_path = f"/tmp/script_{session_id}.py"
+            script_path = f"/tmp/script_{episode_id}.py"
 
             # Create script file using echo (simple approach)
             working_dir = parameters.get("working_dir", "/workspace")
@@ -375,7 +375,7 @@ class PythonExecutor(DockerExecutor):
             tool_result.metadata.update(
                 {
                     "container_id": container_id,
-                    "session_id": session_id,
+                    "episode_id": episode_id,
                     "execution_time": result.execution_time,
                 }
             )

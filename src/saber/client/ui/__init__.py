@@ -1,10 +1,9 @@
 """SABER UI Module - Clean UI integration with multiple backend support."""
 
 from .inspect_ai_backend import InspectAIBackend  # noqa: F401
-from .interfaces import MCPToolCall, MCPToolCallStatus, ToolCallProgressReporter, UIProgressAdapter  # noqa: F401
+from .interfaces import ToolCallProgressReporter, UIProgressAdapter  # noqa: F401
 from .manager import UIManager  # noqa: F401
 from .models import MessageType, TaskInfo, TaskStatus, UIBackendType, UIConfig, UIMessage  # noqa: F401
-from .progress_reporter import SSEProgressReporter  # noqa: F401
 
 # Conditional textual mode imports
 try:
@@ -33,11 +32,8 @@ __all__ = [
     "UIMessage",
     "TaskInfo",
     # Tool call monitoring
-    "MCPToolCall",
-    "MCPToolCallStatus",
     "ToolCallProgressReporter",
     "UIProgressAdapter",
-    "SSEProgressReporter",
     # Backend implementations
     "InspectAIBackend",
 ] + TEXTUAL_EXPORTS

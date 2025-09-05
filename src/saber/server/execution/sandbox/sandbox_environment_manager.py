@@ -38,7 +38,7 @@ class SandboxEnvironmentManager:
             SandboxExecutionError: If sandbox configuration is invalid
         """
         self.sandbox_config = sandbox_config
-        self.active_sessions: Dict[str, DockerSandboxEnvironment] = {}
+        self.active_environments: Dict[str, DockerSandboxEnvironment] = {}  # episode_id -> Environment
         self._is_ready = False  # Track readiness state
 
         # Set cleanup behavior
@@ -141,32 +141,30 @@ class SandboxEnvironmentManager:
 
         return self._is_ready
 
-    def create_session_environment(
+    def create_episode_environment(
         self,
-        session_id: str,
+        episode_id: str,
         environment_spec: SandboxEnvironmentSpec,
-        episode_id: Optional[str] = None,
     ) -> DockerSandboxEnvironment:
         """
-        Create a new Docker sandbox environment for a session.
+        Create episode-specific sandbox environment.
 
         Args:
-            session_id: Unique identifier for the session
+            episode_id: Episode identifier for unique container naming
             environment_spec: Environment specification for container orchestration
-            episode_id: Optional episode identifier for unique container naming
 
         Returns:
             DockerSandboxEnvironment instance
 
         Raises:
-            SandboxExecutionError: If session already exists or environment cannot be created
+            SandboxExecutionError: If environment for episode already exists or environment cannot be created
         """
         # Check if sandbox manager is ready
         if not self._is_ready:
             raise SandboxExecutionError("SandboxManager is not ready yet. Please wait for initialization to complete.")
 
-        if session_id in self.active_sessions:
-            raise SandboxExecutionError(f"Session {session_id} already has an active environment")
+        if episode_id in self.active_environments:
+            raise SandboxExecutionError(f"Environment for episode {episode_id} already exists")
 
         try:
             # Ensure required Docker images exist (build if necessary)
@@ -177,102 +175,105 @@ class SandboxEnvironmentManager:
             container_logging_config.update(
                 {
                     "domain": self.sandbox_config.get("domain", "sandbox"),
-                    "session_id": session_id,
+                    "episode_id": episode_id,
                     "logs_directory": self.sandbox_config.get("logs_directory", "/app/logs"),
                     "enable_logging": self.sandbox_config.get("enable_container_logging", True),
                 }
             )
 
-            # Create new environment with specification and logging config
+            # Create environment with episode context - session_id can be extracted from episode if needed
             environment = DockerSandboxEnvironment(
-                session_id, environment_spec, container_logging_config=container_logging_config, episode_id=episode_id
+                session_id=episode_id,  # Use episode_id as primary identifier
+                environment_spec=environment_spec,
+                container_logging_config=container_logging_config,
+                episode_id=episode_id,
             )
 
             # Start the environment
             environment.start()
 
-            # Track the session
-            self.active_sessions[session_id] = environment
+            # Track by episode_id
+            self.active_environments[episode_id] = environment
 
-            logger.info(f"Created Docker sandbox environment for session {session_id}")
+            logger.info(f"Created Docker sandbox environment for episode {episode_id}")
             return environment
 
         except Exception as e:
             # Clean up if creation failed
-            if session_id in self.active_sessions:
-                del self.active_sessions[session_id]
-            raise SandboxExecutionError(f"Failed to create session environment: {e}")
+            if episode_id in self.active_environments:
+                del self.active_environments[episode_id]
+            raise SandboxExecutionError(f"Failed to create episode environment: {e}")
 
-    def get_session_environment(self, session_id: str) -> Optional[DockerSandboxEnvironment]:
+    def get_episode_environment(self, episode_id: str) -> Optional[DockerSandboxEnvironment]:
         """
-        Get existing Docker sandbox environment for a session.
+        Get existing Docker sandbox environment for an episode.
 
         Args:
-            session_id: Session identifier
+            episode_id: Episode identifier
 
         Returns:
-            DockerSandboxEnvironment if session exists, None otherwise
+            DockerSandboxEnvironment if episode exists, None otherwise
         """
-        environment = self.active_sessions.get(session_id)
+        environment = self.active_environments.get(episode_id)
 
         # Check if environment services are still healthy
         if environment and not self._is_environment_healthy(environment):
-            logger.warning(f"🔥 HEALTH CHECK FAILURE: Environment for session {session_id} is unhealthy, removing")
-            self.cleanup_session(session_id)
+            logger.warning(f"🔥 HEALTH CHECK FAILURE: Environment for episode {episode_id} is unhealthy, removing")
+            self.cleanup_episode(episode_id)
             return None
 
         return environment
 
-    def cleanup_session(self, session_id: str) -> None:
+    def cleanup_episode(self, episode_id: str) -> None:
         """
-        Clean up Docker sandbox environment for a session.
+        Clean up Docker sandbox environment for an episode.
 
         Args:
-            session_id: Session identifier to clean up
+            episode_id: Episode identifier to clean up
         """
         logger.warning(
-            f"🔥 CONTAINER TERMINATION INITIATED: SandboxManager.cleanup_session() called for session {session_id}"
+            f"🔥 CONTAINER TERMINATION INITIATED: SandboxManager.cleanup_episode() called for episode {episode_id}"
         )
-        environment = self.active_sessions.get(session_id)
+        environment = self.active_environments.get(episode_id)
         if not environment:
             logger.warning(
-                f"🔥 NO ENVIRONMENT OBJECT: No active environment found for session {session_id}, "
+                f"🔥 NO ENVIRONMENT OBJECT: No active environment found for episode {episode_id}, "
                 f"checking for orphaned resources"
             )
             # Even if no environment object exists, try to clean up orphaned resources
-            self._cleanup_orphaned_session_resources(session_id)
+            self._cleanup_orphaned_episode_resources(episode_id)
             return
 
         try:
-            logger.warning(f"🔥 STOPPING DOCKER ENVIRONMENT: About to call environment.stop() for session {session_id}")
+            logger.warning(f"🔥 STOPPING DOCKER ENVIRONMENT: About to call environment.stop() for episode {episode_id}")
             # Stop and clean up the multi-container environment
             environment.stop()
-            logger.info(f"Cleaned up Docker sandbox environment for session {session_id}")
+            logger.info(f"Cleaned up Docker sandbox environment for episode {episode_id}")
 
         except Exception as e:
-            logger.error(f"Error cleaning up session {session_id}: {e}")
+            logger.error(f"Error cleaning up episode {episode_id}: {e}")
             # Still try to clean up orphaned resources as fallback
-            logger.warning(f"🔥 FALLBACK CLEANUP: Attempting to clean orphaned resources for session {session_id}")
-            self._cleanup_orphaned_session_resources(session_id)
+            logger.warning(f"🔥 FALLBACK CLEANUP: Attempting to clean orphaned resources for episode {episode_id}")
+            self._cleanup_orphaned_episode_resources(episode_id)
 
         finally:
-            # Remove from active sessions
-            if session_id in self.active_sessions:
-                logger.warning(f"🔥 REMOVING SESSION TRACKING: Deleting session {session_id} from active_sessions")
-                del self.active_sessions[session_id]
+            # Remove from active environments
+            if episode_id in self.active_environments:
+                logger.warning(f"🔥 REMOVING EPISODE TRACKING: Deleting episode {episode_id} from active_environments")
+                del self.active_environments[episode_id]
 
-    def _cleanup_orphaned_session_resources(self, session_id: str) -> None:
+    def _cleanup_orphaned_episode_resources(self, episode_id: str) -> None:
         """
-        Clean up orphaned Docker resources for a session even without environment object.
+        Clean up orphaned Docker resources for an episode even without environment object.
 
         Args:
-            session_id: Session identifier to clean up orphaned resources for
+            episode_id: Episode identifier to clean up orphaned resources for
         """
         try:
             import subprocess
 
-            # Try to stop any containers with the session label
-            compose_project_name = f"saber-session-{session_id}"
+            # Try to stop any containers with the episode label
+            compose_project_name = f"saber-episode-{episode_id}"
             logger.warning(f"🔥 ORPHANED CLEANUP: Attempting to clean up project {compose_project_name}")
 
             # Use docker compose down with project name to clean up any remaining resources
@@ -290,11 +291,11 @@ class SandboxEnvironmentManager:
 
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
             if result.returncode == 0:
-                logger.warning(f"🔥 ORPHANED CLEANUP SUCCESS: Cleaned up orphaned resources for session {session_id}")
+                logger.warning(f"🔥 ORPHANED CLEANUP SUCCESS: Cleaned up orphaned resources for episode {episode_id}")
             else:
                 logger.warning(
                     f"🔥 ORPHANED CLEANUP PARTIAL: docker compose down returned {result.returncode} "
-                    f"for session {session_id}"
+                    f"for episode {episode_id}"
                 )
 
             if result.stderr:
@@ -302,60 +303,60 @@ class SandboxEnvironmentManager:
 
         except Exception as e:
             logger.warning(
-                f"🔥 ORPHANED CLEANUP ERROR: Failed to clean orphaned resources for session {session_id}: {e}"
+                f"🔥 ORPHANED CLEANUP ERROR: Failed to clean orphaned resources for episode {episode_id}: {e}"
             )
 
-    def cleanup_all_sessions(self) -> None:
+    def cleanup_all_episodes(self) -> None:
         """
         Clean up all active Docker execution environments.
 
         This method should be called during shutdown to ensure
         all containers are properly cleaned up.
         """
-        if not self.active_sessions:
-            logger.info("No active sessions to clean up")
+        if not self.active_environments:
+            logger.info("No active episodes to clean up")
             return
 
         logger.warning(
-            f"🔥 MASS CONTAINER TERMINATION: SandboxManager.cleanup_all_sessions() cleaning up "
-            f"{len(self.active_sessions)} active sessions"
+            f"🔥 MASS CONTAINER TERMINATION: SandboxManager.cleanup_all_episodes() cleaning up "
+            f"{len(self.active_environments)} active episodes"
         )
 
-        # Copy session IDs to avoid modifying dict during iteration
-        session_ids = list(self.active_sessions.keys())
+        # Copy episode IDs to avoid modifying dict during iteration
+        episode_ids = list(self.active_environments.keys())
 
-        for session_id in session_ids:
+        for episode_id in episode_ids:
             try:
-                logger.warning(f"🔥 BATCH CLEANUP: Processing session {session_id}")
-                self.cleanup_session(session_id)
+                logger.warning(f"🔥 BATCH CLEANUP: Processing episode {episode_id}")
+                self.cleanup_episode(episode_id)
             except Exception as e:
-                logger.error(f"Error cleaning up session {session_id}: {e}")
+                logger.error(f"Error cleaning up episode {episode_id}: {e}")
 
-        logger.info("All sessions cleaned up")
+        logger.info("All episodes cleaned up")
 
-    def list_active_sessions(self) -> List[str]:
+    def list_active_episodes(self) -> List[str]:
         """
-        List all active session IDs.
+        List all active episode IDs.
 
         Returns:
-            List of active session identifiers
+            List of active episode identifiers
         """
-        # Filter out unhealthy sessions
-        healthy_sessions = []
-        unhealthy_sessions = []
+        # Filter out unhealthy episodes
+        healthy_episodes = []
+        unhealthy_episodes = []
 
-        for session_id, environment in self.active_sessions.items():
+        for episode_id, environment in self.active_environments.items():
             if self._is_environment_healthy(environment):
-                healthy_sessions.append(session_id)
+                healthy_episodes.append(episode_id)
             else:
-                unhealthy_sessions.append(session_id)
+                unhealthy_episodes.append(episode_id)
 
-        # Clean up unhealthy sessions
-        for session_id in unhealthy_sessions:
-            logger.warning(f"🔥 HEALTH CHECK CLEANUP: Cleaning up unhealthy session {session_id}")
-            self.cleanup_session(session_id)
+        # Clean up unhealthy episodes
+        for episode_id in unhealthy_episodes:
+            logger.warning(f"🔥 HEALTH CHECK CLEANUP: Cleaning up unhealthy episode {episode_id}")
+            self.cleanup_episode(episode_id)
 
-        return healthy_sessions
+        return healthy_episodes
 
     def _is_environment_healthy(self, environment: DockerSandboxEnvironment) -> bool:
         """
@@ -399,14 +400,14 @@ class SandboxEnvironmentManager:
             logger.warning(f"Error checking environment health: {e}")
             return False
 
-    def get_session_count(self) -> int:
+    def get_episode_count(self) -> int:
         """
-        Get count of active sessions.
+        Get count of active episodes.
 
         Returns:
-            Number of active sessions
+            Number of active episodes
         """
-        return len(self.list_active_sessions())
+        return len(self.list_active_episodes())
 
     def get_sandbox_config(self) -> Dict[str, Any]:
         """
@@ -416,7 +417,3 @@ class SandboxEnvironmentManager:
             Copy of sandbox configuration dictionary
         """
         return dict(self.sandbox_config)
-
-
-# Compatibility alias
-SandboxManager = SandboxEnvironmentManager

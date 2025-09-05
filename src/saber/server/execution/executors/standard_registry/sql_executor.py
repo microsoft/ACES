@@ -31,7 +31,7 @@ class SQLExecutor(DockerExecutor):
     - Docker container isolation
     - Timeout enforcement
     - Connection string management
-    - Session-based container management
+    - Episode-based container management
     - Query validation
     """
 
@@ -304,7 +304,7 @@ class SQLExecutor(DockerExecutor):
 
         Args:
             parameters: Tool parameters (must include 'query')
-            context: Execution context including session_id
+            context: Execution context including episode_id
 
         Returns:
             CommandResult with execution results
@@ -326,13 +326,13 @@ class SQLExecutor(DockerExecutor):
                 for warning in validation_result.warnings:
                     logger.warning(f"SQL security warning: {warning}")
 
-            # Extract session ID from context
-            session_id = context.get("session_id")
-            if not session_id:
-                raise SandboxExecutionError("session_id required in context for SQL execution")
+            # Extract episode ID from context
+            episode_id = context.get("episode_id")
+            if not episode_id:
+                raise SandboxExecutionError("episode_id required in context for SQL execution")
 
-            # Get Docker environment for session
-            environment = self.get_session_environment(session_id)
+            # Get Docker environment for episode
+            environment = self.get_episode_environment(episode_id)
             timeout = int(self.get_timeout())
 
             # Get SQL query
@@ -352,7 +352,7 @@ class SQLExecutor(DockerExecutor):
 
             # Log query execution
             logger.warning(
-                f"🔍 SQL QUERY START: session={session_id}, timeout={timeout}s, "
+                f"🔍 SQL QUERY START: episode={episode_id}, timeout={timeout}s, "
                 f"database={connection_info['database']}, "
                 f"query='{query[:100]}{'...' if len(query) > 100 else ''}'"
             )
@@ -361,17 +361,17 @@ class SQLExecutor(DockerExecutor):
             try:
                 result = await environment.execute_command(command=command_args, timeout=timeout)
                 logger.warning(
-                    f"🔍 SQL QUERY SUCCESS: session={session_id}, exit_code={result.exit_code}, "
+                    f"🔍 SQL QUERY SUCCESS: episode={episode_id}, exit_code={result.exit_code}, "
                     f"execution_time={result.execution_time:.2f}s"
                 )
             except Exception as e:
                 if "timed out" in str(e).lower():
                     logger.warning(
-                        f"🔍 SQL QUERY TIMEOUT: session={session_id}, timeout={timeout}s, "
+                        f"🔍 SQL QUERY TIMEOUT: episode={episode_id}, timeout={timeout}s, "
                         f"query='{query[:50]}...' - {str(e)}"
                     )
                 else:
-                    logger.warning(f"🔍 SQL QUERY ERROR: session={session_id}, error='{str(e)}'")
+                    logger.warning(f"🔍 SQL QUERY ERROR: episode={episode_id}, error='{str(e)}'")
                 raise
 
             # Parse output
@@ -384,7 +384,7 @@ class SQLExecutor(DockerExecutor):
             tool_result.metadata.update(
                 {
                     "container_id": container_id,
-                    "session_id": session_id,
+                    "episode_id": episode_id,
                     "execution_time": result.execution_time,
                     "query": query,
                     "database": connection_info["database"],

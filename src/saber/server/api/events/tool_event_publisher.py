@@ -31,15 +31,17 @@ class ToolEventPublisher:
             max_queue_size: Maximum events per session queue before failing fast
         """
         self._subscribers: Dict[str, asyncio.Queue] = {}  # session_id -> queue
+        self._episode_subscribers: Dict[str, asyncio.Queue] = {}  # "session_id:episode_id" -> queue
         self._max_queue_size = max_queue_size
         logger.info(f"Tool event publisher initialized with max_queue_size={max_queue_size}")
 
-    async def subscribe(self, session_id: str) -> asyncio.Queue:
+    async def subscribe(self, session_id: str, episode_id: Optional[str] = None) -> asyncio.Queue:
         """
-        Subscribe to tool events for a session.
+        Subscribe to tool events for a session (and optionally specific episode).
 
         Args:
             session_id: SABER session ID to subscribe to
+            episode_id: Optional episode ID for episode-specific filtering
 
         Returns:
             asyncio.Queue for receiving tool events
@@ -51,24 +53,43 @@ class ToolEventPublisher:
             raise ValueError("session_id cannot be empty")
 
         queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue(maxsize=self._max_queue_size)
-        self._subscribers[session_id] = queue
-        logger.info(f"Subscribed to tool events for session: {session_id}")
+
+        if episode_id:
+            # EPISODE-FIRST: Subscribe to specific episode
+            episode_key = f"{session_id}:{episode_id}"
+            self._episode_subscribers[episode_key] = queue
+            logger.info(f"Subscribed to tool events for session: {session_id}, episode: {episode_id}")
+        else:
+            # Session-wide subscription (all episodes)
+            self._subscribers[session_id] = queue
+            logger.info(f"Subscribed to tool events for session: {session_id} (all episodes)")
+
         return queue
 
-    async def unsubscribe(self, session_id: str) -> None:
+    async def unsubscribe(self, session_id: str, episode_id: Optional[str] = None) -> None:
         """
-        Unsubscribe from tool events for a session.
+        Unsubscribe from tool events for a session (and optionally specific episode).
 
         Args:
             session_id: SABER session ID to unsubscribe from
+            episode_id: Optional episode ID for episode-specific unsubscription
         """
-        if session_id in self._subscribers:
-            del self._subscribers[session_id]
-            logger.info(f"Unsubscribed from tool events for session: {session_id}")
+        if episode_id:
+            # EPISODE-FIRST: Unsubscribe from specific episode
+            episode_key = f"{session_id}:{episode_id}"
+            if episode_key in self._episode_subscribers:
+                del self._episode_subscribers[episode_key]
+                logger.info(f"Unsubscribed from tool events for session: {session_id}, episode: {episode_id}")
+        else:
+            # Session-wide unsubscription
+            if session_id in self._subscribers:
+                del self._subscribers[session_id]
+                logger.info(f"Unsubscribed from tool events for session: {session_id} (all episodes)")
 
     async def publish_tool_started(
         self,
         session_id: str,
+        episode_id: str,
         tool_name: str,
         arguments: Dict[str, Any],
         call_id: str,
@@ -81,6 +102,7 @@ class ToolEventPublisher:
 
         Args:
             session_id: SABER session ID
+            episode_id: SABER episode ID (required for multi-episode architecture)
             tool_name: Name of the tool being executed
             arguments: Tool call arguments
             call_id: Unique identifier for this tool call
@@ -92,14 +114,15 @@ class ToolEventPublisher:
             ValueError: If required parameters are missing
             RuntimeError: If session queue is full (fail-fast)
         """
-        if not all([session_id, tool_name, call_id]):
-            raise ValueError("session_id, tool_name, and call_id are required")
+        if not all([session_id, episode_id, tool_name, call_id]):
+            raise ValueError("session_id, episode_id, tool_name, and call_id are required")
 
         event_model = ToolCallEventStart(
             call_id=call_id,
             tool_name=tool_name,
             arguments=arguments,
             session_id=session_id,
+            episode_id=episode_id,
             task_id=task_id,
             current_step=current_step,
             max_steps=max_steps,
@@ -110,11 +133,14 @@ class ToolEventPublisher:
         event = {"type": "tool_call_started", **event_model.model_dump()}
 
         await self._publish_to_session(session_id, event)
-        logger.info(f"Published tool_call_started: {tool_name} (call_id={call_id}, session={session_id})")
+        logger.info(
+            f"Published tool_call_started: {tool_name} (call_id={call_id}, session={session_id}, episode={episode_id})"
+        )
 
     async def publish_tool_completed(
         self,
         session_id: str,
+        episode_id: str,
         tool_name: str,
         call_id: str,
         success: bool,
@@ -131,6 +157,7 @@ class ToolEventPublisher:
 
         Args:
             session_id: SABER session ID
+            episode_id: SABER episode ID (required for multi-episode architecture)
             tool_name: Name of the tool that was executed
             call_id: Unique identifier for this tool call
             success: Whether tool execution succeeded
@@ -145,8 +172,8 @@ class ToolEventPublisher:
             ValueError: If required parameters are missing
             RuntimeError: If session queue is full (fail-fast)
         """
-        if not all([session_id, tool_name, call_id]):
-            raise ValueError("session_id, tool_name, and call_id are required")
+        if not all([session_id, episode_id, tool_name, call_id]):
+            raise ValueError("session_id, episode_id, tool_name, and call_id are required")
 
         event_model = ToolCallEventComplete(
             call_id=call_id,
@@ -157,6 +184,7 @@ class ToolEventPublisher:
             error=error,
             execution_time_ms=execution_time_ms,
             session_id=session_id,
+            episode_id=episode_id,
             task_id=task_id,
             current_step=current_step,
             max_steps=max_steps,
@@ -172,7 +200,10 @@ class ToolEventPublisher:
 
         await self._publish_to_session(session_id, event)
         status = "succeeded" if success else "failed"
-        logger.info(f"Published tool_call_completed: {tool_name} {status} (call_id={call_id}, session={session_id})")
+        logger.info(
+            f"Published tool_call_completed: {tool_name} {status} "
+            f"(call_id={call_id}, session={session_id}, episode={episode_id})"
+        )
 
     async def _publish_to_session(self, session_id: str, event: Dict[str, Any]) -> None:
         """

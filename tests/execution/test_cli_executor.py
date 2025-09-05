@@ -282,8 +282,8 @@ class TestCLIExecutorIntegration:
             "read_only_root": True,
             "user": "tooluser:tooluser",
         }
-        manager.get_session_environment.return_value = mock_docker_sandbox_environment
-        manager.create_session_environment.return_value = mock_docker_sandbox_environment
+        manager.get_episode_environment.return_value = mock_docker_sandbox_environment
+        manager.create_episode_environment.return_value = mock_docker_sandbox_environment
         return manager
 
     @pytest.fixture
@@ -303,11 +303,11 @@ class TestCLIExecutorIntegration:
         # Set up mock command result
         command_result = CommandResult(exit_code=0, stdout="Hello from Docker!\n", stderr="", execution_time=0.5)
 
-        env = mock_sandbox_manager_with_env.get_session_environment.return_value
+        env = mock_sandbox_manager_with_env.get_episode_environment.return_value
         env.execute_command = AsyncMock(return_value=command_result)
 
         parameters = {"command": "echo 'Hello from Docker!'"}
-        context = {"session_id": "test_session_123"}
+        context = {"episode_id": "test_episode_123", "session_id": "test_session_123"}
 
         result = await docker_cli_tool_with_env(parameters, context)
 
@@ -315,7 +315,7 @@ class TestCLIExecutorIntegration:
         assert result.data["stdout"] == "Hello from Docker!\n"
         assert result.data["return_code"] == 0
         assert result.metadata["container_id"] == "container123"[:12]  # Truncated to 12 chars
-        assert result.metadata["session_id"] == "test_session_123"
+        assert result.metadata["episode_id"] == "test_episode_123"
         assert result.metadata["execution_time"] == 0.5
 
         # Verify Docker environment was called correctly (shell mode)
@@ -329,11 +329,11 @@ class TestCLIExecutorIntegration:
 
         command_result = CommandResult(exit_code=0, stdout="hello world\n", stderr="", execution_time=1.2)
 
-        env = mock_sandbox_manager_with_env.get_session_environment.return_value
+        env = mock_sandbox_manager_with_env.get_episode_environment.return_value
         env.execute_command = AsyncMock(return_value=command_result)
 
         parameters = {"command": "echo hello world", "shell": True}
-        context = {"session_id": "shell_test_session"}
+        context = {"episode_id": "shell_test_episode"}
 
         result = await docker_cli_tool_with_env(parameters, context)
 
@@ -351,11 +351,11 @@ class TestCLIExecutorIntegration:
             exit_code=127, stdout="", stderr="command not found: nonexistent_command\n", execution_time=0.1
         )
 
-        env = mock_sandbox_manager_with_env.get_session_environment.return_value
+        env = mock_sandbox_manager_with_env.get_episode_environment.return_value
         env.execute_command = AsyncMock(return_value=command_result)
 
         parameters = {"command": "nonexistent_command", "shell": False}
-        context = {"session_id": "failure_test_session"}
+        context = {"episode_id": "failure_test_episode"}
 
         result = await docker_cli_tool_with_env(parameters, context)
 
@@ -368,12 +368,12 @@ class TestCLIExecutorIntegration:
     async def test_execute_missing_session_id(self, docker_cli_tool_with_env):
         """Test that execution fails without session_id in context."""
         parameters = {"command": "echo test", "shell": False}
-        context = {}  # Missing session_id
+        context = {}  # Missing episode_id
 
         result = await docker_cli_tool_with_env(parameters, context)
 
         assert result.success is False
-        assert "session_id required in context" in result.error
+        assert "episode_id required in context" in result.error
 
     @pytest.mark.asyncio
     async def test_execute_with_existing_environment(self, docker_cli_tool_with_env, mock_sandbox_manager_with_env):
@@ -381,7 +381,7 @@ class TestCLIExecutorIntegration:
 
         # Mock an existing environment
         existing_env = MagicMock()
-        mock_sandbox_manager_with_env.get_session_environment.return_value = existing_env
+        mock_sandbox_manager_with_env.get_episode_environment.return_value = existing_env
 
         command_result = CommandResult(exit_code=0, stdout="test\n", stderr="", execution_time=0.3)
         existing_env.execute_command = AsyncMock(return_value=command_result)
@@ -392,24 +392,24 @@ class TestCLIExecutorIntegration:
         existing_env.get_execution_container.return_value = container_mock
 
         parameters = {"command": "echo test", "shell": False}
-        context = {"session_id": "existing_session"}
+        context = {"episode_id": "existing_episode"}
 
         result = await docker_cli_tool_with_env(parameters, context)
 
         assert result.success is True
         assert result.data["stdout"] == "test\n"
 
-        # Verify that create_session_environment was NOT called since environment exists
-        mock_sandbox_manager_with_env.create_session_environment.assert_not_called()
+        # Verify that create_episode_environment was NOT called since environment exists
+        mock_sandbox_manager_with_env.create_episode_environment.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_execute_docker_exception_handling(self, docker_cli_tool_with_env, mock_sandbox_manager_with_env):
         """Test handling of Docker execution exceptions."""
-        env = mock_sandbox_manager_with_env.get_session_environment.return_value
+        env = mock_sandbox_manager_with_env.get_episode_environment.return_value
         env.execute_command.side_effect = Exception("Docker daemon not available")
 
         parameters = {"command": "echo test", "shell": False}
-        context = {"session_id": "exception_test"}
+        context = {"episode_id": "exception_test"}
 
         result = await docker_cli_tool_with_env(parameters, context)
 

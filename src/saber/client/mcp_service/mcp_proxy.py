@@ -81,17 +81,28 @@ class MCPProxy:
         Returns:
             FastMCP client configured for the session
         """
-        session_key = f"{session.saber_session_id}_{session.task_id or 'default'}"
+        # Include episode_id in session key for episode-first architecture
+        episode_key = session.saber_episode_id or "no-episode"
+        session_key = f"{session.saber_session_id}_{episode_key}_{session.task_id or 'default'}"
 
         if session_key not in self._client_pool:
             # Create new FastMCP client for this session
             sse_url = f"{self.saber_mcp_url}/sse"
 
-            # Create headers for session mapping
+            # Create headers for session mapping with episode-first architecture
             headers = {
                 MCPHeaders.SESSION_ID: session.saber_session_id,
                 MCPHeaders.CLIENT_ID: session.agent_id,
             }
+
+            # EPISODE-FIRST: Include episode_id header (REQUIRED)
+            if session.saber_episode_id:
+                headers[MCPHeaders.EPISODE_ID] = session.saber_episode_id
+            else:
+                # FAIL FAST: Episode ID is required for episode-first architecture
+                logger.warning(
+                    f"⚠️ No episode_id for session {session.saber_session_id} - this may cause server-side failures"
+                )
 
             if session.task_id:
                 headers[MCPHeaders.TASK_ID] = session.task_id
@@ -105,9 +116,15 @@ class MCPProxy:
             # Test the connection
             try:
                 await client.ping()
-                logger.debug(f"✅ FastMCP client connected for session {session.saber_session_id}")
+                logger.debug(
+                    f"✅ FastMCP client connected for session {session.saber_session_id}, "
+                    f"episode {session.saber_episode_id}"
+                )
             except Exception as e:
-                logger.warning(f"FastMCP ping failed for session {session.saber_session_id}: {e}")
+                logger.warning(
+                    f"FastMCP ping failed for session {session.saber_session_id}, "
+                    f"episode {session.saber_episode_id}: {e}"
+                )
                 # Continue anyway, the connection might still work for tools
 
             self._client_pool[session_key] = client

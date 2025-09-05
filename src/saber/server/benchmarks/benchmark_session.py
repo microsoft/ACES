@@ -1,6 +1,6 @@
 """BenchmarkSession model for tracking active benchmark sessions."""
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from .benchmark_info import BenchmarkInfo
 
@@ -24,6 +24,7 @@ class BenchmarkSession:
         self.session_id = session_id
         self.benchmark_info = benchmark_info
         self.config = config or {}
+        self.active_episode_ids: List[str] = []  # Track episodes associated with this benchmark session
 
     def to_api_response(self, domain: str) -> Dict[str, Any]:
         """
@@ -37,6 +38,7 @@ class BenchmarkSession:
         """
         response = self.benchmark_info.to_dict()
         response["benchmark_config"] = self.config
+        response["active_episode_ids"] = self.active_episode_ids
         return response
 
     @property
@@ -53,3 +55,18 @@ class BenchmarkSession:
     def total_episodes(self) -> int:
         """Get the total number of episodes."""
         return self.benchmark_info.total_episodes
+
+    def add_episode(self, episode_id: str) -> None:
+        """Add an episode to this benchmark session."""
+        if episode_id not in self.active_episode_ids:
+            self.active_episode_ids.append(episode_id)
+
+    def remove_episode(self, episode_id: str) -> None:
+        """Remove an episode from this benchmark session."""
+        if episode_id in self.active_episode_ids:
+            self.active_episode_ids.remove(episode_id)
+
+    @property
+    def active_episode_count(self) -> int:
+        """Get the number of active episodes."""
+        return len(self.active_episode_ids)

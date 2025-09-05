@@ -140,7 +140,8 @@ class TestRealDockerIntegration:
         from saber.server.base import Action
 
         action = Action(tool_name="cli", parameters={"command": "echo 'real container test'"})
-        context = {"session_id": session_id}
+        episode_id = f"episode_{uuid.uuid4().hex[:8]}"
+        context = {"session_id": session_id, "episode_id": episode_id}
 
         try:
             # This should create a real Docker container
@@ -161,6 +162,6 @@ class TestRealDockerIntegration:
             print(f"Docker execution error (expected if image unavailable): {e}")
 
         # Manually test cleanup
-        real_registry.cleanup_session(session_id)
+        real_registry.cleanup_session(session_id, reason="test_completion")
 
         # The actual container cleanup verification happens in the docker_cleanup fixture

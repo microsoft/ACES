@@ -127,14 +127,20 @@ class SidecarManager:
             logger.error(f"❌ Failed to stop sidecar: {e}")
 
     async def register_agent_session(
-        self, session_id: str, task_id: Optional[str] = None, agent_id: Optional[str] = None
+        self,
+        session_id: str,
+        episode_id: Optional[str] = None,
+        task_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
     ) -> Optional[str]:
         """
         Register an agent session with the sidecar.
 
         Args:
             session_id: SABER server session ID
+            episode_id: Episode ID for episode-first execution (REQUIRED for new architecture)
             task_id: Optional task ID for context
+            agent_id: Optional explicit agent ID
 
         Returns:
             Agent ID if registration successful, None otherwise
@@ -150,15 +156,22 @@ class SidecarManager:
             payload = {
                 "agent_id": agent_identifier,
                 "saber_session_id": session_id,
+                "episode_id": episode_id,
                 "task_id": task_id,
             }
+
+            if not episode_id:
+                logger.warning(
+                    f"⚠️ Registering agent {agent_identifier} without episode_id - "
+                    f"this may cause server-side failures in episode-first architecture"
+                )
 
             async with aiohttp.ClientSession() as client:
                 async with client.post(url, json=payload, timeout=self.config.health_check_timeout) as response:
                     if response.status == 200:
                         result = await response.json()
                         agent_id = result.get("agent_id")
-                        logger.info(f"✅ Registered agent session: {agent_identifier}")
+                        logger.info(f"✅ Registered agent session: {agent_identifier} (episode: {episode_id})")
                         self._registered_agent_ids.add(agent_identifier)
                         return agent_identifier
                     else:

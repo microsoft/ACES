@@ -73,7 +73,7 @@ class CommandExecutor(ABC):
 
         Args:
             parameters: Command-specific parameters
-            context: Execution context (session_id, task_id, etc.)
+            context: Execution context (episode_id, task_id, etc.)
 
         Returns:
             CommandResult containing execution results
@@ -89,7 +89,7 @@ class CommandExecutor(ABC):
 
         Args:
             parameters: Command-specific parameters
-            context: Execution context (session_id, task_id, etc.)
+            context: Execution context (episode_id, task_id, etc.)
 
         Returns:
             CommandResult containing execution results

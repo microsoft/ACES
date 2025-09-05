@@ -98,7 +98,7 @@ class TestSessionManagerCore:
         assert isinstance(session, ClientSession)
         assert session.client_id == client_id
         assert session.is_active is True
-        assert session.current_episode_id is None
+        assert session.active_episode_ids == []  # New multi-episode model
         assert session.session_id in session_manager.active_sessions
 
         # Check evaluation manager was called
@@ -135,13 +135,14 @@ class TestSessionManagerCore:
         """Test terminating session with active episode."""
         client_id = "test_client"
         session = await session_manager.create_session(client_id)
-        session.current_episode_id = "episode_123"
+        # Add episode to session's active episodes (replacing current_episode_id)
+        session.add_active_episode("episode_123")
         session_id = session.session_id
 
         await session_manager.terminate_session(session_id)
 
         # Should call episode manager to end episode
-        session_manager.episode_manager.end_episode.assert_called_once_with(session_id, "session_terminated")
+        session_manager.episode_manager.end_episode.assert_called_once_with("episode_123", "session_terminated")
         assert session_id not in session_manager.active_sessions
 
     @pytest.mark.asyncio
@@ -270,7 +271,9 @@ class TestClientSession:
 
         assert session.session_id == "test_id"
         assert session.client_id == "client_123"
-        assert session.current_episode_id is None
+        assert session.active_episode_ids == []  # New multi-episode model
+        assert session.episode_history == []  # New multi-episode model
+        assert session.task_queue == []  # New multi-episode model
         assert session.is_active is True
         assert isinstance(session.created_at, datetime)
         assert isinstance(session.last_activity, datetime)

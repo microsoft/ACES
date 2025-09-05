@@ -26,7 +26,7 @@ async def test_progress_stream_start_stop(monkeypatch):
 
     monkeypatch.setattr(client, "_run_progress_stream_sync", fake_run_sync)
 
-    ok = await client.start_progress_stream(cb, agent_id="test-agent")
+    ok = await client.start_progress_stream(cb, episode_id="test-episode-123", agent_id="test-agent")
     assert ok is True
 
     await client.stop_progress_stream()

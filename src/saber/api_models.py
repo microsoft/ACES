@@ -53,6 +53,17 @@ class EpisodeInfo(BaseModel):
     message: Optional[str] = None
 
 
+class EpisodeEndResponse(BaseModel):
+    """Response model for episode termination."""
+
+    episode_ended: bool = Field(description="Whether the episode has ended")
+    episode_id: str = Field(description="ID of the episode that ended")
+    success: bool = Field(description="Whether the episode completed successfully")
+    reason: str = Field(description="Reason for episode termination")
+    previous_task_id: Optional[str] = Field(None, description="Task ID of the completed episode")
+    active_episodes_remaining: int = Field(description="Number of active episodes remaining in session")
+
+
 class SessionInfo(BaseModel):
     """Session information."""
 
@@ -68,6 +79,7 @@ class ToolCallEventStart(BaseModel):
     arguments: Optional[Dict[str, Any]] = None
     agent_id: Optional[str] = None
     session_id: Optional[str] = None
+    episode_id: Optional[str] = None
     task_id: Optional[str] = None
     timestamp: Optional[str] = None
     current_step: Optional[int] = None
@@ -83,6 +95,7 @@ class ToolCallEventProgress(BaseModel):
     progress: Optional[float] = None
     agent_id: Optional[str] = None
     session_id: Optional[str] = None
+    episode_id: Optional[str] = None
     task_id: Optional[str] = None
     timestamp: Optional[str] = None
 
@@ -99,6 +112,7 @@ class ToolCallEventComplete(BaseModel):
     error: Optional[str] = None
     agent_id: Optional[str] = None
     session_id: Optional[str] = None
+    episode_id: Optional[str] = None
     task_id: Optional[str] = None
     timestamp: Optional[str] = None
     current_step: Optional[int] = None

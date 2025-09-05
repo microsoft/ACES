@@ -215,8 +215,8 @@ class SABERHarness:
                     )
                     self.harness_logger.log_session_creation_event(session_event)
 
-                # Start tool events SSE stream for real-time updates
-                await self._start_tool_events_stream()
+                # NOTE: Tool events SSE streams are now handled per-episode
+                # Each episode will start its own dedicated stream for better isolation
 
             except Exception as e:
                 # Log failed session creation
@@ -693,20 +693,21 @@ class SABERHarness:
             # FAIL FAST: Don't silently drop tool events
             raise
 
-    async def _start_tool_events_stream(self) -> None:
-        """Start the tool events SSE stream from server."""
+    # DEPRECATED: Tool events streams are now handled per-episode for better isolation
+    # Each episode starts its own dedicated SSE stream with episode_id filtering
+    async def _start_tool_events_stream_DEPRECATED(self) -> None:
+        """Start the tool events SSE stream from server (DEPRECATED - use per-episode streams)."""
         if not self.rest_client:
             logger.warning("REST client not available, cannot start tool events stream")
             return
 
         try:
-            # Start SSE stream with tool event callback
-            success = await self.rest_client.start_progress_stream(progress_callback=self._handle_tool_event)
-
-            if success:
-                logger.info("🔗 Tool events SSE stream started")
-            else:
-                logger.warning("Failed to start tool events SSE stream")
+            # This would now require an episode_id parameter
+            # success = await self.rest_client.start_progress_stream(
+            #     progress_callback=self._handle_tool_event,
+            #     episode_id="???"  # No single episode_id for global harness stream
+            # )
+            logger.info("🔗 Tool events streams now handled per-episode")
 
         except Exception as e:
             logger.error(f"Error starting tool events stream: {e}")
