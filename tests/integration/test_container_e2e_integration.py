@@ -23,7 +23,7 @@ from unittest.mock import patch, AsyncMock
 import pytest
 import docker
 import aiohttp
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 import uvicorn
 from threading import Thread
@@ -33,6 +33,7 @@ from saber.client.containers.sidecar_manager import SidecarConfig
 from saber.client.containers.agent_manager import AgentContainerConfig
 from saber.client.episode_executor import ContainerEpisodeExecutor
 from saber.client.api import SABERRestClient
+from saber.base import MCPHeaders
 
 # Configure logging for test visibility
 logging.basicConfig(level=logging.INFO)
@@ -97,8 +98,8 @@ class MockSABERServer:
                 return {"success": True}
             return {"success": False, "error": "Session not found"}
 
-        @self.app.post("/session/{session_id}/episode")
-        async def start_episode(session_id: str, request: Dict[str, Any] = None):
+        @self.app.post("/session/{session_id}/episodes")
+        async def create_episode(session_id: str, request: Dict[str, Any] = None):
             if session_id not in self.sessions:
                 return JSONResponse({"error": "Session not found"}, status_code=404)
 
@@ -111,19 +112,41 @@ class MockSABERServer:
             }
             return {"episode_id": episode_id}
 
-        @self.app.get("/session/{session_id}/current-task")
-        async def get_current_task(session_id: str):
+        @self.app.post("/session/{session_id}/episodes/{episode_id}/end")
+        async def end_episode(session_id: str, episode_id: str, request: Dict[str, Any] = None):
+            if session_id not in self.sessions:
+                raise HTTPException(status_code=404, detail="Session not found")
+            if episode_id not in self.episodes:
+                raise HTTPException(status_code=404, detail="Episode not found")
+
+            self.episodes[episode_id]["completed"] = True
+            self.episodes[episode_id]["end_time"] = "2024-01-01T12:00:00Z"
+            return {"message": "Episode ended successfully"}
+
+        @self.app.get("/session/{session_id}/episodes/{episode_id}/task")
+        async def get_episode_task(session_id: str, episode_id: str):
             return {
                 "task_id": "test_task_1",
                 "title": "Integration Test Task",
                 "description": "A test task for validating the container architecture"
             }
 
-        @self.app.get("/session/{session_id}/policy")
-        async def get_policy(session_id: str):
+        @self.app.get("/session/{session_id}/episodes/{episode_id}/policy")
+        async def get_episode_policy(session_id: str, episode_id: str):
             return {
                 "prompt": "You are a test agent. Use available tools to complete the task.",
                 "rules": ["Use tools responsibly", "Complete the objective"]
+            }
+
+        @self.app.get("/get-benchmark")
+        async def get_benchmark():
+            return {
+                "total_tasks": 2,
+                "total_episodes": 2,
+                "episodes": [
+                    {"task_id": "test_task_1", "episode_id": "episode_1", "max_attempts": 1},
+                    {"task_id": "test_task_2", "episode_id": "episode_2", "max_attempts": 1}
+                ]
             }
 
         @self.app.get("/tasks")
@@ -230,10 +253,18 @@ import json
 import os
 import aiohttp
 
+class MCPHeaders:
+    """HTTP header names for MCP session mapping."""
+    SESSION_ID = "X-SABER-Session-ID"
+    TASK_ID = "X-SABER-Task-ID"
+    EPISODE_ID = "X-SABER-Episode-ID"
+    CLIENT_ID = "X-SABER-Client-ID"
+
 class SimpleTestAgent:
     def __init__(self):
         self.sidecar_url = os.getenv("SABER_SIDECAR_URL", "http://saber-mcp-sidecar:8002")
         self.session_id = os.getenv("SABER_SESSION_ID")
+        self.episode_id = os.getenv("EPISODE_ID")  # EPISODE-FIRST: Get episode_id from environment
 
     async def run(self, initial_prompt: str, shutdown_check=None) -> dict:
         """Execute the agent workflow."""
@@ -269,7 +300,10 @@ class SimpleTestAgent:
     async def list_tools(self):
         """List available tools via MCP sidecar."""
         url = f"{self.sidecar_url}/mcp/list_tools"
-        headers = {"X-Saber-Session-Id": self.session_id}
+        headers = {
+            MCPHeaders.SESSION_ID: self.session_id,
+            MCPHeaders.EPISODE_ID: self.episode_id  # EPISODE-FIRST: Include episode header
+        }
 
         async with aiohttp.ClientSession() as session:
             async with session.post(url, headers=headers, json={}) as response:
@@ -282,7 +316,10 @@ class SimpleTestAgent:
     async def call_tool(self, name: str, arguments: dict):
         """Call a tool via MCP sidecar."""
         url = f"{self.sidecar_url}/mcp/call_tool"
-        headers = {"X-Saber-Session-Id": self.session_id}
+        headers = {
+            MCPHeaders.SESSION_ID: self.session_id,
+            MCPHeaders.EPISODE_ID: self.episode_id  # EPISODE-FIRST: Include episode header
+        }
         payload = {
             "jsonrpc": "2.0",
             "method": "call_tool",
@@ -394,6 +431,7 @@ class TestContainerE2EIntegration:
             logger.info("🔐 Registering session with sidecar...")
             agent_id = await sidecar_manager.register_agent_session(
                 session_id=session_id,
+                episode_id=episode_id,  # EPISODE-FIRST: Include episode_id in registration
                 task_id=task_id,
                 agent_id="test_agent"
             )
@@ -414,7 +452,8 @@ class TestContainerE2EIntegration:
                 session_id=session_id,
                 extra_env={
                     "SABER_SIDECAR_URL": sidecar_url,
-                    "SABER_SESSION_ID": session_id
+                    "SABER_SESSION_ID": session_id,
+                    "EPISODE_ID": episode_id  # EPISODE-FIRST: Pass episode_id to agent environment
                 }
             )
 

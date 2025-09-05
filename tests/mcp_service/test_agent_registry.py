@@ -19,11 +19,13 @@ class TestAgentSessionRegistry:
         session = await registry.register_session(
             agent_id="test-agent-1",
             saber_session_id="saber-session-123",
+            saber_episode_id="episode-456",
             task_id="task-456"
         )
 
         assert session.agent_id == "test-agent-1"
         assert session.saber_session_id == "saber-session-123"
+        assert session.saber_episode_id == "episode-456"
         assert session.task_id == "task-456"
         assert session.is_active is True
 
@@ -40,6 +42,7 @@ class TestAgentSessionRegistry:
         session1 = await registry.register_session(
             agent_id="test-agent-1",
             saber_session_id="saber-session-123",
+            saber_episode_id="episode-456",
             task_id="task-456"
         )
 
@@ -47,12 +50,14 @@ class TestAgentSessionRegistry:
         session2 = await registry.register_session(
             agent_id="test-agent-1",
             saber_session_id="saber-session-123",
+            saber_episode_id="episode-456",
             task_id="task-789"
         )
 
         # Should be the same session object, updated
         assert session2.agent_id == "test-agent-1"
         assert session2.saber_session_id == "saber-session-123"
+        assert session2.saber_episode_id == "episode-456"
         assert session2.task_id == "task-789"  # Updated
 
         # Should only have one session
@@ -66,14 +71,16 @@ class TestAgentSessionRegistry:
         # Register initial session
         await registry.register_session(
             agent_id="test-agent-1",
-            saber_session_id="saber-session-123"
+            saber_session_id="saber-session-123",
+            saber_episode_id="episode-456"
         )
 
         # Try to register same agent with different SABER session
         with pytest.raises(ValueError, match="already registered with different session"):
             await registry.register_session(
                 agent_id="test-agent-1",
-                saber_session_id="saber-session-456"
+                saber_session_id="saber-session-456",
+                saber_episode_id="episode-789"
             )
 
     async def test_unregister_session(self):
@@ -83,7 +90,8 @@ class TestAgentSessionRegistry:
         # Register session
         await registry.register_session(
             agent_id="test-agent-1",
-            saber_session_id="saber-session-123"
+            saber_session_id="saber-session-123",
+            saber_episode_id="episode-456"
         )
 
         # Verify it exists
@@ -113,7 +121,8 @@ class TestAgentSessionRegistry:
         # Register agent
         await registry.register_session(
             agent_id="test-agent-1",
-            saber_session_id="saber-session-123"
+            saber_session_id="saber-session-123",
+            saber_episode_id="episode-456"
         )
 
         # Get SABER session ID
@@ -129,9 +138,9 @@ class TestAgentSessionRegistry:
         assert len(sessions) == 0
 
         # Register multiple sessions
-        await registry.register_session("agent-1", "saber-1")
-        await registry.register_session("agent-2", "saber-2")
-        await registry.register_session("agent-3", "saber-3")
+        await registry.register_session("agent-1", "saber-1", "episode-1")
+        await registry.register_session("agent-2", "saber-2", "episode-2")
+        await registry.register_session("agent-3", "saber-3", "episode-3")
 
         # Deactivate one
         await registry.deactivate_session("agent-2")
@@ -154,8 +163,8 @@ class TestAgentSessionRegistry:
         assert stats["inactive_sessions"] == 0
 
         # Register sessions
-        await registry.register_session("agent-1", "saber-1")
-        await registry.register_session("agent-2", "saber-2")
+        await registry.register_session("agent-1", "saber-1", "episode-1")
+        await registry.register_session("agent-2", "saber-2", "episode-2")
 
         # Deactivate one
         await registry.deactivate_session("agent-1")
@@ -175,11 +184,13 @@ class TestAgentSession:
         session = AgentSession(
             agent_id="test-agent",
             saber_session_id="saber-123",
+            saber_episode_id="episode-456",
             task_id="task-456"
         )
 
         assert session.agent_id == "test-agent"
         assert session.saber_session_id == "saber-123"
+        assert session.saber_episode_id == "episode-456"
         assert session.task_id == "task-456"
         assert session.is_active is True
         assert isinstance(session.registered_at, datetime)
@@ -189,7 +200,8 @@ class TestAgentSession:
         """Test updating last activity timestamp."""
         session = AgentSession(
             agent_id="test-agent",
-            saber_session_id="saber-123"
+            saber_session_id="saber-123",
+            saber_episode_id="episode-456"
         )
 
         original_time = session.last_activity

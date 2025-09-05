@@ -9,12 +9,13 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any, AsyncGenerator, Dict, cast
+from typing import Any, AsyncGenerator, Dict, Optional, cast
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse
 
+from ...base import MCPHeaders
 from .events.tool_event_publisher import ToolEventPublisher
 
 logger = logging.getLogger(__name__)
@@ -74,40 +75,53 @@ class SessionRestAPI:
             result: Dict[str, str] = {"message": "Session terminated successfully"}
             return result
 
-        @self.app.get("/session/{session_id}/current-task")
-        async def get_current_task_endpoint(session_id: str) -> Dict[str, Any]:
-            """Get current task information."""
-            task = await self.session_manager.get_current_task(session_id)
+        @self.app.get("/session/{session_id}/episodes/{episode_id}/task")
+        async def get_episode_task_endpoint(session_id: str, episode_id: str) -> Dict[str, Any]:
+            """Get task information for a specific episode."""
+            task = await self.session_manager.get_current_task(session_id, episode_id)
             task_dict = cast(Dict[str, Any], task.to_dict())
 
-            # Add episode context
-            episode_config = self.session_manager.get_episode_config(session_id)
-            task_dict["episode_context"] = episode_config
+            # Get episode to access its configuration
+            episode = self.session_manager.get_episode_by_id(episode_id)
+            if episode:
+                # Get episode configuration from the task using BenchmarkManager
+                episode_config = self.session_manager.benchmark_manager.get_episode_config(episode.task_id)
+                task_dict["episode_context"] = episode_config
+            else:
+                task_dict["episode_context"] = {"session_id": session_id}
+
+            task_dict["episode_id"] = episode_id
 
             return task_dict
 
-        @self.app.get("/session/{session_id}/policy")
-        async def get_policy_endpoint(session_id: str) -> Dict[str, Any]:
-            """Get domain policy document."""
-            policy = self.session_manager.get_policy(session_id)
+        @self.app.get("/session/{session_id}/episodes/{episode_id}/policy")
+        async def get_policy_endpoint(session_id: str, episode_id: str) -> Dict[str, Any]:
+            """Get policy information for a specific episode."""
+            episode = self.session_manager.get_episode_by_id(episode_id)
+            if not episode:
+                raise HTTPException(status_code=404, detail="Episode not found")
+
+            policy = self.session_manager.get_policy(session_id, episode_id)
             policy_dict = policy.to_dict()
             return dict(policy_dict) if policy_dict else {}
 
         @self.app.get("/tool-events/stream")
         async def tool_events_stream(request: Request) -> EventSourceResponse:
-            """Server-Sent Events stream for real-time tool call events."""
-            session_id = request.headers.get("X-Saber-Session-ID")
-            if not session_id:
-                raise HTTPException(status_code=400, detail="Missing X-Saber-Session-ID header")
+            """Server-Sent Events stream for real-time tool call events with episode filtering."""
+            session_id = request.headers.get(MCPHeaders.SESSION_ID)
+            episode_id = request.headers.get(MCPHeaders.EPISODE_ID)  # EPISODE-FIRST: Support episode filtering
 
-            logger.info(f"Starting tool events SSE stream for session: {session_id}")
+            if not session_id:
+                raise HTTPException(status_code=400, detail=f"Missing {MCPHeaders.SESSION_ID} header")
+
+            logger.info(f"Starting tool events SSE stream for session: {session_id}, episode: {episode_id}")
 
             # Check if session exists
             if not hasattr(self, "tool_event_publisher"):
                 raise HTTPException(status_code=500, detail="Tool event publisher not available")
 
-            # Subscribe to tool events for this session
-            event_queue = await self.tool_event_publisher.subscribe(session_id)
+            # Subscribe to tool events for this session (and optionally episode)
+            event_queue = await self.tool_event_publisher.subscribe(session_id, episode_id=episode_id)
 
             async def event_generator() -> AsyncGenerator[Dict[str, Any], None]:
                 """Generate SSE events from the tool event queue."""
@@ -119,6 +133,7 @@ class SessionRestAPI:
                                 "type": "connection",
                                 "message": "Tool events stream connected",
                                 "session_id": session_id,
+                                "episode_id": episode_id,  # EPISODE-FIRST: Include episode_id in events
                                 "timestamp": datetime.now(timezone.utc).isoformat(),
                             }
                         )
@@ -129,32 +144,48 @@ class SessionRestAPI:
                         try:
                             # Wait for events with timeout for heartbeat
                             event = await asyncio.wait_for(event_queue.get(), timeout=30.0)
+
+                            # EPISODE-FIRST: Filter events by episode_id if specified
+                            if episode_id and event.get("episode_id") != episode_id:
+                                logger.debug(
+                                    f"Skipping event for different episode: {event.get('episode_id')} != {episode_id}"
+                                )
+                                continue
+
                             yield {"data": json.dumps(event)}
-                            logger.debug(f"Sent tool event: {event['type']} for session {session_id}")
+                            logger.debug(
+                                f"Sent tool event: {event['type']} for session {session_id}, episode {episode_id}"
+                            )
                         except asyncio.TimeoutError:
                             # Send heartbeat to keep connection alive
                             yield {
                                 "data": json.dumps(
-                                    {"type": "heartbeat", "timestamp": datetime.now(timezone.utc).isoformat()}
+                                    {
+                                        "type": "heartbeat",
+                                        "session_id": session_id,
+                                        "episode_id": episode_id,  # EPISODE-FIRST: Include episode_id in heartbeat
+                                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                                    }
                                 )
                             }
-                            logger.debug(f"Sent heartbeat for session {session_id}")
+                            logger.debug(f"Sent heartbeat for session {session_id}, episode {episode_id}")
                 except Exception as e:
-                    logger.error(f"Tool events stream error for session {session_id}: {e}")
+                    logger.error(f"Tool events stream error for session {session_id}, episode {episode_id}: {e}")
                     yield {
                         "data": json.dumps(
                             {
                                 "type": "error",
                                 "message": str(e),
                                 "session_id": session_id,
+                                "episode_id": episode_id,  # EPISODE-FIRST: Include episode_id in error
                                 "timestamp": datetime.now(timezone.utc).isoformat(),
                             }
                         )
                     }
                 finally:
                     # Clean up subscription
-                    await self.tool_event_publisher.unsubscribe(session_id)
-                    logger.info(f"Tool events stream closed for session: {session_id}")
+                    await self.tool_event_publisher.unsubscribe(session_id, episode_id=episode_id)
+                    logger.info(f"Tool events stream closed for session: {session_id}, episode: {episode_id}")
 
             return EventSourceResponse(
                 event_generator(),
@@ -168,15 +199,129 @@ class SessionRestAPI:
                 },
             )
 
-        @self.app.post("/session/{session_id}/start-episode")
-        async def start_episode_endpoint(session_id: str, task_id: str) -> Dict[str, Any]:
-            """Start an episode for a specific task."""
+        @self.app.post("/session/{session_id}/episodes")
+        async def create_episode_endpoint(session_id: str, task_id: str) -> Dict[str, Any]:
+            """Create a new episode for a specific task."""
             episode = await self.session_manager.start_episode(session_id, task_id)
             result: Dict[str, Any] = {
                 "episode_id": episode.episode_id,
                 "task_id": task_id,
                 "session_id": session_id,
-                "message": "Episode started successfully",
+                "state": episode.state.value,
+                "message": "Episode created successfully",
+            }
+            return result
+
+        @self.app.get("/session/{session_id}/episodes")
+        async def list_episodes_endpoint(session_id: str, include_completed: bool = False) -> Dict[str, Any]:
+            """List all episodes for a session."""
+            session = self.session_manager._get_session(session_id)
+
+            result: Dict[str, Any] = {
+                "session_id": session_id,
+                "active_episodes": session.active_episode_ids,
+                "episode_history": session.episode_history if include_completed else [],
+                "episode_counts": session.get_episode_count(),
+                "task_queue": session.task_queue,
+            }
+            return result
+
+        @self.app.get("/session/{session_id}/episodes/active")
+        async def list_active_episodes_endpoint(session_id: str) -> Dict[str, Any]:
+            """List only active episodes for a session."""
+            session = self.session_manager._get_session(session_id)
+
+            # Get episode details from episode manager
+            active_episodes = []
+            for episode_id in session.active_episode_ids:
+                episode = self.session_manager.episode_manager.get_episode_by_id(episode_id)
+                if episode:
+                    active_episodes.append(
+                        {
+                            "episode_id": episode.episode_id,
+                            "task_id": episode.task_id,
+                            "state": episode.state.value,
+                            "step_count": len(episode.steps),
+                            "start_time": episode.start_time.isoformat(),
+                            "duration": episode.duration,
+                        }
+                    )
+
+            result: Dict[str, Any] = {
+                "session_id": session_id,
+                "active_episodes": active_episodes,
+                "count": len(active_episodes),
+            }
+            return result
+
+        @self.app.get("/session/{session_id}/episodes/{episode_id}")
+        async def get_episode_endpoint(session_id: str, episode_id: str) -> Dict[str, Any]:
+            """Get detailed information about a specific episode."""
+            # Validate episode belongs to session
+            session = self.session_manager._get_session(session_id)
+            if episode_id not in session.active_episode_ids and episode_id not in session.episode_history:
+                raise HTTPException(status_code=404, detail=f"Episode {episode_id} not found in session {session_id}")
+
+            episode = self.session_manager.episode_manager.get_episode_by_id(episode_id)
+            if not episode:
+                raise HTTPException(status_code=404, detail=f"Episode {episode_id} not found")
+
+            result: Dict[str, Any] = {
+                "episode_id": episode.episode_id,
+                "task_id": episode.task_id,
+                "session_id": episode.session_id,
+                "state": episode.state.value,
+                "step_count": len(episode.steps),
+                "start_time": episode.start_time.isoformat(),
+                "end_time": episode.end_time.isoformat() if episode.end_time else None,
+                "duration": episode.duration,
+                "completion_reason": episode.completion_reason,
+                "context": episode.context,
+                "metadata": episode.metadata,
+            }
+            return result
+
+        @self.app.delete("/session/{session_id}/episodes/{episode_id}")
+        async def end_episode_endpoint(
+            session_id: str, episode_id: str, reason: str = "manual_termination", result: Optional[str] = None
+        ) -> Dict[str, Any]:
+            """End a specific episode."""
+            response = await self.session_manager.end_episode(session_id, episode_id, reason, result)
+            return cast(Dict[str, Any], response.model_dump())
+
+        @self.app.post("/session/{session_id}/episodes/{episode_id}/actions")
+        async def execute_episode_action_endpoint(
+            session_id: str, episode_id: str, action_data: Dict[str, Any]
+        ) -> Dict[str, Any]:
+            """Execute action in specific episode context."""
+            from ..base import Action
+
+            try:
+                action = Action(**action_data)
+                result = await self.session_manager.execute_episode_action(session_id, episode_id, action)
+                return {
+                    "success": result.success,
+                    "data": result.data,
+                    "execution_time": result.execution_time,
+                    "error": result.error,
+                }
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Invalid action data: {str(e)}")
+
+        @self.app.post("/session/{session_id}/orchestrate")
+        async def orchestrate_tasks_endpoint(session_id: str, task_ids: str) -> Dict[str, Any]:
+            """Queue multiple tasks for orchestration in a session."""
+            task_id_list = [tid.strip() for tid in task_ids.split(",")]
+            session = self.session_manager._get_session(session_id)
+
+            for task_id in task_id_list:
+                session.add_task_to_queue(task_id)
+
+            result: Dict[str, Any] = {
+                "session_id": session_id,
+                "queued_tasks": task_id_list,
+                "task_queue": session.task_queue,
+                "message": f"Queued {len(task_id_list)} tasks for orchestration",
             }
             return result
 
@@ -203,8 +348,8 @@ class SessionRestAPI:
                     "client_id": session.client_id,
                     "created_at": session.created_at.isoformat(),
                     "last_activity": session.last_activity.isoformat(),
-                    "current_episode_id": session.current_episode_id,
-                    "current_task_id": session.current_task_id,
+                    "active_episode_ids": session.active_episode_ids,
+                    "episode_counts": session.get_episode_count(),
                     "is_active": session.is_active,
                 }
                 for session_id, session in self.session_manager.active_sessions.items()

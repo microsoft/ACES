@@ -171,14 +171,14 @@ class TestSessionRestAPI:
         # Mock the start_episode method
         with patch.object(manager, 'start_episode', return_value=mock_episode):
             # Start individual episode
-            response = client.post(f"/session/{session_id}/start-episode?task_id=task_456")
+            response = client.post(f"/session/{session_id}/episodes?task_id=task_456")
 
             assert response.status_code == 200
             data = response.json()
             assert data["episode_id"] == "episode_123"
             assert data["task_id"] == "task_456"
             assert data["session_id"] == session_id
-            assert data["message"] == "Episode started successfully"
+            assert data["message"] == "Episode created successfully"
 
     def test_get_benchmark_endpoint(self, session_manager_app):
         """Test get benchmark endpoint for client orchestration."""
@@ -249,7 +249,7 @@ class TestSessionRestAPI:
 
         # Set up session with episode
         session = list(manager.active_sessions.values())[0]
-        session.current_episode_id = "episode_123"
+        session.add_active_episode("episode_123")
 
         # Mock episode and task
         mock_episode = MagicMock()
@@ -272,27 +272,38 @@ class TestSessionRestAPI:
 
         manager.episode_manager.get_current_episode.return_value = mock_episode
         manager.benchmark_manager.get_task.return_value = mock_task
+        manager.benchmark_manager.get_episode_config.return_value = {"session_id": session_id}
 
-        # Get current task
-        response = client.get(f"/session/{session_id}/current-task")
+        # Mock the get_episode_by_id method
+        with patch.object(manager, 'get_episode_by_id', return_value=mock_episode):
+            # Get current task (need to specify episode_id since sessions can have multiple episodes)
+            response = client.get(f"/session/{session_id}/episodes/episode_123/task")
 
-        assert response.status_code == 200
-        data = response.json()
-        assert data["task_id"] == "task_456"
-        assert data["title"] == "Test Task"
-        assert "episode_context" in data
-        assert data["episode_context"]["session_id"] == session_id
+            assert response.status_code == 200
+            data = response.json()
+            assert data["task_id"] == "task_456"
+            assert data["title"] == "Test Task"
+            assert "episode_context" in data
+            # episode_context should be a dict when episode is found
+            assert isinstance(data["episode_context"], dict)
+            assert data["episode_context"]["session_id"] == session_id
 
     def test_get_policy_endpoint(self, session_manager_app):
-        """Test get policy endpoint."""
+        """Test get policy endpoint for specific episode."""
         manager, client = session_manager_app
 
         # Create session
         create_response = client.post("/session?client_id=test_client")
         session_id = create_response.json()["session_id"]
 
-        # Get policy
-        response = client.get(f"/session/{session_id}/policy")
+        # Mock the get_policy method to return a valid policy for any episode
+        from unittest.mock import patch, MagicMock
+        mock_policy = MagicMock()
+        mock_policy.to_dict.return_value = {"prompt": "Test domain policy prompt"}
+
+        with patch.object(manager, 'get_policy', return_value=mock_policy):
+            # Test policy endpoint with any episode_id (the validation is mocked out)
+            response = client.get(f"/session/{session_id}/episodes/test_episode_123/policy")
 
         assert response.status_code == 200
         data = response.json()

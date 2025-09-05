@@ -131,7 +131,7 @@ class ContainerEpisodeExecutor:
 
         # State
         self.sidecar_started = False
-        self.active_episodes: Dict[str, asyncio.Task] = {}
+        self.active_episodes: Dict[str, asyncio.Task[None]] = {}
         self._harness_agent_id: Optional[str] = None
 
     def _setup_container_logging(self) -> None:
@@ -182,119 +182,93 @@ class ContainerEpisodeExecutor:
 
         # Register session with sidecar
         # Register harness agent session with sidecar for monitoring (optional)
+        # NOTE: Harness registration uses episode_id=None since it's not episode-specific
         self._harness_agent_id = await self.sidecar_manager.register_agent_session(
-            session_id=self.session_id, task_id=None, agent_id="saber-harness"
+            session_id=self.session_id, episode_id=None, task_id=None, agent_id="saber-harness"
         )
-
-        # Start SSE progress stream from sidecar
-        await self._start_sidecar_progress_stream()
 
         logger.info("✅ Container infrastructure initialized")
 
-    async def _start_sidecar_progress_stream(self) -> None:
-        """Start SSE progress stream from sidecar for tool call updates."""
+    async def _start_episode_progress_stream(self, episode_id: str) -> None:
+        """Start episode-specific SSE progress stream for tool call updates."""
         if not self.rest_client:
             logger.warning("No REST client available for progress stream")
             return
 
-        # Import UI progress adapter
-        from datetime import datetime, timezone
+        # Import UI progress adapter and server API models
+        from saber.api_models import ToolCallEventComplete, ToolCallEventStart
 
-        from .ui.interfaces import MCPToolCall, MCPToolCallStatus, UIProgressAdapter
+        from .ui.interfaces import UIProgressAdapter
 
         # Create UI progress adapter
         self.progress_adapter = UIProgressAdapter(ui_manager=self.ui_manager)
 
         def progress_callback(data: Dict[str, Any]) -> None:
-            """Handle progress updates from sidecar SSE stream."""
+            """Handle progress updates from episode-specific SSE stream."""
             try:
-                logger.info(f"📡 Progress update: {data}")
-                logger.info(f"🚨 CLIENT SSE DEBUG: Received event type: {data.get('type', 'UNKNOWN')}")
+                logger.info(f"📡 Episode {episode_id} progress update: {data}")
+                logger.info(f"🚨 EPISODE SSE DEBUG: Received event type: {data.get('type', 'UNKNOWN')}")
 
                 # Parse SSE data into tool call events and schedule async operations
                 event_type = data.get("type")
 
                 if event_type == "connection":
-                    logger.info("🚨 CLIENT SSE DEBUG: Connection event received")
+                    logger.info(f"🚨 EPISODE SSE DEBUG: Connection event received for episode {episode_id}")
                     return
 
                 elif event_type == "heartbeat":
-                    logger.info("🚨 CLIENT SSE DEBUG: Heartbeat event received")
+                    logger.info(f"🚨 EPISODE SSE DEBUG: Heartbeat event received for episode {episode_id}")
                     return
 
                 elif event_type == "tool_call_start":
                     logger.info(
-                        f"🚨 CLIENT SSE DEBUG: Tool call start event received for {data.get('tool_name', 'unknown')}"
+                        f"🚨 EPISODE SSE DEBUG: Tool call start event received for "
+                        f"{data.get('tool_name', 'unknown')} in episode {episode_id}"
                     )
-                    # Create MCPToolCall object from SSE data
-                    tool_call = MCPToolCall(
-                        tool_name=data.get("tool_name", "unknown"),
-                        call_id=data.get("call_id", "unknown"),
-                        status=MCPToolCallStatus.STARTING,
-                        input_args=data.get("input_args", {}),
-                        start_time=datetime.fromisoformat(
-                            data.get("start_time", datetime.now(timezone.utc).isoformat())
-                        ),
-                        agent_id=data.get("agent_id"),
-                        session_id=data.get("session_id"),
-                        task_id=data.get("task_id"),
-                    )
+                    # Create ToolCallEventStart object directly from SSE data (which already has the right structure)
+                    tool_event_start = ToolCallEventStart(**data)
                     # Schedule the async call
-                    logger.info("🚨 CLIENT SSE DEBUG: Creating async task for tool_call_start")
-                    asyncio.create_task(self.progress_adapter.tool_call_start(tool_call))
+                    logger.info("🚨 EPISODE SSE DEBUG: Creating async task for tool_call_start")
+                    asyncio.create_task(self.progress_adapter.tool_call_start(tool_event_start))
 
                 elif event_type == "tool_call_complete":
                     logger.info(
-                        f"🚨 CLIENT SSE DEBUG: Tool call complete event received for {data.get('tool_name', 'unknown')}"
+                        f"🚨 EPISODE SSE DEBUG: Tool call complete event received for "
+                        f"{data.get('tool_name', 'unknown')} in episode {episode_id}"
                     )
-                    # Complete tool call
-                    status_map = {
-                        "completed": MCPToolCallStatus.COMPLETED,
-                        "failed": MCPToolCallStatus.FAILED,
-                        "timeout": MCPToolCallStatus.TIMEOUT,
-                        "cancelled": MCPToolCallStatus.CANCELLED,
-                    }
-
-                    tool_call = MCPToolCall(
-                        tool_name=data.get("tool_name", "unknown"),
-                        call_id=data.get("call_id", "unknown"),
-                        status=status_map.get(data.get("status", "completed"), MCPToolCallStatus.COMPLETED),
-                        input_args=data.get("input_args", {}),
-                        start_time=datetime.fromisoformat(
-                            data.get("start_time", datetime.now(timezone.utc).isoformat())
-                        ),
-                        end_time=datetime.fromisoformat(data.get("end_time", datetime.now(timezone.utc).isoformat())),
-                        execution_time_ms=data.get("execution_time_ms"),
-                        output=data.get("output"),
-                        error=data.get("error"),
-                        progress=1.0,
-                        agent_id=data.get("agent_id"),
-                        session_id=data.get("session_id"),
-                        task_id=data.get("task_id"),
-                    )
+                    # Create ToolCallEventComplete object directly from SSE data (which already has the right structure)
+                    tool_event_complete = ToolCallEventComplete(**data)
                     # Schedule the async call
-                    logger.info("🚨 CLIENT SSE DEBUG: Creating async task for tool_call_complete")
-                    asyncio.create_task(self.progress_adapter.tool_call_complete(tool_call))
+                    logger.info("🚨 EPISODE SSE DEBUG: Creating async task for tool_call_complete")
+                    asyncio.create_task(self.progress_adapter.tool_call_complete(tool_event_complete))
 
                 elif event_type in ["connection", "heartbeat"]:
                     # Ignore connection/heartbeat events
                     pass
                 else:
-                    logger.info(f"🚨 CLIENT SSE DEBUG: Unknown event type: {event_type}")
+                    logger.info(f"🚨 EPISODE SSE DEBUG: Unknown event type: {event_type}")
                     logger.debug(f"🔍 Unknown SSE event type: {event_type}")
 
             except Exception as e:
-                logger.warning(f"⚠️ Error handling progress update: {e}")
+                logger.warning(f"⚠️ Error handling progress update for episode {episode_id}: {e}")
 
-        # Start the SSE stream
+        # Start the episode-specific SSE stream with required episode_id
         success = await self.rest_client.start_progress_stream(
-            progress_callback=progress_callback, agent_id="saber-harness"
+            progress_callback=progress_callback, episode_id=episode_id, agent_id="saber-harness"
         )
 
         if success:
-            logger.info("✅ SSE progress stream started")
+            logger.info(f"✅ Episode {episode_id} SSE progress stream started")
         else:
-            logger.warning("⚠️ Failed to start SSE progress stream")
+            logger.warning(f"⚠️ Failed to start SSE progress stream for episode {episode_id}")
+
+    async def _stop_episode_progress_stream(self) -> None:
+        """Stop the current episode's progress stream."""
+        try:
+            await self.rest_client.stop_progress_stream()
+            logger.info("✅ Episode progress stream stopped")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to stop episode progress stream: {e}")
 
     async def execute_episodes(
         self, episodes: List[Tuple[str, int]], agent: Any  # [(task_id, attempt), ...]
@@ -379,16 +353,19 @@ class ContainerEpisodeExecutor:
             await self._notify_episode_start(task_id, attempt)
 
         try:
-            # Step 1: Start episode on server
-            episode_id = await self.rest_client.start_episode(task_id)
-            logger.debug(f"📍 Started episode: {episode_id}")
+            # Step 1: Create episode on server (episode-first pattern)
+            episode_id = await self.rest_client.create_episode(task_id=task_id)
+            logger.debug(f"📍 Created episode: {episode_id}")
+
+            # Step 1.5: Start episode-specific progress stream
+            await self._start_episode_progress_stream(episode_id)
 
             # UI Progress: Episode started
             if self.ui_manager:
                 await self._notify_episode_started(task_id, episode_id, attempt)
 
-            # Step 2: Get task-specific policy
-            policy_data = await self.rest_client.get_policy_info(session_id=self.session_id, task_id=task_id)
+            # Step 2: Get episode-specific policy
+            policy_data = await self.rest_client.get_policy_info(episode_id=episode_id, session_id=self.session_id)
             initial_prompt = str(policy_data.get("prompt", ""))
             if not initial_prompt:
                 raise Exception("No prompt found in policy data")
@@ -402,6 +379,26 @@ class ContainerEpisodeExecutor:
 
             # Step 4: Analyze results
             success, flag, termination_reason = self._analyze_container_result(container_result)
+
+            # Step 5: End episode on server with results
+            episode_result_data = {
+                "success": success,
+                "flag": flag,
+                "termination_reason": termination_reason,
+                "iterations": self._extract_step_count(container_result),
+            }
+
+            # FAIL FAST: Always end episode on server, don't ignore failures
+            end_success = await self.rest_client.end_episode(
+                episode_id=episode_id, reason=termination_reason, result=episode_result_data
+            )
+            if not end_success:
+                logger.error(f"❌ Failed to properly end episode {episode_id} on server!")
+                # FAIL FAST: Don't silently continue with unended episodes
+                raise Exception(f"Failed to end episode {episode_id} on server")
+
+            # Step 6: Stop episode-specific progress stream
+            await self._stop_episode_progress_stream()
 
             result = EpisodeResult(
                 task_id=task_id,
@@ -417,12 +414,43 @@ class ContainerEpisodeExecutor:
             if self.ui_manager:
                 await self._notify_episode_complete(result)
 
+            logger.info(f"✅ Episode {episode_id} completed successfully")
             return result
 
         except Exception as e:
             logger.error(f"Container episode execution failed: {e}")
+
+            # If we have an episode_id, try to end it properly
+            episode_id_for_result = ""
+            try:
+                # Check if episode_id was created before the error
+                if "episode_id" in locals():
+                    episode_id_for_result = episode_id
+                    logger.info(f"🧹 Attempting to end failed episode: {episode_id}")
+                    # FAIL FAST: End episode with error state, don't ignore failures
+                    end_success = await self.rest_client.end_episode(
+                        episode_id=episode_id, reason="error", result={"success": False, "error": str(e)}
+                    )
+                    if not end_success:
+                        logger.error(f"❌ Failed to end failed episode {episode_id} - may cause server-side orphan")
+                        # Don't raise here since we're already in error handling
+            except Exception as cleanup_error:
+                logger.error(f"❌ Episode cleanup failed: {cleanup_error}")
+                # Don't raise here since we're already in error handling
+
+            # Stop episode progress stream in error case too
+            try:
+                await self._stop_episode_progress_stream()
+            except Exception as stream_cleanup_error:
+                logger.error(f"❌ Failed to stop episode progress stream: {stream_cleanup_error}")
+
             result = EpisodeResult(
-                task_id=task_id, episode_id="", attempt=attempt, success=False, termination_reason="error", error=str(e)
+                task_id=task_id,
+                episode_id=episode_id_for_result,
+                attempt=attempt,
+                success=False,
+                termination_reason="error",
+                error=str(e),
             )
 
             # UI Progress: Episode failed
@@ -514,7 +542,7 @@ class ContainerEpisodeExecutor:
             monitor_task.cancel()
             raise
 
-    async def _monitor_episode_termination(self, episode_id: str, container_task: asyncio.Task) -> None:
+    async def _monitor_episode_termination(self, episode_id: str, container_task: asyncio.Task[Any]) -> None:
         """Monitor episode termination via REST API and stop container if needed."""
         try:
             while not container_task.done():
@@ -786,10 +814,8 @@ class ContainerEpisodeExecutor:
         logger.info("🧹 Cleaning up container infrastructure")
 
         try:
-            # Stop SSE progress stream
-            if self.rest_client:
-                await self.rest_client.stop_progress_stream()
-                logger.info("✅ SSE progress stream stopped")
+            # NOTE: Episode-specific progress streams are cleaned up per-episode
+            # No global stream cleanup needed
 
             # Finalize container logging session
             if self.log_manager:

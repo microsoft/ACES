@@ -8,11 +8,12 @@ and coordinating all server components. REST API functionality is handled by Ses
 import asyncio
 import uuid
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
+from ..api_models import EpisodeEndResponse
 from ..logging_config import (
     get_cleanup_logger,
     get_session_manager_logger,
@@ -26,7 +27,7 @@ from .api.session_rest_api import SessionRestAPI
 from .base import Action, CommandResult
 from .benchmarks.benchmark_info import BenchmarkInfo
 from .benchmarks.benchmark_manager import BenchmarkManager
-from .episodes.constants import EpisodeResponseKeys, EpisodeTerminationReason
+from .episodes.constants import EpisodeTerminationReason
 from .episodes.episode_manager import EpisodeManager
 from .evaluation.evaluation_manager import EvaluationManager
 from .execution.cleanup.cleanup_reason import CleanupReason
@@ -38,14 +39,23 @@ cleanup_logger = get_cleanup_logger(__name__)
 
 
 class ClientSession(BaseModel):
-    """Represents an active client session."""
+    """Represents an active client session with support for multiple episodes."""
 
     model_config = ConfigDict()
 
     session_id: str = Field(..., description="Unique session identifier")
     client_id: str = Field(..., description="Client identifier")
-    current_episode_id: Optional[str] = Field(None, description="Current active episode ID")
-    current_task_id: Optional[str] = Field(None, description="Current active task ID")
+
+    # Multi-episode support
+    active_episode_ids: List[str] = Field(default_factory=list, description="Currently active episode IDs")
+    episode_history: List[str] = Field(
+        default_factory=list, description="All completed episode IDs in chronological order"
+    )
+
+    # Task orchestration support
+    task_queue: List[str] = Field(default_factory=list, description="Queued tasks for orchestration")
+
+    # Session metadata
     created_at: datetime = Field(default_factory=datetime.utcnow, description="Session creation time")
     last_activity: datetime = Field(default_factory=datetime.utcnow, description="Last activity timestamp")
     is_active: bool = Field(default=True, description="Whether session is active")
@@ -59,6 +69,52 @@ class ClientSession(BaseModel):
     def update_activity(self) -> None:
         """Update the last activity timestamp."""
         self.last_activity = datetime.utcnow()
+
+    def add_active_episode(self, episode_id: str) -> None:
+        """Add an episode to the active episodes list."""
+        if episode_id not in self.active_episode_ids:
+            self.active_episode_ids.append(episode_id)
+            self.update_activity()
+
+    def remove_active_episode(self, episode_id: str) -> None:
+        """Remove an episode from active episodes."""
+        if episode_id in self.active_episode_ids:
+            self.active_episode_ids.remove(episode_id)
+            self.update_activity()
+
+    def complete_episode(self, episode_id: str) -> None:
+        """Move an episode from active to history."""
+        if episode_id in self.active_episode_ids:
+            self.active_episode_ids.remove(episode_id)
+            if episode_id not in self.episode_history:
+                self.episode_history.append(episode_id)
+            self.update_activity()
+
+    def add_task_to_queue(self, task_id: str) -> None:
+        """Add a task to the orchestration queue."""
+        if task_id not in self.task_queue:
+            self.task_queue.append(task_id)
+            self.update_activity()
+
+    def get_next_task(self) -> Optional[str]:
+        """Get and remove the next task from the queue."""
+        if self.task_queue:
+            task_id = self.task_queue.pop(0)
+            self.update_activity()
+            return task_id
+        return None
+
+    def has_active_episodes(self) -> bool:
+        """Check if session has any active episodes."""
+        return len(self.active_episode_ids) > 0
+
+    def get_episode_count(self) -> Dict[str, int]:
+        """Get episode counts for analytics."""
+        return {
+            "active": len(self.active_episode_ids),
+            "completed": len(self.episode_history),
+            "total": len(self.active_episode_ids) + len(self.episode_history),
+        }
 
 
 class SessionManager:
@@ -102,7 +158,7 @@ class SessionManager:
         self.session_timeout_minutes = session_timeout_minutes
         self.cleanup_interval_minutes = cleanup_interval_minutes
         self.active_sessions: Dict[str, ClientSession] = {}
-        self.cleanup_task: Optional[asyncio.Task] = None
+        self.cleanup_task: Optional[asyncio.Task[None]] = None
         self.shutdown_event = asyncio.Event()
 
         # Initialize server components
@@ -206,9 +262,7 @@ class SessionManager:
             raise HTTPException(status_code=503, detail="Server is still initializing. Please try again in a moment.")
 
         session_id = str(uuid.uuid4())
-        session = ClientSession(
-            session_id=session_id, client_id=client_id, current_episode_id=None, current_task_id=None
-        )
+        session = ClientSession(session_id=session_id, client_id=client_id)
 
         self.active_sessions[session_id] = session
 
@@ -230,20 +284,28 @@ class SessionManager:
         """
         log_session_end(logger, session_id, "SessionManager termination")
         session = self._get_session(session_id)
-        session.is_active = False
 
-        # End any active episode
-        if session.current_episode_id:
+        # End all active episodes
+        if session.has_active_episodes():
             try:
                 logger.info(
-                    f"Ending active episode {session.current_episode_id} during session termination "
-                    f"for session {session_id}"
+                    f"Ending {len(session.active_episode_ids)} active episodes during session termination "
+                    f"for session {session_id}: {session.active_episode_ids}"
                 )
-                self.episode_manager.end_episode(session_id, EpisodeTerminationReason.SESSION_TERMINATED)
-                session.current_episode_id = None
-                session.current_task_id = None
+                # End all active episodes
+                for episode_id in session.active_episode_ids.copy():  # Copy to avoid modification during iteration
+                    try:
+                        self.episode_manager.end_episode(episode_id, EpisodeTerminationReason.SESSION_TERMINATED)
+                        session.complete_episode(episode_id)
+                        logger.info(f"Successfully ended episode {episode_id}")
+                    except Exception as e:
+                        logger.warning(f"Error ending episode {episode_id}: {str(e)}")
+
+                # Clear remaining state
+                session.active_episode_ids.clear()
+                session.task_queue.clear()
             except Exception as e:
-                logger.warning(f"Error ending episode during session termination: {str(e)}")
+                logger.warning(f"Error ending episodes during session termination: {str(e)}")
 
         # Log session end with evaluation manager (ignore failures)
         try:
@@ -253,16 +315,30 @@ class SessionManager:
 
         # Cleanup execution resources (Docker containers) through ExecutionManager
         try:
-            log_operation_start(logger, "Unified container cleanup", session_id)
-            cleanup_success = self.execution_manager.cleanup_session(
-                session_id, CleanupReason.SESSION_TERMINATED, {"manual_termination": True}
-            )
+            log_operation_start(logger, "Episode-based container cleanup", session_id)
+            # Clean up each active episode individually
+            cleanup_success = True
+            for episode_id in session.active_episode_ids.copy():
+                try:
+                    episode_cleanup = self.execution_manager.cleanup_episode(
+                        episode_id, CleanupReason.SESSION_TERMINATED, {"manual_termination": True}
+                    )
+                    if not episode_cleanup:
+                        cleanup_success = False
+                        logger.warning(f"Episode cleanup failed for {episode_id}")
+                except Exception as e:
+                    cleanup_success = False
+                    logger.warning(f"Episode cleanup error for {episode_id}: {e}")
+
             if cleanup_success:
-                log_operation_success(logger, "Unified container cleanup", session_id)
+                log_operation_success(logger, "Episode-based container cleanup", session_id)
             else:
-                logger.warning(f"Unified container cleanup reported failure for session {session_id}")
+                logger.warning(f"Episode-based container cleanup reported failure for session {session_id}")
         except Exception as e:
-            log_operation_failure(logger, "Unified container cleanup", str(e), session_id)
+            log_operation_failure(logger, "Episode-based container cleanup", str(e), session_id)
+
+        # Mark session as inactive
+        session.is_active = False
 
         # Remove session from active sessions
         logger.info(f"Session {session_id} removed from active sessions")
@@ -293,16 +369,16 @@ class SessionManager:
         )
 
         # Configure execution manager with task object and episode ID for unique container naming
-        self.execution_manager.configure_for_task(session_id, task, episode_id=episode.episode_id)
+        self.execution_manager.configure_for_task(episode.episode_id, task, session_id=session_id)
 
-        # Configure policy manager with task object
-        self.policy_manager.configure_for_task(session_id, task)
+        # Configure policy manager with task object and episode ID
+        self.policy_manager.configure_for_episode(episode.episode_id, session_id, task)
 
         # Configure episode manager with task object
-        self.episode_manager.configure_for_task(session_id, task)
+        self.episode_manager.configure_for_task(episode.episode_id, task)
 
-        session.current_episode_id = episode.episode_id
-        session.current_task_id = task_id
+        # Add episode to session's active episodes
+        session.add_active_episode(episode.episode_id)
 
         # Log episode start with evaluation manager (ignore failures)
         try:
@@ -323,13 +399,18 @@ class SessionManager:
         return self.benchmark_manager.get_benchmark_info()
 
     async def end_episode(
-        self, session_id: str, reason: str = EpisodeTerminationReason.COMPLETED, result: Optional[str] = None
-    ) -> Dict[str, Any]:
+        self,
+        session_id: str,
+        episode_id: str,
+        reason: str = EpisodeTerminationReason.COMPLETED,
+        result: Optional[str] = None,
+    ) -> EpisodeEndResponse:
         """
-        End the current episode for a session.
+        End a specific episode for a session.
 
         Args:
             session_id: ID of the client session
+            episode_id: ID of the specific episode to end
             reason: Reason for episode termination (use EpisodeTerminationReason enum values)
             result: Optional result/submission from the episode (e.g., captured flag)
 
@@ -339,34 +420,44 @@ class SessionManager:
         session = self._get_session(session_id)
         session.update_activity()
 
-        completed_task_id = session.current_task_id
+        # Validate episode is active in this session
+        if episode_id not in session.active_episode_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Episode {episode_id} is not active in session {session_id}. "
+                f"Active episodes: {session.active_episode_ids}",
+            )
+
+        # Get the task_id from the episode before ending it
+        episode = self.episode_manager.get_episode_by_id(episode_id)
+        completed_task_id = episode.task_id if episode else None
         success = EpisodeTerminationReason.is_success(reason)
 
         # End episode through episode manager, passing the result
-        self.episode_manager.end_episode(session_id, reason, result)
+        self.episode_manager.end_episode(episode_id, reason, result)
 
-        # Clear current episode and task from session
-        session.current_episode_id = None
-        session.current_task_id = None
+        # Move episode from active to history in session
+        session.complete_episode(episode_id)
 
-        logger.info(f"Ended episode for session {session_id} with reason: {reason}")
+        logger.info(f"Ended episode {episode_id} for session {session_id} with reason: {reason}")
 
-        # Build response info - client handles orchestration now
-        response: Dict[str, Any] = {
-            EpisodeResponseKeys.EPISODE_ENDED.value: True,
-            EpisodeResponseKeys.PREVIOUS_TASK_ID.value: completed_task_id,
-            EpisodeResponseKeys.SUCCESS.value: success,
-            EpisodeResponseKeys.REASON.value: reason,
-        }
+        # Build response using proper API model - client handles orchestration now
+        return EpisodeEndResponse(
+            episode_ended=True,
+            episode_id=episode_id,
+            success=success,
+            reason=reason,
+            previous_task_id=completed_task_id,
+            active_episodes_remaining=len(session.active_episode_ids),
+        )
 
-        return response
-
-    async def execute_action(self, session_id: str, action: Action) -> CommandResult:
+    async def execute_action(self, session_id: str, episode_id: str, action: Action) -> CommandResult:
         """
         Execute action for MCP integration.
 
         Args:
             session_id: ID of the client session
+            episode_id: ID of the specific episode to execute action against
             action: Action object containing command and parameters
 
         Returns:
@@ -375,36 +466,38 @@ class SessionManager:
         session = self._get_session(session_id)
         session.update_activity()
 
-        if not session.current_episode_id:
-            return CommandResult.error_result(error="No active episode in session")
-
-        try:
-            log_operation_start(
-                logger, "Action execution", session_id, tool=action.tool_name, episode=session.current_episode_id
+        # Validate episode is active in this session
+        if episode_id not in session.active_episode_ids:
+            return CommandResult.error_result(
+                error=f"Episode {episode_id} is not active in session {session_id}. "
+                f"Active episodes: {session.active_episode_ids}"
             )
 
-            context = {"session_id": session_id}
+        try:
+            log_operation_start(logger, "Action execution", session_id, tool=action.tool_name, episode=episode_id)
+
+            context = {"session_id": session_id, "episode_id": episode_id}
             command_result = await self.execution_manager.step(action, context)
 
             if command_result.success:
                 log_operation_success(logger, "Action execution", session_id, tool=action.tool_name)
             else:
                 log_operation_failure(logger, "Action execution", command_result.error or "Unknown error", session_id)
-            step_result = self.episode_manager.step(session_id, action, command_result)
+
+            step_result = self.episode_manager.step(episode_id, action, command_result)
 
             # Log action with evaluation manager (ignore failures)
             try:
                 await self.evaluation_manager.log_action(
-                    session_id=session_id, episode_id=session.current_episode_id, action=action, result=command_result
+                    session_id=session_id, episode_id=episode_id, action=action, result=command_result
                 )
             except Exception as e:
                 logger.warning(f"Failed to log action: {e}")
 
             # End episode if step indicates completion OR if EpisodeManager indicates termination
             if step_result.step.done:
-                self.episode_manager.end_episode(session_id, EpisodeTerminationReason.COMPLETED)
-                session.current_episode_id = None
-                session.current_task_id = None
+                self.episode_manager.end_episode(episode_id, EpisodeTerminationReason.COMPLETED)
+                session.complete_episode(episode_id)
                 # Add termination metadata to command result
                 if not hasattr(command_result, "metadata") or command_result.metadata is None:
                     command_result.metadata = {}
@@ -416,9 +509,8 @@ class SessionManager:
                     logger.warning(f"Failed to log episode end: {e}")
             elif step_result.should_terminate:
                 termination_reason = step_result.termination_reason or EpisodeTerminationReason.TERMINATED
-                self.episode_manager.end_episode(session_id, termination_reason)
-                session.current_episode_id = None
-                session.current_task_id = None
+                self.episode_manager.end_episode(episode_id, termination_reason)
+                session.complete_episode(episode_id)
                 # Add termination metadata to command result
                 if not hasattr(command_result, "metadata") or command_result.metadata is None:
                     command_result.metadata = {}
@@ -428,19 +520,18 @@ class SessionManager:
                     await self.evaluation_manager.log_episode_end(session_id, termination_reason)
                 except Exception as e:
                     logger.warning(f"Failed to log episode end: {e}")
-                logger.info(f"🏗️ Episode ended due to termination condition: {termination_reason}")
+                logger.info(f"🏗️ Episode {episode_id} ended due to termination condition: {termination_reason}")
 
             return command_result
 
         except Exception as e:
-            logger.error(f"Command execution failed in session {session_id}: {e}")
+            logger.error(f"Command execution failed in session {session_id}, episode {episode_id}: {e}")
 
             # Remove episode tracking and trigger immediate cleanup on any error
             try:
-                self.episode_manager.remove_episode_on_error(session_id, e)
-                session.current_episode_id = None
-                session.current_task_id = None
-                logger.info("Episode removed from tracking due to error")
+                self.episode_manager.remove_episode_on_error(episode_id, e)
+                session.remove_active_episode(episode_id)
+                logger.info(f"Episode {episode_id} removed from tracking due to error")
 
                 # Trigger immediate container cleanup through ExecutionManager
                 cleanup_success = self.execution_manager.cleanup_session(
@@ -456,44 +547,144 @@ class SessionManager:
 
             return CommandResult.error_result(error=str(e))
 
-    async def get_current_task(self, session_id: str) -> Any:
+    async def execute_episode_action(self, session_id: str, episode_id: str, action: Action) -> CommandResult:
         """
-        Get current task object with episode context.
+        Execute action in context of specific episode.
+
+        This is an alias for execute_action to match the implementation plan naming.
 
         Args:
             session_id: ID of the client session
+            episode_id: ID of the specific episode to execute action against
+            action: Action object containing command and parameters
 
         Returns:
-            Task object for the current episode
+            CommandResult with execution results
+        """
+        return await self.execute_action(session_id, episode_id, action)
+
+    async def get_current_task(self, session_id: str, episode_id: str) -> Any:
+        """
+        Get task object for a specific episode.
+
+        Args:
+            session_id: ID of the client session
+            episode_id: ID of the specific episode
+
+        Returns:
+            Task object for the specified episode
         """
         session = self._get_session(session_id)
         session.update_activity()
 
-        if not session.current_episode_id:
-            raise HTTPException(status_code=400, detail="No active episode in session")
+        # Validate episode is active in this session
+        if episode_id not in session.active_episode_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Episode {episode_id} is not active in session {session_id}. "
+                f"Active episodes: {session.active_episode_ids}",
+            )
 
-        # Get current episode and task info from episode manager
-        episode = self.episode_manager.get_current_episode(session_id)
+        # Get episode and task info from episode manager
+        episode = self.episode_manager.get_episode_by_id(episode_id)
         if not episode:
-            raise HTTPException(status_code=400, detail="No active episode found")
+            raise HTTPException(status_code=400, detail=f"Episode {episode_id} not found")
 
         task = self.benchmark_manager.get_task(episode.task_id)
         return task
 
-    def get_policy(self, session_id: str) -> PolicyDocument:
+    def get_policy(self, session_id: str, episode_id: str) -> PolicyDocument:
         """
-        Get domain policy document.
+        Get domain policy document for a specific episode.
 
         Args:
             session_id: ID of the client session
+            episode_id: ID of the episode to get policy for
 
         Returns:
-            PolicyDocument for the domain
+            PolicyDocument for the domain configured for the episode's task
         """
         session = self._get_session(session_id)
         session.update_activity()
 
-        return self.policy_manager.get_policy()
+        # Validate episode exists and belongs to session
+        if episode_id not in session.active_episode_ids and episode_id not in session.episode_history:
+            raise ValueError(f"Episode {episode_id} not found in session {session_id}")
+
+        # Get episode-specific policy that was configured during start_episode
+        return self.policy_manager.get_policy(episode_id)
+
+    async def list_session_episodes(self, session_id: str, status_filter: Optional[str] = None) -> List[Any]:
+        """
+        List all episodes for a session with optional status filtering.
+
+        Args:
+            session_id: ID of the client session
+            status_filter: Optional filter by episode status
+
+        Returns:
+            List of episode objects for the session
+        """
+        session = self._get_session(session_id)
+        session.update_activity()
+
+        episodes = self.episode_manager.get_session_episodes(session_id)
+
+        if status_filter:
+            episodes = [ep for ep in episodes if ep.state.value == status_filter]
+
+        return episodes
+
+    async def get_episode_details(self, session_id: str, episode_id: str) -> Any:
+        """
+        Get detailed information about a specific episode.
+
+        Args:
+            session_id: ID of the client session
+            episode_id: ID of the specific episode
+
+        Returns:
+            Episode object with full details
+
+        Raises:
+            HTTPException: If episode not found or doesn't belong to session
+        """
+        session = self._get_session(session_id)
+        session.update_activity()
+
+        # Validate episode belongs to session
+        if episode_id not in session.active_episode_ids and episode_id not in session.episode_history:
+            raise HTTPException(status_code=404, detail=f"Episode {episode_id} not found in session {session_id}")
+
+        episode = self.episode_manager.get_episode_by_id(episode_id)
+        if not episode:
+            raise HTTPException(status_code=404, detail=f"Episode {episode_id} not found")
+
+        return episode
+
+    def get_tool_event_publisher(self) -> Any:
+        """
+        Get tool event publisher instance - used by MCP API.
+
+        Returns:
+            Tool event publisher instance if available
+        """
+        # Return the tool event publisher from REST API if available
+        if hasattr(self.rest_api, "tool_event_publisher"):
+            return self.rest_api.tool_event_publisher
+        return None
+
+    def get_episode_by_id(self, episode_id: str) -> Any:
+        """
+        Get episode by ID - used by MCP API for episode context.
+
+        Args:
+            episode_id: ID of the episode to retrieve
+
+        Returns:
+            Episode object if found, None otherwise
+        """
+        return self.episode_manager.get_episode_by_id(episode_id)
 
     def _get_session(self, session_id: str) -> ClientSession:
         """
@@ -578,12 +769,15 @@ class SessionManager:
 
         for session_id, session in self.active_sessions.items():
             time_since_activity = current_time - session.last_activity
+            episode_counts = session.get_episode_count()
             stats["sessions"].append(
                 {
                     "session_id": session_id,
                     "client_id": session.client_id,
-                    "current_episode_id": session.current_episode_id,
-                    "current_task_id": session.current_task_id,
+                    "active_episode_ids": session.active_episode_ids,
+                    "episode_history": session.episode_history,
+                    "episode_counts": episode_counts,
+                    "task_queue": session.task_queue,
                     "uptime_seconds": (current_time - session.created_at).total_seconds(),
                     "time_since_activity_seconds": time_since_activity.total_seconds(),
                     "is_active": session.is_active,
@@ -591,72 +785,6 @@ class SessionManager:
             )
 
         return stats
-
-    def get_episode_config(self, session_id: str) -> Dict[str, Any]:
-        """
-        Get episode configuration for monitoring.
-
-        Args:
-            session_id: Session ID
-
-        Returns:
-            Episode configuration including max_steps and other settings from the actual task
-        """
-        session = self._get_session(session_id)
-
-        # Delegate to BenchmarkManager which has all the task configuration logic
-        if session.current_task_id:
-            try:
-                episode_config = self.benchmark_manager.get_episode_config(session.current_task_id)
-                # Add session-specific info
-                episode_config["session_id"] = session_id
-                return episode_config
-            except Exception as e:
-                logger.warning(f"Failed to get episode configuration for {session.current_task_id}: {e}")
-
-        # Return empty config if no current task or on error
-        return {"session_id": session_id}
-
-    def should_terminate_episode(self, session_id: str) -> tuple[bool, str]:
-        """
-        Check if the current episode should be terminated.
-
-        Args:
-            session_id: Session ID to check
-
-        Returns:
-            Tuple of (should_terminate, reason)
-        """
-        return self.episode_manager.should_terminate_episode(session_id)
-
-    def get_tool_event_publisher(self) -> Optional[Any]:
-        """Get the tool event publisher from the REST API."""
-        return getattr(self.rest_api, "tool_event_publisher", None)
-
-    def get_current_task_id(self, session_id: str) -> Optional[str]:
-        """Get the current task_id for a session."""
-        try:
-            session = self._get_session(session_id)
-            return session.current_task_id
-        except Exception as e:
-            logger.warning(f"Failed to get current task_id for session {session_id}: {e}")
-            return None
-
-    def get_episode_step_info(self, session_id: str) -> Dict[str, Any]:
-        """Get current step count and max steps for a session."""
-        try:
-            # Get episode config for max_steps
-            episode_config = self.get_episode_config(session_id)
-            max_steps = episode_config.get("max_steps", 10)  # Fallback to 10
-
-            # Get current step count from episode manager
-            episode = self.episode_manager.active_episodes.get(session_id)
-            current_steps = len(episode.steps) if episode else 0
-
-            return {"current_steps": current_steps, "max_steps": max_steps, "session_id": session_id}
-        except Exception as e:
-            logger.warning(f"Failed to get episode step info for session {session_id}: {e}")
-            return {"current_steps": 0, "max_steps": 10, "session_id": session_id}  # Fallback
 
     async def _start_permanent_environment(self) -> None:
         """Start permanent environment if configured through ExecutionManager lifecycle management."""

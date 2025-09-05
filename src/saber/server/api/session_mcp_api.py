@@ -76,6 +76,46 @@ class SessionMCPAPI:
             logger.error(f"Error getting session from HTTP headers: {e}")
             return None
 
+    async def _get_episode_from_headers(self) -> Optional[str]:
+        """
+        Get SABER episode ID from HTTP headers.
+
+        Returns:
+            SABER episode ID if found, None otherwise
+        """
+        try:
+            headers = get_http_headers()
+
+            # Try case-insensitive header lookup
+            episode_id_from_header = None
+            for header_name, header_value in headers.items():
+                if header_name.lower() == MCPHeaders.EPISODE_ID.lower():
+                    episode_id_from_header = header_value
+                    break
+
+            if episode_id_from_header:
+                logger.info(f"✅ Found episode_id in header: {episode_id_from_header}")
+                return str(episode_id_from_header)
+            else:
+                logger.debug(f"No {MCPHeaders.EPISODE_ID} header found. Available headers: {list(headers.keys())}")
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Error getting episode from HTTP headers: {e}")
+            return None
+
+    async def _get_session_and_episode_from_headers(self) -> tuple[Optional[str], Optional[str]]:
+        """
+        Get both SABER session ID and episode ID from HTTP headers.
+
+        Returns:
+            Tuple of (session_id, episode_id) if found, (None, None) otherwise
+        """
+        session_id = await self._get_session_from_headers()
+        episode_id = await self._get_episode_from_headers()
+        return session_id, episode_id
+
     async def start_mcp_server(self) -> None:
         """Start the MCP server."""
         try:
@@ -130,17 +170,21 @@ class SessionMCPAPI:
         async def end_episode(submission: Optional[str] = None) -> str:
             """End the current episode and optionally record a discovered flag/target/objective."""
             try:
-                # Get session from HTTP headers
-                session_id = await self._get_session_from_headers()
+                # Get session and episode from HTTP headers
+                session_id, episode_id = await self._get_session_and_episode_from_headers()
                 if not session_id:
                     return json.dumps({"success": False, "error": "No SABER session mapped to MCP request"})
+                if not episode_id:
+                    return json.dumps(
+                        {"success": False, "error": "No SABER episode ID in headers - episode context required"}
+                    )
 
                 # Build arguments for end episode call
                 args = {}
                 if submission:
                     args["parameters"] = {"submission": submission}
 
-                mcp_result = await self._handle_end_episode_call(args, session_id)
+                mcp_result = await self._handle_end_episode_call(args, session_id, episode_id)
 
                 # Extract the text content from the MCP result
                 if mcp_result.get("isError", False):
@@ -162,8 +206,8 @@ class SessionMCPAPI:
             executor_name: The name of the executor (e.g., 'cli', 'python')
         """
         try:
-            # Get the executor instance to extract the MCP schema
-            executor_instance = self.session_manager.execution_manager.get_executor(executor_name)
+            # Get the executor instance to extract the MCP schema (no episode context during registration)
+            executor_instance = self.session_manager.execution_manager.get_executor(executor_name, episode_id=None)
             input_schema = executor_instance.to_mcp_schema()
             metadata = getattr(executor_instance, "_executor_metadata", {})
 
@@ -196,14 +240,18 @@ class SessionMCPAPI:
 
     async def handle_list_tools(self) -> List[Dict[str, Any]]:
         """
-        Handle MCP tool discovery.
+        Handle MCP tool discovery with episode-specific context.
 
         Returns:
-            List of available MCP tools from ExecutionManager plus hardcoded MCP tools
+            List of available MCP tools from ExecutionManager filtered by episode's
+            allowed executors plus hardcoded MCP tools
         """
         try:
-            # Get tools from execution manager
-            tools: List[Dict[str, Any]] = self.session_manager.execution_manager.to_mcp_tools()
+            # Get episode context from headers
+            episode_id = await self._get_episode_from_headers()
+
+            # Get tools from execution manager with episode context
+            tools: List[Dict[str, Any]] = self.session_manager.execution_manager.to_mcp_tools(episode_id)
 
             # Add hardcoded MCP API tools (without session_id in schema)
             hardcoded_tools = [
@@ -229,6 +277,7 @@ class SessionMCPAPI:
             logger.debug(
                 f"Returning {len(all_tools)} tools ({len(tools)} executor tools + "
                 f"{len(hardcoded_tools)} hardcoded tool) for MCP discovery"
+                f"{f' for episode {episode_id}' if episode_id else ' (no episode context)'}"
             )
             return all_tools
 
@@ -247,20 +296,28 @@ class SessionMCPAPI:
         Returns:
             MCP-formatted execution result
         """
-        # Get session from HTTP headers first
-        session_id = await self._get_session_from_headers()
+        # Get session and episode from HTTP headers first
+        session_id, episode_id = await self._get_session_and_episode_from_headers()
         if not session_id:
             return self._convert_to_mcp_result(
                 CommandResult.error_result(error="No SABER session mapped to MCP request")
             )
 
-        # Get current task_id for the session
-        task_id = self.session_manager.get_current_task_id(session_id)
+        # Episode ID is required for multi-episode architecture
+        if not episode_id:
+            return self._convert_to_mcp_result(
+                CommandResult.error_result(error="No SABER episode ID in headers - episode context required")
+            )
 
-        # Get step information for progress tracking
-        step_info = self.session_manager.get_episode_step_info(session_id)
-        current_step = step_info.get("current_steps", 0) + 1  # +1 because we're about to start a new step
-        max_steps = step_info.get("max_steps", 10)
+        # Get task_id from the specific episode, not the session
+        episode = self.session_manager.get_episode_by_id(episode_id)
+        if not episode:
+            return self._convert_to_mcp_result(CommandResult.error_result(error=f"Episode {episode_id} not found"))
+        task_id = episode.task_id
+
+        # Get step information for progress tracking from the specific episode
+        current_step = len(episode.steps) + 1  # +1 because we're about to start a new step
+        max_steps = episode.max_steps
 
         # Generate unique call ID for tracking
         call_id = str(uuid.uuid4())
@@ -272,6 +329,7 @@ class SessionMCPAPI:
             try:
                 await tool_event_publisher.publish_tool_started(
                     session_id=session_id,
+                    episode_id=episode_id,
                     tool_name=name,
                     arguments=arguments,
                     call_id=call_id,
@@ -281,16 +339,16 @@ class SessionMCPAPI:
                 )
                 logger.debug(
                     f"Published tool_call_started event: {name} (call_id={call_id}, "
-                    f"task_id={task_id}, step={current_step}/{max_steps})"
+                    f"task_id={task_id}, episode_id={episode_id}, step={current_step}/{max_steps})"
                 )
             except Exception as e:
                 logger.error(f"Failed to publish tool_call_started event: {e}")
                 # Continue execution - event publishing failure shouldn't break tool execution
 
         try:
-            # Execute action through SessionManager
+            # Execute action through SessionManager with explicit episode_id
             action = self._convert_to_action(name, arguments)
-            command_result = await self.session_manager.execute_action(session_id, action)
+            command_result = await self.session_manager.execute_action(session_id, episode_id, action)
 
             # Calculate execution time
             execution_time_ms = (time.time() - start_time) * 1000
@@ -299,12 +357,13 @@ class SessionMCPAPI:
             tool_event_publisher = self.session_manager.get_tool_event_publisher()
             if tool_event_publisher:
                 try:
-                    # Get updated step info after tool execution
-                    updated_step_info = self.session_manager.get_episode_step_info(session_id)
-                    completed_step = updated_step_info.get("current_steps", current_step)
+                    # Get updated step info after tool execution from the specific episode
+                    updated_episode = self.session_manager.get_episode_by_id(episode_id)
+                    completed_step = len(updated_episode.steps) if updated_episode else current_step
 
                     await tool_event_publisher.publish_tool_completed(
                         session_id=session_id,
+                        episode_id=episode_id,
                         tool_name=name,
                         call_id=call_id,
                         success=command_result.success,
@@ -323,11 +382,10 @@ class SessionMCPAPI:
                     logger.debug(
                         f"Published tool_call_completed event: {name} "
                         f"({'success' if command_result.success else 'failed'}, "
-                        f"task_id={task_id}, step={completed_step}/{max_steps})"
+                        f"task_id={task_id}, episode_id={episode_id}, step={completed_step}/{max_steps})"
                     )
                 except Exception as e:
                     logger.error(f"Failed to publish tool_call_completed event: {e}")
-                    # Continue - event publishing failure shouldn't affect response
 
             # Convert result to MCP format
             return self._convert_to_mcp_result(command_result)
@@ -342,6 +400,7 @@ class SessionMCPAPI:
                 try:
                     await tool_event_publisher.publish_tool_completed(
                         session_id=session_id,
+                        episode_id=episode_id,
                         tool_name=name,
                         call_id=call_id,
                         success=False,
@@ -355,7 +414,7 @@ class SessionMCPAPI:
                     )
                     logger.debug(
                         f"Published tool_call_completed (failed) event: {name} "
-                        f"(task_id={task_id}, step={current_step}/{max_steps})"
+                        f"(task_id={task_id}, episode_id={episode_id}, step={current_step}/{max_steps})"
                     )
                 except Exception as pub_error:
                     logger.error(f"Failed to publish tool_call_completed (failed) event: {pub_error}")
@@ -364,7 +423,7 @@ class SessionMCPAPI:
             return self._convert_to_mcp_result(CommandResult.error_result(error=f"Tool execution failed: {str(e)}"))
 
     async def _handle_end_episode_call(
-        self, arguments: Dict[str, Any], session_id: Optional[str] = None
+        self, arguments: Dict[str, Any], session_id: Optional[str] = None, episode_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Handle the hardcoded end_episode tool call.
@@ -372,6 +431,7 @@ class SessionMCPAPI:
         Args:
             arguments: Tool arguments (clean, no session_id)
             session_id: SABER session ID from Context (can be None for legacy support)
+            episode_id: SABER episode ID from Context (required for multi-episode architecture)
 
         Returns:
             MCP-formatted result confirming episode end
@@ -382,11 +442,16 @@ class SessionMCPAPI:
                 if "session_id" in arguments:
                     session_id = arguments["session_id"]
                 else:
-                    session_id = await self._get_session_from_headers()
+                    session_id, episode_id = await self._get_session_and_episode_from_headers()
 
             if not session_id:
                 return self._convert_to_mcp_result(
                     CommandResult.error_result(error="No SABER session mapped to MCP request")
+                )
+
+            if not episode_id:
+                return self._convert_to_mcp_result(
+                    CommandResult.error_result(error="No SABER episode ID - episode context required")
                 )
 
             # Extract optional result/flag/objective from parameters.submission
@@ -404,15 +469,17 @@ class SessionMCPAPI:
                 )
 
                 # Execute the action to record it
-                await self.session_manager.execute_action(session_id, result_action)
+                await self.session_manager.execute_action(session_id, episode_id, result_action)
 
             # End the episode through SessionManager, passing the result
-            logger.warning(f"🔥 MCP END EPISODE: Agent called end_episode tool for session {session_id}")
+            logger.warning(
+                f"🔥 MCP END EPISODE: Agent called end_episode tool for session {session_id}, episode {episode_id}"
+            )
             if result:
                 logger.info(f"Episode ending with result: {result}")
-                await self.session_manager.end_episode(session_id, "agent_completed", result)
+                await self.session_manager.end_episode(session_id, episode_id, "agent_completed", result)
             else:
-                await self.session_manager.end_episode(session_id, "agent_completed")
+                await self.session_manager.end_episode(session_id, episode_id, "agent_completed")
 
             # Prepare success message
             success_message = "Episode ended successfully"

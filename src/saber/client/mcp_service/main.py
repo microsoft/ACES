@@ -15,6 +15,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from ...base import MCPHeaders
 from .agent_registry import AgentSessionRegistry
 from .mcp_proxy import MCPProxy
 from .tool_registry import ToolRegistry
@@ -58,6 +59,7 @@ class SessionRegistrationRequest(BaseModel):
 
     agent_id: str = Field(..., description="Unique identifier for the agent container")
     saber_session_id: str = Field(..., description="SABER server session ID")
+    saber_episode_id: str = Field(..., description="Episode ID for episode-first execution (REQUIRED)")
     task_id: Optional[str] = Field(None, description="Optional task ID for context")
 
 
@@ -280,10 +282,11 @@ def create_app(
     # Session management endpoints
     @app.post("/admin/sessions", response_model=SessionRegistrationResponse)
     async def register_session(request: SessionRegistrationRequest) -> SessionRegistrationResponse:
-        """Register a new agent container session."""
+        """Register a new agent container session with episode-first architecture."""
         logger.info(
             f"🔐 Session registration request: agent_id={request.agent_id}, "
-            f"saber_session_id={request.saber_session_id}, task_id={request.task_id}"
+            f"saber_session_id={request.saber_session_id}, "
+            f"saber_episode_id={request.saber_episode_id}, task_id={request.task_id}"
         )
 
         if not session_registry:
@@ -291,11 +294,18 @@ def create_app(
             raise HTTPException(status_code=503, detail="Session registry not initialized")
 
         try:
+            # EPISODE-FIRST: Pass saber_episode_id to registration
             session = await session_registry.register_session(
-                agent_id=request.agent_id, saber_session_id=request.saber_session_id, task_id=request.task_id
+                agent_id=request.agent_id,
+                saber_session_id=request.saber_session_id,
+                saber_episode_id=request.saber_episode_id,
+                task_id=request.task_id,
             )
 
-            logger.info(f"✅ Session registered successfully: {session.agent_id} → {session.saber_session_id}")
+            logger.info(
+                f"✅ Session registered successfully: {session.agent_id} → "
+                f"{session.saber_session_id} (episode: {session.saber_episode_id})"
+            )
             return SessionRegistrationResponse(
                 success=True,
                 message="Session registered successfully",
@@ -340,6 +350,7 @@ def create_app(
             "sessions": {
                 agent_id: {
                     "saber_session_id": session.saber_session_id,
+                    "saber_episode_id": session.saber_episode_id,
                     "task_id": session.task_id,
                     "registered_at": session.registered_at.isoformat(),
                     "last_activity": session.last_activity.isoformat(),
@@ -353,8 +364,8 @@ def create_app(
     @app.get("/tools")
     async def get_tools_metadata(request: Request) -> JSONResponse:
         """Get available tools for the requesting session+episode."""
-        session_id = request.headers.get("X-Saber-Session-Id")
-        episode_id = request.headers.get("X-Saber-Episode-Id")
+        session_id = request.headers.get(MCPHeaders.SESSION_ID)
+        episode_id = request.headers.get(MCPHeaders.EPISODE_ID)
 
         logger.info(f"🔧 Tools metadata request: session_id={session_id}, episode_id={episode_id}")
 
@@ -364,11 +375,15 @@ def create_app(
 
         try:
             if not session_id:
-                logger.error("❌ Tools request failed: Missing X-Saber-Session-Id header")
-                raise HTTPException(status_code=400, detail="Missing X-Saber-Session-Id header")
+                logger.error(f"❌ Tools request failed: Missing {MCPHeaders.SESSION_ID} header")
+                raise HTTPException(status_code=400, detail=f"Missing required header: {MCPHeaders.SESSION_ID}")
+
+            if not episode_id:
+                logger.error(f"❌ Tools request failed: Missing {MCPHeaders.EPISODE_ID} header")
+                raise HTTPException(status_code=400, detail=f"Missing required header: {MCPHeaders.EPISODE_ID}")
 
             # Extract episode and task context
-            task_id = request.headers.get("X-Saber-Task-Id")
+            task_id = request.headers.get(MCPHeaders.TASK_ID)
 
             # Check if session is registered
             if not session_registry:
@@ -419,8 +434,8 @@ def create_app(
     @app.post("/execute_tool")
     async def execute_tool_endpoint(request: Request, body: ToolExecutionRequest) -> JSONResponse:
         """Execute a tool for the requesting session+episode."""
-        session_id = request.headers.get("X-Saber-Session-Id")
-        episode_id = request.headers.get("X-Saber-Episode-Id")
+        session_id = request.headers.get(MCPHeaders.SESSION_ID)
+        episode_id = request.headers.get(MCPHeaders.EPISODE_ID)
 
         logger.info(f"🛠️ Tool execution request: {body.tool_name} for session {session_id}, episode {episode_id}")
 
@@ -430,8 +445,12 @@ def create_app(
 
         try:
             if not session_id:
-                logger.error("❌ Tool execution failed: Missing X-Saber-Session-Id header")
-                raise HTTPException(status_code=400, detail="Missing X-Saber-Session-Id header")
+                logger.error(f"❌ Tool execution failed: Missing {MCPHeaders.SESSION_ID} header")
+                raise HTTPException(status_code=400, detail=f"Missing required header: {MCPHeaders.SESSION_ID}")
+
+            if not episode_id:
+                logger.error(f"❌ Tool execution failed: Missing {MCPHeaders.EPISODE_ID} header")
+                raise HTTPException(status_code=400, detail=f"Missing required header: {MCPHeaders.EPISODE_ID}")
 
             # Check if session is registered and get agent_id
             if not session_registry:
@@ -442,7 +461,7 @@ def create_app(
                 raise HTTPException(status_code=404, detail="Session not registered")
 
             # Extract episode context
-            episode_id = request.headers.get("X-Saber-Episode-Id")
+            episode_id = request.headers.get(MCPHeaders.EPISODE_ID)
 
             # Emit tool call start event
             import uuid
@@ -503,9 +522,9 @@ def create_app(
             raise HTTPException(status_code=503, detail="Tool registry not initialized")
 
         try:
-            session_id = request.headers.get("X-Saber-Session-Id")
+            session_id = request.headers.get(MCPHeaders.SESSION_ID)
             if not session_id:
-                raise HTTPException(status_code=400, detail="Missing X-Saber-Session-Id header")
+                raise HTTPException(status_code=400, detail=f"Missing {MCPHeaders.SESSION_ID} header")
 
             # Check if session is registered and get agent_id
             if not session_registry:
@@ -516,8 +535,8 @@ def create_app(
                 raise HTTPException(status_code=404, detail="Session not registered")
 
             # Extract episode context
-            episode_id = request.headers.get("X-Saber-Episode-Id")
-            task_id = request.headers.get("X-Saber-Task-Id")
+            episode_id = request.headers.get(MCPHeaders.EPISODE_ID)
+            task_id = request.headers.get(MCPHeaders.TASK_ID)
 
             # Force refresh
             tools = await tool_registry.get_tools_for_session_episode(

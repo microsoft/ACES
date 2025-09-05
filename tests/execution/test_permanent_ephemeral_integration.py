@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Dict, Any
 
 import docker
+import docker.errors
 import pytest
 import yaml
 from unittest.mock import patch
@@ -253,19 +254,27 @@ class TestPermanentEphemeralIntegration:
         # For this test, we'll simulate permanent container startup
         # In real implementation, this would be handled by the permanent environment manager
         try:
-            # Create shared network first
-            shared_network = docker_client.networks.create(
-                name="saber_shared_test_network",
-                driver="bridge",
-                labels={"saber.type": "permanent", "saber.test": "true"}
-            )
-            logger.info(f"Created shared network: {shared_network.name}")
+            # Create shared network first (or reuse if exists)
+            network_name = f"saber_shared_test_network_{session_id}"
+            try:
+                shared_network = docker_client.networks.create(
+                    name=network_name,
+                    driver="bridge",
+                    labels={"saber.type": "permanent", "saber.test": "true"}
+                )
+                logger.info(f"Created shared network: {shared_network.name}")
+            except docker.errors.APIError as e:
+                if "already exists" in str(e):
+                    shared_network = docker_client.networks.get(network_name)
+                    logger.info(f"Reusing existing network: {shared_network.name}")
+                else:
+                    raise
 
             # Start Redis container
             redis_container = docker_client.containers.run(
                 image="redis:alpine",
                 name=f"redis_cache_{session_id}",
-                network="saber_shared_test_network",
+                network=network_name,
                 ports={"6379/tcp": 6379},
                 environment=["REDIS_PASSWORD=testpass"],
                 detach=True,
@@ -372,7 +381,7 @@ class TestPermanentEphemeralIntegration:
         finally:
             # Cleanup
             try:
-                execution_manager.cleanup_session(session_id)
+                execution_manager.cleanup_session(session_id, reason="test_cleanup")
 
                 # Clean up permanent containers and networks
                 for container in docker_client.containers.list(all=True):
@@ -437,7 +446,7 @@ class TestPermanentEphemeralIntegration:
             # Cleanup both sessions
             for session_id in [session_1, session_2]:
                 try:
-                    execution_manager.cleanup_session(session_id)
+                    execution_manager.cleanup_session(session_id, reason="test_cleanup")
                 except Exception as e:
                     logger.warning(f"Failed to cleanup session {session_id}: {e}")
 

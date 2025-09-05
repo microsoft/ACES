@@ -64,7 +64,7 @@ class ExecutionManager:
 
         self._configuration: Dict[str, Any] = {}
 
-        # Initialize sandbox manager with basic logging config (will be updated per session)
+        # Initialize sandbox manager with basic logging config (will be updated per episode)
         initial_sandbox_config = {
             "domain": "execution",
             "logs_directory": str(Path(config_dir) / "logs"),
@@ -73,7 +73,7 @@ class ExecutionManager:
 
         self._sandbox_manager = SandboxEnvironmentManager(initial_sandbox_config)
 
-        # Initialize executor factory with minimal configuration
+        # Single executor factory with episode registration support
         self._executor_factory = ExecutorFactory(
             sandbox_manager=self._sandbox_manager,
             configuration=self._configuration,
@@ -86,13 +86,13 @@ class ExecutionManager:
             debug_mode=self._debug_mode,
         )
 
-        # Session-based execution tracking for concurrent commands
-        self._active_executions: Dict[str, int] = {}  # session_id -> count of active executions
-        self._max_concurrent_per_session = 3  # Allow multiple concurrent commands per session
+        # Episode-specific execution tracking for concurrent commands
+        self._active_executions: Dict[str, int] = {}  # episode_id -> count of active executions
+        self._max_concurrent_per_episode = 3  # Allow multiple concurrent commands per episode
 
         logger.info("ExecutionManager initialized for concurrent execution")
         logger.info(f"Available executor types: {self._executor_factory.get_available_executors()}")
-        logger.info(f"Max concurrent executions per session: {self._max_concurrent_per_session}")
+        logger.info(f"Max concurrent executions per episode: {self._max_concurrent_per_episode}")
 
     def is_sandbox_ready(self) -> bool:
         """
@@ -143,34 +143,37 @@ class ExecutionManager:
         """
         Execute the action with the appropriate executor.
 
-        Commands are executed concurrently with session-based limits.
+        Commands are executed concurrently with episode-based limits.
 
         Args:
             action: Action object containing command and parameters
-            context: Optional execution context
+            context: Optional execution context (should include episode_id)
 
         Returns:
             CommandResult with execution results
         """
-        session_id = context.get("session_id") if context else None
+        # Get episode_id from context for episode-specific executor and concurrency tracking
+        episode_id = context.get("episode_id") if context else None
 
-        # Track concurrent executions per session
-        if session_id:
-            current_count = self._active_executions.get(session_id, 0)
-            if current_count >= self._max_concurrent_per_session:
+        # Track concurrent executions per episode
+        if episode_id:
+            current_count = self._active_executions.get(episode_id, 0)
+            if current_count >= self._max_concurrent_per_episode:
                 error_msg = (
-                    f"Too many concurrent executions for session {session_id} "
-                    f"({current_count}/{self._max_concurrent_per_session})"
+                    f"Too many concurrent executions for episode {episode_id} "
+                    f"({current_count}/{self._max_concurrent_per_episode})"
                 )
                 return CommandResult.error_result(error=error_msg)
 
-            # Increment active execution count
-            self._active_executions[session_id] = current_count + 1
-            logger.debug(f"Session {session_id} active executions: {self._active_executions[session_id]}")
+            # Increment active execution count for episode
+            self._active_executions[episode_id] = current_count + 1
+            logger.debug(f"Episode {episode_id} active executions: {self._active_executions[episode_id]}")
+        else:
+            logger.warning("No episode_id in context for step execution - proceeding without concurrency limits")
 
         try:
-            # Get executor directly from action's tool name
-            executor = self._executor_factory.get_executor(action.tool_name)
+            # Get executor directly from action's tool name with episode context
+            executor = self.get_executor(action.tool_name, episode_id=episode_id)
 
             # Use action parameters directly - no mapping needed
             parameters = action.parameters.copy()
@@ -187,23 +190,24 @@ class ExecutionManager:
             return await executor(parameters, context or {})
 
         except Exception as e:
-            logger.error(f"Execution failed: {e}")
+            logger.error(f"Execution failed for episode {episode_id}: {e}")
             return CommandResult.error_result(error=str(e))
 
         finally:
-            # Decrement active execution count
-            if session_id and session_id in self._active_executions:
-                self._active_executions[session_id] -= 1
-                if self._active_executions[session_id] <= 0:
-                    del self._active_executions[session_id]
-                logger.debug(f"Session {session_id} active executions: {self._active_executions.get(session_id, 0)}")
+            # Decrement active execution count for episode
+            if episode_id and episode_id in self._active_executions:
+                self._active_executions[episode_id] -= 1
+                if self._active_executions[episode_id] <= 0:
+                    del self._active_executions[episode_id]
+                logger.debug(f"Episode {episode_id} active executions: {self._active_executions.get(episode_id, 0)}")
 
-    def get_executor(self, executor_type: str) -> DockerExecutor:
+    def get_executor(self, executor_type: str, episode_id: Optional[str] = None) -> DockerExecutor:
         """
-        Get a specific executor by type.
+        Get a specific executor by type, optionally for a specific episode.
 
         Args:
             executor_type: Type of executor to retrieve
+            episode_id: Optional episode ID to get episode-specific executor
 
         Returns:
             Executor instance
@@ -211,49 +215,61 @@ class ExecutionManager:
         Raises:
             ValueError: If executor type is not supported
         """
-        return self._executor_factory.get_executor(executor_type)
+        return self._executor_factory.get_executor(executor_type, episode_id)
 
-    def get_available_executors(self) -> List[str]:
+    def _get_episode_executor_factory(self, episode_id: Optional[str] = None) -> ExecutorFactory:
         """
-        Get list of all available executor types.
+        Get the executor factory (always returns the single shared factory).
+
+        Args:
+            episode_id: Episode identifier (unused, kept for compatibility)
+
+        Returns:
+            The shared ExecutorFactory instance
+        """
+        return self._executor_factory
+
+    def get_available_executors(self, episode_id: Optional[str] = None) -> List[str]:
+        """
+        Get list of available executor types, optionally for a specific episode.
+
+        Args:
+            episode_id: Optional episode ID to get episode-specific executors
 
         Returns:
             List of executor type names
         """
-        return self._executor_factory.get_available_executors()
+        return self._executor_factory.get_available_executors(episode_id)
 
     def configure_for_task(
         self,
-        session_id: str,
+        episode_id: str,
         task: Any,
-        episode_id: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> None:
         """
-        Configure ExecutionManager for a specific task/session.
+        Configure ExecutionManager for a specific task/episode.
 
         Args:
-            session_id: Session identifier
+            episode_id: Episode identifier for unique container naming and configuration
             task: Task object containing execution parameters and environment specification
-            episode_id: Optional episode identifier for unique container naming
+            session_id: Optional session identifier for compatibility/logging
         """
         # Resolve environment if specified in task
         environment_spec = None
-        logger.info(f"🔍 DEBUG: Task object: {task}")
-        logger.info(f"🔍 DEBUG: Task environment attribute: {getattr(task, 'environment', 'NOT_FOUND')}")
 
         if task.environment:
-            logger.info(f"🔍 DEBUG: Task has environment: {task.environment}")
             if not self._environment_loader:
-                logger.error(f"Environment specified but no environment loader available for session {session_id}")
+                logger.error(f"Environment specified but no environment loader available for episode {episode_id}")
                 raise RuntimeError("Environment loader not initialized but environment specified in task")
 
             try:
                 logger.info(f"🔍 DEBUG: About to resolve environment: {task.environment}")
                 environment_spec = self._environment_loader.resolve_environment(task.environment)
-                logger.info(f"✅ Resolved environment for session {session_id}: {task.environment}")
+                logger.info(f"✅ Resolved environment for episode {episode_id}: {task.environment}")
                 logger.info(f"🔍 DEBUG: Environment spec: {environment_spec}")
             except Exception as e:
-                logger.error(f"❌ Failed to resolve environment for session {session_id}: {e}")
+                logger.error(f"❌ Failed to resolve environment for episode {episode_id}: {e}")
                 raise
         else:
             logger.warning("⚠️ DEBUG: Task has no environment specified")
@@ -282,21 +298,22 @@ class ExecutionManager:
             "enable_container_logging": True,
         }
 
-        logger.info(f"🔍 DEBUG: About to check environment_spec. Value: {environment_spec}")
-
         if environment_spec:
-            logger.info(
-                f"🔍 DEBUG: Environment spec found, creating SandboxEnvironmentManager with config: {sandbox_config}"
-            )
             self._sandbox_manager = SandboxEnvironmentManager(sandbox_config)
 
-            # Create the session environment immediately
-            logger.info(f"🔍 DEBUG: About to call create_session_environment for session {session_id}")
+            # Store allowed_executors in the environment spec for later retrieval
+            if hasattr(task, "allowed_executors") and task.allowed_executors:
+                # Note: SandboxEnvironmentSpec doesn't have allowed_executors attribute
+                # Store this information in episode configuration instead
+                logger.info(f"Task has allowed_executors: {task.allowed_executors}")
+
+            # Create the episode environment immediately
+            logger.info(f"🔍 DEBUG: About to call create_episode_environment for episode {episode_id}")
             try:
-                self._sandbox_manager.create_session_environment(session_id, environment_spec, episode_id=episode_id)
-                logger.info(f"✅ Created sandbox environment for session {session_id}")
+                self._sandbox_manager.create_episode_environment(episode_id, environment_spec)
+                logger.info(f"✅ Created sandbox environment for episode {episode_id}")
             except Exception as e:
-                logger.error(f"❌ FAILED to create sandbox environment for session {session_id}: {e}")
+                logger.error(f"❌ FAILED to create sandbox environment for episode {episode_id}: {e}")
                 logger.error(f"❌ Environment spec was: {environment_spec}")
                 logger.error(f"❌ Sandbox config was: {sandbox_config}")
                 raise
@@ -304,43 +321,52 @@ class ExecutionManager:
             logger.warning("⚠️ No environment_spec found, creating SandboxEnvironmentManager without environment")
             self._sandbox_manager = SandboxEnvironmentManager(sandbox_config)
 
+        # Register episode configuration with the single executor factory
         allowed_executors = task.allowed_executors
-        self._executor_factory = ExecutorFactory(
-            sandbox_manager=self._sandbox_manager,
-            configuration=self._configuration,
-            allowed_executors=allowed_executors,
+        episode_config = execution_config
+
+        self._executor_factory.register_episode_configuration(
+            episode_id=episode_id, allowed_executors=allowed_executors, episode_config=episode_config
         )
 
-        logger.info(f"ExecutionManager configured for session {session_id} with task-specific settings")
+        logger.info(f"ExecutionManager configured for episode {episode_id} with task-specific settings")
         if allowed_executors:
-            logger.info(f"Restricted to executors: {allowed_executors}")
+            logger.info(f"Episode {episode_id} restricted to executors: {allowed_executors}")
+        if session_id:
+            logger.info(f"Episode {episode_id} associated with session {session_id}")
 
         # Log configured executor types
-        configured_executors = [k for k in self._configuration.keys() if k in executor_types]
+        configured_executors = [k for k in execution_config.keys() if k in executor_types]
         if configured_executors:
-            logger.info(f"Configured executor-specific settings for: {configured_executors}")
+            logger.info(f"Episode {episode_id} configured executor-specific settings for: {configured_executors}")
 
-    def to_mcp_tools(self) -> List[Dict[str, Any]]:
+    def to_mcp_tools(self, episode_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """
-        Convert all available executors to MCP format.
+        Convert available executors to MCP format, optionally filtered by episode configuration.
+
+        Args:
+            episode_id: Optional episode identifier to filter tools for episode-specific allowed executors
 
         Returns:
-            List containing MCP tool definitions for all executors
+            List containing MCP tool definitions for all executors or episode-specific executors
         """
-        return self._executor_factory.get_all_mcp_tools()
+        return self._executor_factory.get_all_mcp_tools(episode_id)
 
-    def list_commands(self) -> List[Dict[str, Any]]:
+    def list_commands(self, episode_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """
-        List all available commands from all executors.
+        List all available commands from executors, optionally for a specific episode.
+
+        Args:
+            episode_id: Optional episode ID to get episode-specific commands
 
         Returns:
             List of command definitions
         """
         commands = []
 
-        for executor_type in self._executor_factory.get_available_executors():
+        for executor_type in self._executor_factory.get_available_executors(episode_id):
             try:
-                executor = self._executor_factory.get_executor(executor_type)
+                executor = self._executor_factory.get_executor(executor_type, episode_id)
                 metadata = getattr(executor, "_executor_metadata", {})
 
                 command_info = {
@@ -359,18 +385,24 @@ class ExecutionManager:
 
         return commands
 
-    def get_security_info(self) -> Dict[str, Any]:
+    def get_security_info(self, episode_id: Optional[str] = None) -> Dict[str, Any]:
         """
-        Get security information about the execution environment.
+        Get security information about the execution environment, optionally for a specific episode.
+
+        Args:
+            episode_id: Optional episode ID to get episode-specific security info
 
         Returns:
             Dictionary containing security-related information
         """
+        executor_factory = self._get_episode_executor_factory(episode_id)
+
         return {
             "execution_mode": "docker_sandbox",
             "security_level": "isolated",
-            "available_executors": self._executor_factory.get_available_executors(),
-            "sandbox_active": bool(self._sandbox_manager.active_sessions),
+            "available_executors": executor_factory.get_available_executors(),
+            "sandbox_active": bool(self._sandbox_manager.active_environments if self._sandbox_manager else False),
+            "episode_id": episode_id,
         }
 
     def get_configuration(self) -> Dict[str, Any]:
@@ -384,7 +416,7 @@ class ExecutionManager:
 
     def get_execution_stats(self) -> Dict[str, Any]:
         """
-        Get statistics about active executions.
+        Get statistics about active executions (now episode-based).
 
         Returns:
             Dictionary with execution statistics
@@ -392,19 +424,19 @@ class ExecutionManager:
         total_active = sum(self._active_executions.values())
         return {
             "total_active_executions": total_active,
-            "active_sessions": len(self._active_executions),
-            "max_concurrent_per_session": self._max_concurrent_per_session,
-            "session_execution_counts": self._active_executions.copy(),
+            "active_episodes": len(self._active_executions),
+            "max_concurrent_per_episode": self._max_concurrent_per_episode,
+            "episode_execution_counts": self._active_executions.copy(),
         }
 
-    def cleanup_session(
-        self, session_id: str, reason: Optional[CleanupReason] = None, context: Optional[Dict[str, Any]] = None
+    def cleanup_episode(
+        self, episode_id: str, reason: Optional[CleanupReason] = None, context: Optional[Dict[str, Any]] = None
     ) -> bool:
         """
-        Clean up session resources including Docker containers through unified cleanup manager.
+        Clean up episode resources including Docker containers.
 
         Args:
-            session_id: The session ID to clean up
+            episode_id: The episode ID to clean up
             reason: Standardized cleanup reason
             context: Additional context for debugging
 
@@ -414,12 +446,38 @@ class ExecutionManager:
         if reason is None:
             reason = CleanupReason.SESSION_TERMINATED
 
-        # Use unified cleanup manager for all container cleanup
-        cleanup_success = self._cleanup_manager.cleanup_session(session_id, reason, context)
+        logger.info(f"🔥 EPISODE CLEANUP: ExecutionManager.cleanup_episode() called for episode {episode_id}")
 
-        # Also clean up our execution tracking
-        if session_id in self._active_executions:
-            del self._active_executions[session_id]
+        cleanup_success = True
+
+        # Clean up episode environment through unified cleanup manager
+        try:
+            container_cleanup_success = self._cleanup_manager.cleanup_episode(episode_id, reason, context)
+            if container_cleanup_success:
+                logger.info(f"✅ Episode container cleanup completed for episode {episode_id}")
+            else:
+                logger.error(f"❌ Episode container cleanup failed for episode {episode_id}")
+                cleanup_success = False
+        except Exception as e:
+            logger.error(f"❌ Failed to cleanup episode containers for episode {episode_id}: {e}")
+            cleanup_success = False
+
+        # Unregister episode configuration from executor factory
+        try:
+            self._executor_factory.unregister_episode_configuration(episode_id)
+            logger.info(f"✅ Episode configuration unregistered from executor factory for episode {episode_id}")
+        except Exception as e:
+            logger.error(f"❌ Failed to unregister episode configuration for episode {episode_id}: {e}")
+            cleanup_success = False
+
+        # Clean up episode execution tracking
+        if episode_id in self._active_executions:
+            try:
+                del self._active_executions[episode_id]
+                logger.info(f"✅ Episode execution tracking cleanup completed for episode {episode_id}")
+            except Exception as e:
+                logger.error(f"❌ Failed to cleanup episode execution tracking for episode {episode_id}: {e}")
+                cleanup_success = False
 
         return cleanup_success
 
@@ -507,6 +565,43 @@ class ExecutionManager:
             reason = CleanupReason.SERVER_SHUTDOWN
 
         return self._cleanup_manager.cleanup_all_containers(reason, context)
+
+    def cleanup_session(self, session_id: str, reason: CleanupReason, context: Optional[Dict[str, Any]] = None) -> bool:
+        """
+        Clean up all containers and resources for a specific session.
+
+        Args:
+            session_id: The session ID to clean up
+            reason: Standardized cleanup reason
+            context: Additional context for debugging
+
+        Returns:
+            True if cleanup was successful, False otherwise
+        """
+        try:
+            # Clean up session environment if it exists
+            if hasattr(self._sandbox_manager, "cleanup_session"):
+                self._sandbox_manager.cleanup_session(session_id)
+            elif hasattr(self._sandbox_manager, "get_session_environment"):
+                # Try to get and stop the session environment
+                try:
+                    env = self._sandbox_manager.get_session_environment(session_id)
+                    if env and hasattr(env, "stop"):
+                        env.stop()
+                except Exception as e:
+                    logger.warning(f"Failed to get/stop session environment for {session_id}: {e}")
+
+            # Clean up any active executions for this session
+            session_episodes = [ep_id for ep_id in self._active_executions.keys() if ep_id.startswith(session_id)]
+            for episode_id in session_episodes:
+                if episode_id in self._active_executions:
+                    del self._active_executions[episode_id]
+
+            logger.info(f"Successfully cleaned up session {session_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to cleanup session {session_id}: {e}")
+            return False
 
     @property
     def debug_mode(self) -> bool:

@@ -61,11 +61,22 @@ def mock_container_dependencies():
         # Configure REST client mock
         mock_rest_instance = mock_rest.return_value
         mock_rest_instance.create_session = AsyncMock(return_value="session_123")
+        mock_rest_instance.get_benchmark = AsyncMock(return_value={
+            "total_tasks": 2,
+            "total_episodes": 2,
+            "episodes": [
+                {"task_id": "test_task_1", "episode_id": "episode_1", "max_attempts": 1},
+                {"task_id": "test_task_2", "episode_id": "episode_2", "max_attempts": 1}
+            ]
+        })
         mock_rest_instance.list_tasks = AsyncMock(return_value=[
             {"task_id": "test_task_1", "title": "Container Test Task 1"},
             {"task_id": "test_task_2", "title": "Container Test Task 2"}
         ])
-        mock_rest_instance.start_episode = AsyncMock(return_value="episode_456")
+        mock_rest_instance.create_episode = AsyncMock(return_value="episode_456")
+        mock_rest_instance.end_episode = AsyncMock(return_value=True)
+        mock_rest_instance.start_progress_stream = AsyncMock(return_value=True)
+        mock_rest_instance.stop_progress_stream = AsyncMock(return_value=True)
         mock_rest_instance.get_policy_info = AsyncMock(return_value={
             "prompt": "You are a test agent. Use available tools to complete the task."
         })
@@ -151,6 +162,11 @@ class TestHarnessContainerIntegration:
         # Mock the REST client to avoid real HTTP calls
         with patch.object(harness, 'rest_client') as mock_rest_client:
             mock_rest_client.create_session = AsyncMock(return_value="test_session")
+            mock_rest_client.get_benchmark = AsyncMock(return_value={
+                "total_tasks": 1,
+                "total_episodes": 1,
+                "episodes": [{"task_id": "test_task_1", "episode_id": "episode_1", "max_attempts": 1}]
+            })
             mock_rest_client.list_tasks = AsyncMock(return_value=[
                 {"task_id": "test_task_1", "title": "Test Task 1"}
             ])
@@ -262,6 +278,11 @@ class TestHarnessContainerIntegration:
         # Test that container executor gets created when run() is called
         with patch.object(container_harness, 'rest_client') as mock_rest_client:
             mock_rest_client.create_session = AsyncMock(return_value="test_session")
+            mock_rest_client.get_benchmark = AsyncMock(return_value={
+                "total_tasks": 0,
+                "total_episodes": 0,
+                "episodes": []
+            })
             mock_rest_client.list_tasks = AsyncMock(return_value=[])
 
             with patch('saber.client.saber_harness.ContainerEpisodeExecutor') as mock_executor_class:

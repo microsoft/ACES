@@ -71,7 +71,7 @@ class TestSessionManagerEpisodes:
         mock_execution_manager.configure_for_task = MagicMock()
         mock_policy_manager = MagicMock()
         mock_policy_manager.get_policy = AsyncMock()
-        mock_policy_manager.configure_for_task = MagicMock()
+        mock_policy_manager.configure_for_episode = MagicMock()  # Episode-first architecture
         mock_evaluation_manager = MagicMock()
         mock_evaluation_manager.log_session_start = AsyncMock()
         mock_evaluation_manager.log_episode_start = AsyncMock()
@@ -117,7 +117,7 @@ class TestSessionManagerEpisodes:
         episode = await manager.start_episode(session_id, task_id)
 
         assert episode == mock_episode
-        assert session.current_episode_id == mock_episode.episode_id
+        assert mock_episode.episode_id in session.active_episode_ids  # New multi-episode model
 
         # Verify task manager was called to get task
         manager.benchmark_manager.get_task.assert_called_once_with(task_id)
@@ -132,11 +132,11 @@ class TestSessionManagerEpisodes:
             session_id, mock_episode.episode_id, task_id
         )
 
-        # Verify PolicyManager configure_for_task was called
-        manager.policy_manager.configure_for_task.assert_called_once_with(session_id, mock_task)
+        # Verify PolicyManager configure_for_episode was called (episode-first architecture)
+        manager.policy_manager.configure_for_episode.assert_called_once_with(mock_episode.episode_id, session_id, mock_task)
 
         # Verify EpisodeManager configure_for_task was called
-        manager.episode_manager.configure_for_task.assert_called_once_with(session_id, mock_task)
+        manager.episode_manager.configure_for_task.assert_called_once_with(mock_episode.episode_id, mock_task)
 
     @pytest.mark.asyncio
     async def test_start_episode_invalid_session(self, session_manager_with_session):
@@ -158,7 +158,8 @@ class TestSessionManagerEpisodes:
         # Create session and start episode
         session = await manager.create_session("test_client")
         session_id = session.session_id
-        session.current_episode_id = "episode_123"
+        # Add episode to session's active episodes (replacing current_episode_id)
+        session.add_active_episode("episode_123")
 
         # Mock episode manager to return a valid episode
         mock_episode_obj = MagicMock()
@@ -181,7 +182,7 @@ class TestSessionManagerEpisodes:
 
         # Execute command
         action = Action(tool_name="cli", parameters={"arguments": "file test.txt", "param": "value"})
-        response = await manager.execute_action(session_id, action)
+        response = await manager.execute_action(session_id, "episode_123", action)
 
         assert isinstance(response, CommandResult)
         assert response.success is True
@@ -199,7 +200,7 @@ class TestSessionManagerEpisodes:
 
         # Verify episode manager was called with action
         call_args = manager.episode_manager.step.call_args
-        assert call_args[0][0] == session_id  # session_id
+        assert call_args[0][0] == "episode_123"  # episode_id (new signature)
         assert isinstance(call_args[0][1], Action)  # action
         assert call_args[0][2] == command_result  # command_result
 
@@ -216,11 +217,9 @@ class TestSessionManagerEpisodes:
         session_id = session.session_id
 
         action = Action(tool_name="cli", parameters={"arguments": "file test.txt"})
-        result = await manager.execute_action(session_id, action)
-
-        assert isinstance(result, CommandResult)
-        assert not result.success
-        assert "No active episode" in result.error
+        # New API requires explicit episode_id - test should fail fast with missing parameter
+        with pytest.raises(TypeError):
+            await manager.execute_action(session_id, action)
 
     @pytest.mark.asyncio
     async def test_step_execution_with_completion(self, session_manager_with_session, mock_step):
@@ -230,7 +229,8 @@ class TestSessionManagerEpisodes:
         # Create session and start episode
         session = await manager.create_session("test_client")
         session_id = session.session_id
-        session.current_episode_id = "episode_123"
+        # Add episode to session's active episodes (replacing current_episode_id)
+        session.add_active_episode("episode_123")
 
         # Mock episode manager to return a valid episode
         mock_episode_obj = MagicMock()
@@ -256,13 +256,13 @@ class TestSessionManagerEpisodes:
 
         # Execute command
         action = Action(tool_name="cli", parameters={"arguments": "final command"})
-        response = await manager.execute_action(session_id, action)
+        response = await manager.execute_action(session_id, "episode_123", action)
 
         assert response.success is True
-        assert session.current_episode_id is None  # Episode should be cleared
+        assert "episode_123" not in session.active_episode_ids  # Episode should be cleared
 
-        # Verify episode was ended
-        manager.episode_manager.end_episode.assert_called_once_with(session_id, "completed")
+        # Verify episode was ended - should now use episode_id
+        manager.episode_manager.end_episode.assert_called_once_with("episode_123", "completed")
         manager.evaluation_manager.log_episode_end.assert_called_once_with(session_id, "completed")
 
     @pytest.mark.asyncio
@@ -273,14 +273,15 @@ class TestSessionManagerEpisodes:
         # Create session with episode
         session = await manager.create_session("test_client")
         session_id = session.session_id
-        session.current_episode_id = "episode_123"
+        # Add episode to session's active episodes (replacing current_episode_id)
+        session.add_active_episode("episode_123")
 
         # Mock execution manager to raise exception
         manager.execution_manager.step.side_effect = Exception("Execution failed")
 
         # Execute command
         action = Action(tool_name="cli", parameters={"arguments": "bad command"})
-        response = await manager.execute_action(session_id, action)
+        response = await manager.execute_action(session_id, "episode_123", action)
 
         assert response.success is False
         assert response.error == "Execution failed"
@@ -293,14 +294,15 @@ class TestSessionManagerEpisodes:
         # Create session with episode
         session = await manager.create_session("test_client")
         session_id = session.session_id
-        session.current_episode_id = "episode_123"
+        # Add episode to session's active episodes (replacing current_episode_id)
+        session.add_active_episode("episode_123")
 
         # Mock episode manager and task manager responses
-        manager.episode_manager.get_current_episode.return_value = mock_episode
+        manager.episode_manager.get_episode_by_id.return_value = mock_episode
         manager.benchmark_manager.get_task.return_value = mock_task
 
-        # Get current task
-        task = await manager.get_current_task(session_id)
+        # Get current task - now requires episode_id
+        task = await manager.get_current_task(session_id, "episode_123")
         task_info = task.to_dict()
 
         assert task_info["task_id"] == "task_456"
@@ -310,7 +312,7 @@ class TestSessionManagerEpisodes:
         assert task_info["state"] == "active"
 
         # Verify episode manager and task manager were called
-        manager.episode_manager.get_current_episode.assert_called_once_with(session_id)
+        manager.episode_manager.get_episode_by_id.assert_called_once_with("episode_123")
         manager.benchmark_manager.get_task.assert_called_once_with("task_456")
 
     @pytest.mark.asyncio
@@ -324,11 +326,9 @@ class TestSessionManagerEpisodes:
 
         from fastapi import HTTPException
 
-        with pytest.raises(HTTPException) as exc_info:
+        # New API requires explicit episode_id - test should fail fast with missing parameter
+        with pytest.raises(TypeError):
             await manager.get_current_task(session_id)
-
-        assert exc_info.value.status_code == 400
-        assert "No active episode" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
     async def test_get_current_task_episode_not_found(self, session_manager_with_session):
@@ -338,15 +338,16 @@ class TestSessionManagerEpisodes:
         # Create session with episode ID but no actual episode
         session = await manager.create_session("test_client")
         session_id = session.session_id
-        session.current_episode_id = "episode_123"
+        # Add non-existent episode to session's active episodes (replacing current_episode_id)
+        session.add_active_episode("episode_123")
 
         # Mock episode manager to return None
-        manager.episode_manager.get_current_episode.return_value = None
+        manager.episode_manager.get_episode_by_id.return_value = None
 
         from fastapi import HTTPException
 
         with pytest.raises(HTTPException) as exc_info:
-            await manager.get_current_task(session_id)
+            await manager.get_current_task(session_id, "episode_123")
 
         assert exc_info.value.status_code == 400
-        assert "No active episode found" in str(exc_info.value.detail)
+        assert "Episode episode_123 not found" in str(exc_info.value.detail)

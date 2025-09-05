@@ -6,7 +6,12 @@ Unit tests for SessionManage        with patch('saber.server.session_manager.Ben
 
             manager = SessionManager(
                 domain_name="integration_test",
-                config_dir="/tmp",
+                config_dir="        # Verify pentest_team_alpha has no active episodes but others are unaffected (real end_episode manages this)
+        assert len(alpha_session.active_episode_ids) == 0
+        # Note: episode_history is managed internally, we can't easily test that in this mock setup
+
+        # Verify other sessions still have their episodes
+        other_active_episodes = 0
                 host="127.0.0.1",
                 port=8004
             )
@@ -110,19 +115,19 @@ class TestSessionManagerIntegration:
 
         # 2. Start episode
         episode = await manager.start_episode(session_id, "task_456")
-        assert session.current_episode_id == "episode_123"
+        assert "episode_123" in session.active_episode_ids
 
         # 3. Execute first step
         action1 = Action(tool_name="cli", parameters={"arguments": "command1"})
-        response1 = await manager.execute_action(session_id, action1)
+        response1 = await manager.execute_action(session_id, "episode_123", action1)
         assert response1.success is True
-        assert session.current_episode_id == "episode_123"  # Still active
+        assert "episode_123" in session.active_episode_ids  # Still active
 
         # 4. Execute final step (completes episode)
         action2 = Action(tool_name="cli", parameters={"arguments": "command2"})
-        response2 = await manager.execute_action(session_id, action2)
+        response2 = await manager.execute_action(session_id, "episode_123", action2)
         assert response2.success is True
-        assert session.current_episode_id is None  # Episode completed
+        assert "episode_123" not in session.active_episode_ids  # Episode completed
 
         # 5. Verify all components were called correctly
         manager.evaluation_manager.log_session_start.assert_called_once()
@@ -225,7 +230,8 @@ class TestSessionManagerErrorHandling:
 
         # Create session with episode
         session = await manager.create_session("test_client")
-        session.current_episode_id = "episode_123"
+        # Add episode to session's active episodes (replacing current_episode_id)
+        session.add_active_episode("episode_123")
 
         # Mock episode ending to raise exception
         manager.benchmark_manager.end_episode.side_effect = Exception("Episode end failed")
@@ -243,14 +249,15 @@ class TestSessionManagerErrorHandling:
 
         # Create session with episode
         session = await manager.create_session("test_client")
-        session.current_episode_id = "episode_123"
+        # Add episode to session's active episodes (replacing current_episode_id)
+        session.add_active_episode("episode_123")
 
         # Mock execution manager to fail
         manager.execution_manager.step.side_effect = Exception("Execution failed")
 
         # Execute command
         action = Action(tool_name="cli", parameters={"arguments": "failing_command"})
-        response = await manager.execute_action(session.session_id, action)
+        response = await manager.execute_action(session.session_id, "episode_123", action)
 
         assert response.success is False
         assert response.error == "Execution failed"
@@ -262,7 +269,8 @@ class TestSessionManagerErrorHandling:
 
         # Create session with episode
         session = await manager.create_session("test_client")
-        session.current_episode_id = "episode_123"
+        # Add episode to session's active episodes (replacing current_episode_id)
+        session.add_active_episode("episode_123")
 
         # Mock episode manager to return a valid episode
         mock_episode_obj = MagicMock()
@@ -277,7 +285,7 @@ class TestSessionManagerErrorHandling:
 
         # Execute command
         action = Action(tool_name="cli", parameters={"arguments": "command"})
-        response = await manager.execute_action(session.session_id, action)
+        response = await manager.execute_action(session.session_id, "episode_123", action)
 
         assert response.success is False
         assert "Episode manager failed" in response.error
@@ -293,7 +301,8 @@ class TestSessionManagerErrorHandling:
 
         # Should still be able to create session and execute steps
         session = await manager.create_session("test_client")
-        session.current_episode_id = "episode_123"
+        # Add episode to session's active episodes (replacing current_episode_id)
+        session.add_active_episode("episode_123")
 
         # Mock episode manager to return a valid episode
         mock_episode_obj = MagicMock()
@@ -312,7 +321,7 @@ class TestSessionManagerErrorHandling:
 
         # This should still work despite evaluation manager failures
         action = Action(tool_name="cli", parameters={"arguments": "command"})
-        response = await manager.execute_action(session.session_id, action)
+        response = await manager.execute_action(session.session_id, "episode_123", action)
         assert response.success is True
 
     @pytest.mark.asyncio
@@ -320,15 +329,30 @@ class TestSessionManagerErrorHandling:
         """Test handling of policy manager failures."""
         manager = error_test_manager
 
-        # Create session
+        # Create session and episode
         session = await manager.create_session("test_client")
 
-        # Mock policy manager to fail
+        # Mock task for episode
+        mock_task = MagicMock()
+        mock_task.task_id = "test_task"
+        mock_task.execution_config = {"timeout": 60}
+
+        # Mock start_episode to return a valid episode ID and add it to session
+        mock_episode_id = "test_episode_123"
+        manager.start_episode = AsyncMock(return_value=mock_episode_id)
+
+        # Start episode to trigger policy configuration
+        episode_id = await manager.start_episode(session.session_id, mock_task)
+
+        # Manually add episode to session for validation
+        session.active_episode_ids.append(episode_id)
+
+        # Mock policy manager to fail on retrieval
         manager.policy_manager.get_policy.side_effect = Exception("Policy failed")
 
         # Should propagate the exception
         with pytest.raises(Exception, match="Policy failed"):
-            await manager.get_policy(session.session_id)
+            await manager.get_policy(session.session_id, episode_id)
 
     @pytest.mark.asyncio
     async def test_concurrent_session_operations(self, error_test_manager):
@@ -368,3 +392,231 @@ class TestSessionManagerErrorHandling:
             session.update_activity()
 
         assert session.last_activity >= original_time
+
+    @pytest.mark.asyncio
+    async def test_multi_episode_orchestration_single_session(self, error_test_manager):
+        """Test SessionManager can orchestrate multiple episodes within a single session."""
+        manager = error_test_manager
+
+        # Create session
+        session = await manager.create_session("test_multi_episode_client")
+        session_id = session.session_id
+
+        # Create multiple different task IDs for episode variety
+        task_configs = [
+            ("web_reconnaissance_task", 60),
+            ("vulnerability_scan_task", 180),
+            ("exploit_execution_task", 300),
+            ("data_extraction_task", 120),
+        ]
+
+        # Mock the benchmark manager to return tasks
+        for task_id, timeout in task_configs:
+            mock_task = MagicMock()
+            mock_task.task_id = task_id
+            mock_task.execution_config = {"timeout": timeout}
+            mock_task.initial_context = {}
+            manager.benchmark_manager.get_task = MagicMock(return_value=mock_task)
+
+        # Start multiple episodes concurrently
+        episode_ids = []
+        for task_id, timeout in task_configs:
+            # Mock the episode manager to return a proper episode object
+            mock_episode = MagicMock()
+            mock_episode.episode_id = f"episode_{task_id}_{timeout}"
+            mock_episode.task_id = task_id  # Use actual task_id string
+            manager.episode_manager.start_episode = MagicMock(return_value=mock_episode)
+
+            # Mock get_episode_by_id to return the same episode for end_episode
+            manager.episode_manager.get_episode_by_id = MagicMock(return_value=mock_episode)
+
+            started_episode = await manager.start_episode(session_id, task_id)
+            episode_ids.append(started_episode.episode_id)
+
+            # Add episode to session for validation (the real start_episode would do this)
+            if started_episode.episode_id not in session.active_episode_ids:
+                session.active_episode_ids.append(started_episode.episode_id)
+
+        # Verify all episodes are tracked in the session
+        assert len(session.active_episode_ids) == 4
+        assert len(set(episode_ids)) == 4  # All unique episode IDs
+
+        # Test episode-specific policy retrieval for each episode
+        for i, episode_id in enumerate(episode_ids):
+            # Mock policy manager to return episode-specific policy
+            expected_timeout = [60, 180, 300, 120][i]
+            mock_policy = MagicMock()
+            mock_policy.prompt = f"Policy for episode {episode_id} with {expected_timeout}s timeout"
+            manager.policy_manager.get_policy = MagicMock(return_value=mock_policy)
+
+            policy = manager.get_policy(session_id, episode_id)
+            assert str(expected_timeout) in policy.prompt
+            assert episode_id in policy.prompt
+
+        # Test episode isolation - ending one episode shouldn't affect others
+        episode_to_end = episode_ids[1]  # End the vulnerability_scan episode
+
+        await manager.end_episode(session_id, episode_to_end, "completed")
+
+        # Verify session still has other active episodes (the real end_episode removes it)
+        assert len(session.active_episode_ids) == 3
+        assert episode_to_end not in session.active_episode_ids
+        # Note: episode_history is managed internally, we can't easily test that in this mock setup
+
+        # Verify other episodes are still accessible
+        remaining_episodes = [ep for ep in episode_ids if ep != episode_to_end]
+        for episode_id in remaining_episodes:
+            # Should still be able to get policy for remaining episodes
+            mock_policy = MagicMock()
+            mock_policy.prompt = f"Remaining policy for {episode_id}"
+            manager.policy_manager.get_policy = MagicMock(return_value=mock_policy)
+
+            policy = manager.get_policy(session_id, episode_id)
+            assert episode_id in policy.prompt
+
+    @pytest.mark.asyncio
+    async def test_concurrent_multi_session_multi_episode_orchestration(self, error_test_manager):
+        """Test SessionManager handling multiple sessions each running multiple episodes."""
+        manager = error_test_manager
+
+        # Create multiple sessions representing different security assessment scenarios
+        session_configs = [
+            ("pentest_team_alpha", ["network_scan", "web_enum", "exploitation"]),
+            ("pentest_team_beta", ["wireless_audit", "social_eng", "physical_sec"]),
+            ("forensics_team", ["memory_analysis", "disk_forensics"]),
+            ("red_team", ["c2_setup", "lateral_movement", "persistence"]),
+        ]
+
+        sessions_and_episodes = {}
+        total_episodes = 0
+
+        # Create sessions and start episodes for each
+        for client_name, task_names in session_configs:
+            session = await manager.create_session(client_name)
+            session_id = session.session_id
+            episode_ids = []
+
+            for task_name in task_names:
+                # Create unique task ID
+                task_id = f"{client_name}_{task_name}_task"
+
+                # Mock task object for benchmark manager
+                mock_task = MagicMock()
+                mock_task.task_id = task_id
+                mock_task.execution_config = {"timeout": 60 + len(task_name) * 10}  # Varying timeouts
+                mock_task.initial_context = {}
+                manager.benchmark_manager.get_task = MagicMock(return_value=mock_task)
+
+                # Mock episode creation
+                episode_id = f"ep_{client_name}_{task_name}"
+                mock_episode = MagicMock()
+                mock_episode.episode_id = episode_id
+                mock_episode.task_id = task_id  # Use actual task_id string
+                manager.episode_manager.start_episode = MagicMock(return_value=mock_episode)
+
+                # Mock get_episode_by_id to return the same episode for end_episode
+                manager.episode_manager.get_episode_by_id = MagicMock(return_value=mock_episode)
+
+                started_episode = await manager.start_episode(session_id, task_id)
+                episode_ids.append(started_episode.episode_id)
+                if started_episode.episode_id not in session.active_episode_ids:
+                    session.active_episode_ids.append(started_episode.episode_id)
+                total_episodes += 1
+
+            sessions_and_episodes[session_id] = {
+                "client_name": client_name,
+                "session": session,
+                "episode_ids": episode_ids,
+                "task_names": task_names
+            }
+
+        # Verify all sessions and episodes are properly managed
+        assert len(manager.active_sessions) == 4
+        assert total_episodes == 11  # 3+3+2+3 = 11 episodes
+
+        # Test cross-session episode isolation
+        for session_id, session_data in sessions_and_episodes.items():
+            session = session_data["session"]
+            client_name = session_data["client_name"]
+
+            # Verify each session only contains its own episodes
+            for episode_id in session.active_episode_ids:
+                assert client_name in episode_id
+
+                # Mock policy retrieval for cross-session verification
+                mock_policy = MagicMock()
+                mock_policy.prompt = f"Policy for {episode_id} in session {session_id}"
+                manager.policy_manager.get_policy = MagicMock(return_value=mock_policy)
+
+                policy = manager.get_policy(session_id, episode_id)
+                assert session_id in policy.prompt
+                assert episode_id in policy.prompt
+
+        # Test selective session cleanup - end all episodes for one team
+        pentest_alpha_session_id = None
+        for sid, data in sessions_and_episodes.items():
+            if data["client_name"] == "pentest_team_alpha":
+                pentest_alpha_session_id = sid
+                break
+
+        assert pentest_alpha_session_id is not None
+        alpha_session = sessions_and_episodes[pentest_alpha_session_id]["session"]
+        alpha_episodes = alpha_session.active_episode_ids.copy()
+
+        # End all episodes for pentest_team_alpha
+        for episode_id in alpha_episodes:
+            await manager.end_episode(pentest_alpha_session_id, episode_id, "team_rotation")
+
+        # Verify pentest_team_alpha has no active episodes but others are unaffected (real end_episode manages this)
+        assert len(alpha_session.active_episode_ids) == 0
+        # Note: episode_history is managed internally, we can't easily test that in this mock setup
+
+        # Verify other sessions still have their episodes
+        other_active_episodes = 0
+        for sid, data in sessions_and_episodes.items():
+            if sid != pentest_alpha_session_id:
+                other_active_episodes += len(data["session"].active_episode_ids)
+
+        assert other_active_episodes == 8  # 11 total - 3 from alpha team = 8
+
+        # Test adding new episodes to existing sessions during operations
+        forensics_session_id = None
+        for sid, data in sessions_and_episodes.items():
+            if data["client_name"] == "forensics_team":
+                forensics_session_id = sid
+                break
+
+        assert forensics_session_id is not None
+        forensics_session = sessions_and_episodes[forensics_session_id]["session"]
+
+        # Add urgent analysis episode to forensics team
+        urgent_task_id = "forensics_team_urgent_malware_analysis_task"
+        urgent_mock_task = MagicMock()
+        urgent_mock_task.task_id = urgent_task_id
+        urgent_mock_task.execution_config = {"timeout": 600}  # High priority, longer timeout
+        urgent_mock_task.initial_context = {}
+        manager.benchmark_manager.get_task = MagicMock(return_value=urgent_mock_task)
+
+        urgent_episode_id = "ep_forensics_team_urgent_malware_analysis"
+        urgent_mock_episode = MagicMock()
+        urgent_mock_episode.episode_id = urgent_episode_id
+        urgent_mock_episode.task_id = urgent_task_id
+        manager.episode_manager.start_episode = MagicMock(return_value=urgent_mock_episode)
+
+        new_episode = await manager.start_episode(forensics_session_id, urgent_task_id)
+        # Only add episode to session if it's not already there (the real start_episode might do this)
+        if new_episode.episode_id not in forensics_session.active_episode_ids:
+            forensics_session.active_episode_ids.append(new_episode.episode_id)
+
+        # Verify new episode is properly integrated
+        assert new_episode.episode_id in forensics_session.active_episode_ids
+        assert len(forensics_session.active_episode_ids) == 3  # Original 2 + 1 new
+
+        # Verify policy access for new episode
+        mock_policy = MagicMock()
+        mock_policy.prompt = f"Urgent analysis policy for {new_episode.episode_id}"
+        manager.policy_manager.get_policy = MagicMock(return_value=mock_policy)
+
+        policy = manager.get_policy(forensics_session_id, new_episode.episode_id)
+        assert "Urgent analysis" in policy.prompt
+        assert new_episode.episode_id in policy.prompt

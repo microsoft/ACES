@@ -189,6 +189,7 @@ class Episode(BaseModel):
     context: Dict[str, Any] = Field(default_factory=dict, description="Episode context data")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional episode metadata")
     completion_reason: Optional[str] = Field(None, description="Reason the episode ended")
+    max_steps: int = Field(default=10, description="Maximum number of steps allowed for this episode")
 
     class Config:
         """Pydantic configuration."""

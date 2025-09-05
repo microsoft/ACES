@@ -1,8 +1,8 @@
 """
 Abstract Docker executor base class for shared Docker container management.
 
-This module provides the DockerExecutor abstract base class that handles common
-Docker container operations for all Docker-based command executors.
+This module provides the DockerExecutor Docker container operations for all
+Docker-based command executors.
 """
 
 import logging
@@ -26,7 +26,7 @@ class DockerExecutor(CommandExecutor):
     Abstract base class for Docker-based command executors.
 
     Provides shared Docker container management functionality including:
-    - Session-based container environments
+    - Episode-based container environments
     - Container health checks
     - Docker configuration validation
     - Post-execution cleanup
@@ -83,60 +83,60 @@ class DockerExecutor(CommandExecutor):
 
         return cls(sandbox_manager=sandbox_manager, docker_config=config, **merged_kwargs)
 
-    def get_session_environment(self, session_id: str) -> "DockerSandboxEnvironment":
+    def get_episode_environment(self, episode_id: str) -> "DockerSandboxEnvironment":
         """
-        Retrieve Docker environment for the given session.
+        Retrieve Docker environment for the given episode.
 
         Args:
-            session_id: Session identifier
+            episode_id: Episode identifier
 
         Returns:
-            DockerSandboxEnvironment for the session
+            DockerSandboxEnvironment for the episode
 
         Raises:
-            SandboxExecutionError: If session environment cannot be retrieved
+            SandboxExecutionError: If episode environment cannot be retrieved
         """
         try:
-            environment = self._sandbox_manager.get_session_environment(session_id)
+            environment = self._sandbox_manager.get_episode_environment(episode_id)
             if not environment:
                 raise SandboxExecutionError(
-                    f"No environment found for session {session_id}. Environment must be created before execution."
+                    f"No environment found for episode {episode_id}. Environment must be created before execution."
                 )
             return environment
         except Exception as e:
-            raise SandboxExecutionError(f"Failed to get session environment: {e}")
+            raise SandboxExecutionError(f"Failed to get episode environment: {e}")
 
-    def ensure_container_ready(self, session_id: str) -> bool:
+    def ensure_container_ready(self, episode_id: str) -> bool:
         """
         Ensure Docker container is ready for command execution.
 
         Args:
-            session_id: Session identifier
+            episode_id: Episode identifier
 
         Returns:
             True if container is ready, False otherwise
         """
         try:
-            environment = self.get_session_environment(session_id)
+            environment = self.get_episode_environment(episode_id)
             # The sandbox manager handles container readiness internally
             return environment is not None
         except Exception as e:
-            logger.error(f"Container readiness check failed for session {session_id}: {e}")
+            logger.error(f"Container readiness check failed for episode {episode_id}: {e}")
             return False
 
-    def cleanup_execution(self, session_id: str) -> None:
+    def cleanup_execution(self, episode_id: str) -> None:
         """
-        Perform post-execution cleanup for the session.
+        Perform post-execution cleanup for the episode.
 
         Args:
-            session_id: Session identifier to clean up
+            episode_id: episode identifier to clean up
         """
         try:
             # Let sandbox manager handle the cleanup
-            self._sandbox_manager.cleanup_session(session_id)
-            logger.debug(f"Cleaned up execution resources for session {session_id}")
+            self._sandbox_manager.cleanup_episode(episode_id)
+            logger.debug(f"Cleaned up execution resources for episode {episode_id}")
         except Exception as e:
-            logger.warning(f"Error during execution cleanup for session {session_id}: {e}")
+            logger.warning(f"Error during execution cleanup for episode {episode_id}: {e}")
 
     def validate_docker_parameters(self, parameters: Dict[str, Any]) -> ValidationResult:
         """
@@ -214,7 +214,7 @@ class DockerExecutor(CommandExecutor):
 
         Args:
             parameters: Command-specific parameters
-            context: Execution context including session_id
+            context: Execution context including episode_id
 
         Returns:
             CommandResult with execution results
@@ -230,7 +230,7 @@ class DockerExecutor(CommandExecutor):
 
         Args:
             parameters: Command-specific parameters
-            context: Execution context including session_id
+            context: Execution context including episode_id
 
         Returns:
             CommandResult with execution results

@@ -2,64 +2,32 @@
 
 import asyncio
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from datetime import datetime
-from enum import Enum
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from ...api_models import ToolCallEventComplete, ToolCallEventStart
 from .models import StepStatus, StepUpdate
 
 
-class MCPToolCallStatus(Enum):
-    """Status of an MCP tool call."""
-
-    STARTING = "starting"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    TIMEOUT = "timeout"
-    CANCELLED = "cancelled"
-
-
-@dataclass
-class MCPToolCall:
-    """Represents an MCP tool call with progress tracking."""
-
-    tool_name: str
-    call_id: str
-    status: MCPToolCallStatus
-    input_args: Dict[str, Any]
-    start_time: datetime
-    end_time: Optional[datetime] = None
-    execution_time_ms: Optional[float] = None
-    output: Optional[str] = None
-    error: Optional[str] = None
-    progress: float = 0.0  # 0.0 to 1.0
-    agent_id: Optional[str] = None
-    session_id: Optional[str] = None
-    task_id: Optional[str] = None
-
-
 class ToolCallProgressReporter(ABC):
     """Abstract interface for reporting tool call progress to UI."""
 
     @abstractmethod
-    async def tool_call_start(self, tool_call: MCPToolCall) -> None:
+    async def tool_call_start(self, tool_event: ToolCallEventStart) -> None:
         """Report that a tool call has started."""
         pass
 
     @abstractmethod
-    async def tool_call_complete(self, tool_call: MCPToolCall) -> None:
+    async def tool_call_complete(self, tool_event: ToolCallEventComplete) -> None:
         """Report that a tool call has completed (success, failure, or timeout)."""
         pass
 
 
 class UIProgressAdapter(ToolCallProgressReporter):
     """
-    Adapter that connects MCP tool call progress to the UI manager.
+    Adapter that connects tool call events to the UI manager.
 
-    This class bridges the gap between the MCP sidecar tool call tracking
+    This class bridges the gap between the server tool call events
     and the harness UI system for real-time progress display.
     """
 
@@ -71,46 +39,42 @@ class UIProgressAdapter(ToolCallProgressReporter):
             ui_manager: The harness UI manager instance
         """
         self.ui_manager = ui_manager
-        self._active_tool_calls: Dict[str, MCPToolCall] = {}
+        self._active_tool_calls: Dict[str, ToolCallEventStart] = {}
         self._lock = asyncio.Lock()
 
-    async def tool_call_start(self, tool_call: MCPToolCall) -> None:
+    async def tool_call_start(self, tool_event: ToolCallEventStart) -> None:
         """Report that a tool call has started."""
         async with self._lock:
-            self._active_tool_calls[tool_call.call_id] = tool_call
+            self._active_tool_calls[tool_event.call_id] = tool_event
 
         # Update UI with tool call start
         if self.ui_manager:
             try:
-                # Convert tool call to UI progress step
+                # Convert tool event to UI progress step
                 step = StepUpdate(
-                    step_id=tool_call.call_id,
-                    name=f"{tool_call.tool_name}",
-                    description=f"Calling {tool_call.tool_name}",
+                    step_id=tool_event.call_id,
+                    name=f"{tool_event.tool_name}",
+                    description=f"Calling {tool_event.tool_name}",
                     status=StepStatus.RUNNING,
                     progress=0.0,
-                    start_time=tool_call.start_time,
-                    task_id=tool_call.task_id,
+                    start_time=(
+                        datetime.fromisoformat(tool_event.timestamp)
+                        if tool_event.timestamp
+                        else datetime.now(timezone.utc)
+                    ),
+                    task_id=tool_event.task_id,
                     metadata={
-                        "tool_name": tool_call.tool_name,
-                        "input_args": tool_call.input_args,
-                        "agent_id": tool_call.agent_id,
+                        "tool_name": tool_event.tool_name,
+                        "input_args": tool_event.arguments,
+                        "agent_id": tool_event.agent_id,
                     },
                 )
 
                 # Send step update through UI manager
                 await self._send_step_update(step)
-                # Also show an explicit tool start line if supported
+                # Also send the tool event directly if supported
                 if hasattr(self.ui_manager, "tool_call_start"):
-                    event = ToolCallEventStart(
-                        call_id=tool_call.call_id,
-                        tool_name=tool_call.tool_name,
-                        arguments=tool_call.input_args,
-                        agent_id=tool_call.agent_id,
-                        session_id=tool_call.session_id,
-                        task_id=tool_call.task_id,
-                    )
-                    await self.ui_manager.tool_call_start(event)
+                    await self.ui_manager.tool_call_start(tool_event)
 
             except Exception as e:
                 # Don't let UI errors break tool execution
@@ -118,66 +82,47 @@ class UIProgressAdapter(ToolCallProgressReporter):
 
                 logging.getLogger(__name__).warning(f"UI update failed (tool_call_start): {e}")
 
-    async def tool_call_complete(self, tool_call: MCPToolCall) -> None:
+    async def tool_call_complete(self, tool_event: ToolCallEventComplete) -> None:
         """Report that a tool call has completed."""
-        prior_call: Optional[MCPToolCall] = None
         async with self._lock:
-            if tool_call.call_id in self._active_tool_calls:
-                prior_call = self._active_tool_calls[tool_call.call_id]
-                self._active_tool_calls[tool_call.call_id] = tool_call
+            if tool_event.call_id in self._active_tool_calls:
+                # Remove from active calls since it's complete
+                del self._active_tool_calls[tool_event.call_id]
 
         # Update UI with completion
         if self.ui_manager:
             try:
-                # status = "completed" if tool_call.status == MCPToolCallStatus.COMPLETED else "failed"
-                # Not used currently, but kept for potential future use
-
                 step = StepUpdate(
-                    step_id=tool_call.call_id,
-                    name=f"{tool_call.tool_name}",
-                    description=f"Completed {tool_call.tool_name}",
-                    status=(
-                        StepStatus.COMPLETED if tool_call.status == MCPToolCallStatus.COMPLETED else StepStatus.FAILED
-                    ),
+                    step_id=tool_event.call_id,
+                    name=f"{tool_event.tool_name}",
+                    description=f"Completed {tool_event.tool_name}",
+                    status=StepStatus.COMPLETED if tool_event.success else StepStatus.FAILED,
                     progress=1.0,
-                    end_time=tool_call.end_time,
-                    task_id=tool_call.task_id,
+                    end_time=(
+                        datetime.fromisoformat(tool_event.timestamp)
+                        if tool_event.timestamp
+                        else datetime.now(timezone.utc)
+                    ),
+                    task_id=tool_event.task_id,
                     metadata={
-                        "tool_name": tool_call.tool_name,
-                        "execution_time_ms": tool_call.execution_time_ms,
-                        "output": tool_call.output,
-                        "error": tool_call.error,
+                        "tool_name": tool_event.tool_name,
+                        "execution_time_ms": tool_event.execution_time_ms,
+                        "output": tool_event.output,
+                        "error": tool_event.error,
                     },
                 )
 
                 await self._send_step_update(step)
-                # Also show an explicit tool complete line if supported
+                # Also send the tool event directly if supported
                 if hasattr(self.ui_manager, "tool_call_complete"):
-                    success = tool_call.status == MCPToolCallStatus.COMPLETED and not tool_call.error
-                    # Fallback to stored args if missing on this event
-                    args_for_event = tool_call.input_args or (prior_call.input_args if prior_call else None)
-                    event = ToolCallEventComplete(
-                        call_id=tool_call.call_id,
-                        tool_name=tool_call.tool_name,
-                        success=success,
-                        arguments=args_for_event,
-                        execution_time_ms=tool_call.execution_time_ms,
-                        output=tool_call.output,
-                        error=tool_call.error,
-                        agent_id=tool_call.agent_id,
-                        session_id=tool_call.session_id,
-                        task_id=tool_call.task_id,
-                    )
-                    await self.ui_manager.tool_call_complete(event)
+                    await self.ui_manager.tool_call_complete(tool_event)
 
             except Exception as e:
                 import logging
 
                 logging.getLogger(__name__).warning(f"UI update failed (tool_call_complete): {e}")
 
-        # Clean up completed tool call
-        async with self._lock:
-            self._active_tool_calls.pop(tool_call.call_id, None)
+        # NOTE: Clean up was already done above when we removed from active_tool_calls
 
     async def _send_step_update(self, step_info: Any) -> None:
         """Send step update to UI manager."""
@@ -200,7 +145,7 @@ class UIProgressAdapter(ToolCallProgressReporter):
             )
             logging.getLogger(__name__).debug(f"UI manager doesn't support step updates, step: {name}")
 
-    def get_active_tool_calls(self) -> Dict[str, MCPToolCall]:
+    def get_active_tool_calls(self) -> Dict[str, ToolCallEventStart]:
         """Get currently active tool calls."""
         return self._active_tool_calls.copy()
 

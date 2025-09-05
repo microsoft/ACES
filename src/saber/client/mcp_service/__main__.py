@@ -34,6 +34,17 @@ def cli() -> None:
 @click.option("--timeout", default=30, help="HTTP timeout in seconds")
 @click.option("--log-level", default="INFO", help="Log level")
 @click.option("--reload", is_flag=True, help="Enable auto-reload")
+def start_service(
+    host: str, port: int, saber_mcp_url: Optional[str], timeout: int, log_level: str, reload: bool
+) -> None:
+    """Start the MCP sidecar service."""
+    setup_logging(log_level)
+
+    from .main import start_sidecar_service
+
+    start_sidecar_service(host=host, port=port, saber_mcp_url=saber_mcp_url)
+
+
 @cli.command()
 @click.option("--saber-mcp-url", default="http://localhost:8001", help="SABER MCP server URL")
 @click.option("--timeout", default=5.0, help="Health check timeout")
@@ -68,13 +79,16 @@ async def health_check(saber_mcp_url: str, timeout: float) -> None:
 @cli.command()
 @click.argument("agent_id")
 @click.argument("saber_session_id")
+@click.argument("saber_episode_id")
 @click.option("--task-id", help="Optional task ID")
 @click.option("--service-url", default="http://localhost:8002", help="MCP service URL")
-async def register_session(agent_id: str, saber_session_id: str, task_id: Optional[str], service_url: str) -> None:
+async def register_session(
+    agent_id: str, saber_session_id: str, saber_episode_id: str, task_id: Optional[str], service_url: str
+) -> None:
     """Register an agent session with the MCP service."""
     import aiohttp
 
-    request_data = {"agent_id": agent_id, "saber_session_id": saber_session_id}
+    request_data = {"agent_id": agent_id, "saber_session_id": saber_session_id, "saber_episode_id": saber_episode_id}
 
     if task_id:
         request_data["task_id"] = task_id
@@ -147,7 +161,6 @@ def async_command(f: Callable[..., Any]) -> Callable[..., Any]:
 
 # Apply async decorator to async commands
 health_check = async_command(health_check)
-register_session = async_command(register_session)
 list_sessions = async_command(list_sessions)
 
 

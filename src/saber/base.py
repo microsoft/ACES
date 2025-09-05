@@ -13,4 +13,5 @@ class MCPHeaders:
 
     SESSION_ID = "X-SABER-Session-ID"
     TASK_ID = "X-SABER-Task-ID"
+    EPISODE_ID = "X-SABER-Episode-ID"
     CLIENT_ID = "X-SABER-Client-ID"

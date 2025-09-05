@@ -184,20 +184,20 @@ import numpy as np
 
     def test_get_python_environment(self, python_executor):
         """Test getting Python environment information."""
-        with patch.object(python_executor, "get_session_environment") as mock_get_env:
+        with patch.object(python_executor, "get_episode_environment") as mock_get_env:
             mock_env = MagicMock()
             mock_get_env.return_value = mock_env
 
-            env_info = python_executor.get_python_environment("test_session")
+            env_info = python_executor.get_python_environment("test_episode")
 
-            assert env_info["session_id"] == "test_session"
+            assert env_info["episode_id"] == "test_episode"
             assert env_info["container_ready"] is True
 
     @pytest.mark.asyncio
     async def test_execute_success(self, python_executor, mock_sandbox_manager, mock_docker_environment):
         """Test successful Python script execution."""
         # Mock environment creation
-        mock_sandbox_manager.get_session_environment.return_value = mock_docker_environment
+        mock_sandbox_manager.get_episode_environment.return_value = mock_docker_environment
         python_executor._sandbox_manager = mock_sandbox_manager
 
         # Mock script creation and execution
@@ -216,20 +216,20 @@ import numpy as np
         mock_docker_environment.execute_command = AsyncMock(side_effect=[create_result, execute_result])
 
         parameters = {"code": "print('Hello, World!')"}
-        context = {"session_id": "test123"}
+        context = {"episode_id": "test123"}
 
         result = await python_executor(parameters, context)
 
         assert result.success is True
         assert result.data["stdout"] == "Hello, World!\n"
-        assert result.metadata["session_id"] == "test123"
+        assert result.metadata["episode_id"] == "test123"
         assert result.metadata["container_id"] == "container123"  # First 12 chars: container123
 
     @pytest.mark.asyncio
     async def test_execute_validation_failure(self, python_executor):
         """Test execution with invalid Python code."""
         parameters = {"code": ""}  # Empty code
-        context = {"session_id": "test123"}
+        context = {"episode_id": "test123"}
 
         result = await python_executor(parameters, context)
 
@@ -237,15 +237,15 @@ import numpy as np
         assert "Python code validation failed" in result.error
 
     @pytest.mark.asyncio
-    async def test_execute_missing_session_id(self, python_executor):
-        """Test execution without session ID."""
+    async def test_execute_missing_episode_id(self, python_executor):
+        """Test execution without episode ID."""
         parameters = {"arguments": "print('hello')"}
-        context = {}  # Missing session_id
+        context = {}  # Missing episode_id
 
         result = await python_executor(parameters, context)
 
         assert result.success is False
-        assert "session_id required" in result.error
+        assert "episode_id required" in result.error
 
     def test_validate_parameters_valid(self, python_executor):
         """Test parameter validation with valid parameters."""

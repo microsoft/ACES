@@ -3,7 +3,7 @@
 from dataclasses import asdict
 from datetime import datetime
 from logging import getLogger
-from typing import Any, Dict, NamedTuple, Optional
+from typing import Any, Dict, List, NamedTuple, Optional
 
 from ..base import Action, CommandResult, Episode, EpisodeState, Step
 from .constants import EpisodeTerminationReason
@@ -26,19 +26,61 @@ class EpisodeManager:
 
     Provides gym-compatible interfaces for episode lifecycle management,
     action-response tracking, and automatic subtask progression.
+    Supports multiple concurrent episodes per session.
     """
 
     def __init__(self) -> None:
         """Initialize the EpisodeManager."""
-        self.active_episodes: Dict[str, Episode] = {}  # session_id -> Episode
-        self.episode_configs: Dict[str, Dict[str, Any]] = {}  # session_id -> episode config from task
+        self.episodes: Dict[str, Episode] = {}  # episode_id -> Episode
+        self.session_episodes: Dict[str, List[str]] = {}  # session_id -> [episode_ids]
+        self.completed_episodes: Dict[str, Episode] = {}  # episode_id -> completed Episode (for history)
+        self.episode_configs: Dict[str, Dict[str, Any]] = {}  # episode_id -> episode config from task
 
-    def configure_for_task(self, session_id: str, task: Any) -> None:
+    def get_episode_by_id(self, episode_id: str) -> Optional[Episode]:
+        """Get episode by episode ID from active or completed episodes."""
+        return self.episodes.get(episode_id) or self.completed_episodes.get(episode_id)
+
+    def get_session_episodes(self, session_id: str, include_completed: bool = False) -> List[Episode]:
+        """Get all episodes for a session."""
+        episode_ids = self.session_episodes.get(session_id, [])
+        episodes = []
+
+        for episode_id in episode_ids:
+            episode = self.episodes.get(episode_id)
+            if episode:
+                episodes.append(episode)
+            elif include_completed:
+                completed_episode = self.completed_episodes.get(episode_id)
+                if completed_episode:
+                    episodes.append(completed_episode)
+
+        return episodes
+
+    def get_active_episodes_for_session(self, session_id: str) -> List[Episode]:
+        """Get only active episodes for a session."""
+        return self.get_session_episodes(session_id, include_completed=False)
+
+    def add_episode_to_session(self, session_id: str, episode: Episode) -> None:
+        """Add an episode to a session's episode list."""
+        if session_id not in self.session_episodes:
+            self.session_episodes[session_id] = []
+
+        self.session_episodes[session_id].append(episode.episode_id)
+        self.episodes[episode.episode_id] = episode
+
+    def complete_episode(self, episode_id: str) -> Optional[Episode]:
+        """Move an episode from active to completed."""
+        episode = self.episodes.pop(episode_id, None)
+        if episode:
+            self.completed_episodes[episode_id] = episode
+        return episode
+
+    def configure_for_task(self, episode_id: str, task: Any) -> None:
         """
-        Configure EpisodeManager for a specific task/session.
+        Configure EpisodeManager for a specific task/episode.
 
         Args:
-            session_id: Session identifier
+            episode_id: Episode identifier
             task: Task object containing episode configuration
         """
         # Extract episode configuration from task
@@ -58,33 +100,33 @@ class EpisodeManager:
         episode_config.setdefault("step_timeout_seconds", 300)
         episode_config.setdefault("episode_timeout_minutes", 30)
 
-        # Store configuration for this session
-        self.episode_configs[session_id] = episode_config
+        # Store configuration for this episode
+        self.episode_configs[episode_id] = episode_config
 
-        logger.info(f"EpisodeManager configured for session {session_id} with task {task.task_id if task else 'None'}")
+        logger.info(f"EpisodeManager configured for episode {episode_id} with task {task.task_id if task else 'None'}")
 
-    def should_terminate_episode(self, session_id: str) -> tuple[bool, str]:
+    def should_terminate_episode(self, episode_id: str) -> tuple[bool, str]:
         """
-        Check if the current episode should be terminated based on configured limits.
+        Check if an episode should be terminated based on configured limits.
 
         Args:
-            session_id: ID of the session
+            episode_id: ID of the episode to check
 
         Returns:
             Tuple of (should_terminate, reason)
         """
-        episode = self.get_current_episode(session_id)
+        episode = self.get_episode_by_id(episode_id)
         if not episode:
-            return True, "no_active_episode"
+            return True, "episode_not_found"
 
         if episode.is_complete:
             return True, episode.completion_reason or EpisodeTerminationReason.COMPLETED
 
-        # Get episode configuration for this session
-        episode_config = self.episode_configs.get(session_id)
+        # Get episode configuration for this episode
+        episode_config = self.episode_configs.get(episode_id)
         if not episode_config:
-            logger.error(f"No episode configuration found for session {session_id}")
-            return True, f"configuration_error: No episode configuration found for session {session_id}"
+            logger.error(f"No episode configuration found for episode {episode_id}")
+            return True, f"configuration_error: No episode configuration found for episode {episode_id}"
 
         try:
             # Check max steps
@@ -92,13 +134,13 @@ class EpisodeManager:
             current_steps = len(episode.steps)
 
             logger.info(
-                f"🔍 STEP COUNT CHECK: session={session_id}, current_steps={current_steps}, "
+                f"🔍 STEP COUNT CHECK: episode={episode_id}, current_steps={current_steps}, "
                 f"max_steps={max_steps}, should_terminate={current_steps >= max_steps}"
             )
 
             if current_steps >= max_steps:
                 logger.info(
-                    f"🛑 TERMINATING EPISODE: session={session_id}, reached max steps ({current_steps}/{max_steps})"
+                    f"🛑 TERMINATING EPISODE: episode={episode_id}, reached max steps ({current_steps}/{max_steps})"
                 )
                 return True, f"{EpisodeTerminationReason.MAX_STEPS_REACHED} ({current_steps}/{max_steps})"
 
@@ -109,7 +151,7 @@ class EpisodeManager:
             # etc.
 
         except Exception as e:
-            logger.error(f"Failed to check episode termination conditions for session {session_id}: {e}")
+            logger.error(f"Failed to check episode termination conditions for episode {episode_id}: {e}")
             return True, f"configuration_error: {e}"
 
         return False, ""
@@ -139,23 +181,23 @@ class EpisodeManager:
             completion_reason=None,
         )
 
-        # Store as active episode
-        self.active_episodes[session_id] = episode
+        # Add episode to session's episode tracking
+        self.add_episode_to_session(session_id, episode)
 
         logger.info(f"Created episode '{episode.episode_id}' for session '{session_id}'")
         return episode
 
     def step(
         self,
-        session_id: str,
+        episode_id: str,
         action: Action,
         command_result: CommandResult,
     ) -> StepResult:
         """
-        Execute an RL-style step in the current episode.
+        Execute an RL-style step in the specified episode.
 
         Args:
-            session_id: ID of the session
+            episode_id: ID of the episode
             action: Action to execute
             command_result: CommandResult from command execution
 
@@ -163,11 +205,11 @@ class EpisodeManager:
             StepResult object with step information and termination status
 
         Raises:
-            EpisodeNotFoundException: If session has no active episode
+            EpisodeNotFoundException: If episode not found
         """
-        episode = self.get_current_episode(session_id)
+        episode = self.get_episode_by_id(episode_id)
         if not episode:
-            raise EpisodeNotFoundException(session_id)
+            raise EpisodeNotFoundException(episode_id)
 
         logger.debug(f"Executing step {len(episode.steps) + 1} for episode '{episode.episode_id}'")
 
@@ -177,7 +219,7 @@ class EpisodeManager:
         termination_reason = None
 
         # Get episode config to check max_steps
-        episode_config = self.episode_configs.get(session_id)
+        episode_config = self.episode_configs.get(episode_id)
         if episode_config and "max_steps" in episode_config:
             max_steps = episode_config["max_steps"]
             if current_steps + 1 >= max_steps:  # This step will reach the limit
@@ -201,12 +243,12 @@ class EpisodeManager:
             step=step, should_terminate=will_terminate_after_this_step, termination_reason=termination_reason
         )
 
-    def end_episode(self, session_id: str, reason: str, result: Optional[str] = None) -> Episode:
+    def end_episode(self, episode_id: str, reason: str, result: Optional[str] = None) -> Episode:
         """
-        End the current episode for a session.
+        End the specified episode.
 
         Args:
-            session_id: ID of the session
+            episode_id: ID of the episode to end
             reason: Reason for ending the episode
             result: Optional result/submission from the episode (e.g., captured flag)
 
@@ -214,16 +256,16 @@ class EpisodeManager:
             Episode with completion information
 
         Raises:
-            EpisodeNotFoundException: If session has no active episode
+            EpisodeNotFoundException: If episode not found
         """
         logger.warning(
-            f"🔥 EPISODE END: EpisodeManager.end_episode() called for session {session_id}, reason: {reason}"
+            f"🔥 EPISODE END: EpisodeManager.end_episode() called for episode {episode_id}, reason: {reason}"
         )
-        episode = self.get_current_episode(session_id)
+        episode = self.get_episode_by_id(episode_id)
         if not episode:
-            raise EpisodeNotFoundException(session_id)
+            raise EpisodeNotFoundException(episode_id)
 
-        logger.info(f"Ending episode '{episode.episode_id}' for session '{session_id}': {reason}")
+        logger.info(f"Ending episode '{episode.episode_id}': {reason}")
 
         # Create a final step if the agent provided a result/submission
         if result:
@@ -261,9 +303,14 @@ class EpisodeManager:
         episode.state = EpisodeState.COMPLETED if is_successful else EpisodeState.FAILED
         episode.completion_reason = reason
 
-        # Remove from active episodes
-        logger.info(f"Removing episode {episode.episode_id} from active episodes for session {session_id}")
-        del self.active_episodes[session_id]
+        # Move from active to completed episodes
+        if episode_id in self.episodes:
+            logger.info(f"Moving episode {episode_id} from active to completed")
+            self.complete_episode(episode_id)
+
+        # Clean up episode configuration
+        if episode_id in self.episode_configs:
+            del self.episode_configs[episode_id]
 
         logger.info(
             f"Episode '{episode.episode_id}' completed: {len(episode.steps)} steps, "
@@ -271,47 +318,17 @@ class EpisodeManager:
         )
         return episode
 
-    def reset_episode(self, session_id: str, task_id: str) -> Episode:
+    def get_episode_state(self, episode_id: str) -> Optional[EpisodeState]:
         """
-        Reset the current episode (start a new attempt).
+        Get the episode state for a specific episode.
 
         Args:
-            session_id: ID of the session
-            task_id: Task ID to use for the new episode
+            episode_id: ID of the episode
 
         Returns:
-            New Episode instance
-
-        Raises:
-            EpisodeNotFoundException: If session has no active episode
+            Episode state, or None if episode not found
         """
-        current_episode = self.get_current_episode(session_id)
-        if not current_episode:
-            raise EpisodeNotFoundException(session_id)
-
-        logger.info(f"Resetting episode for session '{session_id}'")
-
-        # End current episode with reset reason
-        self.end_episode(session_id, "reset")
-
-        # Start new episode with same task and context
-        new_episode = self.start_episode(
-            session_id=session_id, task_id=task_id, initial_context=current_episode.context.copy()
-        )
-
-        return new_episode
-
-    def get_episode_state(self, session_id: str) -> Optional[EpisodeState]:
-        """
-        Get the current episode state for a session.
-
-        Args:
-            session_id: ID of the session
-
-        Returns:
-            Current episode state, or None if no active episode
-        """
-        episode = self.get_current_episode(session_id)
+        episode = self.get_episode_by_id(episode_id)
         return episode.state if episode else None
 
     def create_step(self, episode: Episode, action: Action, response: CommandResult) -> Step:
@@ -401,39 +418,39 @@ class EpisodeManager:
             session_id: Session identifier to clean up
         """
         logger.info(f"EpisodeManager.cleanup_session() called for session {session_id}")
-        if session_id in self.active_episodes:
-            logger.info(f"Ending active episode for session {session_id} during cleanup")
-            self.end_episode(session_id, "session_cleanup")
 
-    def get_current_episode(self, session_id: str) -> Optional[Episode]:
-        """
-        Get the current active episode for a session.
+        # End all active episodes for this session
+        active_episodes = self.get_active_episodes_for_session(session_id)
+        for episode in active_episodes:
+            logger.info(f"Ending active episode {episode.episode_id} for session {session_id} during cleanup")
+            self.end_episode(episode.episode_id, "session_cleanup")
 
-        Args:
-            session_id: ID of the session
+        # Clean up session episode tracking
+        if session_id in self.session_episodes:
+            del self.session_episodes[session_id]
 
-        Returns:
-            Current Episode instance, or None if no active episode
-        """
-        return self.active_episodes.get(session_id)
-
-    def remove_episode_on_error(self, session_id: str, error: Exception) -> None:
+    def remove_episode_on_error(self, episode_id: str, error: Exception) -> None:
         """
         Immediately remove episode tracking due to error.
 
         Args:
-            session_id: ID of the session with the error
+            episode_id: ID of the episode with the error
             error: Exception that caused the episode to be removed
         """
-        logger.error(f"Removing episode tracking for session '{session_id}' due to error: {error}")
+        logger.error(f"Removing episode tracking for episode '{episode_id}' due to error: {error}")
 
-        if session_id in self.active_episodes:
-            # End episode with error reason
-            episode = self.active_episodes[session_id]
+        episode = self.get_episode_by_id(episode_id)
+        if episode:
+            # Mark episode as failed
             episode.end_time = datetime.utcnow()
             episode.state = EpisodeState.FAILED
             episode.completion_reason = f"error: {str(error)}"
 
-            # Remove from active tracking
-            del self.active_episodes[session_id]
+            # Move from active to completed
+            self.complete_episode(episode_id)
+
+            # Clean up episode configuration
+            if episode_id in self.episode_configs:
+                del self.episode_configs[episode_id]
+
             logger.info(f"Episode '{episode.episode_id}' removed from tracking due to error")

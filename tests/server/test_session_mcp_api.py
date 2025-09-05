@@ -81,9 +81,16 @@ class TestSessionMCPAPI:
         command_result = CommandResult.success_result(data={"output": "test output"})
         mcp_api.session_manager.execute_action.return_value = command_result
 
-        # Mock header-based session retrieval
-        with patch.object(mcp_api, '_get_session_from_headers', return_value="session_123"):
-            # Test tool call (no session_id in arguments - comes from headers)
+        # Mock episode for episode lookup
+        mock_episode = MagicMock()
+        mock_episode.task_id = "task_123"
+        mock_episode.steps = []
+        mock_episode.max_steps = 10
+        mcp_api.session_manager.get_episode_by_id.return_value = mock_episode
+
+        # Mock header-based session and episode retrieval
+        with patch.object(mcp_api, '_get_session_and_episode_from_headers', return_value=("session_123", "episode_456")):
+            # Test tool call (session_id and episode_id come from headers)
             result = await mcp_api.handle_call_tool(
                 name="cli", arguments={"command": "ls", "parameters": {}}
             )
@@ -93,11 +100,12 @@ class TestSessionMCPAPI:
         assert result["content"][0]["type"] == "text"
         assert "output" in result["content"][0]["text"]
 
-        # Verify execute_action was called correctly
+        # Verify execute_action was called correctly with both session_id and episode_id
         mcp_api.session_manager.execute_action.assert_called_once()
         call_args = mcp_api.session_manager.execute_action.call_args
         assert call_args[0][0] == "session_123"  # session_id
-        assert isinstance(call_args[0][1], Action)  # action
+        assert call_args[0][1] == "episode_456"  # episode_id
+        assert isinstance(call_args[0][2], Action)  # action
 
     @pytest.mark.asyncio
     async def test_handle_call_tool_error(self, mcp_api):
@@ -106,8 +114,15 @@ class TestSessionMCPAPI:
         command_result = CommandResult.error_result(error="Command failed")
         mcp_api.session_manager.execute_action.return_value = command_result
 
-        # Mock header-based session retrieval
-        with patch.object(mcp_api, '_get_session_from_headers', return_value="session_123"):
+        # Mock episode for episode lookup
+        mock_episode = MagicMock()
+        mock_episode.task_id = "task_123"
+        mock_episode.steps = []
+        mock_episode.max_steps = 10
+        mcp_api.session_manager.get_episode_by_id.return_value = mock_episode
+
+        # Mock header-based session and episode retrieval
+        with patch.object(mcp_api, '_get_session_and_episode_from_headers', return_value=("session_123", "episode_456")):
             # Test tool call
             result = await mcp_api.handle_call_tool(
                 name="cli", arguments={"command": "invalid_command"}
@@ -122,7 +137,7 @@ class TestSessionMCPAPI:
     async def test_handle_call_tool_missing_session(self, mcp_api):
         """Test MCP tool execution without session_id."""
         # Mock no session found in headers
-        with patch.object(mcp_api, '_get_session_from_headers', return_value=None):
+        with patch.object(mcp_api, '_get_session_and_episode_from_headers', return_value=(None, None)):
             # Test tool call without session_id
             result = await mcp_api.handle_call_tool(name="cli", arguments={"command": "ls"})
 
@@ -136,16 +151,16 @@ class TestSessionMCPAPI:
         # Mock end_episode method
         mcp_api.session_manager.end_episode = AsyncMock()
 
-        # Test end_episode tool call
-        result = await mcp_api._handle_end_episode_call({"session_id": "session_123"})
+        # Test end_episode tool call with proper session_id and episode_id
+        result = await mcp_api._handle_end_episode_call({}, "session_123", "episode_456")
 
         # Verify successful result
         assert result["isError"] is False
         assert result["content"][0]["type"] == "text"
         assert "Episode ended successfully" in result["content"][0]["text"]
 
-        # Verify end_episode was called
-        mcp_api.session_manager.end_episode.assert_called_once_with("session_123", "agent_completed")
+        # Verify end_episode was called with both session_id and episode_id
+        mcp_api.session_manager.end_episode.assert_called_once_with("session_123", "episode_456", "agent_completed")
 
     @pytest.mark.asyncio
     async def test_handle_end_episode_call_with_result(self, mcp_api):
@@ -156,9 +171,9 @@ class TestSessionMCPAPI:
             return_value=CommandResult.success_result(data="Action recorded")
         )
 
-        # Test end_episode tool call with result
+        # Test end_episode tool call with result - provide both session_id and episode_id
         result = await mcp_api._handle_end_episode_call(
-            {"session_id": "session_123", "parameters": {"submission": "flag{test_flag_found}"}}
+            {"parameters": {"submission": "flag{test_flag_found}"}}, "session_123", "episode_456"
         )
 
         # Verify successful result with flag
@@ -167,24 +182,25 @@ class TestSessionMCPAPI:
         result_text = result["content"][0]["text"]
         assert "Episode ended successfully with result: flag{test_flag_found}" in result_text
 
-        # Verify result action was executed
+        # Verify result action was executed with both session_id and episode_id
         mcp_api.session_manager.execute_action.assert_called_once()
         call_args = mcp_api.session_manager.execute_action.call_args
         assert call_args[0][0] == "session_123"  # session_id
-        action = call_args[0][1]  # action
+        assert call_args[0][1] == "episode_456"  # episode_id
+        action = call_args[0][2]  # action
         assert action.tool_name == "episode_result"
         assert "flag{test_flag_found}" in action.parameters.get("submission", "")
         assert action.parameters["submission"] == "flag{test_flag_found}"
         assert action.parameters["episode_end"] is True
 
-        # Verify end_episode was called
-        mcp_api.session_manager.end_episode.assert_called_once_with("session_123", "agent_completed", "flag{test_flag_found}")
+        # Verify end_episode was called with both session_id and episode_id
+        mcp_api.session_manager.end_episode.assert_called_once_with("session_123", "episode_456", "agent_completed", "flag{test_flag_found}")
 
     @pytest.mark.asyncio
     async def test_handle_end_episode_call_missing_session(self, mcp_api):
         """Test end_episode tool call without session_id."""
         # Test end_episode call without session_id
-        result = await mcp_api._handle_end_episode_call({"result": "some_flag"})
+        result = await mcp_api._handle_end_episode_call({"result": "some_flag"}, None, None)
 
         # Verify error result
         assert result["isError"] is True
@@ -197,8 +213,15 @@ class TestSessionMCPAPI:
         command_result = CommandResult.success_result(data="Episode completed")
         mcp_api.session_manager.execute_action.return_value = command_result
 
-        # Mock header-based session retrieval
-        with patch.object(mcp_api, '_get_session_from_headers', return_value="session_123"):
+        # Mock episode for episode lookup
+        mock_episode = MagicMock()
+        mock_episode.task_id = "task_123"
+        mock_episode.steps = []
+        mock_episode.max_steps = 10
+        mcp_api.session_manager.get_episode_by_id.return_value = mock_episode
+
+        # Mock header-based session and episode retrieval
+        with patch.object(mcp_api, '_get_session_and_episode_from_headers', return_value=("session_123", "episode_456")):
             # Test end_episode routing through normal execution path
             result = await mcp_api.handle_call_tool("end_episode", {"submission": "flag{test}"})
 
