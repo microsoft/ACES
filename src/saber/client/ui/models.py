@@ -123,39 +123,3 @@ class UIBackend(ABC):
     def cleanup(self) -> None:
         """Clean up UI resources."""
         pass
-
-
-# Typed events for tool-call lifecycle to avoid passing raw dicts
-@dataclass
-class ToolCallEventStart:
-    call_id: str
-    tool_name: str
-    arguments: Optional[Dict[str, Any]] = None
-    agent_id: Optional[str] = None
-    session_id: Optional[str] = None
-    task_id: Optional[str] = None
-
-
-@dataclass
-class ToolCallEventProgress:
-    call_id: str
-    tool_name: str
-    progress_info: Optional[str] = None
-    progress: Optional[float] = None
-    agent_id: Optional[str] = None
-    session_id: Optional[str] = None
-    task_id: Optional[str] = None
-
-
-@dataclass
-class ToolCallEventComplete:
-    call_id: str
-    tool_name: str
-    success: bool
-    arguments: Optional[Dict[str, Any]] = None
-    execution_time_ms: Optional[float] = None
-    output: Optional[str] = None
-    error: Optional[str] = None
-    agent_id: Optional[str] = None
-    session_id: Optional[str] = None
-    task_id: Optional[str] = None

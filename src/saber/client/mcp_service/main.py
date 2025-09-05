@@ -6,19 +6,14 @@ while routing requests to the appropriate SABER server sessions.
 """
 
 import asyncio
-import json
 import logging
 import sys
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Callable, Dict, Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-
-# Use sse-starlette for reliable SSE flushing (required)
-from sse_starlette.sse import EventSourceResponse
 
 from .agent_registry import AgentSessionRegistry
 from .mcp_proxy import MCPProxy
@@ -97,116 +92,6 @@ session_registry: Optional[AgentSessionRegistry] = None
 mcp_proxy: Optional[MCPProxy] = None
 tool_registry: Optional[ToolRegistry] = None
 cleanup_task: Optional[asyncio.Task] = None
-
-# Global progress event broadcasting
-progress_event_queues: Dict[str, asyncio.Queue] = {}  # agent_id -> queue
-
-
-async def broadcast_progress_event(event_data: Dict[str, Any]) -> None:
-    """Broadcast a progress event to all connected SSE streams."""
-    logger.info(f"🚨 Broadcasting event type {event_data.get('type')} to {len(progress_event_queues)} queues")
-
-    if not progress_event_queues:
-        logger.warning("🚨 No progress event queues available!")
-        return
-
-    # Broadcast to all agent streams
-    for agent_id, queue in progress_event_queues.items():
-        try:
-            # Non-blocking put with size limit
-            if queue.qsize() < 100:  # Prevent memory buildup
-                queue.put_nowait(event_data)
-                logger.info(f"🚨 Successfully queued event for agent {agent_id}")
-            else:
-                logger.warning(f"🚨 Queue full for agent {agent_id}, current size: {queue.qsize()}")
-        except asyncio.QueueFull:
-            logger.warning(f"Progress event queue full for agent {agent_id}, dropping event")
-        except Exception as e:
-            logger.warning(f"Failed to broadcast progress event to {agent_id}: {e}")
-
-
-def add_progress_event_queue(agent_id: str) -> asyncio.Queue:
-    """Add a new progress event queue for an agent."""
-    queue: asyncio.Queue = asyncio.Queue(maxsize=100)
-    progress_event_queues[agent_id] = queue
-    logger.info(f"📡 Added progress event queue for agent: {agent_id}")
-    return queue
-
-
-def remove_progress_event_queue(agent_id: str) -> None:
-    """Remove progress event queue for an agent."""
-    if agent_id in progress_event_queues:
-        del progress_event_queues[agent_id]
-        logger.info(f"📡 Removed progress event queue for agent: {agent_id}")
-
-
-async def emit_tool_call_start(
-    tool_name: str,
-    call_id: str,
-    agent_id: str,
-    input_args: Dict[str, Any],
-    session_id: str,
-    task_id: Optional[str] = None,
-) -> None:
-    """Emit a tool call start event."""
-    logger.info(f"🚨 EMIT DEBUG: emit_tool_call_start called for {tool_name}, call_id={call_id}")
-    event_data = {
-        "type": "tool_call_start",
-        "tool_name": tool_name,
-        "call_id": call_id,
-        "agent_id": agent_id,
-        "session_id": session_id,
-        "task_id": task_id,
-        "input_args": input_args,
-        "start_time": datetime.now(timezone.utc).isoformat(),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-    logger.info("🚨 Broadcasting event: %s", event_data)
-    await broadcast_progress_event(event_data)
-    logger.info(f"🚨 Broadcasted tool_call_start for {tool_name}")
-
-
-async def emit_tool_call_complete(
-    tool_name: str,
-    call_id: str,
-    agent_id: str,
-    status: str,
-    output: Optional[str] = None,
-    error: Optional[str] = None,
-    execution_time_ms: Optional[float] = None,
-    session_id: Optional[str] = None,
-    task_id: Optional[str] = None,
-    start_time: Optional[str] = None,
-    input_args: Optional[Dict[str, Any]] = None,
-) -> None:
-    """Emit a tool call completion event."""
-    logger.info(
-        "🚨 EMIT DEBUG: emit_tool_call_complete called for %s, call_id=%s, status=%s",
-        tool_name,
-        call_id,
-        status,
-    )
-    event_data = {
-        "type": "tool_call_complete",
-        "tool_name": tool_name,
-        "call_id": call_id,
-        "agent_id": agent_id,
-        "session_id": session_id,
-        "task_id": task_id,
-        "status": status,
-        # Include arguments for better UI reporting
-        "input_args": input_args,
-        "arguments": input_args,
-        "output": output,
-        "error": error,
-        "execution_time_ms": execution_time_ms,
-        "start_time": start_time,
-        "end_time": datetime.now(timezone.utc).isoformat(),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-    logger.info(f"🚨 EMIT DEBUG: Broadcasting complete event: {event_data}")
-    await broadcast_progress_event(event_data)
-    logger.info(f"🚨 EMIT DEBUG: Broadcasted tool_call_complete for {tool_name}")
 
 
 @asynccontextmanager
@@ -464,114 +349,6 @@ def create_app(
             }
         }
 
-    # Debug endpoint to check if events are in queue
-    @app.get("/progress/debug/{agent_id}")
-    async def debug_progress_queue(agent_id: str) -> Dict[str, Any]:
-        """Debug endpoint to check queue contents."""
-        if agent_id not in progress_event_queues:
-            return {"error": "No queue for agent", "agent_id": agent_id}
-
-        queue = progress_event_queues[agent_id]
-        events = []
-
-        # Non-blocking check for events in queue
-        while not queue.empty():
-            try:
-                event = queue.get_nowait()
-                events.append(event)
-            except asyncio.QueueEmpty:
-                break
-
-        return {"agent_id": agent_id, "events_found": len(events), "events": events, "queue_size_after": queue.qsize()}
-
-    # Tool Call Progress SSE Endpoint
-    @app.get("/progress/stream")
-    async def tool_progress_stream(request: Request) -> EventSourceResponse:
-        """Server-Sent Events stream for tool call progress updates."""
-        agent_id = request.headers.get("X-Agent-ID")
-        if not agent_id:
-            raise HTTPException(status_code=400, detail="Missing required header: X-Agent-ID")
-
-        logger.info(f"📡 Starting progress stream for agent: {agent_id}")
-
-        # Add event queue for this agent
-        event_queue = add_progress_event_queue(agent_id)
-
-        async def event_source_generator() -> AsyncGenerator[dict, None]:
-            """Generator yielding dicts for EventSourceResponse (sse-starlette)."""
-            try:
-                # Initial connection event
-                yield {
-                    "data": json.dumps(
-                        {
-                            "type": "connection",
-                            "message": "Progress stream connected",
-                            "agent_id": agent_id,
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                        }
-                    )
-                }
-
-                logger.info(
-                    "🚨 EventSource generator started for agent %s, queue size: %s",
-                    agent_id,
-                    event_queue.qsize(),
-                )
-
-                event_count = 0
-                while True:
-                    try:
-                        logger.info(
-                            "🚨 Waiting for event (size: %s), loop iteration: %s",
-                            event_queue.qsize(),
-                            event_count,
-                        )
-                        event_data = await asyncio.wait_for(event_queue.get(), timeout=3.0)
-                        event_count += 1
-                        yield {"data": json.dumps(event_data)}
-                        logger.info(
-                            "🚨 Yielded event to SSE stream: %s, iteration: %s",
-                            event_data.get("type", "unknown"),
-                            event_count,
-                        )
-                    except asyncio.TimeoutError:
-                        yield {
-                            "data": json.dumps(
-                                {
-                                    "type": "heartbeat",
-                                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                                }
-                            )
-                        }
-                        logger.info(
-                            "🚨 Yielded heartbeat (No SSE), iteration: %s",
-                            event_count,
-                        )
-            except asyncio.CancelledError:
-                logger.info(f"📡 Progress stream cancelled for agent: {agent_id}")
-                raise
-            except Exception as e:
-                logger.error(f"❌ Progress stream error for agent {agent_id}: {e}")
-                yield {
-                    "data": json.dumps(
-                        {"type": "error", "message": str(e), "timestamp": datetime.now(timezone.utc).isoformat()}
-                    )
-                }
-            finally:
-                remove_progress_event_queue(agent_id)
-
-        return EventSourceResponse(
-            event_source_generator(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache, no-store, must-revalidate",
-                "Pragma": "no-cache",
-                "Expires": "0",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
-        )
-
     # Function Injection Endpoints for New Architecture
     @app.get("/tools")
     async def get_tools_metadata(request: Request) -> JSONResponse:
@@ -671,16 +448,7 @@ def create_app(
             import uuid
 
             call_id = str(uuid.uuid4())
-            start_time_iso = datetime.now(timezone.utc).isoformat()
-            logger.info(f"🚨 Emitting tool_call_start for {body.tool_name}, call_id={call_id}")
-            await emit_tool_call_start(
-                tool_name=body.tool_name,
-                call_id=call_id,
-                agent_id=agent_id,
-                input_args=body.arguments,
-                session_id=session_id,
-                task_id=episode_id,
-            )
+            logger.info(f"� Executing tool {body.tool_name}, call_id={call_id}")
 
             import time
 
@@ -696,7 +464,6 @@ def create_app(
                 )
 
                 execution_time = time.time() - start_time
-                execution_time_ms = execution_time * 1000
                 result["execution_time"] = execution_time
 
                 if result.get("success"):
@@ -711,67 +478,16 @@ def create_app(
                         body.tool_name,
                         call_id,
                     )
-                    # Serialize result payload for UI output
-                    result_payload = result.get("result")
-                    try:
-                        output_str = json.dumps(result_payload, ensure_ascii=False, default=str)
-                    except Exception:
-                        output_str = str(result_payload)
-                    await emit_tool_call_complete(
-                        tool_name=body.tool_name,
-                        call_id=call_id,
-                        agent_id=agent_id,
-                        status="completed",
-                        output=output_str,
-                        execution_time_ms=execution_time_ms,
-                        session_id=session_id,
-                        task_id=episode_id,
-                        start_time=start_time_iso,
-                        input_args=body.arguments,
-                    )
-                    logger.info(
-                        f"🚨 DEBUG: Emitted tool_call_complete (success) for {body.tool_name}, call_id={call_id}"
-                    )
+                    logger.info(f"🔧 Tool execution completed successfully: {body.tool_name}, call_id={call_id}")
                 else:
                     error_msg = result.get("error", {}).get("message", "Unknown error")
-                    # Emit failure completion event
-                    logger.info(
-                        "🚨 Emitting tool_call_complete (failure) for %s, call_id=%s",
-                        body.tool_name,
-                        call_id,
-                    )
-                    await emit_tool_call_complete(
-                        tool_name=body.tool_name,
-                        call_id=call_id,
-                        agent_id=agent_id,
-                        status="failed",
-                        error=error_msg,
-                        execution_time_ms=execution_time_ms,
-                        session_id=session_id,
-                        task_id=episode_id,
-                        start_time=start_time_iso,
-                        input_args=body.arguments,
-                    )
+                    logger.info(f"� Tool execution failed: {body.tool_name}, call_id={call_id}, error={error_msg}")
 
                 return JSONResponse(content=result)
 
             except Exception as tool_error:
                 execution_time = time.time() - start_time
-                execution_time_ms = execution_time * 1000
-
-                # Emit error completion event
-                await emit_tool_call_complete(
-                    tool_name=body.tool_name,
-                    call_id=call_id,
-                    agent_id=agent_id,
-                    status="failed",
-                    error=str(tool_error),
-                    execution_time_ms=execution_time_ms,
-                    session_id=session_id,
-                    task_id=episode_id,
-                    start_time=start_time_iso,
-                    input_args=body.arguments,
-                )
+                logger.error(f"🔧 Tool execution exception: {body.tool_name}, call_id={call_id}, error={tool_error}")
                 raise
 
         except HTTPException:

@@ -5,6 +5,7 @@ import logging
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
+from ...api_models import ToolCallEventComplete, ToolCallEventStart
 from .inspect_ai_backend import InspectAIBackend
 from .models import (
     MessageType,
@@ -12,9 +13,6 @@ from .models import (
     StepUpdate,
     TaskInfo,
     TaskStatus,
-    ToolCallEventComplete,
-    ToolCallEventProgress,
-    ToolCallEventStart,
     UIBackend,
     UIBackendType,
     UIConfig,
@@ -403,26 +401,12 @@ class UIManager:
             except Exception as e:
                 logger.error(f"Failed to complete task in backend: {e}")
 
-    async def tool_call_start(self, tool_call: Any) -> None:
-        """Start a tool call."""
-        if isinstance(tool_call, ToolCallEventStart):
-            call_id = tool_call.call_id
-            tool_name = tool_call.tool_name
-            args = tool_call.arguments
-            metadata = tool_call.__dict__
-        else:
-            call_id = tool_call.get("call_id", "unknown")
-            tool_name = tool_call.get("tool_name", "unknown")
-            args = tool_call.get("arguments") or tool_call.get("input_args")
-            metadata = tool_call
+    async def tool_call_start(self, tool_call: ToolCallEventStart) -> None:
+        """Start a tool call and update backend tracking."""
+        metadata = tool_call.__dict__
 
-        # Render arguments succinctly
-        args_str = f"({self._format_args_preview(args)})"
-        self.display_message(
-            f"🔧 Starting tool call: {tool_name}{args_str} ({call_id})",
-            MessageType.INFO,
-            metadata,
-        )
+        # Only update backend tracking - no separate display message
+        # The integrated task display will show the tool call information
 
         if self.backend and hasattr(self.backend, "tool_call_start"):
             try:
@@ -430,57 +414,12 @@ class UIManager:
             except Exception as e:
                 logger.error(f"Failed to start tool call in backend: {e}")
 
-    async def tool_call_progress(self, tool_call: Any) -> None:
-        """Update progress for a tool call."""
-        if isinstance(tool_call, ToolCallEventProgress):
-            call_id = tool_call.call_id
-            tool_name = tool_call.tool_name
-            progress_info = tool_call.progress_info or "executing..."
-            metadata = tool_call.__dict__
-        else:
-            call_id = tool_call.get("call_id", "unknown")
-            tool_name = tool_call.get("tool_name", "unknown")
-            progress_info = tool_call.get("progress_info", "executing...")
-            metadata = tool_call
+    async def tool_call_complete(self, tool_call: ToolCallEventComplete) -> None:
+        """Complete a tool call and update backend tracking."""
+        metadata = tool_call.__dict__
 
-        self.display_message(f"🔄 {tool_name}: {progress_info} ({call_id})", MessageType.INFO, metadata)
-
-        if self.backend and hasattr(self.backend, "tool_call_progress"):
-            try:
-                await self.backend.tool_call_progress(metadata)
-            except Exception as e:
-                logger.error(f"Failed to update tool call progress in backend: {e}")
-
-    async def tool_call_complete(self, tool_call: Any) -> None:
-        """Complete a tool call."""
-        if isinstance(tool_call, ToolCallEventComplete):
-            call_id = tool_call.call_id
-            tool_name = tool_call.tool_name
-            success = tool_call.success
-            args = tool_call.arguments
-            output = tool_call.output
-            metadata = tool_call.__dict__
-        else:
-            call_id = tool_call.get("call_id", "unknown")
-            tool_name = tool_call.get("tool_name", "unknown")
-            success = tool_call.get("result", {}).get("success", True)
-            args = tool_call.get("arguments") or tool_call.get("input_args")
-            output = tool_call.get("output")
-            metadata = tool_call
-
-        status = "✅" if success else "❌"
-        # Normalize args/output for display
-        args_disp = self._format_args_preview(args)
-        if success:
-            out_disp = self._format_output_preview(output)
-            suffix = f"{tool_name}({args_disp}) -> {out_disp}"
-        else:
-            suffix = f"{tool_name}({args_disp})"
-        self.display_message(
-            f"{status} Tool call completed: {suffix} ({call_id})",
-            MessageType.SUCCESS if success else MessageType.ERROR,
-            metadata,
-        )
+        # Only update backend tracking - no separate display message
+        # The integrated task display will show the tool call completion
 
         if self.backend and hasattr(self.backend, "tool_call_complete"):
             try:

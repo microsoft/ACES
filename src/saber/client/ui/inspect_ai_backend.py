@@ -178,7 +178,7 @@ class InspectAIBackend(UIBackend):
                 self._safe_display_print(f"📋 TASK: {task.task_id}")
                 self._safe_display_print(f"   ├─ Name: {task.name}")
                 self._safe_display_print(f"   ├─ Status: {task.status.value}")
-                self._safe_display_print("   └─ Note: Use real TUI for progress tracking")
+                self._safe_display_print("    └─ Note: Use real TUI for progress tracking")
                 logger.info(f"Task {task.task_id} registered (textual mode - use real TUI for full experience)")
                 return
 
@@ -189,7 +189,7 @@ class InspectAIBackend(UIBackend):
                 dataset=task.metadata.get("episode_id", "saber-episode") if task.metadata else "saber-episode",
                 scorer="saber-evaluator",
                 samples=1,
-                steps=10,  # Estimated steps for progress tracking
+                steps=1,  # Will be updated when we receive tool events with actual step counts
                 eval_config={"state": task.status.value},
                 task_args={"task_id": task.task_id},
                 generate_config={},
@@ -217,7 +217,7 @@ class InspectAIBackend(UIBackend):
                         "context": progress_context,
                         "progress": progress,
                         "completed_steps": 0,
-                        "total_steps": saber_profile.steps,
+                        "total_steps": None,  # Will be set when we get tool events
                         "supports_progress": True,
                     }
                     logger.debug(f"Progress tracking enabled for task {task.task_id}")
@@ -227,7 +227,7 @@ class InspectAIBackend(UIBackend):
                         "context": None,
                         "progress": None,
                         "completed_steps": 0,
-                        "total_steps": saber_profile.steps,
+                        "total_steps": None,  # Will be set when we get tool events
                         "supports_progress": False,
                     }
 
@@ -239,8 +239,7 @@ class InspectAIBackend(UIBackend):
             self._safe_display_print("   └─ Starting...")
 
             logger.info(
-                f"Task {task.task_id} started with {saber_profile.steps} estimated steps "
-                f"(progress tracking: {'enabled' if progress_enabled else 'disabled'})"
+                f"Task {task.task_id} started " f"(progress tracking: {'enabled' if progress_enabled else 'disabled'})"
             )
 
         except Exception as e:
@@ -252,50 +251,14 @@ class InspectAIBackend(UIBackend):
         try:
             # For textual mode, provide simple status updates
             if self.backend_mode == InspectAIBackendMode.TEXTUAL:
-                progress_pct = task.progress * 100
                 self._safe_display_print(f"🔄 TASK UPDATE: {task.task_id}")
                 self._safe_display_print(f"   ├─ Status: {task.status.value}")
-                self._safe_display_print(f"   ├─ Progress: {progress_pct:.1f}%")
-                self._safe_display_print("   └─ Use real TUI for detailed progress")
+                self._safe_display_print("    └─ Use real TUI for detailed progress")
                 return
 
-            progress_info = self._current_progress_contexts.get(task.task_id)
-            if progress_info and progress_info["supports_progress"]:
-                # Calculate steps based on progress percentage
-                total_steps = progress_info["total_steps"]
-                current_step = int(task.progress * total_steps)
-
-                # Update progress if we have advanced
-                if current_step > progress_info["completed_steps"]:
-                    steps_to_advance = current_step - progress_info["completed_steps"]
-                    try:
-                        for _ in range(steps_to_advance):
-                            # Try different progress update methods
-                            progress = progress_info["progress"]
-                            if hasattr(progress, "advance"):
-                                progress.advance()
-                            elif hasattr(progress, "update"):
-                                progress.update(current_step)
-                            elif hasattr(progress, "step"):
-                                progress.step()
-                            else:
-                                # If none of the expected methods exist, log available methods
-                                available_methods = [m for m in dir(progress) if not m.startswith("_")]
-                                logger.debug(f"Available progress methods: {available_methods}")
-                                break
-                        progress_info["completed_steps"] = current_step
-                    except Exception as e:
-                        logger.warning(f"Failed to update progress steps for task {task.task_id}: {e}")
-
-            # Display status update
-            current_step = progress_info["completed_steps"] if progress_info else int(task.progress * 10)
-            total_steps = progress_info["total_steps"] if progress_info else 10
-            progress_pct = task.progress * 100
-
+            # Simple task status update - tool calls handle their own display
             self._safe_display_print(f"🔄 TASK UPDATE: {task.task_id}")
-            self._safe_display_print(f"   ├─ Status: {task.status.value}")
-            self._safe_display_print(f"   ├─ Progress: {current_step}/{total_steps} steps ({progress_pct:.1f}%)")
-            self._safe_display_print("   └─ Processing...")
+            self._safe_display_print(f"   └─ Status: {task.status.value}")
 
         except Exception as e:
             logger.error(f"Failed to update task status for {task.task_id}: {e}")
@@ -409,71 +372,107 @@ class InspectAIBackend(UIBackend):
 
     # Tool call progress methods for real-time MCP sidecar updates
     async def tool_call_start(self, tool_call: Dict[str, Any]) -> None:
-        """Handle tool call start event."""
+        """Handle tool call start event and display immediately."""
         try:
             call_id = tool_call.get("call_id", "unknown")
             tool_name = tool_call.get("tool_name", "unknown")
             args = tool_call.get("arguments") or tool_call.get("input_args")
+            task_id = tool_call.get("task_id")
+            current_step = tool_call.get("current_step")
+            max_steps = tool_call.get("max_steps")
 
-            if self._display:
-                if args is None:
-                    args_str = "({})"
-                else:
-                    try:
-                        args_str = f"({args})"
-                    except Exception:
-                        args_str = "(<unprintable-args>)"
-                self._safe_display_print(f"🔧 Starting: {tool_name}{args_str} ({call_id[:8]}...)")
+            # Format arguments for display
+            if args:
+                try:
+                    args_str = str(args) if len(str(args)) < 100 else f"{str(args)[:97]}..."
+                except Exception:
+                    args_str = "<unprintable-args>"
+            else:
+                args_str = "{}"
+
+            # Display tool call start immediately
+            if task_id:
+                self._safe_display_print(f"🔧 TOOL CALL START: {task_id}")
+
+                # Show step progress if available
+                if current_step is not None and max_steps is not None:
+                    progress_pct = (current_step / max_steps * 100) if max_steps > 0 else 0
+                    self._safe_display_print(f"   ├─ Progress: {current_step}/{max_steps} steps ({progress_pct:.1f}%)")
+
+                self._safe_display_print(f"   ├─ Tool: {tool_name}({args_str})")
+                self._safe_display_print(f"   └─ Call ID: {call_id}")
+
+                step_info = (
+                    f"step={current_step}/{max_steps}"
+                    if current_step is not None and max_steps is not None
+                    else "step=?/?"
+                )
+                logger.debug(f"Tool call started: {tool_name} (call_id={call_id}, task_id={task_id}, {step_info})")
+            else:
+                logger.debug(f"Tool call started without task_id: {tool_name} (call_id={call_id})")
 
         except Exception as e:
             logger.error(f"Failed to handle tool call start: {e}")
 
-    async def tool_call_progress(self, tool_call: Dict[str, Any]) -> None:
-        """Handle tool call progress event."""
-        try:
-            # call_id = tool_call.get("call_id", "unknown")  # Not used currently
-            tool_name = tool_call.get("tool_name", "unknown")
-            progress_info = tool_call.get("progress_info", "executing...")
-
-            if self._display:
-                self._safe_display_print(f"🔄 {tool_name}: {progress_info}")
-
-        except Exception as e:
-            logger.error(f"Failed to handle tool call progress: {e}")
-
     async def tool_call_complete(self, tool_call: Dict[str, Any]) -> None:
-        """Handle tool call completion event."""
+        """Handle tool call completion event and display immediately."""
         try:
-            # call_id = tool_call.get("call_id", "unknown")  # Not used currently
+            call_id = tool_call.get("call_id", "unknown")
             tool_name = tool_call.get("tool_name", "unknown")
-            success = tool_call.get("result", {}).get("success", True)
+            success = tool_call.get("success", True)
             args = tool_call.get("arguments") or tool_call.get("input_args")
             output = tool_call.get("output")
             execution_time_ms = tool_call.get("execution_time_ms")
+            task_id = tool_call.get("task_id")
+            current_step = tool_call.get("current_step")
+            max_steps = tool_call.get("max_steps")
 
-            status = "✅" if success else "❌"
-            time_str = f" ({execution_time_ms}ms)" if execution_time_ms else ""
+            # Format arguments for display
+            if args:
+                try:
+                    args_str = str(args) if len(str(args)) < 100 else f"{str(args)[:97]}..."
+                except Exception:
+                    args_str = "<unprintable-args>"
+            else:
+                args_str = "{}"
 
-            if self._display:
-                if args is None:
-                    args_disp = "{}"
-                else:
-                    try:
-                        args_disp = f"{args}"
-                    except Exception:
-                        args_disp = "<unprintable-args>"
-                if success:
-                    if output is None:
-                        out_disp = "<no output>"
-                    else:
-                        try:
-                            out_disp = str(output)
-                        except Exception:
-                            out_disp = "<unprintable-output>"
-                    suffix = f"{tool_name}({args_disp}) -> {out_disp}"
-                else:
-                    suffix = f"{tool_name}({args_disp})"
-                self._safe_display_print(f"{status} Completed: {suffix}{time_str}")
+            # Format output for display
+            if success and output:
+                try:
+                    out_str = str(output) if len(str(output)) < 50 else f"{str(output)[:47]}..."
+                except Exception:
+                    out_str = "<unprintable-output>"
+            else:
+                out_str = ""
+
+            # Display tool call completion immediately
+            if task_id:
+                success_icon = "✅" if success else "❌"
+                time_str = f" ({execution_time_ms:.1f}ms)" if execution_time_ms else ""
+                result_str = f" -> {out_str}" if out_str else ""
+
+                self._safe_display_print(f"🔧 TOOL CALL COMPLETE: {task_id}")
+
+                # Show step progress if available
+                if current_step is not None and max_steps is not None:
+                    progress_pct = (current_step / max_steps * 100) if max_steps > 0 else 0
+                    self._safe_display_print(f"   ├─ Progress: {current_step}/{max_steps} steps ({progress_pct:.1f}%)")
+
+                self._safe_display_print(f"   ├─ Tool: {tool_name}({args_str})")
+                self._safe_display_print(f"   ├─ Call ID: {call_id}")
+                self._safe_display_print(f"   └─ {success_icon} Result{result_str}{time_str}")
+
+                step_info = (
+                    f"step={current_step}/{max_steps}"
+                    if current_step is not None and max_steps is not None
+                    else "step=?/?"
+                )
+                logger.debug(
+                    f"Tool call completed: {tool_name} ({'success' if success else 'failed'}, "
+                    f"call_id={call_id}, task_id={task_id}, {step_info})"
+                )
+            else:
+                logger.debug(f"Tool call completed without task_id: {tool_name} (call_id={call_id})")
 
         except Exception as e:
             logger.error(f"Failed to handle tool call completion: {e}")

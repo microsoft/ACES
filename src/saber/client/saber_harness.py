@@ -13,6 +13,9 @@ from typing import Any, Dict, List, Optional
 
 from .api import SABERRestClient
 from .episode_executor import ContainerEpisodeExecutor
+from .events.bus import EventBus
+from .events.subscribers.ui_adapter import UIAdapterSubscriber
+from .events.types import EventType, SaberEvent
 from .harness_models import HarnessRunResult, SABERHarnessConfig
 from .llm import create_llm_client
 from .logging import (
@@ -67,7 +70,16 @@ class SABERHarness:
             self.ui_manager = UIManager(ui_config)
             logger.info(f"🎨 UI manager initialized: {self.config.ui_backend}")
 
-        # SSE client for tool call progress updates (replaces old progress server)
+        # Event bus for decoupled UI updates and real-time tool events
+        self.event_bus = EventBus(max_queue_size=1000)
+
+        # Set up UI adapter subscriber if UI is enabled
+        if self.config.ui_enabled and self.ui_manager:
+            ui_adapter = UIAdapterSubscriber(self.ui_manager)
+            self.event_bus.subscribe(None, ui_adapter.handle_event)  # Subscribe to all events
+            logger.info("🔄 UI adapter subscribed to event bus")
+
+        # SSE client for tool call progress updates (replaced with server SSE)
         self.tool_call_sse_client: Optional[Any] = None
 
         # Configure logging
@@ -170,6 +182,9 @@ class SABERHarness:
         """Run complete test with client-orchestrated episodes."""
         start_time = datetime.now(timezone.utc)
 
+        # Start event bus
+        await self.event_bus.start()
+
         try:
             logger.info("🚀 Starting SABER benchmark")
             logger.info(f"🎯 Parallelism: {self.config.parallelism}")
@@ -199,6 +214,9 @@ class SABERHarness:
                         session_id=self.session_id, success=True, server_url=self.config.server_url
                     )
                     self.harness_logger.log_session_creation_event(session_event)
+
+                # Start tool events SSE stream for real-time updates
+                await self._start_tool_events_stream()
 
             except Exception as e:
                 # Log failed session creation
@@ -242,6 +260,9 @@ class SABERHarness:
 
             await self._cleanup_session()
             raise
+        finally:
+            # Stop event bus and flush remaining events
+            await self.event_bus.stop()
 
     async def _run_with_textual_ui(self, tasks: List[Dict[str, Any]], start_time: datetime) -> HarnessRunResult:
         """Run SABER with textual UI mode using the dedicated textual flow."""
@@ -313,7 +334,18 @@ class SABERHarness:
                     "start_time": start_time,
                     "tasks": [task["task_id"] for task in tasks],
                 }
-                await self.ui_manager.session_start(session_info)
+
+                # Emit session started event instead of direct UI call
+                if self.session_id:  # Only emit if session_id is not None
+                    await self.event_bus.publish(
+                        SaberEvent(
+                            event_type=EventType.SESSION_STARTED,
+                            session_id=self.session_id,
+                            correlation_id=self.session_id,
+                            payload=session_info,
+                            timestamp=datetime.now(timezone.utc),
+                        )
+                    )
 
                 if self.harness_logger:
                     ui_event = UIEvent(
@@ -347,7 +379,18 @@ class SABERHarness:
                         "target": task.get("target", "saber_domain"),
                         "description": task.get("description", f"Execute task {task['task_id']}"),
                     }
-                    await self.ui_manager.task_start(task_info)
+
+                    # Emit task started event instead of direct UI call
+                    if self.session_id:  # Only emit if session_id is not None
+                        await self.event_bus.publish(
+                            SaberEvent(
+                                event_type=EventType.TASK_STARTED,
+                                session_id=self.session_id,
+                                correlation_id=task["task_id"],
+                                payload=task_info,
+                                timestamp=datetime.now(timezone.utc),
+                            )
+                        )
 
                 self.ui_manager.display_message(f"📋 Prepared {len(tasks)} tasks for execution", MessageType.INFO)
 
@@ -541,16 +584,14 @@ class SABERHarness:
                     logger.error(f"❌ UI cleanup failed: {e}")
 
             # Clean up SSE client for tool call updates
-            if self.tool_call_sse_client:
+            if self.rest_client:
                 try:
-                    # Close SSE connection
-                    if hasattr(self.tool_call_sse_client, "close"):
-                        await self.tool_call_sse_client.close()
-                    logger.info("� SSE client for tool call updates stopped")
+                    await self.rest_client.stop_progress_stream()
+                    logger.info("🔗 Tool events SSE stream stopped")
                 except Exception as e:
                     cleanup_successful = False
-                    cleanup_errors.append(f"SSE client cleanup failed: {str(e)}")
-                    logger.error(f"❌ SSE client cleanup failed: {e}")
+                    cleanup_errors.append(f"SSE stream cleanup failed: {str(e)}")
+                    logger.error(f"❌ SSE stream cleanup failed: {e}")
 
             # Log cleanup completion
             if self.harness_logger:
@@ -585,3 +626,88 @@ class SABERHarness:
                     session_id=self.session_id,
                 )
                 self.harness_logger.log_error_event(error_event)
+
+    def _handle_tool_event(self, tool_event: Dict[str, Any]) -> None:
+        """
+        Handle tool events from server SSE and publish to event bus.
+
+        Converts server tool events to client event bus events for UI updates.
+
+        Args:
+            tool_event: Tool event from server SSE stream
+        """
+        try:
+            # Debug: log all received tool events
+            logger.info(f"🔄 RECEIVED tool event from server SSE: {tool_event}")
+
+            if not self.session_id:
+                logger.warning("No session ID available for tool event handling")
+                return
+
+            # Map server event types to client event types
+            event_type_mapping = {
+                "tool_call_started": EventType.TOOL_CALL_STARTED,
+                "tool_call_completed": EventType.TOOL_CALL_COMPLETED,
+                "connection": None,  # Skip connection events
+                "heartbeat": None,  # Skip heartbeat events
+                "error": EventType.ERROR,
+            }
+
+            server_event_type = tool_event.get("type")
+            # Ensure server_event_type is a string for dict lookup
+            if not isinstance(server_event_type, str):
+                logger.debug(f"Skipping event with non-string type: {server_event_type}")
+                return
+
+            client_event_type = event_type_mapping.get(server_event_type)
+
+            if client_event_type is None:
+                # Skip non-tool events (connection, heartbeat)
+                logger.debug(f"Skipping non-tool event: {server_event_type}")
+                return
+
+            # Create client event from server tool event
+            client_event = SaberEvent(
+                event_type=client_event_type,
+                session_id=self.session_id,
+                correlation_id=tool_event.get("call_id", tool_event.get("session_id", "unknown")),
+                payload=tool_event,
+                timestamp=datetime.now(timezone.utc),
+            )
+
+            # Publish to event bus asynchronously
+            # Use asyncio.create_task to avoid blocking the SSE thread
+            import asyncio
+
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.create_task(self.event_bus.publish(client_event))
+                logger.info(
+                    f"📤 PUBLISHED tool event to event bus: {server_event_type} (call_id={tool_event.get('call_id')})"
+                )
+            else:
+                logger.warning("Event loop not running, cannot publish tool event")
+
+        except Exception as e:
+            logger.error(f"Failed to handle tool event: {e}")
+            # FAIL FAST: Don't silently drop tool events
+            raise
+
+    async def _start_tool_events_stream(self) -> None:
+        """Start the tool events SSE stream from server."""
+        if not self.rest_client:
+            logger.warning("REST client not available, cannot start tool events stream")
+            return
+
+        try:
+            # Start SSE stream with tool event callback
+            success = await self.rest_client.start_progress_stream(progress_callback=self._handle_tool_event)
+
+            if success:
+                logger.info("🔗 Tool events SSE stream started")
+            else:
+                logger.warning("Failed to start tool events SSE stream")
+
+        except Exception as e:
+            logger.error(f"Error starting tool events stream: {e}")
+            # Don't raise - tool events are optional enhancement

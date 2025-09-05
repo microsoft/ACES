@@ -629,6 +629,35 @@ class SessionManager:
         """
         return self.episode_manager.should_terminate_episode(session_id)
 
+    def get_tool_event_publisher(self) -> Optional[Any]:
+        """Get the tool event publisher from the REST API."""
+        return getattr(self.rest_api, "tool_event_publisher", None)
+
+    def get_current_task_id(self, session_id: str) -> Optional[str]:
+        """Get the current task_id for a session."""
+        try:
+            session = self._get_session(session_id)
+            return session.current_task_id
+        except Exception as e:
+            logger.warning(f"Failed to get current task_id for session {session_id}: {e}")
+            return None
+
+    def get_episode_step_info(self, session_id: str) -> Dict[str, Any]:
+        """Get current step count and max steps for a session."""
+        try:
+            # Get episode config for max_steps
+            episode_config = self.get_episode_config(session_id)
+            max_steps = episode_config.get("max_steps", 10)  # Fallback to 10
+
+            # Get current step count from episode manager
+            episode = self.episode_manager.active_episodes.get(session_id)
+            current_steps = len(episode.steps) if episode else 0
+
+            return {"current_steps": current_steps, "max_steps": max_steps, "session_id": session_id}
+        except Exception as e:
+            logger.warning(f"Failed to get episode step info for session {session_id}: {e}")
+            return {"current_steps": 0, "max_steps": 10, "session_id": session_id}  # Fallback
+
     async def _start_permanent_environment(self) -> None:
         """Start permanent environment if configured through ExecutionManager lifecycle management."""
         permanent_env_name = self.benchmark_manager.config_loader.get_permanent_environment()

@@ -5,11 +5,17 @@ The SessionRestAPI handles REST API endpoints for session management, episodes,
 policy, status, and events. Tool execution is handled by SessionMCPAPI.
 """
 
+import asyncio
+import json
 import logging
-from typing import Any, Dict, cast
+from datetime import datetime, timezone
+from typing import Any, AsyncGenerator, Dict, cast
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
+from sse_starlette.sse import EventSourceResponse
+
+from .events.tool_event_publisher import ToolEventPublisher
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +40,9 @@ class SessionRestAPI:
         self.session_manager = session_manager
         self.host = host
         self.port = port
+
+        # Initialize tool event publisher for real-time SSE events
+        self.tool_event_publisher = ToolEventPublisher(max_queue_size=100)
 
         # Initialize FastAPI app
         self.app = FastAPI(
@@ -83,6 +92,81 @@ class SessionRestAPI:
             policy = self.session_manager.get_policy(session_id)
             policy_dict = policy.to_dict()
             return dict(policy_dict) if policy_dict else {}
+
+        @self.app.get("/tool-events/stream")
+        async def tool_events_stream(request: Request) -> EventSourceResponse:
+            """Server-Sent Events stream for real-time tool call events."""
+            session_id = request.headers.get("X-Saber-Session-ID")
+            if not session_id:
+                raise HTTPException(status_code=400, detail="Missing X-Saber-Session-ID header")
+
+            logger.info(f"Starting tool events SSE stream for session: {session_id}")
+
+            # Check if session exists
+            if not hasattr(self, "tool_event_publisher"):
+                raise HTTPException(status_code=500, detail="Tool event publisher not available")
+
+            # Subscribe to tool events for this session
+            event_queue = await self.tool_event_publisher.subscribe(session_id)
+
+            async def event_generator() -> AsyncGenerator[Dict[str, Any], None]:
+                """Generate SSE events from the tool event queue."""
+                try:
+                    # Send initial connection event
+                    yield {
+                        "data": json.dumps(
+                            {
+                                "type": "connection",
+                                "message": "Tool events stream connected",
+                                "session_id": session_id,
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            }
+                        )
+                    }
+
+                    # Stream tool events
+                    while True:
+                        try:
+                            # Wait for events with timeout for heartbeat
+                            event = await asyncio.wait_for(event_queue.get(), timeout=30.0)
+                            yield {"data": json.dumps(event)}
+                            logger.debug(f"Sent tool event: {event['type']} for session {session_id}")
+                        except asyncio.TimeoutError:
+                            # Send heartbeat to keep connection alive
+                            yield {
+                                "data": json.dumps(
+                                    {"type": "heartbeat", "timestamp": datetime.now(timezone.utc).isoformat()}
+                                )
+                            }
+                            logger.debug(f"Sent heartbeat for session {session_id}")
+                except Exception as e:
+                    logger.error(f"Tool events stream error for session {session_id}: {e}")
+                    yield {
+                        "data": json.dumps(
+                            {
+                                "type": "error",
+                                "message": str(e),
+                                "session_id": session_id,
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            }
+                        )
+                    }
+                finally:
+                    # Clean up subscription
+                    await self.tool_event_publisher.unsubscribe(session_id)
+                    logger.info(f"Tool events stream closed for session: {session_id}")
+
+            return EventSourceResponse(
+                event_generator(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache, no-store, must-revalidate",
+                    "Pragma": "no-cache",
+                    "Expires": "0",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",  # Disable nginx buffering
+                },
+            )
 
         @self.app.post("/session/{session_id}/start-episode")
         async def start_episode_endpoint(session_id: str, task_id: str) -> Dict[str, Any]:
