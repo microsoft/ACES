@@ -243,25 +243,6 @@ class ContainerEpisodeExecutor:
                     logger.info("🚨 CLIENT SSE DEBUG: Creating async task for tool_call_start")
                     asyncio.create_task(self.progress_adapter.tool_call_start(tool_call))
 
-                elif event_type == "tool_call_progress":
-                    # Update existing tool call
-                    tool_call = MCPToolCall(
-                        tool_name=data.get("tool_name", "unknown"),
-                        call_id=data.get("call_id", "unknown"),
-                        status=MCPToolCallStatus.RUNNING,
-                        input_args=data.get("input_args", {}),
-                        start_time=datetime.fromisoformat(
-                            data.get("start_time", datetime.now(timezone.utc).isoformat())
-                        ),
-                        progress=data.get("progress", 0.0),
-                        execution_time_ms=data.get("execution_time_ms"),
-                        agent_id=data.get("agent_id"),
-                        session_id=data.get("session_id"),
-                        task_id=data.get("task_id"),
-                    )
-                    # Schedule the async call
-                    asyncio.create_task(self.progress_adapter.tool_call_progress(tool_call))
-
                 elif event_type == "tool_call_complete":
                     logger.info(
                         f"🚨 CLIENT SSE DEBUG: Tool call complete event received for {data.get('tool_name', 'unknown')}"

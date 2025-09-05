@@ -8,6 +8,8 @@ are handled by SessionRestAPI.
 
 import json
 import logging
+import time
+import uuid
 from typing import Any, Dict, List, Optional
 
 from fastmcp import FastMCP
@@ -245,22 +247,119 @@ class SessionMCPAPI:
         Returns:
             MCP-formatted execution result
         """
-        try:
-            # Get session from HTTP headers
-            session_id = await self._get_session_from_headers()
-            if not session_id:
-                return self._convert_to_mcp_result(
-                    CommandResult.error_result(error="No SABER session mapped to MCP request")
-                )
+        # Get session from HTTP headers first
+        session_id = await self._get_session_from_headers()
+        if not session_id:
+            return self._convert_to_mcp_result(
+                CommandResult.error_result(error="No SABER session mapped to MCP request")
+            )
 
+        # Get current task_id for the session
+        task_id = self.session_manager.get_current_task_id(session_id)
+
+        # Get step information for progress tracking
+        step_info = self.session_manager.get_episode_step_info(session_id)
+        current_step = step_info.get("current_steps", 0) + 1  # +1 because we're about to start a new step
+        max_steps = step_info.get("max_steps", 10)
+
+        # Generate unique call ID for tracking
+        call_id = str(uuid.uuid4())
+        start_time = time.time()
+
+        # Publish tool started event with task_id and step info
+        tool_event_publisher = self.session_manager.get_tool_event_publisher()
+        if tool_event_publisher:
+            try:
+                await tool_event_publisher.publish_tool_started(
+                    session_id=session_id,
+                    tool_name=name,
+                    arguments=arguments,
+                    call_id=call_id,
+                    task_id=task_id,
+                    current_step=current_step,
+                    max_steps=max_steps,
+                )
+                logger.debug(
+                    f"Published tool_call_started event: {name} (call_id={call_id}, "
+                    f"task_id={task_id}, step={current_step}/{max_steps})"
+                )
+            except Exception as e:
+                logger.error(f"Failed to publish tool_call_started event: {e}")
+                # Continue execution - event publishing failure shouldn't break tool execution
+
+        try:
             # Execute action through SessionManager
             action = self._convert_to_action(name, arguments)
             command_result = await self.session_manager.execute_action(session_id, action)
+
+            # Calculate execution time
+            execution_time_ms = (time.time() - start_time) * 1000
+
+            # Publish tool completed event
+            tool_event_publisher = self.session_manager.get_tool_event_publisher()
+            if tool_event_publisher:
+                try:
+                    # Get updated step info after tool execution
+                    updated_step_info = self.session_manager.get_episode_step_info(session_id)
+                    completed_step = updated_step_info.get("current_steps", current_step)
+
+                    await tool_event_publisher.publish_tool_completed(
+                        session_id=session_id,
+                        tool_name=name,
+                        call_id=call_id,
+                        success=command_result.success,
+                        arguments=arguments,
+                        result=(
+                            command_result.data.get("output")
+                            if command_result.success and command_result.data
+                            else command_result.stdout
+                        ),
+                        error=command_result.error if not command_result.success else None,
+                        execution_time_ms=execution_time_ms,
+                        task_id=task_id,
+                        current_step=completed_step,
+                        max_steps=max_steps,
+                    )
+                    logger.debug(
+                        f"Published tool_call_completed event: {name} "
+                        f"({'success' if command_result.success else 'failed'}, "
+                        f"task_id={task_id}, step={completed_step}/{max_steps})"
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to publish tool_call_completed event: {e}")
+                    # Continue - event publishing failure shouldn't affect response
 
             # Convert result to MCP format
             return self._convert_to_mcp_result(command_result)
 
         except Exception as e:
+            # Calculate execution time for failed call
+            execution_time_ms = (time.time() - start_time) * 1000
+
+            # Publish tool failed event
+            tool_event_publisher = self.session_manager.get_tool_event_publisher()
+            if tool_event_publisher:
+                try:
+                    await tool_event_publisher.publish_tool_completed(
+                        session_id=session_id,
+                        tool_name=name,
+                        call_id=call_id,
+                        success=False,
+                        arguments=arguments,  # Include the original arguments
+                        result=None,
+                        error=str(e),
+                        execution_time_ms=execution_time_ms,
+                        task_id=task_id,
+                        current_step=current_step,
+                        max_steps=max_steps,
+                    )
+                    logger.debug(
+                        f"Published tool_call_completed (failed) event: {name} "
+                        f"(task_id={task_id}, step={current_step}/{max_steps})"
+                    )
+                except Exception as pub_error:
+                    logger.error(f"Failed to publish tool_call_completed (failed) event: {pub_error}")
+
             logger.error(f"Error handling call_tool {name}: {e}")
             return self._convert_to_mcp_result(CommandResult.error_result(error=f"Tool execution failed: {str(e)}"))
 

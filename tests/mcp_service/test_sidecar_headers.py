@@ -77,11 +77,11 @@ def test_session_register_and_list(client: TestClient):
     assert sessions["agent-1"]["saber_session_id"] == "sess-1"
 
 
-def test_mcp_list_tools_requires_session_header(client: TestClient):
+def test_tools_requires_session_header(client: TestClient):
     # Register session
     client.post("/admin/sessions", json={"agent_id": "agent-2", "saber_session_id": "sess-2"})
     # Missing header should fail
-    r = client.post("/mcp/list_tools", json={})
+    r = client.get("/tools")
     assert r.status_code == 400
     # Wrong header should fail
     r = client.post("/mcp/list_tools", headers={"X-Agent-ID": "agent-2"}, json={})
@@ -93,20 +93,20 @@ def test_mcp_list_tools_requires_session_header(client: TestClient):
     assert isinstance(tools, list) and tools and tools[0]["name"] == "noop"
 
 
-def test_mcp_list_tools_with_saber_session_header(client: TestClient):
+def test_tools_with_saber_session_header(client: TestClient):
     # Register session
     client.post("/admin/sessions", json={"agent_id": "agent-3", "saber_session_id": "sess-3"})
     # Call with preferred header (maps to agent id internally)
-    r = client.post("/mcp/list_tools", headers={"X-Saber-Session-Id": "sess-3"}, json={})
+    r = client.get("/tools", headers={"X-Saber-Session-Id": "sess-3"})
     assert r.status_code == 200
     tools = r.json().get("result", [])
     assert isinstance(tools, list) and tools and tools[0]["name"] == "noop"
 
 
-def test_mcp_call_tool_and_ping(client: TestClient):
+def test_execute_tool_and_health(client: TestClient):
     client.post("/admin/sessions", json={"agent_id": "agent-4", "saber_session_id": "sess-4"})
-    r = client.post("/mcp/call_tool", headers={"X-Saber-Session-Id": "sess-4"},
-                    json={"jsonrpc": "2.0", "method": "call_tool", "params": {"name": "noop", "arguments": {}}})
+    r = client.post("/execute_tool", headers={"X-Saber-Session-Id": "sess-4"},
+                    json={"tool_name": "noop", "arguments": {}})
     assert r.status_code == 200
     assert r.json().get("result", {}).get("ok") is True
     r = client.post("/mcp/ping", headers={"X-Saber-Session-Id": "sess-4"})

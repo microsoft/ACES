@@ -12,6 +12,9 @@ async def test_progress_stream_start_stop(monkeypatch):
     # Use a fake sidecar url; we won't actually connect, just ensure start/stop wiring works
     client = SABERRestClient(base_url="http://localhost:8000", sidecar_url="http://localhost:8001")
 
+    # Set a session ID to pass the validation
+    client.session_id = "test-session-123"
+
     received: List[dict] = []
 
     def cb(evt: dict) -> None:

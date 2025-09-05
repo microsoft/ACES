@@ -80,7 +80,6 @@ class SSEProgressReporter(ToolCallProgressReporter):
             # Send to specific progress server endpoint based on event type
             endpoint_map = {
                 "tool_call_start": "/progress/tool_call_start",
-                "tool_call_progress": "/progress/tool_call_progress",
                 "tool_call_complete": "/progress/tool_call_complete",
             }
 
@@ -110,10 +109,6 @@ class SSEProgressReporter(ToolCallProgressReporter):
     async def tool_call_start(self, tool_call: MCPToolCall) -> None:
         """Report that a tool call has started."""
         await self._send_progress_event("tool_call_start", tool_call)
-
-    async def tool_call_progress(self, tool_call: MCPToolCall) -> None:
-        """Report progress during tool call execution."""
-        await self._send_progress_event("tool_call_progress", tool_call)
 
     async def tool_call_complete(self, tool_call: MCPToolCall) -> None:
         """Report that a tool call has completed."""

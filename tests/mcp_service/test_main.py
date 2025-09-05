@@ -161,21 +161,43 @@ class TestMCPEndpoints:
         # Mock session lookup
         mock_registry.get_agent_id_by_saber_session = AsyncMock(return_value="test-agent")
 
-        # Mock proxy response
-        mock_proxy.list_tools = AsyncMock(return_value=MCPResponse(
-            result=[{"name": "test_tool", "description": "Test tool"}]
-        ))
+        # Mock tool registry response
+        from dataclasses import dataclass
+        from datetime import datetime
 
-        response = client.post(
-            "/mcp/list_tools",
-            headers={"X-Saber-Session-Id": "saber-session-123"}
-        )
+        @dataclass
+        class MockToolMetadata:
+            description: str
+            parameters: dict
+            timeout: int
+            cached_at: datetime = None
 
-        assert response.status_code == 200
-        data = response.json()
-        assert data["jsonrpc"] == "2.0"
-        assert len(data["result"]) == 1
-        assert data["result"][0]["name"] == "test_tool"
+        mock_tools = {
+            "test_tool": MockToolMetadata(
+                description='Test tool',
+                parameters={},
+                timeout=30,
+                cached_at=None
+            )
+        }
+
+        # Mock tool_registry instead of mcp_proxy since the actual endpoint uses tool_registry
+        with patch('saber.client.mcp_service.main.tool_registry') as mock_tool_registry:
+            mock_tool_registry.get_tools_for_session_episode = AsyncMock(return_value=mock_tools)
+            # Mock the cache_ttl property to avoid JSON serialization issues
+            from datetime import timedelta
+            mock_tool_registry.cache_ttl = timedelta(seconds=300)
+
+            response = client.get(
+                "/tools",
+                headers={"X-Saber-Session-Id": "saber-session-123"}
+            )
+
+            assert response.status_code == 200
+            data = response.json()
+            assert "tools" in data
+            assert "test_tool" in data["tools"]
+            assert data["tools"]["test_tool"]["description"] == "Test tool"
 
     def test_list_tools_error(self, client, setup_mcp_globals):
         """Test list_tools request with error."""
@@ -184,21 +206,18 @@ class TestMCPEndpoints:
         # Mock session lookup
         mock_registry.get_agent_id_by_saber_session = AsyncMock(return_value="test-agent")
 
-        # Mock proxy response with error
-        mock_proxy.list_tools = AsyncMock(return_value=MCPResponse(
-            result=None,
-            error={"code": -32000, "message": "Agent not registered"}
-        ))
+        # Mock tool_registry to raise an exception
+        with patch('saber.client.mcp_service.main.tool_registry') as mock_tool_registry:
+            mock_tool_registry.get_tools_for_session_episode = AsyncMock(side_effect=Exception("Tool registry error"))
 
-        response = client.post(
-            "/mcp/list_tools",
-            headers={"X-Saber-Session-Id": "saber-session-123"}
-        )
+            response = client.get(
+                "/tools",
+                headers={"X-Saber-Session-Id": "saber-session-123"}
+            )
 
-        assert response.status_code == 200
-        data = response.json()
-        assert data["error"]["code"] == -32000
-        assert "not registered" in data["error"]["message"]
+            assert response.status_code == 500
+            data = response.json()
+            assert data["detail"] == "Internal server error"
 
     def test_call_tool_success(self, client, setup_mcp_globals):
         """Test successful call_tool request."""
@@ -207,30 +226,26 @@ class TestMCPEndpoints:
         # Mock session lookup
         mock_registry.get_agent_id_by_saber_session = AsyncMock(return_value="test-agent")
 
-        # Mock proxy response
-        mock_proxy.call_tool = AsyncMock(return_value=MCPResponse(
-            result={"output": "Command executed successfully"}
-        ))
+        # Mock tool registry response
+        with patch('saber.client.mcp_service.main.tool_registry') as mock_tool_registry:
+            mock_tool_registry.execute_tool_for_session_episode = AsyncMock(return_value={
+                "output": "Command executed successfully",
+                "success": True
+            })
 
-        response = client.post(
-            "/mcp/call_tool",
-            headers={"X-Saber-Session-Id": "test-agent"},
-            json={
-                "jsonrpc": "2.0",
-                "method": "call_tool",
-                "params": {
-                    "name": "cli_execute",
+            response = client.post(
+                "/execute_tool",
+                headers={"X-Saber-Session-Id": "test-agent"},
+                json={
+                    "tool_name": "cli_execute",
                     "arguments": {"command": "ls -la"}
-                },
-                "id": "request-123"
-            }
-        )
+                }
+            )
 
-        assert response.status_code == 200
-        data = response.json()
-        assert data["jsonrpc"] == "2.0"
-        assert data["id"] == "request-123"
-        assert data["result"]["output"] == "Command executed successfully"
+            assert response.status_code == 200
+            data = response.json()
+            assert data["output"] == "Command executed successfully"
+            assert data["success"] == True
 
 
     def test_call_tool_missing_name(self, client, setup_mcp_globals):
@@ -241,22 +256,17 @@ class TestMCPEndpoints:
         mock_registry.get_agent_id_by_saber_session = AsyncMock(return_value="test-agent")
 
         response = client.post(
-            "/mcp/call_tool",
+            "/execute_tool",
             headers={"X-Saber-Session-Id": "saber-session-123"},
             json={
-                "jsonrpc": "2.0",
-                "method": "call_tool",
-                "params": {
-                    "arguments": {"command": "ls -la"}
-                },
-                "id": "request-123"
+                "arguments": {"command": "ls -la"}
             }
         )
 
-        assert response.status_code == 200
+        # Should return 422 for validation error (missing required field)
+        assert response.status_code == 422
         data = response.json()
-        assert data["error"]["code"] == -32602
-        assert "Missing required parameter 'name'" in data["error"]["message"]
+        assert "field required" in str(data).lower() or "missing" in str(data).lower()
 
 
     def test_ping(self, client, setup_mcp_globals):

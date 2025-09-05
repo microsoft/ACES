@@ -37,7 +37,6 @@ def mock_container_dependencies():
     """Mock all container dependencies for harness testing."""
     with patch('saber.client.episode_executor.SidecarManager') as mock_sidecar, \
          patch('saber.client.episode_executor.AgentManager') as mock_agent_mgr, \
-         patch('saber.client.episode_executor.ContainerFactory') as mock_factory, \
          patch('saber.client.api.rest_client.SABERRestClient') as mock_rest:
 
         # Configure sidecar manager mock
@@ -59,10 +58,6 @@ def mock_container_dependencies():
             container_id="mock_container_123"
         )
 
-        # Configure container factory mock
-        mock_factory_instance = mock_factory.return_value
-        mock_factory_instance.package_agent_code.return_value = "mock_package_path"
-
         # Configure REST client mock
         mock_rest_instance = mock_rest.return_value
         mock_rest_instance.create_session = AsyncMock(return_value="session_123")
@@ -79,7 +74,6 @@ def mock_container_dependencies():
         yield {
             "sidecar": mock_sidecar_instance,
             "agent_manager": mock_agent_instance,
-            "factory": mock_factory_instance,
             "rest_client": mock_rest_instance
         }
 

@@ -7,7 +7,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, Optional
 
-from .models import StepStatus, StepUpdate, ToolCallEventComplete, ToolCallEventProgress, ToolCallEventStart
+from ...api_models import ToolCallEventComplete, ToolCallEventStart
+from .models import StepStatus, StepUpdate
 
 
 class MCPToolCallStatus(Enum):
@@ -46,11 +47,6 @@ class ToolCallProgressReporter(ABC):
     @abstractmethod
     async def tool_call_start(self, tool_call: MCPToolCall) -> None:
         """Report that a tool call has started."""
-        pass
-
-    @abstractmethod
-    async def tool_call_progress(self, tool_call: MCPToolCall) -> None:
-        """Report progress update for a tool call."""
         pass
 
     @abstractmethod
@@ -121,49 +117,6 @@ class UIProgressAdapter(ToolCallProgressReporter):
                 import logging
 
                 logging.getLogger(__name__).warning(f"UI update failed (tool_call_start): {e}")
-
-    async def tool_call_progress(self, tool_call: MCPToolCall) -> None:
-        """Report progress update for a tool call."""
-        # Capture prior state before any mutation so we can access original args
-        # prior_call: Optional[MCPToolCall] = None  # Not used currently
-        async with self._lock:
-            if tool_call.call_id in self._active_tool_calls:
-                pass  # prior_call = self._active_tool_calls[tool_call.call_id]
-
-        # Update UI with progress
-        if self.ui_manager:
-            try:
-                step = StepUpdate(
-                    step_id=tool_call.call_id,
-                    name=f"{tool_call.tool_name}",
-                    description=f"Executing {tool_call.tool_name}",
-                    status=StepStatus.RUNNING,
-                    progress=tool_call.progress,
-                    task_id=tool_call.task_id,
-                    metadata={
-                        "tool_name": tool_call.tool_name,
-                        "execution_time_ms": tool_call.execution_time_ms,
-                    },
-                )
-
-                await self._send_step_update(step)
-                # Also show an explicit tool progress line if supported
-                if hasattr(self.ui_manager, "tool_call_progress"):
-                    event = ToolCallEventProgress(
-                        call_id=tool_call.call_id,
-                        tool_name=tool_call.tool_name,
-                        progress_info="executing...",
-                        progress=tool_call.progress,
-                        agent_id=tool_call.agent_id,
-                        session_id=tool_call.session_id,
-                        task_id=tool_call.task_id,
-                    )
-                    await self.ui_manager.tool_call_progress(event)
-
-            except Exception as e:
-                import logging
-
-                logging.getLogger(__name__).warning(f"UI update failed (tool_call_progress): {e}")
 
     async def tool_call_complete(self, tool_call: MCPToolCall) -> None:
         """Report that a tool call has completed."""

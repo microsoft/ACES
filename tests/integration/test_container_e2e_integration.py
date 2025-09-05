@@ -28,7 +28,7 @@ from fastapi.responses import JSONResponse
 import uvicorn
 from threading import Thread
 
-from saber.client.containers import SidecarManager, AgentManager, ContainerFactory
+from saber.client.containers import SidecarManager, AgentManager
 from saber.client.containers.sidecar_manager import SidecarConfig
 from saber.client.containers.agent_manager import AgentContainerConfig
 from saber.client.episode_executor import ContainerEpisodeExecutor
@@ -377,7 +377,6 @@ class TestContainerE2EIntegration:
 
         sidecar_manager = SidecarManager(sidecar_config)
         agent_manager = AgentManager(agent_config)
-        container_factory = ContainerFactory()
 
         session_id = "test_session_123"
         task_id = "test_task_1"
@@ -400,21 +399,13 @@ class TestContainerE2EIntegration:
             )
             assert agent_id is not None, "Failed to register agent session"
 
-            # Step 3: Package agent for container execution
-            logger.info("📦 Packaging agent for container execution...")
-            agent_package_path = await container_factory.package_agent_code(
-                agent_code_path=simple_test_agent,
-                agent_name="test_agent"
-            )
-            assert agent_package_path is not None, "Failed to package agent"
-
-            # Step 4: Execute agent in container
+            # Step 3: Execute agent in container
             logger.info("🤖 Executing agent in container...")
             sidecar_url = f"http://{sidecar_config.container_name}:{sidecar_config.port}"
             initial_prompt = "Complete the integration test by using available tools."
 
             execution_result = await agent_manager.execute_agent(
-                agent_code_path=agent_package_path,
+                agent_code_path=simple_test_agent,
                 agent_id="test_agent",
                 sidecar_url=sidecar_url,
                 initial_prompt=initial_prompt,
@@ -547,8 +538,7 @@ class TestContainerE2EIntegration:
 
         # Mock the container managers to avoid Docker dependencies
         with patch('saber.client.episode_executor.SidecarManager') as mock_sidecar, \
-             patch('saber.client.episode_executor.AgentManager') as mock_agent, \
-             patch('saber.client.episode_executor.ContainerFactory') as mock_factory:
+             patch('saber.client.episode_executor.AgentManager') as mock_agent:
 
             # Setup mocks
             mock_sidecar_instance = mock_sidecar.return_value
@@ -562,9 +552,6 @@ class TestContainerE2EIntegration:
                 'stdout': '{"success": true, "flag": "flag{mock_success}"}',
                 'execution_time': 1.5
             })()
-
-            mock_factory_instance = mock_factory.return_value
-            mock_factory_instance.package_agent_code.return_value = "mock_package"
 
             # Test executor
             executor = ContainerEpisodeExecutor(
@@ -581,7 +568,6 @@ class TestContainerE2EIntegration:
             # This validates the integration patterns without requiring Docker
             assert executor.sidecar_manager is not None
             assert executor.agent_manager is not None
-            assert executor.container_factory is not None
 
             logger.info("✅ Container episode executor integration validated")
 

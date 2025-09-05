@@ -296,17 +296,17 @@ class SABERRestClient:
         self, progress_callback: Callable[[Dict[str, Any]], None], agent_id: str = "saber-harness"
     ) -> bool:
         """
-        Start SSE stream for tool call progress updates from sidecar.
+        Start SSE stream for tool call progress updates from server.
 
         Args:
             progress_callback: Function to call with progress updates
-            agent_id: Agent ID to listen for progress updates
+            agent_id: Agent ID (deprecated, using session_id instead)
 
         Returns:
             bool: True if stream started successfully, False otherwise
         """
-        if not self.sidecar_url:
-            logger.warning("No sidecar URL configured - cannot start progress stream")
+        if not self.session_id:
+            logger.warning("No session ID available - cannot start progress stream")
             return False
 
         # Prevent duplicates
@@ -320,13 +320,13 @@ class SABERRestClient:
 
         def _thread_target() -> None:
             try:
-                self._run_progress_stream_sync(agent_id, loop)
+                self._run_progress_stream_sync(loop)
             except Exception as e:
                 logger.error(f"❌ Progress stream thread error: {e}")
 
         self._sse_thread = threading.Thread(target=_thread_target, name="SSEClientThread", daemon=True)
         self._sse_thread.start()
-        logger.info(f"📡 Started progress stream for agent: {agent_id}")
+        logger.info(f"📡 Started tool events stream for session: {self.session_id}")
         return True
 
     async def stop_progress_stream(self) -> None:
@@ -350,18 +350,19 @@ class SABERRestClient:
         self._progress_callback = None
         logger.info("📡 Progress stream stopped")
 
-    def _run_progress_stream_sync(self, agent_id: str, loop: asyncio.AbstractEventLoop) -> None:
-        """Blocking SSE consumer running in a dedicated thread (httpx-sse sync).
+    def _run_progress_stream_sync(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Blocking SSE consumer connecting to server tool events endpoint.
 
         Schedules progress callbacks back onto the asyncio loop.
         """
-        if not self.sidecar_url:
+        if not self.session_id:
             return
         from httpx_sse import connect_sse
 
-        url = f"{self.sidecar_url}/progress/stream"
+        # CHANGE: Connect to server tool events endpoint instead of sidecar
+        url = f"{self.base_url}/tool-events/stream"
         headers = {
-            "X-Agent-ID": agent_id,
+            "X-Saber-Session-ID": self.session_id,  # Use session ID for filtering
             "Accept": "text/event-stream",
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
@@ -371,10 +372,10 @@ class SABERRestClient:
             connect=self.request_timeout, read=None, write=self.request_timeout, pool=self.request_timeout
         )
         client = httpx.Client(timeout=timeout)
-        logger.info("Connecting to progress SSE with httpx-sse…")
+        logger.info("Connecting to server tool events SSE with httpx-sse…")
         try:
             with connect_sse(client, "GET", url, headers=headers) as event_source:
-                logger.info("✅ Progress stream connected (httpx-sse)")
+                logger.info("✅ Tool events stream connected to server (httpx-sse)")
                 for sse in event_source.iter_sse():
                     if self._sse_stop.is_set():
                         break
@@ -388,7 +389,7 @@ class SABERRestClient:
 
                         data = json.loads(raw_data)
                     except Exception as e:  # json error or others
-                        logger.warning(f"⚠️ Invalid progress payload: {e}; payload={raw_data!r}")
+                        logger.warning(f"⚠️ Invalid tool event payload: {e}; payload={raw_data!r}")
                         continue
 
                     if self._progress_callback:
@@ -397,7 +398,7 @@ class SABERRestClient:
                         break
         except Exception as e:
             if not self._sse_stop.is_set():
-                logger.error(f"❌ Progress stream error: {e}")
+                logger.error(f"❌ Tool events stream error: {e}")
         finally:
             try:
                 client.close()
