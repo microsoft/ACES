@@ -292,34 +292,26 @@ class ExecutionManager:
         self._configuration = execution_config
 
         # Update sandbox manager with resolved environment spec and logging config
-        sandbox_config = {
-            "domain": getattr(task, "domain", "unknown"),
-            "logs_directory": str(Path(self._config_dir) / "logs"),
-            "enable_container_logging": True,
-        }
+        # Note: Sandbox configuration setup reserved for future container management features
 
         if environment_spec:
-            self._sandbox_manager = SandboxEnvironmentManager(sandbox_config)
-
             # Store allowed_executors in the environment spec for later retrieval
             if hasattr(task, "allowed_executors") and task.allowed_executors:
                 # Note: SandboxEnvironmentSpec doesn't have allowed_executors attribute
                 # Store this information in episode configuration instead
                 logger.info(f"Task has allowed_executors: {task.allowed_executors}")
 
-            # Create the episode environment immediately
-            logger.info(f"🔍 DEBUG: About to call create_episode_environment for episode {episode_id}")
+            # Create the episode environment using the SandboxManager initialized in constructor
+            logger.info(f"Creating sandbox environment for episode {episode_id}")
             try:
                 self._sandbox_manager.create_episode_environment(episode_id, environment_spec)
                 logger.info(f"✅ Created sandbox environment for episode {episode_id}")
             except Exception as e:
                 logger.error(f"❌ FAILED to create sandbox environment for episode {episode_id}: {e}")
                 logger.error(f"❌ Environment spec was: {environment_spec}")
-                logger.error(f"❌ Sandbox config was: {sandbox_config}")
                 raise
         else:
-            logger.warning("⚠️ No environment_spec found, creating SandboxEnvironmentManager without environment")
-            self._sandbox_manager = SandboxEnvironmentManager(sandbox_config)
+            logger.warning("No environment specified for this task - episode will run without sandbox environment")
 
         # Register episode configuration with the single executor factory
         allowed_executors = task.allowed_executors
@@ -446,12 +438,15 @@ class ExecutionManager:
         if reason is None:
             reason = CleanupReason.SESSION_TERMINATED
 
-        logger.info(f"🔥 EPISODE CLEANUP: ExecutionManager.cleanup_episode() called for episode {episode_id}")
+        logger.info(
+            f"🔥 EPISODE CLEANUP: ExecutionManager.cleanup_episode() called for episode {episode_id}, reason: {reason}"
+        )
 
         cleanup_success = True
 
         # Clean up episode environment through unified cleanup manager
         try:
+            logger.info(f"🧹 Calling cleanup manager for episode {episode_id}")
             container_cleanup_success = self._cleanup_manager.cleanup_episode(episode_id, reason, context)
             if container_cleanup_success:
                 logger.info(f"✅ Episode container cleanup completed for episode {episode_id}")

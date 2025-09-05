@@ -166,11 +166,10 @@ class SABERRestClient:
         if not task_id:
             raise Exception("Task ID required for episode creation")
 
-        url = f"{self.base_url}/session/{session_id}/episodes"
-        data = {"task_id": task_id}
+        url = f"{self.base_url}/session/{session_id}/episodes?task_id={task_id}"
 
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=data, timeout=self.request_timeout) as response:
+            async with session.post(url, timeout=self.request_timeout) as response:
                 if response.status == 200:
                     result = await response.json()
                     episode_id = cast(str, result["episode_id"])

@@ -285,18 +285,18 @@ class SessionManager:
         log_session_end(logger, session_id, "SessionManager termination")
         session = self._get_session(session_id)
 
-        # End all active episodes
+        # End all active episodes (this will trigger individual episode cleanup)
         if session.has_active_episodes():
             try:
                 logger.info(
                     f"Ending {len(session.active_episode_ids)} active episodes during session termination "
                     f"for session {session_id}: {session.active_episode_ids}"
                 )
-                # End all active episodes
+                # End all active episodes - each will trigger its own cleanup
                 for episode_id in session.active_episode_ids.copy():  # Copy to avoid modification during iteration
                     try:
-                        self.episode_manager.end_episode(episode_id, EpisodeTerminationReason.SESSION_TERMINATED)
-                        session.complete_episode(episode_id)
+                        # Call end_episode which will handle both episode termination AND container cleanup
+                        await self.end_episode(session_id, episode_id, EpisodeTerminationReason.SESSION_TERMINATED)
                         logger.info(f"Successfully ended episode {episode_id}")
                     except Exception as e:
                         logger.warning(f"Error ending episode {episode_id}: {str(e)}")
@@ -313,29 +313,36 @@ class SessionManager:
         except Exception as e:
             logger.warning(f"Failed to log session end: {str(e)}")
 
-        # Cleanup execution resources (Docker containers) through ExecutionManager
+        # Check for any orphaned episodes that might still need cleanup
         try:
-            log_operation_start(logger, "Episode-based container cleanup", session_id)
-            # Clean up each active episode individually
+            log_operation_start(logger, "Orphaned episode cleanup check", session_id)
+            episodes_to_cleanup = list(session.episode_history)
+            logger.info(f"Checking for orphaned episodes: {episodes_to_cleanup}")
+
             cleanup_success = True
-            for episode_id in session.active_episode_ids.copy():
+            for episode_id in episodes_to_cleanup:
                 try:
+                    logger.info(f"🧹 Checking orphaned cleanup for episode {episode_id}")
                     episode_cleanup = self.execution_manager.cleanup_episode(
-                        episode_id, CleanupReason.SESSION_TERMINATED, {"manual_termination": True}
+                        episode_id,
+                        CleanupReason.SESSION_TERMINATED,
+                        {"manual_termination": True, "orphaned_check": True},
                     )
                     if not episode_cleanup:
                         cleanup_success = False
-                        logger.warning(f"Episode cleanup failed for {episode_id}")
+                        logger.warning(f"Orphaned episode cleanup failed for {episode_id}")
+                    else:
+                        logger.info(f"✅ Orphaned episode cleanup succeeded for {episode_id}")
                 except Exception as e:
                     cleanup_success = False
-                    logger.warning(f"Episode cleanup error for {episode_id}: {e}")
+                    logger.warning(f"Orphaned episode cleanup error for {episode_id}: {e}")
 
             if cleanup_success:
-                log_operation_success(logger, "Episode-based container cleanup", session_id)
+                log_operation_success(logger, "Orphaned episode cleanup check", session_id)
             else:
-                logger.warning(f"Episode-based container cleanup reported failure for session {session_id}")
+                logger.warning(f"Orphaned episode cleanup check reported failures for session {session_id}")
         except Exception as e:
-            log_operation_failure(logger, "Episode-based container cleanup", str(e), session_id)
+            log_operation_failure(logger, "Orphaned episode cleanup check", str(e), session_id)
 
         # Mark session as inactive
         session.is_active = False
@@ -435,6 +442,19 @@ class SessionManager:
 
         # End episode through episode manager, passing the result
         self.episode_manager.end_episode(episode_id, reason, result)
+
+        # Cleanup episode containers immediately when episode ends
+        try:
+            logger.info(f"🧹 Starting episode cleanup for {episode_id}")
+            episode_cleanup = self.execution_manager.cleanup_episode(
+                episode_id, CleanupReason.EPISODE_COMPLETED, {"episode_end_reason": reason}
+            )
+            if episode_cleanup:
+                logger.info(f"✅ Episode cleanup completed for {episode_id}")
+            else:
+                logger.warning(f"❌ Episode cleanup failed for {episode_id}")
+        except Exception as e:
+            logger.error(f"Episode cleanup error for {episode_id}: {e}")
 
         # Move episode from active to history in session
         session.complete_episode(episode_id)

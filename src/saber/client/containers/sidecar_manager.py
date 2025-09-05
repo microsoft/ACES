@@ -13,11 +13,10 @@ from dataclasses import dataclass
 from typing import Optional, Set
 
 import aiohttp
-import docker.types
-from docker.models.containers import Container
-
 import docker
+import docker.types
 from docker import errors as docker_errors
+from docker.models.containers import Container
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +155,7 @@ class SidecarManager:
             payload = {
                 "agent_id": agent_identifier,
                 "saber_session_id": session_id,
-                "episode_id": episode_id,
+                "saber_episode_id": episode_id,
                 "task_id": task_id,
             }
 
