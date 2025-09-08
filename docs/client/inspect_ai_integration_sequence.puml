@@ -1,0 +1,189 @@
+@startuml SABER Client-Server Interaction - Inspect AI Integration
+
+!theme plain
+title SABER Client-Server Interaction - Current Inspect AI Integration
+
+actor "User" as User
+participant "CLI" as CLI
+participant "SABEREvaluationOrchestrator" as Orchestrator
+participant "ClientSessionManager" as SessionMgr
+participant "AgentManager" as AgentMgr
+participant "DatasetManager" as DatasetMgr
+participant "SABERRestClient" as RestClient
+participant "SessionManager" as Server
+participant "SABERReactAgent" as Agent
+participant "SABERMCPClient" as MCPClient
+participant "ExecutionManager" as ExecMgr
+
+User -> CLI: python -m saber.client --agent my_agent.py
+CLI -> CLI: setup_client_logging()
+CLI -> CLI: parse_arguments()
+
+CLI -> Orchestrator: SABEREvaluationOrchestrator(config)
+activate Orchestrator
+
+note over Orchestrator: **Async Context Manager Entry**
+Orchestrator -> Orchestrator: __aenter__()
+Orchestrator -> Orchestrator: _validate_config()
+
+== Component Initialization (Fail-Fast) ==
+
+Orchestrator -> SessionMgr: ClientSessionManager(config)
+activate SessionMgr
+SessionMgr -> SessionMgr: __aenter__()
+SessionMgr -> RestClient: SABERRestClient(config)
+activate RestClient
+
+SessionMgr -> RestClient: create_session()
+RestClient -> Server: POST /session
+activate Server
+Server -> Server: create_session(client_id)
+Server --> RestClient: {session_id, created_at}
+RestClient --> SessionMgr: session_id
+deactivate RestClient
+
+Orchestrator -> AgentMgr: AgentManager(config, session_mgr)
+activate AgentMgr
+AgentMgr -> AgentMgr: __aenter__()
+AgentMgr -> AgentMgr: _initialize_agent()
+
+Orchestrator -> DatasetMgr: DatasetManager(config, session_mgr)
+activate DatasetMgr
+DatasetMgr -> DatasetMgr: __aenter__()
+DatasetMgr -> SessionMgr: get_benchmark_info()
+SessionMgr -> RestClient: get_benchmark()
+RestClient -> Server: GET /benchmark
+Server --> RestClient: BenchmarkInfo
+RestClient --> SessionMgr: BenchmarkInfo
+SessionMgr --> DatasetMgr: BenchmarkInfo
+
+== Dataset and Task Creation ==
+
+DatasetMgr -> DatasetMgr: create_dataset()
+DatasetMgr -> DatasetMgr: _create_task_samples()
+
+AgentMgr -> AgentMgr: create_tasks()
+AgentMgr -> Agent: saber_react(session_manager=session_mgr)
+activate Agent
+
+== Inspect AI Evaluation Execution ==
+
+Orchestrator -> Orchestrator: execute()
+
+note over Orchestrator: **Uses inspect_ai.eval_async()**
+Orchestrator -> "inspect_ai": eval_async(tasks, model, **kwargs)
+
+loop for each task/episode
+    "inspect_ai" -> Agent: saber_enhanced_agent(state, tools)
+    Agent -> Agent: _initialize_saber_context()
+    Agent -> SessionMgr: create_episode(task_id)
+    SessionMgr -> RestClient: start_episode(task_id)
+    RestClient -> Server: POST /session/{session_id}/start-episode
+    Server -> Server: start_episode(session_id, task_id)
+    Server --> RestClient: EpisodeCreateResponse
+    RestClient --> SessionMgr: EpisodeCreateResponse
+    SessionMgr --> Agent: episode_context
+
+    Agent -> SessionMgr: get_policy_response()
+    SessionMgr -> RestClient: get_policy_info()
+    RestClient -> Server: GET /session/{session_id}/policy
+    Server --> RestClient: PolicyResponse
+    RestClient --> SessionMgr: PolicyResponse
+    SessionMgr --> Agent: enhanced_prompt
+
+    Agent -> SessionMgr: ensure_episode_mcp_client()
+    SessionMgr -> MCPClient: SABERMCPClient(session_id, episode_id)
+    activate MCPClient
+
+    loop agent reasoning and tool execution
+        Agent -> MCPClient: list_tools()
+        MCPClient -> Server: POST /mcp/list_tools
+        Server -> ExecMgr: to_mcp_tools()
+        activate ExecMgr
+        ExecMgr --> Server: List[MCPToolSchema]
+        Server --> MCPClient: tools_response
+        MCPClient --> Agent: available_tools
+
+        Agent -> Agent: reasoning_step()
+
+        opt tool execution needed
+            Agent -> MCPClient: call_tool(name, arguments)
+            MCPClient -> Server: POST /mcp/call_tool
+            Server -> Server: execute_action(session_id, action)
+            Server -> ExecMgr: step(action, context)
+            ExecMgr -> ExecMgr: execute_in_sandbox()
+            ExecMgr --> Server: CommandResult
+            Server --> MCPClient: mcp_result
+            MCPClient --> Agent: tool_result
+        end
+
+        opt episode termination check
+            Agent -> SessionMgr: check_episode_termination()
+            SessionMgr -> RestClient: get_task_info()
+            RestClient -> Server: GET /session/{session_id}/current-task
+            Server --> RestClient: termination_status
+            RestClient --> SessionMgr: should_terminate
+        end
+    end
+
+    deactivate ExecMgr
+    deactivate MCPClient
+
+    Agent --> "inspect_ai": final_agent_state
+end
+
+"inspect_ai" --> Orchestrator: EvalLog
+
+== Cleanup (Guaranteed via Context Managers) ==
+
+Orchestrator -> Orchestrator: __aexit__()
+Orchestrator -> AgentMgr: __aexit__()
+deactivate AgentMgr
+Orchestrator -> DatasetMgr: __aexit__()
+deactivate DatasetMgr
+Orchestrator -> SessionMgr: __aexit__()
+SessionMgr -> SessionMgr: cleanup_session()
+SessionMgr -> RestClient: terminate_session()
+RestClient -> Server: DELETE /session/{session_id}
+Server -> Server: terminate_session(session_id)
+Server -> Server: cleanup_session_resources()
+deactivate Server
+deactivate SessionMgr
+
+deactivate Agent
+deactivate Orchestrator
+
+Orchestrator --> CLI: EvalLog
+CLI -> CLI: display_results(eval_log)
+CLI --> User: Evaluation Complete
+
+note right of Server
+**SABER Server Features**
+- Multi-episode session support
+- Docker sandbox execution
+- MCP tool discovery and execution
+- Automatic session cleanup
+- Policy-driven prompting
+- Real-time episode termination
+end note
+
+note left of Orchestrator
+**Key Improvements**
+- Async context managers ensure cleanup
+- Fail-fast validation prevents silent failures
+- inspect_ai integration for standard evaluation
+- Per-episode MCP clients for isolation
+- Structured error handling throughout
+- No backwards compatibility (clean design)
+end note
+
+note over "inspect_ai"
+**Inspect AI Integration**
+- Standard evaluation framework
+- Built-in logging and metrics
+- Agent state management
+- Tool execution framework
+- Parallel evaluation support
+end note
+
+@enduml

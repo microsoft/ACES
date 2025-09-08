@@ -1,38 +1,68 @@
-# Security Agent Benchmarking System - Architecture Documentation
+# SABER Architecture Documentation - Current Implementation
 
 ## Overview
 
-This document describes the high-level architecture for a security agent benchmarking system designed to evaluate agentic workflows in the cybersecurity domain. The system employs a distributed server-client architecture where security domains are hosted as dedicated servers, and customer agents operate as independent clients.
+This document describes the current architecture for SABER (Security Agent Benchmarking and Evaluation Research), a system designed to evaluate agentic workflows in cybersecurity domains using **Inspect AI integration**. 
 
-## Architecture Diagrams
+**BREAKING CHANGE**: The system has moved from container-based execution to inspect_ai framework integration with async/await patterns throughout.
 
-The SABER system architecture is documented in several PlantUML diagrams organized by module:
+## Current Architecture Diagrams
 
 ### System Overview
-- **[System Overview](system/system_overview_architecture.puml)**: High-level system components and relationships
+- **[System Overview](system/system_overview_architecture.puml)**: Current system components with inspect_ai integration
 
-### Server Architecture
-- **[Server Detailed Architecture](server/session/server_detailed_architecture.puml)**: Main server architecture with simplified framework views
-- **[Benchmark Framework Architecture](server/benchmarks/benchmark_framework_architecture.puml)**: Detailed Benchmark Management system design
-- **[Command Execution Architecture](server/execution/command_execution_architecture.puml)**: Detailed Command Execution framework design
-- **[Episode Workflow Sequence](server/episodes/episode_workflow_sequence.puml)**: Episode lifecycle and RL workflow
-- **[Enhanced Sandbox Sequence](server/execution/enhanced_sandbox_sequence.puml)**: Enhanced sandbox environment setup sequence
-- **[MCP Integration Sequence](server/api/mcp_integration_sequence.puml)**: Model Context Protocol integration workflow and dual protocol communication
+### Server Architecture (Current)
+- **[Server Architecture Current](server/server_architecture_current.puml)**: **NEW** - Current async FastAPI/FastMCP implementation
+- **[Command Execution Architecture](server/execution/command_execution_architecture.puml)**: Docker sandbox execution framework (still current)
 
-### Client Architecture
-- **[Client Architecture](client/client_architecture.puml)**: High-level client architecture with dual execution modes (container vs embedded)
-- **[Container Execution Architecture](client/container_execution_architecture.puml)**: Detailed container-based execution system with MCP sidecar
-- **[MCP Sidecar Architecture](client/mcp_sidecar_architecture.puml)**: MCP sidecar service architecture and session management
-- **[Agent Runtime Architecture](client/agent_runtime_architecture.puml)**: Universal agent adapters and container runtime system
-- **[Full E2E Benchmark Sequence](client/full_e2e_benchmark_sequence.puml)**: Complete end-to-end benchmark execution sequence
+### Client Architecture (Current)
+- **[Client Architecture](client/client_architecture.puml)**: **UPDATED** - Inspect AI integration architecture
+- **[Inspect AI Integration Sequence](client/inspect_ai_integration_sequence.puml)**: **NEW** - Current client-server interaction flow
 
-### Package Management
+### Obsolete Documentation (Removed)
+The following container-based architecture diagrams have been **removed** as they no longer reflect the current implementation:
+- ❌ Container Execution Architecture
+- ❌ MCP Sidecar Architecture  
+- ❌ Agent Runtime Architecture
+- ❌ Full E2E Benchmark Sequence
 
-This package is managed by uv for its python environments, use
+## Current Implementation Summary
+
+### Key Changes from Container Architecture
+
+1. **Inspect AI Integration**: Replaced container-based execution with inspect_ai framework
+2. **Async Context Managers**: Proper resource management with async/await patterns
+3. **Fail-Fast Design**: Upfront validation with structured error handling
+4. **Session-Based MCP**: Per-episode MCP clients instead of sidecar containers
+5. **Direct Agent Integration**: inspect_ai agent patterns instead of container adapters
+
+### Core Components (Current)
+
+#### Server Side
+- **SessionManager**: Async FastAPI/FastMCP server with multi-session support
+- **ExecutionManager**: Docker sandbox execution (unchanged from container architecture)
+- **BenchmarkManager**: YAML-based task and benchmark configuration
+- **EpisodeManager**: Multi-episode session support with termination handling
+- **PolicyManager**: Dynamic policy and prompt generation
+
+#### Client Side  
+- **SABEREvaluationOrchestrator**: Main async context manager replacing function-based approach
+- **ClientSessionManager**: HTTP session lifecycle with REST/MCP clients
+- **AgentManager**: Agent integration with inspect_ai task creation
+- **DatasetManager**: SABER dataset creation from server benchmark info
+- **SABERReactAgent**: inspect_ai compatible agent with SABER MCP tool integration
+
+## Package Management
+
+This package uses **uv** for Python environment management:
+
+```bash
+# Server
+uv run python -m saber.server --start --domain pentest_demo
+
+# Client  
+uv run python -m saber.client --agent examples/agents/my_agent.py
 ```
-uv run
-```
-whenever executing anything in python.
 
 ## System Architecture
 

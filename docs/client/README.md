@@ -1,180 +1,241 @@
 # SABER Client Architecture Documentation
 
-This directory contains PlantUML diagrams documenting the SABER client-side architecture, which uses container-based execution with industry-standard MCP compatibility.
+This directory contains PlantUML diagrams documenting the SABER client-side architecture, which uses **inspect_ai integration** with **Model Context Protocol (MCP)** for modern agent evaluation.
 
 ## Architecture Overview
 
-The SABER client implements a **container-based execution architecture** that provides:
+The SABER client implements a **modern inspect_ai-integrated architecture** that provides:
 
-- **Container Isolation**: Agents run in isolated Docker containers with resource limits
-- **MCP Sidecar**: Shared HTTP proxy service for standard MCP protocol communication  
-- **Agent Runtime**: Universal adapter system supporting various agent interfaces
-- **Logging Infrastructure**: Comprehensive container log collection and management
+- **inspect_ai Compatibility**: Native `eval_async` integration for seamless agent evaluation
+- **MCP Protocol**: Industry-standard Model Context Protocol for tool communication
+- **Type Safety**: Strict Pydantic models with fail-fast validation
+- **Clean Architecture**: Separation of concerns with proper resource management
+- **No Backwards Compatibility**: Modern API designed for maintainability and clarity
+
+## Design Principles
+
+Following SABER best practices:
+
+- ✅ **FAIL FAST**: Upfront validation with clear error messages
+- ✅ **NO BACKWARDS COMPATIBILITY**: Clean modern API without legacy baggage  
+- ✅ **TYPE SAFETY**: Strict Pydantic models throughout
+- ✅ **NO DEFENSIVE PROGRAMMING**: Hard failures instead of silent fallbacks
+- ✅ **SEPARATION OF CONCERNS**: Clean component boundaries
 
 ## Diagrams
 
 ### 1. [Client Architecture](client_architecture.puml)
-**High-level client architecture overview**
+**Modern inspect_ai integration architecture**
 
 Shows the complete client infrastructure including:
-- `SABERHarness` - Main client orchestrator for container execution
-- `ContainerEpisodeExecutor` - Container lifecycle management and episode orchestration
-- `SidecarManager` - Shared MCP sidecar container management
-- `AgentManager` - Individual agent container execution and monitoring
-- `ContainerFactory` - Agent packaging and container creation
-- Container logging infrastructure for comprehensive execution tracking
+- `run_saber_eval_async` - Main inspect_ai compatible entry point
+- `SABEREvaluationOrchestrator` - Component lifecycle management and resource cleanup
+- `AgentManager` - Agent discovery, initialization, and lifecycle management
+- `DatasetManager` - Task discovery and inspect_ai Dataset creation
+- `ClientSessionManager` - Unified API layer for REST + MCP communication
+- Type-safe configuration with fail-fast validation
 
 **Key Features:**
-- Container isolation with Docker networking
-- Standard MCP protocol compatibility via HTTP proxy
-- Universal agent adapter system
-- Comprehensive logging and monitoring
+- inspect_ai native compatibility via `eval_async`
+- Async context manager lifecycle for guaranteed cleanup
+- Strict type safety with Pydantic models
+- Fail-fast configuration validation
+- Clean separation of concerns
 
-### 2. [Container Execution Architecture](container_execution_architecture.puml)
-**Detailed container-based execution system**
+### 2. [SABER MCP Architecture](saber_mcp_architecture.puml)
+**Model Context Protocol integration and communication flow**
 
-Deep dive into the container execution infrastructure:
-- Container lifecycle management (sidecar + agents)
-- Docker network isolation (`saber-network`)
-- Resource limits and security policies
-- Multi-channel termination monitoring
-- Session management and routing
+Deep dive into the MCP-based communication system:
+- Standard MCP protocol compliance for agent portability
+- Dual protocol design (REST for session management, MCP for tool execution)
+- Episode-scoped MCP client pooling
+- Type-safe API models throughout
+- Server-side FastMCP implementation with tool discovery
 
-**Container Details:**
-- **MCP Sidecar**: FastAPI HTTP proxy for MCP protocol, shared across episodes
-- **Agent Runtime**: Lightweight containers with standard MCP clients and universal adapters
-- **Network Isolation**: Agent containers communicate only with sidecar, no direct SABER access
-- **Logging System**: Real-time log streaming and file collection for debugging
+**MCP Communication Details:**
+- **Standard Protocol**: Industry-standard Model Context Protocol
+- **Tool Discovery**: Dynamic tool discovery via `list_tools`
+- **Session Context**: Episode-scoped client instances with header-based context
+- **Error Handling**: Comprehensive error handling and retry logic
+- **Security**: Server-side validation and Docker sandbox execution
 
-### 3. [MCP Sidecar Architecture](mcp_sidecar_architecture.puml)
-**MCP sidecar service architecture and session management**
+## Component Breakdown
 
-Details the shared MCP sidecar service:
-- FastAPI application with standard MCP HTTP endpoints
-- Session registry for agent ↔ SABER session mapping
-- MCP proxy with connection pooling and error handling
-- Health monitoring and readiness checks
-- Configuration and environment management
+### Core Components
 
-**HTTP API:**
-- `GET /ready` - Process readiness (no upstream dependency)
-- `GET /health` - Full health including upstream checks
-- `POST /admin/sessions` - Session registration/cleanup
-- `POST /mcp/list_tools` - MCP tool discovery
-- `POST /mcp/call_tool` - MCP tool execution
-- `GET /mcp/list_resources` - MCP resource listing
+#### run_saber_eval_async
+**Main entry point for SABER evaluations**
+- inspect_ai compatible interface for seamless integration
+- Automatic resource management via async context managers
+- Fail-fast configuration validation
+- Type-safe configuration with SABERConfig
 
-### 4. [Agent Runtime Architecture](agent_runtime_architecture.puml)
-**Universal agent adapters and container runtime system**
+#### SABEREvaluationOrchestrator  
+**Central orchestration component**
+- Async context manager for component lifecycle
+- Upfront validation and early failure detection
+- Component initialization and cleanup
+- Resource management and error recovery
 
-Shows the agent runtime system running inside containers:
-- `AgentExecutor` - Main entry point for container execution
-- Universal agent adapters (class, function, async patterns)
-- Standard MCP client integration
-- Agent discovery and loading mechanisms
-- Parameter mapping and interface detection
+#### ClientSessionManager
+**Unified API layer for dual-protocol communication**
+- REST API for session and episode management
+- MCP API for tool execution and discovery
+- Episode-scoped MCP client pooling
+- Session context management
 
-**Agent Compatibility:**
-- **Zero code changes** required for existing agents
-- **Auto-detection** of agent interfaces (class/function/async)
-- **Standard MCP libraries** (anthropic/mcp-python) supported
-- **Universal adapters** for different agent patterns
+#### AgentManager & DatasetManager
+**Separation of concerns for agent and dataset operations**
+- AgentManager: Agent discovery, initialization, lifecycle
+- DatasetManager: Task discovery, filtering, inspect_ai Dataset creation
+- Shared ClientSessionManager for API operations
+- Clean resource management
 
-### 5. [Full E2E Benchmark Sequence](full_e2e_benchmark_sequence.puml)
-**Complete end-to-end benchmark execution sequence**
+### Configuration Models
 
-Comprehensive sequence diagram showing:
-- Benchmark initialization and infrastructure setup
-- Container orchestration and parallel execution
-- MCP protocol flow between agents and SABER server
-- Session management and routing
-- Results collection and cleanup
-- Error handling and termination scenarios
+#### SABERConfig
+**Type-safe configuration with fail-fast validation**
+- Required fields: `model`, `session_config`, `agent_config`
+- Strict validation in `__post_init__`
+- No backwards compatibility
+- Factory methods for common configurations
 
-**Execution Flow:**
-1. **Initialization**: Harness → Sidecar → Agent containers
-2. **Episode Execution**: Parallel agent execution with MCP tools
-3. **Session Routing**: Agent sessions mapped to SABER sessions
-4. **Tool Execution**: Commands run in SABER sandboxes (not agent containers)
-5. **Results Collection**: Multi-channel result aggregation
-6. **Cleanup**: Guaranteed container termination and resource cleanup
+#### SessionManagerConfig & MCPConfig
+**Protocol-specific configuration**
+- SessionManagerConfig: Unified REST + MCP settings
+- MCPConfig: MCP-specific timeout, retry, client settings
+- Type conversion methods between configs
+- Strict typing with `extra="forbid"`
 
-### 6. Container Logging Architecture
-**Comprehensive logging infrastructure for debugging and monitoring**
+## Integration Patterns
 
-Features:
-- **Real-time Log Streaming**: Live capture from all containers during execution
-- **File-based Collection**: Persistent logs saved to structured directory hierarchy
-- **Multi-container Support**: Separate logs for sidecar and each agent container
-- **Debug Integration**: Complete execution traces for troubleshooting failures
-- **Session Organization**: Logs grouped by session timestamp for easy correlation
-
-## Key Architectural Benefits
-
-### For Agents
-- ✅ **Zero code changes** required for MCP-compatible agents
-- ✅ **Standard MCP libraries** (anthropic/mcp-python) work directly
-- ✅ **Industry-standard patterns** for tool discovery and execution
-- ✅ **No SABER-specific dependencies**
-
-### for SABER
-- ✅ **Robust termination** with guaranteed container cleanup
-- ✅ **Resource isolation** and limits per agent container
-- ✅ **Scalable architecture** with shared sidecar
-- ✅ **Better observability** through container metrics
-
-### For Operations
-- ✅ **Predictable resource usage** with container limits
-- ✅ **Clean process management** without race conditions
-- ✅ **Parallel execution** with container isolation
-- ✅ **Production-ready reliability**
-- ✅ **Comprehensive logging** with real-time streaming and persistent collection
-- ✅ **Debug capabilities** with complete execution traces
-
-## Container Images
-
-### MCP Sidecar (`saber/mcp-service:latest`)
-- **Purpose**: Shared HTTP proxy for MCP protocol
-- **Dependencies**: FastAPI, aiohttp, minimal Python runtime
-- **Resources**: 256MB RAM, 0.5 CPU limit
-
-### Agent Runtime (`saber/agent-runner:latest`)  
-- **Purpose**: Lightweight agent execution environment
-- **Dependencies**: Standard MCP clients, HTTP libraries, Python runtime
-- **Resources**: 512MB RAM, 1.0 CPU limit (configurable)
-- **Security**: Non-root user, read-only filesystem, isolated network
-
-## Usage Example
-
+### inspect_ai Integration
 ```python
-from saber.client import SABERHarness, SABERHarnessConfig
+# Modern SABER evaluation
+from saber.client.inspect_ai import run_saber_eval_async
 
-# Container-based execution
-config = SABERHarnessConfig(
-    parallelism=4,             # Run 4 agents concurrently
-    server_url="http://server:8000",
-    task_ids=["task1", "task2"],
-    enable_container_logs=True  # Enable comprehensive logging
+config = SABERConfig.create(
+    model="gpt-4o",
+    rest_url="http://localhost:8000",
+    mcp_url="http://localhost:8001",
+    agent_id="my_security_agent"
 )
 
-harness = SABERHarness(config)
-await harness.initialize(my_agent)
-results = await harness.run()
+eval_log = await run_saber_eval_async(
+    config=config,
+    task_ids=["webapp_pentest_1", "malware_analysis_1"]
+)
 ```
 
-## Implementation Status
+### MCP Tool Usage
+```python
+# Standard MCP pattern in agents
+async with MCPClient(config) as client:
+    tools = await client.list_tools()
+    result = await client.call_tool(MCPToolCallRequest(
+        name="python",
+        arguments={"code": "print('Security analysis')"}
+    ))
+```
 
-**✅ PRODUCTION READY**:
-- Container infrastructure and orchestration
-- MCP sidecar service with HTTP proxy
-- Universal agent runtime and adapters
-- Docker images and build system
-- Comprehensive container logging
-- Real-time log streaming and collection
+## Error Handling
 
-**🎯 CURRENT ARCHITECTURE**:
-The container architecture is the primary and only execution mode, providing robust isolation, logging, and MCP compatibility.
+### Fail-Fast Principles
+- Configuration validation at startup
+- Early server connectivity testing
+- Clear error messages with actionable guidance
+- No silent failures or defensive fallbacks
 
----
+### Resource Management
+- Guaranteed cleanup via async context managers
+- Automatic MCP client pool management
+- Session lifecycle tracking
+- Episode-scoped resource isolation
 
-For implementation details and development history, see the SABER server documentation and source code.
+## Migration from Legacy Architecture
+
+### Removed Components
+- ❌ Container-based execution (replaced with inspect_ai)
+- ❌ SABERHarness (replaced with run_saber_eval_async)
+- ❌ Sidecar management (replaced with direct MCP clients)
+- ❌ Agent adapters (replaced with standard MCP patterns)
+- ❌ Container logging infrastructure
+
+### New Components  
+- ✅ inspect_ai integration via eval_async
+- ✅ Direct MCP client communication
+- ✅ Type-safe Pydantic models
+- ✅ Async context manager lifecycle
+- ✅ Fail-fast validation
+
+## Benefits
+
+### For Agents
+- ✅ **Standard MCP compatibility** - agents work with any MCP-compliant system
+- ✅ **inspect_ai integration** - seamless evaluation framework integration
+- ✅ **Type safety** - clear contracts and early error detection
+- ✅ **No SABER-specific dependencies** - portable agent implementations
+
+### For SABER
+- ✅ **Clean architecture** - clear separation of concerns
+- ✅ **Modern patterns** - async context managers and fail-fast design
+- ✅ **Type safety** - Pydantic models throughout
+- ✅ **MCP compliance** - industry-standard protocol
+
+### For Operations
+- ✅ **Predictable behavior** - fail-fast validation eliminates runtime surprises
+- ✅ **Clear error messages** - actionable guidance for troubleshooting
+- ✅ **Resource management** - guaranteed cleanup via context managers
+- ✅ **Debugging** - comprehensive logging with structured data
+
+This directory contains PlantUML diagrams documenting the SABER client-side architecture, which uses **inspect_ai integration** with **Model Context Protocol (MCP)** for modern agent evaluation.
+
+## Architecture Overview
+
+The SABER client implements a **modern inspect_ai-integrated architecture** that provides:
+
+- **inspect_ai Compatibility**: Native `eval_async` integration for seamless agent evaluation
+- **MCP Protocol**: Industry-standard Model Context Protocol for tool communication
+- **Type Safety**: Strict Pydantic models with fail-fast validation
+- **Clean Architecture**: Separation of concerns with proper resource management
+- **No Backwards Compatibility**: Modern API designed for maintainability and clarity
+
+## Design Principles
+
+Following SABER best practices:
+
+- ✅ **FAIL FAST**: Upfront validation with clear error messages
+- ✅ **NO BACKWARDS COMPATIBILITY**: Clean modern API without legacy baggage  
+- ✅ **TYPE SAFETY**: Strict Pydantic models throughout
+- ✅ **NO DEFENSIVE PROGRAMMING**: Hard failures instead of silent fallbacks
+- ✅ **SEPARATION OF CONCERNS**: Clean component boundaries
+
+## Diagrams
+
+### 1. [Client Architecture](client_architecture.puml)
+**Modern inspect_ai integration architecture**
+
+Shows the complete client infrastructure including:
+- `run_saber_eval_async` - Main inspect_ai compatible entry point
+- `SABEREvaluationOrchestrator` - Component lifecycle management and resource cleanup
+- `AgentManager` - Agent discovery, initialization, and lifecycle management
+- `DatasetManager` - Task discovery and inspect_ai Dataset creation
+- `ClientSessionManager` - Unified API layer for REST + MCP communication
+- Type-safe configuration with fail-fast validation
+
+**Key Features:**
+- inspect_ai native compatibility via `eval_async`
+- Async context manager lifecycle for guaranteed cleanup
+- Strict type safety with Pydantic models
+- Fail-fast configuration validation
+- Clean separation of concerns
+
+### 2. [SABER MCP Architecture](saber_mcp_architecture.puml)
+**Model Context Protocol integration and communication flow**
+
+Deep dive into the MCP-based communication system:
+- Standard MCP protocol compliance for agent portability
+- Dual protocol design (REST for session management, MCP for tool execution)
+- Episode-scoped MCP client pooling
+- Type-safe API models throughout
+- Server-side FastMCP implementation with tool discovery

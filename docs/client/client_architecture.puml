@@ -1,7 +1,7 @@
-@startuml SABER Client Architecture
+@startuml SABER Client Architecture - Inspect AI Integration
 
 !theme plain
-title Security Agent Benchmarking System - Client Architecture
+title SABER Client Architecture - Inspect AI Integration
 
 skinparam class {
     BackgroundColor lightblue
@@ -16,278 +16,484 @@ skinparam component {
     FontSize 10
 }
 
-package "SABER Client Infrastructure" {
+package "SABER Client Infrastructure - Current Implementation" {
 
-    class SABERHarness {
-        +config: SABERHarnessConfig
-        +session_id: str
-        +rest_client: SABERRestClient
-        +agent: Any?
-        +agent_file_path: str?
-        +container_executor: ContainerEpisodeExecutor?
-        +harness_logger: HarnessExecutionLogger?
-        +session_log_dir: Path?
-        +ui_adapter: SABERUIAdapter?
+    class SABEREvaluationOrchestrator {
+        +config: SABERConfig
+        +agent_manager: Optional[AgentManager]
+        +dataset_manager: Optional[DatasetManager]
+        +session_manager: Optional[ClientSessionManager]
+        +_initialized: bool
         --
-        +initialize(agent, env_file): void
-        +initialize_with_file(path, class): void
-        +run(): HarnessRunResult
-        +shutdown(): void
+        +__aenter__(): SABEREvaluationOrchestrator
+        +__aexit__(): void
+        +execute(): EvalLog
+        +_validate_config(): void
         --
-        **Container-Only Execution**
-        +_execute_episodes_container(): List[EpisodeResult]
+        **Async Context Management**
+        +_ensure_components_initialized(): void
+        +_cleanup_components(): void
     }
 
-    class SABERHarnessConfig {
-        +server_url: str = "http://localhost:8000"
-        +mcp_url: str = "http://localhost:8001"
-        +task_ids: List[str]?
-        +log_level: str = "INFO"
-        +timeout_minutes: int = 30
-        +parallelism: int = 1
+    class AgentManager {
+        +config: SABERConfig
+        +session_manager: ClientSessionManager
+        +saber_agent: Optional[AgentInfo]
+        +_initialized: bool
         --
-        **Container Configuration**
-        +sidecar_port: int = 8002
-        +agent_memory_limit: str = "512m"
-        +agent_cpu_limit: float = 1.0
+        +create_tasks(): List[Task]
+        +__aenter__(): AgentManager
+        +__aexit__(): void
         --
-        **UI Configuration**
-        +ui_enabled: bool = False
-        +ui_backend: str = "AUTO"
-        --
-        **Logging Configuration**
-        +enable_container_logs: bool = True
-        +log_container_output: bool = True
+        **Agent Integration**
+        +_initialize_agent(): AgentInfo
+        +_create_inspect_ai_tasks(): List[Task]
     }
 
-    package "Container Execution Infrastructure" as ContainerMode {
+    class DatasetManager {
+        +config: SABERConfig
+        +session_manager: ClientSessionManager
+        +benchmark_info: Optional[BenchmarkInfo]
+        +task_dataset: Optional[List[Sample]]
+        +_initialized: bool
+        --
+        +create_dataset(): List[Sample]
+        +__aenter__(): DatasetManager
+        +__aexit__(): void
+        --
+        **Dataset Creation**
+        +_fetch_benchmark_info(): BenchmarkInfo
+        +_create_task_samples(): List[Sample]
+    }
 
-        class ContainerEpisodeExecutor {
-            +rest_client: SABERRestClient
+    class ClientSessionManager {
+        +config: SessionManagerConfig
+        +rest_client: Optional[SABERRestClient]
+        +mcp_client: Optional[SABERMCPClient]
+        +session_id: Optional[str]
+        +_session_created: bool
+        --
+        +create_session(): str
+        +cleanup_session(): void
+        +get_benchmark_info(): BenchmarkInfo
+        +create_episode(): EpisodeCreateResponse
+        +get_policy_response(): PolicyResponse
+        +ensure_episode_mcp_client(): SABERMCPClient
+        +__aenter__(): ClientSessionManager
+        +__aexit__(): void
+        --
+        **Session Lifecycle**
+        +_create_rest_client(): SABERRestClient
+        +_cleanup_clients(): void
+    }
+
+    package "HTTP Client Layer" {
+        class SABERRestClient {
+            +base_url: str
+            +client_id: str
+            +session: ClientSession
+            --
+            +create_session(): str
+            +get_benchmark(): Dict[str, Any]
+            +start_episode(task_id: str): str
+            +get_task_info(): Dict[str, Any]
+            +get_policy_info(): Dict[str, Any]
+            +list_tasks(): List[Dict[str, Any]]
+            +terminate_session(): bool
+            +health_check(): Dict[str, Any]
+            --
+            **HTTP Operations**
+            +_make_request(): Dict[str, Any]
+            +_handle_response(): Any
+        }
+
+        class SABERMCPClient {
             +session_id: str
-            +parallelism: int
-            +sidecar_manager: SidecarManager
+            +episode_id: str
+            +base_url: str
+            +client_session: ClientSession
+            --
+            +list_tools(): List[MCPToolSchema]
+            +call_tool(request: MCPToolCallRequest): Any
+            +close(): void
+            --
+            **MCP Operations**
+            +_make_mcp_request(): Any
+            +_handle_mcp_response(): Any
+        }
+    }
+
+    package "Inspect AI Integration" {
+        class SABERDataset {
+            +samples: List[Sample]
+            +metadata: Dict[str, Any]
+            --
+            +from_benchmark_info(): SABERDataset
+            +to_inspect_ai_dataset(): Dataset
+            --
+            **Sample Creation**
+            +_create_sample_from_task(): Sample
+            +_add_task_metadata(): Dict[str, Any]
+        }
+
+        class SABERReactAgent {
+            +attempts: int = 1
+            +agent_id: str = "saber_react"
+            +session_manager: Optional[ClientSessionManager]
+            --
+            +saber_react(): Agent
+            +saber_enhanced_agent(): AgentState
+            --
+            **SABER Integration**
+            +_initialize_saber_context(): void
+            +_get_saber_tools(): List[Tool]
+            +_execute_with_mcp(): AgentState
+        }
+
+        class SABERTaskScorer {
+            +session_manager: ClientSessionManager
+            +episode_context: Dict[str, Any]
+            --
+            +score(): Score
+            +server_scorer(): Scorer
+            +task_scorer(): Scorer
+            --
+            **Scoring Logic**
+            +_evaluate_task_completion(): float
+            +_get_episode_results(): Dict[str, Any]
+        }
+    }
+
+    package "Configuration and Models" {
+        class SABERConfig {
+            +agent_id: str
+            +server_url: str = "http://localhost:8000"
+            +mcp_url: str = "http://localhost:3001"
+            +task_ids: Optional[List[str]]
+            +log_level: str = "INFO"
+            +max_steps: int = 50
+            --
+            **Validation**
+            +validate_config(): void
+            +to_session_config(): SessionManagerConfig
+        }
+
+        class SessionManagerConfig {
+            +server_url: str
+            +mcp_url: str
+            +client_id: str
+            +timeout_seconds: int = 300
+            --
+            +from_saber_config(): SessionManagerConfig
+        }
+    }
+
+    class CLI {
+        --
+        +main(): void
+        +setup_client_logging(): void
+        +_parse_arguments(): argparse.Namespace
+        +_run_evaluation(): EvalLog
+    }
+}
+
+' Core Relationships
+SABEREvaluationOrchestrator *-- AgentManager
+SABEREvaluationOrchestrator *-- DatasetManager
+SABEREvaluationOrchestrator *-- ClientSessionManager
+ClientSessionManager *-- SABERRestClient
+ClientSessionManager ..> SABERMCPClient : creates per episode
+
+' Inspect AI Integration
+AgentManager ..> SABERReactAgent : creates
+DatasetManager ..> SABERDataset : creates
+SABERTaskScorer ..> ClientSessionManager : uses
+
+' Configuration
+SABEREvaluationOrchestrator ..> SABERConfig : uses
+ClientSessionManager ..> SessionManagerConfig : uses
+
+' CLI orchestration
+CLI ..> SABEREvaluationOrchestrator : orchestrates
+
+' External communication
+SABERRestClient ..> "SABER Server" : "HTTP REST API"
+SABERMCPClient ..> "SABER Server" : "MCP Protocol"
+
+note top of SABEREvaluationOrchestrator
+**SABER Evaluation Orchestrator - Main Entry Point**
+- Replaces function-based eval_async approach
+- Async context manager for proper resource management
+- Upfront configuration validation with fail-fast design
+- Component lifecycle management (Agent, Dataset, Session managers)
+- BREAKING CHANGE: No backwards compatibility with old patterns
+- Uses inspect_ai framework for agent evaluation
+end note
+
+note right of ClientSessionManager
+**Session Management - HTTP Based**
+- Manages REST and MCP client lifecycle
+- Per-episode MCP client creation
+- Automatic session cleanup on exit
+- Supports dynamic policy fetching
+- Fail-fast error handling with structured exceptions
+end note
+
+note left of SABERReactAgent
+**Inspect AI Agent Integration**
+- Uses @agent decorator for proper registration
+- Enhanced with SABER infrastructure
+- MCP tool discovery and integration
+- Dynamic prompt fetching from policy endpoint
+- Session and context management via inspect_ai store
+end note
+
+note bottom of SABERConfig
+**Configuration Model**
+- Pydantic-based validation
+- Environment variable support
+- Conversion to component-specific configs
+- Fail-fast validation on initialization
+end note
+
+@enduml
+            +create(model, rest_url, mcp_url): factory_method
+            --
+            **No Backwards Compatibility**
+            - Clean modern API
+            - Strict typing with Pydantic
+            - Explicit configuration requirements
+        }
+    }
+
+    package "Core Orchestration Layer" {
+        class SABEREvaluationOrchestrator {
+            +config: SABERConfig
+            +session_manager: ClientSessionManager
             +agent_manager: AgentManager
-            +container_factory: ContainerFactory
-            +container_log_manager: ContainerLogManager?
-            +session_log_dir: Path?
+            +dataset_manager: DatasetManager
             --
-            +initialize(): void
-            +execute_episodes(episodes, agent): List[EpisodeResult]
-            +shutdown(): void
+            **Async Context Manager**
+            +__aenter__(): validates_and_initializes_all_components
+            +__aexit__(): guaranteed_cleanup
+            +execute(): EvalLog
             --
-            **Execution Strategies**
-            +_execute_sequential(): List[EpisodeResult]
-            +_execute_parallel(): List[EpisodeResult]
-        }
-
-        package "Container Management" {
-            class SidecarManager {
-                +config: SidecarConfig
-                +container: Container?
-                +is_running: bool
-                +docker_client: DockerClient
-                --
-                +start_sidecar(): bool
-                +stop_sidecar(): void
-                +health_check(): bool
-                +register_agent_session(): str
-                +unregister_agent_session(): void
-                +get_sidecar_url(): str
-            }
-
-            class AgentManager {
-                +docker_client: DockerClient
-                +active_containers: Dict[str, Container]
-                +container_log_manager: ContainerLogManager?
-                --
-                +execute_agent_container(): AgentExecutionResult
-                +monitor_container(): ContainerStatus
-                +terminate_container(): void
-                +collect_results(): Dict[str, Any]
-                +_save_container_logs_to_file(): void
-            }
-
-            class ContainerFactory {
-                +docker_client: DockerClient
-                --
-                +build_agent_image(): str
-                +package_agent_code(): Path
-                +create_agent_container(): Container
-                +prepare_environment(): Dict[str, str]
-                +setup_agent_directory(): Path
-            }
-        }
-
-        package "MCP Sidecar Service" as SidecarService {
-            class MCPProxy {
-                +saber_client: aiohttp.ClientSession
-                +session_registry: AgentSessionRegistry
-                --
-                +proxy_list_tools(): MCPResponse
-                +proxy_call_tool(): MCPResponse
-                +proxy_list_resources(): MCPResponse
-                +health_check(): MCPResponse
-            }
-
-            class AgentSessionRegistry {
-                +active_sessions: Dict[str, SessionInfo]
-                --
-                +register_session(): void
-                +unregister_session(): void
-                +get_session_mapping(): SessionInfo
-                +cleanup_expired_sessions(): void
-            }
-        }
-
-        package "Agent Runtime (In Container)" as AgentRuntime {
-            class AgentExecutor {
-                +agent: Any
-                +mcp_client: StandardMCPClient
-                +agent_adapter: AgentAdapter
-                --
-                +run(): Dict[str, Any]
-                +_discover_and_load_agent(): Any
-                +_initialize_mcp_client(): StandardMCPClient
-                +_execute_agent(): Dict[str, Any]
-            }
-
-            class StandardMCPClient {
-                +sidecar_url: str
-                +session_id: str
-                +http_client: aiohttp.ClientSession
-                --
-                +list_tools(): List[Dict[str, Any]]
-                +call_tool(name, arguments): Dict[str, Any]
-                +list_resources(): List[Dict[str, Any]]
-                +_make_request(): Dict[str, Any]
-            }
-
-            package "Universal Agent Adapters" {
-                class AgentAdapterFactory {
-                    +create_adapter(agent, mcp_client): AgentAdapter
-                    +detect_agent_interface(agent): AgentType
-                }
-
-                class ClassBasedAdapter {
-                    +agent_instance: Any
-                    +method_name: str
-                    --
-                    +execute(prompt, context): Dict[str, Any]
-                }
-
-                class FunctionBasedAdapter {
-                    +agent_function: Callable
-                    +parameter_mapping: Dict[str, str]
-                    --
-                    +execute(prompt, context): Dict[str, Any]
-                }
-
-                class ClassBasedAdapter {
-                    +agent_instance: Any
-                    +method_name: str
-                    --
-                    +execute(prompt, context): Dict[str, Any]
-                }
-
-                class FunctionBasedAdapter {
-                    +agent_function: Callable
-                    +parameter_mapping: Dict[str, str]
-                    --
-                    +execute(prompt, context): Dict[str, Any]
-                }
-
-                class AsyncAdapter {
-                    +wrapped_adapter: AgentAdapter
-                    --
-                    +execute(prompt, context): Dict[str, Any]
-                }
-            }
+            **Upfront Validation**
+            +_validate_configuration(): fail_fast_validation
+            +_test_server_connectivity(): early_failure_detection
+            --
+            **Responsibilities**
+            - Component lifecycle management
+            - Resource management and cleanup
+            - Error handling and recovery
+            - Evaluation orchestration
         }
     }
 
-    package "UI System" {
-        class SABERUIAdapter {
-            +backend_type: UIBackendType
+    package "Component Managers - Separation of Concerns" {
+        class AgentManager {
+            +config: SABERConfig
+            +session_manager: ClientSessionManager
+            +saber_agent: AgentInfo?
             --
-            +display_progress(): void
-            +update_status(): void
-            +show_results(): void
+            **Agent Lifecycle**
+            +__aenter__(): initialize_agent_and_session
+            +__aexit__(): cleanup_agent_resources
+            --
+            **Responsibilities**
+            - Agent discovery and initialization
+            - Agent lifecycle management
+            - Task creation with agent configuration
+            - Agent resource cleanup
+            --
+            **Removed Legacy Features**
+            - No dataset creation (moved to DatasetManager)
+            - No task discovery (moved to DatasetManager)
+            - No HTTP client creation (uses shared ClientSessionManager)
+        }
+
+        class DatasetManager {
+            +config: SABERConfig
+            +session_manager: ClientSessionManager
+            +task_cache: Dict[str, TaskInfo]
+            --
+            **Dataset Operations**
+            +__aenter__(): initialize_dataset_components
+            +__aexit__(): cleanup_dataset_resources
+            +get_tasks(): List[TaskInfo]
+            +create_dataset(): inspect_ai.Dataset
+            --
+            **Responsibilities**
+            - Task discovery and caching
+            - inspect_ai Dataset creation
+            - Task filtering and validation
+            - Dataset resource management
+        }
+
+        class ClientSessionManager {
+            +config: SessionManagerConfig
+            +base_url: str
+            +mcp_config: MCPConfig
+            +mcp_client_pool: Dict[str, MCPClient]
+            --
+            **Session Management**
+            +create_session(): str
+            +create_episode(session_id, task_id): EpisodeCreateResponse
+            +get_policy_response(session_id, episode_id): PolicyResponse?
+            --
+            **Task Discovery**
+            +get_available_tasks(): List[TaskInfo]
+            +get_tasks(task_ids): List[TaskInfo]
+            --
+            **MCP Operations**
+            +ensure_episode_mcp_client(episode_id): MCPClient
+            +cleanup_episode_mcp_client(episode_id): void
+            --
+            **Unified API Layer**
+            - REST API for session/episode management
+            - MCP API for tool execution
+            - Episode-scoped MCP client pooling
         }
     }
 
-    package "Logging Infrastructure" {
-        class ContainerLogManager {
-            +session_log_dir: Path
-            +container_logs_dir: Path
+    package "API Layer - Dual Protocol Design" {
+        class SABERRestClient {
+            +base_url: str
+            +timeout: float
             --
-            +setup_logging_structure(): void
-            +create_log_stream_collector(): LogStreamCollector
-            +get_agent_log_path(): Path
-            +get_sidecar_log_path(): Path
+            **REST Operations**
+            +get_benchmark_info(): BenchmarkInfo
+            +get_dataset_tasks(task_ids): List[TaskInfo]
+            +post_evaluation_result(): void
+            --
+            **Features**
+            - Type-safe responses with Pydantic models
+            - Automatic error handling
+            - Timeout management
         }
 
-        class LogStreamCollector {
-            +container: Container
-            +log_file_path: Path
-            +should_stop: bool
+        class MCPClient {
+            +config: MCPConfig
+            +session_context: SessionContext
+            +client_session: ClientSession?
             --
-            +start_streaming(): void
-            +stop_streaming(): void
-            +_stream_logs(): void
-        }
-
-        class HarnessExecutionLogger {
-            +session_log_dir: Path
-            +log_file: Path
+            **MCP Protocol**
+            +__aenter__(): establish_mcp_connection
+            +__aexit__(): cleanup_mcp_connection
+            +list_tools(): List[MCPTool]
+            +call_tool(request): MCPToolCallResponse
             --
-            +log_event(event): void
-            +log_infrastructure_event(): void
-            +log_episode_queue(): void
-            +log_execution_complete(): void
+            **Session Context**
+            - Per-episode MCP client instances
+            - Session/episode context via headers
+            - Standard MCP protocol compliance
         }
     }
 
-    package "External Dependencies" {
-        class DockerEngine
-        class SABERServer
+    package "Type-Safe Models" {
+        class SessionManagerConfig {
+            +base_url: str  # SABER server REST API URL
+            +client_id: str = "saber_client"
+            +rest_timeout: float = 30.0
+            +mcp_url: str  # SABER server MCP endpoint URL
+            +mcp_timeout: int = 30
+            +mcp_retry_attempts: int = 3
+            +mcp_retry_delay: float = 1.0
+            +mcp_headers: Dict[str, str]
+            --
+            **Factory Methods**
+            +from_urls(rest_url, mcp_url): SessionManagerConfig
+            +to_mcp_config(): MCPConfig
+            --
+            **Strict Typing**
+            - No extra fields allowed
+            - Fail-fast validation
+        }
+
+        class AgentConfig {
+            +max_steps: int = 50
+            +max_errors: int = 3
+            +debug_mode: bool = False
+            +image: str?  # Docker image
+            +env: Dict[str, str]  # Environment variables
+            +resources: Dict[str, Any]  # Resource limits
+            --
+            **Features**
+            - Extensible via "allow" extra config
+            - Container execution support
+            - Clean typing
+        }
+
+        class AgentInfo {
+            +agent_id: str
+            +name: str
+            +description: str
+            +version: str = "1.0.0"
+            +capabilities: List[str]
+            +tags: List[str]
+        }
+    }
+
+    package "inspect_ai Integration" {
+        class create_saber_dataset {
+            +session_manager: ClientSessionManager
+            +task_ids: List[str]
+            --
+            **inspect_ai Dataset Factory**
+            +create(session_manager, task_ids): inspect_ai.Dataset
+            --
+            **Features**
+            - Native inspect_ai.Sample creation
+            - SABER task metadata integration
+            - Type-safe task conversion
+        }
+
+        class SABERTaskScorer {
+            +session_manager: ClientSessionManager
+            --
+            **inspect_ai Scorer Implementation**
+            +score(state, target): Score
+            --
+            **Features**
+            - Integration with SABER server evaluation
+            - Custom scoring logic for security tasks
+            - Results persistence
+        }
     }
 }
 
 ' Relationships
-SABERHarness --> SABERHarnessConfig : configured by
-SABERHarness --> ContainerEpisodeExecutor : uses
-SABERHarness --> HarnessExecutionLogger : logs to
-SABERHarness --> SABERUIAdapter : displays via
+run_saber_eval_async --> SABEREvaluationOrchestrator : creates and manages
+run_saber_eval_async --> SABERConfig : validates
+SABEREvaluationOrchestrator --> AgentManager : manages
+SABEREvaluationOrchestrator --> DatasetManager : manages
+SABEREvaluationOrchestrator --> ClientSessionManager : shares
+AgentManager --> ClientSessionManager : uses shared
+DatasetManager --> ClientSessionManager : uses shared
+ClientSessionManager --> SABERRestClient : delegates REST calls
+ClientSessionManager --> MCPClient : pools MCP connections
+SABERConfig --> SessionManagerConfig : contains
+SABERConfig --> AgentConfig : contains
+SessionManagerConfig --> MCPConfig : converts to
+DatasetManager --> create_saber_dataset : uses
+run_saber_eval_async --> SABERTaskScorer : integrates
 
-ContainerEpisodeExecutor --> SidecarManager : manages
-ContainerEpisodeExecutor --> AgentManager : manages
-ContainerEpisodeExecutor --> ContainerFactory : uses
-ContainerEpisodeExecutor --> ContainerLogManager : logs with
+note top of run_saber_eval_async
+**Modern inspect_ai Integration**
+- eval_async compatible interface
+- No backwards compatibility
+- Fail-fast validation
+- Type-safe configuration
+- Automatic resource management
+end note
 
-SidecarManager --> DockerEngine : controls containers
-AgentManager --> DockerEngine : controls containers
-AgentManager --> ContainerLogManager : logs via
-
-MCPProxy --> AgentSessionRegistry : uses
-AgentExecutor --> StandardMCPClient : uses
-AgentExecutor --> AgentAdapterFactory : uses
-StandardMCPClient --> MCPProxy : communicates via HTTP
-
-AgentAdapterFactory --> ClassBasedAdapter : creates
-AgentAdapterFactory --> FunctionBasedAdapter : creates
-AgentAdapterFactory --> AsyncAdapter : wraps with
-
-ContainerLogManager --> LogStreamCollector : creates
-LogStreamCollector --> DockerEngine : streams from
-
-MCPProxy --> SABERServer : proxies to (MCP)
-SABERHarness --> SABERServer : communicates via (REST)
-
-note top of SABERHarness : Entry Point\nMain client orchestrator\nContainer-only execution\nComprehensive logging
-
-note top of ContainerMode : Core Architecture\n✅ Standard MCP compatibility\n✅ Agent isolation & resource limits\n✅ Robust termination & cleanup\n✅ Real-time log streaming
-
-note bottom of DockerEngine : Container Infrastructure\nsaber/mcp-sidecar:latest\nsaber/agent-runner:latest\nIsolated networks & resource limits
+note bottom of SABEREvaluationOrchestrator
+**Clean Architecture Principles**
+- Async context manager lifecycle
+- Separation of concerns
+- Resource management
+- Error handling and recovery
+- Upfront validation
+end note
 
 @enduml
