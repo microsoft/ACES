@@ -222,10 +222,12 @@ class ExecutorFactory:
                 tool_schema = executor.to_mcp_schema()
                 metadata = getattr(executor, "_executor_metadata", {})
 
+                # Keep as Pydantic object - don't convert to raw JSON Schema
+                # The MCP protocol will handle serialization/deserialization
                 tool_def = {
                     "name": metadata.get("name", executor_type),
                     "description": metadata.get("description", f"{executor_type.title()} executor"),
-                    "inputSchema": tool_schema,
+                    "inputSchema": tool_schema,  # Keep as MCPInputSchema object
                 }
 
                 tools.append(tool_def)

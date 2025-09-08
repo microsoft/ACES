@@ -55,13 +55,9 @@ echo "📦 Building domain-specific images..."
 echo "📦 Building SABER server for excytin domain..."
 docker build -f Dockerfile.server -t saber/excytin-server:latest ../
 
-# Build Excytin Demo client
+# Build Excytin Demo client (needs repo root for external/ directory)
 echo "📦 Building Excytin Demo client..."
-docker build -f Dockerfile.client -t saber/excytin-client:latest ../
-
-# Build Excytin Demo agent with dependencies
-echo "📦 Building Excytin Demo agent..."
-docker build -f Dockerfile.agent -t saber/excytin-agent:latest ../
+docker build -f ./Dockerfile.client -t saber/excytin-client:latest ../../../
 
 # Build Excytin Demo sandbox
 echo "📦 Building Excytin Demo sandbox..."

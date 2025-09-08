@@ -2,11 +2,16 @@
 # Extends the generic SABER client base
 FROM saber/client:latest
 
+# Copy external dependencies (inspect-ai submodule)
+COPY external/ /app/external/
+
 # Copy client code and dependencies
-COPY client/ /app/client/
+COPY domains/excytin_demo/client/ /app/client/
 
 # Install Python dependencies using uv
 WORKDIR /app/client
+# Set version for setuptools-scm since we're copying without git metadata
+ENV SETUPTOOLS_SCM_PRETEND_VERSION_FOR_INSPECT_AI=0.3.130.dev19
 RUN uv venv && uv sync
 
 # Set working directory back to app root

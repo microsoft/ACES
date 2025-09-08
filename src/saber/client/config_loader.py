@@ -1,208 +1,218 @@
-#!/usr/bin/env python3
 """
-SABER Harness Configuration Loader
+Simple SABER Configuration Loader
 
-Utilities for loading SABER harness configuration from YAML files.
+Replaces the old HarnessConfigLoader with a simple YAML loader that works
+with the new SABERConfig format and eval_async integration.
+
+Following SABER's philosophy:
+- Fail fast when configuration files are invalid or missing
+- Clean validation of required fields
+- No silent fallbacks that mask configuration issues
 """
 
-import os
+import logging
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import yaml
 
-from .harness_models import DockerCommand, SABERHarnessConfig
+from .models import SABERConfig
+
+logger = logging.getLogger(__name__)
 
 
-class HarnessConfigLoader:
-    """Loads and validates SABER harness configuration from YAML files."""
+class SABERConfigLoader:
+    """Simple configuration loader for SABER YAML configs."""
 
     @staticmethod
-    def load_from_file(config_path: Path) -> SABERHarnessConfig:
-        """Load configuration from a YAML file."""
+    def load_from_file(config_path: Path) -> SABERConfig:
+        """
+        Load SABER configuration from YAML file.
+
+        Args:
+            config_path: Path to YAML configuration file
+
+        Returns:
+            SABERConfig instance
+
+        Raises:
+            FileNotFoundError: If config file doesn't exist
+            ValueError: If configuration is invalid
+            yaml.YAMLError: If YAML parsing fails
+        """
+
         if not config_path.exists():
             raise FileNotFoundError(f"Configuration file not found: {config_path}")
 
-        with open(config_path, "r") as f:
-            config_data = yaml.safe_load(f)
+        logger.info(f"Loading SABER configuration from: {config_path}")
 
-        return HarnessConfigLoader._parse_config(config_data)
+        try:
+            with open(config_path, "r") as f:
+                config_data = yaml.safe_load(f)
+        except yaml.YAMLError as e:
+            raise ValueError(f"Failed to parse YAML configuration: {e}") from e
+
+        if not config_data:
+            raise ValueError(f"Configuration file is empty: {config_path}")
+
+        if not isinstance(config_data, dict):
+            raise ValueError(f"Configuration must be a YAML dictionary, got: {type(config_data)}")
+
+        # Convert YAML config to SABERConfig
+        saber_config = SABERConfigLoader._convert_yaml_to_saber_config(config_data, config_path)
+
+        logger.info("SABER configuration loaded successfully")
+        logger.debug(f"Config: saber_rest_url={saber_config.saber_rest_url}, model={saber_config.model}")
+
+        return saber_config
 
     @staticmethod
-    def _parse_config(config_data: Dict[str, Any]) -> SABERHarnessConfig:
-        """Parse configuration data into SABERHarnessConfig."""
-        # Server configuration
-        server = config_data.get("server", {})
-        server_url = server.get("url", "http://localhost:8000")
-        mcp_url = server.get("mcp_url", "http://localhost:8001")
-        client_id = server.get("client_id", "saber-client")
-        request_timeout = server.get("request_timeout", 300.0)
+    def _convert_yaml_to_saber_config(config_data: Dict[str, Any], config_path: Path) -> SABERConfig:
+        """
+        Convert YAML configuration dictionary to SABERConfig.
 
-        # Logging configuration
-        logging = config_data.get("logging", {})
-        log_level = logging.get("level", "INFO")
-        client_log_dir = logging.get("client_log_dir")
-        if client_log_dir:
-            client_log_dir = Path(client_log_dir)
-        enable_container_logging = logging.get("enable_container_logging", True)
-        log_retention_days = logging.get("log_retention_days", 30)
-        max_log_size_mb = logging.get("max_log_size_mb", 50)
-        compress_old_logs = logging.get("compress_old_logs", True)
+        Uses the new nested configuration format. No legacy support.
 
-        # Task configuration
-        tasks = config_data.get("tasks", {})
-        task_ids = tasks.get("task_ids")
-        if task_ids == []:  # Empty list means run all
-            task_ids = None
-        parallelism = tasks.get("parallelism", 1)
+        Args:
+            config_data: YAML configuration dictionary
+            config_path: Path to config file (for relative path resolution)
 
-        # Safety configuration
-        safety = config_data.get("safety", {})
-        max_steps_client_safety = safety.get("max_steps_client_safety", 100)
+        Returns:
+            SABERConfig instance
 
-        # LLM configuration
-        llm = config_data.get("llm", {})
-        llm_provider = llm.get("provider")
-        llm_config = llm.get("config", {})
+        Raises:
+            ValueError: If required configuration is missing or invalid
+        """
 
-        # Agent configuration
-        agent = config_data.get("agent", {})
-        agent_config = {}
-        if "image" in agent:
-            agent_config["image"] = agent["image"]
-        if "config" in agent:
-            agent_config.update(agent["config"])
+        # Extract model configuration (required)
+        model = config_data.get("model")
+        if not model:
+            raise ValueError("Configuration must specify 'model' field")
 
-        # Extract agent path for separate handling
-        agent_path = agent.get("path")
+        model_args = config_data.get("model_args", {})
+        if not isinstance(model_args, dict):
+            raise ValueError("'model_args' must be a dictionary")
 
-        # Parse docker_commands configuration
-        docker_commands = []
-        docker_commands_config = agent.get("docker_commands", [])
-        for cmd_config in docker_commands_config:
-            try:
-                # Validate and create DockerCommand object
-                docker_cmd = DockerCommand(
-                    type=cmd_config["type"],
-                    description=cmd_config.get("description"),
-                    source=cmd_config.get("source"),
-                    destination=cmd_config.get("destination"),
-                    command=cmd_config.get("command"),
-                )
-                docker_commands.append(docker_cmd)
-            except Exception as e:
-                raise ValueError(f"Invalid docker command configuration: {cmd_config}. Error: {e}")
+        # Extract server configuration (required, nested format only)
+        server_config = config_data.get("server")
+        if not server_config or not isinstance(server_config, dict):
+            raise ValueError("Configuration must specify 'server' section with rest_url and mcp_url")
 
-        # UI configuration
-        ui = config_data.get("ui", {})
-        ui_backend = ui.get("backend", "auto")
-        ui_enabled = ui.get("enabled", True)
-        ui_internal_only = ui.get("internal_only", True)
-        ui_tool_detail_level = ui.get("tool_detail_level", "full")
+        rest_url = server_config.get("rest_url")
+        if not rest_url:
+            raise ValueError("Configuration must specify 'server.rest_url'")
 
-        # Apply environment variable overrides
-        HarnessConfigLoader._apply_env_overrides(locals())
+        mcp_url = server_config.get("mcp_url")
+        if not mcp_url:
+            raise ValueError("Configuration must specify 'server.mcp_url'")
 
-        return SABERHarnessConfig(
-            server_url=server_url,
+        client_id = server_config.get("client_id", "saber-client")
+
+        # Extract task configuration
+        task_config = config_data.get("tasks", {})
+        if not isinstance(task_config, dict):
+            raise ValueError("'tasks' section must be a dictionary")
+
+        task_ids = task_config.get("task_ids")
+        if task_ids and not isinstance(task_ids, list):
+            raise ValueError("'tasks.task_ids' must be a list")
+
+        # Extract agent configuration
+        agent_config = config_data.get("agent", {})
+        if not isinstance(agent_config, dict):
+            raise ValueError("'agent' section must be a dictionary")
+
+        # Handle agent_id or path - require one of them
+        agent_id = agent_config.get("id")
+        agent_path = agent_config.get("path")
+
+        if not agent_id and not agent_path:
+            raise ValueError("Agent configuration must specify either 'agent.id' or 'agent.path'")
+
+        if agent_path:
+            # Resolve relative paths relative to config file
+            agent_path = SABERConfigLoader._resolve_agent_path(agent_path, config_path)
+
+        # Extract agent parameters
+        max_steps = agent_config.get("max_steps", 50)
+        max_errors = agent_config.get("max_errors", 3)
+        debug_mode = agent_config.get("debug_mode", False)
+
+        # Extract Docker commands
+        docker_commands = config_data.get("docker_commands", [])
+        if not isinstance(docker_commands, list):
+            raise ValueError("'docker_commands' must be a list")
+
+        # Extract execution configuration
+        log_level = config_data.get("log_level", "INFO")
+        log_dir = config_data.get("log_dir")
+        ui_enabled = config_data.get("ui_enabled", True)
+        container_timeout = config_data.get("container_timeout", 300)
+
+        # Extract eval_async configuration
+        max_samples = config_data.get("max_samples")
+        max_subprocesses = config_data.get("max_subprocesses", 1)
+        parallel_execution = config_data.get("parallel_execution", True)
+        max_parallel_tasks = config_data.get("max_parallel_tasks", 4)
+
+        # Create SABERConfig using the factory method
+        saber_config = SABERConfig.create(
+            model=model,
+            model_args=model_args,
+            rest_url=rest_url,
             mcp_url=mcp_url,
             client_id=client_id,
-            request_timeout=request_timeout,
-            log_level=log_level,
-            client_log_dir=client_log_dir,
-            enable_container_logging=enable_container_logging,
-            log_retention_days=log_retention_days,
-            max_log_size_mb=max_log_size_mb,
-            compress_old_logs=compress_old_logs,
             task_ids=task_ids,
-            parallelism=parallelism,
-            max_steps_client_safety=max_steps_client_safety,
-            llm_provider=llm_provider,
-            llm_config=llm_config,
-            agent_config=agent_config,
+            agent_id=agent_id,
             agent_path=agent_path,
+            max_steps=max_steps,
+            max_errors=max_errors,
+            debug_mode=debug_mode,
             docker_commands=docker_commands,
-            ui_backend=ui_backend,
+            log_level=log_level,
+            log_dir=log_dir,
             ui_enabled=ui_enabled,
-            ui_internal_only=ui_internal_only,
-            ui_tool_detail_level=ui_tool_detail_level,
+            container_timeout=container_timeout,
+            max_samples=max_samples,
+            max_subprocesses=max_subprocesses,
+            parallel_execution=parallel_execution,
+            max_parallel_tasks=max_parallel_tasks,
         )
 
-    @staticmethod
-    def _apply_env_overrides(config_vars: Dict[str, Any]) -> None:
-        """Apply environment variable overrides to configuration."""
-        # Server URL overrides
-        if "SABER_SERVER_URL" in os.environ:
-            config_vars["server_url"] = os.environ["SABER_SERVER_URL"]
-        if "SABER_MCP_URL" in os.environ:
-            config_vars["mcp_url"] = os.environ["SABER_MCP_URL"]
-
-        # Logging overrides
-        if "SABER_LOG_LEVEL" in os.environ:
-            config_vars["log_level"] = os.environ["SABER_LOG_LEVEL"]
-
-        # Agent image override
-        if "SABER_AGENT_IMAGE" in os.environ:
-            if "agent_config" not in config_vars:
-                config_vars["agent_config"] = {}
-            config_vars["agent_config"]["image"] = os.environ["SABER_AGENT_IMAGE"]
+        return saber_config
 
     @staticmethod
-    def create_default_config(config_path: Path) -> None:
-        """Create a default configuration file."""
-        default_config = {
-            "server": {
-                "url": "http://localhost:8000",
-                "mcp_url": "http://localhost:8001",
-                "client_id": "saber-client",
-                "request_timeout": 60.0,
-            },
-            "logging": {
-                "level": "INFO",
-                "client_log_dir": "./logs",
-                "enable_container_logging": True,
-                "log_retention_days": 30,
-                "max_log_size_mb": 50,
-                "compress_old_logs": True,
-            },
-            "tasks": {
-                "task_ids": [],
-                "parallelism": 1,
-            },
-            "safety": {
-                "max_steps_client_safety": 100,
-            },
-            "llm": {
-                "provider": None,
-                "config": {},
-            },
-            "agent": {
-                "path": None,
-                "image": "saber/agent-runner:latest",
-                "config": {},
-                "docker_commands": [
-                    # Example: Copy Azure CLI credentials from host to container
-                    # {
-                    #     "type": "copy",
-                    #     "source": "/home/user/.azure",
-                    #     "destination": "/home/agent/.azure",
-                    #     "description": "Copy Azure CLI credentials"
-                    # },
-                    # {
-                    #     "type": "exec",
-                    #     "command": ["chown", "-R", "agent:agent", "/home/agent/.azure"],
-                    #     "description": "Fix Azure credentials ownership"
-                    # }
-                ],
-            },
-            "ui": {
-                "backend": "auto",
-                "enabled": True,
-                "internal_only": True,
-                "tool_detail_level": "full",
-            },
-        }
+    def _resolve_agent_path(agent_path: str, config_path: Path) -> Optional[str]:
+        """
+        Resolve agent path relative to config file location.
 
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(config_path, "w") as f:
-            yaml.dump(default_config, f, default_flow_style=False, indent=2)
+        Args:
+            agent_path: Agent path from config (may be relative)
+            config_path: Path to config file
+
+        Returns:
+            Resolved absolute agent path, or None if not found
+        """
+
+        if not agent_path:
+            return None
+
+        agent_path_obj = Path(agent_path)
+
+        # If already absolute, use as-is
+        if agent_path_obj.is_absolute():
+            if agent_path_obj.exists():
+                return str(agent_path_obj)
+            else:
+                logger.warning(f"Agent path not found: {agent_path}")
+                return str(agent_path_obj)  # Return anyway, let caller handle
+
+        # Resolve relative to config file directory
+        config_dir = config_path.parent
+        resolved_path = config_dir / agent_path_obj
+
+        if resolved_path.exists():
+            return str(resolved_path.resolve())
+        else:
+            logger.warning(f"Agent path not found: {resolved_path}")
+            return str(resolved_path)  # Return anyway, let caller handle

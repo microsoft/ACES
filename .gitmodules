@@ -1,0 +1,3 @@
+[submodule "external/inspect_ai"]
+	path = external/inspect_ai
+	url = https://github.com/UKGovernmentBEIS/inspect_ai.git

@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List, Optional
 
-from .benchmark_info import BenchmarkInfo
+from ...models import BenchmarkInfo
 
 
 class BenchmarkSession:

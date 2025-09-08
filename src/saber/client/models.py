@@ -1,0 +1,372 @@
+"""
+SABER Client Models - Type definitions for client-side operations.
+
+These models provide strict typing for SABER client operations, including
+solver execution, agent configuration, and client configuration, replacing
+raw dictionaries with proper Pydantic models.
+"""
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel, Field
+
+
+class MCPConfig(BaseModel):
+    """Configuration for MCP (Model Context Protocol) client with FastMCP integration."""
+
+    base_url: str = Field(default="http://localhost:8001", description="SABER MCP server base URL")
+    timeout: float = Field(default=30.0, description="Request timeout in seconds")
+    retry_attempts: int = Field(default=3, description="Number of retry attempts for transient errors")
+    retry_delay: float = Field(default=1.0, description="Delay between retries in seconds")
+    client_id: str = Field(default="saber-client", description="Client identifier for requests")
+
+    def get_sse_url(self) -> str:
+        """Get the SSE endpoint URL for FastMCP connection."""
+        return f"{self.base_url.rstrip('/')}/sse"
+
+    class Config:
+        extra = "forbid"  # Don't allow extra fields for strict typing
+
+
+class SessionManagerConfig(BaseModel):
+    """Unified configuration for ClientSessionManager API layer (REST + MCP)."""
+
+    # REST API configuration
+    base_url: str = Field(description="SABER server REST API base URL")
+    client_id: str = Field(default="saber_client", description="Client identifier for session creation")
+    rest_timeout: float = Field(default=30.0, description="REST API request timeout in seconds")
+
+    # MCP configuration
+    mcp_url: str = Field(description="SABER server MCP endpoint URL")
+    mcp_timeout: int = Field(default=30, description="MCP connection timeout in seconds")
+    mcp_retry_attempts: int = Field(default=3, description="Number of retry attempts for failed MCP connections")
+    mcp_retry_delay: float = Field(default=1.0, description="Delay between MCP retry attempts in seconds")
+    mcp_headers: Dict[str, str] = Field(default_factory=dict, description="Additional headers for MCP requests")
+
+    @classmethod
+    def from_urls(
+        cls, rest_url: str, mcp_url: str, client_id: str = "saber_client", **kwargs: Any
+    ) -> "SessionManagerConfig":
+        """
+        Create SessionManagerConfig from separate REST and MCP URLs.
+
+        Args:
+            rest_url: SABER server REST API URL
+            mcp_url: SABER server MCP endpoint URL
+            client_id: Client identifier
+            **kwargs: Additional configuration options
+
+        Returns:
+            Configured SessionManagerConfig instance
+        """
+        return cls(base_url=rest_url, mcp_url=mcp_url, client_id=client_id, **kwargs)
+
+    def to_mcp_config(self) -> MCPConfig:
+        """
+        Create MCPConfig from SessionManagerConfig settings.
+
+        Returns:
+            MCPConfig instance with MCP-specific settings
+        """
+        return MCPConfig(
+            base_url=self.mcp_url,
+            timeout=float(self.mcp_timeout),
+            retry_attempts=self.mcp_retry_attempts,
+            retry_delay=self.mcp_retry_delay,
+            client_id=self.client_id,
+        )
+
+    class Config:
+        extra = "forbid"  # Don't allow extra fields for strict typing
+
+
+class AgentConfig(BaseModel):
+    """Strictly typed agent configuration for container execution."""
+
+    # Core agent behavior settings
+    max_steps: int = Field(default=50, description="Maximum steps the agent can take")
+    max_errors: int = Field(default=3, description="Maximum errors before stopping")
+    debug_mode: bool = Field(default=False, description="Enable debug mode")
+
+    # Optional container settings
+    image: Optional[str] = Field(None, description="Docker image to use for the agent")
+    env: Optional[Dict[str, str]] = Field(default_factory=dict, description="Environment variables for the agent")
+    resources: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Resource limits for the agent")
+
+    # Allow additional fields for extensibility
+    class Config:
+        extra = "allow"
+
+
+class AgentInfo(BaseModel):
+    """Information about a SABER agent."""
+
+    agent_id: str = Field(description="Unique agent identifier")
+    name: str = Field(description="Human-readable agent name")
+    description: str = Field(description="Agent description")
+    version: str = Field(default="1.0.0", description="Agent version")
+    capabilities: List[str] = Field(default_factory=list, description="Agent capabilities")
+    tags: List[str] = Field(default_factory=list, description="Agent tags")
+
+
+class SABERTask(BaseModel):
+    """Typed SABER task definition."""
+
+    id: str = Field(description="Unique task identifier")
+    title: Optional[str] = Field(None, description="Task title")
+    description: str = Field(description="Task description")
+    environment: str = Field(description="Environment description")
+    subtasks: List[Dict[str, Any]] = Field(default_factory=list, description="Task subtasks")
+    success_criteria: Optional[str] = Field(None, description="Success criteria")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional task metadata")
+
+
+class AgentExecutionParams(BaseModel):
+    """Parameters for agent container execution."""
+
+    agent_file: str = Field(description="Path to agent file")
+    initial_prompt: str = Field(description="Initial prompt for agent")
+    task_id: str = Field(description="Task identifier")
+    mcp_service_url: str = Field(description="MCP service URL")
+    agent_config: AgentConfig = Field(description="Agent configuration")
+    timeout: int = Field(default=300, description="Execution timeout in seconds")
+
+
+class ContainerExecutionResult(BaseModel):
+    """Result from container execution via AgentManager."""
+
+    status: str = Field(description="Execution status (completed/failed)")
+    result: str = Field(description="Execution result or output")
+    task_id: str = Field(description="Task identifier")
+    success: bool = Field(description="Whether execution succeeded")
+    exit_code: int = Field(description="Container exit code")
+    execution_time: float = Field(description="Execution time in seconds")
+    container_id: str = Field(description="Container identifier")
+    termination_reason: str = Field(description="How container terminated")
+    error: Optional[str] = Field(None, description="Error message if failed")
+    agent_id: str = Field(description="Agent identifier")
+    episode_id: str = Field(description="Episode identifier")
+
+
+# =============================================================================
+# Configuration Models
+# =============================================================================
+
+
+@dataclass
+class DockerCommand:
+    """Configuration for additional Docker commands to execute during agent container setup."""
+
+    type: str  # "copy", "exec"
+    description: Optional[str] = None
+
+    # For type="copy"
+    source: Optional[str] = None
+    destination: Optional[str] = None
+
+    # For type="exec"
+    command: Optional[List[str]] = None
+    user: Optional[str] = None  # User to run exec command as (default: container default user)
+
+    def __post_init__(self) -> None:
+        """Validate docker command configuration."""
+        if self.type == "copy":
+            if not self.source or not self.destination:
+                raise ValueError("Docker copy commands must specify both source and destination")
+        elif self.type == "exec":
+            if not self.command:
+                raise ValueError("Docker exec commands must specify a command")
+        else:
+            raise ValueError(f"Invalid Docker command type: {self.type}. Must be 'copy' or 'exec'")
+
+
+@dataclass
+class SABERConfig:
+    """
+    Main SABER configuration using inspect_ai model specifications.
+    Clean configuration with no legacy support - fail fast design.
+    """
+
+    model: str  # Required model spec, no default
+    model_args: Dict[str, Any] = field(default_factory=dict)
+
+    # Session manager configuration (unified REST + MCP)
+    session_config: Optional[SessionManagerConfig] = field(default=None)
+
+    # Task configuration
+    task_ids: Optional[List[str]] = None
+
+    # Agent configuration - modernized, no legacy support
+    agent_id: Optional[str] = None  # Agent ID from registry (preferred)
+    agent_path: Optional[str] = None  # Path to agent Python file
+    agent_config: Optional[AgentConfig] = field(default=None)
+
+    # Container configuration
+    docker_commands: List[DockerCommand] = field(default_factory=list)
+    container_timeout: int = 300
+
+    # Execution configuration
+    ui_enabled: bool = True
+    log_level: str = "INFO"
+    log_dir: Optional[str] = None
+
+    # eval_async specific configuration
+    max_samples: Optional[int] = None
+    max_subprocesses: int = 1
+    parallel_execution: bool = True
+    max_parallel_tasks: int = 4
+
+    @classmethod
+    def create(
+        cls,
+        model: str,
+        rest_url: str,
+        mcp_url: str,
+        client_id: str = "saber-client",
+        model_args: Optional[Dict[str, Any]] = None,
+        task_ids: Optional[List[str]] = None,
+        agent_id: Optional[str] = None,
+        agent_path: Optional[str] = None,
+        max_steps: int = 50,
+        max_errors: int = 3,
+        debug_mode: bool = False,
+        docker_commands: Optional[List[Dict[str, Any]]] = None,
+        log_level: str = "INFO",
+        log_dir: Optional[str] = None,
+        ui_enabled: bool = True,
+        container_timeout: int = 300,
+        max_samples: Optional[int] = None,
+        max_subprocesses: int = 1,
+        parallel_execution: bool = True,
+        max_parallel_tasks: int = 4,
+    ) -> "SABERConfig":
+        """
+        Factory method to create SABERConfig with proper validation.
+
+        Args:
+            model: Model specification (required)
+            rest_url: SABER server REST API URL
+            mcp_url: SABER server MCP URL
+            client_id: Client identifier
+            model_args: Model arguments dictionary
+            task_ids: List of task IDs to execute
+            agent_id: Agent ID from registry
+            agent_path: Path to agent Python file
+            max_steps: Maximum steps for agent execution
+            max_errors: Maximum errors before failure
+            debug_mode: Enable debug mode
+            docker_commands: Docker commands for container setup
+            log_level: Logging level
+            log_dir: Log directory path
+            ui_enabled: Enable UI
+            container_timeout: Container timeout in seconds
+            max_samples: Maximum samples to process
+            max_subprocesses: Maximum subprocess count
+            parallel_execution: Enable parallel execution
+            max_parallel_tasks: Maximum parallel tasks
+
+        Returns:
+            Configured SABERConfig instance
+
+        Raises:
+            ValueError: If configuration is invalid
+        """
+        # Create session config
+        session_config = SessionManagerConfig.from_urls(rest_url=rest_url, mcp_url=mcp_url, client_id=client_id)
+
+        # Create agent config
+        agent_config = AgentConfig(max_steps=max_steps, max_errors=max_errors, debug_mode=debug_mode, image=None)
+
+        # Convert docker commands if provided
+        docker_cmd_objects = []
+        if docker_commands:
+            for cmd_dict in docker_commands:
+                docker_cmd_objects.append(DockerCommand(**cmd_dict))
+
+        return cls(
+            model=model,
+            model_args=model_args or {},
+            session_config=session_config,
+            task_ids=task_ids,
+            agent_id=agent_id,
+            agent_path=agent_path,
+            agent_config=agent_config,
+            docker_commands=docker_cmd_objects,
+            container_timeout=container_timeout,
+            ui_enabled=ui_enabled,
+            log_level=log_level,
+            log_dir=log_dir,
+            max_samples=max_samples,
+            max_subprocesses=max_subprocesses,
+            parallel_execution=parallel_execution,
+            max_parallel_tasks=max_parallel_tasks,
+        )
+
+    def __post_init__(self) -> None:
+        """Validate configuration on creation - fail fast design."""
+        if not self.model:
+            raise ValueError("model specification is required")
+
+        if not self.session_config:
+            raise ValueError("session_config is required")
+
+        # Validate agent specification - exactly one required
+        if not self.agent_id and not self.agent_path:
+            raise ValueError("Either agent_id or agent_path must be provided")
+
+        if self.agent_id and self.agent_path:
+            raise ValueError("Cannot specify both agent_id and agent_path - choose one")
+
+        if self.agent_path:
+            agent_path_obj = Path(self.agent_path)
+            if not agent_path_obj.exists():
+                raise FileNotFoundError(f"Agent file not found: {self.agent_path}")
+
+        if not self.agent_config:
+            raise ValueError("agent_config is required")
+
+        # Validate container_timeout
+        if self.container_timeout <= 0:
+            raise ValueError(f"container_timeout must be positive, got: {self.container_timeout}")
+
+        # Validate max_parallel_tasks
+        if self.max_parallel_tasks <= 0:
+            raise ValueError(f"max_parallel_tasks must be positive, got: {self.max_parallel_tasks}")
+
+        # Validate max_subprocesses
+        if self.max_subprocesses <= 0:
+            raise ValueError(f"max_subprocesses must be positive, got: {self.max_subprocesses}")
+
+        # Validate model_args
+        if not isinstance(self.model_args, dict):
+            raise TypeError("model_args must be a dictionary")
+
+        # Validate agent_config type
+        if not isinstance(self.agent_config, AgentConfig):
+            raise TypeError("agent_config must be an AgentConfig instance")
+
+        # Validate docker_commands
+        if not isinstance(self.docker_commands, list):
+            raise TypeError("docker_commands must be a list")
+
+        for cmd in self.docker_commands:
+            if not isinstance(cmd, DockerCommand):
+                raise TypeError("All docker_commands must be DockerCommand instances")
+
+    # Legacy property accessors for backward compatibility during transition
+    @property
+    def saber_rest_url(self) -> str:
+        """Legacy property accessor for REST URL."""
+        return self.session_config.base_url if self.session_config else ""
+
+    @property
+    def saber_mcp_url(self) -> str:
+        """Legacy property accessor for MCP URL."""
+        return self.session_config.mcp_url if self.session_config else ""
+
+    @property
+    def client_id(self) -> str:
+        """Legacy property accessor for client ID."""
+        return self.session_config.client_id if self.session_config else ""

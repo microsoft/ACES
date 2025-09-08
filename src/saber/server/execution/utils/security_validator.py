@@ -9,7 +9,7 @@ import logging
 import re
 import shlex
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from ..base import ValidationResult
 from .security_constants import (
@@ -217,17 +217,3 @@ class SecurityValidator:
             combined_result.valid = False
 
         return combined_result
-
-    def get_security_info(self) -> Dict[str, Any]:
-        """
-        Get information about security settings.
-
-        Returns:
-            Dictionary with security configuration
-        """
-        return {
-            "allowed_commands": list(self._allowed_commands) if self._allowed_commands else None,
-            "dangerous_patterns_count": len(DANGEROUS_PATTERNS),
-            "blocked_commands_count": len(BLOCKED_COMMANDS),
-            "security_limits": DEFAULT_SECURITY_SETTINGS.copy(),
-        }

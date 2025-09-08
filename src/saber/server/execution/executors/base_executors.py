@@ -8,6 +8,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
+from ....models import MCPInputSchema, MCPPropertySchema
 from ...base import CommandResult
 from ..base import Parameter, ValidationResult
 
@@ -147,49 +148,47 @@ class CommandExecutor(ABC):
 
         return result
 
-    def to_mcp_schema(self) -> Dict[str, Any]:
+    def to_mcp_schema(self) -> MCPInputSchema:
         """
         Convert tool parameters to MCP tool schema format.
 
         Returns:
-            Dictionary containing MCP-compatible parameter schema
+            MCPInputSchema containing typed parameter schema
         """
-        properties: Dict[str, Any] = {}
+        properties: Dict[str, MCPPropertySchema] = {}
         required: List[str] = []
 
         for param_name, param_def in self._parameters.items():
             # Build parameter schema
-            param_schema: Dict[str, Any] = {
-                "type": param_def.type.value,
-                "description": param_def.description,
-            }
-
-            # Add default value if present
-            if param_def.default is not None:
-                param_schema["default"] = param_def.default
-
-            # Add enum values if present
-            if param_def.enum_values:
-                param_schema["enum"] = param_def.enum_values
+            property_schema = MCPPropertySchema(
+                type=param_def.type.value,
+                description=param_def.description,
+                title=None,
+                default=param_def.default,
+                enum=param_def.enum_values,
+                minimum=None,
+                maximum=None,
+                pattern=None,
+            )
 
             # Add range constraints for numbers
             if param_def.type.value in ("integer", "number"):
                 if param_def.min_value is not None:
-                    param_schema["minimum"] = param_def.min_value
+                    property_schema.minimum = param_def.min_value
                 if param_def.max_value is not None:
-                    param_schema["maximum"] = param_def.max_value
+                    property_schema.maximum = param_def.max_value
 
             # Add pattern for strings
             if param_def.type.value == "string" and param_def.pattern:
-                param_schema["pattern"] = param_def.pattern
+                property_schema.pattern = param_def.pattern
 
-            properties[param_name] = param_schema
+            properties[param_name] = property_schema
 
             if param_def.required:
                 required.append(param_name)
 
-        return {
-            "type": "object",
-            "properties": properties,
-            "required": required,
-        }
+        return MCPInputSchema(
+            type="object",
+            properties=properties,
+            required=required,
+        )

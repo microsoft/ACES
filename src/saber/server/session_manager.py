@@ -13,7 +13,6 @@ from typing import Any, Dict, List, Optional
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
-from ..api_models import EpisodeEndResponse
 from ..logging_config import (
     get_cleanup_logger,
     get_session_manager_logger,
@@ -22,11 +21,13 @@ from ..logging_config import (
     log_operation_success,
     log_session_end,
 )
+from ..models import BenchmarkInfo, EpisodeEndResponse
+from .api.events.tool_event_publisher import ToolEventPublisher
 from .api.session_mcp_api import SessionMCPAPI
 from .api.session_rest_api import SessionRestAPI
-from .base import Action, CommandResult
-from .benchmarks.benchmark_info import BenchmarkInfo
+from .base import Action, CommandResult, Episode
 from .benchmarks.benchmark_manager import BenchmarkManager
+from .benchmarks.task import Task
 from .episodes.constants import EpisodeTerminationReason
 from .episodes.episode_manager import EpisodeManager
 from .evaluation.evaluation_manager import EvaluationManager
@@ -353,7 +354,7 @@ class SessionManager:
 
         logger.info(f"Terminated session {session_id}")
 
-    async def start_episode(self, session_id: str, task_id: str) -> Any:
+    async def start_episode(self, session_id: str, task_id: str) -> Episode:
         """
         Initialize episode for a task.
 
@@ -583,7 +584,7 @@ class SessionManager:
         """
         return await self.execute_action(session_id, episode_id, action)
 
-    async def get_current_task(self, session_id: str, episode_id: str) -> Any:
+    async def get_current_task(self, session_id: str, episode_id: str) -> Task:
         """
         Get task object for a specific episode.
 
@@ -634,7 +635,7 @@ class SessionManager:
         # Get episode-specific policy that was configured during start_episode
         return self.policy_manager.get_policy(episode_id)
 
-    async def list_session_episodes(self, session_id: str, status_filter: Optional[str] = None) -> List[Any]:
+    async def list_session_episodes(self, session_id: str, status_filter: Optional[str] = None) -> List[Episode]:
         """
         List all episodes for a session with optional status filtering.
 
@@ -655,7 +656,7 @@ class SessionManager:
 
         return episodes
 
-    async def get_episode_details(self, session_id: str, episode_id: str) -> Any:
+    async def get_episode_details(self, session_id: str, episode_id: str) -> Episode:
         """
         Get detailed information about a specific episode.
 
@@ -682,7 +683,7 @@ class SessionManager:
 
         return episode
 
-    def get_tool_event_publisher(self) -> Any:
+    def get_tool_event_publisher(self) -> Optional[ToolEventPublisher]:
         """
         Get tool event publisher instance - used by MCP API.
 
@@ -694,7 +695,7 @@ class SessionManager:
             return self.rest_api.tool_event_publisher
         return None
 
-    def get_episode_by_id(self, episode_id: str) -> Any:
+    def get_episode_by_id(self, episode_id: str) -> Optional[Episode]:
         """
         Get episode by ID - used by MCP API for episode context.
 

@@ -253,11 +253,3 @@ import numpy as np
 
         result = python_executor.validate_parameters(parameters)
         assert result.valid is True
-
-    def test_get_security_info(self, python_executor):
-        """Test getting security information."""
-        info = python_executor.get_docker_info()
-
-        assert info["execution_environment"] == "docker_container"
-        assert "timeout" in info
-        assert "docker_config" in info

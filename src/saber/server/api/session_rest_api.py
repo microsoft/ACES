@@ -9,14 +9,44 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any, AsyncGenerator, Dict, Optional, cast
+
+# Forward declaration to avoid circular imports
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, Optional
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse
 
-from ...base import MCPHeaders
+from ...models import (
+    ActionExecutionResponse,
+    ActiveCleanupInfo,
+    ActiveCleanupsResponse,
+    ActiveEpisodeInfo,
+    ActiveEpisodesResponse,
+    BenchmarkInfo,
+    CleanupHistoryEntry,
+    CleanupHistoryResponse,
+    EpisodeContext,
+    EpisodeCreateResponse,
+    EpisodeDetailResponse,
+    EpisodeEndResponse,
+    EpisodeListResponse,
+    EpisodeTaskResponse,
+    HealthResponse,
+    HTTPHeaders,
+    PolicyResponse,
+    SessionCleanupHistoryResponse,
+    SessionCreateResponse,
+    SessionListResponse,
+    SessionStatsResponse,
+    SessionSummary,
+    SessionTerminateResponse,
+    TaskOrchestrationResponse,
+)
 from .events.tool_event_publisher import ToolEventPublisher
+
+if TYPE_CHECKING:
+    from ..session_manager import SessionManager
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +59,7 @@ class SessionRestAPI:
     Tool execution is handled by SessionMCPAPI.
     """
 
-    def __init__(self, session_manager: Any, host: str = "0.0.0.0", port: int = 8000) -> None:
+    def __init__(self, session_manager: "SessionManager", host: str = "0.0.0.0", port: int = 8000) -> None:
         """
         Initialize the SessionRestAPI.
 
@@ -60,42 +90,58 @@ class SessionRestAPI:
     def _setup_routes(self) -> None:
         """Setup FastAPI routes for the session management API."""
 
-        @self.app.post("/session", response_model=Dict[str, str])
-        async def create_session_endpoint(client_id: str) -> Dict[str, str]:
+        @self.app.post("/session", response_model=SessionCreateResponse)
+        async def create_session_endpoint(client_id: str) -> SessionCreateResponse:
             """Create a new client session."""
             session = await self.session_manager.create_session(client_id)
-            result: Dict[str, str] = {"session_id": session.session_id, "message": "Session created successfully"}
-            return result
+            return SessionCreateResponse(session_id=session.session_id, message="Session created successfully")
 
-        @self.app.delete("/session/{session_id}")
-        async def terminate_session_endpoint(session_id: str) -> Dict[str, str]:
+        @self.app.delete("/session/{session_id}", response_model=SessionTerminateResponse)
+        async def terminate_session_endpoint(session_id: str) -> SessionTerminateResponse:
             """Terminate a client session."""
             logger.warning(f"🔥 REST API TERMINATION: DELETE /session/{session_id} endpoint called")
             await self.session_manager.terminate_session(session_id)
-            result: Dict[str, str] = {"message": "Session terminated successfully"}
-            return result
+            return SessionTerminateResponse(message="Session terminated successfully")
 
-        @self.app.get("/session/{session_id}/episodes/{episode_id}/task")
-        async def get_episode_task_endpoint(session_id: str, episode_id: str) -> Dict[str, Any]:
+        @self.app.get("/session/{session_id}/episodes/{episode_id}/task", response_model=EpisodeTaskResponse)
+        async def get_episode_task_endpoint(session_id: str, episode_id: str) -> EpisodeTaskResponse:
             """Get task information for a specific episode."""
             task = await self.session_manager.get_current_task(session_id, episode_id)
-            task_dict = cast(Dict[str, Any], task.to_dict())
 
             # Get episode to access its configuration
             episode = self.session_manager.get_episode_by_id(episode_id)
+
+            # Build episode context
             if episode:
                 # Get episode configuration from the task using BenchmarkManager
                 episode_config = self.session_manager.benchmark_manager.get_episode_config(episode.task_id)
-                task_dict["episode_context"] = episode_config
+                episode_context = EpisodeContext(
+                    session_id=session_id,
+                    task_timeout=episode_config.get("task_timeout") if episode_config else None,
+                    max_steps=episode_config.get("max_steps") if episode_config else None,
+                    metadata=episode_config if episode_config else {},
+                )
             else:
-                task_dict["episode_context"] = {"session_id": session_id}
+                episode_context = EpisodeContext(
+                    session_id=session_id,
+                    task_timeout=None,
+                    max_steps=None,
+                    metadata={},
+                )
 
-            task_dict["episode_id"] = episode_id
+            # Convert task to dict to get attributes
+            task_dict = task.to_dict()
 
-            return task_dict
+            return EpisodeTaskResponse(
+                task_id=task_dict["task_id"],
+                title=task_dict["title"],
+                description=task_dict["description"],
+                episode_id=episode_id,
+                episode_context=episode_context,
+            )
 
-        @self.app.get("/session/{session_id}/episodes/{episode_id}/policy")
-        async def get_policy_endpoint(session_id: str, episode_id: str) -> Dict[str, Any]:
+        @self.app.get("/session/{session_id}/episodes/{episode_id}/policy", response_model=PolicyResponse)
+        async def get_policy_endpoint(session_id: str, episode_id: str) -> PolicyResponse:
             """Get policy information for a specific episode."""
             episode = self.session_manager.get_episode_by_id(episode_id)
             if not episode:
@@ -103,16 +149,17 @@ class SessionRestAPI:
 
             policy = self.session_manager.get_policy(session_id, episode_id)
             policy_dict = policy.to_dict()
-            return dict(policy_dict) if policy_dict else {}
+
+            return PolicyResponse(prompt=policy_dict.get("prompt", ""), domain=policy_dict.get("domain"))
 
         @self.app.get("/tool-events/stream")
         async def tool_events_stream(request: Request) -> EventSourceResponse:
             """Server-Sent Events stream for real-time tool call events with episode filtering."""
-            session_id = request.headers.get(MCPHeaders.SESSION_ID)
-            episode_id = request.headers.get(MCPHeaders.EPISODE_ID)  # EPISODE-FIRST: Support episode filtering
+            session_id = request.headers.get(HTTPHeaders.SESSION_ID)
+            episode_id = request.headers.get(HTTPHeaders.EPISODE_ID)  # EPISODE-FIRST: Support episode filtering
 
             if not session_id:
-                raise HTTPException(status_code=400, detail=f"Missing {MCPHeaders.SESSION_ID} header")
+                raise HTTPException(status_code=400, detail=f"Missing {HTTPHeaders.SESSION_ID} header")
 
             logger.info(f"Starting tool events SSE stream for session: {session_id}, episode: {episode_id}")
 
@@ -199,35 +246,43 @@ class SessionRestAPI:
                 },
             )
 
-        @self.app.post("/session/{session_id}/episodes")
-        async def create_episode_endpoint(session_id: str, task_id: str) -> Dict[str, Any]:
+        @self.app.post("/session/{session_id}/episodes", response_model=EpisodeCreateResponse)
+        async def create_episode_endpoint(session_id: str, task_id: str) -> EpisodeCreateResponse:
             """Create a new episode for a specific task."""
             episode = await self.session_manager.start_episode(session_id, task_id)
-            result: Dict[str, Any] = {
-                "episode_id": episode.episode_id,
-                "task_id": task_id,
-                "session_id": session_id,
-                "state": episode.state.value,
-                "message": "Episode created successfully",
-            }
-            return result
 
-        @self.app.get("/session/{session_id}/episodes")
-        async def list_episodes_endpoint(session_id: str, include_completed: bool = False) -> Dict[str, Any]:
+            # Create episode context with limits and metadata
+            episode_context = EpisodeContext(
+                session_id=session_id,
+                task_timeout=None,
+                max_steps=episode.max_steps,
+                metadata=episode.metadata,
+            )
+
+            return EpisodeCreateResponse(
+                episode_id=episode.episode_id,
+                task_id=task_id,
+                session_id=session_id,
+                state=episode.state.value,
+                message="Episode created successfully",
+                episode_context=episode_context,
+            )
+
+        @self.app.get("/session/{session_id}/episodes", response_model=EpisodeListResponse)
+        async def list_episodes_endpoint(session_id: str, include_completed: bool = False) -> EpisodeListResponse:
             """List all episodes for a session."""
             session = self.session_manager._get_session(session_id)
 
-            result: Dict[str, Any] = {
-                "session_id": session_id,
-                "active_episodes": session.active_episode_ids,
-                "episode_history": session.episode_history if include_completed else [],
-                "episode_counts": session.get_episode_count(),
-                "task_queue": session.task_queue,
-            }
-            return result
+            return EpisodeListResponse(
+                session_id=session_id,
+                active_episodes=session.active_episode_ids,
+                episode_history=session.episode_history if include_completed else [],
+                episode_counts=session.get_episode_count(),
+                task_queue=session.task_queue,
+            )
 
-        @self.app.get("/session/{session_id}/episodes/active")
-        async def list_active_episodes_endpoint(session_id: str) -> Dict[str, Any]:
+        @self.app.get("/session/{session_id}/episodes/active", response_model=ActiveEpisodesResponse)
+        async def list_active_episodes_endpoint(session_id: str) -> ActiveEpisodesResponse:
             """List only active episodes for a session."""
             session = self.session_manager._get_session(session_id)
 
@@ -237,25 +292,24 @@ class SessionRestAPI:
                 episode = self.session_manager.episode_manager.get_episode_by_id(episode_id)
                 if episode:
                     active_episodes.append(
-                        {
-                            "episode_id": episode.episode_id,
-                            "task_id": episode.task_id,
-                            "state": episode.state.value,
-                            "step_count": len(episode.steps),
-                            "start_time": episode.start_time.isoformat(),
-                            "duration": episode.duration,
-                        }
+                        ActiveEpisodeInfo(
+                            episode_id=episode.episode_id,
+                            task_id=episode.task_id,
+                            state=episode.state.value,
+                            step_count=len(episode.steps),
+                            start_time=episode.start_time.isoformat(),
+                            duration=episode.duration,
+                        )
                     )
 
-            result: Dict[str, Any] = {
-                "session_id": session_id,
-                "active_episodes": active_episodes,
-                "count": len(active_episodes),
-            }
-            return result
+            return ActiveEpisodesResponse(
+                session_id=session_id,
+                active_episodes=active_episodes,
+                count=len(active_episodes),
+            )
 
-        @self.app.get("/session/{session_id}/episodes/{episode_id}")
-        async def get_episode_endpoint(session_id: str, episode_id: str) -> Dict[str, Any]:
+        @self.app.get("/session/{session_id}/episodes/{episode_id}", response_model=EpisodeDetailResponse)
+        async def get_episode_endpoint(session_id: str, episode_id: str) -> EpisodeDetailResponse:
             """Get detailed information about a specific episode."""
             # Validate episode belongs to session
             session = self.session_manager._get_session(session_id)
@@ -266,50 +320,49 @@ class SessionRestAPI:
             if not episode:
                 raise HTTPException(status_code=404, detail=f"Episode {episode_id} not found")
 
-            result: Dict[str, Any] = {
-                "episode_id": episode.episode_id,
-                "task_id": episode.task_id,
-                "session_id": episode.session_id,
-                "state": episode.state.value,
-                "step_count": len(episode.steps),
-                "start_time": episode.start_time.isoformat(),
-                "end_time": episode.end_time.isoformat() if episode.end_time else None,
-                "duration": episode.duration,
-                "completion_reason": episode.completion_reason,
-                "context": episode.context,
-                "metadata": episode.metadata,
-            }
-            return result
+            return EpisodeDetailResponse(
+                episode_id=episode.episode_id,
+                task_id=episode.task_id,
+                session_id=episode.session_id,
+                state=episode.state.value,
+                step_count=len(episode.steps),
+                start_time=episode.start_time.isoformat(),
+                end_time=episode.end_time.isoformat() if episode.end_time else None,
+                duration=episode.duration,
+                completion_reason=episode.completion_reason,
+                context=episode.context,
+                metadata=episode.metadata,
+            )
 
-        @self.app.delete("/session/{session_id}/episodes/{episode_id}")
+        @self.app.delete("/session/{session_id}/episodes/{episode_id}", response_model=EpisodeEndResponse)
         async def end_episode_endpoint(
             session_id: str, episode_id: str, reason: str = "manual_termination", result: Optional[str] = None
-        ) -> Dict[str, Any]:
+        ) -> EpisodeEndResponse:
             """End a specific episode."""
             response = await self.session_manager.end_episode(session_id, episode_id, reason, result)
-            return cast(Dict[str, Any], response.model_dump())
+            return response
 
-        @self.app.post("/session/{session_id}/episodes/{episode_id}/actions")
+        @self.app.post("/session/{session_id}/episodes/{episode_id}/actions", response_model=ActionExecutionResponse)
         async def execute_episode_action_endpoint(
             session_id: str, episode_id: str, action_data: Dict[str, Any]
-        ) -> Dict[str, Any]:
+        ) -> ActionExecutionResponse:
             """Execute action in specific episode context."""
             from ..base import Action
 
             try:
                 action = Action(**action_data)
                 result = await self.session_manager.execute_episode_action(session_id, episode_id, action)
-                return {
-                    "success": result.success,
-                    "data": result.data,
-                    "execution_time": result.execution_time,
-                    "error": result.error,
-                }
+                return ActionExecutionResponse(
+                    success=result.success,
+                    data=result.data,
+                    execution_time=result.execution_time,
+                    error=result.error,
+                )
             except Exception as e:
                 raise HTTPException(status_code=400, detail=f"Invalid action data: {str(e)}")
 
-        @self.app.post("/session/{session_id}/orchestrate")
-        async def orchestrate_tasks_endpoint(session_id: str, task_ids: str) -> Dict[str, Any]:
+        @self.app.post("/session/{session_id}/orchestrate", response_model=TaskOrchestrationResponse)
+        async def orchestrate_tasks_endpoint(session_id: str, task_ids: str) -> TaskOrchestrationResponse:
             """Queue multiple tasks for orchestration in a session."""
             task_id_list = [tid.strip() for tid in task_ids.split(",")]
             session = self.session_manager._get_session(session_id)
@@ -317,110 +370,118 @@ class SessionRestAPI:
             for task_id in task_id_list:
                 session.add_task_to_queue(task_id)
 
-            result: Dict[str, Any] = {
-                "session_id": session_id,
-                "queued_tasks": task_id_list,
-                "task_queue": session.task_queue,
-                "message": f"Queued {len(task_id_list)} tasks for orchestration",
-            }
-            return result
+            return TaskOrchestrationResponse(
+                session_id=session_id,
+                queued_tasks=task_id_list,
+                message=f"Queued {len(task_id_list)} tasks for orchestration",
+            )
 
-        @self.app.get("/benchmark")
-        async def get_benchmark_endpoint() -> Dict[str, Any]:
+        @self.app.get("/benchmark", response_model=BenchmarkInfo)
+        async def get_benchmark_endpoint() -> BenchmarkInfo:
             """
             Get complete benchmark task list with episode attempts for client orchestration.
+            Returns BenchmarkInfo object with typed data structure.
             Each task reports its own configured episode_attempts.
             """
-            benchmark_info = self.session_manager.get_benchmark_info()
-            return cast(Dict[str, Any], benchmark_info.to_dict())
+            benchmark_info: BenchmarkInfo = self.session_manager.get_benchmark_info()
+            return benchmark_info
 
-        @self.app.get("/health")
-        async def health_check() -> Dict[str, str]:
+        @self.app.get("/health", response_model=HealthResponse)
+        async def health_check() -> HealthResponse:
             """Health check endpoint."""
-            result: Dict[str, str] = {"status": "healthy", "domain": self.session_manager.domain_name}
-            return result
+            return HealthResponse(status="healthy", domain=self.session_manager.domain_name)
 
-        @self.app.get("/sessions")
-        async def list_sessions() -> Dict[str, Any]:
+        @self.app.get("/sessions", response_model=SessionListResponse)
+        async def list_sessions() -> SessionListResponse:
             """List all active sessions."""
-            sessions = {
-                session_id: {
-                    "client_id": session.client_id,
-                    "created_at": session.created_at.isoformat(),
-                    "last_activity": session.last_activity.isoformat(),
-                    "active_episode_ids": session.active_episode_ids,
-                    "episode_counts": session.get_episode_count(),
-                    "is_active": session.is_active,
-                }
+            sessions = [
+                SessionSummary(
+                    session_id=session_id,
+                    client_id=session.client_id,
+                    created_at=session.created_at.isoformat(),
+                    last_activity=session.last_activity.isoformat(),
+                    is_active=session.is_active,
+                    active_episodes=len(session.active_episode_ids),
+                    total_episodes=session.get_episode_count().get("total", 0),
+                )
                 for session_id, session in self.session_manager.active_sessions.items()
-            }
-            result: Dict[str, Any] = {
-                "active_session_count": len(self.session_manager.active_sessions),
-                "sessions": sessions,
-            }
-            return result
+            ]
+            return SessionListResponse(
+                sessions=sessions,
+                total_count=len(self.session_manager.active_sessions),
+                active_count=len([s for s in sessions if s.is_active]),
+            )
 
-        @self.app.get("/sessions/stats")
-        async def get_session_stats() -> Dict[str, Any]:
+        @self.app.get("/sessions/stats", response_model=SessionStatsResponse)
+        async def get_session_stats() -> SessionStatsResponse:
             """Get detailed session statistics including timeout information."""
-            stats: Dict[str, Any] = self.session_manager.get_session_stats()
-            return stats
+            stats = self.session_manager.get_session_stats()
+            return SessionStatsResponse(
+                total_sessions=stats.get("total_sessions", 0),
+                active_sessions=stats.get("active_sessions", 0),
+                total_episodes=stats.get("total_episodes", 0),
+                active_episodes=stats.get("active_episodes", 0),
+                average_session_duration=stats.get("average_session_duration"),
+                oldest_session_age=stats.get("oldest_session_age"),
+            )
 
-        @self.app.get("/debug/cleanup-history")
-        async def get_cleanup_history() -> Dict[str, Any]:
+        @self.app.get("/debug/cleanup-history", response_model=CleanupHistoryResponse)
+        async def get_cleanup_history() -> CleanupHistoryResponse:
             """Get complete cleanup history for debugging."""
             if hasattr(self.session_manager, "cleanup_manager"):
                 history = self.session_manager.cleanup_manager.get_cleanup_history()
-                stats = self.session_manager.cleanup_manager.get_cleanup_stats()
-                return {
-                    "history": [
-                        {
-                            "session_id": op.session_id,
-                            "reason": str(op.reason),
-                            "context": op.context,
-                            "start_time": op.start_time.isoformat(),
-                            "end_time": op.end_time.isoformat() if op.end_time else None,
-                            "success": op.success,
-                            "error": op.error,
-                            "duration_seconds": op.duration_seconds,
-                            "steps_completed": op.steps_completed,
-                        }
+                return CleanupHistoryResponse(
+                    cleanup_history=[
+                        CleanupHistoryEntry(
+                            session_id=op.session_id,
+                            cleanup_time=op.start_time.isoformat(),
+                            reason=str(op.reason),
+                            episode_count=op.steps_completed or 0,
+                        )
                         for op in history
                     ],
-                    "stats": stats,
-                }
-            return {"error": "Cleanup manager not available"}
+                    total_cleanups=len(history),
+                )
+            raise HTTPException(status_code=500, detail="Cleanup manager not available")
 
-        @self.app.get("/debug/cleanup-history/{session_id}")
-        async def get_session_cleanup_history(session_id: str) -> Dict[str, Any]:
+        @self.app.get("/debug/cleanup-history/{session_id}", response_model=SessionCleanupHistoryResponse)
+        async def get_session_cleanup_history(session_id: str) -> SessionCleanupHistoryResponse:
             """Get cleanup history for a specific session."""
             if hasattr(self.session_manager, "cleanup_manager"):
                 history = self.session_manager.cleanup_manager.get_cleanup_history(session_id)
-                return {
-                    "session_id": session_id,
-                    "history": [
-                        {
-                            "reason": str(op.reason),
-                            "context": op.context,
-                            "start_time": op.start_time.isoformat(),
-                            "end_time": op.end_time.isoformat() if op.end_time else None,
-                            "success": op.success,
-                            "error": op.error,
-                            "duration_seconds": op.duration_seconds,
-                            "steps_completed": op.steps_completed,
-                        }
+                return SessionCleanupHistoryResponse(
+                    session_id=session_id,
+                    cleanup_entries=[
+                        CleanupHistoryEntry(
+                            session_id=op.session_id,
+                            cleanup_time=op.start_time.isoformat(),
+                            reason=str(op.reason),
+                            episode_count=op.steps_completed or 0,
+                        )
                         for op in history
                     ],
-                }
-            return {"error": "Cleanup manager not available"}
+                    total_cleanups=len(history),
+                )
+            raise HTTPException(status_code=500, detail="Cleanup manager not available")
 
-        @self.app.get("/debug/active-cleanups")
-        async def get_active_cleanups() -> Dict[str, Any]:
+        @self.app.get("/debug/active-cleanups", response_model=ActiveCleanupsResponse)
+        async def get_active_cleanups() -> ActiveCleanupsResponse:
             """Get currently active cleanup operations."""
             if hasattr(self.session_manager, "cleanup_manager"):
                 active = self.session_manager.cleanup_manager.get_active_cleanups()
-                return {"active_cleanup_count": len(active), "active_session_ids": list(active)}
-            return {"error": "Cleanup manager not available"}
+                return ActiveCleanupsResponse(
+                    active_cleanups=[
+                        ActiveCleanupInfo(
+                            session_id=session_id,
+                            cleanup_type="session_cleanup",
+                            start_time="Unknown",  # Would need to track this in cleanup_manager
+                            progress=None,
+                        )
+                        for session_id in active
+                    ],
+                    count=len(active),
+                )
+            raise HTTPException(status_code=500, detail="Cleanup manager not available")
 
     async def start_server(self) -> None:
         """Start the SessionRestAPI server."""

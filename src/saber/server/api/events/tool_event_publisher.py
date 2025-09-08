@@ -10,7 +10,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from ....api_models import ToolCallEventComplete, ToolCallEventStart
+from ....models.events import ToolCallEventComplete, ToolCallEventStart
 
 logger = logging.getLogger(__name__)
 

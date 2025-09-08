@@ -326,16 +326,6 @@ class CLIExecutor(DockerExecutor):
         except Exception as e:
             return ValidationResult.failure([f"Command validation error: {str(e)}"])
 
-    def get_security_info(self) -> Dict[str, Any]:
-        """
-        Get information about security settings including Docker info.
-
-        Returns:
-            Dictionary with security configuration
-        """
-        # Get Docker-specific information from parent class
-        return self.get_docker_info()
-
 
 # Register this executor with the registry - must be at module level
 from ..executor_registry import register_executor  # noqa: E402

@@ -87,7 +87,7 @@ class TestSessionManagerAPI:
 
         assert response.status_code == 200
         data = response.json()
-        assert data["active_session_count"] == 2
+        assert data["active_count"] == 2
         assert "sessions" in data
         assert len(data["sessions"]) == 2
 
@@ -127,8 +127,12 @@ class TestSessionManagerAPI:
         manager.benchmark_manager.get_task.return_value = mock_task
 
         # Mock episode
+        from saber.server.base import EpisodeState
         mock_episode = MagicMock()
         mock_episode.episode_id = "episode_123"
+        mock_episode.state = EpisodeState.ACTIVE
+        mock_episode.max_steps = 10
+        mock_episode.metadata = {"test": "data"}
 
         # Create session first
         create_response = client.post("/session?client_id=test_client")
@@ -179,6 +183,11 @@ class TestSessionManagerAPI:
 
         manager.episode_manager.get_current_episode.return_value = mock_episode
         manager.benchmark_manager.get_task.return_value = mock_task
+        # Mock episode config to return a proper dictionary
+        manager.benchmark_manager.get_episode_config.return_value = {
+            "task_timeout": 300,
+            "max_steps": 50
+        }
 
         # Mock the get_current_task method with episode_id parameter (episode-first)
         with patch.object(manager, 'get_current_task', return_value=mock_task) as mock_get_current_task, \

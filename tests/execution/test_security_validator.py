@@ -261,25 +261,6 @@ class TestSecurityValidator:
         assert len(result.warnings) > 0
         assert "Executable file extension" in str(result.warnings)
 
-    def test_get_security_info_default(self, validator):
-        """Test security info with default configuration."""
-        info = validator.get_security_info()
-
-        assert info["allowed_commands"] is None
-        assert info["dangerous_patterns_count"] == len(DANGEROUS_PATTERNS)
-        assert info["blocked_commands_count"] == len(BLOCKED_COMMANDS)
-        assert "security_limits" in info
-
-    def test_get_security_info_with_config(self, validator_with_whitelist, tmp_path):
-        """Test security info with custom configuration."""
-        validator = SecurityValidator(
-            allowed_commands=["file", "strings"],
-        )
-
-        info = validator.get_security_info()
-
-        assert set(info["allowed_commands"]) == {"file", "strings"}
-
     def test_complex_command_validation(self, validator):
         """Test validation of complex real-world commands."""
         # Test cases that might appear in malware analysis

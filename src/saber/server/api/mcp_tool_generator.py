@@ -9,6 +9,8 @@ properly typed functions that the FastMCP library can register.
 import logging
 from typing import Any, Callable, Dict, List, Optional
 
+from ...models.mcp import MCPToolSchema
+
 logger = logging.getLogger(__name__)
 
 
@@ -24,24 +26,24 @@ class MCPToolGenerator:
         """Initialize the MCP tool generator."""
         self.logger = logging.getLogger(__name__)
 
-    def create_executor_tool(self, executor_name: str, mcp_schema: Dict[str, Any], handler_func: Callable) -> Callable:
+    def create_executor_tool(self, executor_name: str, mcp_schema: MCPToolSchema, handler_func: Callable) -> Callable:
         """
         Create a dynamically typed MCP tool function for an executor.
 
         Args:
             executor_name: Name of the executor (e.g., 'cli', 'python', 'xss_testing')
-            mcp_schema: MCP schema dictionary from executor.to_mcp_schema()
+            mcp_schema: Typed MCPToolSchema object from executor registration
             handler_func: Function to call with the parameters (e.g., handle_call_tool)
 
         Returns:
             Async function with proper typing that can be registered with FastMCP
         """
-        # Extract parameter information from the schema
-        input_schema = mcp_schema.get("inputSchema", {})
-        properties = input_schema.get("properties", {})
-        required = input_schema.get("required", [])
+        # Extract parameter information from the typed schema
+        input_schema = mcp_schema.inputSchema
+        properties = input_schema.properties
+        required = input_schema.required
 
-        if not self.validate_mcp_schema(mcp_schema):
+        if not self.validate_mcp_tool_schema(mcp_schema):
             raise ValueError(f"Invalid MCP schema for executor '{executor_name}'")
 
         # Build function signature components - no need for Context parameter
@@ -49,8 +51,8 @@ class MCPToolGenerator:
         param_names = []
         for param_name, param_def in properties.items():
             param_names.append(param_name)
-            # Get Python type from JSON schema type
-            param_type = self._json_type_to_python_type(param_def.get("type", "string"))
+            # Get Python type from JSON schema type - param_def is now MCPPropertySchema
+            param_type = self._json_type_to_python_type(param_def.type)
             # Make all parameters required (no default values)
             params.append(f"{param_name}: {param_type}")
 
@@ -65,6 +67,11 @@ class MCPToolGenerator:
             param_dict_items.append(f"'{param_name}': {param_name}")
 
         param_dict_construction = "{" + ", ".join(param_dict_items) + "}"
+
+        # Build property defaults mapping for runtime access
+        property_defaults = {}
+        for prop_name, prop_def in properties.items():
+            property_defaults[prop_name] = getattr(prop_def, "default", None)
 
         # Complete function body
         function_body = f'''
@@ -81,24 +88,34 @@ class MCPToolGenerator:
             parameters[param_name] = param_value
         else:
             # For optional parameters, only include if they differ from default or no default exists
-            param_def = {repr(properties)}[param_name]
-            default_val = param_def.get("default")
+            default_val = property_defaults.get(param_name)
             if default_val is None or param_value != default_val:
                 parameters[param_name] = param_value
 
     result = await handler_func('{executor_name}', parameters)
 
-    # Extract the text content from the MCP result
-    if result.get("isError", False):
+    # Extract the text content from the CallToolResult object (from FastMCP)
+    if hasattr(result, 'is_error') and result.is_error:
         import json
-        return json.dumps({{"success": False, "error": result["content"][0]["text"]}})
+        # Handle CallToolResult with error
+        if hasattr(result, 'content') and result.content and len(result.content) > 0:
+            error_text = result.content[0].text if hasattr(result.content[0], 'text') else str(result.content[0])
+        else:
+            error_text = "Unknown error"
+        return json.dumps({{"success": False, "error": error_text}})
     else:
-        return str(result["content"][0]["text"])
+        # Handle successful CallToolResult
+        if hasattr(result, 'content') and result.content and len(result.content) > 0:
+            result_text = result.content[0].text if hasattr(result.content[0], 'text') else str(result.content[0])
+        else:
+            result_text = ""
+        return str(result_text)
 '''
 
         # Create the function dynamically
         namespace = {
             "handler_func": handler_func,
+            "property_defaults": property_defaults,
             "Optional": Optional,
             "str": str,
             "int": int,
@@ -194,6 +211,35 @@ class MCPToolGenerator:
                 return "None"
             else:
                 return "None"
+
+    def validate_mcp_tool_schema(self, mcp_schema: MCPToolSchema) -> bool:
+        """
+        Validate that a typed MCPToolSchema is suitable for dynamic function generation.
+
+        Args:
+            mcp_schema: Typed MCPToolSchema object
+
+        Returns:
+            True if schema is valid for function generation
+        """
+        # Basic validation - the Pydantic model already ensures structure
+        if not mcp_schema.name or not mcp_schema.description:
+            return False
+
+        # Validate input schema
+        input_schema = mcp_schema.inputSchema
+        if not input_schema.properties:
+            return False
+
+        # Check that all properties have valid types
+        for prop_name, prop_def in input_schema.properties.items():
+            if not prop_def.type:
+                return False
+            # Ensure type is supported for function generation
+            if prop_def.type not in ["string", "integer", "number", "boolean", "array", "object"]:
+                return False
+
+        return True
 
     def validate_mcp_schema(self, mcp_schema: Dict[str, Any]) -> bool:
         """
