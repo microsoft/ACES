@@ -1,0 +1,176 @@
+@startuml SABER MCP Architecture
+
+!theme plain
+!include <archimate/Archimate>
+allowmixing
+title SABER - Model Context Protocol (MCP) Architecture
+
+skinparam class {
+    BackgroundColor lightblue
+    BorderColor black
+    ArrowColor black
+    FontSize 10
+}
+
+skinparam component {
+    BackgroundColor lightgreen
+    BorderColor black
+    FontSize 10
+}
+
+package "SABER Client - MCP Architecture" {
+
+    package "inspect_ai Integration" {
+        class run_saber_eval_async {
+            +eval_async_compatible_interface
+            +automatic_resource_management
+            +fail_fast_validation
+            --
+            +run(tasks, model): EvalLog
+        }
+
+        component "inspect_ai Framework"
+    }
+
+    package "MCP Communication" {
+        class ClientSessionManager {
+            +REST_API_for_session_management
+            +MCP_API_for_tool_execution
+            +episode_scoped_mcp_client_pooling
+            --
+            +create_session(): str
+            +create_episode(session_id, task_id)
+            +ensure_episode_mcp_client(episode_id)
+            +cleanup_episode_mcp_client(episode_id)
+        }
+
+        class MCPClient {
+            +config: MCPConfig
+            +session_context: SessionContext
+            +client_session: ClientSession
+            --
+            +list_tools(): List[MCPTool]
+            +call_tool(request): MCPToolCallResponse
+        }
+
+        class SABERRestClient {
+            +get_benchmark_info(): BenchmarkInfo
+            +get_dataset_tasks(task_ids): List[TaskInfo]
+            +post_evaluation_result()
+        }
+    }
+
+    package "Configuration Models" {
+        class SABERConfig {
+            +model: str
+            +session_config: SessionManagerConfig
+            +agent_config: AgentConfig
+            +task_ids: List[str]
+            +agent_id: str
+            --
+            +create(): factory_method_with_validation
+        }
+
+        class SessionManagerConfig {
+            +base_url: str
+            +mcp_url: str
+            +client_id: str
+            +timeouts_and_retry_config
+            --
+            +from_urls(rest_url, mcp_url)
+            +to_mcp_config(): MCPConfig
+        }
+
+        class MCPConfig {
+            +base_url: str
+            +timeout: float
+            +retry_attempts: int
+            +client_id: str
+            --
+            +get_sse_url(): str
+        }
+    }
+}
+
+cloud "SABER Server" {
+    package "Server MCP API" {
+        class SessionMCPAPI {
+            +tool_discovery_and_execution
+            +session_context_management
+            +command_delegation_to_executors
+        }
+
+        class ExecutionManager {
+            +executor_factory: ExecutorFactory
+            +sandbox_manager: SandboxManager
+            --
+            +execute_command_in_sandbox
+            +container_lifecycle_management
+            +security_validation
+        }
+    }
+
+    package "Server REST API" {
+        class SessionRestAPI {
+            +POST_session_create_session
+            +POST_episodes_create_episode
+            +GET_benchmark_get_tasks
+        }
+    }
+}
+
+package "MCP Protocol Flow" {
+    rectangle "Agent Code" as agent
+    rectangle "MCP Protocol" as mcp_protocol
+    rectangle "Server Tools" as server_tools
+}
+
+' Relationships
+run_saber_eval_async --> ClientSessionManager : orchestrates
+run_saber_eval_async --> SABERConfig : validates
+ClientSessionManager --> MCPClient : pools connections
+ClientSessionManager --> SABERRestClient : delegates REST
+MCPClient --> SessionMCPAPI : MCP protocol
+SABERRestClient --> SessionRestAPI : HTTP requests
+SABERConfig --> SessionManagerConfig : contains
+SessionManagerConfig --> MCPConfig : converts to
+
+' MCP Protocol Flow
+agent --> mcp_protocol : standard MCP calls
+mcp_protocol --> SessionMCPAPI : tool requests
+SessionMCPAPI --> server_tools : executes
+SessionMCPAPI --> ExecutionManager : delegates to
+
+' inspect_ai Integration
+run_saber_eval_async ..> "inspect_ai Framework" : compatible interface
+
+note top of run_saber_eval_async
+Modern SABER Architecture
+- inspect_ai native integration
+- Standard MCP protocol compliance
+- Fail-fast configuration validation
+- Type-safe Pydantic models
+- No backwards compatibility
+- Clean separation of concerns
+end note
+
+note bottom of mcp_protocol
+MCP Benefits
+- Industry standard protocol
+- Agent portability
+- Tool discoverability
+- Session management
+- Error handling
+- Security validation
+end note
+
+note right of SessionMCPAPI
+Server-Side MCP
+- FastMCP implementation
+- Tool schema generation
+- Session context handling
+- Docker sandbox execution
+- Security validation
+end note
+
+@enduml

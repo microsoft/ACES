@@ -1,0 +1,336 @@
+@startuml SABER Server Architecture - Current Implementation
+
+!theme plain
+title SABER Server Architecture - Current Implementation (AsyncIO + FastAPI/FastMCP)
+
+skinparam class {
+    BackgroundColor lightblue
+    BorderColor black
+    ArrowColor black
+    FontSize 10
+}
+
+skinparam package {
+    BackgroundColor lightyellow
+    BorderColor black
+    FontSize 12
+}
+
+package "SABER Server Core - Current Implementation" {
+
+    class SessionManager {
+        +domain_name: str
+        +config_dir: str
+        +host: str = "0.0.0.0"
+        +port: int = 8000
+        +mcp_host: str = "0.0.0.0"
+        +mcp_port: int = 3001
+        +session_timeout_minutes: int = 30
+        +cleanup_interval_minutes: int = 5
+        +active_sessions: Dict[str, ClientSession]
+        +cleanup_task: Optional[asyncio.Task]
+        +shutdown_event: asyncio.Event
+        +benchmark_manager: BenchmarkManager
+        +episode_manager: EpisodeManager
+        +execution_manager: ExecutionManager
+        +policy_manager: PolicyManager
+        +evaluation_manager: EvaluationManager
+        +rest_api: SessionRestAPI
+        +mcp_api: SessionMCPAPI
+        --
+        +start_server(): void
+        +shutdown(): void
+        +create_session(client_id: str): ClientSession
+        +terminate_session(session_id: str): void
+        +end_episode(session_id: str, reason: str): Dict[str, Any]
+        +execute_action(session_id: str, action: Action): CommandResult
+        +get_current_task(session_id: str): Any
+        +get_policy(session_id: str): PolicyDocument
+        +_cleanup_expired_sessions(): void
+        +_start_permanent_environment(): void
+    }
+
+    class ClientSession {
+        +session_id: str
+        +client_id: str
+        +active_episode_ids: List[str]
+        +episode_history: List[str]
+        +task_queue: List[str]
+        +created_at: datetime
+        +last_activity: datetime
+        +is_active: bool
+        +context: Dict[str, Any]
+        --
+        +update_activity(): void
+        +add_active_episode(episode_id: str): void
+        +remove_active_episode(episode_id: str): void
+        +complete_episode(episode_id: str): void
+        +add_task_to_queue(task_id: str): void
+        +get_next_task(): Optional[str]
+        +has_active_episodes(): bool
+        +get_episode_count(): Dict[str, int]
+    }
+
+    package "Protocol Handlers - Async Implementation" {
+        class SessionRestAPI {
+            +session_manager: SessionManager
+            +app: FastAPI
+            +host: str
+            +port: int
+            +server: Optional[uvicorn.Server]
+            --
+            +start_server(): void
+            +shutdown(): void
+            --
+            **FastAPI Async Endpoints**
+            +POST /session
+            +DELETE /session/{session_id}
+            +GET /session/{session_id}/current-task
+            +GET /session/{session_id}/policy
+            +POST /session/{session_id}/start-episode
+            +GET /benchmark
+            +GET /health
+            +GET /sessions
+            +GET /sessions/stats
+        }
+
+        class SessionMCPAPI {
+            +session_manager: SessionManager
+            +host: str
+            +port: int
+            +mcp_server: Optional[FastMCP]
+            +tool_generator: MCPToolGenerator
+            --
+            +start_mcp_server(): void
+            +shutdown_mcp_server(): void
+            +handle_list_tools(): List[MCPTool]
+            +handle_call_tool(): MCPResult
+            +_get_session_from_headers(): Optional[str]
+            +_convert_action_parameters(): Action
+            +_convert_command_result_to_mcp(): List[MCPContent]
+        }
+    }
+
+    package "Benchmark Management" {
+        class BenchmarkManager {
+            +domain: str
+            +config_dir: Path
+            +tasks: Dict[str, Task]
+            +config_loader: BenchmarkConfigLoader
+            +benchmark_config: Dict[str, Any]
+            --
+            +get_task(task_id: str): Task
+            +get_subtask(task_id: str, subtask_id: str): SubTask
+            +list_tasks(): List[Dict[str, Any]]
+            +get_benchmark_config(): Dict[str, Any]
+            +get_episode_config(task_id: str): Dict[str, Any]
+            +list_benchmark_tasks(): List[Dict[str, Any]]
+            +load_tasks_from_yaml(): void
+        }
+
+        class Task {
+            +task_id: str
+            +name: str
+            +description: str
+            +subtasks: List[SubTask]
+            +metadata: Dict[str, Any]
+            +context: Dict[str, Any]
+            --
+            +get_subtask(subtask_id: str): Optional[SubTask]
+            +to_dict(): Dict[str, Any]
+        }
+
+        class SubTask {
+            +subtask_id: str
+            +name: str
+            +description: str
+            +metadata: Dict[str, Any]
+            --
+            +to_dict(): Dict[str, Any]
+        }
+    }
+
+    package "Episode Management" {
+        class EpisodeManager {
+            +active_episodes: Dict[str, Episode]
+            +episode_configs: Dict[str, Dict[str, Any]]
+            --
+            +configure_for_task(session_id: str, task: Any): void
+            +start_episode(session_id: str, task_id: str, initial_context?: Dict): Episode
+            +step(session_id: str, action: Action, result: CommandResult): StepResult
+            +end_episode(session_id: str, reason: str, result?: str): Episode
+            +get_current_episode(session_id: str): Optional[Episode]
+        }
+
+        class Episode {
+            +episode_id: str
+            +session_id: str
+            +task_id: str
+            +state: EpisodeState
+            +created_at: datetime
+            +started_at: Optional[datetime]
+            +ended_at: Optional[datetime]
+            +step_count: int
+            +context: Dict[str, Any]
+            +termination_reason: Optional[EpisodeTerminationReason]
+            --
+            +to_dict(): Dict[str, Any]
+            +is_active(): bool
+            +can_step(): bool
+        }
+    }
+
+    package "Execution Management - Current Implementation" {
+        class ExecutionManager {
+            +_config_dir: str
+            +_configuration: Dict[str, Any]
+            +_executor_factory: ExecutorFactory
+            +_sandbox_manager: SandboxEnvironmentManager
+            +_permanent_environment_manager: Optional[PermanentEnvironmentManager]
+            +_environment_loader: Optional[EnvironmentLoader]
+            +_cleanup_manager: ContainerCleanupManager
+            +_active_executions: Dict[str, int]
+            --
+            +step(action: Action, context?: Dict): CommandResult
+            +configure_for_task(session_id: str, task: Task): void
+            +initialize_permanent_environment_manager(config: Dict): void
+            +cleanup_session(session_id: str): void
+            +cleanup_all_sessions(): void
+            +to_mcp_tools(): List[Dict[str, Any]]
+            +get_executor(executor_type: str): DockerExecutor
+        }
+
+        class SandboxEnvironmentManager {
+            +_docker_client: DockerClient
+            +_active_containers: Dict[str, Container]
+            +_container_configs: Dict[str, Dict[str, Any]]
+            +_network_name: str = "saber-network"
+            --
+            +get_or_create_container(session_id: str, environment_spec: EnvironmentSpec): Container
+            +cleanup_session_containers(session_id: str): void
+            +cleanup_all_containers(): void
+            +_create_container(session_id: str, environment_spec: EnvironmentSpec): Container
+            +_setup_container_networking(container: Container): void
+        }
+
+        class PermanentEnvironmentManager {
+            +_config: Dict[str, Any]
+            +_docker_client: DockerClient
+            +_permanent_containers: Dict[str, Container]
+            +_startup_commands: List[str]
+            --
+            +start_permanent_environment(): Dict[str, Container]
+            +stop_permanent_environment(): void
+            +get_container_info(): Dict[str, Dict[str, Any]]
+            +execute_startup_commands(): void
+        }
+    }
+
+    package "Policy Management" {
+        class PolicyManager {
+            +domain_name: str
+            +domain_policy: PolicyDocument
+            --
+            +get_policy(): PolicyDocument
+        }
+
+        class PolicyDocument {
+            +domain: str
+            +version: str
+            +policy_content: str
+            +guidelines: List[str]
+            +restrictions: List[str]
+            +context_hints: Dict[str, Any]
+            --
+            +to_dict(): Dict[str, Any]
+            +format_for_agent(context?: Dict): str
+        }
+    }
+
+    package "Evaluation Management" {
+        class EvaluationManager {
+            --
+            +log_session_start(session_id: str, client_id: str): void
+            +log_session_end(session_id: str): void
+            +log_episode_start(session_id: str, episode_id: str, task_id: str): void
+            +log_episode_end(session_id: str, episode_id: str, reason: str): void
+            +log_action(session_id: str, action: Action, result: CommandResult): void
+        }
+    }
+}
+
+' Core relationships
+SessionManager *-- BenchmarkManager
+SessionManager *-- EpisodeManager
+SessionManager *-- ExecutionManager
+SessionManager *-- PolicyManager
+SessionManager *-- EvaluationManager
+SessionManager *-- SessionRestAPI
+SessionManager *-- SessionMCPAPI
+
+' Session relationships
+SessionManager o-- ClientSession
+
+' Benchmark relationships
+BenchmarkManager o-- Task
+Task o-- SubTask
+
+' Episode relationships
+EpisodeManager o-- Episode
+
+' Execution relationships
+ExecutionManager *-- SandboxEnvironmentManager
+ExecutionManager *-- PermanentEnvironmentManager
+
+' Policy relationships
+PolicyManager *-- PolicyDocument
+
+note top of SessionManager
+**SABER Session Manager - Current Async Implementation**
+- Central orchestrator using async/await patterns throughout
+- Manages multiple concurrent client sessions with asyncio.Task cleanup
+- Integrated with FastAPI (REST) and FastMCP (MCP protocol) servers
+- Multi-episode support with proper session state management
+- Automatic session timeout and cleanup via background asyncio tasks
+- Supports both sandbox and permanent environment orchestration
+- Built for horizontal scaling with stateless session design
+end note
+
+note right of ClientSession
+**Multi-Episode Session Support**
+- Supports multiple active episodes per session
+- Task queue for orchestration workflows
+- Episode history tracking for analytics
+- Activity-based timeout management
+- Context preservation across episodes
+end note
+
+note left of ExecutionManager
+**Docker-Based Command Execution**
+- Dual environment support (sandbox + permanent)
+- Factory-based executor pattern with registry
+- Container lifecycle management with cleanup
+- Network isolation and security validation
+- MCP tool schema generation for client discovery
+- Session-scoped container management
+end note
+
+note bottom of SessionRestAPI
+**FastAPI Async REST Server**
+- Full async/await implementation
+- Session lifecycle management endpoints
+- Episode management and orchestration
+- Health checks and monitoring endpoints
+- Proper error handling with structured responses
+end note
+
+note bottom of SessionMCPAPI
+**FastMCP Protocol Handler**
+- MCP protocol implementation via FastMCP framework
+- Tool discovery and execution endpoints
+- Session-aware tool routing and execution
+- Command result conversion to MCP format
+- Async tool execution with proper error handling
+end note
+
+@enduml

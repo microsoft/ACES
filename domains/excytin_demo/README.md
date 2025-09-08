@@ -2,18 +2,22 @@
 
 ## Overview
 
-The `excytin_demo` domain is designed to demonstrate and test SABER's container-based execution capabilities. This domain showcases how SABER:
+The `excytin_demo` domain demonstrates SABER's unified evaluation architecture using the new inspect_ai integration. This domain showcases how SABER:
 
-1. **Docker Compose configurations** used to spin up environments
-2. **Container networking** and communication between services  
-3. **Container lifecycle events** (start, stop, health checks, failures)
+1. **Unified Client Architecture**: Uses the new `python -m saber.client` entry point with YAML configuration
+2. **Direct Agent Execution**: Agents run directly via inspect_ai without container overhead
+3. **MCP Tool Integration**: Direct MCP client connections with per-episode session context
+4. **Episode-Based Execution**: RL-style episodes with automatic termination and resource cleanup
+5. **Evaluate-as-you-Code**: Real-time UI with progress bars and structured logging
 
 ## What We're Testing
 
-- **Container Management**: SABER's container orchestration and lifecycle management
-- **Environment Creation Flow**: Episodes should create Docker environments with MySQL containers
-- **Volume Mounts**: Host-mounted logs directory (`./server/logs:/app/logs:rw`) for persistent log storage
-- **Multi-container Orchestration**: Testing database + execution container setups
+- **Unified Client Architecture**: SABER's new inspect_ai-based evaluation framework
+- **Episode Management**: Session/episode lifecycle with proper resource cleanup
+- **MCP Tool Integration**: Direct agent-to-server communication via MCP tools (`cli`, `python`, `file_operations`)
+- **Container Orchestration**: Sandbox environments created per episode with MySQL connectivity
+- **Evaluation Orchestration**: Multi-sample dataset execution with fail-fast error handling
+- **Structured Logging**: Timestamped logs with inspect_ai integration
 
 ## Architecture
 
@@ -30,28 +34,56 @@ The `excytin_demo` domain is designed to demonstrate and test SABER's container-
 │  │  │   │   └── sql_files/                     ││
 │  │  │   │       └── incident_5.sql             ││
 │  │  │   └── logs/                              ││
-│  │  │       └── [container logs appear here]   ││
+│  │  │       ├── compose-configs/               ││
+│  │  │       ├── container-logs/                ││
+│  │  │       └── container-events-*.jsonl      ││
 │  │  ├── client/                                ││
-│  │  │   └── demo_client.py                     ││
+│  │  │   ├── saber.yaml                         ││
+│  │  │   ├── run_demo.sh                        ││
+│  │  │   └── logs/                              ││
+│  │  │       ├── {timestamp}/                   ││
+│  │  │       │   └── saber_client.log           ││
+│  │  │       └── {timestamp}_task_*.eval        ││
 │  │  └── docker-compose.yml                     ││
 │  └─────────────────────────────────────────────┘│
 └─────────────────────────────────────────────────┘
-              │ Docker-in-Docker │
-        ┌─────────────────────────────────┐
-        │ SABER Server Container          │
-        │  /app/config/ (mounted)         │
-        │  /app/data/ (mounted)           │
-        │  /app/logs/ (mounted)           │
-        │  /app/src/ (mounted)            │
-        │                                 │
-        │  Creates episodes that spawn:   │
-        │  ┌─────────────────────────────┐│
-        │  │ Episode Container           ││
-        │  │  - MySQL Database           ││
-        │  │  - Application Services     ││
-        │  │  - [Logs captured to host]  ││
-        │  └─────────────────────────────┘│
-        └─────────────────────────────────┘
+              │ SABER Unified Architecture │
+        ┌─────────────────────────────────────────┐
+        │ SABER Client Container                  │
+        │  ┌───────────────────────────────────┐  │
+        │  │ inspect_ai eval_async             │  │
+        │  │  ├─ SABEREvaluationOrchestrator  │  │
+        │  │  ├─ AgentManager (React Agent)   │  │
+        │  │  ├─ DatasetManager               │  │
+        │  │  └─ ClientSessionManager         │  │
+        │  └───────────────────────────────────┘  │
+        │              │ MCP/REST │               │
+        └──────────────────────────────────────────┘
+                       │
+        ┌─────────────────────────────────────────┐
+        │ SABER Server Container                  │
+        │  ├─ SessionManager                      │
+        │  ├─ EpisodeManager                      │
+        │  ├─ ExecutionManager                    │
+        │  └─ MCP Server (tools: cli, python, file)
+        │                                         │
+        │  Creates per-episode sandbox:           │
+        │  ┌─────────────────────────────────────┐│
+        │  │ Episode Sandbox Container           ││
+        │  │  - excytin-sandbox image            ││
+        │  │  - Connected to permanent MySQL     ││
+        │  │  - Networked execution environment  ││
+        │  │  - Logs captured automatically     ││
+        │  └─────────────────────────────────────┘│
+        └─────────────────────────────────────────┘
+                       │
+        ┌─────────────────────────────────────────┐
+        │ Permanent MySQL Container               │
+        │  - saber-excytin-incident-5             │
+        │  - Runs for server lifetime             │
+        │  - Shared across all episodes           │
+        │  - Pre-loaded with incident_5.sql data │
+        └─────────────────────────────────────────┘
 ```
 
 ## Cold Start Instructions
@@ -105,7 +137,7 @@ docker logs saber-excytin-server --tail 20
 
 ### 5. Run Demo Client
 
-The excytin demo uses YAML configuration with the unified SABER client:
+The excytin demo uses the unified SABER client with YAML configuration and inspect_ai integration:
 
 #### Quick Start (Recommended)
 ```bash
@@ -113,39 +145,54 @@ cd /home/ms_test/repos/saber_vibin/domains/excytin_demo/client
 ./run_demo.sh
 ```
 
-#### Manual Execution
+#### Advanced Usage
 ```bash
-# Run with configuration file
-docker exec -it saber-excytin-client uv run python -m saber.client --config /app/client/harness.yaml
+# Verbose logging with file output
+./run_demo.sh --verbose
 
-# Auto-detect config in current directory
-docker exec -it saber-excytin-client uv run python -m saber.client
+# Console logging (no file)  
+./run_demo.sh --console-logs
+
+# Both verbose and console
+./run_demo.sh --verbose --console-logs
+
+# Manual execution
+docker exec -it saber-excytin-client uv run python -m saber.client --config /app/client/saber.yaml
 ```
 
-#### Script Options
-```bash
-docker exec -it saber-excytin-client /app/client/run_demo.sh --help                    # Show help
-docker exec -it saber-excytin-client /app/client/run_demo.sh --ui rich                 # Rich UI mode
-docker exec -it saber-excytin-client /app/client/run_demo.sh --ui textual --verbose    # Full TUI with debug logs
-docker exec -it saber-excytin-client /app/client/run_demo.sh --console-logs            # Show logs on console
-```
+#### What the Demo Does
+1. **Loads Configuration**: Parses `saber.yaml` for model, server, task, and agent settings
+2. **Creates Session**: Establishes session with SABER server
+3. **Executes eval_async**: Uses inspect_ai framework to run dataset samples
+4. **Creates Episodes**: Each task attempt creates a new episode with sandbox environment
+5. **Executes Agent**: React agent uses MCP tools (cli, python, file_operations) to complete tasks
+6. **Captures Logs**: Structured logging to timestamped directories and inspect_ai eval files
+7. **Cleanup**: Automatic resource cleanup when complete
 
 ## Expected Behavior
 
 ### Successful Flow:
-1. **Session Creation**: Demo client creates a session
-2. **Benchmark Start**: Triggers `excytin_demo` task  
-3. **Episode Creation**: Episode created for the task
-4. **Environment Setup**: MySQL container (`saber-excytin-incident-5`) should be created
-5. **Container Communication**: 
-   - Docker Compose config saved to `./server/logs/`
-   - Lifecycle events logged
-6. **Verification**: Check `./server/logs/` for captured logs
+1. **Session Creation**: Client creates session with SABER server
+2. **Task Discovery**: Retrieves `excytin_demo` task configuration from server
+3. **Dataset Creation**: Creates inspect_ai dataset with task samples (multiple attempts)
+4. **Episode Execution**: For each sample:
+   - Creates new episode with unique ID
+   - Sets up MCP client connection
+   - Creates sandbox environment (`excytin-sandbox` container)
+   - Connects to permanent MySQL database (`saber-excytin-incident-5`)
+   - Agent executes using available MCP tools
+   - Episode automatically terminates on completion or max steps
+5. **Logging**: Structured logs captured in timestamped directories
+6. **Cleanup**: All resources automatically cleaned up
 
-### Current Issue (As of Investigation):
-- ✅ Sessions create successfully
-- ✅ Episodes create successfully  
-- ❌ **Environments are NOT being created**
+### Current Status:
+- ✅ **Sessions create successfully**
+- ✅ **Episodes create successfully** 
+- ✅ **MCP client connections work**
+- ✅ **Tool execution successful** (`cli`, `python`, `file_operations`)
+- ✅ **Agent execution completes**
+- ✅ **Structured logging works**
+- ✅ **Resource cleanup automatic**
 - ❌ No Docker containers spawned for episodes
 - ❌ No container logs captured (because no containers exist)
 
@@ -160,7 +207,7 @@ docker logs saber-excytin-server | grep -E "(DEBUG|ERROR|environment|episode|con
 Look for log messages like:
 - `"Created episode '...' for session '...'"` ✅
 - `"ExecutionManager configured for session..."` ✅  
-- `"Created sandbox environment for session..."` ❌ (Missing!)
+- `"Created sandbox environment for session..."` (should appear in server logs)
 
 ### Check Container Creation
 ```bash
@@ -168,46 +215,63 @@ Look for log messages like:
 docker ps -a | grep saber-session-
 
 # Should see episode containers like:
-# saber-session-[session-id]-mysql...
+# saber-session-[session-id]-excytin-sandbox...
 ```
 
-### Check Logs Directory
+### Check Logs Directory Structure
 ```bash
-# Find the latest session logs
+# Check client logs (timestamped structure)
 ls -la ./client/logs/
+# Shows:
+#   saber_client_YYYYMMDD_HHMMSS/     - Client application logs
+#   YYYY-MM-DDTHH-MM-SS_task_*.eval   - inspect_ai evaluation results
 
-# Check unified logging structure  
-ls -la ./client/logs/{timestamp}/
-# Should contain:
-#   harness-execution/     - Harness execution logs
-#   container-logs/        - All container logs
-#   client-logs/          - Client application logs  
-#   container-events/     - Container lifecycle events
+# Check client application logs
+tail -f ./client/logs/saber_client_*/saber_client.log
 
-# Check client logs
-tail -f ./client/logs/{timestamp}/client-logs/saber_client.log
-
-# Check agent execution logs
-ls ./client/logs/{timestamp}/container-logs/agent-containers/
-
-# Check container events
-cat ./client/logs/{timestamp}/container-events/container-events-*.jsonl
+# Check server logs  
+ls -la ./server/logs/
+# Shows:
+#   compose-configs/          - Docker compose configurations
+#   ├── permanent-environments/    - Permanent container configs
+#   └── sandbox-environments/      - Episode sandbox configs
+#   container-logs/           - Container execution logs
+#   container-events-*.jsonl  - Container lifecycle events
 ```
 
 ## Configuration Files
 
 ### `server/config/tasks.yaml`
 Defines the `excytin_demo` task that:
-- Uses environment `excytin_incident_5`
-- Has 3 subtasks for container interaction
+- Uses sandbox environment `excytin_sandbox` 
+- Has 3 subtasks for container interaction testing
 - Allows `cli` and `python` executors
+- Configures episode attempts and step limits
+- References permanent environment `excytin_incident_5`
 
 ### `server/config/environments.yaml`  
-Defines the `excytin_incident_5` environment:
-- MySQL 8.0 container
-- Initializes with `incident_5.sql` data
-- Exposes port 3306
-- Creates `env_monitor_db` database
+Defines two environments:
+
+**Permanent Environment (`excytin_incident_5`)**:
+- MySQL 8.0 container (`saber-excytin-incident-5`)
+- Runs for server lifetime
+- Pre-loaded with `incident_5.sql` data
+- Exposes port 3306 for connectivity
+
+**Sandbox Environment (`excytin_sandbox`)**:
+- Lightweight execution container (`saber/excytin-sandbox:latest`)
+- Created per episode
+- Connected to shared network for MySQL access
+- Resource limits: 512MB memory, 0.5 CPU
+
+### `client/saber.yaml`
+Main client configuration:
+- **Model**: Azure OpenAI GPT-4.1 (inspect_ai format)
+- **Agent**: React agent with max 50 steps
+- **Server URLs**: REST (8000) and MCP (8001) endpoints
+- **Tasks**: `["excytin_demo"]`
+- **Logging**: Structured logging to `./logs` directory
+- **Docker Commands**: Azure CLI credential mounting
 
 ### `server/data/sql_files/incident_5.sql`
 Sample database schema with:
@@ -217,72 +281,131 @@ Sample database schema with:
 
 ## Troubleshooting
 
-### No Containers Created
-If episodes are created but no Docker containers appear:
-1. Check environment resolution in server logs
-2. Verify `environments.yaml` syntax
-3. Check Docker-in-Docker permissions
-4. Verify volume mounts in docker-compose.yml
-
-### Volume Mount Issues
-Ensure paths exist and are accessible:
+### Configuration Issues
 ```bash
-ls -la ./server/config/  # Should contain tasks.yaml, environments.yaml
-ls -la ./server/data/    # Should contain sql_files/
-ls -la ./server/logs/    # Should exist (may be empty initially)
+# Verify YAML syntax
+docker exec -it saber-excytin-client python -c "
+import yaml
+with open('/app/client/saber.yaml') as f:
+    print('✅ Client config valid')
+    yaml.safe_load(f)
+"
+
+# Check server config
+docker exec -it saber-excytin-server python -c "
+import yaml
+with open('/app/config/tasks.yaml') as f:
+    yaml.safe_load(f)
+with open('/app/config/environments.yaml') as f:
+    yaml.safe_load(f)
+print('✅ Server configs valid')
+"
 ```
 
-### Permission Issues
+### Connection Issues
 ```bash
-# Fix log directory permissions if needed
-chmod 755 ./server/logs/
+# Test server connectivity
+curl http://localhost:8000/health
+curl http://localhost:8001/  # MCP server
+
+# Check server status
+docker logs saber-excytin-server --tail 20
+
+# Check client container status
+docker exec -it saber-excytin-client echo "Client accessible"
+```
+
+### Episode/Environment Issues
+```bash
+# Check active sessions via REST API
+curl http://localhost:8000/sessions
+
+# Check permanent environment status
+docker ps | grep saber-excytin-incident-5
+
+# Check if sandbox environments are being created
+docker ps -a | grep excytin-sandbox
+```
+
+### Log Analysis
+```bash
+# Check most recent client execution
+ls -la ./client/logs/ | tail -2
+
+# Check specific client run
+tail -f ./client/logs/saber_client_*/saber_client.log
+
+# Check for MCP connection issues
+grep -i "mcp\|connection\|error" ./client/logs/saber_client_*/saber_client.log
+
+# Check server-side episode creation
+docker logs saber-excytin-server | grep -i "episode\|environment"
 ```
 
 ## What Success Looks Like
 
 When everything works correctly:
 
-1. **Episode Creates Environment**: 
+1. **Session and Episode Creation**: 
    ```
-   Created sandbox environment for session [session-id]
+   Created session: <session-id>
+   Created episode: <episode-id>
    ```
 
-2. **Docker Containers Spawn**:
+2. **MCP Client Connection**:
+   ```
+   MCP client connected successfully
+   Discovered 3 MCP tools
+   ```
+
+3. **Agent Execution**:
+   ```
+   Tool execution completed: cli
+   Tool execution completed: python
+   Tool execution completed: file_operations
+   ```
+
+4. **Structured Logging**:
+   ```bash
+   ls ./client/logs/
+   # Shows timestamped client logs:
+   #   ├── saber_client_YYYYMMDD_HHMMSS/
+   #   │   └── saber_client.log          # Detailed execution logs
+   #   └── YYYY-MM-DDTHH-MM-SS_task_*.eval  # inspect_ai evaluation results
+   ```
+
+5. **Server-Side Container Management**:
    ```bash
    docker ps
-   # Shows: saber-session-[id]-mysql, etc.
+   # Shows permanent MySQL container and episode sandbox:
+   #   saber-excytin-incident-5         # Permanent database
+   #   saber-session-<id>-excytin-sandbox  # Episode sandbox (if active)
    ```
 
-3. **Unified Logs Are Captured**:
-   ```bash
-   ls ./logs/{timestamp}/
-   # Shows unified logging structure:
-   #   ├── harness-execution/        # Harness execution logs
-   #   ├── container-logs/
-   #   │   ├── agent-containers/     # Agent execution containers  
-   #   │   └── sidecar-containers/   # MCP sidecar containers
-   #   ├── client-logs/              # Client application logs
-   #   ├── container-events/         # Container lifecycle events
-   #   ├── system.log               # System logs
-   #   └── meta.json                # Session metadata
+6. **Clean Resource Cleanup**:
+   ```
+   MCP client disconnected
+   Session <session-id> terminated successfully
+   ClientSessionManager cleanup completed
    ```
 
-4. **Container Networking Works**: Host filesystem contains all debugging information needed to diagnose container issues.
+## Unified Architecture Benefits
 
-5. **Clean UI Output**: Detailed logs saved to files, console shows only essential UI messages and progress.
+This new architecture provides:
 
-## Docker-in-Docker Limitations
-
-**Issue**: MySQL container fails with "Can't initialize batch_readline" when mounting SQL files from SABER server container.
-
-**Root Cause**: Docker-in-Docker can't mount files from parent container filesystem to child containers.
-
-**Current Solution**: Custom MySQL image with SQL files baked in during build.
-- **Pros**: Reliable, standard Docker pattern, works in all environments
-- **Cons**: Increases image size, requires rebuild when data changes
-
-**Production Fix**: Use proper volume mounting from host filesystem or external database services.
+- **Direct Agent Execution**: No container overhead for agent runtime
+- **Fail-Fast Error Handling**: Immediate failure alerts with clear error messages
+- **Resource Management**: Automatic cleanup of sessions, episodes, and containers
+- **Structured Logging**: Timestamped logs compatible with inspect_ai tooling
+- **Real-time UI**: Progress bars and status updates during execution
+- **Modular Design**: Clean separation between client orchestration and server execution
+- **Tool Integration**: Direct MCP client connections for efficient tool usage
 
 ## Next Steps
 
-Once this domain works correctly, the Excytin capabilities can be applied to other domains like `webapp_pentest` for more complex multi-container pentesting scenarios.
+This unified architecture serves as the foundation for more complex domains:
+- **webapp_pentest**: Multi-container pentesting scenarios with target applications
+- **malware_analysis**: Isolated sandbox environments for malware execution
+- **red_team_ops**: Complex attack chain scenarios across multiple targets
+
+The inspect_ai integration ensures consistent evaluation methodology across all domains while maintaining the flexibility for domain-specific customization.

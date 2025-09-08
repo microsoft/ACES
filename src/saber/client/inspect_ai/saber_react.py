@@ -413,8 +413,6 @@ Returns:
         # Type check and return the tool
         from typing import cast
 
-        from inspect_ai.tool import Tool
-
         if isinstance(actual_tool, Tool) or callable(actual_tool):
             return cast(Tool, actual_tool)  # Return the actual tool (execute function) that inspect_ai can call
         else:
