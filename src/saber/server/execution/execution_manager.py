@@ -377,26 +377,6 @@ class ExecutionManager:
 
         return commands
 
-    def get_security_info(self, episode_id: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Get security information about the execution environment, optionally for a specific episode.
-
-        Args:
-            episode_id: Optional episode ID to get episode-specific security info
-
-        Returns:
-            Dictionary containing security-related information
-        """
-        executor_factory = self._get_episode_executor_factory(episode_id)
-
-        return {
-            "execution_mode": "docker_sandbox",
-            "security_level": "isolated",
-            "available_executors": executor_factory.get_available_executors(),
-            "sandbox_active": bool(self._sandbox_manager.active_environments if self._sandbox_manager else False),
-            "episode_id": episode_id,
-        }
-
     def get_configuration(self) -> Dict[str, Any]:
         """
         Get the configuration dictionary.

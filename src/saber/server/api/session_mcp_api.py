@@ -10,14 +10,20 @@ import json
 import logging
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+
+# Forward declaration to avoid circular imports
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_http_headers
 
-from ...base import MCPHeaders
+from ...models import HTTPHeaders
+from ...models.mcp import MCPInputSchema, MCPPropertySchema, MCPToolCallResponse, MCPToolListResponse, MCPToolSchema
 from ..base import Action, CommandResult
 from .mcp_tool_generator import MCPToolGenerator
+
+if TYPE_CHECKING:
+    from ..session_manager import SessionManager
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +36,7 @@ class SessionMCPAPI:
     All other operations (session management, episodes, policy) are handled by SessionRestAPI.
     """
 
-    def __init__(self, session_manager: Any, host: str = "0.0.0.0", port: int = 8001) -> None:
+    def __init__(self, session_manager: "SessionManager", host: str = "0.0.0.0", port: int = 8001) -> None:
         """
         Initialize the SessionMCPAPI.
 
@@ -60,7 +66,7 @@ class SessionMCPAPI:
             # Try case-insensitive header lookup
             session_id_from_header = None
             for header_name, header_value in headers.items():
-                if header_name.lower() == MCPHeaders.SESSION_ID.lower():
+                if header_name.lower() == HTTPHeaders.SESSION_ID.lower():
                     session_id_from_header = header_value
                     break
 
@@ -68,7 +74,7 @@ class SessionMCPAPI:
                 logger.info(f"✅ Found session_id in header: {session_id_from_header}")
                 return str(session_id_from_header)
             else:
-                logger.info(f"❌ No {MCPHeaders.SESSION_ID} header found. Available headers: {list(headers.keys())}")
+                logger.info(f"❌ No {HTTPHeaders.SESSION_ID} header found. Available headers: {list(headers.keys())}")
 
             return None
 
@@ -89,7 +95,7 @@ class SessionMCPAPI:
             # Try case-insensitive header lookup
             episode_id_from_header = None
             for header_name, header_value in headers.items():
-                if header_name.lower() == MCPHeaders.EPISODE_ID.lower():
+                if header_name.lower() == HTTPHeaders.EPISODE_ID.lower():
                     episode_id_from_header = header_value
                     break
 
@@ -97,7 +103,7 @@ class SessionMCPAPI:
                 logger.info(f"✅ Found episode_id in header: {episode_id_from_header}")
                 return str(episode_id_from_header)
             else:
-                logger.debug(f"No {MCPHeaders.EPISODE_ID} header found. Available headers: {list(headers.keys())}")
+                logger.debug(f"No {HTTPHeaders.EPISODE_ID} header found. Available headers: {list(headers.keys())}")
 
             return None
 
@@ -167,7 +173,7 @@ class SessionMCPAPI:
 
         # Register end_episode tool using @decorator syntax
         @self.mcp_server.tool  # type: ignore[misc]
-        async def end_episode(submission: Optional[str] = None) -> str:
+        async def end_episode(submission: str = "") -> str:
             """End the current episode and optionally record a discovered flag/target/objective."""
             try:
                 # Get session and episode from HTTP headers
@@ -186,11 +192,11 @@ class SessionMCPAPI:
 
                 mcp_result = await self._handle_end_episode_call(args, session_id, episode_id)
 
-                # Extract the text content from the MCP result
-                if mcp_result.get("isError", False):
-                    return json.dumps({"success": False, "error": mcp_result["content"][0]["text"]})
+                # Extract the text content from the typed MCP result
+                if mcp_result.isError:
+                    return json.dumps({"success": False, "error": mcp_result.content[0]["text"]})
                 else:
-                    return str(mcp_result["content"][0]["text"])
+                    return str(mcp_result.content[0]["text"])
 
             except Exception as e:
                 logger.error(f"Error in end_episode tool: {e}")
@@ -211,21 +217,21 @@ class SessionMCPAPI:
             input_schema = executor_instance.to_mcp_schema()
             metadata = getattr(executor_instance, "_executor_metadata", {})
 
-            # Build the full MCP schema structure
-            mcp_schema = {
-                "name": metadata.get("name", executor_name),
-                "description": metadata.get("description", f"{executor_name.title()} executor"),
-                "inputSchema": input_schema,
-            }
+            # Build the typed MCP tool schema
+            mcp_tool_schema = MCPToolSchema(
+                name=metadata.get("name", executor_name),
+                description=metadata.get("description", f"{executor_name.title()} executor"),
+                inputSchema=input_schema,
+            )
 
-            # Validate the schema
-            if not self.tool_generator.validate_mcp_schema(mcp_schema):
+            # Validate the typed schema
+            if not self.tool_generator.validate_mcp_tool_schema(mcp_tool_schema):
                 logger.error(f"Invalid MCP schema for executor '{executor_name}'")
                 return
 
-            # Generate the dynamic tool function using templated code
+            # Generate the dynamic tool function using typed schema
             executor_tool = self.tool_generator.create_executor_tool(
-                executor_name=executor_name, mcp_schema=mcp_schema, handler_func=self.handle_call_tool
+                executor_name=executor_name, mcp_schema=mcp_tool_schema, handler_func=self.handle_call_tool
             )
 
             # Register the tool with the MCP server
@@ -238,54 +244,67 @@ class SessionMCPAPI:
             logger.error(f"Failed to register MCP tool for executor '{executor_name}': {e}")
             raise
 
-    async def handle_list_tools(self) -> List[Dict[str, Any]]:
+    async def handle_list_tools(self) -> MCPToolListResponse:
         """
         Handle MCP tool discovery with episode-specific context.
 
         Returns:
-            List of available MCP tools from ExecutionManager filtered by episode's
+            MCPToolListResponse with available MCP tools from ExecutionManager filtered by episode's
             allowed executors plus hardcoded MCP tools
         """
         try:
             # Get episode context from headers
-            episode_id = await self._get_episode_from_headers()
+            session_id, episode_id = await self._get_session_and_episode_from_headers()
 
             # Get tools from execution manager with episode context
-            tools: List[Dict[str, Any]] = self.session_manager.execution_manager.to_mcp_tools(episode_id)
+            tools_data: List[Dict[str, Any]] = self.session_manager.execution_manager.to_mcp_tools(episode_id)
 
             # Add hardcoded MCP API tools (without session_id in schema)
-            hardcoded_tools = [
-                {
-                    "name": "end_episode",
-                    "description": "End the current episode and optionally record a discovered flag/target/objective",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "submission": {
-                                "type": "string",
-                                "description": "Optional flag, target, or objective discovered during episode",
-                            },
+            hardcoded_tools_data = [
+                MCPToolSchema(
+                    name="end_episode",
+                    description="End the current episode and optionally record a discovered flag/target/objective",
+                    inputSchema=MCPInputSchema(
+                        type="object",
+                        properties={
+                            "submission": MCPPropertySchema(
+                                type="string",
+                                description="Optional flag, target, or objective discovered during episode",
+                                title=None,
+                                default="",  # Use empty string instead of None
+                                enum=None,
+                                minimum=None,
+                                maximum=None,
+                                pattern=None,
+                            )
                         },
-                        "required": [],
-                    },
-                }
+                        required=[],  # Keep as optional since it has a default
+                    ),
+                )
             ]
 
-            # Combine executor tools and hardcoded tools
-            all_tools = tools + hardcoded_tools
+            # Convert executor tools to typed MCPToolSchema objects
+            executor_mcp_tools = [
+                MCPToolSchema(name=tool["name"], description=tool["description"], inputSchema=tool["inputSchema"])
+                for tool in tools_data
+            ]
+
+            # Combine executor tools and hardcoded tools (hardcoded_tools_data already contains MCPToolSchema objects)
+            mcp_tools = executor_mcp_tools + hardcoded_tools_data
 
             logger.debug(
-                f"Returning {len(all_tools)} tools ({len(tools)} executor tools + "
-                f"{len(hardcoded_tools)} hardcoded tool) for MCP discovery"
+                f"Returning {len(mcp_tools)} tools ({len(tools_data)} executor tools + "
+                f"{len(hardcoded_tools_data)} hardcoded tool) for MCP discovery"
                 f"{f' for episode {episode_id}' if episode_id else ' (no episode context)'}"
             )
-            return all_tools
+
+            return MCPToolListResponse(tools=mcp_tools, session_id=session_id, episode_id=episode_id)
 
         except Exception as e:
             logger.error(f"Error handling list_tools: {e}")
-            return []
+            return MCPToolListResponse(tools=[], session_id=None, episode_id=None)
 
-    async def handle_call_tool(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    async def handle_call_tool(self, name: str, arguments: Dict[str, Any]) -> MCPToolCallResponse:
         """
         Handle MCP tool execution using get_http_headers.
 
@@ -294,25 +313,28 @@ class SessionMCPAPI:
             arguments: Tool arguments (clean, no session_id)
 
         Returns:
-            MCP-formatted execution result
+            MCPToolCallResponse with execution result
         """
         # Get session and episode from HTTP headers first
         session_id, episode_id = await self._get_session_and_episode_from_headers()
         if not session_id:
-            return self._convert_to_mcp_result(
-                CommandResult.error_result(error="No SABER session mapped to MCP request")
+            return MCPToolCallResponse(
+                content=[{"type": "text", "text": "Error: No SABER session mapped to MCP request"}], isError=True
             )
 
         # Episode ID is required for multi-episode architecture
         if not episode_id:
-            return self._convert_to_mcp_result(
-                CommandResult.error_result(error="No SABER episode ID in headers - episode context required")
+            return MCPToolCallResponse(
+                content=[{"type": "text", "text": "Error: No SABER episode ID in headers - episode context required"}],
+                isError=True,
             )
 
         # Get task_id from the specific episode, not the session
         episode = self.session_manager.get_episode_by_id(episode_id)
         if not episode:
-            return self._convert_to_mcp_result(CommandResult.error_result(error=f"Episode {episode_id} not found"))
+            return MCPToolCallResponse(
+                content=[{"type": "text", "text": f"Error: Episode {episode_id} not found"}], isError=True
+            )
         task_id = episode.task_id
 
         # Get step information for progress tracking from the specific episode
@@ -387,7 +409,7 @@ class SessionMCPAPI:
                 except Exception as e:
                     logger.error(f"Failed to publish tool_call_completed event: {e}")
 
-            # Convert result to MCP format
+            # Convert result to MCP format using typed response
             return self._convert_to_mcp_result(command_result)
 
         except Exception as e:
@@ -420,11 +442,13 @@ class SessionMCPAPI:
                     logger.error(f"Failed to publish tool_call_completed (failed) event: {pub_error}")
 
             logger.error(f"Error handling call_tool {name}: {e}")
-            return self._convert_to_mcp_result(CommandResult.error_result(error=f"Tool execution failed: {str(e)}"))
+            return MCPToolCallResponse(
+                content=[{"type": "text", "text": f"Error: Tool execution failed: {str(e)}"}], isError=True
+            )
 
     async def _handle_end_episode_call(
         self, arguments: Dict[str, Any], session_id: Optional[str] = None, episode_id: Optional[str] = None
-    ) -> Dict[str, Any]:
+    ) -> MCPToolCallResponse:
         """
         Handle the hardcoded end_episode tool call.
 
@@ -434,7 +458,7 @@ class SessionMCPAPI:
             episode_id: SABER episode ID from Context (required for multi-episode architecture)
 
         Returns:
-            MCP-formatted result confirming episode end
+            MCPToolCallResponse confirming episode end
         """
         try:
             # If session_id not provided, try to get it from arguments or headers
@@ -445,13 +469,14 @@ class SessionMCPAPI:
                     session_id, episode_id = await self._get_session_and_episode_from_headers()
 
             if not session_id:
-                return self._convert_to_mcp_result(
-                    CommandResult.error_result(error="No SABER session mapped to MCP request")
+                return MCPToolCallResponse(
+                    content=[{"type": "text", "text": "Error: No SABER session mapped to MCP request"}], isError=True
                 )
 
             if not episode_id:
-                return self._convert_to_mcp_result(
-                    CommandResult.error_result(error="No SABER episode ID - episode context required")
+                return MCPToolCallResponse(
+                    content=[{"type": "text", "text": "Error: No SABER episode ID - episode context required"}],
+                    isError=True,
                 )
 
             # Extract optional result/flag/objective from parameters.submission
@@ -488,13 +513,14 @@ class SessionMCPAPI:
 
             logger.info(f"Episode ended for session {session_id}")
 
-            # Return success result
-            command_result = CommandResult.success_result(data=success_message)
-            return self._convert_to_mcp_result(command_result)
+            # Return success result with typed response
+            return MCPToolCallResponse(content=[{"type": "text", "text": success_message}], isError=False)
 
         except Exception as e:
             logger.error(f"Error handling end_episode tool call: {e}")
-            return self._convert_to_mcp_result(CommandResult.error_result(error=f"Failed to end episode: {str(e)}"))
+            return MCPToolCallResponse(
+                content=[{"type": "text", "text": f"Error: Failed to end episode: {str(e)}"}], isError=True
+            )
 
     def _convert_to_action(self, tool_name: str, arguments: Dict[str, Any]) -> Action:
         """
@@ -511,7 +537,7 @@ class SessionMCPAPI:
         filtered_arguments = {k: v for k, v in arguments.items() if k != "session_id"}
         return Action(tool_name=tool_name, parameters=filtered_arguments)
 
-    def _convert_to_mcp_result(self, command_result: CommandResult) -> Dict[str, Any]:
+    def _convert_to_mcp_result(self, command_result: CommandResult) -> MCPToolCallResponse:
         """
         Convert CommandResult to MCP-compatible result with episode termination signals.
 
@@ -519,7 +545,7 @@ class SessionMCPAPI:
             command_result: Result from command execution
 
         Returns:
-            MCP-formatted result dictionary with optional termination metadata
+            MCPToolCallResponse with optional termination metadata
         """
         if command_result.success:
             # Check if we need to add episode termination signals
@@ -531,14 +557,8 @@ class SessionMCPAPI:
                     termination_reason = command_result.metadata.get("termination_reason", "server_terminated")
                     result_text += f"\n[EPISODE_TERMINATED: {termination_reason}]"
 
-            return {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": result_text,
-                    }
-                ],
-                "isError": False,
-            }
+            return MCPToolCallResponse(content=[{"type": "text", "text": result_text}], isError=False)
         else:
-            return {"content": [{"type": "text", "text": f"Error: {command_result.error}"}], "isError": True}
+            return MCPToolCallResponse(
+                content=[{"type": "text", "text": f"Error: {command_result.error}"}], isError=True
+            )

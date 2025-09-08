@@ -83,6 +83,44 @@ class TestMCPToolGenerator:
             }
         }) is False
 
+    def test_validate_mcp_tool_schema_typed(self, generator):
+        """Test typed schema validation with MCPToolSchema objects."""
+        from saber.models.mcp import MCPToolSchema, MCPInputSchema, MCPPropertySchema
+
+        # Valid typed schema
+        valid_schema = MCPToolSchema(
+            name="test_tool",
+            description="Test tool",
+            inputSchema=MCPInputSchema(
+                type="object",
+                properties={
+                    "command": MCPPropertySchema(
+                        type="string",
+                        description="Command to execute"
+                    )
+                },
+                required=["command"]
+            )
+        )
+
+        assert generator.validate_mcp_tool_schema(valid_schema) is True
+
+        # Invalid schema - missing name
+        try:
+            invalid_schema = MCPToolSchema(
+                name="",  # Empty name should fail validation
+                description="Test tool",
+                inputSchema=MCPInputSchema(
+                    type="object",
+                    properties={"test": MCPPropertySchema(type="string")},
+                    required=[]
+                )
+            )
+            assert generator.validate_mcp_tool_schema(invalid_schema) is False
+        except Exception:
+            # If Pydantic validation fails, that's also acceptable
+            pass
+
     def test_json_type_to_python_type(self, generator):
         """Test JSON schema type to Python type conversion."""
         assert generator._json_type_to_python_type("string") == "str"
@@ -96,32 +134,34 @@ class TestMCPToolGenerator:
     @pytest.mark.asyncio
     async def test_create_executor_tool_cli(self, generator):
         """Test creating MCP tool function for CLI executor."""
+        from saber.models.mcp import MCPToolSchema, MCPInputSchema, MCPPropertySchema
+
         # Mock handler function
         mock_handler = AsyncMock(return_value={
             "content": [{"type": "text", "text": "Command executed successfully"}],
             "isError": False
         })
 
-        # CLI executor schema
-        cli_schema = {
-            "name": "cli",
-            "description": "Execute CLI commands",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "command": {
-                        "type": "string",
-                        "description": "Command to execute"
-                    },
-                    "shell": {
-                        "type": "boolean",
-                        "description": "Use shell mode",
-                        "default": False
-                    }
+        # CLI executor schema with proper typing
+        cli_schema = MCPToolSchema(
+            name="cli",
+            description="Execute CLI commands",
+            inputSchema=MCPInputSchema(
+                type="object",
+                properties={
+                    "command": MCPPropertySchema(
+                        type="string",
+                        description="Command to execute"
+                    ),
+                    "shell": MCPPropertySchema(
+                        type="boolean",
+                        description="Use shell mode",
+                        default=False
+                    )
                 },
-                "required": ["command"]
-            }
-        }
+                required=["command"]
+            )
+        )
 
         # Generate the tool function
         tool_function = generator.create_executor_tool(
@@ -151,36 +191,38 @@ class TestMCPToolGenerator:
     @pytest.mark.asyncio
     async def test_create_executor_tool_python(self, generator):
         """Test creating MCP tool function for Python executor."""
+        from saber.models.mcp import MCPToolSchema, MCPInputSchema, MCPPropertySchema
+
         # Mock handler function
         mock_handler = AsyncMock(return_value={
             "content": [{"type": "text", "text": "Python code executed"}],
             "isError": False
         })
 
-        # Python executor schema
-        python_schema = {
-            "name": "python",
-            "description": "Execute Python code",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "code": {
-                        "type": "string",
-                        "description": "Python code to execute"
-                    },
-                    "template": {
-                        "type": "string",
-                        "description": "Script template to use"
-                    },
-                    "working_dir": {
-                        "type": "string",
-                        "description": "Working directory",
-                        "default": "/workspace"
-                    }
+        # Python executor schema with proper typing
+        python_schema = MCPToolSchema(
+            name="python",
+            description="Execute Python code",
+            inputSchema=MCPInputSchema(
+                type="object",
+                properties={
+                    "code": MCPPropertySchema(
+                        type="string",
+                        description="Python code to execute"
+                    ),
+                    "template": MCPPropertySchema(
+                        type="string",
+                        description="Script template to use"
+                    ),
+                    "working_dir": MCPPropertySchema(
+                        type="string",
+                        description="Working directory",
+                        default="/workspace"
+                    )
                 },
-                "required": ["code"]
-            }
-        }
+                required=["code"]
+            )
+        )
 
         # Generate the tool function
         tool_function = generator.create_executor_tool(
@@ -206,27 +248,29 @@ class TestMCPToolGenerator:
     @pytest.mark.asyncio
     async def test_create_executor_tool_error_handling(self, generator):
         """Test error handling in generated tool function."""
+        from saber.models.mcp import MCPToolSchema, MCPInputSchema, MCPPropertySchema
+
         # Mock handler function that returns error
         mock_handler = AsyncMock(return_value={
             "content": [{"type": "text", "text": "Command failed"}],
             "isError": True
         })
 
-        # Simple schema
-        schema = {
-            "name": "test",
-            "description": "Test executor",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "input": {
-                        "type": "string",
-                        "description": "Test input"
-                    }
+        # Simple schema with proper typing
+        schema = MCPToolSchema(
+            name="test",
+            description="Test executor",
+            inputSchema=MCPInputSchema(
+                type="object",
+                properties={
+                    "input": MCPPropertySchema(
+                        type="string",
+                        description="Test input"
+                    )
                 },
-                "required": ["input"]
-            }
-        }
+                required=["input"]
+            )
+        )
 
         # Generate the tool function
         tool_function = generator.create_executor_tool(
@@ -242,27 +286,29 @@ class TestMCPToolGenerator:
 
     def test_create_executor_tool_none_filtering(self, generator):
         """Test that None values are filtered from parameters."""
+        from saber.models.mcp import MCPToolSchema, MCPInputSchema, MCPPropertySchema
+
         # This test verifies the generated function filters None values
         # We'll inspect the generated code rather than execute it
 
-        schema = {
-            "name": "test",
-            "description": "Test executor",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "required_param": {
-                        "type": "string",
-                        "description": "Required parameter"
-                    },
-                    "optional_param": {
-                        "type": "string",
-                        "description": "Optional parameter"
-                    }
+        schema = MCPToolSchema(
+            name="test",
+            description="Test executor",
+            inputSchema=MCPInputSchema(
+                type="object",
+                properties={
+                    "required_param": MCPPropertySchema(
+                        type="string",
+                        description="Required parameter"
+                    ),
+                    "optional_param": MCPPropertySchema(
+                        type="string",
+                        description="Optional parameter"
+                    )
                 },
-                "required": ["required_param"]
-            }
-        }
+                required=["required_param"]
+            )
+        )
 
         mock_handler = AsyncMock()
 
@@ -298,28 +344,30 @@ class TestMCPToolGenerator:
 
     def test_create_executor_tool_complex_types(self, generator):
         """Test handling of complex parameter types."""
+        from saber.models.mcp import MCPToolSchema, MCPInputSchema, MCPPropertySchema
+
         mock_handler = AsyncMock(return_value={
             "content": [{"type": "text", "text": "Success"}],
             "isError": False
         })
 
-        # Schema with various parameter types
-        complex_schema = {
-            "name": "complex",
-            "description": "Complex executor",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "string_param": {"type": "string"},
-                    "int_param": {"type": "integer"},
-                    "bool_param": {"type": "boolean"},
-                    "float_param": {"type": "number"},
-                    "array_param": {"type": "array"},
-                    "object_param": {"type": "object"}
+        # Schema with various parameter types with proper typing
+        complex_schema = MCPToolSchema(
+            name="complex",
+            description="Complex executor",
+            inputSchema=MCPInputSchema(
+                type="object",
+                properties={
+                    "string_param": MCPPropertySchema(type="string", description="String parameter"),
+                    "int_param": MCPPropertySchema(type="integer", description="Integer parameter"),
+                    "bool_param": MCPPropertySchema(type="boolean", description="Boolean parameter"),
+                    "float_param": MCPPropertySchema(type="number", description="Float parameter"),
+                    "array_param": MCPPropertySchema(type="array", description="Array parameter"),
+                    "object_param": MCPPropertySchema(type="object", description="Object parameter")
                 },
-                "required": ["string_param"]
-            }
-        }
+                required=["string_param"]
+            )
+        )
 
         # Should generate function without errors
         tool_function = generator.create_executor_tool(

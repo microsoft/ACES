@@ -147,12 +147,12 @@ class TestToolsIntegration:
 
     def test_security_validator_configuration_integration(self, registry):
         """Test that security validator is properly configured at executor level."""
-        # Get CLI executor and verify its security configuration
+        # Get CLI executor and verify its Docker configuration
         cli_executor = registry.get_executor("cli")
-        security_info = cli_executor.get_security_info()
+        docker_info = cli_executor.get_docker_info()
 
         # Verify the CLI executor has proper Docker configuration
-        assert "docker_config" in security_info or "image" in security_info
+        assert "docker_config" in docker_info or "execution_environment" in docker_info
 
         # Test that security validation works by attempting to validate a command
         validation_result = cli_executor.validate_parameters({"command": "echo test"})

@@ -8,75 +8,66 @@ Simple command-line interface for testing agents against SABER server:
 
 import argparse
 import asyncio
-import json
 import logging
-import os
 import sys
-import traceback
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Optional
 
-from .harness_models import SABERHarnessConfig
-from .saber_harness import SABERHarness
+from inspect_ai._display.core.active import display as task_display
 
-
-class JSONFormatter(logging.Formatter):
-    """Minimal JSON log formatter (adds level, logger, message, and extra fields)."""
-
-    def format(self, record: logging.LogRecord) -> str:
-        base: Dict[str, Any] = {
-            "level": record.levelname,
-            "logger": record.name,
-            "message": record.getMessage(),
-        }
-        if record.exc_info:
-            base["exception"] = self.formatException(record.exc_info)
-        # Include any custom attributes (simple heuristic: skip built-ins)
-        for k, v in record.__dict__.items():
-            if k not in {
-                "name",
-                "msg",
-                "args",
-                "levelname",
-                "levelno",
-                "pathname",
-                "filename",
-                "module",
-                "exc_info",
-                "exc_text",
-                "stack_info",
-                "lineno",
-                "funcName",
-                "created",
-                "msecs",
-                "relativeCreated",
-                "thread",
-                "threadName",
-                "processName",
-                "process",
-            } and not k.startswith("_"):
-                try:
-                    json.dumps({k: v})  # ensure serializable
-                    base[k] = v
-                except Exception:
-                    base[k] = str(v)
-        return json.dumps(base, ensure_ascii=False)
+from .config_loader import SABERConfigLoader
+from .inspect_ai import run_saber_eval_async
+from .models import SABERConfig
 
 
 def setup_client_logging(
     verbose: bool = False, log_to_file: bool = True, log_dir: Optional[Path] = None
 ) -> logging.Logger:
-    """Setup initial logging. Will be enhanced later when harness creates its timestamp directory."""
+    """Setup client logging with timestamped directory."""
     if log_to_file:
-        # For now, create minimal console logging
-        # We'll redirect to harness logging directory after harness initialization
-        logging.basicConfig(
-            level=logging.WARNING,  # Minimal console output
-            format="%(levelname)s: %(message)s",
-            handlers=[logging.StreamHandler(sys.stdout)],
-        )
+        # Create timestamped log directory
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        print("📝 Detailed logs will be integrated with harness logging directory")
+        if log_dir:
+            log_base_dir = Path(log_dir)
+        else:
+            log_base_dir = Path("logs")
+
+        # Create timestamped directory
+        timestamped_dir = log_base_dir / f"saber_client_{timestamp}"
+        timestamped_dir.mkdir(parents=True, exist_ok=True)
+
+        # Setup file logging
+        log_file = timestamped_dir / "saber_client.log"
+
+        # Configure root logger - this will catch ALL loggers including inspect_ai
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.DEBUG if verbose else logging.INFO)
+        root_logger.handlers.clear()
+
+        # File handler - captures everything
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setLevel(logging.DEBUG)
+        file_formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+        file_handler.setFormatter(file_formatter)
+        root_logger.addHandler(file_handler)
+
+        # Console handler - only warnings and errors to keep output clean
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(logging.WARNING)
+        console_formatter = logging.Formatter("%(levelname)s: %(message)s")
+        console_handler.setFormatter(console_formatter)
+        root_logger.addHandler(console_handler)
+
+        # Configure specific logger levels for better control
+        logging.getLogger("saber").setLevel(logging.DEBUG if verbose else logging.INFO)
+        logging.getLogger("inspect_ai").setLevel(logging.DEBUG if verbose else logging.INFO)
+        logging.getLogger("docker").setLevel(logging.WARNING)  # Docker is too chatty
+        logging.getLogger("urllib3").setLevel(logging.WARNING)  # HTTP requests are too chatty
+
+        print(f"📝 Logs will be written to: {log_file}")
+        print(f"🔍 Monitor with: tail -f {log_file}")
         print()
 
         return logging.getLogger("saber.client")
@@ -85,118 +76,12 @@ def setup_client_logging(
         logging.basicConfig(
             level=getattr(logging, "DEBUG" if verbose else "INFO"), format="%(asctime)s - %(levelname)s - %(message)s"
         )
+
+        # Still configure specific loggers for console mode
+        logging.getLogger("docker").setLevel(logging.WARNING)
+        logging.getLogger("urllib3").setLevel(logging.WARNING)
+
         return logging.getLogger("saber.client")
-
-
-def setup_integrated_logging(harness_log_dir: Path, verbose: bool = False) -> logging.Logger:
-    """Setup integrated logging that uses the harness timestamp directory."""
-    # Create client logs directory within harness directory
-    client_log_dir = harness_log_dir / "client-logs"
-    client_log_dir.mkdir(exist_ok=True)
-
-    # Create client log file
-    log_file = client_log_dir / "saber_client.log"
-
-    # Configure root logger
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.DEBUG if verbose else logging.INFO)
-
-    # Clear any existing handlers
-    root_logger.handlers.clear()
-
-    # File handler - captures everything
-    file_handler = logging.FileHandler(log_file)
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(JSONFormatter())
-    root_logger.addHandler(file_handler)
-
-    # Console handler - only warnings and errors
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.WARNING)
-    console_formatter = logging.Formatter("%(levelname)s: %(message)s")
-    console_handler.setFormatter(console_formatter)
-    root_logger.addHandler(console_handler)
-
-    print(f"📝 Client logs integrated into: {log_file}")
-    print(f"🔍 Monitor with: tail -f {log_file}")
-    print()
-
-    return logging.getLogger("saber.client")
-
-
-async def run_unified_benchmark(
-    config: SABERHarnessConfig,
-) -> None:
-    """Run unified benchmark mode using configuration from YAML file."""
-
-    # Set environment variable for debug mode (if configured)
-    debug_mode = config.agent_config.get("debug_mode", False)
-    if debug_mode:
-        os.environ["SABER_DEBUG_MODE"] = "true"
-
-    # Stage 1: Initial logging setup
-    logger = setup_client_logging(
-        verbose=(config.log_level.upper() == "DEBUG"),
-        log_to_file=True,  # Always use file logging with config-driven approach
-    )
-
-    try:
-        # Initialize harness (agent will be loaded in its own container)
-        logger.info("� Initializing SABER harness with configuration")
-
-        # Create harness
-        harness = SABERHarness(config)
-
-        # Validate agent path is provided
-        if not config.agent_path:
-            raise ValueError("Agent path must be specified in configuration")
-
-        # Initialize with agent from config
-        await harness.initialize_with_file(config.agent_path)
-
-        # Stage 2: Integrate logging with harness timestamp directory
-        if hasattr(harness, "session_log_dir") and harness.session_log_dir:
-            setup_integrated_logging(harness.session_log_dir, verbose=(config.log_level.upper() == "DEBUG"))
-            logger = logging.getLogger("saber.client")  # Get updated logger
-
-        logger.info("✅ SABER harness initialized successfully")
-
-        # Connect to server
-        logger.info(f"🔗 Connecting to SABER server: {config.server_url}")
-        logger.info(f"🔗 MCP server: {config.mcp_url}")
-
-        logger.info("🚀 Starting agent execution...")
-
-        results = await harness.run()
-
-        # Results display
-        if results.success:
-            logger.info("🎉 EXECUTION COMPLETE!")
-            successful = results.successful_episodes
-            total = results.total_episodes
-            logger.info(f"📊 Results: {successful}/{total} episodes successful")
-        else:
-            logger.error("❌ EXECUTION FAILED")
-
-        # Display episode details if available
-        if results.episode_results:
-            logger.info("📝 Episode Details:")
-            for episode_result in results.episode_results:
-                status = "✅" if episode_result.success else "❌"
-                task_id = episode_result.task_id
-                attempt = episode_result.attempt
-                reason = episode_result.termination_reason or "unknown"
-                detail = f"  {status} {task_id} (attempt {attempt}): {reason}"
-                logger.info(detail)
-
-    except KeyboardInterrupt:
-        logger.info("⏹️ Interrupted by user")
-        sys.exit(0)
-    except Exception as e:
-        logger.error(f"❌ Error: {e}")
-        if config.log_level.upper() == "DEBUG":
-            logger.error(f"🔍 Traceback: {traceback.format_exc()}")
-        sys.exit(1)
 
 
 def main() -> None:
@@ -207,26 +92,33 @@ def main() -> None:
         epilog="""
 Examples:
   # Run with specific config file
-  python -m saber.client --config /path/to/harness.yaml
+  python -m saber.client --config /path/to/saber.yaml
 
   # Auto-detect config from current directory
   python -m saber.client
 
   # Excytin demo
-  docker exec -it saber-excytin-client uv run python -m saber.client --config /app/client/harness.yaml
+  docker exec -it saber-excytin-client uv run python -m saber.client --config /app/client/saber.yaml
         """,
     )
 
     # Configuration file
     parser.add_argument(
         "--config",
-        help="Path to harness configuration YAML file (default: auto-detect harness.yaml in current directory)",
+        help="Path to SABER configuration YAML file (default: auto-detect saber.yaml in current directory)",
     )
+
+    # Logging options
+    parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
+
+    parser.add_argument("--no-log-file", action="store_true", help="Disable file logging (console only)")
 
     args = parser.parse_args()
 
-    # Load configuration file
-    from .config_loader import HarnessConfigLoader
+    # Setup logging FIRST - before any other operations
+    logger = setup_client_logging(
+        verbose=args.verbose, log_to_file=not args.no_log_file, log_dir=None  # Will be set from config if available
+    )
 
     if args.config:
         # Use explicitly provided config path
@@ -235,48 +127,86 @@ Examples:
             print(f"❌ Configuration file not found: {args.config}")
             sys.exit(1)
     else:
-        # Look for harness.yaml in current directory
-        config_file_path = Path("harness.yaml")
+        # Look for saber.yaml in current directory
+        config_file_path = Path("saber.yaml")
         if not config_file_path.exists():
-            print("❌ No configuration file found. Please provide --config or create harness.yaml in current directory")
+            print("❌ No configuration file found. Please provide --config or create saber.yaml in current directory")
             sys.exit(1)
 
     try:
-        config = HarnessConfigLoader.load_from_file(config_file_path)
+        config: SABERConfig = SABERConfigLoader.load_from_file(config_file_path)
+
+        # Update logging with config's log directory if specified
+        if config.log_dir and not args.no_log_file:
+            logger.info(f"Updating log directory to: {config.log_dir}")
+            # Re-setup logging with config's log directory
+            logger = setup_client_logging(verbose=args.verbose, log_to_file=True, log_dir=Path(config.log_dir))
+
         agent_path = config.agent_path
-        if not agent_path:
-            print("❌ Agent path must be specified in configuration file")
+        agent_id = getattr(config, "agent_id", None)
+
+        if not agent_path and not agent_id:
+            logger.error("Either agent_path or agent_id must be specified in configuration file")
+            print("❌ Either agent_path or agent_id must be specified in configuration file")
             sys.exit(1)
+
+        logger.info(f"Loaded configuration from: {config_file_path}")
+        if agent_id:
+            logger.info(f"Agent ID: {agent_id}")
+        if agent_path:
+            logger.info(f"Agent path: {agent_path}")
+        logger.info(f"SABER REST URL: {config.saber_rest_url}")
+        logger.info(f"SABER MCP URL: {config.saber_mcp_url}")
+
     except Exception as e:
+        logger.error(f"Error loading config file: {e}")
         print(f"❌ Error loading config file: {e}")
         sys.exit(1)
 
-    # Validate agent file exists
-    if not Path(agent_path).exists():
+    # Validate agent file exists (only if using agent_path)
+    if agent_path and not Path(agent_path).exists():
+        logger.error(f"Agent file not found: {agent_path}")
         print(f"❌ Agent file not found: {agent_path}")
         sys.exit(1)
 
-    # EXACT INSPECT-AI PATTERN - define async function and let display handle everything
+    logger.info("Starting SABER eval_async execution")
+
+    if agent_id:
+        print(f"🚀 Starting SABER evaluation with agent ID: {agent_id}")
+    elif agent_path:
+        print(f"🚀 Starting SABER evaluation with agent: {Path(agent_path).name}")
+    else:
+        print("🚀 Starting SABER evaluation")
+
+    print(f"📊 Server: {config.saber_rest_url}")
+    print(f"🔗 MCP: {config.saber_mcp_url}")
+    print()
+
+    # INSPECT-AI EVAL_ASYNC PATTERN - eval_async controls everything
     async def run_task_app() -> None:
-        """All SABER work happens here - just like inspect-ai's eval_async."""
-        await run_unified_benchmark(config)
+        """Run SABER via inspect_ai eval_async for full UI and dataset iteration."""
+        logger.info("Starting eval_async task app")
+        # eval_async becomes the main entrypoint - handles UI, dataset iteration, everything
+        await run_saber_eval_async(config)
+        logger.info("eval_async task app completed")
 
-    # EXACT INSPECT-AI PATTERN - let task_display handle event loop
     try:
-        from inspect_ai._display.core.active import display as task_display
-
+        logger.info("Starting inspect_ai task display")
         task_display().run_task_app(run_task_app)
-    except ImportError:
-        # Fallback if inspect-ai not available
-        print("⚠️ inspect-ai not available, using basic async mode")
-        asyncio.run(run_task_app())
+        logger.info("inspect_ai task display completed")
     except asyncio.CancelledError:
         # Normal cleanup - inspect-ai cancels tasks during shutdown
         # This is expected behavior, don't show as error
+        logger.info("Task cancelled during shutdown (normal)")
         pass
     except KeyboardInterrupt:
         # User interrupted - clean exit
+        logger.info("User interrupted execution")
         sys.exit(0)
+    except Exception as e:
+        logger.error(f"Unexpected error during execution: {e}", exc_info=True)
+        print(f"❌ Unexpected error: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

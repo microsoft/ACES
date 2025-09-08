@@ -142,7 +142,8 @@ class TestSessionManagerCore:
         await session_manager.terminate_session(session_id)
 
         # Should call episode manager to end episode
-        session_manager.episode_manager.end_episode.assert_called_once_with("episode_123", "session_terminated")
+        from saber.server.episodes.episode_manager import EpisodeTerminationReason
+        session_manager.episode_manager.end_episode.assert_called_once_with("episode_123", EpisodeTerminationReason.SESSION_TERMINATED, None)
         assert session_id not in session_manager.active_sessions
 
     @pytest.mark.asyncio

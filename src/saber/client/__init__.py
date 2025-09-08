@@ -13,23 +13,19 @@ Programmatic usage:
     results = await harness.run()
 """
 
-from ..api_models import EpisodeInfo, PolicyInfo, SessionInfo, StepResponse, TaskInfo
+from ..models import BenchmarkInfo, PolicyInfo, SessionInfo, StepResponse, TaskInfo
 from .api import SABERRestClient
-from .harness_models import EpisodeResult, HarnessRunResult, SABERHarnessConfig
-from .llm import LLMClientFactory, create_llm_client
-from .saber_harness import SABERHarness
+from .models import SABERConfig
 
 __all__ = [
-    "SABERHarness",
-    "SABERHarnessConfig",
-    "EpisodeResult",
-    "HarnessRunResult",
+    # Configuration models
+    "SABERConfig",
+    # API client
     "SABERRestClient",
-    "LLMClientFactory",
-    "create_llm_client",
+    # API models
     "StepResponse",
     "TaskInfo",
     "PolicyInfo",
-    "EpisodeInfo",
+    "BenchmarkInfo",
     "SessionInfo",
 ]

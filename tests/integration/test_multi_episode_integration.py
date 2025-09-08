@@ -21,10 +21,8 @@ import uuid
 from typing import Dict, Any, List
 from unittest.mock import AsyncMock, patch
 
-from saber.client import SABERHarness, SABERHarnessConfig
 from saber.client.api import SABERRestClient
-from saber.client.episode_executor import ContainerEpisodeExecutor
-from saber.base import MCPHeaders
+from saber.models import HTTPHeaders
 
 logger = logging.getLogger(__name__)
 

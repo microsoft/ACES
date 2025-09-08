@@ -4,8 +4,8 @@ from logging import getLogger
 from pathlib import Path
 from typing import Any, Dict, List
 
+from ...models import BenchmarkInfo, TaskInfo
 from .benchmark_config_loader import BenchmarkConfigLoader
-from .benchmark_info import BenchmarkInfo, TaskInfo
 from .exceptions import SubTaskNotFoundException, TaskNotFoundException
 from .subtask import SubTask
 from .task import Task
@@ -70,12 +70,16 @@ class BenchmarkManager:
 
         for task in self.tasks.values():
             episode_attempts = task.get_episode_attempts()
+            episode_config = task.episode_config or {}
+            max_steps = episode_config.get("max_steps", 100)
+
             task_info = TaskInfo(
                 task_id=task.task_id,
                 title=task.title,
                 description=task.description,
                 episode_attempts=episode_attempts,
                 subtask_count=len(task.subtasks),
+                max_steps=max_steps,
             )
             task_infos.append(task_info)
             total_episodes += episode_attempts

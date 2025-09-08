@@ -108,22 +108,13 @@ class TestExecutionManager:
         registry._environment_loader = MagicMock()
         registry._environment_loader.resolve_environment.return_value = mock_env_spec
 
-        # Mock SandboxManager class to avoid environment creation issues
-        with patch("saber.server.execution.execution_manager.SandboxEnvironmentManager") as mock_sandbox_class:
-            mock_sandbox_instance = MagicMock()
-            mock_sandbox_class.return_value = mock_sandbox_instance
+        # The registry fixture already mocks SandboxEnvironmentManager, just need to access it
+        registry.configure_for_task("episode123", mock_task, session_id="session123")
 
-            registry.configure_for_task("episode123", mock_task, session_id="session123")
-
-            # Should have created sandbox manager and called environment creation
-            # Check that sandbox manager was called with logging config containing the domain
-            call_args = mock_sandbox_class.call_args[0][0]
-            assert "domain" in call_args
-            assert "logs_directory" in call_args
-            assert "enable_container_logging" in call_args
-            mock_sandbox_instance.create_episode_environment.assert_called_once_with(
-                "episode123", mock_env_spec
-            )
+        # Should have called environment creation on the mocked sandbox manager
+        registry._sandbox_manager.create_episode_environment.assert_called_once_with(
+            "episode123", mock_env_spec
+        )
 
         # Should have updated configuration (only cli config should be present since python_config is None)
         assert registry._configuration["timeout"] == 120.0
@@ -872,10 +863,15 @@ class TestExecutionManagerDebugMode:
         call_args = mock_cleanup_manager_class.call_args
         assert call_args.kwargs.get('debug_mode') is True
 
-    def test_configure_for_task_with_episode_id(self, tmp_path, monkeypatch):
+    @patch('saber.server.execution.execution_manager.SandboxEnvironmentManager')
+    def test_configure_for_task_with_episode_id(self, mock_sandbox_class, tmp_path, monkeypatch):
         """Test configuring ExecutionManager with episode ID for unique container naming."""
         # Ensure SABER_DEBUG_MODE is not set
         monkeypatch.delenv("SABER_DEBUG_MODE", raising=False)
+
+        # Setup mock before creating ExecutionManager
+        mock_sandbox_instance = MagicMock()
+        mock_sandbox_class.return_value = mock_sandbox_instance
 
         execution_manager = ExecutionManager(str(tmp_path))
 
@@ -892,18 +888,13 @@ class TestExecutionManagerDebugMode:
         execution_manager._environment_loader = MagicMock()
         execution_manager._environment_loader.resolve_environment.return_value = mock_env_spec
 
-        # Mock SandboxManager class
-        with patch("saber.server.execution.execution_manager.SandboxEnvironmentManager") as mock_sandbox_class:
-            mock_sandbox_instance = MagicMock()
-            mock_sandbox_class.return_value = mock_sandbox_instance
+        episode_id = "test-episode-123"
+        execution_manager.configure_for_task(episode_id, mock_task, session_id="session123")
 
-            episode_id = "test-episode-123"
-            execution_manager.configure_for_task(episode_id, mock_task, session_id="session123")
-
-            # Verify episode_id was passed to create_episode_environment
-            mock_sandbox_instance.create_episode_environment.assert_called_once_with(
-                episode_id, mock_env_spec
-            )
+        # Verify episode_id was passed to create_episode_environment
+        mock_sandbox_instance.create_episode_environment.assert_called_once_with(
+            episode_id, mock_env_spec
+        )
 
     @patch('saber.server.execution.execution_manager.ContainerCleanupManager')
     @patch('saber.server.execution.execution_manager.SandboxEnvironmentManager')

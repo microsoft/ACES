@@ -522,25 +522,6 @@ class SQLExecutor(DockerExecutor):
 
         return basic_validation
 
-    def get_security_info(self) -> Dict[str, Any]:
-        """
-        Get information about SQL security settings.
-
-        Returns:
-            Dictionary with security configuration
-        """
-        # Get Docker-specific information from parent class
-        docker_info = self.get_docker_info()
-
-        # Add SQL-specific security information
-        sql_info = {
-            "allow_schema_queries": self._allow_schema_queries,
-            "max_rows": self._max_rows,
-            "connection_type": self.parse_connection_string(self._connection_string)["protocol"],
-        }
-
-        return {**docker_info, **sql_info}
-
 
 # Register this executor with the registry - must be at module level
 from ..executor_registry import register_executor  # noqa: E402

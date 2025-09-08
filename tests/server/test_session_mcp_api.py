@@ -45,32 +45,58 @@ class TestSessionMCPAPI:
         """Test MCP tool discovery."""
         # Mock execution manager returning tools
         mock_tools = [
-            {"name": "cli", "description": "Command line executor", "inputSchema": {"type": "object"}},
-            {"name": "python", "description": "Python executor", "inputSchema": {"type": "object"}},
+            {
+                "name": "cli",
+                "description": "Command line executor",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "Command to execute"
+                        }
+                    },
+                    "required": ["command"]
+                }
+            },
+            {
+                "name": "python",
+                "description": "Python executor",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "code": {
+                            "type": "string",
+                            "description": "Python code to execute"
+                        }
+                    },
+                    "required": ["code"]
+                }
+            },
         ]
         mcp_api.session_manager.execution_manager.to_mcp_tools.return_value = mock_tools
 
-        tools = await mcp_api.handle_list_tools()
+        response = await mcp_api.handle_list_tools()
 
         # Should include executor tools + hardcoded tools
-        assert len(tools) == 3  # 2 executor tools + 1 hardcoded tool (end_episode)
+        assert len(response.tools) == 3  # 2 executor tools + 1 hardcoded tool (end_episode)
 
         # Check executor tools are included
-        executor_tools = [t for t in tools if t["name"] in ["cli", "python"]]
+        executor_tools = [t for t in response.tools if t.name in ["cli", "python"]]
         assert len(executor_tools) == 2
 
         # Check hardcoded tools are included
-        hardcoded_tools = [t for t in tools if t["name"] in ["end_episode"]]
+        hardcoded_tools = [t for t in response.tools if t.name in ["end_episode"]]
         assert len(hardcoded_tools) == 1
 
         # Verify end_episode tool definition
-        end_episode_tool = next(t for t in tools if t["name"] == "end_episode")
+        end_episode_tool = next(t for t in response.tools if t.name == "end_episode")
         assert (
-            end_episode_tool["description"]
+            end_episode_tool.description
             == "End the current episode and optionally record a discovered flag/target/objective"
         )
-        assert end_episode_tool["inputSchema"]["required"] == []
-        assert "submission" in end_episode_tool["inputSchema"]["properties"]
+        assert end_episode_tool.inputSchema.required == []
+        assert "submission" in end_episode_tool.inputSchema.properties
 
         mcp_api.session_manager.execution_manager.to_mcp_tools.assert_called_once()
 
@@ -96,9 +122,9 @@ class TestSessionMCPAPI:
             )
 
         # Verify result format
-        assert result["isError"] is False
-        assert result["content"][0]["type"] == "text"
-        assert "output" in result["content"][0]["text"]
+        assert result.isError is False
+        assert result.content[0]["type"] == "text"
+        assert "output" in result.content[0]["text"]
 
         # Verify execute_action was called correctly with both session_id and episode_id
         mcp_api.session_manager.execute_action.assert_called_once()
@@ -129,9 +155,9 @@ class TestSessionMCPAPI:
             )
 
         # Verify error result format
-        assert result["isError"] is True
-        assert result["content"][0]["type"] == "text"
-        assert "Error: Command failed" in result["content"][0]["text"]
+        assert result.isError is True
+        assert result.content[0]["type"] == "text"
+        assert "Error: Command failed" in result.content[0]["text"]
 
     @pytest.mark.asyncio
     async def test_handle_call_tool_missing_session(self, mcp_api):
@@ -142,8 +168,8 @@ class TestSessionMCPAPI:
             result = await mcp_api.handle_call_tool(name="cli", arguments={"command": "ls"})
 
         # Verify error result
-        assert result["isError"] is True
-        assert "No SABER session mapped to MCP request" in result["content"][0]["text"]
+        assert result.isError is True
+        assert "No SABER session mapped to MCP request" in result.content[0]["text"]
 
     @pytest.mark.asyncio
     async def test_handle_end_episode_call_success(self, mcp_api):
@@ -155,9 +181,9 @@ class TestSessionMCPAPI:
         result = await mcp_api._handle_end_episode_call({}, "session_123", "episode_456")
 
         # Verify successful result
-        assert result["isError"] is False
-        assert result["content"][0]["type"] == "text"
-        assert "Episode ended successfully" in result["content"][0]["text"]
+        assert result.isError is False
+        assert result.content[0]["type"] == "text"
+        assert "Episode ended successfully" in result.content[0]["text"]
 
         # Verify end_episode was called with both session_id and episode_id
         mcp_api.session_manager.end_episode.assert_called_once_with("session_123", "episode_456", "agent_completed")
@@ -177,9 +203,9 @@ class TestSessionMCPAPI:
         )
 
         # Verify successful result with flag
-        assert result["isError"] is False
-        assert result["content"][0]["type"] == "text"
-        result_text = result["content"][0]["text"]
+        assert result.isError is False
+        assert result.content[0]["type"] == "text"
+        result_text = result.content[0]["text"]
         assert "Episode ended successfully with result: flag{test_flag_found}" in result_text
 
         # Verify result action was executed with both session_id and episode_id
@@ -203,8 +229,8 @@ class TestSessionMCPAPI:
         result = await mcp_api._handle_end_episode_call({"result": "some_flag"}, None, None)
 
         # Verify error result
-        assert result["isError"] is True
-        assert "No SABER session mapped to MCP request" in result["content"][0]["text"]
+        assert result.isError is True
+        assert "No SABER session mapped to MCP request" in result.content[0]["text"]
 
     @pytest.mark.asyncio
     async def test_handle_call_tool_hardcoded_tools(self, mcp_api):
@@ -225,8 +251,8 @@ class TestSessionMCPAPI:
             # Test end_episode routing through normal execution path
             result = await mcp_api.handle_call_tool("end_episode", {"submission": "flag{test}"})
 
-        assert result["isError"] is False
-        assert "Episode completed" in result["content"][0]["text"]
+        assert result.isError is False
+        assert "Episode completed" in result.content[0]["text"]
 
     def test_convert_to_action(self, mcp_api):
         """Test conversion from MCP tool call to Action."""
@@ -248,9 +274,9 @@ class TestSessionMCPAPI:
 
         mcp_result = mcp_api._convert_to_mcp_result(command_result)
 
-        assert mcp_result["isError"] is False
-        assert mcp_result["content"][0]["type"] == "text"
-        assert "output" in mcp_result["content"][0]["text"]
+        assert mcp_result.isError is False
+        assert mcp_result.content[0]["type"] == "text"
+        assert "output" in mcp_result.content[0]["text"]
 
     def test_convert_to_mcp_result_error(self, mcp_api):
         """Test conversion of error CommandResult to MCP format."""
@@ -258,9 +284,9 @@ class TestSessionMCPAPI:
 
         mcp_result = mcp_api._convert_to_mcp_result(command_result)
 
-        assert mcp_result["isError"] is True
-        assert mcp_result["content"][0]["type"] == "text"
-        assert "Error: Command execution failed" in mcp_result["content"][0]["text"]
+        assert mcp_result.isError is True
+        assert mcp_result.content[0]["type"] == "text"
+        assert "Error: Command execution failed" in mcp_result.content[0]["text"]
 
     @pytest.mark.asyncio
     async def test_start_and_shutdown_mcp_server(self, mcp_api):

@@ -27,7 +27,6 @@ class TestCLIExecutor:
         validator = MagicMock(spec=SecurityValidator)
         validator.validate_base_command.return_value = None
         validator.validate_full_command.return_value = ValidationResult.success()
-        validator.get_security_info.return_value = {"test": "security_info"}
         return validator
 
     @pytest.fixture
@@ -241,20 +240,6 @@ class TestCLIExecutor:
 
         assert result.valid is True  # Should be valid but with warning
         assert "Unknown parameter 'unknown_param' will be ignored" in result.warnings
-
-    def test_get_security_info(self, docker_cli_tool):
-        """Test getting security information including sandbox config."""
-        security_info = docker_cli_tool.get_security_info()
-
-        assert security_info["execution_environment"] == "docker_container"
-        assert security_info["timeout"] == 30.0
-        assert "docker_config" in security_info
-
-        docker_config = security_info["docker_config"]
-        assert docker_config["image"] == "saber/sandbox:latest"
-        assert docker_config["network_mode"] == "none"
-        assert docker_config["read_only_root"] is True
-        assert docker_config["user"] == "tooluser:tooluser"
 
 
 class TestCLIExecutorIntegration:
