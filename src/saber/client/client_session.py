@@ -200,7 +200,8 @@ class ClientSessionManager:
         missing_ids = set(task_ids) - found_ids
 
         if missing_ids:
-            raise Exception(f"Tasks not found: {missing_ids}")
+            available_ids = {task.task_id for task in all_tasks}
+            raise Exception(f"Tasks not found: {missing_ids}. " f"Available tasks: {sorted(available_ids)}")
 
         logger.info(f"Retrieved {len(requested_tasks)} tasks successfully as TaskInfo objects")
         return requested_tasks

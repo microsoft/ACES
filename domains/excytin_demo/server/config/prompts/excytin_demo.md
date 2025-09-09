@@ -4,6 +4,19 @@ TASK INFORMATION:
 - Task: {{ task_title }}
 - Description: {{ task_description }}
 
+INCIDENT CONTEXT:
+{{ initial_context.incident_context }}
+
+INVESTIGATION QUESTION:
+{{ initial_context.question }}
+
+DATABASE CONNECTION:
+- Hostname: {{ initial_context.database_connection.hostname }}
+- Username: {{ initial_context.database_connection.username }}
+- Password: {{ initial_context.database_connection.password }}
+- Database: {{ initial_context.database_connection.database }}
+- Connection Example: {{ initial_context.database_connection.connection_example }}
+
 EXECUTION PARAMETERS:
 - Command timeout: {{ timeout_seconds }} seconds
 

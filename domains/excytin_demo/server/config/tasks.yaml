@@ -25,6 +25,14 @@ tasks:
     initial_context:
       incident_context: "A command and control behavior was blocked on host `vnevado-win10r`, which indicated an active infection by malware that could replicate and receive commands from remote attackers. This malware was active, and precautionary measures should be taken to check for residual signs of infection. The process involved had the ID 1332 and ran the command `curl http://vectorsandarrows.com`."
       question: "What is the IP address associated with the Manatee Tempest activity group detected in this security incident?"
+      database_connection:
+        hostname: "saber-excytin-incident-5"
+        port: 3306
+        username: "admin"
+        password: "admin"
+        database: "env_monitor_db"
+        ssl_mode: "disabled"
+        connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin env_monitor_db"
 
     evaluation_config:
       strategy: "static"
@@ -50,6 +58,14 @@ tasks:
     initial_context:
       incident_context: "An incident involving a ransomware payload remotely launched on device `vnevado-win11u` with AadDeviceId `bc00e484-d0e5-4da4-9472-95568cccc07e` and IP address `99.83.111.100` has been detected. The attackers might be attempting to encrypt content on this device. Additionally, there is a notable change in typical user behavior that may indicate a compromise."
       question: "What is the command line of the suspicious process involved in the user behavior change on device `vnevado-win11u`?"
+      database_connection:
+        hostname: "saber-excytin-incident-5"
+        port: 3306
+        username: "admin"
+        password: "admin"
+        database: "env_monitor_db"
+        ssl_mode: "disabled"
+        connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin env_monitor_db"
 
     evaluation_config:
       strategy: "static"
@@ -75,6 +91,14 @@ tasks:
     initial_context:
       incident_context: "A Mimikatz credential theft tool was detected on a device at 2024-07-04 22:35:03.797541+00:00. Mimikatz is a tool used to harvest plaintext passwords, password hashes, smartcard PINs, and Kerberos tickets. The attacker might be leveraging this tool to harvest credentials to log into this or other devices on the network by impersonating a valid user. Several command line executions involving `mimikatz.exe` were observed, along with connected mimikatz-related files like `mimidrv.sys`, `mimispool.dll`, and `mimilove.exe`. More information can be found in the Mimikatz tool profile Threat Analytics report and the Actor profile: Storm-0875 Threat Analytics report provided by Microsoft."
       question: "Can you identify the IP address involved in the malicious credential theft tool execution detected?"
+      database_connection:
+        hostname: "saber-excytin-incident-5"
+        port: 3306
+        username: "admin"
+        password: "admin"
+        database: "env_monitor_db"
+        ssl_mode: "disabled"
+        connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin env_monitor_db"
 
     evaluation_config:
       strategy: "static"
@@ -100,6 +124,14 @@ tasks:
     initial_context:
       incident_context: "On July 4, 2024, a security incident involving malware behavior named 'GenRansom' was detected on host `vnevado-win11t`. This malware was identified as active on the machine, and immediate precautionary measures were recommended. This incident is part of a broader malicious activity linked to the Manatee Tempest activity group. Manatee Tempest is a Russia-based cybercriminal group known for engaging in various sophisticated cyberattacks targeting numerous industries."
       question: "What is the URL associated with the Manatee Tempest activity group in this incident?"
+      database_connection:
+        hostname: "saber-excytin-incident-5"
+        port: 3306
+        username: "admin"
+        password: "admin"
+        database: "env_monitor_db"
+        ssl_mode: "disabled"
+        connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin env_monitor_db"
 
     evaluation_config:
       strategy: "static"
@@ -125,6 +157,14 @@ tasks:
     initial_context:
       incident_context: "During a recent investigation involving potentially compromised assets exhibiting ransomware-like behavior, it was observed that an attacker might be using the specified user account, IP, or device to move laterally across the network. Some of the files involved are `syncretic.7z.lockbit`, `earlap.doc`, `ponceau.7z`, and `unstreaming.xlsx.lockbit`. The suspicious activities were noted on the host `vnevado-win11u`, with associated account SID `S-0-6-5`. Automated remediation actions might be taken to disable the account or device being used by the attacker."
       question: "Can you identify the hostname of the device where system recovery setting tampering was observed?"
+      database_connection:
+        hostname: "saber-excytin-incident-5"
+        port: 3306
+        username: "admin"
+        password: "admin"
+        database: "env_monitor_db"
+        ssl_mode: "disabled"
+        connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin env_monitor_db"
 
     evaluation_config:
       strategy: "static"

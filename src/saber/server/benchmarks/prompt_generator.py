@@ -19,7 +19,7 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from jinja2 import FileSystemLoader, StrictUndefined, TemplateError, TemplateNotFound
 from jinja2.sandbox import SandboxedEnvironment
@@ -54,10 +54,11 @@ class PromptContext:
     environment: str
     subtasks: List[Dict[str, Any]]
     allowed_executors: List[str]
+    initial_context: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for Jinja2 template rendering."""
-        return {
+        result = {
             "domain": self.domain,
             "task_id": self.task_id,
             "task_title": self.task_title,
@@ -68,6 +69,12 @@ class PromptContext:
             "subtasks": self.subtasks,
             "allowed_executors": self.allowed_executors,
         }
+
+        # Add initial_context if provided
+        if self.initial_context:
+            result["initial_context"] = self.initial_context
+
+        return result
 
 
 class PromptGenerator:
@@ -305,6 +312,7 @@ class PromptGenerator:
             environment=environment_str,
             subtasks=subtasks_data,
             allowed_executors=allowed_executors,
+            initial_context=task.initial_context,  # Include initial_context from task
         )
 
     # -------------------- Private Helpers --------------------

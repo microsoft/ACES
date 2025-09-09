@@ -56,6 +56,9 @@ async def run_saber_eval_async(config: SABERConfig) -> Union[EvalLog, None]:
     logger.info(f"Agent: {config.agent_id or config.agent_path}")
     logger.info(f"Tasks: {config.task_ids or 'all available'}")
 
+    # Initialize eval_kwargs early to prevent UnboundLocalError in exception handler
+    eval_kwargs = {}
+
     # Create orchestrator and keep it alive for the entire evaluation
     orchestrator = SABEREvaluationOrchestrator(config)
     await orchestrator.__aenter__()
@@ -119,12 +122,23 @@ async def run_saber_eval_async(config: SABERConfig) -> Union[EvalLog, None]:
         # Use SABER's exception for consistency but don't import in orchestrator
         from ..exceptions import EvaluationExecutionError
 
+        # Build error details with available context
+        error_details = {
+            "error_type": type(e).__name__,
+            "server_url": config.session_config.base_url if config.session_config else "unknown",
+            "agent_spec": config.agent_id or config.agent_path,
+            "task_ids": config.task_ids,
+        }
+
+        # Add eval_config details if available
+        if eval_kwargs:
+            # Extract eval_kwargs as a separate field to avoid type issues
+            eval_config_summary = {k: str(v) for k, v in eval_kwargs.items() if k != "tasks"}
+            error_details["eval_config"] = str(eval_config_summary)
+
         raise EvaluationExecutionError(
             f"eval_async execution failed: {e}",
-            details={
-                "eval_config": {k: v for k, v in eval_kwargs.items() if k != "tasks"},
-                "error_type": type(e).__name__,
-            },
+            details=error_details,
             suggestion="Check eval_async logs for detailed error information",
         ) from e
 

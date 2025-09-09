@@ -12,7 +12,7 @@ server:
 
 # Task configuration
 tasks:
-  task_ids: ["excytin_demo"]
+  task_ids: ["incident_5_task_1", ] # "incident_5_task_2", "incident_5_task_3", "incident_5_task_4", "incident_5_task_5"]
 
 # Agent configuration (use agent registry)
 agent:
