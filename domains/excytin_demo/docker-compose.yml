@@ -5,6 +5,7 @@ services:
   saber-excytin-server:
     image: saber/excytin-server:latest
     container_name: saber-excytin-server
+    user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"  # Run as host user to fix log permissions
     ports:
       - "8000:8000"  # REST API
       - "8001:8001"  # MCP API
@@ -31,6 +32,7 @@ services:
   saber-excytin-client:
     image: saber/excytin-client:latest
     container_name: saber-excytin-client
+    user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"  # Run as host user to fix log permissions
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock  # Docker-in-Docker for agent container creation
       - ./client:/app/client  # Mount client code for development

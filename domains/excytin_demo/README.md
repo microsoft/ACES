@@ -269,7 +269,7 @@ Main client configuration:
 - **Model**: Azure OpenAI GPT-4.1 (inspect_ai format)
 - **Agent**: React agent with max 50 steps
 - **Server URLs**: REST (8000) and MCP (8001) endpoints
-- **Tasks**: `["excytin_demo"]`
+- **Tasks**: `["incident_5_task_1", "incident_5_task_2", "incident_5_task_3", "incident_5_task_4", "incident_5_task_5"]` (all incident tasks)
 - **Logging**: Structured logging to `./logs` directory
 - **Docker Commands**: Azure CLI credential mounting
 
