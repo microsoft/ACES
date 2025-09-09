@@ -379,8 +379,9 @@ class SessionManager:
         # Configure execution manager with task object and episode ID for unique container naming
         self.execution_manager.configure_for_task(episode.episode_id, task, session_id=session_id)
 
-        # Configure policy manager with task object and episode ID
-        self.policy_manager.configure_for_episode(episode.episode_id, session_id, task)
+        # Generate & store prompt (fail-fast if misconfigured)
+        prompt = self.benchmark_manager.get_task_prompt(task.task_id)
+        self.policy_manager.set_episode_policy(episode.episode_id, session_id, prompt)
 
         # Configure episode manager with task object
         self.episode_manager.configure_for_task(episode.episode_id, task)
@@ -388,7 +389,7 @@ class SessionManager:
         # Add episode to session's active episodes
         session.add_active_episode(episode.episode_id)
 
-        # Log episode start with evaluation manager (ignore failures)
+        # Log episode start (non-fatal on failure)
         try:
             await self.evaluation_manager.log_episode_start(session_id, episode.episode_id, task_id)
         except Exception as e:

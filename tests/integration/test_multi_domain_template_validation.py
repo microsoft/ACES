@@ -1,0 +1,169 @@
+"""Integration tests for multi-domain template validation and prompt generation."""
+
+import pytest
+import tempfile
+from pathlib import Path
+
+from saber.server.benchmarks.benchmark_manager import BenchmarkManager
+from saber.server.benchmarks.prompt_generator import TemplateValidationError
+
+
+class TestMultiDomainTemplateValidation:
+    """Test template validation and prompt generation across multiple domains."""
+
+    def test_all_domains_validate_successfully(self):
+        """Test that all production domains validate their templates successfully."""
+
+        # Test excytin_demo domain
+        try:
+            bm_excytin = BenchmarkManager('excytin_demo', 'domains/excytin_demo/server/config')
+            assert len(bm_excytin.tasks) > 0
+            print(f"excytin_demo: SUCCESS ({len(bm_excytin.tasks)} tasks)")
+        except Exception as e:
+            pytest.fail(f"excytin_demo domain validation failed: {e}")
+
+        # Test webapp_pentest domain
+        try:
+            bm_webapp = BenchmarkManager('webapp_pentest', 'domains/webapp_pentest/server/config')
+            assert len(bm_webapp.tasks) > 0
+            print(f"webapp_pentest: SUCCESS ({len(bm_webapp.tasks)} tasks)")
+        except Exception as e:
+            pytest.fail(f"webapp_pentest domain validation failed: {e}")
+
+        # Test pentest_demo domain
+        try:
+            bm_demo = BenchmarkManager('pentest_demo', 'examples/pentest_demo/server/config')
+            assert len(bm_demo.tasks) > 0
+            print(f"pentest_demo: SUCCESS ({len(bm_demo.tasks)} tasks)")
+        except Exception as e:
+            pytest.fail(f"pentest_demo domain validation failed: {e}")
+
+    def test_prompt_generation_all_domains(self):
+        """Test prompt generation works for all tasks in all domains."""
+
+        domains = [
+            ('excytin_demo', 'domains/excytin_demo/server/config'),
+            ('webapp_pentest', 'domains/webapp_pentest/server/config'),
+            ('pentest_demo', 'examples/pentest_demo/server/config'),
+        ]
+
+        total_prompts_generated = 0
+
+        for domain_name, config_path in domains:
+            bm = BenchmarkManager(domain_name, config_path)
+
+            for task_id in bm.tasks.keys():
+                prompt = bm.get_task_prompt(task_id)
+                assert isinstance(prompt, str)
+                assert len(prompt) > 100  # Reasonable minimum prompt length
+                total_prompts_generated += 1
+
+        print(f"Successfully generated {total_prompts_generated} prompts across {len(domains)} domains")
+        assert total_prompts_generated > 0
+
+    def test_template_inheritance_validation(self):
+        """Test that template inheritance (extends) works correctly."""
+
+        bm = BenchmarkManager('webapp_pentest', 'domains/webapp_pentest/server/config')
+
+        # Test that the inheritance demo template validates
+        try:
+            bm.prompt_generator.validate_template('xss_0_flag_capture_inheritance_demo.md')
+            print("Template inheritance validation: SUCCESS")
+        except TemplateValidationError as e:
+            pytest.fail(f"Template inheritance validation failed: {e}")
+
+    def test_missing_template_fails_fast(self):
+        """Test that missing templates cause startup failure (fail-fast behavior)."""
+
+        # Create a temporary domain with missing template
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_config = Path(temp_dir) / "config"
+            temp_config.mkdir()
+
+            # Create tasks.yaml with missing template
+            tasks_yaml = temp_config / "tasks.yaml"
+            tasks_yaml.write_text("""
+domain: "test_domain"
+
+global_defaults:
+  execution_config:
+    allowed_executors: ["cli"]
+    timeout: 30
+  episode_config:
+    max_steps: 5
+  benchmark_config:
+    episode_attempts: 1
+
+tasks:
+  - task_id: "test_task"
+    title: "Test Task"
+    description: "Test description"
+    prompt_template_file: "missing_template.md"
+""")
+
+            # Create prompts directory but no template file
+            prompts_dir = temp_config / "prompts"
+            prompts_dir.mkdir()
+
+            # This should fail fast during initialization
+            with pytest.raises(TemplateValidationError) as exc_info:
+                BenchmarkManager('test_domain', str(temp_config))
+
+            assert "missing dependencies" in str(exc_info.value)
+            print("Missing template fail-fast behavior: SUCCESS")
+
+    def test_missing_required_config_fails_fast(self):
+        """Test that missing required configuration causes validation failure."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_config = Path(temp_dir) / "config"
+            temp_config.mkdir()
+
+            # Create tasks.yaml with missing required config
+            tasks_yaml = temp_config / "tasks.yaml"
+            tasks_yaml.write_text("""
+domain: "test_domain"
+
+# Missing global_defaults - should cause failure
+
+tasks:
+  - task_id: "test_task"
+    title: "Test Task"
+    description: "Test description"
+    prompt_template_file: "test_template.md"
+""")
+
+            # Create prompts directory with template
+            prompts_dir = temp_config / "prompts"
+            prompts_dir.mkdir()
+
+            template_file = prompts_dir / "test_template.md"
+            template_file.write_text("Test template: {{ task_title }}")
+
+            # This should fail due to missing required configuration
+            with pytest.raises(Exception):  # Could be various config validation errors
+                BenchmarkManager('test_domain', str(temp_config))
+
+            print("Missing required config fail-fast behavior: SUCCESS")
+
+    def test_shared_partials_work_across_domains(self):
+        """Test that shared partials (includes) work across different domains."""
+
+        domains = [
+            ('excytin_demo', 'domains/excytin_demo/server/config'),
+            ('webapp_pentest', 'domains/webapp_pentest/server/config'),
+            ('pentest_demo', 'examples/pentest_demo/server/config'),
+        ]
+
+        for domain_name, config_path in domains:
+            bm = BenchmarkManager(domain_name, config_path)
+
+            # Generate a prompt to ensure includes work
+            first_task_id = list(bm.tasks.keys())[0]
+            prompt = bm.get_task_prompt(first_task_id)
+
+            # Check that shared content is included
+            assert "EXECUTION GUIDELINES" in prompt or "CONSTRAINTS" in prompt
+
+        print("Shared partials validation across domains: SUCCESS")

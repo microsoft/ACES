@@ -25,6 +25,14 @@ class TestBenchmarkConfigLoaderPermanentSupport:
             "benchmark_config": {
                 "episode_attempts": 3
             },
+            "global_defaults": {
+                "execution_config": {
+                    "timeout": 300
+                },
+                "episode_config": {
+                    "max_steps": 50
+                }
+            },
             "executors": ["cli", "python"],  # Domain-level executor configuration
             "permanent_environment": {
                 "services": [
@@ -51,6 +59,7 @@ class TestBenchmarkConfigLoaderPermanentSupport:
                     "task_id": "test_task_with_permanent",
                     "title": "Test Task with Permanent Environment",
                     "description": "Task that uses permanent environment",
+                    "prompt_template_file": "test_task_with_permanent_prompt.md",
                     "sandbox_environment": "test_sandbox",
                     "permanent_environment": "default",  # Reference to the global permanent environment
                     "subtasks": [
@@ -79,6 +88,7 @@ class TestBenchmarkConfigLoaderPermanentSupport:
                     "task_id": "test_task_no_permanent",
                     "title": "Test Task without Permanent Environment",
                     "description": "Task that doesn't use permanent environment",
+                    "prompt_template_file": "test_task_no_permanent_prompt.md",
                     "sandbox_environment": "test_sandbox",
                     "subtasks": [
                         {
@@ -171,6 +181,7 @@ class TestBenchmarkConfigLoaderPermanentSupport:
             "task_id": "enhanced_task",
             "title": "Enhanced Task",
             "description": "Task with both environment types",
+            "prompt_template_file": "enhanced_task_prompt.md",
             "sandbox_environment": "test_sandbox",
             "permanent_environment": "default",
             "subtasks": [
@@ -223,6 +234,7 @@ class TestBenchmarkConfigLoaderPermanentSupport:
             "task_id": "permanent_only_task",
             "title": "Permanent Only Task",
             "description": "Task with only permanent environment",
+            "prompt_template_file": "permanent_only_task_prompt.md",
             "permanent_environment": "default",
             "subtasks": [
                 {

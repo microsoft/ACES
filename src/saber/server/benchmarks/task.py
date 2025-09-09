@@ -19,6 +19,7 @@ class Task:
         domain: str,
         title: str,
         description: str,
+        prompt_template_file: str,
         subtasks: Optional[List[SubTask]] = None,
         initial_context: Optional[Dict[str, Any]] = None,
         environment: Optional[Union[str, Dict[str, Any]]] = None,
@@ -35,6 +36,7 @@ class Task:
             domain: Security domain this task belongs to
             title: Human-readable title
             description: Detailed description of the task
+            prompt_template_file: Required path to Jinja2 template file for prompt generation
             subtasks: List of subtasks
             initial_context: Initial context provided when the task starts
             environment: Environment specification that can be:
@@ -50,6 +52,7 @@ class Task:
         self.domain = domain
         self.title = title
         self.description = description
+        self.prompt_template_file = prompt_template_file
         self.subtasks = subtasks or []
         self.initial_context = initial_context or {}
         self.environment = environment
@@ -136,6 +139,7 @@ class Task:
             "domain": self.domain,
             "title": self.title,
             "description": self.description,
+            "prompt_template_file": self.prompt_template_file,
             "subtasks": [subtask.to_dict() if hasattr(subtask, "to_dict") else subtask for subtask in self.subtasks],
             "initial_context": self.initial_context,
             "environment": self.environment,

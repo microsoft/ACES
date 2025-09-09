@@ -59,7 +59,7 @@ class BenchmarkConfigLoader:
                 logger.debug(f"Successfully loaded YAML data from {tasks_path}")
 
             if not isinstance(self.yaml_data, dict):
-                logger.error("YAML root is not a dictionary")
+                logger.error("YAML root must be a dictionary (got sequence or scalar)")
                 raise InvalidTaskDefinitionException("YAML root must be a dictionary", str(tasks_path))
 
             # Validate domain consistency
@@ -87,14 +87,14 @@ class BenchmarkConfigLoader:
             # Parse tasks
             tasks_data = self.yaml_data.get("tasks", [])
             if not isinstance(tasks_data, list):
-                logger.error("Tasks field is not a list")
+                logger.error("Tasks section must be a list of task objects")
                 raise InvalidTaskDefinitionException("Tasks must be a list", str(tasks_path))
 
             # Parse executors configuration (optional)
             executors_data = self.yaml_data.get("executors")
             if executors_data is not None:
                 if not isinstance(executors_data, list):
-                    logger.error("Executors field is not a list")
+                    logger.error("executors field must be a list")
                     raise InvalidTaskDefinitionException("Executors must be a list", str(tasks_path))
 
                 self.allowed_executors = executors_data
@@ -255,7 +255,7 @@ class BenchmarkConfigLoader:
         Returns:
             Task instance
         """
-        required_fields = ["task_id", "title", "description"]
+        required_fields = ["task_id", "title", "description", "prompt_template_file"]
         for field in required_fields:
             if field not in task_data:
                 logger.error(f"Missing required field '{field}' in task definition")
@@ -264,6 +264,7 @@ class BenchmarkConfigLoader:
         task_id = task_data["task_id"]
         title = task_data["title"]
         description = task_data["description"]
+        prompt_template_file = task_data["prompt_template_file"]
         initial_context = task_data.get("initial_context", {})
 
         logger.debug(f"Parsing task '{task_id}': {title}")
@@ -283,11 +284,28 @@ class BenchmarkConfigLoader:
 
         # Merge global defaults with task-specific config (task-specific takes precedence)
         execution_config = {**global_execution_defaults, **task_execution_config}
+        # Enforce required execution_config.timeout after merge (explicit or via global defaults)
+        if "timeout" not in execution_config:
+            raise InvalidTaskDefinitionException(
+                f"Task '{task_id}' missing required execution_config.timeout (no implicit default)"
+            )
+        if not isinstance(execution_config["timeout"], int) or execution_config["timeout"] <= 0:
+            raise InvalidTaskDefinitionException(
+                f"Task '{task_id}' execution_config.timeout must be positive int, got: {execution_config['timeout']}"
+            )
 
-        # Handle allowed_executors: task-level > global defaults > domain-level executors
+        # Resolve allowed_executors precedence: task-level explicit > global defaults > domain-level executors
+        if "allowed_executors" not in execution_config and self.allowed_executors is not None:
+            execution_config["allowed_executors"] = self.allowed_executors
         if "allowed_executors" not in execution_config:
-            if self.allowed_executors is not None:
-                execution_config["allowed_executors"] = self.allowed_executors
+            raise InvalidTaskDefinitionException(
+                f"Task '{task_id}' missing required allowed_executors (no implicit default)"
+            )
+        if not isinstance(execution_config["allowed_executors"], list) or not execution_config["allowed_executors"]:
+            raise InvalidTaskDefinitionException(
+                f"Task '{task_id}' allowed_executors must be a non-empty list, "
+                f"got: {execution_config['allowed_executors']}"
+            )
 
         # Get episode configuration with global defaults fallback
         task_episode_config = task_data.get("episode_config", {})
@@ -295,6 +313,16 @@ class BenchmarkConfigLoader:
 
         # Merge global defaults with task-specific config (task-specific takes precedence)
         episode_config = {**global_episode_defaults, **task_episode_config}
+
+        # Enforce required episode_config.max_steps after merge
+        if "max_steps" not in episode_config:
+            raise InvalidTaskDefinitionException(
+                f"Task '{task_id}' missing required episode_config.max_steps (no implicit default)"
+            )
+        if not isinstance(episode_config["max_steps"], int) or episode_config["max_steps"] <= 0:
+            raise InvalidTaskDefinitionException(
+                f"Task '{task_id}' episode_config.max_steps must be positive int, got: {episode_config['max_steps']}"
+            )
 
         # Get task-level benchmark configuration with global defaults fallback
         task_benchmark_config = task_data.get("benchmark_config", {})
@@ -343,6 +371,7 @@ class BenchmarkConfigLoader:
             domain=self.domain,
             title=title,
             description=description,
+            prompt_template_file=prompt_template_file,
             subtasks=subtasks,
             initial_context=initial_context,
             environment=sandbox_environment,
