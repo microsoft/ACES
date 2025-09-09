@@ -135,12 +135,18 @@ class TestMCPToolGenerator:
     async def test_create_executor_tool_cli(self, generator):
         """Test creating MCP tool function for CLI executor."""
         from saber.models.mcp import MCPToolSchema, MCPInputSchema, MCPPropertySchema
+        from types import SimpleNamespace
 
-        # Mock handler function
-        mock_handler = AsyncMock(return_value={
-            "content": [{"type": "text", "text": "Command executed successfully"}],
-            "isError": False
-        })
+        # Mock handler function that returns CallToolResult-like object
+        def create_mock_result(text: str, is_error: bool = False):
+            result = SimpleNamespace()
+            content_item = SimpleNamespace()
+            content_item.text = text
+            result.content = [content_item]
+            result.is_error = is_error
+            return result
+
+        mock_handler = AsyncMock(return_value=create_mock_result("Command executed successfully"))
 
         # CLI executor schema with proper typing
         cli_schema = MCPToolSchema(
@@ -183,6 +189,7 @@ class TestMCPToolGenerator:
 
         # Reset mock and test with optional parameter
         mock_handler.reset_mock()
+        mock_handler.return_value = create_mock_result("Command executed successfully")
         result = await tool_function(command="ps aux", shell=True)
         assert result == "Command executed successfully"
         mock_handler.assert_called_once_with("cli", {"command": "ps aux", "shell": True})
@@ -192,12 +199,18 @@ class TestMCPToolGenerator:
     async def test_create_executor_tool_python(self, generator):
         """Test creating MCP tool function for Python executor."""
         from saber.models.mcp import MCPToolSchema, MCPInputSchema, MCPPropertySchema
+        from types import SimpleNamespace
 
-        # Mock handler function
-        mock_handler = AsyncMock(return_value={
-            "content": [{"type": "text", "text": "Python code executed"}],
-            "isError": False
-        })
+        # Mock handler function that returns CallToolResult-like object
+        def create_mock_result(text: str, is_error: bool = False):
+            result = SimpleNamespace()
+            content_item = SimpleNamespace()
+            content_item.text = text
+            result.content = [content_item]
+            result.is_error = is_error
+            return result
+
+        mock_handler = AsyncMock(return_value=create_mock_result("Python code executed"))
 
         # Python executor schema with proper typing
         python_schema = MCPToolSchema(
@@ -249,12 +262,18 @@ class TestMCPToolGenerator:
     async def test_create_executor_tool_error_handling(self, generator):
         """Test error handling in generated tool function."""
         from saber.models.mcp import MCPToolSchema, MCPInputSchema, MCPPropertySchema
+        from types import SimpleNamespace
 
-        # Mock handler function that returns error
-        mock_handler = AsyncMock(return_value={
-            "content": [{"type": "text", "text": "Command failed"}],
-            "isError": True
-        })
+        # Mock handler function that returns error result
+        def create_mock_error_result(text: str):
+            result = SimpleNamespace()
+            content_item = SimpleNamespace()
+            content_item.text = text
+            result.content = [content_item]
+            result.is_error = True
+            return result
+
+        mock_handler = AsyncMock(return_value=create_mock_error_result("Command failed"))
 
         # Simple schema with proper typing
         schema = MCPToolSchema(

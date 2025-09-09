@@ -17,8 +17,6 @@ tasks:
 # Agent configuration (use agent registry)
 agent:
   id: "react"
-  max_steps: 50
-  max_errors: 3
   debug_mode: false
 
 # Docker commands for container setup

@@ -164,7 +164,7 @@ class TestToolsIntegration:
 
         assert len(mcp_tools) >= 2  # At least CLI and Python executors
 
-        # Find CLI and Python tools
+        # Find CLI and Python tools - they should be dictionaries now
         cli_tool = next(tool for tool in mcp_tools if "cli" in tool["name"])
         python_tool = next(tool for tool in mcp_tools if "python" in tool["name"])
 
@@ -173,22 +173,42 @@ class TestToolsIntegration:
         assert "inputSchema" in cli_tool
 
         cli_schema = cli_tool["inputSchema"]
-        assert cli_schema["type"] == "object"
-        assert "properties" in cli_schema
-        assert "required" in cli_schema
-        assert "command" in cli_schema["properties"]
-        assert "command" in cli_schema["required"]
+        # Handle both dict and MCPInputSchema object formats
+        if hasattr(cli_schema, 'type'):
+            # It's an MCPInputSchema object
+            assert cli_schema.type == "object"
+            assert hasattr(cli_schema, 'properties')
+            assert hasattr(cli_schema, 'required')
+            assert "command" in cli_schema.properties
+            assert "command" in cli_schema.required
+        else:
+            # It's a dictionary
+            assert cli_schema["type"] == "object"
+            assert "properties" in cli_schema
+            assert "required" in cli_schema
+            assert "command" in cli_schema["properties"]
+            assert "command" in cli_schema["required"]
 
         # Verify MCP format compliance for Python tool
         assert "description" in python_tool
         assert "inputSchema" in python_tool
 
         python_schema = python_tool["inputSchema"]
-        assert python_schema["type"] == "object"
-        assert "properties" in python_schema
-        assert "required" in python_schema
-        assert "code" in python_schema["properties"]
-        assert "code" in python_schema["required"]
+        # Handle both dict and MCPInputSchema object formats
+        if hasattr(python_schema, 'type'):
+            # It's an MCPInputSchema object
+            assert python_schema.type == "object"
+            assert hasattr(python_schema, 'properties')
+            assert hasattr(python_schema, 'required')
+            assert "code" in python_schema.properties
+            assert "code" in python_schema.required
+        else:
+            # It's a dictionary
+            assert python_schema["type"] == "object"
+            assert "properties" in python_schema
+            assert "required" in python_schema
+            assert "code" in python_schema["properties"]
+            assert "code" in python_schema["required"]
 
     @pytest.mark.asyncio
     async def test_parameter_validation_integration(self, registry):

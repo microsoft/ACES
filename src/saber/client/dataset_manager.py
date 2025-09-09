@@ -9,9 +9,7 @@ NEW COMPONENT: Focuses solely on dataset-related operations.
 
 import logging
 from types import TracebackType
-from typing import List, Optional
-
-from inspect_ai.dataset import Sample
+from typing import Any, List, Optional
 
 from ..models import TaskInfo  # Use server models directly
 from .client_session import ClientSessionManager
@@ -84,7 +82,7 @@ class DatasetManager:
         self._initialized = False
         logger.info("Dataset manager cleanup completed")
 
-    async def create_dataset(self, tasks_data: List[TaskInfo]) -> List[Sample]:
+    async def create_dataset(self, tasks_data: List[TaskInfo]) -> List[Any]:
         """
         Create SABER dataset from task data using inspect_ai dataset conversion.
 

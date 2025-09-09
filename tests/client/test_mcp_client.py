@@ -66,7 +66,7 @@ class TestMCPClient:
             assert mcp_client.is_connected()
             assert mcp_client._session_context == session_context
             mock_client.__aenter__.assert_called_once()
-            mock_client.ping.assert_called_once()
+            # Note: ping() call was removed from implementation - FastMCP handles initialization internally
 
     @pytest.mark.asyncio
     async def test_connection_failure(self, mcp_client, session_context):
@@ -104,29 +104,31 @@ class TestMCPClient:
             mock_client = AsyncMock()
             mock_create.return_value = mock_client
 
-            # Setup mock response - should match MCP protocol format
-            mock_tools_response = {
-                "tools": [
-                    {
-                        "name": "test_tool",
-                        "description": "A test tool",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {},
-                            "required": []
-                        }
-                    },
-                    {
-                        "name": "another_tool",
-                        "description": "Another tool",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {},
-                            "required": []
-                        }
-                    }
-                ]
+            # Setup mock response - create mock objects with required attributes
+            from types import SimpleNamespace
+            mock_tool1 = SimpleNamespace()
+            mock_tool1.model_dump = lambda: {
+                "name": "test_tool",
+                "description": "A test tool",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
             }
+            mock_tool2 = SimpleNamespace()
+            mock_tool2.model_dump = lambda: {
+                "name": "another_tool",
+                "description": "Another tool",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            }
+
+            mock_tools_response = SimpleNamespace()
+            mock_tools_response.tools = [mock_tool1, mock_tool2]
             mock_client.list_tools.return_value = mock_tools_response
 
             await mcp_client.connect(session_context)
@@ -143,8 +145,14 @@ class TestMCPClient:
             mock_client = AsyncMock()
             mock_create.return_value = mock_client
 
-            # Setup mock response
-            mock_result = {"content": [{"type": "text", "text": "Success"}]}
+            # Setup mock response - simulate FastMCP CallToolResult
+            from types import SimpleNamespace
+            mock_text_content = SimpleNamespace()
+            mock_text_content.text = "Success"
+
+            mock_result = SimpleNamespace()
+            mock_result.content = [mock_text_content]
+            mock_result.is_error = False
             mock_client.call_tool.return_value = mock_result
 
             await mcp_client.connect(session_context)
@@ -162,16 +170,8 @@ class TestMCPClient:
             assert response.isError is False
             assert response.content == [{"type": "text", "text": "Success"}]
 
-            mock_client.call_tool.assert_called_once_with(
-                tool_name="test_tool",
-                arguments={"param": "value"},
-                headers={
-                    'X-SABER-Session-ID': 'test-session',
-                    'X-SABER-Client-ID': 'test-client',
-                    'X-SABER-Episode-ID': 'test-episode',
-                    'X-SABER-Task-ID': 'test-task'
-                }
-            )
+            # FastMCP call_tool signature: call_tool(name, arguments)
+            mock_client.call_tool.assert_called_once_with("test_tool", {"param": "value"})
 
     @pytest.mark.asyncio
     async def test_tool_execution_timeout(self, mcp_client, session_context):

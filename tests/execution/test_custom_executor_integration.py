@@ -227,27 +227,77 @@ register_executor("schema_test", SchemaTestExecutor)
 
                 # Check the schema structure
                 input_schema = tool["inputSchema"]
-                assert input_schema["type"] == "object"
-
-                properties = input_schema["properties"]
-                required = input_schema["required"]
+                # Handle both dict and MCPInputSchema object formats
+                if hasattr(input_schema, 'type'):
+                    # It's an MCPInputSchema object
+                    assert input_schema.type == "object"
+                    properties = input_schema.properties
+                    required = input_schema.required
+                else:
+                    # It's a dictionary
+                    assert input_schema["type"] == "object"
+                    properties = input_schema["properties"]
+                    required = input_schema["required"]
 
                 # Check required parameter
                 assert "required_param" in properties
                 assert "required_param" in required
-                assert properties["required_param"]["type"] == "string"
-                assert properties["required_param"]["description"] == "A required string parameter"
 
-                # Check optional integer parameter with constraints
-                assert "optional_param" in properties
-                assert "optional_param" not in required
-                assert properties["optional_param"]["type"] == "integer"
-                assert properties["optional_param"]["minimum"] == 1
-                assert properties["optional_param"]["maximum"] == 100
+                # Handle parameter access for both dict and object formats
+                if hasattr(properties, '__getitem__'):
+                    # Dictionary format
+                    required_param_schema = properties["required_param"]
+                    if hasattr(required_param_schema, 'type'):
+                        # The parameter schema is an object
+                        assert required_param_schema.type == "string"
+                        assert required_param_schema.description == "A required string parameter"
+                    else:
+                        # The parameter schema is a dict
+                        assert required_param_schema["type"] == "string"
+                        assert required_param_schema["description"] == "A required string parameter"
 
-                # Check boolean parameter
-                assert "boolean_param" in properties
-                assert properties["boolean_param"]["type"] == "boolean"
+                    # Check optional integer parameter with constraints
+                    assert "optional_param" in properties
+                    assert "optional_param" not in required
+                    optional_param_schema = properties["optional_param"]
+                    if hasattr(optional_param_schema, 'type'):
+                        # The parameter schema is an object
+                        assert optional_param_schema.type == "integer"
+                        assert optional_param_schema.minimum == 1
+                        assert optional_param_schema.maximum == 100
+                    else:
+                        # The parameter schema is a dict
+                        assert optional_param_schema["type"] == "integer"
+                        assert optional_param_schema["minimum"] == 1
+                        assert optional_param_schema["maximum"] == 100
+
+                    # Check boolean parameter
+                    assert "boolean_param" in properties
+                    boolean_param_schema = properties["boolean_param"]
+                    if hasattr(boolean_param_schema, 'type'):
+                        # The parameter schema is an object
+                        assert boolean_param_schema.type == "boolean"
+                    else:
+                        # The parameter schema is a dict
+                        assert boolean_param_schema["type"] == "boolean"
+                else:
+                    # Object format - properties are attributes
+                    required_param = getattr(properties, 'required_param')
+                    assert required_param.type == "string"
+                    assert required_param.description == "A required string parameter"
+
+                    # Check optional integer parameter with constraints
+                    assert hasattr(properties, 'optional_param')
+                    assert "optional_param" not in required
+                    optional_param = getattr(properties, 'optional_param')
+                    assert optional_param.type == "integer"
+                    assert optional_param.minimum == 1
+                    assert optional_param.maximum == 100
+
+                    # Check boolean parameter
+                    assert hasattr(properties, 'boolean_param')
+                    boolean_param = getattr(properties, 'boolean_param')
+                    assert boolean_param.type == "boolean"
 
     def test_factory_integration_with_custom_executors(self, cleanup_factory):
         """Test that ExecutorFactory properly integrates custom executors."""

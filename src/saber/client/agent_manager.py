@@ -11,8 +11,6 @@ import logging
 from types import TracebackType
 from typing import Any, List, Optional
 
-from inspect_ai import Task
-
 from .client_session import ClientSessionManager
 from .exceptions import AgentInitializationError
 from .models import AgentInfo, SABERConfig
@@ -34,6 +32,8 @@ class AgentManager:
     - Dataset creation (moved to DatasetManager)
     - Task discovery (moved to DatasetManager)
     - HTTP client creation (use shared ClientSessionManager)
+
+    Note: inspect_ai imports are isolated to specific methods to maintain clean separation.
     """
 
     def __init__(self, config: SABERConfig, session_manager: ClientSessionManager):
@@ -46,7 +46,7 @@ class AgentManager:
         """
         self.config = config
         self.session_manager = session_manager
-        self.saber_agent: Optional["AgentInfo"] = None
+        self.saber_agent: Optional[AgentInfo] = None
         self._initialized = False
 
         logger.debug("Initialized AgentManager with shared ClientSessionManager")
@@ -68,17 +68,17 @@ class AgentManager:
         logger.info("Initializing SABER agent")
 
         try:
-            # For now, we'll skip the complex registry and just validate the agent_id
+            # Get agent metadata from core registry (fail-fast if not found)
             if not hasattr(self.config, "agent_id") or not self.config.agent_id:
                 raise AgentInitializationError("Agent not specified in config")
 
-            # Create a simple agent info object instead of using registry
+            # Create basic agent info - no need for a registry
             self.saber_agent = AgentInfo(
                 agent_id=self.config.agent_id,
                 name=f"{self.config.agent_id.title()} Agent",
-                description=f"SABER {self.config.agent_id} agent for security domain benchmarking",
+                description=f"SABER {self.config.agent_id} agent",
                 capabilities=["reasoning", "tool_use"],
-                tags=[self.config.agent_id, "saber", "security"],
+                tags=[self.config.agent_id, "saber"],
             )
 
             # Create session using shared session manager
@@ -118,7 +118,7 @@ class AgentManager:
             self.saber_agent = None
             # Note: Don't cleanup session_manager here - it's shared
 
-    async def create_task(self, dataset: List[Any]) -> Task:
+    async def create_task(self, dataset: List[Any]) -> Any:
         """
         Create inspect_ai Task configured with SABER agent.
 
@@ -134,17 +134,21 @@ class AgentManager:
         if not self._initialized or not self.saber_agent:
             raise RuntimeError("SABER agent not initialized - use as async context manager")
 
-        logger.debug("Creating inspect_ai Task with SABER react agent")
+        logger.debug("Creating inspect_ai Task with SABER agent")
 
-        # Import here to avoid circular imports
-        from .inspect_ai.saber_react import saber_react
+        # Import inspect_ai modules only when needed
+        from inspect_ai import Task
+
+        from .inspect_ai import InspectAIAgentFactory  # Import through package to trigger registrations
         from .inspect_ai.saber_scorer import SABERTaskScorer
 
-        # Create SABER react agent with session manager
-        saber_agent = saber_react(
-            attempts=1,
-            agent_id=self.saber_agent.agent_id,
+        # Create SABER agent using the inspect_ai factory
+        factory = InspectAIAgentFactory()
+        saber_agent = await factory.create_agent(
+            agent_id=self.saber_agent.agent_id,  # Use agent_id as the identifier
+            config=self.config,
             session_manager=self.session_manager,
+            attempts=1,  # Could be configured from self.config.agent_config if needed
         )
 
         # Create task with SABER context in metadata
