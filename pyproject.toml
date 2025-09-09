@@ -95,11 +95,11 @@ allow-direct-references = true
 [tool.uv.sources]
 # PATHWAY 1: Standard installation from MSEC ADO repository (default)
 # This is the recommended approach for most users
-inspect-ai = { git = "https://MSECAIModels@dev.azure.com/MSECAIModels/Benchmarking/_git/inspect_ai" }
+# inspect-ai = { git = "https://MSECAIModels@dev.azure.com/MSECAIModels/Benchmarking/_git/inspect_ai" }
 
 # PATHWAY 2: Local development with external directory
 # To use local development, comment the line above and uncomment this one:
-# inspect-ai = { path = "./external/inspect_ai" }
+inspect-ai = { path = "./external/inspect_ai" }
 
 # Alternative: PyPI installation (if inspect-ai becomes available on PyPI)
 # inspect-ai = { version = "*" }

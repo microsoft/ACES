@@ -132,8 +132,8 @@ class SessionMCPAPI:
 
             logger.info(f"Starting SABER {self.session_manager.domain_name} MCP server on {self.host}:{self.port}")
 
-            # Use run_async instead of run to work within existing asyncio loop
-            await self.mcp_server.run_async(transport="sse", host=self.host, port=self.port)
+            # Use HTTP transport for production deployment (exposes /mcp endpoint)
+            await self.mcp_server.run_async(transport="http", host=self.host, port=self.port)
 
         except Exception as e:
             logger.error(f"Failed to start MCP server: {e}")

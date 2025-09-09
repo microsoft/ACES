@@ -20,15 +20,15 @@ Architecture:
 """
 
 import logging
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List
 
-from inspect_ai.agent import Agent, AgentState
-from inspect_ai.tool import Tool
+from inspect_ai.agent import Agent, AgentState, agent
+from inspect_ai.tool import Tool, mcp_server_http
 
+from ...models import HTTPHeaders
 from ..client_session import ClientSessionManager
 from ..models import SABERConfig
 from .agent_registry import register_inspect_ai_agent
-from .saber_agent_base import SABERAgentContext
 
 logger = logging.getLogger(__name__)
 
@@ -95,131 +95,33 @@ def _register_builtin_implementations() -> None:
 _register_builtin_implementations()
 
 
-class SABERAgentFactory:
-    """Factory for creating SABER-enhanced agents."""
-
-    def __init__(self, registry: Optional[AgentImplementationRegistry] = None):
-        """Initialize factory with implementation registry."""
-        self.registry = registry or AgentImplementationRegistry()
-
-    async def create_agent(
-        self,
-        agent_type: str,
-        config: SABERConfig,
-        session_manager: ClientSessionManager,
-        agent_id: Optional[str] = None,
-        **agent_params: Any,
-    ) -> Agent:
-        """Create a SABER-enhanced agent.
-
-        Args:
-            agent_type: Type of agent implementation ("react", "chain", etc.)
-            config: SABER configuration
-            session_manager: Session manager for SABER infrastructure
-            agent_id: Agent identifier (defaults to agent_type)
-            **agent_params: Parameters to pass to the agent implementation
-
-        Returns:
-            SABER-enhanced inspect_ai Agent
-        """
-        # Get the inspect_ai agent implementation
-        agent_implementation = self.registry.get_implementation(agent_type)
-
-        # Use agent_type as agent_id if not provided
-        if agent_id is None:
-            agent_id = agent_type
-
-        logger.info(f"Creating SABER agent: {agent_id} using implementation: {agent_type}")
-
-        # Return the configurable agent with the specific implementation
-        return await self._create_configurable_agent(
-            agent_implementation=agent_implementation,
-            agent_id=agent_id,
-            session_manager=session_manager,
-            agent_params=agent_params,
-        )
-
-    async def _create_configurable_agent(
-        self,
-        agent_implementation: Callable,
-        agent_id: str,
-        session_manager: ClientSessionManager,
-        agent_params: Dict[str, Any],
-    ) -> Agent:
-        """Create configurable agent with specific implementation."""
-
-        from inspect_ai.agent import agent
-
-        # Create the agent function with proper @agent decoration
-        @agent  # type: ignore[misc]
-        def saber_configurable_agent() -> Agent:
-            """SABER configurable agent factory."""
-
-            async def configurable_agent(state: AgentState, tools: List[Tool]) -> AgentState:
-                """Configurable agent that composes any inspect_ai agent with SABER infrastructure."""
-
-                # Initialize SABER context
-                async with SABERAgentContext(
-                    session_manager=session_manager,
-                    agent_id=agent_id,
-                    default_prompt=f"You are a {agent_id} security domain agent.",
-                ) as context:
-
-                    # Get enhanced state and tools
-                    enhanced_state = context.get_enhanced_state(state)
-                    all_tools = context.get_all_tools(tools)
-
-                    # Create the specific agent implementation with SABER-enhanced parameters
-                    enhanced_params = {
-                        "name": f"SABER {agent_id.title()} Agent",
-                        "description": f"SABER-enhanced {agent_id} agent for security domain",
-                        "prompt": context.enhanced_prompt,
-                        "tools": all_tools,
-                        **agent_params,  # Add any additional parameters
-                    }
-
-                    # Create and execute the agent implementation
-                    agent_instance = agent_implementation(**enhanced_params)
-                    result = await agent_instance(enhanced_state)
-
-                    logger.info(f"SABER agent ({agent_id}) execution completed")
-                    return result
-
-            return configurable_agent
-
-        # Call the decorated factory to get the actual agent
-        return saber_configurable_agent()
-
-
 # Register the factory-based agents with the SABER inspect_ai agent registry
 @register_inspect_ai_agent(
     name="react",
-    description="ReAct agent with SABER infrastructure",
-    capabilities=["reasoning", "tool_use"],
+    description="React agent with native SABER MCP integration",
+    capabilities=["reasoning", "tool_use", "step_by_step"],
     tags=["saber", "react", "security"],
 )
 async def create_react_agent(
     config: SABERConfig,
     session_manager: ClientSessionManager,
     agent_id: str = "react",
-    attempts: int = 1,
     **kwargs: Any,
 ) -> Agent:
-    """Create a ReAct agent using the factory pattern."""
-    factory = SABERAgentFactory()
-    return await factory.create_agent(
-        agent_type="react",
+    """Create a React agent with SABER MCP integration."""
+    # Delegate to configurable agent with react type
+    return await create_configurable_agent(
         config=config,
         session_manager=session_manager,
         agent_id=agent_id,
-        attempts=attempts,
+        agent_type="react",
         **kwargs,
     )
 
 
 @register_inspect_ai_agent(
     name="configurable",
-    description="Configurable SABER agent with pluggable implementations",
+    description="Configurable SABER agent with pluggable implementations and native MCP",
     capabilities=["reasoning", "tool_use", "configurable_behavior"],
     tags=["saber", "configurable", "security"],
 )
@@ -230,8 +132,97 @@ async def create_configurable_agent(
     agent_type: str = "react",
     **kwargs: Any,
 ) -> Agent:
-    """Create a configurable agent using the factory pattern."""
-    factory = SABERAgentFactory()
-    return await factory.create_agent(
-        agent_type=agent_type, config=config, session_manager=session_manager, agent_id=agent_id, **kwargs
-    )
+    """Create a configurable agent with native MCP integration."""
+
+    # Get the agent implementation
+    agent_implementation = AgentImplementationRegistry.get_implementation(agent_type)
+
+    # Create a SABER-aware configurable agent using inspect_ai's @agent decorator
+    @agent  # type: ignore[misc]
+    def saber_configurable_agent() -> Agent:
+        """SABER-aware configurable agent with deferred context creation."""
+
+        async def execute(state: AgentState, tools: List[Tool]) -> AgentState:
+            """Agent execution function called for each sample - NOW sample metadata is available."""
+
+            # Import what we need for SABER context initialization
+            from inspect_ai.solver._task_state import sample_state
+            from inspect_ai.util import store
+
+            # Initialize SABER context similar to saber_react.py
+            task_store = store()
+
+            # Store session manager
+            task_store.set("saber_session_manager", session_manager)
+
+            if session_manager is None:
+                raise ValueError("Session manager is required but not provided")
+
+            session_id = session_manager.get_current_session_id()
+            if session_id is None:
+                raise ValueError("Session ID not available from session manager")
+            task_store.set("saber_session_id", session_id)
+
+            # Get task_id from current sample metadata using sample_state()
+            current_state = sample_state()
+            if current_state is None:
+                raise ValueError("Current task state is not available")
+
+            task_id = current_state.metadata.get("task_id")
+            if task_id is None:
+                raise ValueError("Task ID not found in sample metadata")
+            task_store.set("saber_task_id", task_id)
+
+            # Get initial prompt from sample metadata (server-provided at task creation)
+            initial_prompt = current_state.metadata.get("initial_prompt")
+            if initial_prompt is None:
+                raise ValueError("Initial prompt not found in sample metadata")
+            logger.info(f"Using initial prompt from metadata: {initial_prompt[:100]}...")
+
+            # Create episode
+            episode = await session_manager.create_episode(session_id, task_id)
+            task_store.set("saber_current_episode", episode)
+
+            # Create MCP server connection with episode headers using SABER standard headers
+            mcp_headers = {
+                HTTPHeaders.SESSION_ID: session_id,
+                HTTPHeaders.EPISODE_ID: episode.episode_id,
+                HTTPHeaders.TASK_ID: task_id,
+            }
+
+            saber_server = mcp_server_http(
+                name="SABER Security Tools",
+                url=f"{config.saber_mcp_url}/mcp",
+                headers=mcp_headers,
+            )
+
+            # Combine all tools (passed tools + SABER MCP tools)
+            all_tools = list(tools) + [saber_server]
+
+            # Create the actual agent with SABER tools using the specified implementation
+            actual_agent = agent_implementation(
+                name=f"SABER {agent_id.title()} Agent",
+                prompt=initial_prompt,
+                tools=all_tools,
+                **kwargs,
+            )
+
+            try:
+                # Run the agent
+                result = await actual_agent(state)
+
+                # End episode with success
+                await session_manager.end_episode(
+                    episode.session_id, episode.episode_id, reason="completed", result="success"
+                )
+
+                return result
+            except Exception as e:
+                # End episode with error
+                await session_manager.end_episode(episode.session_id, episode.episode_id, reason="error", result=str(e))
+                raise
+
+        return execute
+
+    # Return the SABER-aware configurable agent
+    return saber_configurable_agent()

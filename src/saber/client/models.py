@@ -13,37 +13,16 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
-class MCPConfig(BaseModel):
-    """Configuration for MCP (Model Context Protocol) client with FastMCP integration."""
-
-    base_url: str = Field(default="http://localhost:8001", description="SABER MCP server base URL")
-    timeout: float = Field(default=30.0, description="Request timeout in seconds")
-    retry_attempts: int = Field(default=3, description="Number of retry attempts for transient errors")
-    retry_delay: float = Field(default=1.0, description="Delay between retries in seconds")
-    client_id: str = Field(default="saber-client", description="Client identifier for requests")
-
-    def get_sse_url(self) -> str:
-        """Get the SSE endpoint URL for FastMCP connection."""
-        return f"{self.base_url.rstrip('/')}/sse"
-
-    class Config:
-        extra = "forbid"  # Don't allow extra fields for strict typing
-
-
 class SessionManagerConfig(BaseModel):
-    """Unified configuration for ClientSessionManager API layer (REST + MCP)."""
+    """Simplified configuration for ClientSessionManager REST API layer."""
 
     # REST API configuration
     base_url: str = Field(description="SABER server REST API base URL")
     client_id: str = Field(default="saber_client", description="Client identifier for session creation")
     rest_timeout: float = Field(default=30.0, description="REST API request timeout in seconds")
 
-    # MCP configuration
-    mcp_url: str = Field(description="SABER server MCP endpoint URL")
-    mcp_timeout: int = Field(default=30, description="MCP connection timeout in seconds")
-    mcp_retry_attempts: int = Field(default=3, description="Number of retry attempts for failed MCP connections")
-    mcp_retry_delay: float = Field(default=1.0, description="Delay between MCP retry attempts in seconds")
-    mcp_headers: Dict[str, str] = Field(default_factory=dict, description="Additional headers for MCP requests")
+    # MCP server URL for agent tasks (used by inspect_ai native integration)
+    mcp_server_url: str = Field(description="SABER MCP server URL for agent tools")
 
     @classmethod
     def from_urls(
@@ -61,22 +40,7 @@ class SessionManagerConfig(BaseModel):
         Returns:
             Configured SessionManagerConfig instance
         """
-        return cls(base_url=rest_url, mcp_url=mcp_url, client_id=client_id, **kwargs)
-
-    def to_mcp_config(self) -> MCPConfig:
-        """
-        Create MCPConfig from SessionManagerConfig settings.
-
-        Returns:
-            MCPConfig instance with MCP-specific settings
-        """
-        return MCPConfig(
-            base_url=self.mcp_url,
-            timeout=float(self.mcp_timeout),
-            retry_attempts=self.mcp_retry_attempts,
-            retry_delay=self.mcp_retry_delay,
-            client_id=self.client_id,
-        )
+        return cls(base_url=rest_url, mcp_server_url=mcp_url, client_id=client_id, **kwargs)
 
     class Config:
         extra = "forbid"  # Don't allow extra fields for strict typing
@@ -122,7 +86,6 @@ class AgentExecutionParams(BaseModel):
     agent_file: str = Field(description="Path to agent file")
     initial_prompt: str = Field(description="Initial prompt for agent")
     task_id: str = Field(description="Task identifier")
-    mcp_service_url: str = Field(description="MCP service URL")
     agent_config: AgentConfig = Field(description="Agent configuration")
     timeout: int = Field(default=300, description="Execution timeout in seconds")
 
@@ -308,7 +271,7 @@ class SABERConfig:
     @property
     def saber_mcp_url(self) -> str:
         """Legacy property accessor for MCP URL."""
-        return self.session_config.mcp_url if self.session_config else ""
+        return self.session_config.mcp_server_url if self.session_config else ""
 
     @property
     def client_id(self) -> str:

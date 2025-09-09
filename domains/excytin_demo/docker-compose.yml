@@ -38,7 +38,7 @@ services:
       - ../../external/inspect_ai:/app/client/external/inspect_ai  # Mount inspect_ai codebase for development
       - ./client/logs:/app/logs:rw  # Mount logs directory for client-side container logging
       - ${HOME}/.azure:/root/.azure:rw  # Mount Azure CLI credentials for git authentication (read-write for session files)
-      - ${HOME}/.git-credentials:/root/.git-credentials:ro  # Mount host git credentials
+      # Note: Removed .git-credentials mount - using Azure CLI authentication instead
     environment:
       - SABER_REST_URL=http://saber-excytin-server:8000
       - SABER_MCP_URL=http://saber-excytin-server:8001
