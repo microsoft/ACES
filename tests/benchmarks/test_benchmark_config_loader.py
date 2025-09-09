@@ -30,6 +30,15 @@ class TestBenchmarkConfigLoader:
         yaml_content = """
 domain: test_domain
 
+global_defaults:
+  execution_config:
+    allowed_executors: ["cli"]
+    timeout: 30
+  episode_config:
+    max_steps: 5
+  benchmark_config:
+    episode_attempts: 3
+
 benchmark_config:
   episode_attempts: 3
 
@@ -37,6 +46,7 @@ tasks:
   - task_id: test_task
     title: Test Task
     description: A simple test task
+    prompt_template_file: test_template.md
     subtasks: []
 """
 
@@ -64,6 +74,15 @@ tasks:
         yaml_content = """
 domain: test_domain
 
+global_defaults:
+  execution_config:
+    allowed_executors: ["cli"]
+    timeout: 30
+  episode_config:
+    max_steps: 6
+  benchmark_config:
+    episode_attempts: 2
+
 benchmark_config:
   episode_attempts: 2
 
@@ -71,6 +90,7 @@ tasks:
   - task_id: complex_task
     title: Complex Task
     description: A task with multiple subtasks
+    prompt_template_file: complex_task_template.md
     initial_context:
       timeout: 300
     subtasks:
@@ -132,6 +152,7 @@ tasks:
   - task_id: test_task
     title: Test Task
     description: A test task
+  prompt_template_file: test_task_template.md
     subtasks: [
       - subtask_id: subtask1
         title: First Subtask
@@ -156,6 +177,7 @@ tasks:
   - task_id: test_task
     title: Test Task
     description: A test task without domain
+  prompt_template_file: test_task_template.md
     subtasks: []
 """
 
@@ -182,6 +204,7 @@ tasks:
   - task_id: timeout_task
     title: Task with Custom Timeout
     description: A task with custom execution timeout
+    prompt_template_file: timeout_task_template.md
     environment: test_env
     execution_config:
       allowed_executors: ["cli", "python"]
@@ -238,12 +261,23 @@ domain: test_domain
 benchmark_config:
   episode_attempts: 1
 
+global_defaults:
+  execution_config:
+    allowed_executors: ["cli"]
+    timeout: 45  # Required default timeout now enforced
+  benchmark_config:
+    episode_attempts: 1
+  episode_config:
+    max_steps: 15  # Provide required episode max_steps default
+
 tasks:
   - task_id: default_timeout_task
     title: Task with Default Timeout
     description: A task without custom timeout configuration
+    prompt_template_file: default_timeout_task_template.md
+    # No task-level timeout -> should inherit from global_defaults
     execution_config:
-      allowed_executors: ["cli"]
+      allowed_executors: ["cli"]  # Inherit timeout only
     subtasks:
       - subtask_id: test_subtask
         title: Test Subtask
@@ -261,11 +295,12 @@ tasks:
 
             assert "default_timeout_task" in tasks
             task = tasks["default_timeout_task"]
-
-            # Verify execution config exists but has no timeout
+            # Verify execution config inherited timeout from global defaults
             assert task.execution_config is not None
-            assert "timeout" not in task.execution_config
+            assert task.execution_config["timeout"] == 45
             assert task.execution_config["allowed_executors"] == ["cli"]
+            # Verify episode config inherited from global defaults
+            assert task.episode_config["max_steps"] == 15
 
         finally:
             os.unlink(temp_path)
@@ -284,10 +319,20 @@ benchmark_config:
   max_duration_minutes: 30
   parallel_tasks: false
 
+global_defaults:
+  execution_config:
+    timeout: 30
+    allowed_executors: ["cli"]
+  episode_config:
+    max_steps: 40
+
 tasks:
   - task_id: test_task
     title: Test Task
     description: A test task
+    prompt_template_file: test_task_template.md
+    execution_config:
+      allowed_executors: ["cli"]  # Explicit allowed executors (timeout via global)
     subtasks: []
 """
 
@@ -297,12 +342,15 @@ tasks:
 
         try:
             loader = BenchmarkConfigLoader("test_domain")
-            loader.load_tasks_from_file(temp_path)
+            tasks = loader.load_tasks_from_file(temp_path)
             config = loader.load_benchmark_config()
 
             assert config["episode_attempts"] == 5
             assert config["max_duration_minutes"] == 30
             assert config["parallel_tasks"] is False
+            # Verify task inherited episode_config.max_steps from global defaults
+            task = tasks["test_task"]
+            assert task.episode_config["max_steps"] == 40
 
         finally:
             os.unlink(temp_path)
@@ -315,16 +363,34 @@ domain: test_domain
 benchmark_config:
   episode_attempts: 3
 
+global_defaults:
+  execution_config:
+    timeout: 50
+    allowed_executors: ["cli"]
+  episode_config:
+    max_steps: 60
+
 tasks:
   - task_id: task_default
     title: Task with Default
     description: Uses domain default
+    prompt_template_file: task_default_template.md
+    execution_config:
+      allowed_executors: ["cli"]  # Inherit timeout 50
+    episode_config:
+      max_steps: 60  # Inherit via global defaults (explicit for clarity)
     subtasks: []
   - task_id: task_override
     title: Task with Override
     description: Overrides domain default
+    prompt_template_file: task_override_template.md
     benchmark_config:
       episode_attempts: 10
+    execution_config:
+      timeout: 75  # Override timeout
+      allowed_executors: ["cli"]
+    episode_config:
+      max_steps: 80  # Override
     subtasks: []
 """
 
@@ -353,6 +419,7 @@ tasks:
   - task_id: test_task
     title: Test Task
     description: A test task
+    prompt_template_file: test_task_template.md
     subtasks: []
 """
 
@@ -384,6 +451,7 @@ tasks:
   - task_id: test_task
     title: Test Task
     description: A test task
+    prompt_template_file: test_task_template.md
     subtasks: []
 """
 
@@ -414,6 +482,7 @@ tasks:
   - task_id: test_task
     title: Test Task
     description: A test task
+    prompt_template_file: test_task_template.md
     subtasks: []
 """
 
@@ -442,6 +511,7 @@ tasks:
   - task_id: test_task
     title: Test Task
     description: A test task
+    prompt_template_file: test_task_template.md
     subtasks: []
 """
 
@@ -467,12 +537,24 @@ domain: test_domain
 benchmark_config:
   episode_attempts: 3
 
+global_defaults:
+  execution_config:
+    timeout: 40
+    allowed_executors: ["cli"]
+  episode_config:
+    max_steps: 30
+
 tasks:
   - task_id: test_task
     title: Test Task
     description: A test task
+    prompt_template_file: test_task_template.md
     benchmark_config:
       episode_attempts: -5
+    execution_config:
+      allowed_executors: ["cli"]
+    episode_config:
+      max_steps: 30
     subtasks: []
 """
 
@@ -511,11 +593,13 @@ tasks:
   - task_id: test_task_minimal
     title: Test Task with Minimal Config
     description: A task that should inherit global defaults
+    prompt_template_file: test_task_minimal_template.md
     subtasks: []
 
   - task_id: test_task_with_overrides
     title: Test Task with Overrides
     description: A task that overrides some defaults
+    prompt_template_file: test_task_with_overrides_template.md
     execution_config:
       timeout: 30  # Override global default
     episode_config:
@@ -569,6 +653,12 @@ tasks:
   - task_id: test_task
     title: Test Task
     description: A test task without global defaults
+    prompt_template_file: test_task_template.md
+    execution_config:
+      timeout: 90
+      allowed_executors: ["cli"]
+    episode_config:
+      max_steps: 55
     subtasks: []
 """
 
@@ -586,8 +676,10 @@ tasks:
 
             # Test task loads correctly without global defaults
             task = tasks["test_task"]
-            assert task.execution_config == {}
-            assert task.episode_config == {}
+            assert task.execution_config["timeout"] == 90
+            assert task.execution_config["allowed_executors"] == ["cli"]
+            # Episode config explicitly provided at task-level
+            assert task.episode_config["max_steps"] == 55
             assert task.benchmark_config["episode_attempts"] == 3
 
         finally:
@@ -611,6 +703,7 @@ tasks:
   - task_id: test_task
     title: Test Task
     description: A test task
+    prompt_template_file: test_task_template.md
     subtasks: []
 """
 
@@ -636,11 +729,21 @@ domain: test_domain
 global_defaults:
   benchmark_config:
     episode_attempts: 3
+  execution_config:
+    timeout: 120
+    allowed_executors: ["cli"]
+  episode_config:
+    max_steps: 45
 
 tasks:
   - task_id: test_task
     title: Test Task
     description: A test task using only global benchmark defaults
+    prompt_template_file: test_task_template.md
+    execution_config:
+      allowed_executors: ["cli"]
+    episode_config:
+      max_steps: 45
     subtasks: []
 """
 

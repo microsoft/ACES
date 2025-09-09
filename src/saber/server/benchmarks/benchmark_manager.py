@@ -7,6 +7,7 @@ from typing import Any, Dict, List
 from ...models import BenchmarkInfo, TaskInfo
 from .benchmark_config_loader import BenchmarkConfigLoader
 from .exceptions import SubTaskNotFoundException, TaskNotFoundException
+from .prompt_generator import PromptGenerator, TemplateValidationError
 from .subtask import SubTask
 from .task import Task
 
@@ -38,11 +39,18 @@ class BenchmarkManager:
         # Initialize specialized components
         self.config_loader = BenchmarkConfigLoader(domain)
 
+        # Initialize prompt generator
+        prompts_dir = self.config_dir / "prompts"
+        self.prompt_generator = PromptGenerator(str(prompts_dir))
+
         logger.info(f"Initializing BenchmarkManager for domain '{domain}' with config dir: {config_dir}")
         logger.info(f"Tasks file: {self.tasks_file_path}")
 
         # Load tasks and benchmark configuration
         self.load_tasks_from_yaml()
+
+        # Validate all task templates at startup (fail-fast)
+        self.validate_all_task_templates()
 
     def load_tasks_from_yaml(self) -> None:
         """
@@ -196,3 +204,60 @@ class BenchmarkManager:
             }
             for task in self.tasks.values()
         ]
+
+    def validate_all_task_templates(self) -> None:
+        """
+        Validate all task templates at startup.
+
+        This method enforces SABER's fail-fast principle by validating:
+        1. All task templates exist and are syntactically valid
+        2. All included dependencies (shared partials) exist
+        3. All task contexts can be built with required configuration
+
+        Raises:
+            TemplateValidationError: If any template or context validation fails
+        """
+        logger.info(f"Validating all task templates for domain '{self.domain}'")
+
+        validation_errors = []
+
+        for task_id, task in self.tasks.items():
+            try:
+                # Validate template exists and syntax is correct
+                self.prompt_generator.validate_template(task.prompt_template_file)
+
+                # Validate that we can build context for this task (ensures required config is present)
+                self.prompt_generator.validate_task_context(task)
+
+                logger.debug(f"Template validation passed for task '{task_id}'")
+
+            except Exception as e:
+                error_msg = f"Task '{task_id}': {str(e)}"
+                validation_errors.append(error_msg)
+                logger.error(f"Template validation failed for task '{task_id}': {e}")
+
+        if validation_errors:
+            error_summary = f"Template validation failed for domain '{self.domain}'. Errors:\n" + "\n".join(
+                f"  - {err}" for err in validation_errors
+            )
+            logger.error(error_summary)
+            raise TemplateValidationError(error_summary)
+
+        logger.info(f"All {len(self.tasks)} task templates validated successfully for domain '{self.domain}'")
+
+    def get_task_prompt(self, task_id: str) -> str:
+        """
+        Generate prompt for a specific task using template rendering.
+
+        Args:
+            task_id: ID of the task to generate prompt for
+
+        Returns:
+            Rendered prompt string
+
+        Raises:
+            TaskNotFoundException: If task is not found
+            PromptGenerationError: If prompt generation fails
+        """
+        task = self.get_task(task_id)
+        return self.prompt_generator.render_prompt_for_task(task)

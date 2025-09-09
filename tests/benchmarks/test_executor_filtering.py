@@ -24,12 +24,21 @@ class TestExecutorFiltering:
             "benchmark_config": {
                 "episode_attempts": 2
             },
+            "global_defaults": {
+                "execution_config": {
+                    "timeout": 300
+                },
+                "episode_config": {
+                    "max_steps": 50
+                }
+            },
             "executors": ["cli", "python"],
             "tasks": [
                 {
                     "task_id": "test_task",
                     "title": "Test Task",
                     "description": "Test description",
+                    "prompt_template_file": "test_task_prompt.md",
                     "subtasks": [
                         {
                             "subtask_id": "test_subtask",
@@ -50,11 +59,20 @@ class TestExecutorFiltering:
             "benchmark_config": {
                 "episode_attempts": 1
             },
+            "global_defaults": {
+                "execution_config": {
+                    "timeout": 300
+                },
+                "episode_config": {
+                    "max_steps": 50
+                }
+            },
             "tasks": [
                 {
                     "task_id": "test_task",
                     "title": "Test Task",
                     "description": "Test description",
+                    "prompt_template_file": "test_task_prompt.md",
                     "subtasks": [
                         {
                             "subtask_id": "test_subtask",
@@ -110,12 +128,21 @@ class TestExecutorFiltering:
             "benchmark_config": {
                 "episode_attempts": 1
             },
+            "global_defaults": {
+                "execution_config": {
+                    "timeout": 300
+                },
+                "episode_config": {
+                    "max_steps": 50
+                }
+            },
             "executors": "not_a_list",  # Should be a list
             "tasks": [
                 {
                     "task_id": "test_task",
                     "title": "Test Task",
                     "description": "Test description",
+                    "prompt_template_file": "test_task_prompt.md",
                     "subtasks": [
                         {
                             "subtask_id": "test_subtask",
@@ -147,12 +174,21 @@ class TestExecutorFiltering:
             "benchmark_config": {
                 "episode_attempts": 1
             },
+            "global_defaults": {
+                "execution_config": {
+                    "timeout": 300
+                },
+                "episode_config": {
+                    "max_steps": 50
+                }
+            },
             "executors": [],  # Empty list
             "tasks": [
                 {
                     "task_id": "test_task",
                     "title": "Test Task",
                     "description": "Test description",
+                    "prompt_template_file": "test_task_prompt.md",
                     "subtasks": [
                         {
                             "subtask_id": "test_subtask",

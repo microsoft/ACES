@@ -80,10 +80,21 @@ domain: "malware_classification"
 benchmark_config:
   episode_attempts: 3
 
+global_defaults:
+  execution_config:
+    timeout: 300
+  episode_config:
+    max_steps: 50
+
+executors:
+  - cli_executor
+  - python_executor
+
 tasks:
   - task_id: "malware_family_analysis"
     title: "Malware Family Classification and Analysis"
     description: "Analyze malware sample to determine family, capabilities, and threat level"
+    prompt_template_file: "malware_family_analysis_prompt.md"
     initial_context:
       sample_path: "/data/samples/unknown_sample.exe"
       analysis_timeout: 300
@@ -112,10 +123,21 @@ domain: "malware_classification"
 benchmark_config:
   episode_attempts: 5
 
+global_defaults:
+  execution_config:
+    timeout: 300
+  episode_config:
+    max_steps: 50
+
+executors:
+  - cli_executor
+  - python_executor
+
 tasks:
   - task_id: "malware_analysis_with_env"
     title: "Malware Analysis with Environment"
     description: "Analyze malware sample in a multi-container environment"
+    prompt_template_file: "malware_analysis_prompt.md"
     environment: "excytin_db1"
     initial_context:
       sample_path: "/data/samples/unknown_sample.exe"
@@ -134,6 +156,32 @@ tasks:
         completion_conditions: ["sandbox_run unknown_sample.exe"]
         depends_on: ["static_analysis"]
 """
+
+
+@pytest.fixture
+def temp_config_dir_helper():
+    """Helper fixture to create temporary config directories with YAML content and prompts directory."""
+    def _create_temp_config_dir(tmp_path, yaml_content):
+        # Create the config directory
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        # Write the tasks.yaml file
+        tasks_file = config_dir / "tasks.yaml"
+        tasks_file.write_text(yaml_content)
+
+        # Create the prompts directory
+        prompts_dir = config_dir / "prompts"
+        prompts_dir.mkdir()
+
+        # Create some sample prompt template files
+        for template_name in ["malware_family_analysis_prompt.md", "malware_analysis_prompt.md", "test_task_prompt.md"]:
+            template_file = prompts_dir / template_name
+            template_file.write_text("# Sample Template\n\nThis is a sample prompt template for testing.")
+
+        return str(config_dir)
+
+    return _create_temp_config_dir
 
 
 @pytest.fixture
@@ -248,10 +296,22 @@ def sample_yaml_missing_benchmark_config():
     """Sample YAML content missing benchmark_config section (should fail)."""
     return """
 domain: "malware_classification"
+
+global_defaults:
+  execution_config:
+    timeout: 300
+  episode_config:
+    max_steps: 50
+
+executors:
+  - cli_executor
+  - python_executor
+
 tasks:
   - task_id: "test_task"
     title: "Test Task"
     description: "A test task without benchmark config"
+    prompt_template_file: "test_task_prompt.md"
     subtasks: []
 """
 
@@ -265,10 +325,21 @@ domain: "malware_classification"
 benchmark_config:
   other_setting: true
 
+global_defaults:
+  execution_config:
+    timeout: 300
+  episode_config:
+    max_steps: 50
+
+executors:
+  - cli_executor
+  - python_executor
+
 tasks:
   - task_id: "test_task"
     title: "Test Task"
     description: "A test task without episode_attempts"
+    prompt_template_file: "test_task_prompt.md"
     subtasks: []
 """
 
@@ -282,9 +353,20 @@ domain: "malware_classification"
 benchmark_config:
   episode_attempts: 0
 
+global_defaults:
+  execution_config:
+    timeout: 300
+  episode_config:
+    max_steps: 50
+
+executors:
+  - cli_executor
+  - python_executor
+
 tasks:
   - task_id: "test_task"
     title: "Test Task"
     description: "A test task with invalid episode_attempts"
+    prompt_template_file: "test_task_prompt.md"
     subtasks: []
 """

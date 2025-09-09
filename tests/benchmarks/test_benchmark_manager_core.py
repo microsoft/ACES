@@ -27,8 +27,9 @@ class TestBenchmarkManagerCore:
         """Helper to create BenchmarkManager from temp directory fixture."""
         return BenchmarkManager("malware_classification", temp_config_dir)
 
-    def test_load_tasks_from_yaml_success(self, temp_config_dir):
+    def test_load_tasks_from_yaml_success(self, tmp_path, temp_config_dir_helper, sample_task_yaml):
         """Test successful loading of tasks from YAML."""
+        temp_config_dir = temp_config_dir_helper(tmp_path, sample_task_yaml)
         manager = self._create_benchmark_manager_from_temp_config_dir(temp_config_dir)
 
         # Clear tasks and reload
@@ -117,41 +118,58 @@ class TestBenchmarkManagerCore:
         assert task_info["description"] is not None
         assert task_info["subtask_count"] == 2
 
-    def test_list_tasks_empty(self, tmp_path):
+    def test_list_tasks_empty(self, tmp_path, temp_config_dir_helper):
         """Test listing tasks when no tasks are defined."""
         # Create tasks.yaml in the tmp directory
-        tasks_yaml = tmp_path / "tasks.yaml"
-        tasks_yaml.write_text(
-            """
+        yaml_content = """
 domain: "malware_classification"
 
 benchmark_config:
   episode_attempts: 1
 
+global_defaults:
+  execution_config:
+    timeout: 300
+  episode_config:
+    max_steps: 50
+
+executors:
+  - cli_executor
+  - python_executor
+
 tasks: []
 """
-        )
+        config_dir = temp_config_dir_helper(tmp_path, yaml_content)
 
-        manager = BenchmarkManager("malware_classification", str(tmp_path))
+        manager = BenchmarkManager("malware_classification", config_dir)
 
         task_list = manager.list_tasks()
         assert task_list == []
 
-    def test_list_tasks_multiple_tasks(self, tmp_path):
+    def test_list_tasks_multiple_tasks(self, tmp_path, temp_config_dir_helper):
         """Test listing multiple tasks."""
         # Create tasks.yaml in the tmp directory
-        tasks_yaml = tmp_path / "tasks.yaml"
-        tasks_yaml.write_text(
-            """
+        yaml_content = """
 domain: "malware_classification"
 
 benchmark_config:
   episode_attempts: 2
 
+global_defaults:
+  execution_config:
+    timeout: 300
+  episode_config:
+    max_steps: 50
+
+allowed_executors:
+  - cli_executor
+  - python_executor
+
 tasks:
   - task_id: "task1"
     title: "First Task"
     description: "First test task"
+    prompt_template_file: "test_task_prompt.md"
     subtasks:
       - subtask_id: "subtask1"
         title: "SubTask 1"
@@ -160,11 +178,12 @@ tasks:
   - task_id: "task2"
     title: "Second Task"
     description: "Second test task"
+    prompt_template_file: "test_task_prompt.md"
     subtasks: []
 """
-        )
+        config_dir = temp_config_dir_helper(tmp_path, yaml_content)
 
-        manager = BenchmarkManager("malware_classification", str(tmp_path))
+        manager = BenchmarkManager("malware_classification", config_dir)
 
         task_list = manager.list_tasks()
         assert len(task_list) == 2
@@ -223,54 +242,73 @@ tasks:
 class TestBenchmarkManagerBenchmarkConfig:
     """Test cases for BenchmarkManager benchmark configuration functionality."""
 
-    def test_get_benchmark_config_success(self, tmp_path):
+    def test_get_benchmark_config_success(self, tmp_path, temp_config_dir_helper):
         """Test successful retrieval of benchmark configuration."""
-        tasks_yaml = tmp_path / "tasks.yaml"
-        tasks_yaml.write_text(
-            """
+        yaml_content = """
 domain: "webapp_pentest"
 
 benchmark_config:
   episode_attempts: 5
   max_duration_minutes: 30
 
+global_defaults:
+  execution_config:
+    timeout: 300
+  episode_config:
+    max_steps: 50
+
+allowed_executors:
+  - cli_executor
+  - python_executor
+
 tasks:
   - task_id: "test_task"
     title: "Test Task"
     description: "A test task"
+    prompt_template_file: "test_task_prompt.md"
     subtasks: []
 """
-        )
+        config_dir = temp_config_dir_helper(tmp_path, yaml_content)
 
-        manager = BenchmarkManager("webapp_pentest", str(tmp_path))
+        manager = BenchmarkManager("webapp_pentest", config_dir)
         config = manager.get_benchmark_config()
 
         assert config["episode_attempts"] == 5
         assert config["max_duration_minutes"] == 30
 
-    def test_start_benchmark_success(self, tmp_path):
+    def test_start_benchmark_success(self, tmp_path, temp_config_dir_helper):
         """Test successful benchmark session start."""
-        tasks_yaml = tmp_path / "tasks.yaml"
-        tasks_yaml.write_text(
-            """
+        yaml_content = """
 domain: "webapp_pentest"
 
 benchmark_config:
   episode_attempts: 3
 
+global_defaults:
+  execution_config:
+    timeout: 300
+  episode_config:
+    max_steps: 50
+
+allowed_executors:
+  - cli_executor
+  - python_executor
+
 tasks:
   - task_id: "task1"
     title: "Task 1"
     description: "First task"
+    prompt_template_file: "test_task_prompt.md"
     subtasks: []
   - task_id: "task2"
     title: "Task 2"
     description: "Second task"
+    prompt_template_file: "test_task_prompt.md"
     subtasks: []
 """
-        )
+        config_dir = temp_config_dir_helper(tmp_path, yaml_content)
 
-        manager = BenchmarkManager("webapp_pentest", str(tmp_path))
+        manager = BenchmarkManager("webapp_pentest", config_dir)
 
         # Use current architecture - get benchmark info
         benchmark_info = manager.get_benchmark_info()
@@ -281,31 +319,41 @@ tasks:
         assert "task1" in [task["task_id"] for task in result["tasks"]]
         assert "task2" in [task["task_id"] for task in result["tasks"]]
 
-    def test_list_benchmark_tasks_with_episode_attempts(self, tmp_path):
+    def test_list_benchmark_tasks_with_episode_attempts(self, tmp_path, temp_config_dir_helper):
         """Test listing tasks with episode attempts information."""
-        tasks_yaml = tmp_path / "tasks.yaml"
-        tasks_yaml.write_text(
-            """
+        yaml_content = """
 domain: "webapp_pentest"
 
 benchmark_config:
   episode_attempts: 3
 
+global_defaults:
+  execution_config:
+    timeout: 300
+  episode_config:
+    max_steps: 50
+
+allowed_executors:
+  - cli_executor
+  - python_executor
+
 tasks:
   - task_id: "task_default"
     title: "Task with Default"
     description: "Uses domain default"
+    prompt_template_file: "test_task_prompt.md"
     subtasks: []
   - task_id: "task_override"
     title: "Task with Override"
     description: "Overrides domain default"
+    prompt_template_file: "test_task_prompt.md"
     benchmark_config:
       episode_attempts: 10
     subtasks: []
 """
-        )
+        config_dir = temp_config_dir_helper(tmp_path, yaml_content)
 
-        manager = BenchmarkManager("webapp_pentest", str(tmp_path))
+        manager = BenchmarkManager("webapp_pentest", config_dir)
         tasks = manager.list_benchmark_tasks()
 
         assert len(tasks) == 2
@@ -318,59 +366,65 @@ tasks:
         assert "benchmark_config" in task_default
         assert "benchmark_config" in task_override
 
-    def test_task_get_episode_attempts(self, tmp_path):
+    def test_task_get_episode_attempts(self, tmp_path, temp_config_dir_helper):
         """Test that tasks correctly return episode attempts."""
-        tasks_yaml = tmp_path / "tasks.yaml"
-        tasks_yaml.write_text(
-            """
+        yaml_content = """
 domain: "webapp_pentest"
 
 benchmark_config:
   episode_attempts: 7
 
+global_defaults:
+  execution_config:
+    timeout: 300
+  episode_config:
+    max_steps: 50
+
+allowed_executors:
+  - cli_executor
+  - python_executor
+
 tasks:
   - task_id: "test_task"
     title: "Test Task"
     description: "A test task"
+    prompt_template_file: "test_task_prompt.md"
     benchmark_config:
       episode_attempts: 15
     subtasks: []
 """
-        )
+        config_dir = temp_config_dir_helper(tmp_path, yaml_content)
 
-        manager = BenchmarkManager("webapp_pentest", str(tmp_path))
+        manager = BenchmarkManager("webapp_pentest", config_dir)
         task = manager.get_task("test_task")
 
         assert task.get_episode_attempts() == 15
 
-    def test_missing_benchmark_config_fails(self, sample_yaml_missing_benchmark_config, tmp_path):
+    def test_missing_benchmark_config_fails(self, sample_yaml_missing_benchmark_config, tmp_path, temp_config_dir_helper):
         """Test that missing benchmark_config section causes failure."""
-        tasks_yaml = tmp_path / "tasks.yaml"
-        tasks_yaml.write_text(sample_yaml_missing_benchmark_config)
+        config_dir = temp_config_dir_helper(tmp_path, sample_yaml_missing_benchmark_config)
 
         with pytest.raises(InvalidTaskDefinitionException) as exc_info:
-            BenchmarkManager("malware_classification", str(tmp_path))
+            BenchmarkManager("malware_classification", config_dir)
 
         # Updated error message reflects the new global defaults system
         assert "Missing required 'episode_attempts' in benchmark configuration" in str(exc_info.value)
         assert "global_defaults.benchmark_config" in str(exc_info.value)
 
-    def test_missing_episode_attempts_fails(self, sample_yaml_missing_episode_attempts, tmp_path):
+    def test_missing_episode_attempts_fails(self, sample_yaml_missing_episode_attempts, tmp_path, temp_config_dir_helper):
         """Test that missing episode_attempts causes failure."""
-        tasks_yaml = tmp_path / "tasks.yaml"
-        tasks_yaml.write_text(sample_yaml_missing_episode_attempts)
+        config_dir = temp_config_dir_helper(tmp_path, sample_yaml_missing_episode_attempts)
 
         with pytest.raises(InvalidTaskDefinitionException) as exc_info:
-            BenchmarkManager("malware_classification", str(tmp_path))
+            BenchmarkManager("malware_classification", config_dir)
 
         assert "Missing required 'episode_attempts'" in str(exc_info.value)
 
-    def test_invalid_episode_attempts_fails(self, sample_yaml_invalid_episode_attempts, tmp_path):
+    def test_invalid_episode_attempts_fails(self, sample_yaml_invalid_episode_attempts, tmp_path, temp_config_dir_helper):
         """Test that invalid episode_attempts value causes failure."""
-        tasks_yaml = tmp_path / "tasks.yaml"
-        tasks_yaml.write_text(sample_yaml_invalid_episode_attempts)
+        config_dir = temp_config_dir_helper(tmp_path, sample_yaml_invalid_episode_attempts)
 
         with pytest.raises(InvalidTaskDefinitionException) as exc_info:
-            BenchmarkManager("malware_classification", str(tmp_path))
+            BenchmarkManager("malware_classification", config_dir)
 
         assert "episode_attempts must be a positive integer" in str(exc_info.value)

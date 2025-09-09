@@ -447,27 +447,20 @@ class SessionMCPAPI:
             )
 
     async def _handle_end_episode_call(
-        self, arguments: Dict[str, Any], session_id: Optional[str] = None, episode_id: Optional[str] = None
+        self, arguments: Dict[str, Any], session_id: str, episode_id: str
     ) -> MCPToolCallResponse:
         """
         Handle the hardcoded end_episode tool call.
 
         Args:
             arguments: Tool arguments (clean, no session_id)
-            session_id: SABER session ID from Context (can be None for legacy support)
-            episode_id: SABER episode ID from Context (required for multi-episode architecture)
+            session_id: SABER session ID from headers
+            episode_id: SABER episode ID from headers
 
         Returns:
             MCPToolCallResponse confirming episode end
         """
         try:
-            # If session_id not provided, try to get it from arguments or headers
-            if not session_id:
-                if "session_id" in arguments:
-                    session_id = arguments["session_id"]
-                else:
-                    session_id, episode_id = await self._get_session_and_episode_from_headers()
-
             if not session_id:
                 return MCPToolCallResponse(
                     content=[{"type": "text", "text": "Error: No SABER session mapped to MCP request"}], isError=True
