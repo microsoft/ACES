@@ -17,7 +17,7 @@ global_defaults:
 tasks:
   - task_id: "incident_5_task_1"
     title: "incident_5_task_1"
-    description: "Analyze command and control behavior through database investigation to identify the IP address involved in the security incident"
+    description: "What is the IP address associated with the Manatee Tempest activity group detected in this security incident?"
     prompt_template_file: "excytin_demo.md"
 
     sandbox_environment: "excytin_sandbox"
@@ -43,14 +43,19 @@ tasks:
         max_score: 1.0
 
     subtasks:
-      - subtask_id: "database_schema_exploration"
-        title: "Database Schema Analysis"
-        description: "Explore database structure and understand available security tables"
-        objective: "Map database schema to identify relevant tables for incident analysis"
+      - subtask_id: "checkpoint_1"
+        title: "Checkpoint 1"
+        description: "The account with SID `S-1-5-21-1840191660-8534830288-125585561-1522` was involved in a Command and Control behavior that was blocked."
+        objective: "Identify key details related to the potential compromise that might help in solving the main task."
+      
+      - subtask_id: "checkpoint_2"
+        title : "Checkpoint 2"
+        description: "The cybercriminal group known as Manatee Tempest, which is associated with the IP address `198.43.121.209`, was active during the incident."
+        objective: "Identify key details related to the potential compromise that might help in solving the main task."
 
   - task_id: "incident_5_task_2"
     title: "incident_5_task_2"
-    description: "Analyze ransomware activity through database investigation to analyze the command line involved in the security incident"
+    description: "What is the command line of the suspicious process involved in the user behavior change on device `vnevado-win11u`?"
     prompt_template_file: "excytin_demo.md"
 
     sandbox_environment: "excytin_sandbox"
@@ -76,14 +81,20 @@ tasks:
         max_score: 1.0
 
     subtasks:
-      - subtask_id: "database_schema_exploration"
-        title: "Database Schema Analysis"
-        description: "Explore database structure and understand available security tables"
-        objective: "Map database schema to identify relevant tables for incident analysis"
+      - subtask_id: "checkpoint_1"
+        title: "Checkpoint 1"
+        description: "A ransomware payload was remotely launched by the user with SID `S-1-5-21-1840191660-8534830288-125585561-1522` at `2024-07-04 22:35:03.038773+00:00`."
+        objective: "Identify key details related to the potential compromise that might help in solving the main task."
+      
+      - subtask_id: "checkpoint_2"
+        title: "Checkpoint 2"
+        description: "Suspicious hands on keyboard user behavior was detected on this device, involving a process with Process ID `88` launched with the command line `curl http://vectorsandarrows.com` at `2024-06-20t09:29:42.3927529z`."
+        objective: "Identify key details related to the potential compromise that might help in solving the main task."
+      
 
   - task_id: "incident_5_task_3"
     title: "incident_5_task_3"
-    description: "Analyze credential theft through database investigation to identify the IP address involved in the security incident"
+    description: "Can you identify the IP address involved in the malicious credential theft tool execution detected?"
     prompt_template_file: "excytin_demo.md"
 
     sandbox_environment: "excytin_sandbox"
@@ -109,14 +120,19 @@ tasks:
         max_score: 1.0
 
     subtasks:
-      - subtask_id: "database_schema_exploration"
-        title: "Database Schema Analysis"
-        description: "Explore database structure and understand available security tables"
-        objective: "Map database schema to identify relevant tables for incident analysis"
+      - subtask_id: "checkpoint_1"
+        title: "Checkpoint 1"
+        description: "The Mimikatz credential theft tool was detected on the device with IP address `107.224.99.179`."
+        objective: "Identify key details related to the potential compromise that might help in solving the main task."
+      
+      - subtask_id: "checkpoint_2"
+        title: "Checkpoint 2"
+        description: "A malicious credential theft tool execution was detected on the same device with IP address `107.224.99.179`."
+        objective: "Identify key details related to the potential compromise that might help in solving the main task."
 
   - task_id: "incident_5_task_4"
     title: "incident_5_task_4"
-    description: "Analyze security incident through database investigation to identify the URL involved in the security incident"
+    description: "What is the URL associated with the Manatee Tempest activity group in this incident?"
     prompt_template_file: "excytin_demo.md"
 
     sandbox_environment: "excytin_sandbox"
@@ -142,14 +158,19 @@ tasks:
         max_score: 1.0
 
     subtasks:
-      - subtask_id: "database_schema_exploration"
-        title: "Database Schema Analysis"
-        description: "Explore database structure and understand available security tables"
-        objective: "Map database schema to identify relevant tables for incident analysis"
+      - subtask_id: "checkpoint_1"
+        title: "Checkpoint 1"
+        description: "Suspicious 'GenRansom' behavior was detected on the host with AadDeviceId `e5799261-6720-4297-961e-bd9ca4275033`."
+        objective: "Identify key details related to the potential compromise that might help in solving the main task."
+      
+      - subtask_id: "checkpoint_2"
+        title: "Checkpoint 2"
+        description: "The Manatee Tempest activity group, a Russia-based cybercriminal group, has potential malicious activity related to the URL `vectorsandarrows.com`."
+        objective: "Identify key details related to the potential compromise that might help in solving the main task."
 
   - task_id: "incident_5_task_5"
     title: "incident_5_task_5"
-    description: "Analyze ransomware activity through database investigation to identify the hostname involved in the security incident"
+    description: "Can you identify the hostname of the device where system recovery setting tampering was observed?"
     prompt_template_file: "excytin_demo.md"
 
     sandbox_environment: "excytin_sandbox"
@@ -175,7 +196,12 @@ tasks:
         max_score: 1.0
 
     subtasks:
-      - subtask_id: "database_schema_exploration"
-        title: "Database Schema Analysis"
-        description: "Explore database structure and understand available security tables"
-        objective: "Map database schema to identify relevant tables for incident analysis"
+      - subtask_id: "checkpoint_1"
+        title: "Checkpoint 1"
+        description: "The user with SID `S-1-5-21-1840191660-8534830288-125585561-1522` is potentially compromised and exhibiting ransomware-like behavior, affecting multiple devices."
+        objective: "Identify key details related to the potential compromise that might help in solving the main task."
+      
+      - subtask_id: "checkpoint_2"
+        title: "Checkpoint 2"
+        description: "System recovery settings have been tampered with on the device with hostname `vnevado-win10s`, which could indicate an attempt by adversaries to disable system recovery features and prevent system recovery."
+        objective: "Identify key details related to the potential compromise that might help in solving the main task."
