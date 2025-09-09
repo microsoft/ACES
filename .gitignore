@@ -52,3 +52,7 @@ bin/
 
 # Ignore vscode for specific user setups
 **/.vscode
+
+# Ignore .cache and .local for client startups
+.cache/
+.local/
