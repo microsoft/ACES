@@ -1040,7 +1040,7 @@ wheels = [
 
 [[package]]
 name = "inspect-ai"
-version = "0.3.130.dev20+g32c03024"
+version = "0.3.0"
 source = { git = "https://dev.azure.com/MSECAIModels/Benchmarking/_git/inspect_ai#32c03024248a0c9b49b8e3bf06dcee1455b3835b" }
 dependencies = [
     { name = "aioboto3" },

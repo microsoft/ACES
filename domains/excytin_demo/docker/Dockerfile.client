@@ -7,7 +7,10 @@ RUN curl -sL https://aka.ms/InstallAzureCLIDeb | bash
 
 # Configure Git to use Azure CLI with Entra ID authentication
 RUN git config --global credential.https://dev.azure.com.useHttpPath true && \
-    git config --global credential.helper store
+    git config --global credential.https://dev.azure.com.helper "!f() { echo \"username=oauth2\"; echo \"password=\$(az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv)\"; }; f"
+
+# Fix setuptools-scm version detection for mounted inspect_ai submodule
+ENV SETUPTOOLS_SCM_PRETEND_VERSION_FOR_INSPECT_AI=0.3.0
 
 # Install Python dependencies using uv
 WORKDIR /app/client

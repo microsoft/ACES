@@ -1,12 +1,13 @@
 """
 Client Session Manager for SABER client-server communication.
 
-Manages sessions, episodes, policy interactions, and MCP tool access from the client side.
+Manages sessions, episodes, and policy interactions from the client side.
+MCP tools are now handled natively by inspect_ai via mcp_server_http().
 """
 
 import asyncio
 import logging
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 import aiohttp
 
@@ -17,8 +18,6 @@ from ..models import (  # Use shared api models directly
     SessionCreateResponse,
     TaskInfo,
 )
-from ..models.mcp import MCPTool, MCPToolCallRequest, MCPToolCallResponse, SessionContext
-from .api.mcp_client import MCPClient
 from .models import SessionManagerConfig
 
 logger = logging.getLogger(__name__)
@@ -46,14 +45,9 @@ class ClientSessionManager:
         self.base_url = config.base_url.rstrip("/")
         self.client_id = config.client_id
         self.timeout = config.rest_timeout
-        self.mcp_config = config.to_mcp_config()
         self._current_session_id: Optional[str] = None
 
-        # Episode-scoped MCP client pool - each episode gets its own client
-        self.mcp_client_pool: Dict[str, MCPClient] = {}
-
         logger.debug(f"Initialized ClientSessionManager for: {self.base_url}")
-        logger.debug(f"MCP endpoint: {self.mcp_config.base_url}")
 
     async def create_session(self) -> str:
         """
@@ -240,7 +234,7 @@ class ClientSessionManager:
         self, session_id: str, episode_id: str, reason: str = "completed", result: Optional[str] = None
     ) -> None:
         """
-        End an episode via REST API and cleanup its MCP client.
+        End an episode via REST API.
 
         Args:
             session_id: Session ID
@@ -249,9 +243,6 @@ class ClientSessionManager:
             result: Optional result data
         """
         logger.debug(f"Ending episode {episode_id} with reason: {reason}")
-
-        # Cleanup episode MCP client first
-        await self.cleanup_episode_mcp_client(episode_id)
 
         url = f"{self.base_url}/session/{session_id}/episodes/{episode_id}"
         params = {"reason": reason}
@@ -293,138 +284,8 @@ class ClientSessionManager:
             raise RuntimeError("No active session - call create_session() first")
         return self._current_session_id
 
-    # ========================================
-    # Enhanced MCP Tool Integration Methods
-    # ========================================
-
-    def _build_episode_context(self, episode_id: str, task_id: Optional[str] = None) -> SessionContext:
-        """Build session context for episode-specific MCP requests."""
-        if not self._current_session_id:
-            raise RuntimeError("No active session for MCP operations")
-
-        return SessionContext(
-            session_id=self._current_session_id,
-            episode_id=episode_id,
-            task_id=task_id,
-            client_id=self.mcp_config.client_id,
-        )
-
-    async def ensure_episode_mcp_client(self, episode_id: str, task_id: Optional[str] = None) -> None:
-        """
-        Ensure an MCP client exists for the given episode.
-
-        Creates a new episode-specific MCP client if one doesn't exist.
-        Each client is connected with episode context in headers.
-
-        Args:
-            episode_id: Episode ID (required for all MCP operations)
-            task_id: Optional task ID for request context
-
-        Raises:
-            RuntimeError: No active session or MCP connection fails
-        """
-        if episode_id in self.mcp_client_pool:
-            # Client already exists for this episode
-            return
-
-        if not self._current_session_id:
-            raise RuntimeError("No active session - call create_session() first")
-
-        # Create new MCP client for this episode
-        episode_mcp_client = MCPClient(self.mcp_config)
-        episode_context = self._build_episode_context(episode_id, task_id)
-
-        try:
-            await episode_mcp_client.connect(episode_context)
-            self.mcp_client_pool[episode_id] = episode_mcp_client
-            logger.info(f"Created MCP client for episode: {episode_id}")
-        except Exception as e:
-            logger.error(f"Failed to create MCP client for episode {episode_id}: {e}")
-            # Fail fast - episode fails if MCP client cannot be created
-            raise RuntimeError(f"Episode {episode_id} failed: MCP client connection failed: {e}") from e
-
-    def _get_episode_mcp_client(self, episode_id: str) -> MCPClient:
-        """
-        Get the MCP client for a specific episode.
-
-        Args:
-            episode_id: Episode ID
-
-        Returns:
-            MCPClient for the episode
-
-        Raises:
-            RuntimeError: No MCP client exists for episode
-        """
-        if episode_id not in self.mcp_client_pool:
-            raise RuntimeError(f"No MCP client for episode {episode_id} - call ensure_episode_mcp_client() first")
-
-        return self.mcp_client_pool[episode_id]
-
-    async def cleanup_episode_mcp_client(self, episode_id: str) -> None:
-        """
-        Cleanup MCP client for a specific episode.
-
-        Args:
-            episode_id: Episode ID to cleanup
-        """
-        if episode_id in self.mcp_client_pool:
-            mcp_client = self.mcp_client_pool[episode_id]
-            try:
-                await mcp_client.disconnect()
-                logger.info(f"Disconnected MCP client for episode: {episode_id}")
-            except Exception as e:
-                logger.warning(f"Error disconnecting MCP client for episode {episode_id}: {e}")
-            finally:
-                del self.mcp_client_pool[episode_id]
-
-    async def cleanup_all_mcp_clients(self) -> None:
-        """Cleanup all episode MCP clients."""
-        episode_ids = list(self.mcp_client_pool.keys())
-        for episode_id in episode_ids:
-            await self.cleanup_episode_mcp_client(episode_id)
-
-    async def list_mcp_tools(self, episode_id: str, task_id: Optional[str] = None) -> List[MCPTool]:
-        """
-        List available MCP tools for a specific episode.
-
-        Args:
-            episode_id: Episode ID (required for all MCP operations)
-            task_id: Optional task ID for request context
-
-        Returns:
-            List of available tools
-
-        Raises:
-            RuntimeError: No MCP client exists for episode
-        """
-        episode_mcp_client = self._get_episode_mcp_client(episode_id)
-        return await episode_mcp_client.discover_tools(episode_id=episode_id, task_id=task_id)
-
-    async def execute_mcp_tool(self, request: MCPToolCallRequest) -> MCPToolCallResponse:
-        """
-        Execute MCP tool using episode-specific client.
-
-        Args:
-            request: Typed tool execution request (must include episode_id)
-
-        Returns:
-            Typed tool execution response
-
-        Raises:
-            RuntimeError: No MCP client exists for episode
-            ValueError: Missing episode_id in request
-        """
-        if not request.episode_id:
-            raise ValueError("episode_id is required for all MCP tool executions")
-
-        episode_mcp_client = self._get_episode_mcp_client(request.episode_id)
-        return await episode_mcp_client.execute_tool(request)
-
     async def cleanup(self) -> None:
-        """Cleanup session manager resources including all MCP connections."""
-        await self.cleanup_all_mcp_clients()
-
+        """Cleanup session manager resources."""
         if self._current_session_id:
             await self.terminate_session(self._current_session_id)
 

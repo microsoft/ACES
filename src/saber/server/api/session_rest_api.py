@@ -249,24 +249,34 @@ class SessionRestAPI:
         @self.app.post("/session/{session_id}/episodes", response_model=EpisodeCreateResponse)
         async def create_episode_endpoint(session_id: str, task_id: str) -> EpisodeCreateResponse:
             """Create a new episode for a specific task."""
-            episode = await self.session_manager.start_episode(session_id, task_id)
+            try:
+                logger.info(f"🔄 Episode creation endpoint called: session_id={session_id}, task_id={task_id}")
+                episode = await self.session_manager.start_episode(session_id, task_id)
+                logger.info(f"✅ Episode created successfully: episode_id={episode.episode_id}")
 
-            # Create episode context with limits and metadata
-            episode_context = EpisodeContext(
-                session_id=session_id,
-                task_timeout=None,
-                max_steps=episode.max_steps,
-                metadata=episode.metadata,
-            )
+                # Create episode context with limits and metadata
+                episode_context = EpisodeContext(
+                    session_id=session_id,
+                    task_timeout=None,
+                    max_steps=episode.max_steps,
+                    metadata=episode.metadata,
+                )
+                logger.info("✅ Episode context created successfully")
 
-            return EpisodeCreateResponse(
-                episode_id=episode.episode_id,
-                task_id=task_id,
-                session_id=session_id,
-                state=episode.state.value,
-                message="Episode created successfully",
-                episode_context=episode_context,
-            )
+                response = EpisodeCreateResponse(
+                    episode_id=episode.episode_id,
+                    task_id=task_id,
+                    session_id=session_id,
+                    state=episode.state.value,
+                    message="Episode created successfully",
+                    episode_context=episode_context,
+                )
+                logger.info("✅ Episode response created successfully, returning to client")
+                return response
+            except Exception as e:
+                logger.error(f"❌ Error in episode creation endpoint: {type(e).__name__}: {str(e)}")
+                logger.error("❌ Full traceback:", exc_info=True)
+                raise HTTPException(status_code=500, detail=f"Failed to create episode: {str(e)}")
 
         @self.app.get("/session/{session_id}/episodes", response_model=EpisodeListResponse)
         async def list_episodes_endpoint(session_id: str, include_completed: bool = False) -> EpisodeListResponse:
@@ -383,8 +393,29 @@ class SessionRestAPI:
             Returns BenchmarkInfo object with typed data structure.
             Each task reports its own configured episode_attempts.
             """
-            benchmark_info: BenchmarkInfo = self.session_manager.get_benchmark_info()
-            return benchmark_info
+            logger.debug("Benchmark endpoint called")
+            try:
+                benchmark_info: BenchmarkInfo = self.session_manager.get_benchmark_info()
+                logger.debug(
+                    f"Got benchmark info: {benchmark_info.total_tasks} tasks, {benchmark_info.total_episodes} episodes"
+                )
+
+                # Test serialization before returning
+                try:
+                    benchmark_info.model_dump()
+                    logger.debug("Benchmark info serialization successful")
+                except Exception as ser_e:
+                    logger.error(f"Benchmark info serialization failed: {ser_e}")
+                    raise
+
+                return benchmark_info
+            except Exception as e:
+                logger.error(f"Error in benchmark endpoint: {e}")
+                logger.error(f"Exception type: {type(e)}")
+                import traceback
+
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                raise
 
         @self.app.get("/health", response_model=HealthResponse)
         async def health_check() -> HealthResponse:

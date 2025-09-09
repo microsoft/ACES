@@ -18,6 +18,9 @@ class TaskInfo(BaseModel):
     episode_attempts: int = Field(..., description="Number of episode attempts for this task")
     subtask_count: int = Field(..., description="Number of subtasks in this task")
     max_steps: int = Field(..., description="Maximum steps allowed per episode")
+    initial_prompt: str = Field(
+        default="", description="Agent initial prompt for this task"
+    )  # Made optional with default
 
 
 class PolicyInfo(BaseModel):

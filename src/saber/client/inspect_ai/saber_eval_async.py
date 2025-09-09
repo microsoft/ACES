@@ -56,8 +56,11 @@ async def run_saber_eval_async(config: SABERConfig) -> Union[EvalLog, None]:
     logger.info(f"Agent: {config.agent_id or config.agent_path}")
     logger.info(f"Tasks: {config.task_ids or 'all available'}")
 
-    # Use orchestrator as unified interface for all operations
-    async with SABEREvaluationOrchestrator(config) as orchestrator:
+    # Create orchestrator and keep it alive for the entire evaluation
+    orchestrator = SABEREvaluationOrchestrator(config)
+    await orchestrator.__aenter__()
+
+    try:
         # Discover tasks (either configured or all available)
         logger.info("Discovering tasks")
         task_ids = await orchestrator.discover_tasks()
@@ -97,30 +100,34 @@ async def run_saber_eval_async(config: SABERConfig) -> Union[EvalLog, None]:
 
         # Execute eval_async (inspect_ai specific, stays at entrypoint level)
         logger.info("Starting eval_async execution")
-        try:
-            eval_log = await eval_async(**eval_kwargs)
-            logger.info("eval_async execution completed successfully")
+        eval_log = await eval_async(**eval_kwargs)
+        logger.info("eval_async execution completed successfully")
 
-            # Handle case where eval_async returns a list of logs
-            if isinstance(eval_log, list):
-                if len(eval_log) == 1:
-                    return eval_log[0]
-                else:
-                    # Return the first log or combine them - this depends on your use case
-                    logger.warning(f"eval_async returned {len(eval_log)} logs, returning the first one")
-                    return eval_log[0] if eval_log else None
+        # Handle case where eval_async returns a list of logs
+        if isinstance(eval_log, list):
+            if len(eval_log) == 1:
+                return eval_log[0]
+            else:
+                # Return the first log or combine them - this depends on your use case
+                logger.warning(f"eval_async returned {len(eval_log)} logs, returning the first one")
+                return eval_log[0] if eval_log else None
 
-            return eval_log
-        except Exception as e:
-            logger.error(f"eval_async execution failed: {e}")
-            # Use SABER's exception for consistency but don't import in orchestrator
-            from ..exceptions import EvaluationExecutionError
+        return eval_log
 
-            raise EvaluationExecutionError(
-                f"eval_async execution failed: {e}",
-                details={
-                    "eval_config": {k: v for k, v in eval_kwargs.items() if k != "tasks"},
-                    "error_type": type(e).__name__,
-                },
-                suggestion="Check eval_async logs for detailed error information",
-            ) from e
+    except Exception as e:
+        logger.error(f"eval_async execution failed: {e}")
+        # Use SABER's exception for consistency but don't import in orchestrator
+        from ..exceptions import EvaluationExecutionError
+
+        raise EvaluationExecutionError(
+            f"eval_async execution failed: {e}",
+            details={
+                "eval_config": {k: v for k, v in eval_kwargs.items() if k != "tasks"},
+                "error_type": type(e).__name__,
+            },
+            suggestion="Check eval_async logs for detailed error information",
+        ) from e
+
+    finally:
+        # Clean up orchestrator and session AFTER eval_async completes
+        await orchestrator.__aexit__(None, None, None)

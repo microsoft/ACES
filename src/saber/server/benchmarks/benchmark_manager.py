@@ -88,6 +88,7 @@ class BenchmarkManager:
                 episode_attempts=episode_attempts,
                 subtask_count=len(task.subtasks),
                 max_steps=max_steps,
+                initial_prompt=self.get_task_prompt(task.task_id),
             )
             task_infos.append(task_info)
             total_episodes += episode_attempts
