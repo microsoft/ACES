@@ -3,7 +3,7 @@ services:
   saber-excytin-server:
     image: saber/excytin-server:latest
     container_name: saber-excytin-server
-    user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"  # Run as host user to fix log permissions
+    # user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"  # TODO: Fix this so it actually works # Run as host user to fix log permissions
     group_add:
       - "${DOCKER_GROUP_ID:-1001}"  # Add docker group for socket access
     ports:
