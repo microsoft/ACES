@@ -23,12 +23,6 @@ echo "🐳 Restarting containers with user mapping..."
 docker compose down
 docker compose up -d
 
-# Fix container app directory permissions for cache creation
-echo "🔧 Fixing container permissions for cache directories..."
-docker exec saber-excytin-client bash -c "sudo chown -R $DOCKER_UID:$DOCKER_GID /app && sudo chmod -R 755 /app" 2>/dev/null || \
-docker exec --user root saber-excytin-client bash -c "chown -R $DOCKER_UID:$DOCKER_GID /app && chmod -R 755 /app" || \
-echo "⚠️  Could not fix container permissions - you may need to run containers as root initially"
-
 echo "✅ SABER demo is ready with proper log permissions!"
 echo "📊 Log files will now be created with your user ownership"
 echo ""
