@@ -84,7 +84,7 @@ For detailed architecture documentation, see [docs/README.md](docs/README.md).
 1. **Clone the repository:**
    ```bash
    git clone <repository-url>
-   cd saber_vibin
+   cd SABER
    ```
 
 2. **Install uv package manager:**

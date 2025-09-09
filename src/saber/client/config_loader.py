@@ -134,14 +134,7 @@ class SABERConfigLoader:
             agent_path = SABERConfigLoader._resolve_agent_path(agent_path, config_path)
 
         # Extract agent parameters
-        max_steps = agent_config.get("max_steps", 50)
-        max_errors = agent_config.get("max_errors", 3)
         debug_mode = agent_config.get("debug_mode", False)
-
-        # Extract Docker commands
-        docker_commands = config_data.get("docker_commands", [])
-        if not isinstance(docker_commands, list):
-            raise ValueError("'docker_commands' must be a list")
 
         # Extract execution configuration
         log_level = config_data.get("log_level", "INFO")
@@ -165,10 +158,7 @@ class SABERConfigLoader:
             task_ids=task_ids,
             agent_id=agent_id,
             agent_path=agent_path,
-            max_steps=max_steps,
-            max_errors=max_errors,
             debug_mode=debug_mode,
-            docker_commands=docker_commands,
             log_level=log_level,
             log_dir=log_dir,
             ui_enabled=ui_enabled,

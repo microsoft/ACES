@@ -14,10 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from inspect_ai._display.core.active import display as task_display
-
 from .config_loader import SABERConfigLoader
-from .inspect_ai import run_saber_eval_async
 from .models import SABERConfig
 
 
@@ -186,12 +183,20 @@ Examples:
     async def run_task_app() -> None:
         """Run SABER via inspect_ai eval_async for full UI and dataset iteration."""
         logger.info("Starting eval_async task app")
+
+        # Import inspect_ai modules only when needed
+        from .inspect_ai import run_saber_eval_async
+
         # eval_async becomes the main entrypoint - handles UI, dataset iteration, everything
         await run_saber_eval_async(config)
         logger.info("eval_async task app completed")
 
     try:
         logger.info("Starting inspect_ai task display")
+
+        # Import inspect_ai display module only when needed
+        from inspect_ai._display.core.active import display as task_display
+
         task_display().run_task_app(run_task_app)
         logger.info("inspect_ai task display completed")
     except asyncio.CancelledError:

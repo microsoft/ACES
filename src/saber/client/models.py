@@ -86,14 +86,7 @@ class AgentConfig(BaseModel):
     """Strictly typed agent configuration for container execution."""
 
     # Core agent behavior settings
-    max_steps: int = Field(default=50, description="Maximum steps the agent can take")
-    max_errors: int = Field(default=3, description="Maximum errors before stopping")
     debug_mode: bool = Field(default=False, description="Enable debug mode")
-
-    # Optional container settings
-    image: Optional[str] = Field(None, description="Docker image to use for the agent")
-    env: Optional[Dict[str, str]] = Field(default_factory=dict, description="Environment variables for the agent")
-    resources: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Resource limits for the agent")
 
     # Allow additional fields for extensibility
     class Config:
@@ -156,33 +149,6 @@ class ContainerExecutionResult(BaseModel):
 
 
 @dataclass
-class DockerCommand:
-    """Configuration for additional Docker commands to execute during agent container setup."""
-
-    type: str  # "copy", "exec"
-    description: Optional[str] = None
-
-    # For type="copy"
-    source: Optional[str] = None
-    destination: Optional[str] = None
-
-    # For type="exec"
-    command: Optional[List[str]] = None
-    user: Optional[str] = None  # User to run exec command as (default: container default user)
-
-    def __post_init__(self) -> None:
-        """Validate docker command configuration."""
-        if self.type == "copy":
-            if not self.source or not self.destination:
-                raise ValueError("Docker copy commands must specify both source and destination")
-        elif self.type == "exec":
-            if not self.command:
-                raise ValueError("Docker exec commands must specify a command")
-        else:
-            raise ValueError(f"Invalid Docker command type: {self.type}. Must be 'copy' or 'exec'")
-
-
-@dataclass
 class SABERConfig:
     """
     Main SABER configuration using inspect_ai model specifications.
@@ -204,7 +170,6 @@ class SABERConfig:
     agent_config: Optional[AgentConfig] = field(default=None)
 
     # Container configuration
-    docker_commands: List[DockerCommand] = field(default_factory=list)
     container_timeout: int = 300
 
     # Execution configuration
@@ -229,10 +194,7 @@ class SABERConfig:
         task_ids: Optional[List[str]] = None,
         agent_id: Optional[str] = None,
         agent_path: Optional[str] = None,
-        max_steps: int = 50,
-        max_errors: int = 3,
         debug_mode: bool = False,
-        docker_commands: Optional[List[Dict[str, Any]]] = None,
         log_level: str = "INFO",
         log_dir: Optional[str] = None,
         ui_enabled: bool = True,
@@ -254,10 +216,7 @@ class SABERConfig:
             task_ids: List of task IDs to execute
             agent_id: Agent ID from registry
             agent_path: Path to agent Python file
-            max_steps: Maximum steps for agent execution
-            max_errors: Maximum errors before failure
             debug_mode: Enable debug mode
-            docker_commands: Docker commands for container setup
             log_level: Logging level
             log_dir: Log directory path
             ui_enabled: Enable UI
@@ -277,13 +236,7 @@ class SABERConfig:
         session_config = SessionManagerConfig.from_urls(rest_url=rest_url, mcp_url=mcp_url, client_id=client_id)
 
         # Create agent config
-        agent_config = AgentConfig(max_steps=max_steps, max_errors=max_errors, debug_mode=debug_mode, image=None)
-
-        # Convert docker commands if provided
-        docker_cmd_objects = []
-        if docker_commands:
-            for cmd_dict in docker_commands:
-                docker_cmd_objects.append(DockerCommand(**cmd_dict))
+        agent_config = AgentConfig(debug_mode=debug_mode)
 
         return cls(
             model=model,
@@ -293,7 +246,6 @@ class SABERConfig:
             agent_id=agent_id,
             agent_path=agent_path,
             agent_config=agent_config,
-            docker_commands=docker_cmd_objects,
             container_timeout=container_timeout,
             ui_enabled=ui_enabled,
             log_level=log_level,
@@ -346,14 +298,6 @@ class SABERConfig:
         # Validate agent_config type
         if not isinstance(self.agent_config, AgentConfig):
             raise TypeError("agent_config must be an AgentConfig instance")
-
-        # Validate docker_commands
-        if not isinstance(self.docker_commands, list):
-            raise TypeError("docker_commands must be a list")
-
-        for cmd in self.docker_commands:
-            if not isinstance(cmd, DockerCommand):
-                raise TypeError("All docker_commands must be DockerCommand instances")
 
     # Legacy property accessors for backward compatibility during transition
     @property
