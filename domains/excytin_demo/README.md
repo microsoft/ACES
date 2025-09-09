@@ -112,10 +112,35 @@ This builds:
 
 ### 3. Start Environment
 
+**Option A: Quick Setup with Permissions Fix (Recommended)**
 ```bash
 cd /path/to/SABER/domains/excytin_demo
-docker-compose up -d
+./setup-permissions.sh
 ```
+
+This automatically:
+- Sets proper user permissions for log files
+- Fixes existing log file ownership
+- Starts containers with your host user ID
+- Provides helpful usage examples
+
+**Option B: Manual Setup**
+```bash
+cd /path/to/SABER/domains/excytin_demo
+
+# Set environment variables for proper permissions
+export DOCKER_UID=$(id -u)
+export DOCKER_GID=$(id -g)
+
+# Fix existing log permissions (optional)
+sudo chown -R $DOCKER_UID:$DOCKER_GID ./client/logs/ ./server/logs/
+
+# Start containers
+docker compose up -d
+```
+
+**Important: Log File Permissions**
+By default, Docker containers run as root and create log files with root ownership. The updated docker-compose.yml now includes user mapping (`user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"`) to ensure log files are created with your host user permissions, making them readable without sudo.
 
 This starts:
 - `saber-excytin-server` - Main SABER server (ports 8000/8001)
