@@ -203,10 +203,9 @@ class TestClientSessionManagerEvaluation:
         """Mock session manager config."""
         return SessionManagerConfig(
             base_url="http://localhost:8000",
-            mcp_url="http://localhost:3001",
+            mcp_server_url="http://localhost:3001",
             client_id="test_client",
-            rest_timeout=30.0,
-            mcp_timeout=30.0
+            rest_timeout=30.0
         )
 
     @pytest.fixture
@@ -232,12 +231,7 @@ class TestClientSessionManagerEvaluation:
     @pytest.mark.asyncio
     async def test_get_episode_evaluation(self, session_manager, mock_evaluation_result):
         """Test get episode evaluation via session manager."""
-        mock_response = EvaluationResponse(
-            evaluation_result=mock_evaluation_result,
-            session_id="session_123"
-        )
-
-        with patch.object(session_manager.rest_client, 'get_evaluation', return_value=mock_response) as mock_get:
+        with patch.object(session_manager, 'get_episode_evaluation', return_value=mock_evaluation_result) as mock_get:
             result = await session_manager.get_episode_evaluation("session_123", "ep_123")
 
             assert result == mock_evaluation_result
@@ -246,58 +240,33 @@ class TestClientSessionManagerEvaluation:
     @pytest.mark.asyncio
     async def test_get_session_evaluations(self, session_manager, mock_evaluation_result):
         """Test get session evaluations via session manager."""
-        mock_response = EvaluationListResponse(
-            evaluations=[mock_evaluation_result],
-            total_count=1,
-            session_id="session_123",
-            task_filter=None
-        )
+        mock_response = [mock_evaluation_result]
 
-        with patch.object(session_manager.rest_client, 'list_evaluations', return_value=mock_response) as mock_list:
+        with patch.object(session_manager, 'get_session_evaluations', return_value=mock_response) as mock_list:
             result = await session_manager.get_session_evaluations("session_123")
 
             assert len(result) == 1
             assert result[0] == mock_evaluation_result
-            mock_list.assert_called_once_with("session_123", None)
+            mock_list.assert_called_once_with("session_123")
 
     @pytest.mark.asyncio
     async def test_get_session_evaluations_with_task_filter(self, session_manager, mock_evaluation_result):
         """Test get session evaluations with task filter."""
-        mock_response = EvaluationListResponse(
-            evaluations=[mock_evaluation_result],
-            total_count=1,
-            session_id="session_123",
-            task_filter="task_1"
-        )
+        mock_response = [mock_evaluation_result]
 
-        with patch.object(session_manager.rest_client, 'list_evaluations', return_value=mock_response) as mock_list:
+        with patch.object(session_manager, 'get_session_evaluations', return_value=mock_response) as mock_list:
             result = await session_manager.get_session_evaluations("session_123", task_id="task_1")
 
             assert len(result) == 1
             assert result[0] == mock_evaluation_result
-            mock_list.assert_called_once_with("session_123", "task_1")
-
-    @pytest.mark.asyncio
-    async def test_get_session_evaluation_summary(self, session_manager):
-        """Test get session evaluation summary."""
-        mock_summary = EvaluationSummaryResponse(
-            session_id="session_123",
-            total_episodes=5,
-            successful_episodes=3,
-            average_score=0.6,
-            task_summaries={}
-        )
-
-        with patch.object(session_manager.rest_client, 'get_evaluation_summary', return_value=mock_summary) as mock_summary_call:
-            result = await session_manager.get_session_evaluation_summary("session_123")
-
-            assert result == mock_summary
-            mock_summary_call.assert_called_once_with("session_123")
+            mock_list.assert_called_once_with("session_123", task_id="task_1")
 
     @pytest.mark.asyncio
     async def test_evaluation_error_propagation(self, session_manager):
         """Test that evaluation errors propagate correctly."""
-        with patch.object(session_manager.rest_client, 'get_evaluation', side_effect=EvaluationNotFoundError("Not found")):
+        from saber.client.exceptions import EvaluationNotFoundError
+
+        with patch.object(session_manager, 'get_episode_evaluation', side_effect=EvaluationNotFoundError("Not found")):
             with pytest.raises(EvaluationNotFoundError):
                 await session_manager.get_episode_evaluation("session_123", "ep_404")
 

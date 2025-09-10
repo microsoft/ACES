@@ -70,7 +70,9 @@ class TestEvaluationResult:
             max_score=1.0,
             score=0.8,
             success=True,
-            details={"matched": 4, "total": 5}
+            details={"matched": 4, "total": 5},
+            submission="test submission",
+            step_count=10
         )
 
         assert result.episode_id == "episode_123"
@@ -94,7 +96,9 @@ class TestEvaluationResult:
                 raw_score=-0.1,  # Invalid negative score
                 max_score=1.0,
                 score=0.0,
-                success=False
+                success=False,
+                submission="test",
+                step_count=1
             )
 
         # Test zero max_score
@@ -106,7 +110,9 @@ class TestEvaluationResult:
                 raw_score=0.0,
                 max_score=0.0,  # Invalid zero max_score
                 score=0.0,
-                success=False
+                success=False,
+                submission="test",
+                step_count=1
             )
 
         # Test negative score
@@ -118,7 +124,9 @@ class TestEvaluationResult:
                 raw_score=0.0,
                 max_score=1.0,
                 score=-1.0,  # Invalid negative score
-                success=False
+                success=False,
+                submission="test",
+                step_count=1
             )
 
     def test_timestamp_defaults_to_utc(self):
@@ -130,7 +138,9 @@ class TestEvaluationResult:
             raw_score=1.0,
             max_score=1.0,
             score=1.0,
-            success=True
+            success=True,
+            submission="test",
+            step_count=1
         )
 
         # Should be timezone-aware and in UTC
@@ -146,7 +156,9 @@ class TestEvaluationResult:
             raw_score=1.0,
             max_score=1.0,
             score=1.0,
-            success=True
+            success=True,
+            submission="test",
+            step_count=1
         )
 
         assert result.details == {}

@@ -23,7 +23,6 @@ class EvaluationStore:
     async def save(
         self,
         result: EvaluationResult,
-        submission: str,
         session_id: str,
         golden_answer: Optional[str] = None,
     ) -> None:  # pragma: no cover - interface
@@ -59,7 +58,6 @@ class JsonFileEvaluationStore(EvaluationStore):
     async def save(
         self,
         result: EvaluationResult,
-        submission: str,
         session_id: str,
         golden_answer: Optional[str] = None,
     ) -> None:
@@ -68,6 +66,7 @@ class JsonFileEvaluationStore(EvaluationStore):
         task_dir.mkdir(parents=True, exist_ok=True)
         artifact_path = task_dir / f"{result.episode_id}.json"
         payload = {
+            # Core evaluation results
             "episode_id": result.episode_id,
             "task_id": result.task_id,
             "strategy": result.strategy,
@@ -77,10 +76,19 @@ class JsonFileEvaluationStore(EvaluationStore):
             "success": result.success,
             "timestamp": result.timestamp.isoformat(),
             "details": result.details,
-            "submission": submission,
-            # golden_answer snapshot if provided (future LLM support)
+            # Enhanced submission metadata
+            "submission": result.submission,
+            "executed_commands": result.executed_commands,
+            "completion_reason": result.completion_reason,
+            "step_count": result.step_count,
+            # Model and execution metadata
+            "model": result.model,
+            "choices": result.choices,
+            "tokens": result.tokens,
+            "execution_time": result.execution_time,
+            # Legacy support (remove in future versions)
             "golden_answer": golden_answer,
-            "schema_version": 1,
+            "schema_version": 2,  # Increment version for enhanced format
             "tool": "saber",
         }
         try:
@@ -227,6 +235,7 @@ class JsonFileEvaluationStore(EvaluationStore):
             timestamp = datetime.now(timezone.utc)
 
         return EvaluationResult(
+            # Core evaluation results
             episode_id=data["episode_id"],
             task_id=data["task_id"],
             strategy=data["strategy"],
@@ -236,4 +245,14 @@ class JsonFileEvaluationStore(EvaluationStore):
             success=data["success"],
             timestamp=timestamp,
             details=data.get("details", {}),
+            # Enhanced submission metadata (with backward compatibility)
+            submission=data.get("submission", ""),  # Required but provide fallback for old data
+            executed_commands=data.get("executed_commands", []),
+            completion_reason=data.get("completion_reason"),
+            step_count=data.get("step_count", 0),
+            # Model and execution metadata (with backward compatibility)
+            model=data.get("model"),
+            choices=data.get("choices", []),
+            tokens=data.get("tokens", {}),
+            execution_time=data.get("execution_time"),
         )

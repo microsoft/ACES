@@ -62,6 +62,18 @@ class TestBenchmarkConfigLoaderPermanentSupport:
                     "prompt_template_file": "test_task_with_permanent_prompt.md",
                     "sandbox_environment": "test_sandbox",
                     "permanent_environment": "default",  # Reference to the global permanent environment
+                    "execution_config": {
+                        "allowed_executors": ["cli", "python"]
+                    },
+                    "evaluation_config": {
+                        "strategy": "static",
+                        "criteria": {
+                "expected_answers": ["task_completion"]
+            },
+                        "scoring": {
+                            "points": 100
+                        }
+                    },
                     "subtasks": [
                         {
                             "subtask_id": "main",
@@ -90,6 +102,18 @@ class TestBenchmarkConfigLoaderPermanentSupport:
                     "description": "Task that doesn't use permanent environment",
                     "prompt_template_file": "test_task_no_permanent_prompt.md",
                     "sandbox_environment": "test_sandbox",
+                    "execution_config": {
+                        "allowed_executors": ["cli", "python"]
+                    },
+                    "evaluation_config": {
+                        "strategy": "static",
+                        "criteria": {
+                "expected_answers": ["task_completion"]
+            },
+                        "scoring": {
+                            "points": 100
+                        }
+                    },
                     "subtasks": [
                         {
                             "subtask_id": "main",
@@ -184,6 +208,18 @@ class TestBenchmarkConfigLoaderPermanentSupport:
             "prompt_template_file": "enhanced_task_prompt.md",
             "sandbox_environment": "test_sandbox",
             "permanent_environment": "default",
+            "execution_config": {
+                "allowed_executors": ["cli", "python"]
+            },
+            "evaluation_config": {
+                "strategy": "static",
+                "criteria": {
+                    "expected_answers": ["task_completion"]
+                },
+                "scoring": {
+                    "points": 100
+                }
+            },
             "subtasks": [
                 {
                     "subtask_id": "main",
@@ -236,6 +272,18 @@ class TestBenchmarkConfigLoaderPermanentSupport:
             "description": "Task with only permanent environment",
             "prompt_template_file": "permanent_only_task_prompt.md",
             "permanent_environment": "default",
+            "execution_config": {
+                "allowed_executors": ["cli", "python"]
+            },
+            "evaluation_config": {
+                "strategy": "static",
+                "criteria": {
+                    "expected_answers": ["task_completion"]
+                },
+                "scoring": {
+                    "points": 100
+                }
+            },
             "subtasks": [
                 {
                     "subtask_id": "main",

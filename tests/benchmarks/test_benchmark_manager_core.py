@@ -42,10 +42,15 @@ class TestBenchmarkManagerCore:
     @patch.object(BenchmarkConfigLoader, "load_tasks_from_file")
     def test_load_tasks_from_yaml_delegates_to_config_loader(self, mock_load, temp_config_dir):
         """Test that loading delegates to BenchmarkConfigLoader."""
-        mock_tasks = {"test_task": Mock(spec=Task)}
+        mock_task = Mock(spec=Task)
+        mock_task.prompt_template_file = "test_prompt.md"
+        mock_task.task_id = "test_task"
+        mock_tasks = {"test_task": mock_task}
         mock_load.return_value = mock_tasks
 
-        manager = self._create_benchmark_manager_from_temp_config_dir(temp_config_dir)
+        # Also mock the prompt generator validation to prevent template validation errors
+        with patch.object(BenchmarkManager, 'validate_all_task_templates'):
+            manager = self._create_benchmark_manager_from_temp_config_dir(temp_config_dir)
 
         # Should be called with the full path to tasks.yaml
         expected_path = str(Path(temp_config_dir) / "tasks.yaml")
@@ -54,7 +59,8 @@ class TestBenchmarkManagerCore:
 
     def test_load_tasks_invalid_file_raises_exception(self):
         """Test that loading invalid file raises exception."""
-        with pytest.raises(InvalidTaskDefinitionException):
+        from saber.server.benchmarks.prompt_generator import TemplateValidationError
+        with pytest.raises(TemplateValidationError):
             BenchmarkManager("malware_classification", "/nonexistent/file.yaml")
 
     def test_get_task_success(self, temp_config_dir):
@@ -170,6 +176,17 @@ tasks:
     title: "First Task"
     description: "First test task"
     prompt_template_file: "test_task_prompt.md"
+    execution_config:
+      allowed_executors:
+        - cli_executor
+        - python_executor
+    evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers:
+          - "task_completion"
+      scoring:
+        points: 100
     subtasks:
       - subtask_id: "subtask1"
         title: "SubTask 1"
@@ -179,6 +196,17 @@ tasks:
     title: "Second Task"
     description: "Second test task"
     prompt_template_file: "test_task_prompt.md"
+    execution_config:
+      allowed_executors:
+        - cli_executor
+        - python_executor
+    evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers:
+          - "task_completion"
+      scoring:
+        points: 100
     subtasks: []
 """
         config_dir = temp_config_dir_helper(tmp_path, yaml_content)
@@ -266,6 +294,17 @@ tasks:
     title: "Test Task"
     description: "A test task"
     prompt_template_file: "test_task_prompt.md"
+    execution_config:
+      allowed_executors:
+        - cli_executor
+        - python_executor
+    evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers:
+          - "task_completion"
+      scoring:
+        points: 100
     subtasks: []
 """
         config_dir = temp_config_dir_helper(tmp_path, yaml_content)
@@ -299,11 +338,33 @@ tasks:
     title: "Task 1"
     description: "First task"
     prompt_template_file: "test_task_prompt.md"
+    execution_config:
+      allowed_executors:
+        - cli_executor
+        - python_executor
+    evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers:
+          - "task_completion"
+      scoring:
+        points: 100
     subtasks: []
   - task_id: "task2"
     title: "Task 2"
     description: "Second task"
     prompt_template_file: "test_task_prompt.md"
+    execution_config:
+      allowed_executors:
+        - cli_executor
+        - python_executor
+    evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers:
+          - "task_completion"
+      scoring:
+        points: 100
     subtasks: []
 """
         config_dir = temp_config_dir_helper(tmp_path, yaml_content)
@@ -342,11 +403,33 @@ tasks:
     title: "Task with Default"
     description: "Uses domain default"
     prompt_template_file: "test_task_prompt.md"
+    execution_config:
+      allowed_executors:
+        - cli_executor
+        - python_executor
+    evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers:
+          - "task_completion"
+      scoring:
+        points: 100
     subtasks: []
   - task_id: "task_override"
     title: "Task with Override"
     description: "Overrides domain default"
     prompt_template_file: "test_task_prompt.md"
+    execution_config:
+      allowed_executors:
+        - cli_executor
+        - python_executor
+    evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers:
+          - "task_completion"
+      scoring:
+        points: 100
     benchmark_config:
       episode_attempts: 10
     subtasks: []
@@ -389,6 +472,17 @@ tasks:
     title: "Test Task"
     description: "A test task"
     prompt_template_file: "test_task_prompt.md"
+    execution_config:
+      allowed_executors:
+        - cli_executor
+        - python_executor
+    evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers:
+          - "task_completion"
+      scoring:
+        points: 100
     benchmark_config:
       episode_attempts: 15
     subtasks: []

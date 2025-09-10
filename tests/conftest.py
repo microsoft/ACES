@@ -95,6 +95,17 @@ tasks:
     title: "Malware Family Classification and Analysis"
     description: "Analyze malware sample to determine family, capabilities, and threat level"
     prompt_template_file: "malware_family_analysis_prompt.md"
+    execution_config:
+      allowed_executors:
+        - cli_executor
+        - python_executor
+    evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers:
+          - "task_completion"
+      scoring:
+        points: 100
     initial_context:
       sample_path: "/data/samples/unknown_sample.exe"
       analysis_timeout: 300
@@ -189,6 +200,16 @@ def temp_config_dir(tmp_path, sample_task_yaml):
     """Create a temporary directory with tasks.yaml configuration and return the directory path."""
     tasks_file = tmp_path / "tasks.yaml"
     tasks_file.write_text(sample_task_yaml)
+
+    # Create the prompts directory
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+
+    # Create some sample prompt template files
+    for template_name in ["malware_family_analysis_prompt.md", "malware_analysis_prompt.md", "test_task_prompt.md"]:
+        template_file = prompts_dir / template_name
+        template_file.write_text("# Sample Template\n\nThis is a sample prompt template for testing.")
+
     return str(tmp_path)  # Return directory path
 
 

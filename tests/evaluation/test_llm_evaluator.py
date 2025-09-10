@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from saber.server.evaluation.evaluators.llm_evaluator import LLMEvaluator
-from saber.server.evaluation.models import EvaluationConfig
+from saber.server.evaluation.models import EvaluationConfig, EpisodeEvaluationData
 from saber.server.evaluation.exceptions import EvaluationError, EvaluationConfigError
 from saber.server.evaluation.constants import EVAL_STRATEGY_LLM_JUDGE
 
@@ -23,11 +23,12 @@ class MockTask:
 @pytest.fixture
 def sample_episode_data():
     """Sample episode data for testing."""
-    return {
-        "episode_id": "test-episode-123",
-        "task_id": "test-task",
-        "submission": "The malware is a banking trojan targeting user credentials"
-    }
+    return EpisodeEvaluationData(
+        episode_id="test-episode-123",
+        task_id="test-task",
+        submission="The malware is a banking trojan targeting user credentials",
+        step_count=5
+    )
 
 
 @pytest.fixture

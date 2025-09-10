@@ -16,7 +16,7 @@ tasks:
 
 # Agent configuration (use agent registry)
 agent:
-  id: "react"
+  id: "inspect_react"
   debug_mode: false
 
 # Docker commands for container setup

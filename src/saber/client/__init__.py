@@ -14,6 +14,7 @@ Programmatic usage:
 """
 
 from ..models import BenchmarkInfo, PolicyInfo, SessionInfo, StepResponse, TaskInfo
+from .agent import AgentManager, SABERAgentFactory, SABERAgentRegistry, register_saber_agent
 from .api import SABERRestClient
 from .models import SABERConfig
 
@@ -22,6 +23,11 @@ __all__ = [
     "SABERConfig",
     # API client
     "SABERRestClient",
+    # Agent registry and factory (main public API)
+    "SABERAgentRegistry",
+    "SABERAgentFactory",
+    "register_saber_agent",
+    "AgentManager",
     # API models
     "StepResponse",
     "TaskInfo",

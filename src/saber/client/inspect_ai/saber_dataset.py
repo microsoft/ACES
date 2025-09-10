@@ -112,11 +112,13 @@ def _convert_saber_task_to_sample(task_info: TaskInfo, attempt: int = 1) -> Samp
     task_metadata = {
         "saber_task": task_info.model_dump(),
         "task_id": task_info.task_id,
-        "initial_prompt": task_info.initial_prompt,  # ✅ Add initial prompt to metadata
+        "initial_prompt": task_info.initial_prompt,
         "attempt": attempt,
         "total_attempts": task_info.episode_attempts,
-        "tool_call_limit": task_info.max_steps,  # ✅ Store per-sample limit
+        "tool_call_limit": task_info.max_steps,
     }
+
+    logger.info(f"Task metadata for task {task_info.task_id}: {task_metadata}")
 
     # Create unique sample ID for each attempt
     sample_id = f"{task_info.task_id}_attempt_{attempt}"

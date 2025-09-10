@@ -166,7 +166,7 @@ The excytin demo uses the unified SABER client with YAML configuration and inspe
 
 #### Quick Start (Recommended)
 ```bash
-cd /home/ms_test/repos/saber_vibin/domains/excytin_demo/client
+cd /path/to/SABER/domains/excytin_demo/client
 ./run_demo.sh
 ```
 

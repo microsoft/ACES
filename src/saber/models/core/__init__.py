@@ -64,3 +64,19 @@ class BenchmarkInfo(BaseModel):
     def get_task_ids(self) -> List[str]:
         """Get list of all task IDs."""
         return [task.task_id for task in self.tasks]
+
+
+class EvalSubmission(BaseModel):
+    """Enhanced submission model capturing rich ModelOutput data for evaluation."""
+
+    episode_id: str = Field(..., description="Episode ID for tracking")
+    task_id: str = Field(..., description="Task ID for evaluation context")
+    model: str = Field(..., description="Model name from ModelOutput.model")
+    choices: List[Dict[str, Any]] = Field(default_factory=list, description="Model choices from ModelOutput.choices")
+    submission: str = Field(..., description="Completion text from ModelOutput.completion")
+    tokens: Dict[str, Any] = Field(default_factory=dict, description="Token usage information from ModelOutput.usage")
+    time: float = Field(..., description="Execution time from ModelOutput.time")
+
+
+# Export all core models
+__all__ = ["TaskInfo", "PolicyInfo", "BenchmarkInfo", "EvalSubmission"]

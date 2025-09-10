@@ -100,48 +100,6 @@ register_executor("integration_test", TestIntegrationExecutor, "test")
                 assert len(integration_tools) == 1
                 assert integration_tools[0]["description"] == "Test executor for integration testing"
 
-    def test_pentest_demo_executor_loading(self, cleanup_factory):
-        """Test loading the pentest demo executors."""
-        pentest_demo_path = Path("/home/ms_test/repos/saber_vibin/examples/pentest_demo/server")
-
-        # Skip if pentest demo doesn't exist
-        if not pentest_demo_path.exists():
-            pytest.skip("Pentest demo directory not found")
-
-        # Mock SandboxEnvironmentManager to avoid Docker dependencies
-        with patch("saber.server.execution.execution_manager.SandboxEnvironmentManager") as mock_sandbox:
-            mock_sandbox_instance = MagicMock()
-            mock_sandbox.return_value = mock_sandbox_instance
-
-            # Create ExecutionManager with pentest demo config directory
-            execution_manager = ExecutionManager(config_dir=str(pentest_demo_path))
-
-        # Check that custom executors were loaded
-        available_executors = execution_manager._executor_factory.get_available_executors()
-        # Should have the built-in executors plus any custom ones
-        assert "cli" in available_executors
-        assert "python" in available_executors
-
-        # Check if pentest executors were loaded (if file exists)
-        pentest_executor_file = pentest_demo_path / "pentest_executors.py"
-        if pentest_executor_file.exists():
-            custom_info = get_executor_info()
-            # The pentest_executors.py file should register nmap and sqlmap
-            expected_executors = ["nmap", "sqlmap"]
-            for executor_name in expected_executors:
-                if executor_name in custom_info:
-                    assert executor_name in available_executors
-
-            # Check MCP tools include custom executors
-            mcp_tools = execution_manager.to_mcp_tools()
-            tool_names = [tool["name"] for tool in mcp_tools]
-
-            # Should have at least the built-in tools
-            cli_tools = [name for name in tool_names if "cli" in name]
-            python_tools = [name for name in tool_names if "python" in name]
-            assert len(cli_tools) > 0
-            assert len(python_tools) > 0
-
     def test_custom_executor_mcp_schema_generation(self, cleanup_factory):
         """Test that custom executors generate proper MCP schemas."""
         # Create a temporary directory with a custom executor

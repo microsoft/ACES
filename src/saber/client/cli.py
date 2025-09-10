@@ -6,13 +6,12 @@ Command-line interface for SABER client operations including inspect-ai log anal
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, Optional
 
 import click
-
-from . import __main__ as main_module
 
 
 @click.group()  # type: ignore[misc]
@@ -26,6 +25,227 @@ def cli() -> None:
 def inspect() -> None:
     """Inspect-AI integration commands."""
     pass
+
+
+@inspect.command("view")  # type: ignore[misc]
+@click.option(  # type: ignore[misc]
+    "--log-dir",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Directory containing inspect-ai evaluation logs",
+)
+@click.option(  # type: ignore[misc]
+    "--host",
+    default="127.0.0.1",
+    help="Host to bind the web server to (default: 127.0.0.1)",
+)
+@click.option(  # type: ignore[misc]
+    "--port",
+    type=int,
+    default=7575,
+    help="Port to bind the web server to (default: 7575)",
+)
+@click.option(  # type: ignore[misc]
+    "--no-recursive",
+    is_flag=True,
+    help="Do not recursively scan subdirectories for logs",
+)
+@click.option(  # type: ignore[misc]
+    "--no-browser",
+    is_flag=True,
+    help="Do not automatically open browser",
+)
+def view_command(
+    log_dir: Path,
+    host: str,
+    port: int,
+    no_recursive: bool,
+    no_browser: bool,
+) -> None:
+    """Launch Inspect AI log viewer web interface.
+
+    This command launches Inspect AI's built-in web UI for viewing evaluation logs.
+    The web interface provides rich visualization of evaluation results, sample details,
+    model conversations, and performance metrics.
+
+    The viewer will be available at http://{host}:{port}
+    """
+    try:
+        from inspect_ai._view.view import view
+    except ImportError as e:
+        click.echo(
+            f"Error: Failed to import inspect_ai view components: {e}\n"
+            "Please ensure inspect-ai is properly installed.",
+            err=True,
+        )
+        sys.exit(1)
+
+    # Validate log directory
+    if not log_dir.exists():
+        click.echo(f"Error: Log directory '{log_dir}' does not exist.", err=True)
+        sys.exit(1)
+
+    if not log_dir.is_dir():
+        click.echo(f"Error: '{log_dir}' is not a directory.", err=True)
+        sys.exit(1)
+
+    # Check if directory contains any log files (quick scan)
+    log_files = list(log_dir.rglob("*.eval")) + list(log_dir.rglob("*.json"))
+    if not log_files:
+        click.echo(
+            f"Warning: No log files (*.eval or *.json) found in '{log_dir}'. "
+            f"The viewer will start anyway, but may show an empty directory.",
+            err=True,
+        )
+
+    # Initialize inspect_ai environment properly (following exact CLI pattern)
+    try:
+        # Import and set up exactly like the real inspect_ai CLI does
+        from inspect_ai._cli.common import process_common_options
+
+        # Set up the common options that inspect_ai CLI uses
+        common_options = {
+            "log_dir": str(log_dir.absolute()),
+            "log_level": "info",
+            "display": "full",
+            "no_ansi": False,
+            "traceback_locals": False,
+            "env": [],
+            "debug": False,
+            "debug_port": 5678,
+            "debug_errors": False,
+        }
+
+        # Process common options (this sets up logging and display properly)
+        process_common_options(common_options)
+
+    except Exception as e:
+        click.echo(f"Warning: Failed to initialize inspect_ai environment: {e}", err=True)
+
+    click.echo(click.style("🚀 Starting SABER Inspect AI Log Viewer", fg="green", bold=True))
+    click.echo(f"📁 Log Directory: {log_dir.absolute()}")
+    click.echo(f"🌐 Server: http://{host}:{port}")
+    click.echo(f"🔄 Recursive: {not no_recursive}")
+
+    # Open browser unless explicitly disabled
+    if not no_browser:
+        import threading
+        import time
+        import webbrowser
+
+        def open_browser() -> None:
+            """Open browser after a short delay to ensure server is ready."""
+            time.sleep(2)  # Give server time to start
+            webbrowser.open(f"http://{host}:{port}")
+
+        threading.Thread(target=open_browser, daemon=True).start()
+        click.echo("🔗 Browser will open automatically in 2 seconds...")
+
+    click.echo("📝 Press Ctrl+C to stop the server")
+    click.echo("=" * 60)
+
+    # Clear problematic environment variables and set correct ones for frontend
+    # This prevents URL construction errors in the frontend JavaScript
+    os.environ.pop("__VIEW_SERVER_API_URL__", None)
+
+    # Set environment variable to empty string to avoid URL construction issues
+    # The frontend will default to relative paths which work correctly
+    os.environ["VIEW_SERVER_API_URL"] = ""
+
+    # Patch the frontend JavaScript to fix isApiCrossOrigin function
+    try:
+        # Patch the compiled JavaScript file to handle URL construction errors
+        js_path = (
+            Path(sys.executable).parent.parent
+            / "lib"
+            / "python3.11"
+            / "site-packages"
+            / "inspect_ai"
+            / "_view"
+            / "www"
+            / "dist"
+            / "assets"
+            / "index.js"
+        )
+        if js_path.exists():
+            # Read current JavaScript
+            js_content = js_path.read_text()
+
+            # Find and replace the isApiCrossOrigin function to handle the error properly
+            original_function = """function isApiCrossOrigin() {
+      try {
+        console.log("API_BASE_URL:", API_BASE_URL);
+        return Boolean(
+          API_BASE_URL && new URL(API_BASE_URL).origin !== window.location.origin
+        );
+      } catch (e) {
+        console.log("URL construction failed for API_BASE_URL:", API_BASE_URL, "Error:", e);
+        return false;
+      }
+    }"""
+
+            fixed_function = """function isApiCrossOrigin() {
+      try {
+        console.log("API_BASE_URL:", API_BASE_URL);
+        // Handle relative URLs by returning false (same origin)
+        if (!API_BASE_URL || API_BASE_URL.startsWith('/')) {
+          return false;
+        }
+        return Boolean(
+          API_BASE_URL && new URL(API_BASE_URL).origin !== window.location.origin
+        );
+      } catch (e) {
+        console.log("URL construction failed for API_BASE_URL:", API_BASE_URL, "Error:", e);
+        return false;
+      }
+    }"""
+
+            if original_function in js_content:
+                patched_js = js_content.replace(original_function, fixed_function)
+                js_path.write_text(patched_js)
+                click.echo("✅ Patched isApiCrossOrigin function to handle relative URLs")
+            else:
+                # Fallback: look for the function signature and patch it
+                import re
+
+                pattern = r"function isApiCrossOrigin\(\)\s*\{[^}]*new URL\(API_BASE_URL\)[^}]*\}"
+                if re.search(pattern, js_content, re.DOTALL):
+                    # Simple replacement: add check for relative URLs
+                    simple_fix = js_content.replace(
+                        "API_BASE_URL && new URL(API_BASE_URL)",
+                        'API_BASE_URL && !API_BASE_URL.startsWith("/") && new URL(API_BASE_URL)',
+                    )
+                    js_path.write_text(simple_fix)
+                    click.echo("✅ Patched API_BASE_URL check to handle relative paths")
+    except Exception as e:
+        click.echo(f"⚠️  Warning: Failed to patch frontend JavaScript: {e}", err=True)
+
+    try:
+        # Call view() with EXACT same parameters as the real CLI
+        view(
+            log_dir=str(log_dir.absolute()),
+            recursive=not no_recursive,
+            host=host,
+            port=port,
+            authorization=None,
+            log_level="info",
+        )
+    except KeyboardInterrupt:
+        click.echo("\n👋 Server stopped by user")
+        sys.exit(0)
+    except OSError as e:
+        if "Address already in use" in str(e):
+            click.echo(
+                f"Error: Port {port} is already in use. "
+                f"Try a different port with --port, or stop the existing service.",
+                err=True,
+            )
+        else:
+            click.echo(f"Error: Failed to start server: {e}", err=True)
+        sys.exit(1)
+    except Exception as e:
+        click.echo(f"Error: Unexpected failure starting viewer: {e}", err=True)
+        raise  # Re-raise for debugging as per best practices
 
 
 @inspect.command("eval")  # type: ignore[misc]
@@ -472,29 +692,182 @@ def dump_full(log: Any, max_samples: int, pretty: bool) -> None:
 @cli.command("run")  # type: ignore[misc]
 @click.option(  # type: ignore[misc]
     "--config",
-    type=click.Path(exists=True, path_type=Path),
-    help="Path to SABER configuration YAML file",
+    type=click.Path(path_type=Path),
+    help="Path to SABER configuration YAML file (default: auto-detect saber.yaml in current directory)",
 )
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging")  # type: ignore[misc]
 @click.option("--no-log-file", is_flag=True, help="Disable file logging (console only)")  # type: ignore[misc]
 def run_command(config: Optional[Path], verbose: bool, no_log_file: bool) -> None:
-    """Run SABER evaluation (wrapper around main CLI)."""
-    # Build args for main module
-    args = []
-    if config:
-        args.extend(["--config", str(config)])
-    if verbose:
-        args.append("--verbose")
-    if no_log_file:
-        args.append("--no-log-file")
+    """Run SABER evaluation with inspect-ai integration.
 
-    # Override sys.argv and call main
-    original_argv = sys.argv[:]
+    This command runs the main SABER evaluation workflow using inspect-ai's
+    task display and evaluation system. It requires a configuration file
+    that specifies the agent, server endpoints, and evaluation parameters.
+    """
+    import asyncio
+    import logging
+    from datetime import datetime
+
+    from .config_loader import SABERConfigLoader
+    from .models import SABERConfig
+
+    def setup_client_logging(
+        verbose: bool = False, log_to_file: bool = True, log_dir: Optional[Path] = None
+    ) -> logging.Logger:
+        """Setup client logging with timestamped directory."""
+        if log_to_file:
+            # Create timestamped log directory
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+            if log_dir:
+                log_base_dir = Path(log_dir)
+            else:
+                log_base_dir = Path("logs")
+
+            # Create timestamped directory
+            timestamped_dir = log_base_dir / f"saber_client_{timestamp}"
+            timestamped_dir.mkdir(parents=True, exist_ok=True)
+
+            # Setup file logging
+            log_file = timestamped_dir / "saber_client.log"
+
+            # Configure root logger - this will catch ALL loggers including inspect_ai
+            root_logger = logging.getLogger()
+            root_logger.setLevel(logging.DEBUG if verbose else logging.INFO)
+            root_logger.handlers.clear()
+
+            # File handler - captures everything
+            file_handler = logging.FileHandler(log_file)
+            file_handler.setLevel(logging.DEBUG)
+            file_formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+            file_handler.setFormatter(file_formatter)
+            root_logger.addHandler(file_handler)
+
+            # Console handler - show important messages
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(logging.WARNING if not verbose else logging.INFO)
+            console_formatter = logging.Formatter("%(levelname)s - %(message)s")
+            console_handler.setFormatter(console_formatter)
+            root_logger.addHandler(console_handler)
+
+            click.echo(f"📝 Full logs will be written to: {log_file}")
+        else:
+            # Console only logging
+            root_logger = logging.getLogger()
+            root_logger.setLevel(logging.DEBUG if verbose else logging.INFO)
+            root_logger.handlers.clear()
+
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(logging.INFO if verbose else logging.WARNING)
+            console_formatter = logging.Formatter("%(levelname)s - %(message)s")
+            console_handler.setFormatter(console_formatter)
+            root_logger.addHandler(console_handler)
+
+        return logging.getLogger("saber.client")
+
+    # Setup logging FIRST - before any other operations
+    logger = setup_client_logging(
+        verbose=verbose, log_to_file=not no_log_file, log_dir=None  # Will be set from config if available
+    )
+
+    if config:
+        # Use explicitly provided config path
+        config_file_path = Path(config)
+        if not config_file_path.exists():
+            click.echo(f"❌ Configuration file not found: {config}", err=True)
+            sys.exit(1)
+    else:
+        # Look for saber.yaml in current directory
+        config_file_path = Path("saber.yaml")
+        if not config_file_path.exists():
+            click.echo(
+                "❌ No configuration file found. Please provide --config or create saber.yaml in current directory",
+                err=True,
+            )
+            sys.exit(1)
+
     try:
-        sys.argv = ["saber-client"] + args
-        main_module.main()
-    finally:
-        sys.argv = original_argv
+        saber_config: SABERConfig = SABERConfigLoader.load_from_file(config_file_path)
+
+        # Update logging with config's log directory if specified
+        if saber_config.log_dir and not no_log_file:
+            logger.info(f"Updating log directory to: {saber_config.log_dir}")
+            # Re-setup logging with config's log directory
+            logger = setup_client_logging(verbose=verbose, log_to_file=True, log_dir=Path(saber_config.log_dir))
+
+        agent_path = saber_config.agent_path
+        agent_id = getattr(saber_config, "agent_id", None)
+
+        if not agent_path and not agent_id:
+            logger.error("Either agent_path or agent_id must be specified in configuration file")
+            click.echo("❌ Either agent_path or agent_id must be specified in configuration file", err=True)
+            sys.exit(1)
+
+        logger.info(f"Loaded configuration from: {config_file_path}")
+        if agent_id:
+            logger.info(f"Agent ID: {agent_id}")
+        if agent_path:
+            logger.info(f"Agent path: {agent_path}")
+        logger.info(f"SABER REST URL: {saber_config.saber_rest_url}")
+        logger.info(f"SABER MCP URL: {saber_config.saber_mcp_url}")
+
+    except Exception as e:
+        logger.error(f"Error loading config file: {e}")
+        click.echo(f"❌ Error loading config file: {e}", err=True)
+        sys.exit(1)
+
+    # Validate agent file exists (only if using agent_path)
+    if agent_path and not Path(agent_path).exists():
+        logger.error(f"Agent file not found: {agent_path}")
+        click.echo(f"❌ Agent file not found: {agent_path}", err=True)
+        sys.exit(1)
+
+    logger.info("Starting SABER eval_async execution")
+
+    if agent_id:
+        click.echo(f"🚀 Starting SABER evaluation with agent ID: {agent_id}")
+    elif agent_path:
+        click.echo(f"🚀 Starting SABER evaluation with agent: {Path(agent_path).name}")
+    else:
+        click.echo("🚀 Starting SABER evaluation")
+
+    click.echo(f"📊 Server: {saber_config.saber_rest_url}")
+    click.echo(f"🔗 MCP: {saber_config.saber_mcp_url}")
+    click.echo()
+
+    # INSPECT-AI EVAL_ASYNC PATTERN - eval_async controls everything
+    async def run_task_app() -> None:
+        """Run SABER via inspect_ai eval_async for full UI and dataset iteration."""
+        logger.info("Starting eval_async task app")
+
+        # Import inspect_ai modules only when needed
+        from .inspect_ai import run_saber_eval_async
+
+        # eval_async becomes the main entrypoint - handles UI, dataset iteration, everything
+        await run_saber_eval_async(saber_config)
+        logger.info("eval_async task app completed")
+
+    try:
+        logger.info("Starting inspect_ai task display")
+
+        # Import inspect_ai display module only when needed
+        from inspect_ai._display.core.active import display as task_display
+
+        task_display().run_task_app(run_task_app)
+        logger.info("inspect_ai task display completed")
+    except asyncio.CancelledError:
+        # Normal cleanup - inspect-ai cancels tasks during shutdown
+        # This is expected behavior, don't show as error
+        logger.info("Task cancelled during shutdown (normal)")
+        pass
+    except KeyboardInterrupt:
+        # User interrupted - clean exit
+        logger.info("User interrupted execution")
+        sys.exit(0)
+    except Exception as e:
+        logger.error(f"Unexpected error during execution: {e}", exc_info=True)
+        click.echo(f"❌ Unexpected error: {e}", err=True)
+        raise  # Re-raise for debugging
 
 
 def main() -> None:

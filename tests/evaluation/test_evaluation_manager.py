@@ -34,6 +34,7 @@ class TestEvaluationManager:
             domain="test_domain",
             title="Test Task",
             description="A test task",
+            prompt_template_file="test_template.j2",
             evaluation_config={
                 "strategy": "static",
                 "criteria": {"expected_answers": ["flag{correct}"]},
@@ -48,7 +49,8 @@ class TestEvaluationManager:
             task_id="no_eval_task",
             domain="test_domain",
             title="No Eval Task",
-            description="Task without evaluation"
+            description="Task without evaluation",
+            prompt_template_file="test_template.j2"
         )
 
     @pytest.fixture
@@ -94,6 +96,7 @@ class TestEvaluationManager:
             domain="test_domain",
             title="Invalid Task",
             description="Task with invalid strategy",
+            prompt_template_file="test_template.j2",
             evaluation_config={
                 "strategy": "invalid_strategy",
                 "criteria": {},
@@ -111,6 +114,7 @@ class TestEvaluationManager:
             domain="test_domain",
             title="Invalid Static Task",
             description="Task with invalid static config",
+            prompt_template_file="test_template.j2",
             evaluation_config={
                 "strategy": "static",
                 "criteria": {},  # Missing expected_answers
@@ -128,6 +132,7 @@ class TestEvaluationManager:
             domain="test_domain",
             title="Invalid Score Task",
             description="Task with invalid max_score",
+            prompt_template_file="test_template.j2",
             evaluation_config={
                 "strategy": "static",
                 "criteria": {"expected_answers": ["answer"]},
@@ -152,7 +157,9 @@ class TestEvaluationManager:
             raw_score=1.0,
             max_score=1.0,
             score=1.0,
-            success=True
+            success=True,
+            submission="flag{correct}",
+            step_count=5
         )
         evaluation_manager.evaluators[EVAL_STRATEGY_STATIC].evaluate = AsyncMock(return_value=mock_result)
 

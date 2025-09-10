@@ -56,7 +56,13 @@ class TestSessionManagerCore:
         mock = MagicMock()
         mock.start_episode = MagicMock()
         mock.end_episode = MagicMock()
-        mock.get_episode = MagicMock()
+        mock.get_episode_by_id = MagicMock()
+
+        # Mock episode object for get_episode_by_id to return
+        mock_episode = MagicMock()
+        mock_episode.is_complete = False
+        mock.get_episode_by_id.return_value = mock_episode
+
         return mock
 
     @pytest.fixture

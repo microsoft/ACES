@@ -7,12 +7,12 @@ global_defaults:
       - cli
       - python
     timeout: 30
-  
+
   episode_config:
     max_steps: 10
-  
+
   benchmark_config:
-    episode_attempts: 2
+    episode_attempts: 1
 
 tasks:
   - task_id: "incident_5_task_1"
@@ -22,7 +22,7 @@ tasks:
     prompt_template_file: "excytin_demo.md"
 
     sandbox_environment: "excytin_sandbox"
-    
+
     initial_context:
       incident_context: "A command and control behavior was blocked on host `vnevado-win10r`,
         which indicated an active infection by malware that could replicate and receive
@@ -40,7 +40,8 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
-    
+
+
     evaluation_config:
       strategy: "static"
       criteria:
@@ -48,7 +49,7 @@ tasks:
           - "198.43.121.209"
       scoring:
         max_score: 1.0
-    
+
     subtasks:
       - subtask_id: "checkpoint_1"
         title: "Checkpoint 1"
@@ -56,7 +57,7 @@ tasks:
           was involved in a Command and Control behavior that was blocked."
         objective: "Identify key details related to the potential compromise that might
           help in solving the main task."
-      
+
       - subtask_id: "checkpoint_2"
         title: "Checkpoint 2"
         description: "The cybercriminal group known as Manatee Tempest, which is associated
@@ -69,7 +70,9 @@ tasks:
     description: What is the command line of the suspicious process involved in the
       user behavior change on device `vnevado-win11u`?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: An incident involving a ransomware payload remotely launched
         on device `vnevado-win11u` with AadDeviceId `bc00e484-d0e5-4da4-9472-95568cccc07e`
@@ -87,7 +90,8 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
-    
+
+
     evaluation_config:
       strategy: static
       criteria:
@@ -102,6 +106,7 @@ tasks:
         at `2024-07-04 22:35:03.038773+00:00`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: Suspicious hands on keyboard user behavior was detected on this device,
@@ -109,12 +114,15 @@ tasks:
         http://vectorsandarrows.com` at `2024-06-20t09:29:42.3927529z`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_3
     title: incident_5_task_3
     description: Can you identify the IP address involved in the malicious credential
       theft tool execution detected?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: 'A Mimikatz credential theft tool was detected on a device at
         2024-07-04 22:35:03.797541+00:00. Mimikatz is a tool used to harvest plaintext
@@ -136,6 +144,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -150,18 +159,22 @@ tasks:
         IP address `107.224.99.179`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: A malicious credential theft tool execution was detected on the same
         device with IP address `107.224.99.179`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_4
     title: incident_5_task_4
     description: What is the URL associated with the Manatee Tempest activity group
       in this incident?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: On July 4, 2024, a security incident involving malware behavior
         named 'GenRansom' was detected on host `vnevado-win11t`. This malware was identified
@@ -181,6 +194,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -195,18 +209,22 @@ tasks:
         `e5799261-6720-4297-961e-bd9ca4275033`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: The Manatee Tempest activity group, a Russia-based cybercriminal
         group, has potential malicious activity related to the URL `vectorsandarrows.com`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_5
     title: incident_5_task_5
     description: Can you identify the hostname of the device where system recovery setting
       tampering was observed?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: During a recent investigation involving potentially compromised
         assets exhibiting ransomware-like behavior, it was observed that an attacker
@@ -227,6 +245,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -242,6 +261,7 @@ tasks:
         multiple devices.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: System recovery settings have been tampered with on the device with
@@ -249,12 +269,15 @@ tasks:
         disable system recovery features and prevent system recovery.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_6
     title: incident_5_task_6
     description: As per the recent observation, what is the IP address identified in
       connection with the Manatee Tempest activity group?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: On 2024-07-04, a suspicious WMI process creation was observed
         on the machine named `vnevado-win10r`. Various processes including `vssblatemp.exe`
@@ -272,6 +295,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -286,19 +310,23 @@ tasks:
         account with SID `S-1-5-21-1840191660-8534830288-125585561-1522`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: Manatee Tempest, a Russia-based cybercriminal group, conducted suspicious
         activities. One of the IP addresses used by the group is `198.43.121.209`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_7
     title: incident_5_task_7
     description: Alongside the usage of `vssblatemp.exe`, another process was used to
       disable recovery features. What was the command and process ID of the other process
       involved?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A recent security incident involved the tampering of system
         recovery settings on the device `vnevado-win10r`. The process `vssblatemp.exe`
@@ -318,6 +346,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -331,6 +360,7 @@ tasks:
       description: System recovery setting tampering has been detected on this device.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: The adversary used the command `bcdedit /set recoveryenabled no`
@@ -338,11 +368,14 @@ tasks:
         Windows recovery features.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_8
     title: incident_5_task_8
     description: What is the host name of the device involved in this tampering incident?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A security incident involving system recovery setting tampering
         was observed on a device. Adversaries might be attempting to delete or remove
@@ -361,6 +394,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -376,12 +410,15 @@ tasks:
         wbblatemp.exe, or bcdedit.exe to disable or delete system recovery features.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_9
     title: incident_5_task_9
     description: Related to this alert, there was an active malware detected subsequently.
       Can you identify the name of the malware file detected on the machine?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A possible attempt to access Primary Refresh Token (PRT) was
         detected on the host `vnevado-win10s` involving user with username `dp5hn`.
@@ -401,6 +438,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -415,24 +453,29 @@ tasks:
         through the process `browsercore.exe` detected on 2024-07-04.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: Another possible attempt to access Primary Refresh Token (PRT) was
         detected involving the account with SID `S-5-7-21-1843151660-3234030288-105586167-1422`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_3
       title: Checkpoint 3
       description: Active unknown malware, specifically `mimikatz.exe`, was detected
         and running on the machine.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_10
     title: incident_5_task_10
     description: What is the name of the file associated with the ransomware-like behavior
       identified in the potentially compromised assets?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: 'A ransomware payload was remotely launched on a host named
         `vnevado-win11t` with AadDeviceId `e5799261-6720-4297-961e-bd9ca4275033`. Attackers
@@ -452,6 +495,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -466,18 +510,22 @@ tasks:
         `731adb71-b11c-4bbf-850b-57989b350e96`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: Potentially compromised assets are exhibiting ransomware-like behavior
         involving the file `syncretic.7z.lockbit`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_11
     title: incident_5_task_11
     description: A related alert indicates the presence of a file associated with Mimikatz.
       Can you identify the name of this file that was detected?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A recent security incident was flagged due to the execution
         of a known credential theft tool, which was used to dump user's credentials.
@@ -493,6 +541,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -507,18 +556,22 @@ tasks:
         on the host with AadDeviceId `4d8d23e9-a77d-4e33-9435-b8c457e57ca1`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: The Mimikatz credential theft tool, particularly the file `mimilib.dll`,
         was detected on this device.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_12
     title: incident_5_task_12
     description: Can you identify the malicious URL that was associated with the command
       and control behavior blocked during the incident on 2024-07-04?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: The context implies that the suspicious activity involved multiple
         process creations and communications that were likely related to malware. The
@@ -535,6 +588,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -549,18 +603,22 @@ tasks:
         `S-1-5-21-1840191660-8534830288-125585561-1522`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: The Command and Control behavior was blocked, originating from the
         URL `http://vectorsandarrows.com/`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_13
     title: incident_5_task_13
     description: What is the command line of the process that was executed when the
       'CommandAndControl' malware was detected during lateral movement?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: On 2024-07-04, a ransomware payload was remotely launched on
         a device, which might have aimed to encrypt content and render it unusable.
@@ -578,6 +636,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -592,6 +651,7 @@ tasks:
         at `2024-07-04 22:35:01.951341+00:00`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: The 'CommandAndControl' malware was detected during lateral movement.
@@ -599,12 +659,15 @@ tasks:
         executed with Process ID `5572` on `2024-06-20t09:32:04.8002759z`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_14
     title: incident_5_task_14
     description: What is the name of the account involved in the system recovery setting
       tampering incident?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: There was a detection of unknown malware being active in the
         environment, which was stopped by Windows Defender but it is recommended to
@@ -628,6 +691,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -642,30 +706,36 @@ tasks:
         `4d8d23e9-a77d-4e33-9435-b8c457e57ca1`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: There was a possible attempt to access the Primary Refresh Token
         (PRT) involving the process `browsercore.exe`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_3
       title: Checkpoint 3
       description: The user with SID `S-1-5-21-1840191660-8534830288-125585561-1522`
         was involved in a potential attempt to access the Primary Refresh Token (PRT).
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_4
       title: Checkpoint 4
       description: System recovery setting tampering was observed on the account named
         `dp5hn`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_15
     title: incident_5_task_15
     description: What is the hostname of the target device in the 'CommandAndControl'
       malware attempt?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: An alert indicated that 'CommandAndControl' malware was detected,
         suggesting an attempt to move laterally between devices.
@@ -680,6 +750,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -694,19 +765,23 @@ tasks:
         with the account with SID `S-1-5-21-1840191660-8534830288-125585561-1522`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: The 'CommandAndControl' malware was detected on the host `vnevado-win11u`
         during an attempted lateral movement.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_16
     title: incident_5_task_16
     description: There was another instance of a similar process being run on the same
       host in this incident. Can you identify the Process ID and the command line of
       this process?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A security incident involving the Manatee Tempest activity group
         was flagged, where the actor Manatee Tempest, known for its early malware campaigns
@@ -729,6 +804,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -744,6 +820,7 @@ tasks:
         group.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: A process with Process ID `1332` used the command line `curl http://vectorsandarrows.com`
@@ -751,12 +828,15 @@ tasks:
         domain associated with Manatee Tempest.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_17
     title: incident_5_task_17
     description: What is the Azure Active Directory (AAD) Device ID of the host involved
       in this suspicious WMI process creation event?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A suspicious WMI process creation was observed on the machine
         `vnevado-win11t`. Malware frequently uses WMI to spawn new processes, breaking
@@ -775,6 +855,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -789,18 +870,22 @@ tasks:
         `bc00e484-d0e5-4da4-9472-95568cccc07e`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: The WMI process creation was associated with an account having SID
         `S-1-5-21-1840191660-8534830288-125585561-1522`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_18
     title: incident_5_task_18
     description: Can you identify the SID of the account which was involved in the suspicious
       remote activity?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: 'A ransomware payload was remotely launched on the host `vnevado-win11u`
         (AadDeviceId: bc00e484-d0e5-4da4-9472-95568cccc07e). Attackers might be attempting
@@ -820,6 +905,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -834,19 +920,23 @@ tasks:
         account `dp5hn`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: Suspicious remote activity was observed involving the user with SID
         `S-0-6-5`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_19
     title: incident_5_task_19
     description: Related to this alert, there was a possible attempt to access the Primary
       Refresh Token (PRT). What is the file name of the process that was used in this
       attempt?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: 'On July 4th, 2024, a ransomware payload was remotely launched
         on device ''vnevado-win11t'' with IP address ''99.83.111.100''. Attackers might
@@ -865,6 +955,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -879,18 +970,22 @@ tasks:
         name `dp5hn`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: A possible attempt to access the Primary Refresh Token (PRT) was
         detected, involving the process with the filename `browsercore.exe`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_20
     title: incident_5_task_20
     description: As part of this investigation, could you identify the IP address of
       the device that the attacker possibly moved to laterally?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A recent security incident indicated a possible attempt to access
         the Primary Refresh Token (PRT) on host `vnevado-win10v` using the file `powershell.exe`.
@@ -910,6 +1005,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -924,11 +1020,13 @@ tasks:
         using the process `browsercore.exe`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: The attempt to access the PRT originated from the host `vnevado-win11u`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_3
       title: Checkpoint 3
       description: There is a possibility of lateral movement originating from the IP
@@ -936,12 +1034,15 @@ tasks:
         attempt.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_21
     title: incident_5_task_21
     description: What is the name of the executable file used in the PSExec activity
       on `Vnevado-jump` server?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A ransomware payload was remotely launched on the device `vnevado-win11u`.
         Attackers might be attempting to encrypt content on this device, rendering it
@@ -958,6 +1059,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -971,18 +1073,22 @@ tasks:
       description: A ransomware payload was remotely launched from IP address `99.83.111.100`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: PSExec was used to move laterally to the jump server `Vnevado-jump`
         with the file `notepad.exe`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_22
     title: incident_5_task_22
     description: What is the command line of the process that modified the LSASS process
       memory?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: The identified suspicious activity on host `vnevado-win10r`
         involved attempts to access a Primary Refresh Token (PRT) tied to Azure AD authentication.
@@ -999,6 +1105,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -1015,12 +1122,14 @@ tasks:
         (PRT) using the process `browsercore.exe`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: The user with AadUserId `1d94aaf6-efe6-4e76-ad56-ffd7d1257bc1` was
         involved in a possible attempt to access the Primary Refresh Token (PRT).
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_3
       title: Checkpoint 3
       description: 'The LSASS process memory was modified using the command line `mimikatz.exe
@@ -1031,12 +1140,15 @@ tasks:
         ID `2020`.'
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_23
     title: incident_5_task_23
     description: What was the URL associated with the command and control behavior that
       was blocked?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A security incident involving multiple alerts reported by various
         entities. One of the alerts indicates the detection of active unknown malware
@@ -1053,6 +1165,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -1067,30 +1180,36 @@ tasks:
         `4d8d23e9-a77d-4e33-9435-b8c457e57ca1`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: Lateral movement to the jump server was conducted using PSExec to
         IP address `99.83.111.100`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_3
       title: Checkpoint 3
       description: Potentially compromised assets with SID `S-1-5-21-1840191660-8534830288-125585561-1522`
         exhibited ransomware-like behavior, impacting several devices.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_4
       title: Checkpoint 4
       description: A malicious command and control behavior directed to the URL `http://vectorsandarrows.com/`
         was blocked.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_24
     title: incident_5_task_24
     description: Can you identify the SID of the account associated with the suspicious
       remote activity observed on this machine?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A security incident was reported involving Command and Control
         behavior being blocked, suggesting that malware was found running or had persistence
@@ -1110,6 +1229,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -1124,18 +1244,22 @@ tasks:
         `S-1-5-21-1840191660-8534830288-125585561-1522`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: Suspicious remote activity was observed for the account with SID
         `S-0-6-5`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_25
     title: incident_5_task_25
     description: What is the host name of the machine where suspicious 'GenRansom' behavior
       was detected, indicating the machine is actively running malware?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A security incident involved a possible compromised user account
         delivering ransomware-related files across multiple devices. Among these, ransomware-related
@@ -1155,6 +1279,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -1169,22 +1294,27 @@ tasks:
         ransomware-related files on several devices.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: Suspicious remote activity was initiated on the host `vnevado-win11t`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_3
       title: Checkpoint 3
       description: Suspicious 'GenRansom' behavior was detected on the host `vnevado-win11t`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_26
     title: incident_5_task_26
     description: Can you identify the AadUserId of the account related to the CommandAndControl
       malware that was detected during lateral movement?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: To further investigate the incident, 'CommandAndControl' malware
         was detected on the targeted device. An attacker might be attempting to move
@@ -1200,6 +1330,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -1214,30 +1345,36 @@ tasks:
         on the machine associated with account `tgs2z` on `2024-07-04`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: Lateral movement detected using PSExec to the jump server at IP address
         `99.83.111.100` on `2024-07-10`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_3
       title: Checkpoint 3
       description: Potential compromise and ransomware-like behavior detected on host
         with AadDeviceId `e5799261-6720-4297-961e-bd9ca4275033` on `2024-07-04`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_4
       title: Checkpoint 4
       description: Command and control malware detected during lateral movement involving
         user with AadUserId `731adb71-b11c-4bbf-850b-57989b350e96` on `2024-07-04`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_27
     title: incident_5_task_27
     description: What is the process ID and the exact time when the `bcdedit /set recoveryenabled
       no` command was executed as part of the system recovery setting tampering?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: 'The Manatee Tempest activity tracked by Microsoft is a notorious
         Russia-based cybercriminal group that has been active since June 2014, and involved
@@ -1258,6 +1395,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -1273,6 +1411,7 @@ tasks:
         malvertising, and FakeUpdates to gain initial access.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: A system recovery setting tampering attempt was detected with the
@@ -1280,12 +1419,15 @@ tasks:
         which might indicate an attempt to disable system recovery features on the device.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_28
     title: incident_5_task_28
     description: Can you identify the URL associated with the blocked command and control
       behavior related to the malware infection?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A significant security incident involved potentially compromised
         assets exhibiting ransomware-like behavior. This impacted several devices where
@@ -1306,6 +1448,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -1320,18 +1463,22 @@ tasks:
         behavior associated with the user account having SID `S-1-5-21-1840191660-8534830288-125585561-1522`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: Command and Control (C2) behavior was blocked, linked to the URL
         `http://vectorsandarrows.com/`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_29
     title: incident_5_task_29
     description: In relation to the attempt to access Primary Refresh Token (PRT), can
       you identify the name of the process involved in this activity?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A security incident raised flags due to suspicious WMI process
         creation observed on a machine, which is indicative of possible malware activity.
@@ -1349,6 +1496,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -1363,18 +1511,22 @@ tasks:
         `S-1-5-21-1840191660-8534830288-125585561-1522`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: There was a possible attempt to access Primary Refresh Token (PRT)
         by a process with the extracted file name `browsercore.exe`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_30
     title: incident_5_task_30
     description: What is the IP address associated with the suspicious remote activity
       observed on this machine?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: On July 4, 2024, at 22:35:01, a security incident involving
         system recovery setting tampering was observed. The device `vnevado-win11t`
@@ -1393,6 +1545,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -1407,6 +1560,7 @@ tasks:
         settings, possibly attempting to delete or disable recovery features.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: Suspicious remote activity was detected from IP address `99.83.111.100`,
@@ -1414,12 +1568,15 @@ tasks:
         pass WMI commands, create scheduled tasks, or other malicious activities.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_31
     title: incident_5_task_31
     description: What was the URL blocked due to Command and Control (C2) behavior in
       this incident?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A recent security incident involved multiple attempts to access
         a Primary Refresh Token (PRT) which is a key artifact of Azure AD authentication
@@ -1440,6 +1597,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -1454,24 +1612,29 @@ tasks:
         (PRT) using the process `browsercore.exe`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: The account `dp5hn` was associated with a possible attempt to access
         the Primary Refresh Token (PRT).
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_3
       title: Checkpoint 3
       description: Command and Control behavior was detected and blocked for the URL
         `http://vectorsandarrows.com/`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_32
     title: incident_5_task_32
     description: Can you provide the command line of the process that was created using
       WMI on the host?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: 'A possible attempt to access the Primary Refresh Token (PRT)
         was detected on the host `vnevado-win11u` with AadDeviceId `bc00e484-d0e5-4da4-9472-95568cccc07e`.
@@ -1492,6 +1655,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -1506,6 +1670,7 @@ tasks:
         (PRT) associated with the Azure AD user with AadUserId `731adb71-b11c-4bbf-850b-57989b350e96`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: There was a suspicious WMI process creation observed with the process
@@ -1513,12 +1678,15 @@ tasks:
         with Process ID `1900`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_33
     title: incident_5_task_33
     description: Can you identify the SID of the account involved in the suspicious
       remote activity on 2024-07-04 at 22:35:00.896765+00:00?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A security incident involving 'CommandAndControl' malware detected
         during lateral movement flagged a potential attacker trying to move laterally
@@ -1536,6 +1704,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -1550,18 +1719,22 @@ tasks:
         was involved in a lateral movement where 'CommandAndControl' malware was detected.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: Suspicious remote activities were observed initiated by the user
         with SID `S-0-6-5`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_34
     title: incident_5_task_34
     description: As part of the Manatee Tempest activity group, what is the IP address
       associated with their activity in this incident?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: During an investigation of a security incident, it was observed
         that 'CommandAndControl' malware was detected on the host `vnevado-win10r`,
@@ -1581,6 +1754,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -1596,6 +1770,7 @@ tasks:
         the network. The associated user account has the SID `S-1-5-21-1840191660-8534830288-125585561-1522`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: Manatee Tempest, a Russia-based cybercriminal group active since
@@ -1605,12 +1780,15 @@ tasks:
         use the IP address `198.43.121.209` for their activities.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_35
     title: incident_5_task_35
     description: Can you identify the AadUserId associated with the possible attempt
       to access the Primary Refresh Token (PRT)?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: An active unknown malware was detected, which assigned higher
         severity ratings due to its active state and potential persistence mechanisms.
@@ -1630,6 +1808,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -1643,25 +1822,30 @@ tasks:
       description: Active malware was detected on the host `vnevado-win10v`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: There was a possible attempt to access a Primary Refresh Token (PRT)
         using the process `browsercore.exe`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_3
       title: Checkpoint 3
       description: The account with AadUserId `731adb71-b11c-4bbf-850b-57989b350e96`
         was associated with a possible attempt to access a Primary Refresh Token (PRT).
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_36
     title: incident_5_task_36
     description: Following these activities, there was an indication of ransomware behavior
       detected in the file system on a device. Can you determine the AadDeviceId of
       the host where this ransomware activity was detected?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A security incident involving system recovery setting tampering
         was observed on the device with name `vnevado-win10r`. The incident involved
@@ -1681,6 +1865,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -1695,6 +1880,7 @@ tasks:
         settings.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: The same host device with AadDeviceId `e5799261-6720-4297-961e-bd9ca4275033`
@@ -1702,18 +1888,22 @@ tasks:
         compromise.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_3
       title: Checkpoint 3
       description: Ransomware behavior was detected on the host with AadDeviceId `e5799261-6720-4297-961e-bd9ca4275033`,
         indicating potential mass encryption of files by ransomware.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_37
     title: incident_5_task_37
     description: From the subsequent alert, what was the name of the Windows Sysinternals
       tool that was renamed before it was launched?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: An alert reported that the LSASS process memory was modified,
         potentially to bypass security measures. During this incident, a suspicious
@@ -1731,6 +1921,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -1744,18 +1935,22 @@ tasks:
       description: The LSASS process memory was modified from IP address `107.224.99.179`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: A Windows Sysinternals tool was renamed to `mimikatz.exe` and then
         launched, which might indicate malicious activity.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_38
     title: incident_5_task_38
     description: What is the Azure Active Directory (AAD) device ID of the host where
       the possible attempt to access the Primary Refresh Token (PRT) was detected?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: In this investigation, there is a possible attempt to access
         Primary Refresh Token (PRT) that was detected as part of this incident. This
@@ -1771,6 +1966,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -1786,18 +1982,22 @@ tasks:
         which is a common tactic during Ransomware infection.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: A possible attempt to access Primary Refresh Token (PRT) has been
         detected on the host with AadDeviceId `bc00e484-d0e5-4da4-9472-95568cccc07e`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_39
     title: incident_5_task_39
     description: What was the URL associated with the command and control behavior detected
       in the end alert?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A security incident involving multiple malicious activities
         was detected. It started with a known credential theft tool, `mimikatz.exe`,
@@ -1816,6 +2016,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -1830,27 +2031,33 @@ tasks:
         with AadDeviceId `4d8d23e9-a77d-4e33-9435-b8c457e57ca1`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: There was lateral movement to the jump server from the IP address
         `99.83.111.100` using PSExec.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_3
       title: Checkpoint 3
       description: Suspicious remote activity was observed on the account `dp5hn`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_4
       title: Checkpoint 4
       description: Command and Control behavior was blocked for the URL `http://vectorsandarrows.com/`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_40
     title: incident_5_task_40
     description: Can you identify the AadDeviceId related to this alert?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A potential security incident involving a possible attempt to
         access a Primary Refresh Token (PRT) was detected. A file `browsercore.exe`
@@ -1870,6 +2077,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -1884,13 +2092,16 @@ tasks:
         detected on the host with AadDeviceId `e5799261-6720-4297-961e-bd9ca4275033`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_41
     title: incident_5_task_41
     description: During this investigation, a potentially compromised user account was
       identified. Can you provide the SID of the user account that may be operating
       with ransomware-like behavior?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: During a recent security investigation, it was found that a
         malicious credential theft tool `mimikatz.exe` was executed with the process
@@ -1911,6 +2122,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -1925,25 +2137,30 @@ tasks:
         account with the name `tgs2z`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: Lateral movement to the jump server `Vnevado-jump` was performed
         from the IP address `99.83.111.100`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_3
       title: Checkpoint 3
       description: The account with SID `S-1-5-21-1840191660-8534830288-125585561-1522`
         was exhibiting ransomware-like behavior, impacting several devices.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_42
     title: incident_5_task_42
     description: Following this incident, 'CommandAndControl' malware was detected on
       another device during lateral movement. What is the AadDeviceId of this affected
       device?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A security incident involving an attempt to access a Primary
         Refresh Token (PRT) was detected. The PRT is a key artifact of Azure AD authentication
@@ -1963,6 +2180,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -1977,19 +2195,23 @@ tasks:
         detected for the user with AadUserId `731adb71-b11c-4bbf-850b-57989b350e96`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: '''CommandAndControl'' malware was detected on the device with AadDeviceId
         `bc00e484-d0e5-4da4-9472-95568cccc07e`, indicating an attempt of lateral movement.'
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_43
     title: incident_5_task_43
     description: There was suspicious remote activity involving this malware incident.
       Can you identify the AadDeviceId of the host involved in this suspicious remote
       activity?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A security incident was detected involving suspicious 'GenRansom'
         behavior on the host 'vnevado-win11t'. This malware can perform harmful actions
@@ -2010,6 +2232,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -2024,24 +2247,29 @@ tasks:
         `e5799261-6720-4297-961e-bd9ca4275033`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: System recovery setting tampering was observed with the process `vssblatemp.exe`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_3
       title: Checkpoint 3
       description: Suspicious remote activity was detected on device with AadDeviceId
         `bc00e484-d0e5-4da4-9472-95568cccc07e`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_44
     title: incident_5_task_44
     description: In relation to the malicious credential theft tool execution detected
       in this multi-stage incident, can you identify the file name of the tool that
       was executed?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A security incident regarding System recovery setting tampering
         and possible attempts to access Primary Refresh Token (PRT) was reported. Specifically,
@@ -2062,6 +2290,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -2076,29 +2305,35 @@ tasks:
         with AadUserId `731adb71-b11c-4bbf-850b-57989b350e96`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: An attempt to access Primary Refresh Token (PRT) was detected, associated
         with the process `browsercore.exe`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_3
       title: Checkpoint 3
       description: Another attempt to access Primary Refresh Token (PRT) was detected,
         originating from the IP address `107.224.99.179`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_4
       title: Checkpoint 4
       description: A malicious credential theft tool `mimikatz.exe` was executed.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_45
     title: incident_5_task_45
     description: Can you provide the command line details of the suspicious WMI process
       observed on the machine?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A security incident involving the Manatee Tempest activity group
         was reported. This Russia-based cybercriminal group, which has been active since
@@ -2119,6 +2354,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -2133,6 +2369,7 @@ tasks:
         in an activity targeting an account with SID `S-1-5-21-1840191660-8534830288-125585561-1522`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: A suspicious WMI process creation was observed with Process ID `7332`
@@ -2140,12 +2377,15 @@ tasks:
         ignoreallfailures`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_46
     title: incident_5_task_46
     description: What is the name of the credential theft tool detected on the device
       `vnevado-win10v`?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A recent security incident involved the modification of the
         LSASS process memory. This process enforces security policy by verifying user
@@ -2163,6 +2403,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -2176,19 +2417,23 @@ tasks:
       description: The LSASS process memory was modified on host `vnevado-win10v`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: The Mimikatz credential theft tool, known as mimikatz.exe, was detected
         on the same host `vnevado-win10v`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_47
     title: incident_5_task_47
     description: Following this alert regarding system tampering, there was also a command
       and control behavior blocked. Can you identify the URL associated with the blocked
       behavior?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A security incident involving system recovery setting tampering
         has been observed where a file `vssblatemp.exe` was launched on host `vnevado-win10s`,
@@ -2207,6 +2452,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -2221,18 +2467,22 @@ tasks:
         `dp5hn`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: A Command and Control behavior from the URL `http://vectorsandarrows.com/`
         was detected and blocked.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_48
     title: incident_5_task_48
     description: What is the AadDeviceId of the host where 'CommandAndControl' malware
       was detected during lateral movement at 2024-07-04 22:35:03.912589?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: On 2024-07-04 at 22:35:03.423858, a possible ransomware activity
         based on a known malicious extension was detected. Numerous file system changes
@@ -2250,6 +2500,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -2265,6 +2516,7 @@ tasks:
         indicative of mass encryption of files.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: '''CommandAndControl'' malware was detected on the device with AadDeviceId
@@ -2272,13 +2524,16 @@ tasks:
         attempting lateral movement to this device from another device on the network.'
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_49
     title: incident_5_task_49
     description: During this incident, there was also a detected attempt to access the
       Primary Refresh Token (PRT). What is the AadDeviceId of the host involved in this
       attempt?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A recent security incident involved potentially compromised
         assets exhibiting ransomware-like behavior impacting multiple devices. The attacker
@@ -2298,6 +2553,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -2313,18 +2569,22 @@ tasks:
         multiple devices.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: There was a possible attempt to access a Primary Refresh Token (PRT)
         from the device with AadDeviceId `9d4887ba-0b69-47d6-89bc-9b32787f379e`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_50
     title: incident_5_task_50
     description: What is the IP address from which the ransomware payload was remotely
       launched?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: On 2024-07-04, there was a security incident involving suspicious
         WMI process creation on a machine. Malware often uses WMI to spawn new processes,
@@ -2344,6 +2604,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -2358,17 +2619,21 @@ tasks:
         the user with SID `S-1-5-21-1840191660-8534830288-125585561-1522`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: A ransomware payload was remotely launched from IP address `99.83.111.100`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_51
     title: incident_5_task_51
     description: Can you identify the executable file name of the process that attempted
       to access the Primary Refresh Token (PRT) as part of the related alerts?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: 'A security incident involving suspected tampering with system
         recovery settings using various commands and processes, including `vssblatemp.exe`
@@ -2391,6 +2656,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -2405,19 +2671,23 @@ tasks:
         with AadUserId `731adb71-b11c-4bbf-850b-57989b350e96`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: There was a possible attempt to access the Primary Refresh Token
         (PRT) involving the process `browsercore.exe`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_52
     title: incident_5_task_52
     description: A related alert indicated a possible compromised user account dropping
       ransomware-related files. Can you identify the name of the specific file associated
       with the ransomware activity?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A Mimikatz credential theft tool was detected on a device. Mimikatz
         is a credential theft tool that can harvest plaintext passwords, password hashes,
@@ -2438,6 +2708,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -2452,24 +2723,29 @@ tasks:
         AadDeviceId `4d8d23e9-a77d-4e33-9435-b8c457e57ca1`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: Lateral movement to the jump server occurred using PSExec to IP address
         `99.83.111.100`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_3
       title: Checkpoint 3
       description: A compromised user account was observed dropping a ransomware-related
         file named `get-userprttoken.ps1` on several devices.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_53
     title: incident_5_task_53
     description: During this incident, what specific command line was observed that
       could indicate system recovery setting tampering on the device?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A security incident involving suspicious 'GenRansom' behavior
         was detected on the host `vnevado-win11t` with AadDeviceId `e5799261-6720-4297-961e-bd9ca4275033`.
@@ -2488,6 +2764,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -2502,12 +2779,14 @@ tasks:
         with AadDeviceId `e5799261-6720-4297-961e-bd9ca4275033`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: Lateral movement using SMB remote file access was blocked for the
         user with SID `S-1-5-21-1840191660-8534830288-125585561-1522`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_3
       title: Checkpoint 3
       description: System recovery setting tampering was observed with the process having
@@ -2515,12 +2794,15 @@ tasks:
         line `bcdedit /set recoveryenabled no`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_54
     title: incident_5_task_54
     description: What is the command line used by the process that tampered with the
       system recovery settings?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: There was a possible attempt to access the Primary Refresh Token
         (PRT) on a device via the process `browsercore.exe` with the Process ID 1640,
@@ -2542,6 +2824,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -2556,18 +2839,22 @@ tasks:
         for the Azure AD user with the AadUserId `731adb71-b11c-4bbf-850b-57989b350e96`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: System recovery setting tampering was observed with the command `bcdedit
         /set recoveryenabled no` executed by process with Process ID `4828` on `2024-06-20T09:31:59.6743318Z`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_55
     title: incident_5_task_55
     description: As part of this incident, a ransomware payload was also remotely launched.
       Can you identify the IP address involved in the ransomware activity?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A recent malware incident was detected and blocked which exhibited
         Command and Control behavior. The malware ran a `curl` command to fetch content
@@ -2585,6 +2872,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -2599,18 +2887,22 @@ tasks:
         on the account with SID `S-1-5-21-1840191660-8534830288-125585561-1522`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: A ransomware payload was remotely launched from IP address `99.83.111.100`,
         potentially attempting to encrypt content on the device.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_56
     title: incident_5_task_56
     description: As per the recent alert, what is the name of the file that shows the
       potentially compromised assets exhibiting ransomware-like behavior?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A security incident indicates that a possible compromised user
         account was observed delivering ransomware-related files like `ponceau.7z`,
@@ -2629,6 +2921,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -2643,18 +2936,22 @@ tasks:
         on several devices.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: Potentially compromised assets are exhibiting ransomware-like behavior
         with a file named `unstreaming.xlsx`, impacting several devices.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_57
     title: incident_5_task_57
     description: Can you identify the command line details for the process that reflects
       the suspicious WMI process creation on the same machine `vnevado-win10s`?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: The security incident involves suspicious WMI process creation,
         which is a common tactic used by malware to break process trees and infect a
@@ -2674,6 +2971,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -2688,6 +2986,7 @@ tasks:
         of the PowerShell script `get-userprttoken.ps1`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: A suspicious WMI process creation was observed with the command line
@@ -2695,12 +2994,15 @@ tasks:
         ID `4828`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_58
     title: incident_5_task_58
     description: A related alert indicates possible ransomware activity involving a
       known malicious file extension. Can you identify the file involved in this activity?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: As part of a multi-stage ransomware incident detection, suspicious
         file system changes were observed on the host `vnevado-win11t`, indicating potential
@@ -2718,6 +3020,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -2732,18 +3035,22 @@ tasks:
         were detected on host `vnevado-win11t`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: Possible ransomware activity was identified based on the malicious
         file `get-userprttoken.ps1` with known malicious extensions.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_59
     title: incident_5_task_59
     description: Can you identify the Security Identifier (Sid) associated with the
       suspicious remote activity observed in this incident?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A security incident involving a possible attempt to access Primary
         Refresh Token (PRT) was detected. The file `browsercore.exe` was launched with
@@ -2763,6 +3070,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -2777,19 +3085,23 @@ tasks:
         for the user with AadUserId `731adb71-b11c-4bbf-850b-57989b350e96`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: Suspicious remote activity was detected involving the account with
         SID `S-0-6-5`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_60
     title: incident_5_task_60
     description: On the same host `vnevado-win10s`, there was a tampering activity observed.
       Can you identify the command that was executed to disable the automatic Windows
       recovery features?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A security incident was detected involving 'CommandAndControl'
         malware which attempted lateral movement on the host `vnevado-win10s` with AadDeviceId
@@ -2809,6 +3121,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -2823,6 +3136,7 @@ tasks:
         with the account `dp5hn`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: System recovery settings were tampered with using the `bcdedit` command
@@ -2830,12 +3144,15 @@ tasks:
         Process ID `4828`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_61
     title: incident_5_task_61
     description: Regarding the system recovery setting tampering, which process was
       used to delete all volume shadow copies on the system?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A possible ransomware activity based on a known malicious extension
         has been observed on a device where numerous file system changes involved appending
@@ -2854,6 +3171,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -2868,6 +3186,7 @@ tasks:
         that involves mass encryption of files.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: System recovery setting tampering by running the command `vssblatemp.exe
@@ -2875,12 +3194,15 @@ tasks:
         with Process ID `1900`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_62
     title: incident_5_task_62
     description: In the context of this security incident, can you provide the command
       line that was used to delete all file snapshots and shadow copies?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A security incident has been observed involving System recovery
         setting tampering on the device `vnevado-win11u` along with actions aimed at
@@ -2899,6 +3221,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -2914,6 +3237,7 @@ tasks:
         system recovery.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: The process with ID `5512` was detected executing the command `vssblatemp.exe
@@ -2922,13 +3246,16 @@ tasks:
         infection.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_63
     title: incident_5_task_63
     description: In connection to the potential ransomware activity, it was found that
       all file backups were deleted. Can you determine the name of the process that
       executed this deletion?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: During a potential ransomware incident, several suspicious file
         modifications were detected on a device. These modifications involved appending
@@ -2949,6 +3276,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -2964,6 +3292,7 @@ tasks:
         the account with SID `S-1-5-21-1840191660-8534830288-125585561-1522`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: File backups, such as file snapshots and shadow copies, were deleted
@@ -2971,12 +3300,15 @@ tasks:
         ransomware infections.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_64
     title: incident_5_task_64
     description: What is the IP address associated with the malicious Manatee Tempest
       activity?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A recent incident occurred where all file snapshots and shadow
         copies were deleted via WMI or VSSAdmin on the host `vnevado-win11u` using the
@@ -2997,6 +3329,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -3012,6 +3345,7 @@ tasks:
         a ransomware infection.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: A suspicious IP address `198.43.121.209` was associated with the
@@ -3019,12 +3353,15 @@ tasks:
         campaigns and ransomware deployment.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_65
     title: incident_5_task_65
     description: What was the command line of the process detected with the known credential
       theft tool execution?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A serious security incident involving the Mimikatz credential
         theft tool was detected on a device. Mimikatz is known for harvesting plaintext
@@ -3044,6 +3381,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -3060,6 +3398,7 @@ tasks:
         with Process ID `6600`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: A malicious credential theft tool execution was detected with the
@@ -3067,13 +3406,16 @@ tasks:
         with Process ID `7948`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_66
     title: incident_5_task_66
     description: Regarding the system recovery setting tampering observed on this device,
       what command line was executed by the process using `vssblatemp.exe` and what
       was the corresponding Process Id and creation time?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A security incident was reported involving suspicious remote
         activity on a device named `vnevado-win11u` at IP address `99.83.111.100`. This
@@ -3093,6 +3435,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -3108,6 +3451,7 @@ tasks:
         `vssblatemp.exe`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: System recovery setting tampering was performed using `vssblatemp.exe`
@@ -3115,12 +3459,15 @@ tasks:
         with Process ID `7236`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_67
     title: incident_5_task_67
     description: What IP address was involved in the ransomware payload that was remotely
       launched following the attempt to access the Primary Refresh Token (PRT)?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A possible attempt to access a Primary Refresh Token (PRT) was
         detected on host `vnevado-win11u`, which could be an indication of attackers
@@ -3137,6 +3484,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -3151,17 +3499,21 @@ tasks:
         (PRT) by an account with AadUserId `731adb71-b11c-4bbf-850b-57989b350e96`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: A ransomware payload was remotely launched from IP address `99.83.111.100`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_68
     title: incident_5_task_68
     description: What is the host name of the device where 'CommandAndControl' malware
       was detected during lateral movement?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A security incident involving the Manatee Tempest activity group
         was detected. This group is known for using drive-by downloads and other methods
@@ -3181,6 +3533,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -3197,24 +3550,29 @@ tasks:
         The group used domain fronting for command-and-control of Cobalt Strike.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: A suspicious account with SID `S-1-5-21-1840191660-8534830288-125585561-1522`
         was identified in the context of the Manatee Tempest group activities.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_3
       title: Checkpoint 3
       description: The 'CommandAndControl' malware was detected on the host `vnevado-win10s`,
         indicating an attempt at lateral movement within the network.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_69
     title: incident_5_task_69
     description: Can you identify the process command used that might have tampered
       with the system recovery settings?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: An incident occurred involving the potential compromise of devices
         showing ransomware-like behavior. An IP address associated with this is `99.83.111.100`,
@@ -3233,6 +3591,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -3247,6 +3606,7 @@ tasks:
         is potentially compromised and exhibiting ransomware-like behavior.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: On 2024-06-20 at 09:29:40.8785892 UTC, the process vssblatemp.exe
@@ -3255,12 +3615,15 @@ tasks:
         copies.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_70
     title: incident_5_task_70
     description: What is the hostname of the device where a possible attempt to access
       Primary Refresh Token (PRT) was detected?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A security incident started with lateral movement detected from
         IP address `83.162.58.168`. The alert was flagged as 'Possible lateral movement'
@@ -3283,6 +3646,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -3297,24 +3661,29 @@ tasks:
         with AadDeviceId `e5799261-6720-4297-961e-bd9ca4275033`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: Command and control behavior related to malware was blocked, and
         the associated account name is `dp5hn`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_3
       title: Checkpoint 3
       description: A possible attempt to access the Primary Refresh Token (PRT) was
         detected on the host `vnevado-win10s`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_71
     title: incident_5_task_71
     description: In this incident, potentially compromised assets are exhibiting ransomware-like
       behavior. Can you identify the name of the file that has been impacted by ransomware?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A security incident was detected involving a possible attempt
         to access a Primary Refresh Token (PRT), which is an important artifact for
@@ -3333,6 +3702,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -3347,18 +3717,22 @@ tasks:
         by the user with AadUserId `731adb71-b11c-4bbf-850b-57989b350e96`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: Potentially compromised assets exhibiting ransomware-like behavior
         were detected, involving a file named `unstreaming.xlsx.lockbit`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_72
     title: incident_5_task_72
     description: Can you identify the malicious IP address associated with the Manatee
       Tempest group activities?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A security incident related to the Manatee Tempest activity
         group was also identified. Manatee Tempest is known for using various methods
@@ -3377,6 +3751,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -3391,19 +3766,23 @@ tasks:
         deleted which is common during a ransomware infection.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: The cybercriminal group, Manatee Tempest, known for deploying ransomware
         and other malware, accessed using IP address `198.43.121.209`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_73
     title: incident_5_task_73
     description: Relating to this incident, a possible attempt to access the Primary
       Refresh Token (PRT) was detected. Can you identify the file name of the process
       involved in this attempt?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: As part of the process leading to the discovery of an unknown
         malware, we found that components such as `cmd.exe`, `mimikatz.exe`, and `notepad.exe`
@@ -3422,6 +3801,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -3436,18 +3816,22 @@ tasks:
         and was active.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: There was a possible attempt to access the Primary Refresh Token
         (PRT) via the process `browsercore.exe`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_74
     title: incident_5_task_74
     description: What is the AadDeviceId of the host connected to the end alert which
       involves the same Manatee Tempest activity group?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A security incident related to the Manatee Tempest activity
         group has been detected. This actor, tracked by Microsoft and known to be a
@@ -3470,6 +3854,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -3484,18 +3869,22 @@ tasks:
         with AadUserId `731adb71-b11c-4bbf-850b-57989b350e96`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: There is an activity by the Manatee Tempest group targeting a host
         with AadDeviceId `e5799261-6720-4297-961e-bd9ca4275033`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_75
     title: incident_5_task_75
     description: Following this alert, we also detected malicious command and control
       behavior. Can you provide the URL associated with this command and control behavior?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: 'A security incident involving the deletion of all file snapshots
         and shadow copies via WMI or VSSAdmin, which is common during ransomware infection,
@@ -3514,6 +3903,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -3528,18 +3918,22 @@ tasks:
         with ransomware infection.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: A command and control behavior originating from the URL `http://vectorsandarrows.com/`
         was blocked, indicating an active malware infection.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_76
     title: incident_5_task_76
     description: Can you identify the command line of the suspicious WMI process that
       was observed?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A 'CommandAndControl' malware was detected on the device `vnevado-win11u`
         during a security incident on July 4, 2024. This detection suggests an attempt
@@ -3557,6 +3951,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -3571,6 +3966,7 @@ tasks:
         during lateral movement on 2024-07-04 22:35:02.559990+00:00.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: A suspicious WMI process creation was detected, where process with
@@ -3578,13 +3974,16 @@ tasks:
         `powershell -file c:\scripts\get-userprttoken.ps1`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_77
     title: incident_5_task_77
     description: Immediately after this detection, another suspicious WMI process was
       created on the machine. Can you find the command line used by this newly created
       WMI process?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A possible attempt to access Primary Refresh Token (PRT) was
         detected, indicating that attackers may be trying to move laterally within the
@@ -3603,6 +4002,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -3617,6 +4017,7 @@ tasks:
         by a user with AadUserId `731adb71-b11c-4bbf-850b-57989b350e96`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: A suspicious WMI process creation was detected with command line
@@ -3624,12 +4025,15 @@ tasks:
         with Process ID `1868`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_78
     title: incident_5_task_78
     description: Can you identify the URL that was associated with the command and control
       behavior which was blocked?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: The Mimikatz credential theft tool was detected on this device,
         indicating a potential attempt to harvest credentials. Following this, we observed
@@ -3648,6 +4052,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -3662,31 +4067,37 @@ tasks:
         at `2024-07-04 22:35:00.846286+00:00`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: Lateral movement detected using PSExec to IP address `99.83.111.100`
         at `2024-07-10 11:24:45.260113+00:00`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_3
       title: Checkpoint 3
       description: A possible compromised user account `dp5hn` was observed delivering
         ransomware-related files at `2024-07-04 22:35:01.491898+00:00`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_4
       title: Checkpoint 4
       description: Command and Control behavior blocked; malware communicating with
         URL `http://vectorsandarrows.com/` at `2024-07-04 22:35:03.652724+00:00`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_79
     title: incident_5_task_79
     description: The answer points to browsercore.exe running at the specified time.
       This should be further scrutinized to confirm the activity related to PRT access
       attempt mentioned.
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A suspicious WMI process creation was observed on the machine.
         Malware frequently uses WMI to spawn new processes, breaking process trees and
@@ -3708,6 +4119,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -3722,6 +4134,7 @@ tasks:
         with AadDeviceId `e5799261-6720-4297-961e-bd9ca4275033`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: There was a possible attempt to access the Primary Refresh Token
@@ -3729,13 +4142,16 @@ tasks:
         ID `7036` at `2024-06-20t09:29:49.304018z`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_80
     title: incident_5_task_80
     description: After detecting the execution of this malicious tool, there was an
       event involving the renaming and launching of a Windows Sysinternals tool. What
       file name was used in this second alert?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A security incident was detected on 2024-07-04 involving the
         execution of a known credential theft tool, indicated by a suspicious command
@@ -3752,6 +4168,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -3765,18 +4182,22 @@ tasks:
       description: An account with Name `tgs2z` executed a known credential theft tool.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: The renamed Windows Sysinternals tool `mimikatz.exe` was launched,
         potentially for malicious purposes.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_81
     title: incident_5_task_81
     description: Which device was the ransomware payload remotely launched on as indicated
       by the end alert?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A security incident involving a possible compromised user account
         was reported. The user account was observed dropping a ransomware-related file
@@ -3795,6 +4216,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -3809,18 +4231,22 @@ tasks:
         dropping ransomware-related files on several devices.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: A ransomware payload was remotely launched on the device with the
         host name `vnevado-win11u`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_82
     title: incident_5_task_82
     description: What is the file name of the process involved in the suspicious WMI
       process creation observed on the machine after the attempt to access PRT?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A recent security alert flagged a possible attempt to access
         Primary Refresh Token (PRT) on host `vnevado-win10r`, where the process `browsercore.exe`
@@ -3838,6 +4264,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -3852,18 +4279,22 @@ tasks:
         (PRT) associated with the Azure AD user with AadUserId `731adb71-b11c-4bbf-850b-57989b350e96`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: A suspicious WMI process `vssblatemp.exe` was created on the machine,
         indicating potential malware activity.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_83
     title: incident_5_task_83
     description: During the system recovery setting tampering, what process and command
       line was used to disable automatic Windows recovery features?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: As part of a Ransomware infection observed in our organization,
         file backups were deleted via WMI or VSSAdmin on the host `vnevado-win10r`.
@@ -3884,6 +4315,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -3897,6 +4329,7 @@ tasks:
       description: An attack was detected where file backups were deleted via `vssblatemp.exe`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: System recovery settings were tampered with using the process `bcdedit.exe`
@@ -3904,12 +4337,15 @@ tasks:
         `2024-06-20t09:31:59.6743318z` with Process ID `4828`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_84
     title: incident_5_task_84
     description: What command line and process ID were used for the tampering of system
       recovery settings observed earlier?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A suspicious remote activity was observed on a machine named
         `vnevado-win10s`. This alert flagged potentially malicious activities such as
@@ -3928,6 +4364,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -3942,6 +4379,7 @@ tasks:
         the process `vssblatemp.exe` detected at `2024-07-04 22:35:03.258229+00:00`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: System recovery setting tampering was observed using the process
@@ -3949,13 +4387,16 @@ tasks:
         `2024-06-20t09:32:02.4640548z`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_85
     title: incident_5_task_85
     description: In a related alert, there is evidence of system recovery settings being
       tampered with on the same device. Can you determine the command line used to delete
       all volume shadow copies on this system?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A recent security incident indicates a tampering of system recovery
         settings on device `vnevado-win11t`. Adversaries might have attempted to delete
@@ -3974,6 +4415,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -3988,6 +4430,7 @@ tasks:
         exhibited suspicious behavior on their device indicating potential compromise.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: System recovery settings on the same device were tampered with, suggesting
@@ -3996,11 +4439,14 @@ tasks:
         `vssblatemp.exe delete shadows /all`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_86
     title: incident_5_task_86
     description: What is the URL associated with the activity from Manatee Tempest?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A suspicious and anomalous behavior was observed involving a
         user on device `vnevado-win11t`. This behavior suggested a potential compromise
@@ -4022,6 +4468,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -4036,6 +4483,7 @@ tasks:
         on their device.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: The URL `vectorsandarrows.com` is associated with the cybercriminal
@@ -4043,13 +4491,16 @@ tasks:
         access to target networks.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_87
     title: incident_5_task_87
     description: Related to this alert, there was also an incident where file backups
       were deleted. Can you identify the command used in the process that deleted the
       file snapshots and shadow copies?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: 'For more information, read the Activity Profile: Iranian MOIS
         operators opportunistically deploy limited-impact wiper in response to Israel-Hamas
@@ -4066,6 +4517,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -4080,6 +4532,7 @@ tasks:
         for the AadUserId `731adb71-b11c-4bbf-850b-57989b350e96`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: File backups, including all snapshots and shadow copies, were deleted
@@ -4087,12 +4540,15 @@ tasks:
         `vssblatemp.exe delete shadows /all`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_88
     title: incident_5_task_88
     description: What is the name of the file involved in the suspicious access to the
       LSASS service?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A security incident was triggered due to a known credential
         theft tool execution command line. The process mimikatz.exe was used, showing
@@ -4109,6 +4565,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -4122,18 +4579,22 @@ tasks:
       description: A known credential theft tool named `mimikatz.exe` was executed.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: Suspicious access to the LSASS service, potentially attempting to
         decrypt user passwords using the file `cryptdll.dll`, was detected.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_89
     title: incident_5_task_89
     description: Can you identify the SID of the account that was possibly compromised
       and observed delivering ransomware-related files?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A suspicious 'GenRansom' behavior was detected on host `vnevado-win11u`
         which is identified by its AadDeviceId `bc00e484-d0e5-4da4-9472-95568cccc07e`.
@@ -4151,6 +4612,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -4164,18 +4626,22 @@ tasks:
       description: Suspicious 'GenRansom' behavior was detected on host `vnevado-win11u`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: A possible compromised user account with SID `S-1-5-21-1840191660-8534830288-125585561-1522`
         was observed delivering ransomware-related files.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_90
     title: incident_5_task_90
     description: What was the Process ID and command line observed during the suspicious
       hands-on keyboard user behavior?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A ransomware payload was remotely launched on a device from
         the IP address `99.83.111.100`. Attackers might be attempting to encrypt content
@@ -4196,6 +4662,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -4209,6 +4676,7 @@ tasks:
       description: The account `dp5hn` remotely launched a ransomware payload.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: There was suspicious hands-on keyboard behavior detected where a
@@ -4216,13 +4684,16 @@ tasks:
         on `2024-06-20t09:29:42.3927529z`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_91
     title: incident_5_task_91
     description: During the ransomware attack incident on `vnevado-win11u`, a process
       was used to delete all file snapshots and shadow copies via WMI or VSSAdmin. Can
       you identify the name of this process?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A ransomware payload was remotely launched on the device with
         hostname `vnevado-win11u` and IP address `99.83.111.100`. The attackers might
@@ -4241,6 +4712,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -4254,18 +4726,22 @@ tasks:
       description: The ransomware payload was remotely launched for the account `dp5hn`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: File backups were deleted by the process `vssblatemp.exe` which is
         common during a ransomware infection.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_92
     title: incident_5_task_92
     description: Can you identify the name of the possibly compromised user account
       that was dropping ransomware-related files on several devices?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: In continuation, a suspicious activity indicated that a user
         account might have been compromised to deliver ransomware-related files across
@@ -4282,6 +4758,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -4296,24 +4773,29 @@ tasks:
         account SID `S-5-7-21-1843151660-3234030288-105586167-1422`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: Lateral movement using PSExec was detected to the IP address `99.83.111.100`
         associated with the host `vnevado-jump`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_3
       title: Checkpoint 3
       description: A possible compromised user account `dp5hn` was observed delivering
         ransomware-related files on several devices.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_93
     title: incident_5_task_93
     description: What is the name of the file that is associated with the ransomware-like
       behavior?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A security incident involving ransomware-like behavior impacting
         several devices has been observed. Initial detection included the use of PsExec
@@ -4333,6 +4815,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -4347,25 +4830,30 @@ tasks:
         device via PsExec.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: There was a lateral movement to the jump server with IP address `99.83.111.100`
         using PsExec.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_3
       title: Checkpoint 3
       description: A file named `ponceau.7z` is associated with ransomware-like behavior,
         indicating potentially compromised assets.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_94
     title: incident_5_task_94
     description: During this investigation, it was also noted that a user account was
       dropping a ransomware-related file on several devices. Can you identify the name
       of the ransomware-related file?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: As part of a security incident involving the Manatee Tempest
         activity group, a URL `vectorsandarrows.com` was accessed from the host `vnevado-win11u`
@@ -4386,6 +4874,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -4401,6 +4890,7 @@ tasks:
         activities and partnerships.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: A possible compromised user account is observed dropping a ransomware-related
@@ -4408,12 +4898,15 @@ tasks:
         lateral movement and infection attempts across the network.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_95
     title: incident_5_task_95
     description: Can you determine the destination IP address where potential lateral
       movement was observed following the suspicious network event?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: 'On 2024-07-10, at 11:24:45.260113+00:00, a security incident
         was detected involving lateral movement to the jump server `vnevado-jump` from
@@ -4432,6 +4925,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -4446,24 +4940,29 @@ tasks:
         IP address `99.83.111.100`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: A possible ransomware activity involving a known malicious extension
         was detected on host `vnevado-win11t`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_3
       title: Checkpoint 3
       description: Possible lateral movement from IP address `83.162.58.168` was detected
         in close time proximity to a suspicious network event on the device.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_96
     title: incident_5_task_96
     description: What is the process ID and command line of the process that was used
       in the possible attempt to access the Primary Refresh Token (PRT)?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A security incident involving potentially compromised assets
         exhibiting ransomware-like behavior was detected, with the malicious presence
@@ -4485,6 +4984,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -4498,6 +4998,7 @@ tasks:
       description: There is ransomware-like behavior detected on the host `vnevado-win11t`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: There was a possible attempt to access a Primary Refresh Token using
@@ -4505,12 +5006,15 @@ tasks:
         with Process ID `7036`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_97
     title: incident_5_task_97
     description: What is the URL involved in the Command and Control behavior that was
       blocked?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: 'Start Alert: File backups were deleted, performed by `vssblatemp.exe`
         with Process ID 1900 and command line `vssblatemp.exe delete shadows /all`.
@@ -4528,6 +5032,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -4542,17 +5047,21 @@ tasks:
         VSSAdmin by the user with AadUserId `731adb71-b11c-4bbf-850b-57989b350e96`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: Command and Control (C2) behavior was blocked from the URL `http://vectorsandarrows.com/`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
   - task_id: incident_5_task_98
     title: incident_5_task_98
     description: What file name indicates the active malware that was found during this
       incident?
     prompt_template_file: excytin_demo.md
+
     sandbox_environment: excytin_sandbox
+
     initial_context:
       incident_context: A malicious credential theft tool was detected on a host with
         potential involvement of an account bearing the Sid `S-5-7-21-1843151660-3234030288-105586167-1422`
@@ -4569,6 +5078,7 @@ tasks:
         ssl_mode: "disabled"
         connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin
           env_monitor_db"
+
     evaluation_config:
       strategy: static
       criteria:
@@ -4583,6 +5093,7 @@ tasks:
         IP address `107.224.99.179`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
+
     - subtask_id: checkpoint_2
       title: Checkpoint 2
       description: Active malware named `mimikatz.exe` was detected running on the machine.

@@ -1,7 +1,11 @@
 """
 SABER Models - Centralized model exports.
 
-This module provides convenient imports for all SABER models organized by category.
+This module provi    # Core domain models
+    "BenchmarkInfo",
+    "PolicyInfo",
+    "TaskInfo",
+    "EvalSubmission",convenient imports for all SABER models organized by category.
 """
 
 # Administrative models
@@ -14,7 +18,7 @@ from .admin import (
 )
 
 # Core domain models
-from .core import BenchmarkInfo, PolicyInfo, TaskInfo
+from .core import BenchmarkInfo, EvalSubmission, PolicyInfo, TaskInfo
 
 # Event streaming models
 from .events import ToolCallEventComplete, ToolCallEventProgress, ToolCallEventStart
@@ -66,6 +70,7 @@ __all__ = [
     "BenchmarkInfo",
     "PolicyInfo",
     "TaskInfo",
+    "EvalSubmission",
     # REST API models
     "StepResponse",
     "SessionCreateResponse",

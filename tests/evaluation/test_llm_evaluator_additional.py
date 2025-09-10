@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch, Mock
 import pytest
 
 from saber.server.evaluation.evaluators.llm_evaluator import LLMEvaluator
-from saber.server.evaluation.models import EvaluationConfig
+from saber.server.evaluation.models import EvaluationConfig, EpisodeEvaluationData
 from saber.server.evaluation.constants import EVAL_STRATEGY_LLM_JUDGE
 from saber.server.evaluation.exceptions import EvaluationError
 from saber.server.evaluation.evaluation_manager import EvaluationManager
@@ -42,7 +42,12 @@ async def test_llm_empty_message_content():
         criteria={"golden_answer": "abc", "model": "gpt-test"},
         scoring={"max_score": 1.0},
     )
-    episode_data = {"episode_id": "e1", "task_id": "t1", "submission": "test"}
+    episode_data = EpisodeEvaluationData(
+        episode_id="e1",
+        task_id="t1",
+        submission="test",
+        step_count=1
+    )
 
     # Patch environment & _call_llm_json to simulate empty content edge triggered earlier (handled in _call_llm_json path)
     with patch.dict(os.environ, {"OPENAI_API_KEY": "x"}):

@@ -1,14 +1,17 @@
 """SABER × Inspect AI Integration
-Public exports for the Inspect AI integration layer with eval_async support.
-This provides eval_async integration between SABER's new agent architecture
-and inspect_ai's evaluation framework.
+
+Low-level inspect_ai specific implementations and utilities.
+This module should only be imported by SABER internals, not by end users.
+
+For public SABER agent API, use:
+    from saber.client import SABERAgentRegistry, SABERAgentFactory
 """
 
-# Import agent registrations to trigger decorator execution
-from . import configurable_agent  # This triggers agent registration decorators
+# Import SABER agent registrations to trigger decorator execution
+from . import saber_agent  # This triggers SABER agent registration decorators
 
-# Agent registry exports
-from .agent_registry import InspectAIAgentFactory
+# Low-level inspect_ai implementation registry (internal use only)
+from .agent_implementations import InspectAIImplementationRegistry, register_inspect_ai_implementation
 
 # Dataset and evaluation exports
 from .saber_dataset import create_saber_dataset
@@ -21,9 +24,10 @@ from .saber_scorer import SABERTaskScorer, saber_server_scorer, saber_task_score
 
 __all__ = [
     # Agent registrations (triggers decorators)
-    "configurable_agent",
-    # Agent factory
-    "InspectAIAgentFactory",
+    "saber_agent",
+    # Low-level implementation registry (internal)
+    "InspectAIImplementationRegistry",
+    "register_inspect_ai_implementation",
     # Main eval_async integration
     "run_saber_eval_async",
     # Dataset and evaluation

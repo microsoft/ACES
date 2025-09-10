@@ -2,24 +2,24 @@
 Static evaluator implementation for exact string matching.
 """
 
-from typing import Any, Dict
-
 from ...benchmarks.task import Task
 from ..constants import EVAL_STRATEGY_STATIC
 from ..exceptions import EvaluationValidationError
-from ..models import EvaluationConfig, EvaluationResult
+from ..models import EpisodeEvaluationData, EvaluationConfig, EvaluationResult
 from .base import BaseEvaluator
 
 
 class StaticEvaluator(BaseEvaluator):
     """Static evaluator for exact string matching."""
 
-    async def evaluate(self, episode_data: Dict[str, Any], config: EvaluationConfig, task: Task) -> EvaluationResult:
+    async def evaluate(
+        self, episode_data: EpisodeEvaluationData, config: EvaluationConfig, task: Task
+    ) -> EvaluationResult:
         """
         Evaluate episode using static exact matching.
 
         Args:
-            episode_data: Dictionary containing episode information
+            episode_data: EpisodeEvaluationData containing episode information
             config: Evaluation configuration from task
             task: Task being evaluated
 
@@ -29,7 +29,7 @@ class StaticEvaluator(BaseEvaluator):
         Raises:
             EvaluationValidationError: If configuration is invalid
         """
-        submission = episode_data.get("submission", "").strip()
+        submission = episode_data.submission.strip()
         expected_answers = config.criteria.get("expected_answers", [])
 
         # Fail fast validation
@@ -65,9 +65,8 @@ class StaticEvaluator(BaseEvaluator):
         assert 0.0 <= raw_score <= 1.0, f"raw_score out of bounds: {raw_score}"
         assert score <= max_score + 1e-9, "score exceeds max_score"
 
-        return EvaluationResult(
-            episode_id=episode_data["episode_id"],
-            task_id=episode_data["task_id"],
+        return EvaluationResult.from_episode_data(
+            episode_data=episode_data,
             strategy=EVAL_STRATEGY_STATIC,
             raw_score=raw_score,
             max_score=max_score,

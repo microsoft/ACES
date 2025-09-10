@@ -13,7 +13,7 @@ Following SABER's philosophy:
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from inspect_ai.scorer import Score, Scorer, Target, metric, scorer
 from inspect_ai.scorer._metric import Metric, SampleScore, ValueToFloat, value_to_float
@@ -105,130 +105,15 @@ def saber_task_scorer() -> Scorer:
     """
     SABER task scorer for inspect_ai framework.
 
-    This scorer provides basic client-side evaluation for SABER tasks.
-    The real evaluation logic resides on the SABER server, but this
-    scorer provides immediate feedback and compatibility with inspect_ai's
-    scoring framework.
+    This scorer retrieves evaluation results from the SABER server,
+    providing authoritative scoring based on server-side success criteria.
+    Follows SABER's fail-fast principles.
 
     Returns:
-        Scorer function that evaluates SABER task completion
+        Scorer function that retrieves server evaluation results
     """
-
-    async def score(state: TaskState, target: Target) -> Score:
-        """
-        Score SABER task completion based on TaskState and target.
-
-        STUBBED IMPLEMENTATION: Real evaluation happens server-side.
-        This is a placeholder that returns a basic score for inspect_ai compatibility.
-
-        Args:
-            state: Current TaskState after agent execution
-            target: Expected target/success criteria
-
-        Returns:
-            Score object with basic evaluation results
-        """
-
-        # STUB: Basic scoring based on whether agent executed
-        has_messages = len(state.messages) > 0
-        completion_score = 0.5 if has_messages else 0.0
-        success_score = 0.3 if has_messages else 0.0
-
-        explanation = (
-            f"STUB: Basic client-side score ({len(state.messages)} messages). Real evaluation happens server-side."
-        )
-
-        logger.debug(
-            f"SABER task scored (STUB): completion={completion_score}, success={success_score} - {explanation}"
-        )
-
-        # Return overall score (average for simplicity)
-        overall_score = (completion_score + success_score) / 2.0
-
-        return Score(
-            value=overall_score,
-            explanation=explanation,
-            metadata={
-                "message_count": len(state.messages),
-                "completion_score": completion_score,
-                "success_score": success_score,
-                "scorer_type": "saber_client_side_stub",
-            },
-        )
-
-    return score
-
-
-def _extract_scoring_info_from_state(state: TaskState) -> Dict[str, Any]:
-    """
-    STUB: Extract scoring-relevant information from TaskState.
-
-    Real implementation will analyze container execution results and success indicators.
-    Currently returns minimal placeholder data.
-
-    Args:
-        state: TaskState to extract information from
-
-    Returns:
-        Dictionary with basic scoring information
-    """
-
-    return {"message_count": len(state.messages), "stub": True}
-
-
-def _calculate_completion_score(state: TaskState, target: Target) -> float:
-    """
-    STUB: Calculate basic completion score.
-
-    Real implementation will provide sophisticated completion analysis.
-    Currently returns simple message-based score.
-
-    Args:
-        state: TaskState after execution
-        target: Target criteria
-
-    Returns:
-        Basic completion score between 0.0 and 1.0
-    """
-
-    return 0.5 if len(state.messages) > 0 else 0.0
-
-
-def _calculate_success_score(state: TaskState, scoring_info: Dict[str, Any]) -> float:
-    """
-    STUB: Calculate success score based on explicit success indicators.
-
-    Real implementation will analyze container results and success criteria.
-    Currently returns placeholder score.
-
-    Args:
-        state: TaskState after execution
-        scoring_info: Extracted scoring information
-
-    Returns:
-        Basic success score between 0.0 and 1.0
-    """
-
-    return 0.3  # Placeholder success score
-
-
-def _create_score_explanation(completion_score: float, success_score: float, scoring_info: Dict[str, Any]) -> str:
-    """
-    STUB: Create human-readable explanation of the scoring decision.
-
-    Real implementation will provide detailed scoring rationale.
-    Currently returns basic explanation.
-
-    Args:
-        completion_score: Basic completion score
-        success_score: Success-based score
-        scoring_info: Extracted scoring information
-
-    Returns:
-        Simple string explanation of the score
-    """
-
-    return f"STUB: {scoring_info['message_count']} messages processed. Real evaluation happens server-side."
+    # Return the server scorer implementation
+    return saber_server_scorer()
 
 
 @scorer(metrics=[saber_server_score()])  # type: ignore[misc]
@@ -389,13 +274,7 @@ async def _get_server_side_score(state: TaskState) -> Optional[float]:
         evaluation = await session_manager.get_episode_evaluation(session_id, episode_id)
 
         logger.debug(f"Retrieved server score: {evaluation.score} for episode {episode_id}")
-        # Ensure we return a float, not Any
-        score = evaluation.score
-        if isinstance(score, (int, float)):
-            return float(score)
-        else:
-            logger.warning(f"Unexpected score type: {type(score)}, returning None")
-            return None
+        return float(evaluation.score)
 
     except Exception as e:
         logger.debug(f"Server score retrieval failed: {e}")

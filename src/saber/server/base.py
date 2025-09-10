@@ -14,6 +14,9 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+# Import EvalSubmission for Episode model
+from ..models.core import EvalSubmission
+
 
 @dataclass
 class CommandResult:
@@ -142,6 +145,7 @@ class Episode(BaseModel):
     completion_reason: Optional[str] = Field(None, description="Reason the episode ended")
     max_steps: int = Field(default=10, description="Maximum number of steps allowed for this episode")
     submission: Optional[str] = Field(None, description="Final submission for evaluation")
+    eval_submission: Optional[EvalSubmission] = Field(None, description="Rich evaluation submission data")
 
     class Config:
         """Pydantic configuration."""

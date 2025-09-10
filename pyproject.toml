@@ -233,3 +233,8 @@ exclude_lines = [
     "class .*\\bProtocol\\):",
     "@(abc\\.)?abstractmethod",
 ]
+
+[dependency-groups]
+dev = [
+    "types-pyyaml>=6.0.12.20250822",
+]

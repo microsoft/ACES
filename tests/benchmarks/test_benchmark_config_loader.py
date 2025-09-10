@@ -47,6 +47,19 @@ tasks:
     title: Test Task
     description: A simple test task
     prompt_template_file: test_template.md
+    execution_config:
+      timeout: 300
+      allowed_executors:
+        - "test_executor"
+    episode_config:
+      max_steps: 10
+    evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers:
+          - "test_answer"
+      scoring:
+        max_score: 1.0
     subtasks: []
 """
 
@@ -91,6 +104,19 @@ tasks:
     title: Complex Task
     description: A task with multiple subtasks
     prompt_template_file: complex_task_template.md
+    execution_config:
+      timeout: 300
+      allowed_executors:
+        - "test_executor"
+    episode_config:
+      max_steps: 10
+    evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers:
+          - "test_answer"
+      scoring:
+        max_score: 1.0
     initial_context:
       timeout: 300
     subtasks:
@@ -211,6 +237,13 @@ tasks:
       timeout: 180
     episode_config:
       max_steps: 25
+    evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers:
+          - "test_answer"
+      scoring:
+        max_score: 1.0
     subtasks:
       - subtask_id: test_subtask
         title: Test Subtask
@@ -278,6 +311,15 @@ tasks:
     # No task-level timeout -> should inherit from global_defaults
     execution_config:
       allowed_executors: ["cli"]  # Inherit timeout only
+    episode_config:
+      max_steps: 15
+    evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers:
+          - "test_answer"
+      scoring:
+        max_score: 1.0
     subtasks:
       - subtask_id: test_subtask
         title: Test Subtask
@@ -333,6 +375,15 @@ tasks:
     prompt_template_file: test_task_template.md
     execution_config:
       allowed_executors: ["cli"]  # Explicit allowed executors (timeout via global)
+    episode_config:
+      max_steps: 40
+    evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers:
+          - "test_answer"
+      scoring:
+        max_score: 1.0
     subtasks: []
 """
 
@@ -379,6 +430,13 @@ tasks:
       allowed_executors: ["cli"]  # Inherit timeout 50
     episode_config:
       max_steps: 60  # Inherit via global defaults (explicit for clarity)
+    evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers:
+          - "test_answer"
+      scoring:
+        max_score: 1.0
     subtasks: []
   - task_id: task_override
     title: Task with Override
@@ -391,6 +449,13 @@ tasks:
       allowed_executors: ["cli"]
     episode_config:
       max_steps: 80  # Override
+    evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers:
+          - "test_answer"
+      scoring:
+        max_score: 1.0
     subtasks: []
 """
 
@@ -555,6 +620,13 @@ tasks:
       allowed_executors: ["cli"]
     episode_config:
       max_steps: 30
+    evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers:
+          - "test_answer"
+      scoring:
+        max_score: 1.0
     subtasks: []
 """
 
@@ -594,6 +666,18 @@ tasks:
     title: Test Task with Minimal Config
     description: A task that should inherit global defaults
     prompt_template_file: test_task_minimal_template.md
+    execution_config:
+      allowed_executors: ["cli", "python"]
+      timeout: 60
+    episode_config:
+      max_steps: 100
+    evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers:
+          - "test_answer"
+      scoring:
+        max_score: 1.0
     subtasks: []
 
   - task_id: test_task_with_overrides
@@ -602,8 +686,16 @@ tasks:
     prompt_template_file: test_task_with_overrides_template.md
     execution_config:
       timeout: 30  # Override global default
+      allowed_executors: ["cli", "python"]
     episode_config:
       max_steps: 50  # Override global default
+    evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers:
+          - "test_answer"
+      scoring:
+        max_score: 1.0
     benchmark_config:
       episode_attempts: 10  # Override domain-level config
     subtasks: []
@@ -659,6 +751,12 @@ tasks:
       allowed_executors: ["cli"]
     episode_config:
       max_steps: 55
+    evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers: ["test_answer"]
+      scoring:
+        max_score: 1.0
     subtasks: []
 """
 
@@ -744,6 +842,12 @@ tasks:
       allowed_executors: ["cli"]
     episode_config:
       max_steps: 45
+    evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers: ["test_answer"]
+      scoring:
+        max_score: 1.0
     subtasks: []
 """
 

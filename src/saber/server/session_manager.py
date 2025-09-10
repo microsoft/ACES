@@ -21,7 +21,7 @@ from ..logging_config import (
     log_operation_success,
     log_session_end,
 )
-from ..models import BenchmarkInfo, EpisodeEndResponse
+from ..models import BenchmarkInfo, EpisodeEndResponse, EvalSubmission
 from .api.events.tool_event_publisher import ToolEventPublisher
 from .api.session_mcp_api import SessionMCPAPI
 from .api.session_rest_api import SessionRestAPI
@@ -300,8 +300,14 @@ class SessionManager:
                 # End all active episodes - each will trigger its own cleanup
                 for episode_id in session.active_episode_ids.copy():  # Copy to avoid modification during iteration
                     try:
-                        # Call end_episode which will handle both episode termination AND container cleanup
-                        await self.end_episode(session_id, episode_id, EpisodeTerminationReason.SESSION_TERMINATED)
+                        # Check if episode is already completed before forcing termination
+                        episode = self.episode_manager.get_episode_by_id(episode_id)
+                        if episode and episode.is_complete:
+                            logger.info(f"Episode {episode_id} already completed, skipping termination override")
+                            continue
+
+                        # Call episode manager directly for session termination (no submission required)
+                        self.episode_manager.end_episode(episode_id, EpisodeTerminationReason.SESSION_TERMINATED, None)
                         logger.info(f"Successfully ended episode {episode_id}")
                     except Exception as e:
                         logger.warning(f"Error ending episode {episode_id}: {str(e)}")
@@ -428,7 +434,7 @@ class SessionManager:
         session_id: str,
         episode_id: str,
         reason: str = EpisodeTerminationReason.COMPLETED,
-        submission: Optional[str] = None,
+        submission: Optional[EvalSubmission] = None,
     ) -> EpisodeEndResponse:
         """
         End a specific episode for a session with evaluation.
@@ -464,15 +470,29 @@ class SessionManager:
 
         task = self.benchmark_manager.get_task(episode.task_id)
 
-        # Fail fast: submission is required for evaluation
-        if submission is None:
-            raise HTTPException(status_code=400, detail="Episode completion requires a submission for evaluation")
+        # Handle submission based on reason - only require submission for successful completion
+        if reason in ["completed", "agent_completed", "success"] and submission is None:
+            raise HTTPException(
+                status_code=400, detail="Successful episode completion requires a submission for evaluation"
+            )
 
-        # Set submission on episode before marking complete
-        episode.submission = submission
+        # Extract submission text and store EvalSubmission object if provided
+        if submission is not None:
+            # Store the EvalSubmission object for rich evaluation data
+            episode.eval_submission = submission
+            # Extract the submission text for the episode.submission field
+            episode.submission = submission.submission
+        else:
+            # No submission provided (error case)
+            episode.eval_submission = None
+            episode.submission = "Episode failed - no submission"
 
-        # End episode through episode manager
-        completed_episode = self.episode_manager.end_episode(episode_id, reason, submission)
+        # Move episode from active to history IMMEDIATELY to prevent session termination override
+        session.complete_episode(episode_id)
+
+        # End episode through episode manager (pass submission text, not EvalSubmission object)
+        submission_text = submission.submission if submission else None
+        completed_episode = self.episode_manager.end_episode(episode_id, reason, submission_text)
 
         # Evaluate episode using the new evaluation system
         try:
@@ -497,9 +517,6 @@ class SessionManager:
                 logger.warning(f"❌ Episode cleanup failed for {episode_id}")
         except Exception as e:
             logger.error(f"Episode cleanup error for {episode_id}: {e}")
-
-        # Move episode from active to history in session
-        session.complete_episode(episode_id)
 
         logger.info(f"Ended episode {episode_id} for session {session_id} with reason: {reason}")
 
@@ -743,7 +760,8 @@ class SessionManager:
         """
         # Return the tool event publisher from REST API if available
         if hasattr(self.rest_api, "tool_event_publisher"):
-            return self.rest_api.tool_event_publisher
+            publisher = self.rest_api.tool_event_publisher
+            return publisher if isinstance(publisher, ToolEventPublisher) else None
         return None
 
     def get_episode_by_id(self, episode_id: str) -> Optional[Episode]:

@@ -15,7 +15,7 @@ from contextlib import AsyncExitStack
 from types import TracebackType
 from typing import Any, List, Optional
 
-from .agent_manager import AgentManager
+from .agent import AgentManager
 from .client_session import ClientSessionManager
 from .dataset_manager import DatasetManager
 from .exceptions import AgentInitializationError, ConfigurationValidationError, DatasetCreationError

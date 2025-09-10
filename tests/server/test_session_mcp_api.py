@@ -183,7 +183,7 @@ class TestSessionMCPAPI:
         # Verify successful result
         assert result.isError is False
         assert result.content[0]["type"] == "text"
-        assert "Episode ended successfully" in result.content[0]["text"]
+        assert result.content[0]["text"] == "No submission provided"
 
         # Verify end_episode was called with both session_id and episode_id
         mcp_api.session_manager.end_episode.assert_called_once_with("session_123", "episode_456", "agent_completed")
@@ -206,7 +206,7 @@ class TestSessionMCPAPI:
         assert result.isError is False
         assert result.content[0]["type"] == "text"
         result_text = result.content[0]["text"]
-        assert "Episode ended successfully with result: flag{test_flag_found}" in result_text
+        assert result_text == "flag{test_flag_found}"
 
         # Verify result action was executed with both session_id and episode_id
         mcp_api.session_manager.execute_action.assert_called_once()
@@ -219,8 +219,18 @@ class TestSessionMCPAPI:
         assert action.parameters["submission"] == "flag{test_flag_found}"
         assert action.parameters["episode_end"] is True
 
-        # Verify end_episode was called with both session_id and episode_id
-        mcp_api.session_manager.end_episode.assert_called_once_with("session_123", "episode_456", "agent_completed", "flag{test_flag_found}")
+        # Verify end_episode was called with both session_id and episode_id and EvalSubmission
+        mcp_api.session_manager.end_episode.assert_called_once()
+        call_args = mcp_api.session_manager.end_episode.call_args
+        assert call_args[0][0] == "session_123"  # session_id
+        assert call_args[0][1] == "episode_456"  # episode_id
+        assert call_args[0][2] == "agent_completed"  # status
+
+        # Verify EvalSubmission object
+        eval_submission = call_args[0][3]
+        assert eval_submission.episode_id == "episode_456"
+        assert eval_submission.submission == "flag{test_flag_found}"
+        assert eval_submission.model == "mcp_agent"
 
     @pytest.mark.asyncio
     async def test_handle_end_episode_call_missing_session(self, mcp_api):
@@ -301,7 +311,7 @@ class TestSessionMCPAPI:
             # Test startup
             await mcp_api.start_mcp_server()
             assert mcp_api.mcp_server == mock_server
-            mock_server.run_async.assert_called_once_with(transport="sse", host="127.0.0.1", port=3001)
+            mock_server.run_async.assert_called_once_with(transport="http", host="127.0.0.1", port=3001)
 
             # Test shutdown
             await mcp_api.shutdown_mcp_server()

@@ -173,7 +173,7 @@ saber_tools = mcp_server_http(
 
 ## CLI Tools
 
-SABER provides a comprehensive CLI for interacting with the client and analyzing evaluation results. The CLI includes powerful tools for examining inspect-ai evaluation logs.
+SABER provides a comprehensive CLI for interacting with the client and analyzing evaluation results. The CLI includes powerful tools for examining inspect-ai evaluation logs and launching the Inspect AI web viewer.
 
 ### Installation and Setup
 
@@ -181,25 +181,98 @@ After installing SABER, the CLI is available via:
 
 ```bash
 # Via Python module
-python -m saber.client.cli
+python -m saber.client
 
-# If installed as package
-saber-client
+# Show all available commands
+python -m saber.client --help
 ```
 
 ### Commands Overview
 
 #### 1. Evaluation Execution
 ```bash
-# Run SABER evaluations
-python -m saber.client.cli run --config path/to/config.yaml --verbose
+# Run SABER evaluation with default config (saber.yaml in current directory)
+python -m saber.client run
+
+# Run with specific config file
+python -m saber.client run --config /path/to/saber.yaml
+
+# Run with verbose logging
+python -m saber.client run --verbose
+
+# Run without file logging (console only)
+python -m saber.client run --no-log-file
 ```
 
-#### 2. Evaluation Log Analysis
+#### 2. Inspect AI Integration Commands
 ```bash
-# Analyze evaluation results  
-python -m saber.client.cli inspect eval --log-file path/to/evaluation.eval
+# Show inspect AI integration commands
+python -m saber.client inspect --help
 ```
+
+### Log Viewer (Web UI)
+
+Launch Inspect AI's powerful web-based log viewer:
+
+```bash
+# Basic usage - launch viewer for logs directory
+python -m saber.client inspect view --log-dir /path/to/logs
+
+# Advanced options
+python -m saber.client inspect view \
+    --log-dir /path/to/logs \
+    --host 0.0.0.0 \
+    --port 7575 \
+    --no-browser \
+    --no-recursive
+```
+
+**Options:**
+- `--log-dir`: Directory containing `.eval` or `.json` log files (required)
+- `--host`: Host to bind the web server to (default: 127.0.0.1)
+- `--port`: Port to bind the web server to (default: 7575)
+- `--no-recursive`: Don't scan subdirectories for logs
+- `--no-browser`: Don't automatically open browser
+
+The web viewer provides:
+- **Rich log visualization**: Interactive display of evaluation results
+- **Sample-level analysis**: Detailed view of model conversations
+- **Performance metrics**: Scoring and timing information
+- **Real-time updates**: Live viewing of running evaluations
+- **Export capabilities**: Download and share results
+
+### Docker Usage
+
+#### Running from Inside Containers
+
+When running inside Docker containers (like the excytin demo), use `uv run`:
+
+```bash
+# From inside the excytin client container
+docker exec -it saber-excytin-client uv run python -m saber.client --help
+
+# Run evaluation from container
+docker exec -it saber-excytin-client uv run python -m saber.client run --config /app/client/saber.yaml
+
+# Launch log viewer from container (accessible from host at localhost:7575)
+docker exec -d saber-excytin-client uv run python -m saber.client inspect view \
+    --log-dir /app/logs \
+    --no-browser \
+    --host 0.0.0.0
+```
+
+#### Port Mapping for Log Viewer
+
+The excytin demo Docker Compose configuration includes port mapping for the log viewer:
+
+```yaml
+# In docker-compose.yml
+saber-excytin-client:
+  ports:
+    - "7575:7575"  # Inspect AI log viewer
+```
+
+This allows you to run the viewer inside the container but access it from your host browser at `http://localhost:7575`.
 
 ### Evaluation Log Analysis
 
@@ -209,10 +282,10 @@ The CLI provides powerful tools for analyzing inspect-ai evaluation logs (`.eval
 
 ```bash
 # Get help
-python -m saber.client.cli inspect eval --help
+python -m saber.client inspect eval --help
 
 # Analyze an evaluation log
-python -m saber.client.cli inspect eval --log-file path/to/evaluation.eval
+python -m saber.client inspect eval --log-file path/to/evaluation.eval
 ```
 
 #### Output Formats
@@ -223,7 +296,7 @@ The CLI supports multiple output formats optimized for different use cases:
 **Quick overview of evaluation results**
 
 ```bash
-python -m saber.client.cli inspect eval --log-file evaluation.eval --format summary
+python -m saber.client inspect eval --log-file evaluation.eval --format summary
 ```
 
 Shows:
@@ -235,7 +308,7 @@ Shows:
 **Detailed agent conversation analysis**
 
 ```bash
-python -m saber.client.cli inspect eval --log-file evaluation.eval --format samples
+python -m saber.client inspect eval --log-file evaluation.eval --format samples
 ```
 
 Shows:
@@ -249,7 +322,7 @@ Shows:
 **Comprehensive evaluation analysis**
 
 ```bash
-python -m saber.client.cli inspect eval --log-file evaluation.eval --format full
+python -m saber.client inspect eval --log-file evaluation.eval --format full
 ```
 
 Combines summary + samples + additional metadata:
@@ -261,7 +334,7 @@ Combines summary + samples + additional metadata:
 **Machine-readable output for automation**
 
 ```bash
-python -m saber.client.cli inspect eval --log-file evaluation.eval --format json
+python -m saber.client inspect eval --log-file evaluation.eval --format json
 ```
 
 Raw JSON output perfect for:
@@ -273,13 +346,16 @@ Raw JSON output perfect for:
 
 ```bash
 # Control number of samples shown
-python -m saber.client.cli inspect eval --log-file evaluation.eval --format samples --max-samples 5
+python -m saber.client inspect eval --log-file evaluation.eval --format samples --max-samples 5
+
+# Show specific sample by ID
+python -m saber.client inspect eval --log-file evaluation.eval --format samples --sample-id "sample_123"
 
 # Disable pretty formatting (plain text)
-python -m saber.client.cli inspect eval --log-file evaluation.eval --format samples --no-pretty
+python -m saber.client inspect eval --log-file evaluation.eval --format samples --no-pretty
 
 # JSON output without pretty printing
-python -m saber.client.cli inspect eval --log-file evaluation.eval --format json --no-pretty
+python -m saber.client inspect eval --log-file evaluation.eval --format json --no-pretty
 ```
 
 #### Agent Conversation Analysis
@@ -312,72 +388,93 @@ This format makes it easy to:
 - **Improve Prompts**: Understand agent decision-making patterns
 - **Validate Performance**: Confirm agents follow expected workflows
 
-#### Example Workflows
+### Example Workflows
+
+#### Complete Workflow Example
+
+```bash
+# 1. Run an evaluation
+python -m saber.client run --config saber.yaml --verbose
+
+# 2. View the results in the web UI
+python -m saber.client inspect view --log-dir ./logs
+
+# 3. Analyze specific results from CLI
+python -m saber.client inspect eval \
+    --log-file ./logs/2025-09-10T02-52-40+00-00_task_T97zyZ8eu7ZQpQVFyHYJ4i.eval \
+    --format summary
+```
+
+#### Docker Container Example
+
+```bash
+# 1. Start the containers
+cd domains/excytin_demo
+docker compose up -d
+
+# 2. Run evaluation inside container
+docker exec -it saber-excytin-client uv run python -m saber.client run \
+    --config /app/client/saber.yaml
+
+# 3. Launch viewer for results (detached, accessible at localhost:7575)
+docker exec -d saber-excytin-client uv run python -m saber.client inspect view \
+    --log-dir /app/logs \
+    --no-browser \
+    --host 0.0.0.0
+
+# 4. Open browser to http://localhost:7575 to view results
+```
+
+#### Analysis Workflows
 
 **Quick Health Check:**
 ```bash
 # Get overview of recent evaluation
-python -m saber.client.cli inspect eval --log-file latest.eval --format summary
+python -m saber.client inspect eval --log-file latest.eval --format summary
 ```
 
 **Detailed Agent Analysis:**
 ```bash
 # Examine agent conversations and tool usage
-python -m saber.client.cli inspect eval --log-file evaluation.eval --format samples --max-samples 3
+python -m saber.client inspect eval --log-file evaluation.eval --format samples --max-samples 3
 ```
 
 **Automation Integration:**
 ```bash
 # Extract scores for automated reporting
-python -m saber.client.cli inspect eval --log-file evaluation.eval --format json --no-pretty | jq '.samples[].scores'
+python -m saber.client inspect eval --log-file evaluation.eval --format json --no-pretty | jq '.samples[].scores'
 ```
 
 **Debugging Failed Evaluations:**
 ```bash
 # Full analysis to understand failures
-python -m saber.client.cli inspect eval --log-file failed.eval --format full
+python -m saber.client inspect eval --log-file failed.eval --format full
 ```
 
-### Future CLI Extensions
+### Configuration
 
-The CLI is designed for extensibility. Planned additions include:
+#### SABER Configuration File
 
-- 📊 **Batch Analysis**: Compare multiple evaluation runs
-- 📈 **Performance Metrics**: Advanced scoring and timing analysis  
-- 🔄 **Evaluation Management**: Real-time monitoring of running evaluations
-- 📋 **Task Management**: List and filter available tasks
-- 🎯 **Agent Testing**: Quick agent validation workflows
+The `run` command requires a SABER configuration file (YAML format). Example:
 
-### Integration with SABER Evaluations
+```yaml
+# saber.yaml
+agent_path: "./my_agent.py"
+saber_rest_url: "http://localhost:8000"
+saber_mcp_url: "http://localhost:8001"
+log_dir: "./logs"
+# ... other configuration options
+```
 
-The CLI `run` command provides a convenient wrapper around the main SABER evaluation system:
+#### Environment Variables
+
+- `INSPECT_LOG_DIR`: Default directory for inspect-ai logs
+- `SABER_CONFIG_DIR`: Default directory for SABER configurations
+
+#### Debug Mode
+
+For debugging, enable verbose logging:
 
 ```bash
-# Run evaluations with custom configuration
-python -m saber.client.cli run --config evaluation_config.yaml --verbose
-
-# Then analyze the results  
-python -m saber.client.cli inspect eval --log-file logs/latest.eval --format samples
+python -m saber.client run --verbose --config your-config.yaml
 ```
-
-This workflow enables end-to-end evaluation and analysis from a single command-line interface.
-
-## Benefits
-
-### For Agents
-- ✅ **Standard MCP compatibility** - agents work with any MCP-compliant system
-- ✅ **inspect_ai integration** - seamless evaluation framework integration
-- ✅ **Type safety** - clear contracts and early error detection
-- ✅ **No SABER-specific dependencies** - portable agent implementations
-
-### For SABER
-- ✅ **Clean architecture** - clear separation of concerns
-- ✅ **Modern patterns** - async context managers and fail-fast design
-- ✅ **Type safety** - Pydantic models throughout
-- ✅ **MCP compliance** - industry-standard protocol
-
-### For Operations
-- ✅ **Predictable behavior** - fail-fast validation eliminates runtime surprises
-- ✅ **Clear error messages** - actionable guidance for troubleshooting
-- ✅ **Resource management** - guaranteed cleanup via context managers
-- ✅ **Debugging** - comprehensive logging with structured data

@@ -1,8 +1,8 @@
 """
-SABER Server Scorer Integration Tests
+Phase 3 Integration Tests: SABER Server Scorer Implementation
 
 Tests the enhanced scorer functionality that retrieves evaluations from the SABER server,
-following SABER fail-fast principles and demonstrating end-to-end evaluation retrieval.
+following SABER fail-fast principles.
 """
 
 import pytest
@@ -452,7 +452,7 @@ class TestSABERTaskScorerEnhanced:
 
 
 class TestFailFastBehavior:
-    """Test fail-fast behavior throughout the server scorer implementation."""
+    """Test fail-fast behavior throughout Phase 3 implementation."""
 
     @pytest.mark.asyncio
     async def test_no_silent_fallbacks_in_server_scorer(self):
@@ -474,7 +474,7 @@ class TestFailFastBehavior:
     async def test_evaluation_errors_propagate(self):
         """Test that evaluation retrieval errors propagate correctly."""
         mock_session_manager = Mock(spec=ClientSessionManager)
-        mock_session_manager.get_episode_evaluation.side_effect = EvaluationNotFoundError("Test error")
+        mock_session_manager.get_episode_evaluation = AsyncMock(side_effect=EvaluationNotFoundError("Test error"))
 
         with pytest.raises(EvaluationNotFoundError):
             await SABERTaskScorer.get_server_evaluation(mock_session_manager, "session_123", "ep_123")

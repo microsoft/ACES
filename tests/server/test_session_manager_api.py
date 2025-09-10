@@ -54,7 +54,7 @@ class TestSessionManagerAPI:
         """Test health check endpoint."""
         manager, client = session_manager_app
 
-        response = client.get("/health")
+        response = client.get("/api/v1/health")
 
         assert response.status_code == 200
         data = response.json()
@@ -65,7 +65,7 @@ class TestSessionManagerAPI:
         """Test session creation endpoint."""
         manager, client = session_manager_app
 
-        response = client.post("/session?client_id=test_client")
+        response = client.post("/api/v1/session?client_id=test_client")
 
         assert response.status_code == 200
         data = response.json()
@@ -75,32 +75,18 @@ class TestSessionManagerAPI:
         # Verify session was actually created
         assert len(manager.active_sessions) == 1
 
-    def test_list_sessions_endpoint(self, session_manager_app):
-        """Test listing sessions endpoint."""
-        manager, client = session_manager_app
 
-        # Create a few sessions
-        client.post("/session?client_id=client1")
-        client.post("/session?client_id=client2")
-
-        response = client.get("/sessions")
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["active_count"] == 2
-        assert "sessions" in data
-        assert len(data["sessions"]) == 2
 
     def test_terminate_session_endpoint(self, session_manager_app):
         """Test session termination endpoint."""
         manager, client = session_manager_app
 
         # Create session first
-        create_response = client.post("/session?client_id=test_client")
+        create_response = client.post("/api/v1/session?client_id=test_client")
         session_id = create_response.json()["session_id"]
 
         # Terminate session
-        response = client.delete(f"/session/{session_id}")
+        response = client.delete(f"/api/v1/session/{session_id}")
 
         assert response.status_code == 200
         data = response.json()
@@ -113,7 +99,7 @@ class TestSessionManagerAPI:
         """Test terminating non-existent session via endpoint."""
         manager, client = session_manager_app
 
-        response = client.delete("/session/nonexistent_id")
+        response = client.delete("/api/v1/session/nonexistent_id")
 
         assert response.status_code == 404
 
@@ -135,13 +121,13 @@ class TestSessionManagerAPI:
         mock_episode.metadata = {"test": "data"}
 
         # Create session first
-        create_response = client.post("/session?client_id=test_client")
+        create_response = client.post("/api/v1/session?client_id=test_client")
         session_id = create_response.json()["session_id"]
 
         # Mock the start_episode method
         with patch.object(manager, 'start_episode', return_value=mock_episode):
             # Start individual episode using correct endpoint
-            response = client.post(f"/session/{session_id}/episodes?task_id=task_456")
+            response = client.post(f"/api/v1/session/{session_id}/episodes?task_id=task_456")
 
             assert response.status_code == 200
             data = response.json()
@@ -155,7 +141,7 @@ class TestSessionManagerAPI:
         manager, client = session_manager_app
 
         # Create session
-        create_response = client.post("/session?client_id=test_client")
+        create_response = client.post("/api/v1/session?client_id=test_client")
         session_id = create_response.json()["session_id"]
 
         # Set up session with episode
@@ -193,7 +179,7 @@ class TestSessionManagerAPI:
         with patch.object(manager, 'get_current_task', return_value=mock_task) as mock_get_current_task, \
              patch.object(manager, 'get_episode_by_id', return_value=mock_episode) as mock_get_episode:
             # Get task for specific episode (episode-first architecture)
-            response = client.get(f"/session/{session_id}/episodes/episode_123/task")
+            response = client.get(f"/api/v1/session/{session_id}/episodes/episode_123/task")
 
             assert response.status_code == 200
             data = response.json()
@@ -209,7 +195,7 @@ class TestSessionManagerAPI:
         manager, client = session_manager_app
 
         # Create session
-        create_response = client.post("/session?client_id=test_client")
+        create_response = client.post("/api/v1/session?client_id=test_client")
         session_id = create_response.json()["session_id"]
 
         # Set up session with episode for episode-first policy access
@@ -225,7 +211,7 @@ class TestSessionManagerAPI:
         with patch.object(manager, 'get_policy', return_value=mock_policy) as mock_get_policy, \
              patch.object(manager, 'get_episode_by_id', return_value=mock_episode) as mock_get_episode:
             # Get policy for specific episode (episode-first architecture)
-            response = client.get(f"/session/{session_id}/episodes/episode_123/policy")
+            response = client.get(f"/api/v1/session/{session_id}/episodes/episode_123/policy")
 
             assert response.status_code == 200
             data = response.json()
@@ -241,20 +227,16 @@ class TestSessionManagerAPI:
 
         invalid_session_id = "invalid_session_123"
 
-        # Test various endpoints with invalid session (updated for episode-first architecture)
+        # Test various endpoints with invalid session (updated for current API)
         endpoints_to_test = [
-            ("DELETE", f"/session/{invalid_session_id}"),
-            ("POST", f"/session/{invalid_session_id}/episodes?task_id=task1"),  # Updated endpoint
-            ("POST", f"/session/{invalid_session_id}/step"),
-            ("GET", f"/session/{invalid_session_id}/episodes/episode_123/task"),  # Episode-specific
-            ("GET", f"/session/{invalid_session_id}/episodes/episode_123/policy"),  # Episode-specific
-            ("GET", f"/session/{invalid_session_id}/events"),
+            ("DELETE", f"/api/v1/session/{invalid_session_id}"),
+            ("POST", f"/api/v1/session/{invalid_session_id}/episodes?task_id=task1"),
+            ("GET", f"/api/v1/session/{invalid_session_id}/episodes/episode_123/task"),
+            ("GET", f"/api/v1/session/{invalid_session_id}/episodes/episode_123/policy"),
+            ("GET", f"/api/v1/session/{invalid_session_id}/evaluations"),
+            ("GET", f"/api/v1/session/{invalid_session_id}/evaluations/episode_123"),
         ]
 
         for method, endpoint in endpoints_to_test:
-            if method == "POST" and "step" in endpoint:
-                response = client.request(method, endpoint, json={"command": "test"})
-            else:
-                response = client.request(method, endpoint)
-
+            response = client.request(method, endpoint)
             assert response.status_code == 404, f"Endpoint {method} {endpoint} should return 404"

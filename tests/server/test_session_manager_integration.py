@@ -47,6 +47,21 @@ class TestSessionManagerIntegration:
         mock_evaluation_manager.log_episode_end = AsyncMock()
         mock_evaluation_manager.log_action = AsyncMock()
 
+        # Create a mock evaluation result for evaluate_episode
+        from saber.server.evaluation.models import EvaluationResult
+        mock_eval_result = EvaluationResult(
+            episode_id="test_episode",
+            task_id="test_task",
+            strategy="static",
+            raw_score=1.0,
+            max_score=1.0,
+            score=1.0,
+            success=True,
+            submission="test_submission",
+            step_count=1
+        )
+        mock_evaluation_manager.evaluate_episode = AsyncMock(return_value=mock_eval_result)
+
         mock_episode_manager = MagicMock()
         mock_episode_manager.start_episode = MagicMock()
         mock_episode_manager.end_episode = MagicMock()
@@ -205,6 +220,21 @@ class TestSessionManagerErrorHandling:
         mock_evaluation_manager.log_episode_start = AsyncMock()
         mock_evaluation_manager.log_episode_end = AsyncMock()
         mock_evaluation_manager.log_action = AsyncMock()
+
+        # Create a mock evaluation result for evaluate_episode
+        from saber.server.evaluation.models import EvaluationResult
+        mock_eval_result = EvaluationResult(
+            episode_id="test_episode",
+            task_id="test_task",
+            strategy="static",
+            raw_score=1.0,
+            max_score=1.0,
+            score=1.0,
+            success=True,
+            submission="test_submission",
+            step_count=1
+        )
+        mock_evaluation_manager.evaluate_episode = AsyncMock(return_value=mock_eval_result)
 
         mock_episode_manager = MagicMock()
         mock_episode_manager.start_episode = MagicMock()
@@ -456,7 +486,19 @@ class TestSessionManagerErrorHandling:
         # Test episode isolation - ending one episode shouldn't affect others
         episode_to_end = episode_ids[1]  # End the vulnerability_scan episode
 
-        await manager.end_episode(session_id, episode_to_end, "completed")
+        # Create a mock submission for successful completion
+        from saber.models.core import EvalSubmission
+        mock_submission = EvalSubmission(
+            episode_id=episode_to_end,
+            task_id="test_task",
+            model="test_model",
+            choices=[{"content": "test", "message": {"role": "assistant", "content": "test"}}],
+            submission="test_submission",
+            tokens={"input": 10, "output": 20, "total": 30},
+            time=1.5
+        )
+
+        await manager.end_episode(session_id, episode_to_end, "completed", mock_submission)
 
         # Verify session still has other active episodes (the real end_episode removes it)
         assert len(session.active_episode_ids) == 3

@@ -6,7 +6,7 @@ This implementation provides fail-fast evaluation capabilities with no backwards
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from ..base import Episode
 from ..benchmarks.task import Task
@@ -19,7 +19,7 @@ from .exceptions import (
     InvalidEvaluationStrategyError,
     MissingSubmissionError,
 )
-from .models import EvaluationConfig, EvaluationResult
+from .models import EpisodeEvaluationData, EvaluationConfig, EvaluationResult
 from .store import EvaluationStore, JsonFileEvaluationStore
 
 logger = logging.getLogger(__name__)
@@ -154,15 +154,45 @@ class EvaluationManager:
         config = self.evaluation_configs[task.task_id]
         evaluator = self.evaluators[config.strategy]
 
-        # Prepare episode data for evaluation
-        episode_data = {
-            "episode_id": episode.episode_id,
-            "task_id": episode.task_id,
-            "submission": episode.submission,
-            "executed_commands": episode.get_executed_commands(),
-            "completion_reason": episode.completion_reason,
-            "step_count": len(episode.steps),
-        }
+        # Create strongly typed evaluation data directly
+        episode_data = EpisodeEvaluationData(
+            episode_id=episode.episode_id,
+            task_id=episode.task_id,
+            submission=episode.submission,
+            executed_commands=episode.get_executed_commands(),
+            completion_reason=episode.completion_reason,
+            step_count=len(episode.steps),
+            # Add rich EvalSubmission data if available
+            model=(
+                episode.eval_submission.model
+                if hasattr(episode, "eval_submission") and episode.eval_submission
+                else None
+            ),
+            choices=(
+                episode.eval_submission.choices
+                if hasattr(episode, "eval_submission") and episode.eval_submission
+                else []
+            ),
+            tokens=(
+                episode.eval_submission.tokens
+                if hasattr(episode, "eval_submission") and episode.eval_submission
+                else {}
+            ),
+            execution_time=(
+                episode.eval_submission.time
+                if hasattr(episode, "eval_submission") and episode.eval_submission
+                else None
+            ),
+        )
+
+        # Log enhanced evaluation data if available
+        if hasattr(episode, "eval_submission") and episode.eval_submission:
+            eval_submission = episode.eval_submission
+            logger.info(
+                f"Enhanced evaluation data: model={eval_submission.model}, "
+                f"tokens={eval_submission.tokens.get('total_tokens', 0)}, "
+                f"time={eval_submission.time}"
+            )
 
         logger.info(f"Evaluating episode {episode.episode_id} with strategy: {config.strategy}")
         result = await evaluator.evaluate(episode_data, config, task)
@@ -172,9 +202,7 @@ class EvaluationManager:
         else:
             golden_answer = None
         try:
-            await self.store.save(
-                result, submission=episode.submission, session_id=episode.session_id, golden_answer=golden_answer
-            )
+            await self.store.save(result, session_id=episode.session_id, golden_answer=golden_answer)
         except Exception:
             # Re-raise to enforce atomic contract (no silent persistence failures)
             raise
@@ -223,6 +251,6 @@ class EvaluationManager:
         """Log action execution event."""
         logger.info(f"Action logged for episode {episode_id} in session {session_id}: {action.tool_name}")
 
-    async def get_trajectory(self, session_id: str) -> list:
+    async def get_trajectory(self, session_id: str) -> List[Any]:
         """Get trajectory for a session (legacy stub)."""
         return []

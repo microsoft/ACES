@@ -66,12 +66,14 @@ class TestSessionManagerEpisodes:
     def session_manager_with_session(self):
         """Create SessionManager with mocked dependencies and a session."""
         mock_task_manager = MagicMock()
+        mock_task_manager.get_task_prompt = MagicMock(return_value="test_prompt")
+
         mock_execution_manager = MagicMock()
         mock_execution_manager.step = AsyncMock()
         mock_execution_manager.configure_for_task = MagicMock()
         mock_policy_manager = MagicMock()
         mock_policy_manager.get_policy = AsyncMock()
-        mock_policy_manager.configure_for_episode = MagicMock()  # Episode-first architecture
+        mock_policy_manager.set_episode_policy = MagicMock()  # Episode-first architecture
         mock_evaluation_manager = MagicMock()
         mock_evaluation_manager.log_session_start = AsyncMock()
         mock_evaluation_manager.log_episode_start = AsyncMock()
@@ -132,8 +134,8 @@ class TestSessionManagerEpisodes:
             session_id, mock_episode.episode_id, task_id
         )
 
-        # Verify PolicyManager configure_for_episode was called (episode-first architecture)
-        manager.policy_manager.configure_for_episode.assert_called_once_with(mock_episode.episode_id, session_id, mock_task)
+        # Verify PolicyManager set_episode_policy was called (episode-first architecture)
+        manager.policy_manager.set_episode_policy.assert_called_once_with(mock_episode.episode_id, session_id, "test_prompt")
 
         # Verify EpisodeManager configure_for_task was called
         manager.episode_manager.configure_for_task.assert_called_once_with(mock_episode.episode_id, mock_task)

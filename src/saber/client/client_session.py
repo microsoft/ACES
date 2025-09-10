@@ -14,10 +14,12 @@ import aiohttp
 from ..models import (  # Use shared api models directly
     BenchmarkInfo,
     EpisodeCreateResponse,
+    EvalSubmission,
     PolicyResponse,
     SessionCreateResponse,
     TaskInfo,
 )
+from ..models.rest.evaluation import EvaluationResultResponse
 from .models import SessionManagerConfig
 
 logger = logging.getLogger(__name__)
@@ -61,11 +63,12 @@ class ClientSessionManager:
         """
         logger.info(f"Creating new SABER session for client: {self.client_id}")
 
-        url = f"{self.base_url}/session"
+        url = f"{self.base_url}/api/v1/session"
         params = {"client_id": self.client_id}
 
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, params=params, timeout=self.timeout) as response:
+            timeout = aiohttp.ClientTimeout(total=self.timeout)
+            async with session.post(url, params=params, timeout=timeout) as response:
                 if response.status == 200:
                     data = await response.json()
                     session_response = SessionCreateResponse(**data)
@@ -93,11 +96,12 @@ class ClientSessionManager:
         """
         logger.info(f"Creating episode for session {session_id}, task {task_id}")
 
-        url = f"{self.base_url}/session/{session_id}/episodes"
+        url = f"{self.base_url}/api/v1/session/{session_id}/episodes"
         params = {"task_id": task_id}
 
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, params=params, timeout=self.timeout) as response:
+            timeout = aiohttp.ClientTimeout(total=self.timeout)
+            async with session.post(url, params=params, timeout=timeout) as response:
                 if response.status == 200:
                     data = await response.json()
                     episode_response = EpisodeCreateResponse(**data)
@@ -124,11 +128,12 @@ class ClientSessionManager:
         """
         logger.debug(f"Getting policy response for episode {episode_id}")
 
-        url = f"{self.base_url}/session/{session_id}/episodes/{episode_id}/policy"
+        url = f"{self.base_url}/api/v1/session/{session_id}/episodes/{episode_id}/policy"
 
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=self.timeout) as response:
+                timeout = aiohttp.ClientTimeout(total=self.timeout)
+                async with session.get(url, timeout=timeout) as response:
                     if response.status == 200:
                         data = await response.json()
                         policy_response = PolicyResponse(prompt=data.get("prompt", ""), domain=data.get("domain"))
@@ -160,7 +165,7 @@ class ClientSessionManager:
         """
         logger.info("Discovering all available tasks via REST API")
 
-        url = f"{self.base_url}/benchmark"
+        url = f"{self.base_url}/api/v1/benchmark"
 
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.timeout)) as session:
             async with session.get(url) as response:
@@ -218,10 +223,11 @@ class ClientSessionManager:
         """
         logger.info(f"Terminating session: {session_id}")
 
-        url = f"{self.base_url}/session/{session_id}"
+        url = f"{self.base_url}/api/v1/session/{session_id}"
 
         async with aiohttp.ClientSession() as session:
-            async with session.delete(url, timeout=self.timeout) as response:
+            timeout = aiohttp.ClientTimeout(total=self.timeout)
+            async with session.delete(url, timeout=timeout) as response:
                 if response.status == 200:
                     logger.info(f"Session {session_id} terminated successfully")
                     if self._current_session_id == session_id:
@@ -232,7 +238,7 @@ class ClientSessionManager:
                     # Don't raise - termination failures shouldn't break cleanup
 
     async def end_episode(
-        self, session_id: str, episode_id: str, reason: str = "completed", result: Optional[str] = None
+        self, session_id: str, episode_id: str, reason: str = "completed", result: Optional[EvalSubmission] = None
     ) -> None:
         """
         End an episode via REST API.
@@ -241,18 +247,19 @@ class ClientSessionManager:
             session_id: Session ID
             episode_id: Episode ID
             reason: Completion reason
-            result: Optional result data
+            result: Optional EvalSubmission data
         """
         logger.debug(f"Ending episode {episode_id} with reason: {reason}")
 
-        url = f"{self.base_url}/session/{session_id}/episodes/{episode_id}"
+        url = f"{self.base_url}/api/v1/session/{session_id}/episodes/{episode_id}"
         params = {"reason": reason}
         if result:
-            params["result"] = result
+            params["result"] = result.model_dump_json()
 
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.delete(url, params=params, timeout=self.timeout) as response:
+                timeout = aiohttp.ClientTimeout(total=self.timeout)
+                async with session.delete(url, params=params, timeout=timeout) as response:
                     if response.status == 200:
                         logger.debug(f"Episode {episode_id} ended successfully")
                     else:
@@ -274,6 +281,75 @@ class ClientSessionManager:
 
         # TODO: Implement if server supports status updates
         await asyncio.sleep(0.01)
+
+    async def get_episode_evaluation(self, session_id: str, episode_id: str) -> EvaluationResultResponse:
+        """
+        Get evaluation result for a specific episode.
+
+        Args:
+            session_id: Session ID containing the episode
+            episode_id: Episode ID to get evaluation for
+
+        Returns:
+            Evaluation result data
+
+        Raises:
+            Exception: If evaluation retrieval fails
+        """
+        logger.debug(f"Getting evaluation for episode {episode_id} in session {session_id}")
+
+        url = f"{self.base_url}/api/v1/session/{session_id}/evaluations/{episode_id}"
+
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.timeout)) as session:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    logger.debug(f"Retrieved evaluation for episode {episode_id}")
+                    return EvaluationResultResponse(**data["evaluation_result"])
+                elif response.status == 404:
+                    raise Exception(f"Evaluation not found for episode {episode_id}")
+                else:
+                    error_text = await response.text()
+                    raise Exception(
+                        f"Failed to get evaluation for episode {episode_id}: {response.status} - {error_text}"
+                    )
+
+    async def get_session_evaluations(
+        self, session_id: str, task_id: Optional[str] = None
+    ) -> List[EvaluationResultResponse]:
+        """
+        Get all evaluation results for a session.
+
+        Args:
+            session_id: Session ID to get evaluations for
+            task_id: Optional task ID filter
+
+        Returns:
+            List of evaluation result data
+
+        Raises:
+            Exception: If evaluation retrieval fails
+        """
+        logger.debug(
+            f"Getting evaluations for session {session_id}" + (f" with task filter {task_id}" if task_id else "")
+        )
+
+        url = f"{self.base_url}/api/v1/session/{session_id}/evaluations"
+        params = {}
+        if task_id:
+            params["task_id"] = task_id
+
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.timeout)) as session:
+            async with session.get(url, params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    logger.debug(f"Retrieved {data['total_count']} evaluations for session {session_id}")
+                    return [EvaluationResultResponse(**eval_data) for eval_data in data["evaluations"]]
+                else:
+                    error_text = await response.text()
+                    raise Exception(
+                        f"Failed to get evaluations for session {session_id}: {response.status} - {error_text}"
+                    )
 
     def get_current_session_id(self) -> Optional[str]:
         """Get current session ID."""

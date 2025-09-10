@@ -48,7 +48,7 @@ class SABERRestClient:
         Raises:
             Exception: If request fails or server returns error
         """
-        url = f"{self.saber_server_url}/benchmark"
+        url = f"{self.saber_server_url}/api/v1/benchmark"
 
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=self.request_timeout) as response:
@@ -73,7 +73,7 @@ class SABERRestClient:
         Raises:
             Exception: If health check fails
         """
-        url = f"{self.saber_server_url}/health"
+        url = f"{self.saber_server_url}/api/v1/health"
 
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=self.request_timeout) as response:

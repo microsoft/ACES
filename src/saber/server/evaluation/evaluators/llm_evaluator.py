@@ -17,7 +17,7 @@ from openai import OpenAI
 from ...benchmarks.task import Task
 from ..constants import EVAL_STRATEGY_LLM_JUDGE
 from ..exceptions import EvaluationConfigError, EvaluationError
-from ..models import EvaluationConfig, EvaluationResult
+from ..models import EpisodeEvaluationData, EvaluationConfig, EvaluationResult
 from .base import BaseEvaluator
 
 logger = logging.getLogger(__name__)
@@ -51,12 +51,14 @@ class LLMEvaluator(BaseEvaluator):
         self.llm_client: Optional[OpenAI] = None
         logger.info("LLMEvaluator initialized with %d second timeout", timeout_seconds)
 
-    async def evaluate(self, episode_data: Dict[str, Any], config: EvaluationConfig, task: Task) -> EvaluationResult:
+    async def evaluate(
+        self, episode_data: EpisodeEvaluationData, config: EvaluationConfig, task: Task
+    ) -> EvaluationResult:
         """
         Evaluate episode submission using LLM judgment.
 
         Args:
-            episode_data: Dictionary containing episode information including submission
+            episode_data: EpisodeEvaluationData containing episode information including submission
             config: Evaluation configuration containing golden answer and model
             task: Task being evaluated
 
@@ -67,7 +69,7 @@ class LLMEvaluator(BaseEvaluator):
             EvaluationError: If LLM evaluation fails
             EvaluationConfigError: If configuration is invalid
         """
-        submission = episode_data.get("submission", "").strip()
+        submission = episode_data.submission.strip()
         golden_answer = config.criteria.get("golden_answer", "").strip()
         model = config.criteria.get("model")
 
@@ -81,8 +83,8 @@ class LLMEvaluator(BaseEvaluator):
         if not self.llm_client:
             self._initialize_llm_client()
 
-        episode_id = episode_data.get("episode_id")
-        task_id = episode_data.get("task_id")
+        episode_id = episode_data.episode_id
+        task_id = episode_data.task_id
 
         # Validate required fields
         if not episode_id:
@@ -175,9 +177,8 @@ class LLMEvaluator(BaseEvaluator):
             },
         )
 
-        return EvaluationResult(
-            episode_id=episode_id,
-            task_id=task_id,
+        return EvaluationResult.from_episode_data(
+            episode_data=episode_data,
             strategy=EVAL_STRATEGY_LLM_JUDGE,
             raw_score=raw_score,
             max_score=max_score,

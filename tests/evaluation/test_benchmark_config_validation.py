@@ -26,6 +26,13 @@ tasks:
   - task_id: "static_eval_task"
     title: "Static Evaluation Task"
     description: "Task with static evaluation"
+    prompt_template_file: "test_template.j2"
+    execution_config:
+      timeout: 300
+      allowed_executors:
+        - "test_executor"
+    episode_config:
+      max_steps: 10
     evaluation_config:
       strategy: "static"
       criteria:
@@ -64,6 +71,13 @@ tasks:
   - task_id: "llm_eval_task"
     title: "LLM Evaluation Task"
     description: "Task with LLM evaluation"
+    prompt_template_file: "test_template.j2"
+    execution_config:
+      timeout: 300
+      allowed_executors:
+        - "test_executor"
+    episode_config:
+      max_steps: 10
     evaluation_config:
       strategy: "llm_judge"
       criteria:
@@ -101,6 +115,13 @@ tasks:
   - task_id: "no_eval_task"
     title: "No Evaluation Task"
     description: "Task without evaluation config"
+    prompt_template_file: "test_template.j2"
+    execution_config:
+      timeout: 300
+      allowed_executors:
+        - "test_executor"
+    episode_config:
+      max_steps: 10
     subtasks: []
 """)
             temp_path = f.name
@@ -127,6 +148,13 @@ tasks:
   - task_id: "invalid_strategy_task"
     title: "Invalid Strategy Task"
     description: "Task with invalid evaluation strategy"
+    prompt_template_file: "test_template.j2"
+    execution_config:
+      timeout: 300
+      allowed_executors:
+        - "test_executor"
+    episode_config:
+      max_steps: 10
     evaluation_config:
       strategy: "invalid_strategy"
       criteria: {}
@@ -158,6 +186,13 @@ tasks:
   - task_id: "missing_criteria_task"
     title: "Missing Criteria Task"
     description: "Task without criteria section"
+    prompt_template_file: "test_template.j2"
+    execution_config:
+      timeout: 300
+      allowed_executors:
+        - "test_executor"
+    episode_config:
+      max_steps: 10
     evaluation_config:
       strategy: "static"
       scoring:
@@ -188,6 +223,13 @@ tasks:
   - task_id: "invalid_max_score_task"
     title: "Invalid Max Score Task"
     description: "Task with invalid max_score"
+    prompt_template_file: "test_template.j2"
+    execution_config:
+      timeout: 300
+      allowed_executors:
+        - "test_executor"
+    episode_config:
+      max_steps: 10
     evaluation_config:
       strategy: "static"
       criteria:
@@ -220,6 +262,13 @@ tasks:
   - task_id: "static_no_answers_task"
     title: "Static No Answers Task"
     description: "Static task without expected_answers"
+    prompt_template_file: "test_template.j2"
+    execution_config:
+      timeout: 300
+      allowed_executors:
+        - "test_executor"
+    episode_config:
+      max_steps: 10
     evaluation_config:
       strategy: "static"
       criteria: {}
@@ -251,6 +300,13 @@ tasks:
   - task_id: "llm_no_golden_task"
     title: "LLM No Golden Task"
     description: "LLM task without golden_answer"
+    prompt_template_file: "test_template.j2"
+    execution_config:
+      timeout: 300
+      allowed_executors:
+        - "test_executor"
+    episode_config:
+      max_steps: 10
     evaluation_config:
       strategy: "llm_judge"
       criteria:
@@ -283,6 +339,13 @@ tasks:
   - task_id: "llm_no_model_task"
     title: "LLM No Model Task"
     description: "LLM task without model"
+    prompt_template_file: "test_template.j2"
+    execution_config:
+      timeout: 300
+      allowed_executors:
+        - "test_executor"
+    episode_config:
+      max_steps: 10
     evaluation_config:
       strategy: "llm_judge"
       criteria:

@@ -8,7 +8,7 @@ from saber.server.benchmarks.task import Task
 from saber.server.evaluation.constants import EVAL_STRATEGY_STATIC
 from saber.server.evaluation.evaluators.static_evaluator import StaticEvaluator
 from saber.server.evaluation.exceptions import EvaluationValidationError
-from saber.server.evaluation.models import EvaluationConfig, EvaluationResult
+from saber.server.evaluation.models import EvaluationConfig, EvaluationResult, EpisodeEvaluationData
 
 
 class TestStaticEvaluator:
@@ -26,7 +26,14 @@ class TestStaticEvaluator:
             task_id="test_task",
             domain="test_domain",
             title="Test Task",
-            description="A test task"
+            description="A test task",
+            prompt_template_file="test_template.j2",
+            allowed_executors=["test_executor"],
+            evaluation_config={
+                "strategy": "static",
+                "criteria": {"expected_answers": ["test_answer"]},
+                "scoring": {"max_score": 1.0}
+            }
         )
 
     @pytest.fixture
@@ -50,14 +57,14 @@ class TestStaticEvaluator:
     @pytest.fixture
     def episode_data(self):
         """Create sample episode data."""
-        return {
-            "episode_id": "episode_123",
-            "task_id": "test_task",
-            "submission": "flag{correct_answer}",
-            "executed_commands": ["ls", "cat file.txt"],
-            "completion_reason": "completed",
-            "step_count": 5
-        }
+        return EpisodeEvaluationData(
+            episode_id="episode_123",
+            task_id="test_task",
+            submission="flag{correct_answer}",
+            executed_commands=["ls", "cat file.txt"],
+            completion_reason="completed",
+            step_count=5
+        )
 
     @pytest.mark.asyncio
     async def test_single_answer_exact_match_success(self, evaluator, sample_task, single_answer_config, episode_data):
@@ -77,9 +84,14 @@ class TestStaticEvaluator:
         assert result.details["submission"] == "flag{correct_answer}"
 
     @pytest.mark.asyncio
-    async def test_single_answer_exact_match_failure(self, evaluator, sample_task, single_answer_config, episode_data):
+    async def test_single_answer_exact_match_failure(self, evaluator, sample_task, single_answer_config):
         """Test exact match failure for single answer task."""
-        episode_data["submission"] = "flag{wrong_answer}"
+        episode_data = EpisodeEvaluationData(
+            episode_id="episode_123",
+            task_id="test_task",
+            submission="flag{wrong_answer}",
+            step_count=5
+        )
 
         result = await evaluator.evaluate(episode_data, single_answer_config, sample_task)
 
@@ -90,9 +102,14 @@ class TestStaticEvaluator:
         assert result.details["submission"] == "flag{wrong_answer}"
 
     @pytest.mark.asyncio
-    async def test_case_sensitive_matching(self, evaluator, sample_task, single_answer_config, episode_data):
+    async def test_case_sensitive_matching(self, evaluator, sample_task, single_answer_config):
         """Test that matching is case-sensitive."""
-        episode_data["submission"] = "FLAG{CORRECT_ANSWER}"  # Different case
+        episode_data = EpisodeEvaluationData(
+            episode_id="episode_123",
+            task_id="test_task",
+            submission="FLAG{CORRECT_ANSWER}",  # Different case
+            step_count=5
+        )
 
         result = await evaluator.evaluate(episode_data, single_answer_config, sample_task)
 
@@ -100,9 +117,14 @@ class TestStaticEvaluator:
         assert result.success is False
 
     @pytest.mark.asyncio
-    async def test_whitespace_trimming(self, evaluator, sample_task, single_answer_config, episode_data):
+    async def test_whitespace_trimming(self, evaluator, sample_task, single_answer_config):
         """Test that whitespace is properly trimmed."""
-        episode_data["submission"] = "  flag{correct_answer}  "
+        episode_data = EpisodeEvaluationData(
+            episode_id="episode_123",
+            task_id="test_task",
+            submission="  flag{correct_answer}  ",
+            step_count=5
+        )
 
         result = await evaluator.evaluate(episode_data, single_answer_config, sample_task)
 
@@ -110,9 +132,14 @@ class TestStaticEvaluator:
         assert result.success is True
 
     @pytest.mark.asyncio
-    async def test_multi_answer_partial_match(self, evaluator, sample_task, multi_answer_config, episode_data):
+    async def test_multi_answer_partial_match(self, evaluator, sample_task, multi_answer_config):
         """Test partial match for multiple answer task."""
-        episode_data["submission"] = "answer2"
+        episode_data = EpisodeEvaluationData(
+            episode_id="episode_123",
+            task_id="test_task",
+            submission="answer2",
+            step_count=5
+        )
 
         result = await evaluator.evaluate(episode_data, multi_answer_config, sample_task)
 
@@ -123,9 +150,14 @@ class TestStaticEvaluator:
         assert result.details["total_expected"] == 3
 
     @pytest.mark.asyncio
-    async def test_multi_answer_no_match(self, evaluator, sample_task, multi_answer_config, episode_data):
+    async def test_multi_answer_no_match(self, evaluator, sample_task, multi_answer_config):
         """Test no match for multiple answer task."""
-        episode_data["submission"] = "wrong_answer"
+        episode_data = EpisodeEvaluationData(
+            episode_id="episode_123",
+            task_id="test_task",
+            submission="wrong_answer",
+            step_count=5
+        )
 
         result = await evaluator.evaluate(episode_data, multi_answer_config, sample_task)
 
@@ -158,9 +190,14 @@ class TestStaticEvaluator:
             await evaluator.evaluate(episode_data, config, sample_task)
 
     @pytest.mark.asyncio
-    async def test_empty_submission(self, evaluator, sample_task, single_answer_config, episode_data):
+    async def test_empty_submission(self, evaluator, sample_task, single_answer_config):
         """Test evaluation with empty submission."""
-        episode_data["submission"] = ""
+        episode_data = EpisodeEvaluationData(
+            episode_id="episode_123",
+            task_id="test_task",
+            submission="",
+            step_count=5
+        )
 
         result = await evaluator.evaluate(episode_data, single_answer_config, sample_task)
 

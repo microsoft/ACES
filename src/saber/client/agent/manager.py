@@ -11,9 +11,9 @@ import logging
 from types import TracebackType
 from typing import Any, List, Optional
 
-from .client_session import ClientSessionManager
-from .exceptions import AgentInitializationError
-from .models import AgentInfo, SABERConfig
+from ..client_session import ClientSessionManager
+from ..exceptions import AgentInitializationError
+from ..models import AgentInfo, SABERConfig
 
 logger = logging.getLogger(__name__)
 
@@ -139,12 +139,13 @@ class AgentManager:
         # Import inspect_ai modules only when needed
         from inspect_ai import Task
 
-        from .inspect_ai import InspectAIAgentFactory  # Import through package to trigger registrations
-        from .inspect_ai.saber_scorer import SABERTaskScorer
+        from ..inspect_ai import saber_agent  # noqa: F401 - Trigger agent registrations
+        from ..inspect_ai.saber_scorer import SABERTaskScorer
+        from .factory import SABERAgentFactory  # Use the new SABER agent factory
 
-        # Create SABER agent using the inspect_ai factory
-        factory = InspectAIAgentFactory()
-        saber_agent = await factory.create_agent(
+        # Create SABER agent using the new agent factory
+        factory = SABERAgentFactory()
+        saber_agent_instance = await factory.create_agent(
             agent_id=self.saber_agent.agent_id,  # Use agent_id as the identifier
             config=self.config,
             session_manager=self.session_manager,
@@ -154,7 +155,7 @@ class AgentManager:
         # Create task with SABER context in metadata
         task = Task(
             dataset=dataset,
-            solver=saber_agent,
+            solver=saber_agent_instance,
             scorer=SABERTaskScorer.create_default_scorer(),
             metadata={
                 "saber_agent_id": self.saber_agent.agent_id,

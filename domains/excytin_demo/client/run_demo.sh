@@ -61,7 +61,7 @@ fi
 echo ""
 
 # Build the command
-CMD="uv run python -m saber.client --config /app/client/saber.yaml"
+CMD="uv run python -m saber.client run --config /app/client/saber.yaml"
 
 # Add logging options
 if [[ -n "$VERBOSE" ]]; then

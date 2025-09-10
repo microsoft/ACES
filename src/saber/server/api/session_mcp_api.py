@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_http_headers
 
-from ...models import HTTPHeaders
+from ...models import EvalSubmission, HTTPHeaders
 from ...models.mcp import MCPInputSchema, MCPPropertySchema, MCPToolCallResponse, MCPToolListResponse, MCPToolSchema
 from ..base import Action, CommandResult
 from .mcp_tool_generator import MCPToolGenerator
@@ -452,13 +452,20 @@ class SessionMCPAPI:
         """
         Handle the hardcoded end_episode tool call.
 
+        This function processes the agent's submission by:
+        1. Recording the submission as a step in the episode
+        2. Ending the episode with the submission for evaluation
+        3. Returning the submission as text for React agent scoring
+
+        The React agent expects the tool result text to contain the actual answer.
+
         Args:
-            arguments: Tool arguments (clean, no session_id)
+            arguments: Tool arguments containing submission parameter (clean, no session_id)
             session_id: SABER session ID from headers
             episode_id: SABER episode ID from headers
 
         Returns:
-            MCPToolCallResponse confirming episode end
+            MCPToolCallResponse with submission as text content
         """
         try:
             if not session_id:
@@ -474,6 +481,9 @@ class SessionMCPAPI:
 
             # Extract optional result/flag/objective from parameters.submission
             result = ""
+            logger.info(
+                f"Handling end_episode call for session {session_id}, episode {episode_id}, arguments: {arguments}"
+            )
             if "parameters" in arguments and isinstance(arguments["parameters"], dict):
                 result = arguments["parameters"].get("submission", "")
 
@@ -495,19 +505,28 @@ class SessionMCPAPI:
             )
             if result:
                 logger.info(f"Episode ending with result: {result}")
-                await self.session_manager.end_episode(session_id, episode_id, "agent_completed", result)
+                # Create EvalSubmission object from MCP string submission
+                mcp_submission = EvalSubmission(
+                    episode_id=episode_id,
+                    task_id="unknown",  # MCP doesn't provide task_id context
+                    model="mcp_agent",
+                    choices=[],
+                    submission=result,
+                    tokens={},
+                    time=0.0,
+                )
+                await self.session_manager.end_episode(session_id, episode_id, "agent_completed", mcp_submission)
             else:
                 await self.session_manager.end_episode(session_id, episode_id, "agent_completed")
 
-            # Prepare success message
-            success_message = "Episode ended successfully"
-            if result:
-                success_message += f" with result: {result}"
-
             logger.info(f"Episode ended for session {session_id}")
 
-            # Return success result with typed response
-            return MCPToolCallResponse(content=[{"type": "text", "text": success_message}], isError=False)
+            # Return the submission as text for React agent to extract as the answer
+            # The React agent expects result.text to contain the actual answer for scoring
+            response_text = result if result else "No submission provided"
+
+            # Return submission result with typed response
+            return MCPToolCallResponse(content=[{"type": "text", "text": response_text}], isError=False)
 
         except Exception as e:
             logger.error(f"Error handling end_episode tool call: {e}")

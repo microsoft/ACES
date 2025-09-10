@@ -129,22 +129,17 @@ class EpisodeManager:
             return True, f"configuration_error: No episode configuration found for episode {episode_id}"
 
         try:
-            # Check max steps
+            # Note: Step limit checking moved to client-side
+            # Server no longer terminates episodes based on step count
             max_steps = episode_config["max_steps"]
             current_steps = len(episode.steps)
 
-            logger.info(
-                f"🔍 STEP COUNT CHECK: episode={episode_id}, current_steps={current_steps}, "
-                f"max_steps={max_steps}, should_terminate={current_steps >= max_steps}"
+            logger.debug(
+                f"� Step count info: episode={episode_id}, current_steps={current_steps}, "
+                f"max_steps={max_steps} (server-side termination disabled)"
             )
 
-            if current_steps >= max_steps:
-                logger.info(
-                    f"🛑 TERMINATING EPISODE: episode={episode_id}, reached max steps ({current_steps}/{max_steps})"
-                )
-                return True, f"{EpisodeTerminationReason.MAX_STEPS_REACHED} ({current_steps}/{max_steps})"
-
-            # Could add more termination conditions here:
+            # Could add other termination conditions here:
             # - episode timeout based on episode_config["episode_timeout_minutes"]
             # - step timeout based on episode_config["step_timeout_seconds"]
             # - resource limits
@@ -178,6 +173,7 @@ class EpisodeManager:
             context=initial_context or {},
             metadata={"created_at": datetime.utcnow().isoformat()},
             end_time=None,
+            eval_submission=None,
             completion_reason=None,
             submission=None,
         )
@@ -214,21 +210,19 @@ class EpisodeManager:
 
         logger.debug(f"Executing step {len(episode.steps) + 1} for episode '{episode.episode_id}'")
 
-        # Check if this step will cause termination BEFORE adding it
+        # Note: Step limit enforcement has been moved to client-side
+        # The server no longer automatically terminates episodes based on step count
         current_steps = len(episode.steps)
         will_terminate_after_this_step = False
         termination_reason = None
 
-        # Get episode config to check max_steps
+        # Log step information for debugging (no automatic termination)
         episode_config = self.episode_configs.get(episode_id)
         if episode_config and "max_steps" in episode_config:
             max_steps = episode_config["max_steps"]
-            if current_steps + 1 >= max_steps:  # This step will reach the limit
-                will_terminate_after_this_step = True
-                termination_reason = f"{EpisodeTerminationReason.MAX_STEPS_REACHED} ({current_steps + 1}/{max_steps})"
-                logger.info(
-                    f"🔍 FINAL STEP: This will be step {current_steps + 1}/{max_steps} - episode will terminate"
-                )
+            logger.debug(
+                f"📊 Step {current_steps + 1}/{max_steps} for episode {episode_id} (server-side limit checking disabled)"
+            )
 
         # Record tool execution and create step
         step = self.create_step(episode, action, command_result)
