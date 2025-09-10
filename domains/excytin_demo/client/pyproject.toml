@@ -70,7 +70,7 @@ client = [
 
 # Installation method variants
 local-dev = [
-    # Dependencies for local development with external inspect_ai directory
+    # Dependencies for local development with external inspect_ai directory (now default)
     # No additional dependencies needed - just changes the source
 ]
 
@@ -92,13 +92,13 @@ packages = ["src/saber"]
 allow-direct-references = true
 
 [tool.uv.sources]
-# PATHWAY 1: Standard installation from MSEC ADO repository (default)
-# This is the recommended approach for most users
-inspect-ai = { git = "https://MSECAIModels@dev.azure.com/MSECAIModels/Benchmarking/_git/inspect_ai" }
+# PATHWAY 1: Local development with external directory (DEFAULT)
+# This is the recommended approach for most users and enables local inspect_ai development
+inspect-ai = { path = "./external/inspect_ai" }
 
-# PATHWAY 2: Local development with external directory
-# To use local development, comment the line above and uncomment this one:
-# inspect-ai = { path = "./external/inspect_ai" }
+# PATHWAY 2: MSEC ADO repository installation (alternative)
+# To use ADO installation, comment the line above and uncomment this one:
+# inspect-ai = { git = "https://MSECAIModels@dev.azure.com/MSECAIModels/Benchmarking/_git/inspect_ai" }
 
 # Alternative: PyPI installation (if inspect-ai becomes available on PyPI)
 # inspect-ai = { version = "*" }
