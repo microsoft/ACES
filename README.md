@@ -95,22 +95,22 @@ For detailed architecture documentation, see [docs/README.md](docs/README.md).
 
 3. **Install dependencies (choose your pathway):**
 
-   **Pathway 1: Standard Installation (Recommended)**
+   **Pathway 1: Local Development with External Directory (Default & Recommended)**
    ```bash
-   # Install from MSEC ADO repository (default configuration)
+   # Initialize git submodule (usually already done)
+   git submodule update --init --recursive
+   
+   # Install with local inspect_ai (default configuration)
    uv sync --all-extras
    ```
 
-   **Pathway 2: Local Development with External Directory**  
+   **Pathway 2: ADO Repository Installation**  
    ```bash
-   # Initialize git submodule for local development
-   git submodule update --init --recursive
+   # Edit pyproject.toml to use ADO repository:
+   # Uncomment: inspect-ai = { git = "https://MSECAIModels@dev.azure.com/..." }
+   # Comment: inspect-ai = { path = "./external/inspect_ai" }
    
-   # Edit pyproject.toml to use local path:
-   # Comment: inspect-ai = { git = "https://MSECAIModels@dev.azure.com/..." }
-   # Uncomment: inspect-ai = { path = "./external/inspect_ai" }
-   
-   # Install with local inspect_ai
+   # Install with ADO repository source
    uv sync --all-extras
    ```
 
@@ -167,7 +167,15 @@ uv run pre-commit run --all-files
 **Switching Between Installation Pathways:**
 
 ```bash
-# To switch to local development (inspect_ai from ./external/inspect_ai):
+# To switch to ADO repository (inspect_ai from MSEC ADO):
+# 1. Edit pyproject.toml [tool.uv.sources] section:
+#    Uncomment:   inspect-ai = { git = "https://MSECAIModels@dev.azure.com/..." }
+#    Comment out: inspect-ai = { path = "./external/inspect_ai" }
+
+# 2. Reinstall with ADO source
+uv sync --all-extras
+
+# To switch back to local development (default):
 # 1. Initialize submodule if not already done
 git submodule update --init --recursive
 
@@ -175,15 +183,7 @@ git submodule update --init --recursive
 #    Comment out: inspect-ai = { git = "https://MSECAIModels@dev.azure.com/..." }
 #    Uncomment:   inspect-ai = { path = "./external/inspect_ai" }
 
-# 3. Reinstall with new source
-uv sync --all-extras
-
-# To switch back to ADO repository:
-# 1. Edit pyproject.toml [tool.uv.sources] section:
-#    Uncomment:   inspect-ai = { git = "https://MSECAIModels@dev.azure.com/..." }
-#    Comment out: inspect-ai = { path = "./external/inspect_ai" }
-
-# 2. Reinstall with ADO source
+# 3. Reinstall with local source
 uv sync --all-extras
 ```
 
