@@ -31,6 +31,7 @@ from .benchmarks.task import Task
 from .episodes.constants import EpisodeTerminationReason
 from .episodes.episode_manager import EpisodeManager
 from .evaluation.evaluation_manager import EvaluationManager
+from .evaluation.session_evaluation_service import SessionEvaluationService
 from .execution.cleanup.cleanup_reason import CleanupReason
 from .execution.execution_manager import ExecutionManager
 from .policy.policy_manager import PolicyDocument, PolicyManager
@@ -181,6 +182,9 @@ class SessionManager:
 
         self.policy_manager = PolicyManager(domain_name)
         self.evaluation_manager = EvaluationManager()
+
+        # Initialize evaluation service for retrieval operations
+        self.evaluation_service = SessionEvaluationService(self.evaluation_manager.store)
 
         # Initialize protocol handlers
         self.rest_api = SessionRestAPI(self, host, port)
@@ -386,6 +390,18 @@ class SessionManager:
         # Configure episode manager with task object
         self.episode_manager.configure_for_task(episode.episode_id, task)
 
+        # Configure evaluation manager for task (fail fast if invalid)
+        try:
+            self.evaluation_manager.configure_for_task(task)
+        except Exception as e:
+            logger.error(f"Failed to configure evaluation for task {task_id}: {e}")
+            # Cleanup episode since evaluation configuration failed
+            self.episode_manager.remove_episode_on_error(episode.episode_id, e)
+            session.remove_active_episode(episode.episode_id)
+            raise HTTPException(
+                status_code=400, detail=f"Task {task_id} has invalid evaluation configuration: {str(e)}"
+            )
+
         # Add episode to session's active episodes
         session.add_active_episode(episode.episode_id)
 
@@ -412,19 +428,23 @@ class SessionManager:
         session_id: str,
         episode_id: str,
         reason: str = EpisodeTerminationReason.COMPLETED,
-        result: Optional[str] = None,
+        submission: Optional[str] = None,
     ) -> EpisodeEndResponse:
         """
-        End a specific episode for a session.
+        End a specific episode for a session with evaluation.
 
         Args:
             session_id: ID of the client session
             episode_id: ID of the specific episode to end
             reason: Reason for episode termination (use EpisodeTerminationReason enum values)
-            result: Optional result/submission from the episode (e.g., captured flag)
+            submission: Required submission for evaluation
 
         Returns:
-            Dictionary with episode termination information
+            EpisodeEndResponse with evaluation result
+
+        Raises:
+            HTTPException: If episode not active or submission missing
+            EvaluationError: If evaluation fails
         """
         session = self._get_session(session_id)
         session.update_activity()
@@ -437,13 +457,33 @@ class SessionManager:
                 f"Active episodes: {session.active_episode_ids}",
             )
 
-        # Get the task_id from the episode before ending it
+        # Get episode and task for evaluation
         episode = self.episode_manager.get_episode_by_id(episode_id)
-        completed_task_id = episode.task_id if episode else None
-        success = EpisodeTerminationReason.is_success(reason)
+        if not episode:
+            raise HTTPException(status_code=404, detail=f"Episode {episode_id} not found")
 
-        # End episode through episode manager, passing the result
-        self.episode_manager.end_episode(episode_id, reason, result)
+        task = self.benchmark_manager.get_task(episode.task_id)
+
+        # Fail fast: submission is required for evaluation
+        if submission is None:
+            raise HTTPException(status_code=400, detail="Episode completion requires a submission for evaluation")
+
+        # Set submission on episode before marking complete
+        episode.submission = submission
+
+        # End episode through episode manager
+        completed_episode = self.episode_manager.end_episode(episode_id, reason, submission)
+
+        # Evaluate episode using the new evaluation system
+        try:
+            evaluation_result = await self.evaluation_manager.evaluate_episode(completed_episode, task)
+            logger.info(
+                f"Episode {episode_id} evaluated: score={evaluation_result.score}/{evaluation_result.max_score}"
+            )
+        except Exception as e:
+            logger.error(f"Episode evaluation failed for {episode_id}: {e}")
+            # Evaluation failure means episode failure - fail fast
+            raise HTTPException(status_code=500, detail=f"Episode evaluation failed: {str(e)}")
 
         # Cleanup episode containers immediately when episode ends
         try:
@@ -463,14 +503,15 @@ class SessionManager:
 
         logger.info(f"Ended episode {episode_id} for session {session_id} with reason: {reason}")
 
-        # Build response using proper API model - client handles orchestration now
+        # Build response with evaluation result - success derived from evaluation (evaluation_result always present)
         return EpisodeEndResponse(
             episode_ended=True,
             episode_id=episode_id,
-            success=success,
+            success=evaluation_result.success,
             reason=reason,
-            previous_task_id=completed_task_id,
+            previous_task_id=episode.task_id,
             active_episodes_remaining=len(session.active_episode_ids),
+            evaluation_result=evaluation_result.dict(),
         )
 
     async def execute_action(self, session_id: str, episode_id: str, action: Action) -> CommandResult:
@@ -683,6 +724,15 @@ class SessionManager:
             raise HTTPException(status_code=404, detail=f"Episode {episode_id} not found")
 
         return episode
+
+    def get_evaluation_service(self) -> SessionEvaluationService:
+        """
+        Get evaluation service instance for retrieval operations.
+
+        Returns:
+            SessionEvaluationService instance
+        """
+        return self.evaluation_service
 
     def get_tool_event_publisher(self) -> Optional[ToolEventPublisher]:
         """

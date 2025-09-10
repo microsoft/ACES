@@ -143,7 +143,7 @@ class SessionMCPAPI:
         """Shutdown the MCP server."""
         try:
             if self.mcp_server:
-                await self.mcp_server.close()  # type: ignore[attr-defined]
+                await self.mcp_server.close()
                 self.mcp_server = None
             logger.info("MCP server shutdown complete")
 

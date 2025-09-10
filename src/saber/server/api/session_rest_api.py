@@ -43,6 +43,8 @@ from ...models import (
     SessionTerminateResponse,
     TaskOrchestrationResponse,
 )
+from ...models.rest.evaluation import EvaluationListResponse, EvaluationResponse, EvaluationSummaryResponse
+from ..evaluation.exceptions import EvaluationNotFoundError, InvalidEvaluationRequestError, SessionEvaluationError
 from .events.tool_event_publisher import ToolEventPublisher
 
 if TYPE_CHECKING:
@@ -513,6 +515,85 @@ class SessionRestAPI:
                     count=len(active),
                 )
             raise HTTPException(status_code=500, detail="Cleanup manager not available")
+
+        # Evaluation endpoints
+        @self.app.get("/api/v1/session/{session_id}/evaluations/{episode_id}", response_model=EvaluationResponse)
+        async def get_evaluation_endpoint(session_id: str, episode_id: str) -> EvaluationResponse:
+            """Get evaluation result for specific episode."""
+            try:
+                evaluation_service = self.session_manager.get_evaluation_service()
+                result = await evaluation_service.get_evaluation(session_id, episode_id)
+
+                # Convert to response model
+                from ...models.rest.evaluation import EvaluationResultResponse
+
+                evaluation_response = EvaluationResultResponse(
+                    episode_id=result.episode_id,
+                    task_id=result.task_id,
+                    strategy=result.strategy,
+                    raw_score=result.raw_score,
+                    max_score=result.max_score,
+                    score=result.score,
+                    success=result.success,
+                    timestamp=result.timestamp,
+                    details=result.details,
+                )
+
+                return EvaluationResponse(evaluation_result=evaluation_response, session_id=session_id)
+            except EvaluationNotFoundError as e:
+                raise HTTPException(status_code=404, detail=str(e))
+            except InvalidEvaluationRequestError as e:
+                raise HTTPException(status_code=422, detail=str(e))
+            except SessionEvaluationError as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.get("/api/v1/session/{session_id}/evaluations", response_model=EvaluationListResponse)
+        async def list_evaluations_endpoint(session_id: str, task_id: Optional[str] = None) -> EvaluationListResponse:
+            """List evaluation results for session."""
+            try:
+                evaluation_service = self.session_manager.get_evaluation_service()
+                evaluations = await evaluation_service.list_session_evaluations(session_id, task_id)
+
+                # Convert to response models
+                from ...models.rest.evaluation import EvaluationResultResponse
+
+                evaluation_responses = [
+                    EvaluationResultResponse(
+                        episode_id=result.episode_id,
+                        task_id=result.task_id,
+                        strategy=result.strategy,
+                        raw_score=result.raw_score,
+                        max_score=result.max_score,
+                        score=result.score,
+                        success=result.success,
+                        timestamp=result.timestamp,
+                        details=result.details,
+                    )
+                    for result in evaluations
+                ]
+
+                return EvaluationListResponse(
+                    evaluations=evaluation_responses,
+                    total_count=len(evaluation_responses),
+                    session_id=session_id,
+                    task_filter=task_id,
+                )
+            except InvalidEvaluationRequestError as e:
+                raise HTTPException(status_code=422, detail=str(e))
+            except SessionEvaluationError as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.get("/api/v1/session/{session_id}/evaluations/summary", response_model=EvaluationSummaryResponse)
+        async def get_evaluation_summary_endpoint(session_id: str) -> EvaluationSummaryResponse:
+            """Get aggregate evaluation summary for session."""
+            try:
+                evaluation_service = self.session_manager.get_evaluation_service()
+                summary = await evaluation_service.get_session_summary(session_id)
+                return EvaluationSummaryResponse(**summary)
+            except InvalidEvaluationRequestError as e:
+                raise HTTPException(status_code=422, detail=str(e))
+            except SessionEvaluationError as e:
+                raise HTTPException(status_code=500, detail=str(e))
 
     async def start_server(self) -> None:
         """Start the SessionRestAPI server."""

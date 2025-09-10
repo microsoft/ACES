@@ -171,7 +171,12 @@ class SessionStatsResponse(BaseModel):
 
 
 class EpisodeEndResponse(BaseModel):
-    """Response model for episode termination."""
+    """Response model for episode termination.
+
+    Phase 1 guarantee: evaluation_result is ALWAYS present (never None)
+    and contains the serialized EvaluationResult (dict form) produced
+    during fail-fast evaluation. This is a breaking change vs legacy.
+    """
 
     episode_ended: bool = Field(description="Whether the episode has ended")
     episode_id: str = Field(description="ID of the episode that ended")
@@ -179,6 +184,7 @@ class EpisodeEndResponse(BaseModel):
     reason: str = Field(description="Reason for episode termination")
     previous_task_id: Optional[str] = Field(None, description="Task ID of the completed episode")
     active_episodes_remaining: int = Field(description="Number of active episodes remaining in session")
+    evaluation_result: Dict[str, Any] = Field(description="Episode evaluation result (non-null)")
 
 
 # Legacy compatibility - keeping SessionInfo for backward compatibility
@@ -187,3 +193,6 @@ class SessionInfo(BaseModel):
 
     session_id: str
     message: str
+
+
+# Import evaluation models

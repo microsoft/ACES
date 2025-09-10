@@ -141,6 +141,7 @@ class Episode(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional episode metadata")
     completion_reason: Optional[str] = Field(None, description="Reason the episode ended")
     max_steps: int = Field(default=10, description="Maximum number of steps allowed for this episode")
+    submission: Optional[str] = Field(None, description="Final submission for evaluation")
 
     class Config:
         """Pydantic configuration."""

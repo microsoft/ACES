@@ -355,6 +355,16 @@ class BenchmarkConfigLoader:
                 "Each task must have episode_attempts either from domain-level benchmark_config or task-level override."
             )
 
+        # Validate evaluation configuration (REQUIRED - no backwards compatibility)
+        evaluation_config = task_data.get("evaluation_config")
+        if not evaluation_config:
+            raise InvalidTaskDefinitionException(
+                f"Task '{task_id}' missing required evaluation_config section. "
+                "All tasks MUST have evaluation configuration."
+            )
+
+        self._validate_evaluation_config(evaluation_config, task_id)
+
         # Parse subtasks
         subtasks_data = task_data.get("subtasks", [])
         subtasks = []
@@ -379,6 +389,7 @@ class BenchmarkConfigLoader:
             execution_config=execution_config,
             episode_config=episode_config,
             benchmark_config=merged_benchmark_config,
+            evaluation_config=evaluation_config,
         )
 
         logger.debug(f"Created task '{task_id}' with {len(subtasks)} subtasks")
@@ -407,3 +418,61 @@ class BenchmarkConfigLoader:
             description=subtask_data["description"],
             objective=subtask_data["objective"],
         )
+
+    def _validate_evaluation_config(self, eval_config: Dict[str, Any], task_id: str) -> None:
+        """
+        Validate evaluation configuration for a task. Fails fast on invalid config.
+
+        Args:
+            eval_config: Evaluation configuration dictionary
+            task_id: Task ID for error reporting
+
+        Raises:
+            InvalidTaskDefinitionException: If configuration is invalid
+        """
+        # Validate strategy
+        strategy = eval_config.get("strategy")
+        if strategy not in ("static", "llm_judge"):
+            raise InvalidTaskDefinitionException(
+                f"Task '{task_id}': Invalid or missing evaluation strategy. "
+                f"Must be 'static' or 'llm_judge', got: {strategy}"
+            )
+
+        # Validate criteria section
+        criteria = eval_config.get("criteria")
+        if not isinstance(criteria, dict):
+            raise InvalidTaskDefinitionException(
+                f"Task '{task_id}': Missing or invalid criteria section in evaluation_config"
+            )
+
+        # Validate scoring section
+        scoring = eval_config.get("scoring", {})
+        if not isinstance(scoring, dict):
+            raise InvalidTaskDefinitionException(f"Task '{task_id}': scoring must be a dictionary if provided")
+
+        max_score = scoring.get("max_score", 1.0)
+        if not isinstance(max_score, (int, float)) or max_score <= 0:
+            raise InvalidTaskDefinitionException(
+                f"Task '{task_id}': max_score must be a positive number, got: {max_score}"
+            )
+
+        # Strategy-specific validation
+        if strategy == "static":
+            expected_answers = criteria.get("expected_answers")
+            if not expected_answers or not isinstance(expected_answers, list):
+                raise InvalidTaskDefinitionException(
+                    f"Task '{task_id}': static strategy requires 'expected_answers' as a list in criteria"
+                )
+
+        elif strategy == "llm_judge":
+            golden_answer = criteria.get("golden_answer")
+            if not golden_answer or not isinstance(golden_answer, str):
+                raise InvalidTaskDefinitionException(
+                    f"Task '{task_id}': llm_judge strategy requires 'golden_answer' as a string in criteria"
+                )
+
+            model = criteria.get("model")
+            if not model or not isinstance(model, str):
+                raise InvalidTaskDefinitionException(
+                    f"Task '{task_id}': llm_judge strategy requires 'model' as a string in criteria"
+                )

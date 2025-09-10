@@ -27,6 +27,7 @@ class Task:
         execution_config: Optional[Dict[str, Any]] = None,
         episode_config: Optional[Dict[str, Any]] = None,
         benchmark_config: Optional[Dict[str, Any]] = None,
+        evaluation_config: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize a task.
@@ -47,6 +48,7 @@ class Task:
             execution_config: Direct execution configuration (timeouts, limits, etc.)
             episode_config: Episode-specific configuration (max_steps, timeouts, etc.)
             benchmark_config: Benchmark-specific configuration (episode_attempts, etc.)
+            evaluation_config: Evaluation configuration (strategy, criteria, scoring)
         """
         self.task_id = task_id
         self.domain = domain
@@ -60,6 +62,7 @@ class Task:
         self.execution_config = execution_config or {}
         self.episode_config = episode_config or {}
         self.benchmark_config = benchmark_config or {}
+        self.evaluation_config = evaluation_config or {}
 
         # Create lookup map for efficient subtask access
         self._subtask_map = {st.subtask_id: st for st in self.subtasks}
@@ -147,6 +150,7 @@ class Task:
             "execution_config": self.execution_config,
             "episode_config": self.episode_config,
             "benchmark_config": self.benchmark_config,
+            "evaluation_config": self.evaluation_config,
             "subtask_count": len(self.subtasks),
             "episode_attempts": self.get_episode_attempts(),
         }

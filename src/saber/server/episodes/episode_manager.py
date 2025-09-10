@@ -179,6 +179,7 @@ class EpisodeManager:
             metadata={"created_at": datetime.utcnow().isoformat()},
             end_time=None,
             completion_reason=None,
+            submission=None,
         )
 
         # Add episode to session's episode tracking

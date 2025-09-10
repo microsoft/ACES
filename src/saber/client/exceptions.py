@@ -68,3 +68,30 @@ class ResourceCleanupError(SABEREvaluationError):
     """Error during resource cleanup - typically non-fatal."""
 
     pass
+
+
+# Evaluation Retrieval Exceptions - Added for Phase 2 Client Integration
+
+
+class EvaluationRetrievalError(SABEREvaluationError):
+    """Base exception for evaluation retrieval errors."""
+
+    pass
+
+
+class EvaluationNotFoundError(EvaluationRetrievalError):
+    """Evaluation result not found (404)."""
+
+    pass
+
+
+class SessionEvaluationError(EvaluationRetrievalError):
+    """Session-level evaluation access error (500)."""
+
+    pass
+
+
+class InvalidEvaluationRequestError(EvaluationRetrievalError):
+    """Invalid evaluation request parameters (422)."""
+
+    pass
