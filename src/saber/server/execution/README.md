@@ -16,7 +16,7 @@ src/saber/server/execution/
 │   ├── executor_factory.py   # ExecutorFactory for scalable executor management
 │   ├── executor_registry.py  # Dynamic executor registration system
 │   └── standard_registry/    # Built-in executor implementations
-│       ├── cli_executor.py   # CLIExecutor for shell command execution
+│       ├── bash_executor.py   # BashExecutor for shell command execution
 │       └── python_executor.py # PythonExecutor for Python script execution
 ├── sandbox/                  # Docker container management
 │   ├── sandbox_manager.py   # SandboxManager for container lifecycle
@@ -68,7 +68,7 @@ Abstract base class for Docker-based executors:
 - **Container Health**: Container readiness and health checking
 - **Security Info**: Docker-specific security information reporting
 
-#### CLIExecutor (`executors/standard_registry/cli_executor.py`)
+#### BashExecutor (`executors/standard_registry/bash_executor.py`)
 Docker-based shell command executor:
 - **Shell Command Execution**: Executes shell commands in isolated Docker containers
 - **Integrated Security Validation**: Each executor manages its own SecurityValidator for separation of concerns
@@ -121,7 +121,7 @@ Environment specification classes for flexible container configuration:
 ### Executor Hierarchy Overview
 - **CommandExecutor**: Base class with common functionality, parameter management, and MCP schema generation
 - **DockerExecutor**: Abstract base for Docker-based executors with shared container management
-- **CLIExecutor**: Docker-based shell command execution implementation
+- **BashExecutor**: Docker-based shell command execution implementation
 - **PythonExecutor**: Docker-based Python script execution implementation
 
 ## Security Features

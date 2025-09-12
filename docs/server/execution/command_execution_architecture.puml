@@ -99,7 +99,7 @@ package "Execution Management" {
 
 package "Standard Executors (standard_registry/)" {
 
-    class CLIExecutor {
+    class BashExecutor {
         +_executor_metadata: Dict
         +_security_validator: SecurityValidator
         --
@@ -109,7 +109,7 @@ package "Standard Executors (standard_registry/)" {
         +validate_command_string(command: str): ValidationResult
         +get_security_info(): Dict[str, Any]
         +to_mcp_schema(): Dict[str, Any]
-        +create_with_config(sandbox_manager, config?, additional_params?, **kwargs): CLIExecutor
+        +create_with_config(sandbox_manager, config?, additional_params?, **kwargs): BashExecutor
     }
 
     class PythonExecutor {
@@ -355,7 +355,7 @@ package "Docker Sandbox" <<stereototype S>> {
 
 ' Inheritance relationships
 CommandExecutor <|-- DockerExecutor
-DockerExecutor <|-- CLIExecutor
+DockerExecutor <|-- BashExecutor
 DockerExecutor <|-- PythonExecutor
 DockerExecutor <|-- SQLExecutor
 
@@ -368,7 +368,7 @@ ExecutionManager ..> PermanentEnvironmentManager : optional
 
 ' Factory and Registry relationships
 ExecutorFactory ..> ExecutorRegistry : uses
-ExecutorRegistry o-- CLIExecutor : registers
+ExecutorRegistry o-- BashExecutor : registers
 ExecutorRegistry o-- PythonExecutor : registers
 ExecutorRegistry o-- SQLExecutor : registers
 
@@ -386,7 +386,7 @@ DockerExecutor *-- SandboxEnvironmentManager
 DockerSandboxEnvironment ..> CommandResult
 
 ' Executor-specific relationships
-CLIExecutor *-- SecurityValidator
+BashExecutor *-- SecurityValidator
 SecurityValidator ..> SecurityConstants
 
 ' Component relationships
@@ -495,11 +495,11 @@ Async execution with registry integration:
 - Timeout configuration from config dictionary
 end note
 
-note right of CLIExecutor
+note right of BashExecutor
 **Standard CLI Executor**
-Registered as "cli" executor:
-- Located in standard_registry/cli_executor.py
-- Auto-registers on import: register_executor("cli", CLIExecutor, "standard")
+Registered as "bash" executor:
+- Located in standard_registry/bash_executor.py
+- Auto-registers on import: register_executor("bash", BashExecutor, "standard")
 - Shell execution mode with security validation
 - Command chaining and timeout enforcement
 - Working directory and environment variable support

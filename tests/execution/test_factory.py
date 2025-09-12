@@ -12,7 +12,7 @@ import pytest
 from saber.server.execution.executors.docker_executor import DockerExecutor
 from saber.server.execution.executors.executor_factory import ExecutorFactory
 from saber.server.execution.executors.executor_registry import executor_registry
-from saber.server.execution.executors.standard_registry.cli_executor import CLIExecutor
+from saber.server.execution.executors.standard_registry.bash_executor import BashExecutor
 from saber.server.execution.executors.standard_registry.python_executor import PythonExecutor
 from saber.server.execution.sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 
@@ -31,7 +31,7 @@ class TestExecutorFactory:
 
         # Re-register standard executors
         from saber.server.execution.executors.executor_registry import register_executor
-        register_executor("cli", CLIExecutor, "standard")
+        register_executor("bash", BashExecutor, "standard")
         register_executor("python", PythonExecutor, "standard")
 
         yield
@@ -58,7 +58,7 @@ class TestExecutorFactory:
 
         assert factory._sandbox_manager == mock_sandbox_manager
         assert len(factory._executor_instances) == 0
-        assert "cli" in factory.get_available_executors()
+        assert "bash" in factory.get_available_executors()
         assert "python" in factory.get_available_executors()
 
     def test_initialization_with_config(self, mock_sandbox_manager):
@@ -75,7 +75,7 @@ class TestExecutorFactory:
         executors = executor_factory.get_available_executors()
 
         assert isinstance(executors, list)
-        assert "cli" in executors
+        assert "bash" in executors
         assert "python" in executors
         assert len(executors) >= 2
 
@@ -125,10 +125,10 @@ class TestExecutorFactory:
 
     def test_get_executor_cli(self, executor_factory):
         """Test getting CLI executor."""
-        executor = executor_factory.get_executor("cli")
+        executor = executor_factory.get_executor("bash")
 
-        assert isinstance(executor, CLIExecutor)
-        assert executor == executor_factory._executor_instances["cli"]
+        assert isinstance(executor, BashExecutor)
+        assert executor == executor_factory._executor_instances["bash"]
 
     def test_get_executor_python(self, executor_factory):
         """Test getting Python executor."""
@@ -139,20 +139,20 @@ class TestExecutorFactory:
 
     def test_get_executor_cached(self, executor_factory):
         """Test that executors are cached and reused."""
-        executor1 = executor_factory.get_executor("cli")
-        executor2 = executor_factory.get_executor("cli")
+        executor1 = executor_factory.get_executor("bash")
+        executor2 = executor_factory.get_executor("bash")
 
         assert executor1 is executor2
         assert len(executor_factory._executor_instances) == 1
 
     def test_get_executor_force_new(self, executor_factory):
         """Test creating new executor instance with force_new=True."""
-        executor1 = executor_factory.get_executor("cli")
-        executor2 = executor_factory.get_executor("cli", force_new=True)
+        executor1 = executor_factory.get_executor("bash")
+        executor2 = executor_factory.get_executor("bash", force_new=True)
 
         assert executor1 is not executor2
-        assert isinstance(executor1, CLIExecutor)
-        assert isinstance(executor2, CLIExecutor)
+        assert isinstance(executor1, BashExecutor)
+        assert isinstance(executor2, BashExecutor)
 
     def test_get_executor_unknown_type(self, executor_factory):
         """Test getting unknown executor type."""
@@ -162,22 +162,22 @@ class TestExecutorFactory:
     def test_default_executor_configuration(self, executor_factory):
         """Test that executors get default configuration when no specific config provided."""
         # With no configuration, the factory should use built-in defaults
-        cli_executor = executor_factory.get_executor("cli")
+        bash_executor = executor_factory.get_executor("bash")
         python_executor = executor_factory.get_executor("python")
 
         # Verify executors were created successfully with defaults
-        assert isinstance(cli_executor, CLIExecutor)
+        assert isinstance(bash_executor, BashExecutor)
         assert isinstance(python_executor, PythonExecutor)
 
     def test_executor_config_extraction(self, mock_sandbox_manager):
         """Test executor configuration extraction with the new configuration system."""
 
-        configuration = {"timeout": 600, "cli": {"default_shell_mode": True}}
+        configuration = {"timeout": 600, "bash": {"default_shell_mode": True}}
 
         factory = ExecutorFactory(sandbox_manager=mock_sandbox_manager, configuration=configuration)
 
         # Test extracting CLI config
-        cli_config = configuration.get("cli", {})
+        cli_config = configuration.get("bash", {})
         assert cli_config["default_shell_mode"] is True
 
         # Test extracting timeout from top level
@@ -186,8 +186,8 @@ class TestExecutorFactory:
     def test_create_executor_direct(self, executor_factory):
         """Test creating executor by type."""
         # Test CLI executor creation
-        cli_executor = executor_factory.get_executor("cli")
-        assert isinstance(cli_executor, CLIExecutor)
+        bash_executor = executor_factory.get_executor("bash")
+        assert isinstance(bash_executor, BashExecutor)
 
         # Test Python executor creation
         python_executor = executor_factory.get_executor("python")
@@ -198,7 +198,7 @@ class TestExecutorFactory:
         with patch.object(executor_factory, "get_executor") as mock_get_executor:
             # Mock CLI executor
             mock_cli = MagicMock()
-            mock_cli._executor_metadata = {"name": "docker_cli", "description": "Execute shell commands"}
+            mock_cli._executor_metadata = {"name": "bash", "description": "Execute shell commands"}
             mock_cli.to_mcp_schema.return_value = {"type": "object", "properties": {"command": {"type": "string"}}}
 
             # Mock Python executor
@@ -207,7 +207,7 @@ class TestExecutorFactory:
             mock_python.to_mcp_schema.return_value = {"type": "object", "properties": {"code": {"type": "string"}}}
 
             def mock_get_executor_side_effect(executor_type, episode_id=None):
-                if executor_type == "cli":
+                if executor_type == "bash":
                     return mock_cli
                 elif executor_type == "python":
                     return mock_python
@@ -221,7 +221,7 @@ class TestExecutorFactory:
             assert len(tools) == 2
 
             # Check CLI tool
-            cli_tool = next(tool for tool in tools if "cli" in tool["name"])
+            cli_tool = next(tool for tool in tools if "bash" in tool["name"])
             assert cli_tool["description"] == "Execute shell commands"
             assert "command" in cli_tool["inputSchema"]["properties"]
 
@@ -235,9 +235,9 @@ class TestExecutorFactory:
         with patch.object(executor_factory, "get_executor") as mock_get_executor:
 
             def mock_get_executor_side_effect(executor_type, episode_id=None):
-                if executor_type == "cli":
+                if executor_type == "bash":
                     mock_cli = MagicMock()
-                    mock_cli._executor_metadata = {"name": "docker_cli", "description": "Execute shell commands"}
+                    mock_cli._executor_metadata = {"name": "bash", "description": "Execute shell commands"}
                     mock_cli.to_mcp_schema.return_value = {"type": "object"}
                     return mock_cli
                 else:
@@ -249,12 +249,12 @@ class TestExecutorFactory:
 
             # Should return tools for successful executors only
             assert len(tools) >= 1
-            assert any("cli" in tool["name"] for tool in tools)
+            assert any("bash" in tool["name"] for tool in tools)
 
     def test_cleanup_all_executors(self, executor_factory):
         """Test cleanup of all executor instances."""
         # Create some executor instances
-        executor_factory.get_executor("cli")
+        executor_factory.get_executor("bash")
         executor_factory.get_executor("python")
 
         assert len(executor_factory._executor_instances) == 2
@@ -267,7 +267,7 @@ class TestExecutorFactory:
     def test_get_executor_info(self, executor_factory):
         """Test getting executor information."""
         # Create one instance to test active instances
-        executor_factory.get_executor("cli")
+        executor_factory.get_executor("bash")
 
         info = executor_factory.get_executor_info()
 
@@ -276,11 +276,11 @@ class TestExecutorFactory:
         assert "registry_size" in info
         assert "configurations" in info
 
-        assert "cli" in info["available_types"]
+        assert "bash" in info["available_types"]
         assert "python" in info["available_types"]
-        assert "cli" in info["active_instances"]
+        assert "bash" in info["active_instances"]
         assert info["registry_size"] >= 2
-        assert "cli" in info["configurations"]
+        assert "bash" in info["configurations"]
         assert "python" in info["configurations"]
 
     def test_executor_configuration_inheritance(self, mock_sandbox_manager):
@@ -295,7 +295,7 @@ class TestExecutorFactory:
         factory = ExecutorFactory(sandbox_manager=mock_sandbox_manager, configuration=configuration)
 
         # Test CLI config (should get common values only)
-        cli_config = configuration.get("cli", {})  # Empty since no CLI section
+        cli_config = configuration.get("bash", {})  # Empty since no CLI section
         assert configuration["timeout"] == 900
         assert configuration["max_retries"] == 3
         assert "allowed_modules" not in configuration
@@ -307,22 +307,22 @@ class TestExecutorFactory:
 
     def test_multiple_executor_instances(self, executor_factory):
         """Test that multiple different executors can be created and managed."""
-        cli_executor = executor_factory.get_executor("cli")
+        bash_executor = executor_factory.get_executor("bash")
         python_executor = executor_factory.get_executor("python")
 
-        assert isinstance(cli_executor, CLIExecutor)
+        assert isinstance(bash_executor, BashExecutor)
         assert isinstance(python_executor, PythonExecutor)
-        assert cli_executor is not python_executor
+        assert bash_executor is not python_executor
         assert len(executor_factory._executor_instances) == 2
 
     def test_multi_episode_configuration_orchestration(self, executor_factory):
         """Test complex multi-episode orchestration with different executor configurations."""
         # Setup episode configurations with different allowed executors
         episodes = [
-            {"id": "pentest-episode-1", "allowed": ["cli"], "config": {"timeout": 300.0, "cli": {"shell_mode": True}}},
+            {"id": "pentest-episode-1", "allowed": ["bash"], "config": {"timeout": 300.0, "bash": {"shell_mode": True}}},
             {"id": "analysis-episode-1", "allowed": ["python"], "config": {"timeout": 120.0, "python": {"enable_networking": False}}},
-            {"id": "hybrid-episode-1", "allowed": ["cli", "python"], "config": {"timeout": 600.0}},
-            {"id": "restricted-episode-1", "allowed": ["cli"], "config": {"timeout": 60.0, "cli": {"shell_mode": False}}},
+            {"id": "hybrid-episode-1", "allowed": ["bash", "python"], "config": {"timeout": 600.0}},
+            {"id": "restricted-episode-1", "allowed": ["bash"], "config": {"timeout": 60.0, "bash": {"shell_mode": False}}},
         ]
 
         # Register all episode configurations
@@ -335,17 +335,17 @@ class TestExecutorFactory:
 
         # Verify episode-specific executor availability
         pentest_executors = executor_factory.get_available_executors("pentest-episode-1")
-        assert pentest_executors == ["cli"]
+        assert pentest_executors == ["bash"]
 
         analysis_executors = executor_factory.get_available_executors("analysis-episode-1")
         assert analysis_executors == ["python"]
 
         hybrid_executors = executor_factory.get_available_executors("hybrid-episode-1")
-        assert set(hybrid_executors) == {"cli", "python"}
+        assert set(hybrid_executors) == {"bash", "python"}
 
         # Test episode-specific executor creation
-        cli_executor_pentest = executor_factory.get_executor("cli", episode_id="pentest-episode-1")
-        assert isinstance(cli_executor_pentest, CLIExecutor)
+        bash_executor_pentest = executor_factory.get_executor("bash", episode_id="pentest-episode-1")
+        assert isinstance(bash_executor_pentest, BashExecutor)
 
         python_executor_analysis = executor_factory.get_executor("python", episode_id="analysis-episode-1")
         assert isinstance(python_executor_analysis, PythonExecutor)
@@ -354,19 +354,19 @@ class TestExecutorFactory:
         with pytest.raises(ValueError, match="Unknown or disabled executor type: python for episode pentest-episode-1"):
             executor_factory.get_executor("python", episode_id="pentest-episode-1")
 
-        with pytest.raises(ValueError, match="Unknown or disabled executor type: cli for episode analysis-episode-1"):
-            executor_factory.get_executor("cli", episode_id="analysis-episode-1")
+        with pytest.raises(ValueError, match="Unknown or disabled executor type: bash for episode analysis-episode-1"):
+            executor_factory.get_executor("bash", episode_id="analysis-episode-1")
 
         # Test hybrid episode can access both
-        cli_executor_hybrid = executor_factory.get_executor("cli", episode_id="hybrid-episode-1")
+        bash_executor_hybrid = executor_factory.get_executor("bash", episode_id="hybrid-episode-1")
         python_executor_hybrid = executor_factory.get_executor("python", episode_id="hybrid-episode-1")
-        assert isinstance(cli_executor_hybrid, CLIExecutor)
+        assert isinstance(bash_executor_hybrid, BashExecutor)
         assert isinstance(python_executor_hybrid, PythonExecutor)
 
         # Verify configuration storage
         assert len(executor_factory._episode_configurations) == 4
         pentest_config = executor_factory._episode_configurations["pentest-episode-1"]
-        assert pentest_config["allowed_executors"] == ["cli"]
+        assert pentest_config["allowed_executors"] == ["bash"]
         assert pentest_config["config"]["timeout"] == 300.0
 
         # Test partial cleanup - unregister some episodes
@@ -380,14 +380,14 @@ class TestExecutorFactory:
 
         # Test that unregistered episodes fall back to all executors with warning
         fallback_executors = executor_factory.get_available_executors("pentest-episode-1")
-        assert set(fallback_executors) == {"cli", "python"}  # Should return all available
+        assert set(fallback_executors) == {"bash", "python"}  # Should return all available
 
     def test_episode_executor_isolation_and_mcp_tools(self, executor_factory):
         """Test episode isolation for executor management and MCP tool generation."""
         # Setup episodes with different security profiles
         security_episodes = [
-            {"id": "secure-episode-1", "allowed": ["cli"], "config": {"security_level": "high"}},
-            {"id": "dev-episode-1", "allowed": ["cli", "python"], "config": {"security_level": "low"}},
+            {"id": "secure-episode-1", "allowed": ["bash"], "config": {"security_level": "high"}},
+            {"id": "dev-episode-1", "allowed": ["bash", "python"], "config": {"security_level": "low"}},
             {"id": "python-only-episode", "allowed": ["python"], "config": {"security_level": "medium"}},
         ]
 
@@ -412,7 +412,7 @@ class TestExecutorFactory:
             mock_python.to_mcp_schema.return_value = {"type": "object", "properties": {"code": {"type": "string"}}}
 
             def mock_get_executor_side_effect(executor_type, episode_id=None):
-                if executor_type == "cli":
+                if executor_type == "bash":
                     return mock_cli
                 elif executor_type == "python":
                     return mock_python
@@ -447,14 +447,14 @@ class TestExecutorFactory:
             concurrent_results[episode_id] = available
 
         # Verify isolation - each episode sees only its configured executors
-        assert concurrent_results["secure-episode-1"] == ["cli"]
-        assert set(concurrent_results["dev-episode-1"]) == {"cli", "python"}
+        assert concurrent_results["secure-episode-1"] == ["bash"]
+        assert set(concurrent_results["dev-episode-1"]) == {"bash", "python"}
         assert concurrent_results["python-only-episode"] == ["python"]
 
         # Test executor info aggregation across episodes
         executor_info = executor_factory.get_executor_info()
         assert "available_types" in executor_info
-        assert set(executor_info["available_types"]) == {"cli", "python"}  # All registered types
+        assert set(executor_info["available_types"]) == {"bash", "python"}  # All registered types
         assert "configurations" in executor_info
 
         # Cleanup all episode configurations

@@ -4,7 +4,7 @@ permanent_environment: excytin_incident_5
 global_defaults:
   execution_config:
     allowed_executors:
-      - cli
+      - bash
       - python
     timeout: 30
 

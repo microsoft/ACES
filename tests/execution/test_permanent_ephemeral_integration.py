@@ -297,7 +297,7 @@ class TestPermanentEphemeralIntegration:
             mock_task = MagicMock()
             mock_task.environment = "ephemeral_test_env"
             mock_task.execution_config = {"timeout": 120.0}
-            mock_task.allowed_executors = ["cli"]
+            mock_task.allowed_executors = ["bash"]
             mock_task.cli_config = {"default_shell_mode": False}
             mock_task.python_config = None
 
@@ -308,7 +308,7 @@ class TestPermanentEphemeralIntegration:
 
             # Create action to test Redis connectivity from ephemeral container
             redis_test_action = Action(
-                tool_name="cli",
+                tool_name="bash",
                 parameters={
                     "command": "nc -z redis_cache 6379 && echo 'Redis connection successful' || echo 'Redis connection failed'"
                 }
@@ -325,7 +325,7 @@ class TestPermanentEphemeralIntegration:
             else:
                 # If netcat isn't available, try a different approach
                 ping_action = Action(
-                    tool_name="cli",
+                    tool_name="bash",
                     parameters={
                         "command": "ping -c 1 redis_cache && echo 'Network connectivity confirmed'"
                     }
@@ -342,7 +342,7 @@ class TestPermanentEphemeralIntegration:
             logger.info("Testing environment variable propagation...")
 
             env_test_action = Action(
-                tool_name="cli",
+                tool_name="bash",
                 parameters={
                     "command": "echo \"Redis host: $REDIS_HOST\" && echo \"Nginx host: $NGINX_HOST\""
                 }
@@ -359,7 +359,7 @@ class TestPermanentEphemeralIntegration:
             logger.info("Testing network configuration...")
 
             network_test_action = Action(
-                tool_name="cli",
+                tool_name="bash",
                 parameters={
                     "command": "ip route show && echo '---NETWORKS---' && cat /etc/hosts"
                 }

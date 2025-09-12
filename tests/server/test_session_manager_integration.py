@@ -133,13 +133,13 @@ class TestSessionManagerIntegration:
         assert "episode_123" in session.active_episode_ids
 
         # 3. Execute first step
-        action1 = Action(tool_name="cli", parameters={"arguments": "command1"})
+        action1 = Action(tool_name="bash", parameters={"arguments": "command1"})
         response1 = await manager.execute_action(session_id, "episode_123", action1)
         assert response1.success is True
         assert "episode_123" in session.active_episode_ids  # Still active
 
         # 4. Execute final step (completes episode)
-        action2 = Action(tool_name="cli", parameters={"arguments": "command2"})
+        action2 = Action(tool_name="bash", parameters={"arguments": "command2"})
         response2 = await manager.execute_action(session_id, "episode_123", action2)
         assert response2.success is True
         assert "episode_123" not in session.active_episode_ids  # Episode completed
@@ -286,7 +286,7 @@ class TestSessionManagerErrorHandling:
         manager.execution_manager.step.side_effect = Exception("Execution failed")
 
         # Execute command
-        action = Action(tool_name="cli", parameters={"arguments": "failing_command"})
+        action = Action(tool_name="bash", parameters={"arguments": "failing_command"})
         response = await manager.execute_action(session.session_id, "episode_123", action)
 
         assert response.success is False
@@ -314,7 +314,7 @@ class TestSessionManagerErrorHandling:
         manager.episode_manager.step.side_effect = Exception("Episode manager failed")
 
         # Execute command
-        action = Action(tool_name="cli", parameters={"arguments": "command"})
+        action = Action(tool_name="bash", parameters={"arguments": "command"})
         response = await manager.execute_action(session.session_id, "episode_123", action)
 
         assert response.success is False
@@ -350,7 +350,7 @@ class TestSessionManagerErrorHandling:
         manager.benchmark_manager.step.return_value = mock_step
 
         # This should still work despite evaluation manager failures
-        action = Action(tool_name="cli", parameters={"arguments": "command"})
+        action = Action(tool_name="bash", parameters={"arguments": "command"})
         response = await manager.execute_action(session.session_id, "episode_123", action)
         assert response.success is True
 

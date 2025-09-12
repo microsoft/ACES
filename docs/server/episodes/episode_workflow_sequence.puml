@@ -100,8 +100,8 @@ MCP -> Client: available_tools[]
 == RL Episode Step Execution ==
 
 Agent -> Agent: decide_next_action()
-Agent -> Client: tool_request("cli", {command: "file malware.exe"})
-Client -> MCP: call_tool("cli", {command: "file malware.exe"})
+Agent -> Client: tool_request("bash", {command: "file malware.exe"})
+Client -> MCP: call_tool("bash", {command: "file malware.exe"})
 MCP -> SM: execute_action(session_id, action)
 
 SM -> EM_EXEC: step(action, context)

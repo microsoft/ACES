@@ -12,7 +12,7 @@ import pytest
 
 from saber.server.execution.execution_manager import ExecutionManager
 from saber.server.execution.executors.executor_factory import ExecutorFactory
-from saber.server.execution.executors.standard_registry.cli_executor import CLIExecutor
+from saber.server.execution.executors.standard_registry.bash_executor import BashExecutor
 from saber.server.execution.executors.standard_registry.python_executor import PythonExecutor
 from saber.server.execution.sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 
@@ -41,7 +41,7 @@ class TestModularConfiguration:
             "security": {"allowed_commands": ["file", "strings", "cat", "echo"], "max_command_length": 10000},
             "sandbox": {"image": "saber/sandbox:latest", "network_mode": "none"},
             # Executor-specific configurations
-            "cli": {"default_shell_mode": True, "timeout": 120.0},  # Override global timeout
+            "bash": {"default_shell_mode": True, "timeout": 120.0},  # Override global timeout
             "python": {
                 "allowed_modules": ["requests", "json", "os"],
                 "virtual_env": "/opt/venv",
@@ -57,7 +57,7 @@ class TestModularConfiguration:
         config = comprehensive_config
 
         # Test direct dictionary access for executor configurations
-        cli_config = config.get("cli", {})
+        cli_config = config.get("bash", {})
         assert cli_config == {"default_shell_mode": True, "timeout": 120.0}
 
         python_config = config.get("python", {})
@@ -86,7 +86,7 @@ class TestModularConfiguration:
         assert factory._configuration == comprehensive_config
 
         # Test that configuration sections can be extracted
-        cli_config = comprehensive_config.get("cli", {})
+        cli_config = comprehensive_config.get("bash", {})
         assert cli_config["default_shell_mode"] is True
         assert cli_config["timeout"] == 120.0
 
@@ -99,20 +99,20 @@ class TestModularConfiguration:
         factory = ExecutorFactory(sandbox_manager=mock_sandbox_manager, configuration=comprehensive_config)
 
         # Create CLI executor
-        cli_executor = factory.get_executor("cli")
-        assert isinstance(cli_executor, CLIExecutor)
+        bash_executor = factory.get_executor("bash")
+        assert isinstance(bash_executor, BashExecutor)
 
         # Create Python executor
         python_executor = factory.get_executor("python")
         assert isinstance(python_executor, PythonExecutor)
 
         # Verify different instances
-        assert cli_executor is not python_executor
+        assert bash_executor is not python_executor
 
     def test_configuration_isolation(self, comprehensive_config):
         """Test that different executors get isolated configuration sections."""
         # Get different sections directly from dict
-        cli_config = comprehensive_config.get("cli", {}).copy()
+        cli_config = comprehensive_config.get("bash", {}).copy()
         python_config = comprehensive_config.get("python", {}).copy()
 
         # Verify isolation - changes to one section don't affect others
@@ -129,16 +129,16 @@ class TestModularConfiguration:
         config = {}
 
         # All sections should return empty dict
-        assert config.get("cli", {}) == {}
+        assert config.get("bash", {}) == {}
         assert config.get("python", {}) == {}
         assert config.get("nonexistent", {}) == {}
 
     def test_partial_configuration(self):
         """Test behavior with partial configuration."""
-        partial_config = {"cli": {"default_shell_mode": True}, "security": {"allowed_commands": ["echo"]}}
+        partial_config = {"bash": {"default_shell_mode": True}, "security": {"allowed_commands": ["echo"]}}
 
         # Existing sections should work
-        assert partial_config.get("cli", {}) == {"default_shell_mode": True}
+        assert partial_config.get("bash", {}) == {"default_shell_mode": True}
         assert partial_config.get("security", {}) == {"allowed_commands": ["echo"]}
 
         # Missing sections should return empty dict

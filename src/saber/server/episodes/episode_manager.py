@@ -369,7 +369,7 @@ class EpisodeManager:
         """
         Extract actual parameters executed from action.
 
-        Currently focused on DockerCLIExecutor tool only.
+        Currently focused on DockerBashExecutor tool only.
 
         Args:
             action: Action to extract parameters from
@@ -378,7 +378,7 @@ class EpisodeManager:
             Extracted parameters string, or None if not extractable
         """
         if action.tool_name == "docker_cli_executor":
-            # Extract command from DockerCLIExecutor parameters
+            # Extract command from DockerBashExecutor parameters
             command = action.parameters.get("command", "")
             return str(command) if command else None
 

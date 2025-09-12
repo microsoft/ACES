@@ -140,7 +140,7 @@ global_defaults:
     max_steps: 50
 
 executors:
-  - cli_executor
+  - bash_executor
   - python_executor
 
 tasks: []
@@ -168,7 +168,7 @@ global_defaults:
     max_steps: 50
 
 allowed_executors:
-  - cli_executor
+  - bash_executor
   - python_executor
 
 tasks:
@@ -178,7 +178,7 @@ tasks:
     prompt_template_file: "test_task_prompt.md"
     execution_config:
       allowed_executors:
-        - cli_executor
+        - bash_executor
         - python_executor
     evaluation_config:
       strategy: "static"
@@ -198,7 +198,7 @@ tasks:
     prompt_template_file: "test_task_prompt.md"
     execution_config:
       allowed_executors:
-        - cli_executor
+        - bash_executor
         - python_executor
     evaluation_config:
       strategy: "static"
@@ -286,7 +286,7 @@ global_defaults:
     max_steps: 50
 
 allowed_executors:
-  - cli_executor
+  - bash_executor
   - python_executor
 
 tasks:
@@ -296,7 +296,7 @@ tasks:
     prompt_template_file: "test_task_prompt.md"
     execution_config:
       allowed_executors:
-        - cli_executor
+        - bash_executor
         - python_executor
     evaluation_config:
       strategy: "static"
@@ -330,7 +330,7 @@ global_defaults:
     max_steps: 50
 
 allowed_executors:
-  - cli_executor
+  - bash_executor
   - python_executor
 
 tasks:
@@ -340,7 +340,7 @@ tasks:
     prompt_template_file: "test_task_prompt.md"
     execution_config:
       allowed_executors:
-        - cli_executor
+        - bash_executor
         - python_executor
     evaluation_config:
       strategy: "static"
@@ -356,7 +356,7 @@ tasks:
     prompt_template_file: "test_task_prompt.md"
     execution_config:
       allowed_executors:
-        - cli_executor
+        - bash_executor
         - python_executor
     evaluation_config:
       strategy: "static"
@@ -395,7 +395,7 @@ global_defaults:
     max_steps: 50
 
 allowed_executors:
-  - cli_executor
+  - bash_executor
   - python_executor
 
 tasks:
@@ -405,7 +405,7 @@ tasks:
     prompt_template_file: "test_task_prompt.md"
     execution_config:
       allowed_executors:
-        - cli_executor
+        - bash_executor
         - python_executor
     evaluation_config:
       strategy: "static"
@@ -421,7 +421,7 @@ tasks:
     prompt_template_file: "test_task_prompt.md"
     execution_config:
       allowed_executors:
-        - cli_executor
+        - bash_executor
         - python_executor
     evaluation_config:
       strategy: "static"
@@ -464,7 +464,7 @@ global_defaults:
     max_steps: 50
 
 allowed_executors:
-  - cli_executor
+  - bash_executor
   - python_executor
 
 tasks:
@@ -474,7 +474,7 @@ tasks:
     prompt_template_file: "test_task_prompt.md"
     execution_config:
       allowed_executors:
-        - cli_executor
+        - bash_executor
         - python_executor
     evaluation_config:
       strategy: "static"

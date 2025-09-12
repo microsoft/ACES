@@ -20,7 +20,7 @@ def test_config():
     return {
         "execution": {"timeout": 30.0, "max_concurrent": 3},
         "security": {"allowed_commands": ["echo", "cat", "ls"], "max_command_length": 1000},
-        "cli": {"default_shell_mode": False},
+        "bash": {"default_shell_mode": False},
         "sandbox": {
             "image": "saber/sandbox:latest",
             "network_mode": "none",
@@ -139,7 +139,7 @@ class TestRealDockerIntegration:
         # Create a simple action that should work in the container
         from saber.server.base import Action
 
-        action = Action(tool_name="cli", parameters={"command": "echo 'real container test'"})
+        action = Action(tool_name="bash", parameters={"command": "echo 'real container test'"})
         episode_id = f"episode_{uuid.uuid4().hex[:8]}"
         context = {"session_id": session_id, "episode_id": episode_id}
 

@@ -32,7 +32,7 @@ class TestExecutorFiltering:
                     "max_steps": 50
                 }
             },
-            "executors": ["cli", "python"],
+            "executors": ["bash", "python"],
             "tasks": [
                 {
                     "task_id": "test_task",
@@ -40,7 +40,7 @@ class TestExecutorFiltering:
                     "description": "Test description",
                     "prompt_template_file": "test_task_prompt.md",
                     "execution_config": {
-                        "allowed_executors": ["cli", "python"]
+                        "allowed_executors": ["bash", "python"]
                     },
                     "evaluation_config": {
                         "strategy": "static",
@@ -74,7 +74,7 @@ class TestExecutorFiltering:
             "global_defaults": {
                 "execution_config": {
                     "timeout": 300,
-                    "allowed_executors": ["cli", "python"]
+                    "allowed_executors": ["bash", "python"]
                 },
                 "episode_config": {
                     "max_steps": 50
@@ -120,7 +120,7 @@ class TestExecutorFiltering:
 
             assert len(tasks) == 1
             assert "test_task" in tasks
-            assert allowed_executors == ["cli", "python"]
+            assert allowed_executors == ["bash", "python"]
 
         finally:
             Path(temp_path).unlink()

@@ -183,7 +183,7 @@ class TestSessionManagerEpisodes:
         manager.episode_manager.step.return_value = step_result
 
         # Execute command
-        action = Action(tool_name="cli", parameters={"arguments": "file test.txt", "param": "value"})
+        action = Action(tool_name="bash", parameters={"arguments": "file test.txt", "param": "value"})
         response = await manager.execute_action(session_id, "episode_123", action)
 
         assert isinstance(response, CommandResult)
@@ -198,7 +198,7 @@ class TestSessionManagerEpisodes:
         assert isinstance(action_arg, Action)
         assert action_arg.parameters["arguments"] == "file test.txt"
         assert action_arg.parameters == {"arguments": "file test.txt", "param": "value"}
-        assert action_arg.tool_name == "cli"
+        assert action_arg.tool_name == "bash"
 
         # Verify episode manager was called with action
         call_args = manager.episode_manager.step.call_args
@@ -218,7 +218,7 @@ class TestSessionManagerEpisodes:
         session = await manager.create_session("test_client")
         session_id = session.session_id
 
-        action = Action(tool_name="cli", parameters={"arguments": "file test.txt"})
+        action = Action(tool_name="bash", parameters={"arguments": "file test.txt"})
         # New API requires explicit episode_id - test should fail fast with missing parameter
         with pytest.raises(TypeError):
             await manager.execute_action(session_id, action)
@@ -257,7 +257,7 @@ class TestSessionManagerEpisodes:
         manager.episode_manager.step.return_value = step_result
 
         # Execute command
-        action = Action(tool_name="cli", parameters={"arguments": "final command"})
+        action = Action(tool_name="bash", parameters={"arguments": "final command"})
         response = await manager.execute_action(session_id, "episode_123", action)
 
         assert response.success is True
@@ -282,7 +282,7 @@ class TestSessionManagerEpisodes:
         manager.execution_manager.step.side_effect = Exception("Execution failed")
 
         # Execute command
-        action = Action(tool_name="cli", parameters={"arguments": "bad command"})
+        action = Action(tool_name="bash", parameters={"arguments": "bad command"})
         response = await manager.execute_action(session_id, "episode_123", action)
 
         assert response.success is False

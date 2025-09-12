@@ -46,7 +46,7 @@ class TestSessionMCPAPI:
         # Mock execution manager returning tools
         mock_tools = [
             {
-                "name": "cli",
+                "name": "bash",
                 "description": "Command line executor",
                 "inputSchema": {
                     "type": "object",
@@ -82,7 +82,7 @@ class TestSessionMCPAPI:
         assert len(response.tools) == 3  # 2 executor tools + 1 hardcoded tool (end_episode)
 
         # Check executor tools are included
-        executor_tools = [t for t in response.tools if t.name in ["cli", "python"]]
+        executor_tools = [t for t in response.tools if t.name in ["bash", "python"]]
         assert len(executor_tools) == 2
 
         # Check hardcoded tools are included
@@ -118,7 +118,7 @@ class TestSessionMCPAPI:
         with patch.object(mcp_api, '_get_session_and_episode_from_headers', return_value=("session_123", "episode_456")):
             # Test tool call (session_id and episode_id come from headers)
             result = await mcp_api.handle_call_tool(
-                name="cli", arguments={"command": "ls", "parameters": {}}
+                name="bash", arguments={"command": "ls", "parameters": {}}
             )
 
         # Verify result format
@@ -151,7 +151,7 @@ class TestSessionMCPAPI:
         with patch.object(mcp_api, '_get_session_and_episode_from_headers', return_value=("session_123", "episode_456")):
             # Test tool call
             result = await mcp_api.handle_call_tool(
-                name="cli", arguments={"command": "invalid_command"}
+                name="bash", arguments={"command": "invalid_command"}
             )
 
         # Verify error result format
@@ -165,7 +165,7 @@ class TestSessionMCPAPI:
         # Mock no session found in headers
         with patch.object(mcp_api, '_get_session_and_episode_from_headers', return_value=(None, None)):
             # Test tool call without session_id
-            result = await mcp_api.handle_call_tool(name="cli", arguments={"command": "ls"})
+            result = await mcp_api.handle_call_tool(name="bash", arguments={"command": "ls"})
 
         # Verify error result
         assert result.isError is True
@@ -267,7 +267,7 @@ class TestSessionMCPAPI:
     def test_convert_to_action(self, mcp_api):
         """Test conversion from MCP tool call to Action."""
         action = mcp_api._convert_to_action(
-            tool_name="cli",
+            tool_name="bash",
             arguments={
                 "session_id": "session_123",
                 "parameters": {"arguments": "ls -la", "flag": "-l"},
@@ -275,7 +275,7 @@ class TestSessionMCPAPI:
             },
         )
 
-        assert action.tool_name == "cli"
+        assert action.tool_name == "bash"
         assert action.parameters == {"parameters": {"arguments": "ls -la", "flag": "-l"}, "context": {"extra": "data"}}
 
     def test_convert_to_mcp_result_success(self, mcp_api):

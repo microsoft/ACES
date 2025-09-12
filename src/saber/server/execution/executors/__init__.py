@@ -18,7 +18,7 @@ from .executor_registry import (
 )
 
 # Re-export the standard executors for backward compatibility
-from .standard_registry import CLIExecutor, PythonExecutor
+from .standard_registry import BashExecutor, PythonExecutor
 
 # TODO: Fix SQLExecutor _max_rows attribute issue
 # from .standard_registry import SQLExecutor
@@ -26,7 +26,7 @@ from .standard_registry import CLIExecutor, PythonExecutor
 __all__ = [
     "CommandExecutor",
     "DockerExecutor",
-    "CLIExecutor",
+    "BashExecutor",
     "PythonExecutor",
     # "SQLExecutor",  # temporarily removed
     "ExecutorFactory",

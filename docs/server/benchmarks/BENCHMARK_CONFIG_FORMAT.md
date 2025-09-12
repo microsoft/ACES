@@ -15,7 +15,7 @@ permanent_environment: "permanent_env_name"
 global_defaults:
   # Default execution configuration for all tasks
   execution_config:
-    allowed_executors: ["cli", "python"]
+    allowed_executors: ["bash", "python"]
     timeout: 30  # Default command timeout in seconds
 
   # Default episode configuration for all tasks
@@ -28,7 +28,7 @@ global_defaults:
 
 # Executor configuration (optional) - deprecated, use global_defaults.execution_config instead
 executors:
-  - "cli"
+  - "bash"
   - "python"
 
 # Task definitions
@@ -45,7 +45,7 @@ tasks:
     # Execution configuration (overrides global defaults)
     execution_config:
       timeout: 120
-      allowed_executors: ["cli", "python"]
+      allowed_executors: ["bash", "python"]
 
     # Episode configuration (overrides global defaults)
     episode_config:
@@ -146,7 +146,7 @@ permanent_environment: "vulnerable_webapp_db"
 
 global_defaults:
   execution_config:
-    allowed_executors: ["cli", "python"]
+    allowed_executors: ["bash", "python"]
     timeout: 60
 
   episode_config:

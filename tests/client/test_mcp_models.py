@@ -103,12 +103,12 @@ class TestMCPToolSchema:
         )
 
         tool = MCPToolSchema(
-            name="cli",
+            name="bash",
             description="Execute CLI commands",
             inputSchema=input_schema
         )
 
-        assert tool.name == "cli"
+        assert tool.name == "bash"
         assert tool.description == "Execute CLI commands"
         assert tool.inputSchema == input_schema
 
@@ -185,14 +185,14 @@ class TestMCPToolCallRequest:
     def test_tool_call_request_full(self):
         """Test full tool call request."""
         request = MCPToolCallRequest(
-            tool_name="cli",
+            tool_name="bash",
             episode_id="test-episode",
             arguments={"command": "ls -la"},
             timeout=30.0,
             context={"episode_id": "test-episode"}
         )
 
-        assert request.tool_name == "cli"
+        assert request.tool_name == "bash"
         assert request.episode_id == "test-episode"
         assert request.arguments == {"command": "ls -la"}
         assert request.timeout == 30.0

@@ -150,7 +150,7 @@ class TestMCPToolGenerator:
 
         # CLI executor schema with proper typing
         cli_schema = MCPToolSchema(
-            name="cli",
+            name="bash",
             description="Execute CLI commands",
             inputSchema=MCPInputSchema(
                 type="object",
@@ -171,28 +171,28 @@ class TestMCPToolGenerator:
 
         # Generate the tool function
         tool_function = generator.create_executor_tool(
-            executor_name="cli",
+            executor_name="bash",
             mcp_schema=cli_schema,
             handler_func=mock_handler
         )
 
         # Verify function properties
-        assert tool_function.__name__ == "cli"
-        assert "CLI" in tool_function.__doc__ or "cli" in tool_function.__doc__
+        assert tool_function.__name__ == "bash"
+        assert "CLI" in tool_function.__doc__ or "bash" in tool_function.__doc__
         assert asyncio.iscoroutinefunction(tool_function)
 
         # Test function execution with required parameter
         result = await tool_function(command="ls -la", shell=False)
         assert result == "Command executed successfully"
         # shell=False is the default, so it gets filtered out
-        mock_handler.assert_called_once_with("cli", {"command": "ls -la"})
+        mock_handler.assert_called_once_with("bash", {"command": "ls -la"})
 
         # Reset mock and test with optional parameter
         mock_handler.reset_mock()
         mock_handler.return_value = create_mock_result("Command executed successfully")
         result = await tool_function(command="ps aux", shell=True)
         assert result == "Command executed successfully"
-        mock_handler.assert_called_once_with("cli", {"command": "ps aux", "shell": True})
+        mock_handler.assert_called_once_with("bash", {"command": "ps aux", "shell": True})
 
     @pytest.mark.asyncio
     @pytest.mark.asyncio

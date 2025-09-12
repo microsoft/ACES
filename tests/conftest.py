@@ -19,7 +19,7 @@ from saber.server.base import CommandResult
 from saber.server.execution.base import Parameter, ParameterType
 from saber.server.execution.execution_manager import ExecutionManager
 from saber.server.execution.executors.base_executors import CommandExecutor
-from saber.server.execution.executors.standard_registry.cli_executor import CLIExecutor
+from saber.server.execution.executors.standard_registry.bash_executor import BashExecutor
 from saber.server.execution.utils.security_validator import SecurityValidator
 
 logger = logging.getLogger(__name__)
@@ -87,7 +87,7 @@ global_defaults:
     max_steps: 50
 
 executors:
-  - cli_executor
+  - bash_executor
   - python_executor
 
 tasks:
@@ -97,7 +97,7 @@ tasks:
     prompt_template_file: "malware_family_analysis_prompt.md"
     execution_config:
       allowed_executors:
-        - cli_executor
+        - bash_executor
         - python_executor
     evaluation_config:
       strategy: "static"
@@ -141,7 +141,7 @@ global_defaults:
     max_steps: 50
 
 executors:
-  - cli_executor
+  - bash_executor
   - python_executor
 
 tasks:
@@ -232,7 +232,7 @@ def sample_action():
     """Sample action for episode testing."""
     from saber.server.episodes import Action
 
-    return Action(tool_name="docker_cli_executor", parameters={"command": "file sample.exe"}, command="file sample.exe")
+    return Action(tool_name="docker_bash_executor", parameters={"command": "file sample.exe"}, command="file sample.exe")
 
 
 @pytest.fixture
@@ -325,7 +325,7 @@ global_defaults:
     max_steps: 50
 
 executors:
-  - cli_executor
+  - bash_executor
   - python_executor
 
 tasks:
@@ -353,7 +353,7 @@ global_defaults:
     max_steps: 50
 
 executors:
-  - cli_executor
+  - bash_executor
   - python_executor
 
 tasks:
@@ -381,7 +381,7 @@ global_defaults:
     max_steps: 50
 
 executors:
-  - cli_executor
+  - bash_executor
   - python_executor
 
 tasks:

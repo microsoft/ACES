@@ -30,7 +30,7 @@ class TestPromptContext:
             max_steps=5,
             environment="xss_0_ctf",
             subtasks=[{"title": "Test", "description": "Desc", "objective": "Obj"}],
-            allowed_executors=["cli", "python"]
+            allowed_executors=["bash", "python"]
         )
 
         assert context.domain == "webapp_pentest"
@@ -49,7 +49,7 @@ class TestPromptContext:
             max_steps=10,
             environment="test_env",
             subtasks=[],
-            allowed_executors=["cli"]
+            allowed_executors=["bash"]
         )
 
         context_dict = context.to_dict()
@@ -128,7 +128,7 @@ Task: {{ task_title }}
             subtasks=[subtask],
             execution_config={"timeout": 30},
             episode_config={"max_steps": 5},
-            allowed_executors=["cli", "python"]
+            allowed_executors=["bash", "python"]
         )
 
     def test_init_with_valid_directory(self, temp_prompts_dir):
@@ -164,7 +164,7 @@ Task: {{ task_title }}
         assert "TIMEOUT: 30 seconds" in rendered
         assert "MAX STEPS: 5" in rendered
         assert "Test Subtask: Test subtask description" in rendered
-        assert "EXECUTORS: cli, python" in rendered
+        assert "EXECUTORS: bash, python" in rendered
 
     def test_render_prompt_with_includes(self, temp_prompts_dir):
         """Test prompt rendering with template includes."""
@@ -176,7 +176,7 @@ Task: {{ task_title }}
             prompt_template_file="with_include.md",
             execution_config={"timeout": 10},
             episode_config={"max_steps": 3},
-            allowed_executors=["cli"],
+            allowed_executors=["bash"],
         )
 
         generator = PromptGenerator(str(temp_prompts_dir))
@@ -195,7 +195,7 @@ Task: {{ task_title }}
             prompt_template_file="nonexistent.md",
             execution_config={"timeout": 10},
             episode_config={"max_steps": 3},
-            allowed_executors=["cli"],
+            allowed_executors=["bash"],
         )
 
         generator = PromptGenerator(str(temp_prompts_dir))
@@ -217,7 +217,7 @@ Task: {{ task_title }}
             prompt_template_file="",  # Empty string
             execution_config={"timeout": 10},
             episode_config={"max_steps": 3},
-            allowed_executors=["cli"],
+            allowed_executors=["bash"],
         )
 
         generator = PromptGenerator(str(temp_prompts_dir))
@@ -237,7 +237,7 @@ Task: {{ task_title }}
             prompt_template_file="syntax_error.md",
             execution_config={"timeout": 10},
             episode_config={"max_steps": 3},
-            allowed_executors=["cli"],
+            allowed_executors=["bash"],
         )
 
         generator = PromptGenerator(str(temp_prompts_dir))
@@ -359,7 +359,7 @@ Task: {{ task_title }}
         assert context.environment == "default"  # None environment becomes "default"
         assert len(context.subtasks) == 1
         assert context.subtasks[0]["title"] == "Test Subtask"
-        assert context.allowed_executors == ["cli", "python"]
+        assert context.allowed_executors == ["bash", "python"]
 
     def test_build_context_from_task_missing_required_config(self):
         """Test that missing required config fields raises PromptContextError (fail-fast)."""

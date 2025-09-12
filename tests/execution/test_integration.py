@@ -1,7 +1,7 @@
 """
 Integration tests for the Docker-based tool execution framework.
 
-Tests integration between CLIExecutor, SandboxManager,
+Tests integration between BashExecutor, SandboxManager,
 SecurityValidator, and ExecutionManager working together in Docker containers.
 """
 
@@ -15,7 +15,7 @@ from saber.server.base import Action, CommandResult
 from saber.server.execution.base import ValidationResult
 from saber.server.execution.execution_manager import ExecutionManager
 from saber.server.execution.executors.executor_factory import ExecutorFactory
-from saber.server.execution.executors.standard_registry.cli_executor import CLIExecutor
+from saber.server.execution.executors.standard_registry.bash_executor import BashExecutor
 from saber.server.execution.sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 from saber.server.execution.utils.security_validator import SecurityValidator
 
@@ -29,7 +29,7 @@ class TestToolsIntegration:
         return {
             "execution": {"timeout": 30.0, "max_concurrent": 3},
             "security": {"allowed_commands": ["echo", "cat", "ls"], "max_command_length": 1000},
-            "cli": {"default_shell_mode": False},
+            "bash": {"default_shell_mode": False},
             "sandbox": {
                 "image": "saber/sandbox:latest",
                 "network_mode": "none",
@@ -65,7 +65,7 @@ class TestToolsIntegration:
     @pytest.mark.asyncio
     async def test_end_to_end_blocked_command_execution(self, registry):
         """Test complete flow for blocked command execution."""
-        action = Action(tool_name="cli", parameters={"command": "sudo rm -rf /"})
+        action = Action(tool_name="bash", parameters={"command": "sudo rm -rf /"})
         context = {"episode_id": f"integration_test_002_{uuid.uuid4().hex[:8]}"}
 
         result = await registry.step(action, context)
@@ -78,7 +78,7 @@ class TestToolsIntegration:
     async def test_end_to_end_whitelisted_command_execution(self, registry):
         """Test execution of allowed command in Docker container."""
 
-        action = Action(tool_name="cli", parameters={"command": "echo test"})  # Safe command from allowed list
+        action = Action(tool_name="bash", parameters={"command": "echo test"})  # Safe command from allowed list
         context = {"episode_id": f"integration_test_003_{uuid.uuid4().hex[:8]}"}
 
         # Mock Docker environment execution
@@ -98,7 +98,7 @@ class TestToolsIntegration:
     async def test_concurrent_command_execution(self, registry):
         """Test concurrent execution with semaphore control in Docker."""
 
-        actions_list = [Action(tool_name="cli", parameters={"command": f"echo test{i}"}) for i in range(5)]
+        actions_list = [Action(tool_name="bash", parameters={"command": f"echo test{i}"}) for i in range(5)]
 
         contexts_list = [{"episode_id": f"concurrent_test_{i}"} for i in range(5)]
 
@@ -126,7 +126,7 @@ class TestToolsIntegration:
         """Test shell mode with complex commands in Docker."""
 
         # Use a command that would benefit from shell mode but isn't dangerous
-        action = Action(tool_name="cli", parameters={"command": "echo 'hello world'", "shell": True})
+        action = Action(tool_name="bash", parameters={"command": "echo 'hello world'", "shell": True})
         context = {"episode_id": f"integration_test_004_{uuid.uuid4().hex[:8]}"}
 
         # Mock Docker environment execution
@@ -148,14 +148,14 @@ class TestToolsIntegration:
     def test_security_validator_configuration_integration(self, registry):
         """Test that security validator is properly configured at executor level."""
         # Get CLI executor and verify its Docker configuration
-        cli_executor = registry.get_executor("cli")
-        docker_info = cli_executor.get_docker_info()
+        bash_executor = registry.get_executor("bash")
+        docker_info = bash_executor.get_docker_info()
 
         # Verify the CLI executor has proper Docker configuration
         assert "docker_config" in docker_info or "execution_environment" in docker_info
 
         # Test that security validation works by attempting to validate a command
-        validation_result = cli_executor.validate_parameters({"command": "echo test"})
+        validation_result = bash_executor.validate_parameters({"command": "echo test"})
         assert validation_result.valid is True
 
     def test_mcp_integration(self, registry):
@@ -165,7 +165,7 @@ class TestToolsIntegration:
         assert len(mcp_tools) >= 2  # At least CLI and Python executors
 
         # Find CLI and Python tools - they should be dictionaries now
-        cli_tool = next(tool for tool in mcp_tools if "cli" in tool["name"])
+        cli_tool = next(tool for tool in mcp_tools if "bash" in tool["name"])
         python_tool = next(tool for tool in mcp_tools if "python" in tool["name"])
 
         # Verify MCP format compliance for CLI tool
@@ -217,7 +217,7 @@ class TestToolsIntegration:
         unique_episode_id = f"test_validation_{uuid.uuid4().hex[:8]}"
 
         # Test missing required parameter (empty command)
-        action = Action(tool_name="cli", parameters={"command": "", "shell": True})  # Missing command
+        action = Action(tool_name="bash", parameters={"command": "", "shell": True})  # Missing command
         context = {"episode_id": unique_episode_id}
         result = await registry.step(action, context)
         assert result.exit_code != 0
@@ -225,7 +225,7 @@ class TestToolsIntegration:
         assert result.error is not None
 
         # Test invalid parameter type
-        action = Action(tool_name="cli", parameters={"command": "echo test", "shell": "invalid"})
+        action = Action(tool_name="bash", parameters={"command": "echo test", "shell": "invalid"})
         result = await registry.step(action, context)
         assert result.exit_code != 0
         # The test should fail with some validation error
@@ -235,8 +235,8 @@ class TestToolsIntegration:
     async def test_session_isolation_integration(self, registry):
         """Test that different episodes are properly isolated."""
 
-        action1 = Action(tool_name="cli", parameters={"command": "echo episode1"})
-        action2 = Action(tool_name="cli", parameters={"command": "echo episode2"})
+        action1 = Action(tool_name="bash", parameters={"command": "echo episode1"})
+        action2 = Action(tool_name="bash", parameters={"command": "echo episode2"})
         episode_id_1 = f"episode_isolation_1_{uuid.uuid4().hex[:8]}"
         episode_id_2 = f"episode_isolation_2_{uuid.uuid4().hex[:8]}"
         context1 = {"episode_id": episode_id_1}
@@ -284,7 +284,7 @@ class TestToolsIntegration:
     async def test_error_handling_integration(self, registry):
         """Test error handling throughout the Docker system."""
 
-        action = Action(tool_name="cli", parameters={"command": "nonexistent_command_xyz"})
+        action = Action(tool_name="bash", parameters={"command": "nonexistent_command_xyz"})
         context = {"episode_id": f"error_test_episode_{uuid.uuid4().hex[:8]}"}
 
         # Mock Docker environment returning error
@@ -310,7 +310,7 @@ class TestToolsIntegration:
         dangerous_commands = ["echo hello; rm -rf /", "cat file | sh", "echo $(whoami)", "ls > /etc/passwd"]
 
         for cmd in dangerous_commands:
-            action = Action(tool_name="cli", parameters={"command": cmd})
+            action = Action(tool_name="bash", parameters={"command": cmd})
             context = {"episode_id": f"security_test_{uuid.uuid4().hex[:8]}"}
             result = await registry.step(action, context)
 
@@ -332,7 +332,7 @@ class TestToolsIntegration:
 
         # Verify executor factory has CLI capability
         available_executors = registry._executor_factory.get_available_executors()
-        assert "cli" in available_executors
+        assert "bash" in available_executors
         assert "python" in available_executors
 
         assert isinstance(registry._sandbox_manager, SandboxEnvironmentManager)
@@ -343,11 +343,11 @@ class TestToolsIntegration:
 
         # Simulate commands that might be used in malware analysis
         analysis_commands = [
-            Action(tool_name="cli", parameters={"command": "echo 'Analyzing file'"}),
+            Action(tool_name="bash", parameters={"command": "echo 'Analyzing file'"}),
             Action(
-                tool_name="cli", parameters={"command": "echo 'File type: PE32 executable'"}
+                tool_name="bash", parameters={"command": "echo 'File type: PE32 executable'"}
             ),  # Simulating file command
-            Action(tool_name="cli", parameters={"command": "echo 'Strings found: 50'"}),  # Simulating strings command
+            Action(tool_name="bash", parameters={"command": "echo 'Strings found: 50'"}),  # Simulating strings command
         ]
 
         # Mock Docker environment
@@ -387,7 +387,7 @@ class TestToolsIntegration:
         docker_cleanup(real_registry, episode_id)
 
         # Create a simple action that should work in the container
-        action = Action(tool_name="cli", parameters={"command": "echo 'real container test'"})
+        action = Action(tool_name="bash", parameters={"command": "echo 'real container test'"})
         context = {"episode_id": episode_id}
 
         try:

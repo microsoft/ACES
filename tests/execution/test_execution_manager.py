@@ -16,7 +16,7 @@ from saber.server.execution.base import ValidationResult
 from saber.server.execution.exceptions import ExecutionManagerError
 from saber.server.execution.execution_manager import ExecutionManager
 from saber.server.execution.executors.executor_factory import ExecutorFactory
-from saber.server.execution.executors.standard_registry.cli_executor import CLIExecutor
+from saber.server.execution.executors.standard_registry.bash_executor import BashExecutor
 from saber.server.execution.sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 from saber.server.execution.sandbox.environment_spec import (
     PermanentEnvironmentSpec,
@@ -36,7 +36,7 @@ class TestExecutionManager:
         return {
             "execution": {"timeout": 60.0, "max_concurrent": 5},
             "security": {"allowed_commands": ["file", "strings"]},
-            "cli": {"default_shell_mode": False},
+            "bash": {"default_shell_mode": False},
             "sandbox": {
                 "image": "saber/sandbox:latest",
                 "network_mode": "none",
@@ -98,8 +98,8 @@ class TestExecutionManager:
         mock_task = MagicMock()
         mock_task.environment = "test_env"
         mock_task.execution_config = {"timeout": 120.0}
-        mock_task.allowed_executors = ["cli"]
-        mock_task.cli_config = {"default_shell_mode": True}
+        mock_task.allowed_executors = ["bash"]
+        mock_task.bash_config = {"default_shell_mode": True}
         # Make sure python_config returns None
         mock_task.python_config = None
 
@@ -118,19 +118,19 @@ class TestExecutionManager:
 
         # Should have updated configuration (only cli config should be present since python_config is None)
         assert registry._configuration["timeout"] == 120.0
-        assert registry._configuration["cli"] == {"default_shell_mode": True}
+        assert registry._configuration["bash"] == {"default_shell_mode": True}
 
         # Should have called environment resolution
         registry._environment_loader.resolve_environment.assert_called_once_with("test_env")
 
         # Should have filtered executors
         available_executors = registry._executor_factory.get_available_executors()
-        assert "cli" in available_executors
+        assert "bash" in available_executors
 
     @pytest.mark.asyncio
     async def test_step_success(self, registry):
         """Test successful command execution."""
-        action = Action(tool_name="cli", parameters={"arguments": "echo test", "shell": False})
+        action = Action(tool_name="bash", parameters={"arguments": "echo test", "shell": False})
         context = {"session_id": "test123"}
 
         expected_result = CommandResult.success_result(data={"stdout": "test\n", "stderr": "", "return_code": 0})
@@ -151,7 +151,7 @@ class TestExecutionManager:
     @pytest.mark.asyncio
     async def test_step_validation_failure(self, registry):
         """Test command execution with parameter validation failure."""
-        action = Action(tool_name="cli", parameters={"invalid": "params"})
+        action = Action(tool_name="bash", parameters={"invalid": "params"})
 
         validation_result = ValidationResult.failure(["Missing required parameter 'arguments'"])
 
@@ -169,7 +169,7 @@ class TestExecutionManager:
     @pytest.mark.asyncio
     async def test_step_execution_exception(self, registry):
         """Test command execution with exception during execution."""
-        action = Action(tool_name="cli", parameters={"arguments": "test"})
+        action = Action(tool_name="bash", parameters={"arguments": "test"})
 
         # Mock the executor factory to return a mock executor
         mock_executor = AsyncMock()
@@ -230,7 +230,7 @@ class TestExecutionManager:
 
     def test_to_mcp_tools_with_cli_config(self, sample_config, temp_config_dir):
         """Test MCP tools conversion with CLI configuration."""
-        sample_config["cli"]["default_shell_mode"] = True
+        sample_config["bash"]["default_shell_mode"] = True
 
         with patch("saber.server.execution.execution_manager.SandboxEnvironmentManager"):
             registry = ExecutionManager(temp_config_dir)
@@ -278,7 +278,7 @@ class TestExecutionManager:
     @pytest.mark.asyncio
     async def test_step_default_context(self, registry):
         """Test step with default context when none provided."""
-        action = Action(tool_name="cli", parameters={"arguments": "echo test"})
+        action = Action(tool_name="bash", parameters={"arguments": "echo test"})
 
         expected_result = CommandResult.success_result(data="test")
 
@@ -299,10 +299,10 @@ class TestExecutionManager:
         mock_executor = MagicMock()
 
         with patch.object(registry._executor_factory, "get_executor", return_value=mock_executor) as mock_get:
-            result = registry.get_executor("cli")
+            result = registry.get_executor("bash")
 
         assert result == mock_executor
-        mock_get.assert_called_once_with("cli", None)
+        mock_get.assert_called_once_with("bash", None)
 
     @pytest.mark.asyncio
     async def test_step_python_executor(self, registry):
@@ -329,7 +329,7 @@ class TestExecutionManager:
         """Test listing all available commands."""
         mock_commands = [
             {
-                "executor_type": "cli",
+                "executor_type": "bash",
                 "name": "docker_cli",
                 "description": "Execute shell commands",
                 "domain": "general",
@@ -347,13 +347,13 @@ class TestExecutionManager:
         ]
 
         # Mock executor factory methods
-        with patch.object(registry._executor_factory, "get_available_executors", return_value=["cli", "python"]):
-            mock_cli_executor = MagicMock()
-            mock_cli_executor._executor_metadata = {
+        with patch.object(registry._executor_factory, "get_available_executors", return_value=["bash", "python"]):
+            mock_bash_executor = MagicMock()
+            mock_bash_executor._executor_metadata = {
                 "name": "docker_cli",
                 "description": "Execute shell commands",
             }
-            mock_cli_executor.get_parameters.return_value = {"command": MagicMock(), "shell": MagicMock()}
+            mock_bash_executor.get_parameters.return_value = {"command": MagicMock(), "shell": MagicMock()}
 
             mock_python_executor = MagicMock()
             mock_python_executor._executor_metadata = {
@@ -363,8 +363,8 @@ class TestExecutionManager:
             mock_python_executor.get_parameters.return_value = {"code": MagicMock(), "requirements": MagicMock()}
 
             def mock_get_executor(executor_type, episode_id=None):
-                if executor_type == "cli":
-                    return mock_cli_executor
+                if executor_type == "bash":
+                    return mock_bash_executor
                 elif executor_type == "python":
                     return mock_python_executor
 
@@ -372,7 +372,7 @@ class TestExecutionManager:
                 commands = registry.list_commands()
 
         assert len(commands) == 2
-        assert any(cmd["executor_type"] == "cli" for cmd in commands)
+        assert any(cmd["executor_type"] == "bash" for cmd in commands)
         assert any(cmd["executor_type"] == "python" for cmd in commands)
 
     def test_timeout_configuration_flow(self, registry):
@@ -380,8 +380,8 @@ class TestExecutionManager:
         # Create a mock task with custom timeout
         mock_task = MagicMock()
         mock_task.environment = None  # Skip environment resolution for this test
-        mock_task.execution_config = {"timeout": 150, "allowed_executors": ["cli", "python"]}
-        mock_task.allowed_executors = ["cli", "python"]
+        mock_task.execution_config = {"timeout": 150, "allowed_executors": ["bash", "python"]}
+        mock_task.allowed_executors = ["bash", "python"]
         mock_task.cli_config = None
         mock_task.python_config = None
 
@@ -394,10 +394,10 @@ class TestExecutionManager:
         # Test CLI executor timeout
         # NOTE: Currently CLI executor uses hardcoded 60.0 timeout for testing
         # TODO: This test will need updating when timeout configuration is fully implemented
-        if "cli" in registry.get_available_executors():
-            cli_executor = registry.get_executor("cli")
+        if "bash" in registry.get_available_executors():
+            bash_executor = registry.get_executor("bash")
             # Current behavior: hardcoded to 60.0 in CLI executor
-            assert cli_executor.get_timeout() == 60.0, f"CLI executor currently uses hardcoded timeout 60.0, got {cli_executor.get_timeout()}"
+            assert bash_executor.get_timeout() == 60.0, f"CLI executor currently uses hardcoded timeout 60.0, got {bash_executor.get_timeout()}"
 
         # Test Python executor timeout
         # NOTE: Currently Python executor also uses hardcoded timeout for testing
@@ -412,8 +412,8 @@ class TestExecutionManager:
         # Create a mock task without timeout configuration
         mock_task = MagicMock()
         mock_task.environment = None
-        mock_task.execution_config = {"allowed_executors": ["cli", "python"]}  # No timeout field
-        mock_task.allowed_executors = ["cli", "python"]
+        mock_task.execution_config = {"allowed_executors": ["bash", "python"]}  # No timeout field
+        mock_task.allowed_executors = ["bash", "python"]
         mock_task.cli_config = None
         mock_task.python_config = None
 
@@ -424,10 +424,10 @@ class TestExecutionManager:
         assert "timeout" not in registry._configuration
 
         # Test that executors use their default timeouts
-        if "cli" in registry.get_available_executors():
-            cli_executor = registry.get_executor("cli")
+        if "bash" in registry.get_available_executors():
+            bash_executor = registry.get_executor("bash")
             # CLI executor default is 60.0 (from get_default_config)
-            assert cli_executor.get_timeout() == 60.0, f"CLI executor should use default timeout 60, got {cli_executor.get_timeout()}"
+            assert bash_executor.get_timeout() == 60.0, f"CLI executor should use default timeout 60, got {bash_executor.get_timeout()}"
 
         if "python" in registry.get_available_executors():
             python_executor = registry.get_executor("python")
@@ -879,7 +879,7 @@ class TestExecutionManagerDebugMode:
         mock_task = MagicMock()
         mock_task.environment = "test_env"
         mock_task.execution_config = {"timeout": 120.0}
-        mock_task.allowed_executors = ["cli"]
+        mock_task.allowed_executors = ["bash"]
         mock_task.cli_config = {"default_shell_mode": True}
         mock_task.python_config = None
 
@@ -928,7 +928,7 @@ class TestExecutionManagerDebugMode:
             mock_task = MagicMock()
             mock_task.environment = episode["task_env"]
             mock_task.execution_config = {"timeout": 180.0}
-            mock_task.allowed_executors = ["cli", "python"]
+            mock_task.allowed_executors = ["bash", "python"]
             mock_task.cli_config = {"default_shell_mode": False}
             mock_task.python_config = {"enable_networking": True}
 
@@ -1007,7 +1007,7 @@ class TestExecutionManagerDebugMode:
         pentest_task = MagicMock()
         pentest_task.environment = "pentest_env"
         pentest_task.execution_config = {"timeout": 300.0}
-        pentest_task.allowed_executors = ["cli"]
+        pentest_task.allowed_executors = ["bash"]
         pentest_task.cli_config = {"default_shell_mode": True}
         pentest_task.python_config = None
 

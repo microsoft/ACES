@@ -32,7 +32,7 @@ domain: test_domain
 
 global_defaults:
   execution_config:
-    allowed_executors: ["cli"]
+    allowed_executors: ["bash"]
     timeout: 30
   episode_config:
     max_steps: 5
@@ -89,7 +89,7 @@ domain: test_domain
 
 global_defaults:
   execution_config:
-    allowed_executors: ["cli"]
+    allowed_executors: ["bash"]
     timeout: 30
   episode_config:
     max_steps: 6
@@ -233,7 +233,7 @@ tasks:
     prompt_template_file: timeout_task_template.md
     environment: test_env
     execution_config:
-      allowed_executors: ["cli", "python"]
+      allowed_executors: ["bash", "python"]
       timeout: 180
     episode_config:
       max_steps: 25
@@ -271,7 +271,7 @@ tasks:
             assert task.execution_config is not None
             assert "timeout" in task.execution_config
             assert task.execution_config["timeout"] == 180
-            assert task.execution_config["allowed_executors"] == ["cli", "python"]
+            assert task.execution_config["allowed_executors"] == ["bash", "python"]
 
             # Verify episode config
             assert task.episode_config is not None
@@ -296,7 +296,7 @@ benchmark_config:
 
 global_defaults:
   execution_config:
-    allowed_executors: ["cli"]
+    allowed_executors: ["bash"]
     timeout: 45  # Required default timeout now enforced
   benchmark_config:
     episode_attempts: 1
@@ -310,7 +310,7 @@ tasks:
     prompt_template_file: default_timeout_task_template.md
     # No task-level timeout -> should inherit from global_defaults
     execution_config:
-      allowed_executors: ["cli"]  # Inherit timeout only
+      allowed_executors: ["bash"]  # Inherit timeout only
     episode_config:
       max_steps: 15
     evaluation_config:
@@ -340,7 +340,7 @@ tasks:
             # Verify execution config inherited timeout from global defaults
             assert task.execution_config is not None
             assert task.execution_config["timeout"] == 45
-            assert task.execution_config["allowed_executors"] == ["cli"]
+            assert task.execution_config["allowed_executors"] == ["bash"]
             # Verify episode config inherited from global defaults
             assert task.episode_config["max_steps"] == 15
 
@@ -364,7 +364,7 @@ benchmark_config:
 global_defaults:
   execution_config:
     timeout: 30
-    allowed_executors: ["cli"]
+    allowed_executors: ["bash"]
   episode_config:
     max_steps: 40
 
@@ -374,7 +374,7 @@ tasks:
     description: A test task
     prompt_template_file: test_task_template.md
     execution_config:
-      allowed_executors: ["cli"]  # Explicit allowed executors (timeout via global)
+      allowed_executors: ["bash"]  # Explicit allowed executors (timeout via global)
     episode_config:
       max_steps: 40
     evaluation_config:
@@ -417,7 +417,7 @@ benchmark_config:
 global_defaults:
   execution_config:
     timeout: 50
-    allowed_executors: ["cli"]
+    allowed_executors: ["bash"]
   episode_config:
     max_steps: 60
 
@@ -427,7 +427,7 @@ tasks:
     description: Uses domain default
     prompt_template_file: task_default_template.md
     execution_config:
-      allowed_executors: ["cli"]  # Inherit timeout 50
+      allowed_executors: ["bash"]  # Inherit timeout 50
     episode_config:
       max_steps: 60  # Inherit via global defaults (explicit for clarity)
     evaluation_config:
@@ -446,7 +446,7 @@ tasks:
       episode_attempts: 10
     execution_config:
       timeout: 75  # Override timeout
-      allowed_executors: ["cli"]
+      allowed_executors: ["bash"]
     episode_config:
       max_steps: 80  # Override
     evaluation_config:
@@ -605,7 +605,7 @@ benchmark_config:
 global_defaults:
   execution_config:
     timeout: 40
-    allowed_executors: ["cli"]
+    allowed_executors: ["bash"]
   episode_config:
     max_steps: 30
 
@@ -617,7 +617,7 @@ tasks:
     benchmark_config:
       episode_attempts: -5
     execution_config:
-      allowed_executors: ["cli"]
+      allowed_executors: ["bash"]
     episode_config:
       max_steps: 30
     evaluation_config:
@@ -651,7 +651,7 @@ domain: test_domain
 
 global_defaults:
   execution_config:
-    allowed_executors: ["cli", "python"]
+    allowed_executors: ["bash", "python"]
     timeout: 60
   episode_config:
     max_steps: 100
@@ -667,7 +667,7 @@ tasks:
     description: A task that should inherit global defaults
     prompt_template_file: test_task_minimal_template.md
     execution_config:
-      allowed_executors: ["cli", "python"]
+      allowed_executors: ["bash", "python"]
       timeout: 60
     episode_config:
       max_steps: 100
@@ -686,7 +686,7 @@ tasks:
     prompt_template_file: test_task_with_overrides_template.md
     execution_config:
       timeout: 30  # Override global default
-      allowed_executors: ["cli", "python"]
+      allowed_executors: ["bash", "python"]
     episode_config:
       max_steps: 50  # Override global default
     evaluation_config:
@@ -712,21 +712,21 @@ tasks:
             # Test global defaults are loaded
             global_defaults = loader.get_global_defaults()
             assert global_defaults["execution_config"]["timeout"] == 60
-            assert global_defaults["execution_config"]["allowed_executors"] == ["cli", "python"]
+            assert global_defaults["execution_config"]["allowed_executors"] == ["bash", "python"]
             assert global_defaults["episode_config"]["max_steps"] == 100
             assert global_defaults["benchmark_config"]["episode_attempts"] == 3
 
             # Test minimal task inherits all global defaults
             minimal_task = tasks["test_task_minimal"]
             assert minimal_task.execution_config["timeout"] == 60
-            assert minimal_task.execution_config["allowed_executors"] == ["cli", "python"]
+            assert minimal_task.execution_config["allowed_executors"] == ["bash", "python"]
             assert minimal_task.episode_config["max_steps"] == 100
             assert minimal_task.benchmark_config["episode_attempts"] == 5  # Domain-level override
 
             # Test task with overrides
             override_task = tasks["test_task_with_overrides"]
             assert override_task.execution_config["timeout"] == 30  # Task override
-            assert override_task.execution_config["allowed_executors"] == ["cli", "python"]  # From global defaults
+            assert override_task.execution_config["allowed_executors"] == ["bash", "python"]  # From global defaults
             assert override_task.episode_config["max_steps"] == 50  # Task override
             assert override_task.benchmark_config["episode_attempts"] == 10  # Task override
 
@@ -748,7 +748,7 @@ tasks:
     prompt_template_file: test_task_template.md
     execution_config:
       timeout: 90
-      allowed_executors: ["cli"]
+      allowed_executors: ["bash"]
     episode_config:
       max_steps: 55
     evaluation_config:
@@ -775,7 +775,7 @@ tasks:
             # Test task loads correctly without global defaults
             task = tasks["test_task"]
             assert task.execution_config["timeout"] == 90
-            assert task.execution_config["allowed_executors"] == ["cli"]
+            assert task.execution_config["allowed_executors"] == ["bash"]
             # Episode config explicitly provided at task-level
             assert task.episode_config["max_steps"] == 55
             assert task.benchmark_config["episode_attempts"] == 3
@@ -829,7 +829,7 @@ global_defaults:
     episode_attempts: 3
   execution_config:
     timeout: 120
-    allowed_executors: ["cli"]
+    allowed_executors: ["bash"]
   episode_config:
     max_steps: 45
 
@@ -839,7 +839,7 @@ tasks:
     description: A test task using only global benchmark defaults
     prompt_template_file: test_task_template.md
     execution_config:
-      allowed_executors: ["cli"]
+      allowed_executors: ["bash"]
     episode_config:
       max_steps: 45
     evaluation_config:

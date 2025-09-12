@@ -210,7 +210,7 @@ package "Command Execution Framework" {
         +to_mcp_tools(): List[Dict[str, Any]]
     }
 
-    class CLIExecutor {
+    class BashExecutor {
         +_sandbox_env_manager: SandboxEnvironmentManager
         +_config: Dict[str, Any]
         --
@@ -324,7 +324,7 @@ ExecutionManager *-- ExecutorFactory
 ExecutionManager *-- SandboxEnvironmentManager
 ExecutionManager *-- PermanentEnvironmentManager
 
-ExecutorFactory ..> CLIExecutor : creates
+ExecutorFactory ..> BashExecutor : creates
 ExecutorFactory ..> PythonExecutor : creates
 
 PolicyManager *-- PolicyDocument

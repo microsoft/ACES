@@ -78,7 +78,7 @@ domain: "test_domain"
 
 global_defaults:
   execution_config:
-    allowed_executors: ["cli"]
+    allowed_executors: ["bash"]
     timeout: 30
   episode_config:
     max_steps: 5

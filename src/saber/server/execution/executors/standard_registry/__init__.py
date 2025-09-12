@@ -8,10 +8,10 @@ Importing this module will automatically register the standard executors.
 """
 
 # Import executors - this will trigger their registration
-from .cli_executor import CLIExecutor
+from .bash_executor import BashExecutor
 from .python_executor import PythonExecutor
 
 # TODO: Fix SQLExecutor _max_rows attribute issue
 # from .sql_executor import SQLExecutor
 
-__all__ = ["CLIExecutor", "PythonExecutor"]  # "SQLExecutor" temporarily removed
+__all__ = ["BashExecutor", "PythonExecutor"]  # "SQLExecutor" temporarily removed
