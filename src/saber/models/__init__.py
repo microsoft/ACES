@@ -39,6 +39,8 @@ from .mcp import (
     MCPToolListResponse,
     MCPToolNotFoundError,
     MCPToolSchema,
+    OrchestrationEnvironment,
+    RequestHeaders,
     SessionContext,
 )
 
@@ -116,4 +118,7 @@ __all__ = [
     "ActiveCleanupsResponse",
     # HTTP headers
     "HTTPHeaders",
+    # Orchestration models
+    "OrchestrationEnvironment",
+    "RequestHeaders",
 ]

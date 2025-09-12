@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_http_headers
 
-from ...models import EvalSubmission, HTTPHeaders
+from ...models import EvalSubmission, HTTPHeaders, OrchestrationEnvironment, RequestHeaders
 from ...models.mcp import MCPInputSchema, MCPPropertySchema, MCPToolCallResponse, MCPToolListResponse, MCPToolSchema
 from ..base import Action, CommandResult
 from .mcp_tool_generator import MCPToolGenerator
@@ -53,74 +53,102 @@ class SessionMCPAPI:
 
         logger.info(f"SessionMCPAPI initialized for domain '{session_manager.domain_name}' on {host}:{port}")
 
-    async def _get_session_from_headers(self) -> Optional[str]:
+    async def _get_headers(self) -> RequestHeaders:
         """
-        Get SABER session ID from HTTP headers.
+        Parse and validate all required headers from the HTTP request.
+
+        This method extracts all SABER-specific headers and validates them,
+        returning a standardized RequestHeaders object for use throughout
+        the MCP request processing pipeline.
 
         Returns:
-            SABER session ID if found, None otherwise
+            RequestHeaders object with parsed and validated header values
+
+        Raises:
+            ValueError: If mandatory headers are missing or invalid
         """
         try:
             headers = get_http_headers()
+            available_headers = list(headers.keys())
 
-            # Try case-insensitive header lookup
-            session_id_from_header = None
+            # Extract session ID (optional)
+            session_id = None
             for header_name, header_value in headers.items():
                 if header_name.lower() == HTTPHeaders.SESSION_ID.lower():
-                    session_id_from_header = header_value
+                    session_id = str(header_value)
+                    logger.info(f"✅ Found session_id in header: {session_id}")
                     break
 
-            if session_id_from_header:
-                logger.info(f"✅ Found session_id in header: {session_id_from_header}")
-                return str(session_id_from_header)
-            else:
-                logger.info(f"❌ No {HTTPHeaders.SESSION_ID} header found. Available headers: {list(headers.keys())}")
+            if not session_id:
+                logger.info(f"❌ No {HTTPHeaders.SESSION_ID} header found. Available headers: {available_headers}")
 
-            return None
-
-        except Exception as e:
-            logger.error(f"Error getting session from HTTP headers: {e}")
-            return None
-
-    async def _get_episode_from_headers(self) -> Optional[str]:
-        """
-        Get SABER episode ID from HTTP headers.
-
-        Returns:
-            SABER episode ID if found, None otherwise
-        """
-        try:
-            headers = get_http_headers()
-
-            # Try case-insensitive header lookup
-            episode_id_from_header = None
+            # Extract episode ID (optional)
+            episode_id = None
             for header_name, header_value in headers.items():
                 if header_name.lower() == HTTPHeaders.EPISODE_ID.lower():
-                    episode_id_from_header = header_value
+                    episode_id = str(header_value)
+                    logger.info(f"✅ Found episode_id in header: {episode_id}")
                     break
 
-            if episode_id_from_header:
-                logger.info(f"✅ Found episode_id in header: {episode_id_from_header}")
-                return str(episode_id_from_header)
-            else:
-                logger.debug(f"No {HTTPHeaders.EPISODE_ID} header found. Available headers: {list(headers.keys())}")
+            if not episode_id:
+                logger.debug(f"No {HTTPHeaders.EPISODE_ID} header found. Available headers: {available_headers}")
 
-            return None
+            # Extract orchestration environment (MANDATORY)
+            orchestration_env_value = None
+            for header_name, header_value in headers.items():
+                if header_name.lower() == HTTPHeaders.ORCHESTRATION_ENV.lower():
+                    orchestration_env_value = header_value
+                    break
 
+            if not orchestration_env_value:
+                raise ValueError(
+                    f"MANDATORY header {HTTPHeaders.ORCHESTRATION_ENV} not found. "
+                    f"Available headers: {available_headers}. "
+                    f"Valid values: {OrchestrationEnvironment.get_valid_values()}"
+                )
+
+            # Validate the orchestration environment value
+            if not OrchestrationEnvironment.is_valid(orchestration_env_value):
+                raise ValueError(
+                    f"Invalid orchestration environment '{orchestration_env_value}' in header "
+                    f"{HTTPHeaders.ORCHESTRATION_ENV}. Valid values: {OrchestrationEnvironment.get_valid_values()}"
+                )
+
+            orchestration_env = OrchestrationEnvironment(orchestration_env_value)
+            logger.info(f"✅ Found orchestration_env in header: {orchestration_env}")
+
+            # Extract task ID (optional)
+            task_id = None
+            for header_name, header_value in headers.items():
+                if header_name.lower() == HTTPHeaders.TASK_ID.lower():
+                    task_id = str(header_value)
+                    break
+
+            # Extract client ID (optional)
+            client_id = None
+            for header_name, header_value in headers.items():
+                if header_name.lower() == HTTPHeaders.CLIENT_ID.lower():
+                    client_id = str(header_value)
+                    break
+
+            # Create and return the RequestHeaders object
+            request_headers = RequestHeaders(
+                session_id=session_id,
+                episode_id=episode_id,
+                orchestration_env=orchestration_env,
+                task_id=task_id,
+                client_id=client_id,
+            )
+
+            logger.debug(f"Parsed request headers: {request_headers.context_summary}")
+            return request_headers
+
+        except ValueError:
+            # Re-raise validation errors as-is
+            raise
         except Exception as e:
-            logger.error(f"Error getting episode from HTTP headers: {e}")
-            return None
-
-    async def _get_session_and_episode_from_headers(self) -> tuple[Optional[str], Optional[str]]:
-        """
-        Get both SABER session ID and episode ID from HTTP headers.
-
-        Returns:
-            Tuple of (session_id, episode_id) if found, (None, None) otherwise
-        """
-        session_id = await self._get_session_from_headers()
-        episode_id = await self._get_episode_from_headers()
-        return session_id, episode_id
+            logger.error(f"Error parsing headers: {e}")
+            raise ValueError(f"Failed to parse request headers: {e}") from e
 
     async def start_mcp_server(self) -> None:
         """Start the MCP server."""
@@ -143,7 +171,7 @@ class SessionMCPAPI:
         """Shutdown the MCP server."""
         try:
             if self.mcp_server:
-                await self.mcp_server.close()
+                # FastMCP doesn't require explicit cleanup
                 self.mcp_server = None
             logger.info("MCP server shutdown complete")
 
@@ -176,21 +204,27 @@ class SessionMCPAPI:
         async def end_episode(submission: str = "") -> str:
             """End the current episode and optionally record a discovered flag/target/objective."""
             try:
-                # Get session and episode from HTTP headers
-                session_id, episode_id = await self._get_session_and_episode_from_headers()
-                if not session_id:
+                # Get parsed headers
+                headers = await self._get_headers()
+                if not headers.has_session_context:
                     return json.dumps({"success": False, "error": "No SABER session mapped to MCP request"})
-                if not episode_id:
+                if not headers.has_episode_context:
                     return json.dumps(
                         {"success": False, "error": "No SABER episode ID in headers - episode context required"}
                     )
+
+                # At this point, session_id and episode_id are guaranteed to be non-None
+                assert headers.session_id is not None
+                assert headers.episode_id is not None
 
                 # Build arguments for end episode call
                 args = {}
                 if submission:
                     args["parameters"] = {"submission": submission}
 
-                mcp_result = await self._handle_end_episode_call(args, session_id, episode_id)
+                mcp_result = await self._handle_end_episode_call(
+                    args, headers.session_id, headers.episode_id, headers.orchestration_env
+                )
 
                 # Extract the text content from the typed MCP result
                 if mcp_result.isError:
@@ -253,35 +287,11 @@ class SessionMCPAPI:
             allowed executors plus hardcoded MCP tools
         """
         try:
-            # Get episode context from headers
-            session_id, episode_id = await self._get_session_and_episode_from_headers()
+            # Get parsed headers
+            headers = await self._get_headers()
 
             # Get tools from execution manager with episode context
-            tools_data: List[Dict[str, Any]] = self.session_manager.execution_manager.to_mcp_tools(episode_id)
-
-            # Add hardcoded MCP API tools (without session_id in schema)
-            hardcoded_tools_data = [
-                MCPToolSchema(
-                    name="end_episode",
-                    description="End the current episode and optionally record a discovered flag/target/objective",
-                    inputSchema=MCPInputSchema(
-                        type="object",
-                        properties={
-                            "submission": MCPPropertySchema(
-                                type="string",
-                                description="Optional flag, target, or objective discovered during episode",
-                                title=None,
-                                default="",  # Use empty string instead of None
-                                enum=None,
-                                minimum=None,
-                                maximum=None,
-                                pattern=None,
-                            )
-                        },
-                        required=[],  # Keep as optional since it has a default
-                    ),
-                )
-            ]
+            tools_data: List[Dict[str, Any]] = self.session_manager.execution_manager.to_mcp_tools(headers.episode_id)
 
             # Convert executor tools to typed MCPToolSchema objects
             executor_mcp_tools = [
@@ -289,16 +299,45 @@ class SessionMCPAPI:
                 for tool in tools_data
             ]
 
-            # Combine executor tools and hardcoded tools (hardcoded_tools_data already contains MCPToolSchema objects)
+            # Only add hardcoded MCP API tools for STANDALONE orchestration
+            # For INSPECT orchestration, we rely on the framework's native capabilities
+            hardcoded_tools_data = []
+            if headers.orchestration_env == OrchestrationEnvironment.STANDALONE:
+                hardcoded_tools_data = [
+                    MCPToolSchema(
+                        name="end_episode",
+                        description="End the current episode and optionally record a discovered flag/target/objective",
+                        inputSchema=MCPInputSchema(
+                            type="object",
+                            properties={
+                                "submission": MCPPropertySchema(
+                                    type="string",
+                                    description="Optional flag, target, or objective discovered during episode",
+                                    title=None,
+                                    default="",  # Use empty string instead of None
+                                    enum=None,
+                                    minimum=None,
+                                    maximum=None,
+                                    pattern=None,
+                                )
+                            },
+                            required=[],  # Keep as optional since it has a default
+                        ),
+                    )
+                ]
+
+            # Combine executor tools and hardcoded tools (if any)
             mcp_tools = executor_mcp_tools + hardcoded_tools_data
 
             logger.debug(
                 f"Returning {len(mcp_tools)} tools ({len(tools_data)} executor tools + "
-                f"{len(hardcoded_tools_data)} hardcoded tool) for MCP discovery"
-                f"{f' for episode {episode_id}' if episode_id else ' (no episode context)'}"
+                f"{len(hardcoded_tools_data)} hardcoded tool{'s' if len(hardcoded_tools_data) != 1 else ''}) "
+                f"for MCP discovery"
+                f"{f' for episode {headers.episode_id}' if headers.has_episode_context else ' (no episode context)'}"
+                f" {headers.context_summary}"
             )
 
-            return MCPToolListResponse(tools=mcp_tools, session_id=session_id, episode_id=episode_id)
+            return MCPToolListResponse(tools=mcp_tools, session_id=headers.session_id, episode_id=headers.episode_id)
 
         except Exception as e:
             logger.error(f"Error handling list_tools: {e}")
@@ -315,25 +354,29 @@ class SessionMCPAPI:
         Returns:
             MCPToolCallResponse with execution result
         """
-        # Get session and episode from HTTP headers first
-        session_id, episode_id = await self._get_session_and_episode_from_headers()
-        if not session_id:
+        # Get parsed headers first
+        headers = await self._get_headers()
+        if not headers.has_session_context:
             return MCPToolCallResponse(
                 content=[{"type": "text", "text": "Error: No SABER session mapped to MCP request"}], isError=True
             )
 
         # Episode ID is required for multi-episode architecture
-        if not episode_id:
+        if not headers.has_episode_context:
             return MCPToolCallResponse(
                 content=[{"type": "text", "text": "Error: No SABER episode ID in headers - episode context required"}],
                 isError=True,
             )
 
+        # At this point, session_id and episode_id are guaranteed to be non-None
+        assert headers.session_id is not None
+        assert headers.episode_id is not None
+
         # Get task_id from the specific episode, not the session
-        episode = self.session_manager.get_episode_by_id(episode_id)
+        episode = self.session_manager.get_episode_by_id(headers.episode_id)
         if not episode:
             return MCPToolCallResponse(
-                content=[{"type": "text", "text": f"Error: Episode {episode_id} not found"}], isError=True
+                content=[{"type": "text", "text": f"Error: Episode {headers.episode_id} not found"}], isError=True
             )
         task_id = episode.task_id
 
@@ -350,8 +393,8 @@ class SessionMCPAPI:
         if tool_event_publisher:
             try:
                 await tool_event_publisher.publish_tool_started(
-                    session_id=session_id,
-                    episode_id=episode_id,
+                    session_id=headers.session_id,
+                    episode_id=headers.episode_id,
                     tool_name=name,
                     arguments=arguments,
                     call_id=call_id,
@@ -361,7 +404,8 @@ class SessionMCPAPI:
                 )
                 logger.debug(
                     f"Published tool_call_started event: {name} (call_id={call_id}, "
-                    f"task_id={task_id}, episode_id={episode_id}, step={current_step}/{max_steps})"
+                    f"task_id={task_id}, episode_id={headers.episode_id}, step={current_step}/{max_steps}, "
+                    f"orchestration: {headers.orchestration_env})"
                 )
             except Exception as e:
                 logger.error(f"Failed to publish tool_call_started event: {e}")
@@ -370,7 +414,7 @@ class SessionMCPAPI:
         try:
             # Execute action through SessionManager with explicit episode_id
             action = self._convert_to_action(name, arguments)
-            command_result = await self.session_manager.execute_action(session_id, episode_id, action)
+            command_result = await self.session_manager.execute_action(headers.session_id, headers.episode_id, action)
 
             # Calculate execution time
             execution_time_ms = (time.time() - start_time) * 1000
@@ -380,12 +424,12 @@ class SessionMCPAPI:
             if tool_event_publisher:
                 try:
                     # Get updated step info after tool execution from the specific episode
-                    updated_episode = self.session_manager.get_episode_by_id(episode_id)
+                    updated_episode = self.session_manager.get_episode_by_id(headers.episode_id)
                     completed_step = len(updated_episode.steps) if updated_episode else current_step
 
                     await tool_event_publisher.publish_tool_completed(
-                        session_id=session_id,
-                        episode_id=episode_id,
+                        session_id=headers.session_id,
+                        episode_id=headers.episode_id,
                         tool_name=name,
                         call_id=call_id,
                         success=command_result.success,
@@ -404,7 +448,8 @@ class SessionMCPAPI:
                     logger.debug(
                         f"Published tool_call_completed event: {name} "
                         f"({'success' if command_result.success else 'failed'}, "
-                        f"task_id={task_id}, episode_id={episode_id}, step={completed_step}/{max_steps})"
+                        f"task_id={task_id}, episode_id={headers.episode_id}, step={completed_step}/{max_steps}, "
+                        f"orchestration: {headers.orchestration_env})"
                     )
                 except Exception as e:
                     logger.error(f"Failed to publish tool_call_completed event: {e}")
@@ -421,8 +466,8 @@ class SessionMCPAPI:
             if tool_event_publisher:
                 try:
                     await tool_event_publisher.publish_tool_completed(
-                        session_id=session_id,
-                        episode_id=episode_id,
+                        session_id=headers.session_id,
+                        episode_id=headers.episode_id,
                         tool_name=name,
                         call_id=call_id,
                         success=False,
@@ -436,7 +481,8 @@ class SessionMCPAPI:
                     )
                     logger.debug(
                         f"Published tool_call_completed (failed) event: {name} "
-                        f"(task_id={task_id}, episode_id={episode_id}, step={current_step}/{max_steps})"
+                        f"(task_id={task_id}, episode_id={headers.episode_id}, step={current_step}/{max_steps}, "
+                        f"orchestration: {headers.orchestration_env})"
                     )
                 except Exception as pub_error:
                     logger.error(f"Failed to publish tool_call_completed (failed) event: {pub_error}")
@@ -447,7 +493,7 @@ class SessionMCPAPI:
             )
 
     async def _handle_end_episode_call(
-        self, arguments: Dict[str, Any], session_id: str, episode_id: str
+        self, arguments: Dict[str, Any], session_id: str, episode_id: str, orchestration_env: OrchestrationEnvironment
     ) -> MCPToolCallResponse:
         """
         Handle the hardcoded end_episode tool call.
@@ -463,6 +509,7 @@ class SessionMCPAPI:
             arguments: Tool arguments containing submission parameter (clean, no session_id)
             session_id: SABER session ID from headers
             episode_id: SABER episode ID from headers
+            orchestration_env: Orchestration environment from headers
 
         Returns:
             MCPToolCallResponse with submission as text content
@@ -482,7 +529,8 @@ class SessionMCPAPI:
             # Extract optional result/flag/objective from parameters.submission
             result = ""
             logger.info(
-                f"Handling end_episode call for session {session_id}, episode {episode_id}, arguments: {arguments}"
+                f"Handling end_episode call for session {session_id}, episode {episode_id}, arguments: {arguments} "
+                f"[orchestration: {orchestration_env}]"
             )
             if "parameters" in arguments and isinstance(arguments["parameters"], dict):
                 result = arguments["parameters"].get("submission", "")
@@ -501,7 +549,8 @@ class SessionMCPAPI:
 
             # End the episode through SessionManager, passing the result
             logger.warning(
-                f"🔥 MCP END EPISODE: Agent called end_episode tool for session {session_id}, episode {episode_id}"
+                f"🔥 MCP END EPISODE: Agent called end_episode tool for session {session_id}, episode {episode_id} "
+                f"[orchestration: {orchestration_env}]"
             )
             if result:
                 logger.info(f"Episode ending with result: {result}")

@@ -19,7 +19,7 @@ from inspect_ai.agent import Agent, AgentState, agent
 from inspect_ai.model import ModelOutput
 from inspect_ai.tool import Tool, mcp_server_http
 
-from ...models import EvalSubmission, HTTPHeaders
+from ...models import EvalSubmission, HTTPHeaders, OrchestrationEnvironment
 from ..agent.registry import register_saber_agent
 from ..client_session import ClientSessionManager
 from ..models import SABERConfig
@@ -150,6 +150,7 @@ async def create_saber_inspect_agent(
                 HTTPHeaders.SESSION_ID: session_id,
                 HTTPHeaders.EPISODE_ID: episode.episode_id,
                 HTTPHeaders.TASK_ID: task_id,
+                HTTPHeaders.ORCHESTRATION_ENV: OrchestrationEnvironment.INSPECT,
             }
 
             saber_server = mcp_server_http(

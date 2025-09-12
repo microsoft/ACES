@@ -4,9 +4,91 @@ SABER MCP Models - Model Context Protocol specific models.
 These models define the MCP API contract for tool discovery and execution.
 """
 
+from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field
+
+
+class OrchestrationEnvironment(str, Enum):
+    """
+    Enumeration of supported orchestration environments for SABER MCP connections.
+
+    This enum identifies which system is orchestrating the agent's interaction
+    with the SABER MCP server, enabling environment-specific behavior and logging.
+    """
+
+    INSPECT = "inspect"
+    """Inspect AI framework orchestration - agents running under inspect_ai"""
+
+    STANDALONE = "standalone"
+    """Standalone client orchestration - direct MCP client connections"""
+
+    def __str__(self) -> str:
+        """Return the enum value as string for logging."""
+        return self.value
+
+    @classmethod
+    def is_valid(cls, value: str) -> bool:
+        """Check if a string value is a valid orchestration environment."""
+        try:
+            cls(value)
+            return True
+        except ValueError:
+            return False
+
+    @classmethod
+    def get_valid_values(cls) -> list[str]:
+        """Get list of all valid orchestration environment values."""
+        return [env.value for env in cls]
+
+
+@dataclass
+class RequestHeaders:
+    """
+    Parsed HTTP headers for MCP requests.
+
+    This dataclass standardizes header extraction and validation,
+    providing a single object that can be passed around instead of
+    multiple return values.
+    """
+
+    session_id: Optional[str]
+    episode_id: Optional[str]
+    orchestration_env: OrchestrationEnvironment
+    task_id: Optional[str] = None
+    client_id: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        """Validate the headers after initialization."""
+        # orchestration_env is mandatory, so if it's None, we should raise an error
+        # This should not happen since we validate during parsing, but good to be explicit
+        if self.orchestration_env is None:
+            raise ValueError("orchestration_env is mandatory but was None")
+
+    @property
+    def has_session_context(self) -> bool:
+        """Check if session context is available."""
+        return self.session_id is not None
+
+    @property
+    def has_episode_context(self) -> bool:
+        """Check if episode context is available."""
+        return self.episode_id is not None
+
+    @property
+    def context_summary(self) -> str:
+        """Get a summary string of the available context."""
+        parts = []
+        if self.session_id:
+            parts.append(f"session:{self.session_id}")
+        if self.episode_id:
+            parts.append(f"episode:{self.episode_id}")
+        if self.task_id:
+            parts.append(f"task:{self.task_id}")
+        parts.append(f"orchestration:{self.orchestration_env}")
+        return f"[{', '.join(parts)}]"
 
 
 class MCPPropertySchema(BaseModel):
