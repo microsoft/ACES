@@ -10,7 +10,7 @@ import json
 import logging
 import os
 import time
-from typing import Any, Dict, Optional, TypedDict
+from typing import Any, Optional, TypedDict
 
 from openai import OpenAI
 
@@ -79,6 +79,14 @@ class LLMEvaluator(BaseEvaluator):
         if not model:
             raise EvaluationConfigError("LLM evaluation requires model in criteria")
 
+        # Validate judge prompt templates are configured
+        judge_system_template = config.criteria.get("judge_system_template")
+        judge_user_template = config.criteria.get("judge_user_template")
+        if not judge_system_template or not judge_user_template:
+            raise EvaluationConfigError(
+                "LLM evaluation requires both judge_system_template and judge_user_template in criteria"
+            )
+
         # Initialize LLM client if not already done
         if not self.llm_client:
             self._initialize_llm_client()
@@ -103,20 +111,23 @@ class LLMEvaluator(BaseEvaluator):
             },
         )
 
-        # Prepare prompt payload
-        prompt_payload = {
-            "question": task.description,
-            "golden_answer": golden_answer,
-            "submission": submission,
-            "instructions": (
-                "Determine if the submission contains the essential information from the golden answer. "
-                "Respond strictly as JSON with fields: analysis (string), is_correct (boolean)."
-            ),
-        }
+        # Get judge prompt renderer from task evaluation config (pre-configured by BenchmarkManager)
+        judge_prompt_renderer = task.evaluation_config.get("judge_prompt_renderer")
+        if not judge_prompt_renderer:
+            raise EvaluationConfigError(
+                f"Task '{task_id}' missing judge_prompt_renderer function. "
+                "This should be injected by BenchmarkManager for llm_judge tasks."
+            )
+
+        # Generate complete judge prompt payload using pre-configured renderer
+        try:
+            judge_payload = judge_prompt_renderer(submission, episode_id)
+        except Exception as e:
+            raise EvaluationConfigError(f"Failed to generate judge prompt for task '{task_id}': {e}") from e
 
         start = time.perf_counter()
         try:
-            response_text = await self._call_llm_json(model, prompt_payload)
+            response_text = await self._call_llm_json(judge_payload)
         except asyncio.TimeoutError as e:
             raise EvaluationError(
                 f"LLM evaluation timed out after {self.timeout_seconds} seconds for episode {episode_id}"
@@ -194,13 +205,12 @@ class LLMEvaluator(BaseEvaluator):
             },
         )
 
-    async def _call_llm_json(self, model: str, payload: Dict[str, Any]) -> str:
+    async def _call_llm_json(self, judge_payload: Any) -> str:
         """
         Make an LLM API call with timeout and return the response text.
 
         Args:
-            model: OpenAI model name
-            payload: Payload to send to the LLM
+            judge_payload: JudgePromptPayload with complete messages and model configuration
 
         Returns:
             Raw response text from the LLM
@@ -215,21 +225,7 @@ class LLMEvaluator(BaseEvaluator):
             if self.llm_client is None:
                 raise EvaluationError("LLM client not initialized")
             try:
-                response = self.llm_client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": (
-                                "You are a deterministic JSON judge. Respond only with valid JSON. "
-                                'Return strictly: {"analysis": <string>, "is_correct": <true|false>}'
-                            ),
-                        },
-                        {"role": "user", "content": json.dumps(payload)},
-                    ],
-                    temperature=0.0,
-                    max_tokens=500,  # conservative limit
-                )
+                response = self.llm_client.chat.completions.create(**judge_payload.to_dict())
                 if not response.choices:
                     raise EvaluationError("LLM response contained no choices")
                 content = response.choices[0].message.content
@@ -237,7 +233,7 @@ class LLMEvaluator(BaseEvaluator):
                     raise EvaluationError("LLM response message content is empty")
                 return str(content)  # Explicit str conversion to satisfy mypy
             except Exception as e:  # Log & re-raise; upstream wraps context
-                logger.error("llm_api_call_failed", extra={"error": str(e), "model": model})
+                logger.error("llm_api_call_failed", extra={"error": str(e), "model": judge_payload.model})
                 raise
 
         return await asyncio.wait_for(asyncio.to_thread(_sync_call), timeout=self.timeout_seconds)

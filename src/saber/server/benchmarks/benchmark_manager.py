@@ -2,7 +2,7 @@
 
 from logging import getLogger
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 from ...models import BenchmarkInfo, TaskInfo
 from .benchmark_config_loader import BenchmarkConfigLoader
@@ -61,10 +61,35 @@ class BenchmarkManager:
         """
         self.tasks = self.config_loader.load_tasks_from_file(str(self.tasks_file_path))
         self.benchmark_config = self.config_loader.load_benchmark_config()
+
+        # Inject judge prompt renderer functions for llm_judge tasks
+        self._inject_judge_prompt_renderers()
+
         logger.info(
             f"BenchmarkManager initialization complete. Loaded {len(self.tasks)} tasks for domain '{self.domain}'"
         )
         logger.info(f"Benchmark config: {self.benchmark_config}")
+
+    def _inject_judge_prompt_renderers(self) -> None:
+        """
+        Inject judge prompt renderer functions into task evaluation configs.
+
+        For tasks using llm_judge strategy, adds a judge_prompt_renderer function
+        that can be called by the EvaluationManager without cross-manager dependencies.
+        """
+        for task in self.tasks.values():
+            eval_config = task.evaluation_config
+            if eval_config and eval_config.get("strategy") == "llm_judge":
+                # Create a closure that captures the task and prompt generator
+                def create_renderer(task_ref: Task) -> Callable[[str, Optional[str]], Any]:
+                    def judge_prompt_renderer(submission: str, episode_id: Optional[str] = None) -> Any:
+                        return self.prompt_generator.render_judge_prompt_for_task(task_ref, submission, episode_id)
+
+                    return judge_prompt_renderer
+
+                # Inject the renderer function into the evaluation config
+                eval_config["judge_prompt_renderer"] = create_renderer(task)
+                logger.debug(f"Injected judge prompt renderer for task '{task.task_id}'")
 
     def get_benchmark_info(self) -> BenchmarkInfo:
         """
@@ -230,6 +255,20 @@ class BenchmarkManager:
                 # Validate that we can build context for this task (ensures required config is present)
                 self.prompt_generator.validate_task_context(task)
 
+                # Validate judge templates for llm_judge tasks
+                eval_config = task.evaluation_config
+                if eval_config and eval_config.get("strategy") == "llm_judge":
+                    judge_system_template = eval_config["criteria"]["judge_system_template"]
+                    judge_user_template = eval_config["criteria"]["judge_user_template"]
+
+                    self.prompt_generator.validate_judge_template(judge_system_template)
+                    self.prompt_generator.validate_judge_template(judge_user_template)
+
+                    logger.debug(
+                        f"Judge template validation passed for task '{task_id}': "
+                        f"system='{judge_system_template}', user='{judge_user_template}'"
+                    )
+
                 logger.debug(f"Template validation passed for task '{task_id}'")
 
             except Exception as e:
@@ -261,4 +300,24 @@ class BenchmarkManager:
             PromptGenerationError: If prompt generation fails
         """
         task = self.get_task(task_id)
-        return self.prompt_generator.render_prompt_for_task(task)
+        return self.prompt_generator.render_agent_prompt_for_task(task)
+
+    def get_task_judge_prompt(self, task_id: str, submission: str, episode_id: Optional[str] = None) -> Any:
+        """
+        Generate judge prompt for a specific task using template rendering.
+
+        Args:
+            task_id: ID of the task to generate judge prompt for
+            submission: Agent submission to evaluate
+            episode_id: Optional episode identifier for context
+
+        Returns:
+            JudgePromptPayload with complete messages array ready for LLM API
+
+        Raises:
+            TaskNotFoundException: If task is not found
+            PromptGenerationError: If prompt generation fails
+            EvaluationConfigError: If task not configured for LLM judge evaluation
+        """
+        task = self.get_task(task_id)
+        return self.prompt_generator.render_judge_prompt_for_task(task, submission, episode_id)

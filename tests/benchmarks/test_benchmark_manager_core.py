@@ -45,6 +45,7 @@ class TestBenchmarkManagerCore:
         mock_task = Mock(spec=Task)
         mock_task.prompt_template_file = "test_prompt.md"
         mock_task.task_id = "test_task"
+        mock_task.evaluation_config = None  # No LLM judge config
         mock_tasks = {"test_task": mock_task}
         mock_load.return_value = mock_tasks
 

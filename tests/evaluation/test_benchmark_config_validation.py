@@ -83,6 +83,8 @@ tasks:
       criteria:
         golden_answer: "The malware is a banking trojan"
         model: "gpt-4"
+        judge_system_template: "test_system.md"
+        judge_user_template: "test_user.md"
       scoring:
         max_score: 100.0
     subtasks: []

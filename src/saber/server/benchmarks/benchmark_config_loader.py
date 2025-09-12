@@ -476,3 +476,24 @@ class BenchmarkConfigLoader:
                 raise InvalidTaskDefinitionException(
                     f"Task '{task_id}': llm_judge strategy requires 'model' as a string in criteria"
                 )
+
+            # BREAKING CHANGE: Require separate system and user templates
+            judge_system_template = criteria.get("judge_system_template")
+            if not judge_system_template or not isinstance(judge_system_template, str):
+                raise InvalidTaskDefinitionException(
+                    f"Task '{task_id}': llm_judge strategy requires 'judge_system_template' as a string in criteria"
+                )
+
+            judge_user_template = criteria.get("judge_user_template")
+            if not judge_user_template or not isinstance(judge_user_template, str):
+                raise InvalidTaskDefinitionException(
+                    f"Task '{task_id}': llm_judge strategy requires 'judge_user_template' as a string in criteria"
+                )
+
+            # Check for deprecated single template field
+            old_template = criteria.get("judge_prompt_template")
+            if old_template:
+                raise InvalidTaskDefinitionException(
+                    f"Task '{task_id}': 'judge_prompt_template' is deprecated. "
+                    f"Use 'judge_system_template' and 'judge_user_template' instead"
+                )

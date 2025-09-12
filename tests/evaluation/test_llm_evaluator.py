@@ -11,6 +11,7 @@ from saber.server.evaluation.evaluators.llm_evaluator import LLMEvaluator
 from saber.server.evaluation.models import EvaluationConfig, EpisodeEvaluationData
 from saber.server.evaluation.exceptions import EvaluationError, EvaluationConfigError
 from saber.server.evaluation.constants import EVAL_STRATEGY_LLM_JUDGE
+from saber.server.benchmarks.prompt_generator import JudgePromptPayload
 
 
 class MockTask:
@@ -18,6 +19,22 @@ class MockTask:
     def __init__(self):
         self.task_id = "test-task"
         self.description = "Test task description"
+        # Mock evaluation_config with judge_prompt_renderer
+        self.evaluation_config = {
+            "judge_prompt_renderer": self._mock_judge_prompt_renderer
+        }
+
+    def _mock_judge_prompt_renderer(self, submission, episode_id):
+        """Mock judge prompt renderer function."""
+        return JudgePromptPayload(
+            messages=[
+                {"role": "system", "content": "Evaluate this cybersecurity analysis submission."},
+                {"role": "user", "content": f"Submission: {submission}\nEpisode ID: {episode_id}\nIs this analysis correct?"}
+            ],
+            model="gpt-3.5-turbo",
+            task_id="test-task",
+            episode_id=episode_id
+        )
 
 
 @pytest.fixture
@@ -38,7 +55,9 @@ def sample_config():
         strategy=EVAL_STRATEGY_LLM_JUDGE,
         criteria={
             "golden_answer": "Banking trojan that steals credentials",
-            "model": "gpt-3.5-turbo"
+            "model": "gpt-3.5-turbo",
+            "judge_system_template": "test_system.md",
+            "judge_user_template": "test_user.md"
         },
         scoring={"max_score": 1.0}
     )
@@ -80,7 +99,11 @@ class TestLLMEvaluator:
 
         config = EvaluationConfig(
             strategy=EVAL_STRATEGY_LLM_JUDGE,
-            criteria={"model": "gpt-3.5-turbo"},  # Missing golden_answer
+            criteria={
+                "model": "gpt-3.5-turbo",  # Missing golden_answer
+                "judge_system_template": "test_system.md",
+                "judge_user_template": "test_user.md"
+            },
             scoring={"max_score": 1.0}
         )
 
@@ -95,12 +118,54 @@ class TestLLMEvaluator:
 
         config = EvaluationConfig(
             strategy=EVAL_STRATEGY_LLM_JUDGE,
-            criteria={"golden_answer": "test answer"},  # Missing model
+            criteria={
+                "golden_answer": "test answer",  # Missing model
+                "judge_system_template": "test_system.md",
+                "judge_user_template": "test_user.md"
+            },
             scoring={"max_score": 1.0}
         )
 
         # Should fail with config error before checking API key
         with pytest.raises(EvaluationConfigError, match="LLM evaluation requires model"):
+            await evaluator.evaluate(sample_episode_data, config, mock_task)
+
+    @pytest.mark.asyncio
+    async def test_evaluate_missing_judge_system_template(self, sample_episode_data, mock_task):
+        """Test evaluation fails when judge_system_template is missing."""
+        evaluator = LLMEvaluator()
+
+        config = EvaluationConfig(
+            strategy=EVAL_STRATEGY_LLM_JUDGE,
+            criteria={
+                "golden_answer": "test answer",
+                "model": "gpt-3.5-turbo",
+                "judge_user_template": "test_user.md"  # Missing judge_system_template
+            },
+            scoring={"max_score": 1.0}
+        )
+
+        # Should fail with config error
+        with pytest.raises(EvaluationConfigError, match="LLM evaluation requires both judge_system_template and judge_user_template"):
+            await evaluator.evaluate(sample_episode_data, config, mock_task)
+
+    @pytest.mark.asyncio
+    async def test_evaluate_missing_judge_user_template(self, sample_episode_data, mock_task):
+        """Test evaluation fails when judge_user_template is missing."""
+        evaluator = LLMEvaluator()
+
+        config = EvaluationConfig(
+            strategy=EVAL_STRATEGY_LLM_JUDGE,
+            criteria={
+                "golden_answer": "test answer",
+                "model": "gpt-3.5-turbo",
+                "judge_system_template": "test_system.md"  # Missing judge_user_template
+            },
+            scoring={"max_score": 1.0}
+        )
+
+        # Should fail with config error
+        with pytest.raises(EvaluationConfigError, match="LLM evaluation requires both judge_system_template and judge_user_template"):
             await evaluator.evaluate(sample_episode_data, config, mock_task)
 
     @pytest.mark.asyncio
@@ -183,7 +248,9 @@ class TestLLMEvaluator:
             strategy=EVAL_STRATEGY_LLM_JUDGE,
             criteria={
                 "golden_answer": "test answer",
-                "model": "gpt-3.5-turbo"
+                "model": "gpt-3.5-turbo",
+                "judge_system_template": "test_system.md",
+                "judge_user_template": "test_user.md"
             },
             scoring={"max_score": 5.0}
         )
