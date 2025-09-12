@@ -195,7 +195,12 @@ class EvaluationManager:
             )
 
         logger.info(f"Evaluating episode {episode.episode_id} with strategy: {config.strategy}")
-        result = await evaluator.evaluate(episode_data, config, task)
+
+        # Pass episode object to LLM evaluator for enhanced judge prompt context
+        if config.strategy == EVAL_STRATEGY_LLM_JUDGE:
+            result = await evaluator.evaluate(episode_data, config, task, episode)
+        else:
+            result = await evaluator.evaluate(episode_data, config, task, episode)
         # Persist result (fail fast on any write issues)
         if config.strategy == EVAL_STRATEGY_LLM_JUDGE:
             golden_answer = config.criteria.get("golden_answer")

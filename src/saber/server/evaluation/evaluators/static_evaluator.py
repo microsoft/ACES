@@ -2,6 +2,9 @@
 Static evaluator implementation for exact string matching.
 """
 
+from typing import Optional
+
+from ...base import Episode
 from ...benchmarks.task import Task
 from ..constants import EVAL_STRATEGY_STATIC
 from ..exceptions import EvaluationValidationError
@@ -13,7 +16,11 @@ class StaticEvaluator(BaseEvaluator):
     """Static evaluator for exact string matching."""
 
     async def evaluate(
-        self, episode_data: EpisodeEvaluationData, config: EvaluationConfig, task: Task
+        self,
+        episode_data: EpisodeEvaluationData,
+        config: EvaluationConfig,
+        task: Task,
+        episode: Optional[Episode] = None,
     ) -> EvaluationResult:
         """
         Evaluate episode using static exact matching.

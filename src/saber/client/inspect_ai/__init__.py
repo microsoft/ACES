@@ -20,7 +20,7 @@ from .saber_dataset import create_saber_dataset
 from .saber_eval_async import run_saber_eval_async
 
 # Scorer exports
-from .saber_scorer import SABERTaskScorer, saber_server_scorer, saber_task_scorer
+from .saber_scorer import saber_scorer
 
 __all__ = [
     # Agent registrations (triggers decorators)
@@ -33,7 +33,5 @@ __all__ = [
     # Dataset and evaluation
     "create_saber_dataset",
     # Scorer
-    "saber_task_scorer",
-    "saber_server_scorer",
-    "SABERTaskScorer",
+    "saber_scorer",
 ]

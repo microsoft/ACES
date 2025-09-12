@@ -22,6 +22,7 @@ from ..logging_config import (
     log_session_end,
 )
 from ..models import BenchmarkInfo, EpisodeEndResponse, EvalSubmission
+from ..models.rest.evaluation import EvaluationCriteriaResponse, JudgeMessages, TaskEvaluationContext
 from .api.events.tool_event_publisher import ToolEventPublisher
 from .api.session_mcp_api import SessionMCPAPI
 from .api.session_rest_api import SessionRestAPI
@@ -750,6 +751,134 @@ class SessionManager:
             SessionEvaluationService instance
         """
         return self.evaluation_service
+
+    async def get_evaluation_criteria(self, session_id: str, episode_id: str) -> EvaluationCriteriaResponse:
+        """
+        Get complete evaluation criteria package for client-side evaluation.
+
+        Args:
+            session_id: ID of the client session (for context only)
+            episode_id: ID of the specific episode
+
+        Returns:
+            EvaluationCriteriaResponse containing evaluation criteria package
+
+        Raises:
+            HTTPException: If episode or task not found
+            RuntimeError: If episode not complete or missing submission
+        """
+        logger.info(f"🔍 Getting evaluation criteria for session {session_id}, episode {episode_id}")
+
+        # Get episode data - no session validation needed since evaluation criteria
+        # should be available for any completed episode regardless of session state
+        episode = self.episode_manager.get_episode_by_id(episode_id)
+        if not episode:
+            logger.error(f"❌ Episode {episode_id} not found")
+            raise HTTPException(status_code=404, detail=f"Episode {episode_id} not found")
+
+        logger.debug(
+            f"✅ Episode {episode_id} found: state={episode.state}, task_id={episode.task_id}, "
+            f"steps={len(episode.steps)}"
+        )
+
+        # Ensure episode is complete and has submission
+        if not episode.is_complete:
+            logger.error(f"❌ Episode {episode_id} is not complete (state: {episode.state})")
+            raise RuntimeError(f"Cannot get evaluation criteria for incomplete episode {episode_id}")
+
+        if not hasattr(episode, "submission") or not episode.submission:
+            logger.error(f"❌ Episode {episode_id} missing submission attribute")
+            raise RuntimeError(f"Episode {episode_id} missing required submission for evaluation")
+
+        logger.debug(f"✅ Episode {episode_id} is complete with submission: {episode.submission[:100]}...")
+
+        # Get task information
+        task = self.benchmark_manager.get_task(episode.task_id)
+        if not task:
+            logger.error(f"❌ Task {episode.task_id} not found")
+            raise HTTPException(status_code=404, detail=f"Task {episode.task_id} not found")
+
+        logger.debug(f"✅ Task {episode.task_id} found: {task.title}")
+
+        # Ensure task has evaluation configuration
+        if not task.evaluation_config:
+            logger.error(f"❌ Task {task.task_id} missing evaluation configuration")
+            raise RuntimeError(f"Task {task.task_id} missing evaluation configuration")
+
+        logger.debug(f"✅ Task evaluation config: strategy={task.evaluation_config.get('strategy')}")
+
+        # Build task context
+        task_context = TaskEvaluationContext(
+            task_id=task.task_id,
+            title=task.title,
+            description=task.description,
+            domain=task.domain,
+        )
+
+        # Initialize judge messages as None
+        judge_messages = None
+
+        # Add judge messages for LLM evaluation if needed
+        if task.evaluation_config.get("strategy") == "llm_judge":
+            try:
+                logger.debug(f"Rendering judge prompts for episode {episode_id} with task {task.task_id}")
+                # Use PromptGenerator to render judge prompts
+                judge_payload = self.benchmark_manager.prompt_generator.render_judge_prompt_for_episode(task, episode)
+
+                # Extract system and user prompts from messages array
+                system_prompt = None
+                user_prompt = None
+
+                for message in judge_payload.messages:
+                    if message["role"] == "system":
+                        system_prompt = message["content"]
+                    elif message["role"] == "user":
+                        user_prompt = message["content"]
+
+                # Validate that we have both system and user prompts
+                if system_prompt is None or user_prompt is None:
+                    raise ValueError(
+                        f"Missing required prompts: system_prompt={'present' if system_prompt else 'missing'}, "
+                        f"user_prompt={'present' if user_prompt else 'missing'}"
+                    )
+
+                # Build JudgeMessages object
+                judge_messages = JudgeMessages(
+                    system_message=system_prompt, user_message=user_prompt, model=judge_payload.model
+                )
+
+                logger.debug(
+                    f"✅ Successfully rendered judge messages for episode {episode_id} using GRADE format templates"
+                )
+
+            except Exception as e:
+                logger.error(f"❌ Failed to render judge messages for episode {episode_id}: {type(e).__name__}: {e}")
+                logger.error(
+                    f"Task details: task_id={task.task_id}, eval_strategy={task.evaluation_config.get('strategy')}"
+                )
+                logger.error(
+                    f"Episode details: episode_id={episode_id}, state={episode.state}, steps={len(episode.steps)}"
+                )
+                if hasattr(e, "__traceback__"):
+                    import traceback
+
+                    logger.error(f"Stack trace: {traceback.format_exc()}")
+                # Fall back to None - client will need to handle this case
+                judge_messages = None
+
+        # Build and return evaluation criteria response
+        evaluation_criteria = EvaluationCriteriaResponse(
+            session_id=session_id,
+            episode_id=episode_id,
+            task_id=task.task_id,
+            submission=episode.submission,
+            task_context=task_context,
+            evaluation_config=task.evaluation_config,
+            judge_messages=judge_messages,
+        )
+
+        logger.info(f"Retrieved evaluation criteria for episode {episode_id} in session {session_id}")
+        return evaluation_criteria
 
     def get_tool_event_publisher(self) -> Optional[ToolEventPublisher]:
         """

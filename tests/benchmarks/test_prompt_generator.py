@@ -4,6 +4,8 @@ import pytest
 import tempfile
 from pathlib import Path
 from typing import Dict, Any
+from unittest.mock import MagicMock, patch
+from datetime import datetime
 
 from saber.server.benchmarks.prompt_generator import (
     PromptGenerator,
@@ -16,6 +18,7 @@ from saber.server.benchmarks.prompt_generator import (
 )
 from saber.server.benchmarks.task import Task
 from saber.server.benchmarks.subtask import SubTask
+from saber.server.base import Episode, Step, EpisodeState, Action
 
 
 class TestPromptContext:
@@ -511,6 +514,54 @@ class TestJudgePromptPayload:
 class TestJudgePromptGeneration:
     """Test judge prompt generation with dual templates."""
 
+    def _create_mock_episode(self, episode_id: str, submission: str = None, completed: bool = True) -> MagicMock:
+        """Create a mock Episode object for testing."""
+        episode = MagicMock(spec=Episode)
+        episode.episode_id = episode_id
+        episode.task_id = "test_task"
+        episode.session_id = "test_session"
+        episode.submission = submission or "Test submission"
+        episode.is_complete = completed
+        episode.state = EpisodeState.COMPLETED if completed else EpisodeState.ACTIVE
+        episode.start_time = datetime.now()
+        episode.end_time = datetime.now() if completed else None
+        episode.completion_reason = "success" if completed else None
+        episode.metadata = {}
+        episode.context = {}
+        episode.max_steps = 10
+
+        # Create mock steps with actions
+        step1 = MagicMock(spec=Step)
+        step1.step_number = 1
+        step1.timestamp = datetime.now()
+        step1.response = {"output": "starting analysis", "exit_code": 0}
+        step1.context_snapshot = {}
+        step1.done = False
+
+        action1 = MagicMock(spec=Action)
+        action1.tool_name = "bash"
+        action1.parameters = {"command": "echo 'starting analysis'"}
+        action1.timestamp = datetime.now()
+        step1.action = action1
+
+        step2 = MagicMock(spec=Step)
+        step2.step_number = 2
+        step2.timestamp = datetime.now()
+        step2.response = {"output": "Discovered hosts: 198.51.100.1 (suspicious activity detected)", "exit_code": 0}
+        step2.context_snapshot = {}
+        step2.done = False
+
+        action2 = MagicMock(spec=Action)
+        action2.tool_name = "bash"
+        action2.parameters = {"command": "nmap -sS 198.51.100.0/24"}
+        action2.timestamp = datetime.now()
+        step2.action = action2
+
+        episode.steps = [step1, step2]
+        episode.duration = 45.2
+
+        return episode
+
     @pytest.fixture
     def temp_prompts_dir_with_judge(self):
         """Create temporary directory with judge templates."""
@@ -609,14 +660,17 @@ Model: {{ model }}
             }
         )
 
-    def test_render_judge_prompt_for_task_success(self, temp_prompts_dir_with_judge, llm_judge_task):
-        """Test successful rendering of both system and user judge prompts."""
-        generator = PromptGenerator(str(temp_prompts_dir_with_judge))
+    def test_render_judge_prompt_for_episode_success(self, temp_prompts_dir_with_judge, llm_judge_task):
+        """Test successful rendering of LLM judge prompts."""
+        generator = PromptGenerator(temp_prompts_dir_with_judge)
 
-        submission = "The malicious IP is 198.51.100.1"
-        episode_id = "episode_456"
+        # Create episode with submission data
+        episode = self._create_mock_episode(
+            episode_id="episode_456",
+            submission="test submission"
+        )
 
-        payload = generator.render_judge_prompt_for_task(llm_judge_task, submission, episode_id)
+        payload = generator.render_judge_prompt_for_episode(llm_judge_task, episode)
 
         assert isinstance(payload, JudgePromptPayload)
         assert len(payload.messages) == 2
@@ -638,9 +692,9 @@ Model: {{ model }}
         assert "security_task" in user_msg["content"]
         assert "What is the malicious IP address?" in user_msg["content"]
         assert "198.51.100.1" in user_msg["content"]
-        assert submission in user_msg["content"]
+        assert episode.submission in user_msg["content"]
 
-    def test_render_judge_prompt_for_task_with_includes(self, temp_prompts_dir_with_judge):
+    def test_render_judge_prompt_for_episode_with_includes(self, temp_prompts_dir_with_judge):
         """Test rendering judge prompts that use includes."""
         task = Task(
             task_id="include_task",
@@ -660,7 +714,14 @@ Model: {{ model }}
         )
 
         generator = PromptGenerator(str(temp_prompts_dir_with_judge))
-        payload = generator.render_judge_prompt_for_task(task, "test_submission")
+
+        # Create episode with submission data
+        episode = self._create_mock_episode(
+            episode_id="test_episode",
+            submission="test_submission"
+        )
+
+        payload = generator.render_judge_prompt_for_episode(task, episode)
 
         # Check that includes were processed
         system_content = payload.messages[0]["content"]
@@ -668,7 +729,7 @@ Model: {{ model }}
         assert "COMMON: Use strict evaluation criteria." in system_content
         assert "COMMON: Use strict evaluation criteria." in user_content
 
-    def test_render_judge_prompt_for_task_non_llm_judge_strategy(self):
+    def test_render_judge_prompt_for_episode_non_llm_judge_strategy(self):
         """Test error when task is not configured for LLM judge evaluation."""
         task = Task(
             task_id="static_task",
@@ -685,13 +746,13 @@ Model: {{ model }}
         generator = PromptGenerator("/tmp")
 
         with pytest.raises(Exception) as exc_info:  # EvaluationConfigError
-            generator.render_judge_prompt_for_task(task, "submission")
+            generator.render_judge_prompt_for_episode(task, "submission")
 
         error_msg = str(exc_info.value)
         assert "not configured for LLM judge evaluation" in error_msg
         assert "static" in error_msg
 
-    def test_render_judge_prompt_for_task_missing_config(self):
+    def test_render_judge_prompt_for_episode_missing_config(self):
         """Test error when task has no evaluation config."""
         task = Task(
             task_id="no_config_task",
@@ -705,7 +766,7 @@ Model: {{ model }}
         generator = PromptGenerator("/tmp")
 
         with pytest.raises(Exception) as exc_info:  # EvaluationConfigError
-            generator.render_judge_prompt_for_task(task, "submission")
+            generator.render_judge_prompt_for_episode(task, "submission")
 
         error_msg = str(exc_info.value)
         assert "not configured for LLM judge evaluation" in error_msg
@@ -719,7 +780,7 @@ Model: {{ model }}
         generator = PromptGenerator(str(temp_prompts_dir_with_judge))
 
         with pytest.raises(TemplateValidationError) as exc_info:
-            generator.render_judge_prompt_for_task(llm_judge_task, "submission")
+            generator.render_judge_prompt_for_episode(llm_judge_task, "submission")
 
         error_msg = str(exc_info.value)
         assert "missing_system.md" in error_msg
@@ -733,7 +794,7 @@ Model: {{ model }}
         generator = PromptGenerator(str(temp_prompts_dir_with_judge))
 
         with pytest.raises(TemplateValidationError) as exc_info:
-            generator.render_judge_prompt_for_task(llm_judge_task, "submission")
+            generator.render_judge_prompt_for_episode(llm_judge_task, "submission")
 
         error_msg = str(exc_info.value)
         assert "missing_user.md" in error_msg
@@ -747,7 +808,7 @@ Model: {{ model }}
         generator = PromptGenerator(str(temp_prompts_dir_with_judge))
 
         with pytest.raises(PromptGenerationError) as exc_info:
-            generator.render_judge_prompt_for_task(llm_judge_task, "submission")
+            generator.render_judge_prompt_for_episode(llm_judge_task, "submission")
 
         error_msg = str(exc_info.value)
         assert "rendering failed" in error_msg
@@ -761,17 +822,17 @@ Model: {{ model }}
         generator = PromptGenerator(str(temp_prompts_dir_with_judge))
 
         with pytest.raises(PromptGenerationError) as exc_info:
-            generator.render_judge_prompt_for_task(llm_judge_task, "submission")
+            generator.render_judge_prompt_for_episode(llm_judge_task, "submission")
 
         error_msg = str(exc_info.value)
         assert "rendering failed" in error_msg
         assert "error_user.md" in error_msg
 
-    def test_render_judge_prompt_for_task_no_episode_id(self, temp_prompts_dir_with_judge, llm_judge_task):
+    def test_render_judge_prompt_for_episode_no_episode_id(self, temp_prompts_dir_with_judge, llm_judge_task):
         """Test rendering without episode_id uses default."""
         generator = PromptGenerator(str(temp_prompts_dir_with_judge))
 
-        payload = generator.render_judge_prompt_for_task(llm_judge_task, "test_submission")
+        payload = generator.render_judge_prompt_for_episode(llm_judge_task, "test_submission")
 
         assert payload.episode_id == "[not provided]"
 
@@ -1162,7 +1223,7 @@ Evaluate whether the agent's submission demonstrates successful completion of th
         submission = "I found SQL injection using: ' UNION SELECT password FROM users WHERE username='admin'--"
         episode_id = "episode_789"
 
-        judge_payload = generator.render_judge_prompt_for_task(task, submission, episode_id)
+        judge_payload = generator.render_judge_prompt_for_episode(task, submission, episode_id)
 
         # Verify payload structure
         assert isinstance(judge_payload, JudgePromptPayload)

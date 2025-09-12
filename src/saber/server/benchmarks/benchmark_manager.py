@@ -2,9 +2,10 @@
 
 from logging import getLogger
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List
 
 from ...models import BenchmarkInfo, TaskInfo
+from ..base import Episode
 from .benchmark_config_loader import BenchmarkConfigLoader
 from .exceptions import SubTaskNotFoundException, TaskNotFoundException
 from .prompt_generator import PromptGenerator, TemplateValidationError
@@ -81,9 +82,9 @@ class BenchmarkManager:
             eval_config = task.evaluation_config
             if eval_config and eval_config.get("strategy") == "llm_judge":
                 # Create a closure that captures the task and prompt generator
-                def create_renderer(task_ref: Task) -> Callable[[str, Optional[str]], Any]:
-                    def judge_prompt_renderer(submission: str, episode_id: Optional[str] = None) -> Any:
-                        return self.prompt_generator.render_judge_prompt_for_task(task_ref, submission, episode_id)
+                def create_renderer(task_ref: Task) -> Callable[[Episode], Any]:
+                    def judge_prompt_renderer(episode: Episode) -> Any:
+                        return self.prompt_generator.render_judge_prompt_for_episode(task_ref, episode)
 
                     return judge_prompt_renderer
 
@@ -302,14 +303,13 @@ class BenchmarkManager:
         task = self.get_task(task_id)
         return self.prompt_generator.render_agent_prompt_for_task(task)
 
-    def get_task_judge_prompt(self, task_id: str, submission: str, episode_id: Optional[str] = None) -> Any:
+    def render_judge_prompt_for_episode(self, task_id: str, episode: Episode) -> Any:
         """
-        Generate judge prompt for a specific task using template rendering.
+        Generate judge prompt for a specific task using episode-based template rendering.
 
         Args:
             task_id: ID of the task to generate judge prompt for
-            submission: Agent submission to evaluate
-            episode_id: Optional episode identifier for context
+            episode: Complete episode object containing execution history and submission
 
         Returns:
             JudgePromptPayload with complete messages array ready for LLM API
@@ -320,4 +320,4 @@ class BenchmarkManager:
             EvaluationConfigError: If task not configured for LLM judge evaluation
         """
         task = self.get_task(task_id)
-        return self.prompt_generator.render_judge_prompt_for_task(task, submission, episode_id)
+        return self.prompt_generator.render_judge_prompt_for_episode(task, episode)

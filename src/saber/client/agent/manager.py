@@ -140,7 +140,7 @@ class AgentManager:
         from inspect_ai import Task
 
         from ..inspect_ai import saber_agent  # noqa: F401 - Trigger agent registrations
-        from ..inspect_ai.saber_scorer import SABERTaskScorer
+        from ..inspect_ai.saber_scorer import saber_scorer
         from .factory import SABERAgentFactory  # Use the new SABER agent factory
 
         # Create SABER agent using the new agent factory
@@ -156,7 +156,7 @@ class AgentManager:
         task = Task(
             dataset=dataset,
             solver=saber_agent_instance,
-            scorer=SABERTaskScorer.create_default_scorer(),
+            scorer=saber_scorer(),
             metadata={
                 "saber_agent_id": self.saber_agent.agent_id,
                 "saber_agent_name": self.saber_agent.name,

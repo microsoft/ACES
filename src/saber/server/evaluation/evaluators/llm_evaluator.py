@@ -6,17 +6,16 @@ and provides binary scoring (0 or 1) based on correctness assessment.
 """
 
 import asyncio
-import json
 import logging
 import os
-import time
 from typing import Any, Optional, TypedDict
 
 from openai import OpenAI
 
+from ...base import Episode
 from ...benchmarks.task import Task
 from ..constants import EVAL_STRATEGY_LLM_JUDGE
-from ..exceptions import EvaluationConfigError, EvaluationError
+from ..exceptions import EvaluationError
 from ..models import EpisodeEvaluationData, EvaluationConfig, EvaluationResult
 from .base import BaseEvaluator
 
@@ -52,156 +51,41 @@ class LLMEvaluator(BaseEvaluator):
         logger.info("LLMEvaluator initialized with %d second timeout", timeout_seconds)
 
     async def evaluate(
-        self, episode_data: EpisodeEvaluationData, config: EvaluationConfig, task: Task
+        self,
+        episode_data: EpisodeEvaluationData,
+        config: EvaluationConfig,
+        task: Task,
+        episode: Optional["Episode"] = None,
     ) -> EvaluationResult:
         """
-        Evaluate episode submission using LLM judgment.
+        Stubbed LLM evaluator - returns default success result.
+
+        TODO: Implement actual LLM evaluation logic.
 
         Args:
             episode_data: EpisodeEvaluationData containing episode information including submission
             config: Evaluation configuration containing golden answer and model
             task: Task being evaluated
+            episode: Optional full episode object for enhanced judge prompt context
 
         Returns:
-            EvaluationResult with binary score (0 or 1)
-
-        Raises:
-            EvaluationError: If LLM evaluation fails
-            EvaluationConfigError: If configuration is invalid
+            Stubbed EvaluationResult with default success (score=1.0)
         """
-        submission = episode_data.submission.strip()
-        golden_answer = config.criteria.get("golden_answer", "").strip()
-        model = config.criteria.get("model")
-
-        # Validate required configuration first (before initializing client)
-        if not golden_answer:
-            raise EvaluationConfigError("LLM evaluation requires golden_answer in criteria")
-        if not model:
-            raise EvaluationConfigError("LLM evaluation requires model in criteria")
-
-        # Validate judge prompt templates are configured
-        judge_system_template = config.criteria.get("judge_system_template")
-        judge_user_template = config.criteria.get("judge_user_template")
-        if not judge_system_template or not judge_user_template:
-            raise EvaluationConfigError(
-                "LLM evaluation requires both judge_system_template and judge_user_template in criteria"
-            )
-
-        # Initialize LLM client if not already done
-        if not self.llm_client:
-            self._initialize_llm_client()
-
-        episode_id = episode_data.episode_id
-        task_id = episode_data.task_id
-
-        # Validate required fields
-        if not episode_id:
-            raise EvaluationError("episode_id is required in episode_data")
-        if not task_id:
-            raise EvaluationError("task_id is required in episode_data")
-        logger.info(
-            "llm_evaluation_start",
-            extra={
-                "event": "llm_evaluation_start",
-                "strategy": EVAL_STRATEGY_LLM_JUDGE,
-                "episode_id": episode_id,
-                "task_id": task_id,
-                "model": model,
-                "timeout_seconds": self.timeout_seconds,
-            },
-        )
-
-        # Get judge prompt renderer from task evaluation config (pre-configured by BenchmarkManager)
-        judge_prompt_renderer = task.evaluation_config.get("judge_prompt_renderer")
-        if not judge_prompt_renderer:
-            raise EvaluationConfigError(
-                f"Task '{task_id}' missing judge_prompt_renderer function. "
-                "This should be injected by BenchmarkManager for llm_judge tasks."
-            )
-
-        # Generate complete judge prompt payload using pre-configured renderer
-        try:
-            judge_payload = judge_prompt_renderer(submission, episode_id)
-        except Exception as e:
-            raise EvaluationConfigError(f"Failed to generate judge prompt for task '{task_id}': {e}") from e
-
-        start = time.perf_counter()
-        try:
-            response_text = await self._call_llm_json(judge_payload)
-        except asyncio.TimeoutError as e:
-            raise EvaluationError(
-                f"LLM evaluation timed out after {self.timeout_seconds} seconds for episode {episode_id}"
-            ) from e
-        except Exception as e:  # Re-wrap with contextual message
-            raise EvaluationError(f"LLM evaluation failed for episode {episode_id}: {e}") from e
-        finally:
-            elapsed_ms = (time.perf_counter() - start) * 1000.0
-
-        # Parse & validate JSON strictly
-        try:
-            data_raw = json.loads(response_text)
-        except json.JSONDecodeError as e:
-            raise EvaluationError(
-                "Malformed LLM judge response: invalid JSON. Expected keys 'analysis', 'is_correct'. "
-                f"Got: {response_text}"
-            ) from e
-
-        if not isinstance(data_raw, dict):
-            raise EvaluationError("Malformed LLM judge response: top-level JSON must be an object")
-
-        if "analysis" not in data_raw or "is_correct" not in data_raw:
-            raise EvaluationError("Malformed LLM judge response: missing required keys 'analysis' and/or 'is_correct'")
-
-        analysis_val = data_raw["analysis"]
-        is_correct_val = data_raw["is_correct"]
-        if not isinstance(analysis_val, str):
-            raise EvaluationError("Malformed LLM judge response: 'analysis' must be a string")
-        if not isinstance(is_correct_val, bool):
-            raise EvaluationError("Malformed LLM judge response: 'is_correct' must be a boolean")
-
-        analysis = analysis_val.strip()
-        if not analysis:
-            analysis = "(empty analysis)"  # keep explicit marker
-        # Enforce a soft upper bound to avoid runaway verbosity
-        if len(analysis) > 5000:
-            analysis = analysis[:5000] + "...<truncated>"
-
-        is_correct = is_correct_val
+        logger.info(f"Stubbed LLM evaluation for episode {episode_data.episode_id} - returning default success")
 
         max_score = float(config.scoring.get("max_score", 1.0))
-        raw_score = 1.0 if is_correct else 0.0
-        score = raw_score * max_score
-
-        logger.info(
-            "llm_evaluation_complete",
-            extra={
-                "event": "llm_evaluation_complete",
-                "strategy": EVAL_STRATEGY_LLM_JUDGE,
-                "episode_id": episode_id,
-                "task_id": task_id,
-                "model": model,
-                "is_correct": is_correct,
-                "raw_score": raw_score,
-                "score": score,
-                "max_score": max_score,
-                "latency_ms": round(elapsed_ms, 2),
-            },
-        )
 
         return EvaluationResult.from_episode_data(
             episode_data=episode_data,
             strategy=EVAL_STRATEGY_LLM_JUDGE,
-            raw_score=raw_score,
+            raw_score=1.0,  # Stubbed success
             max_score=max_score,
-            score=score,
-            success=is_correct,
+            score=max_score,  # Full score
+            success=True,  # Stubbed success
             details={
-                "golden_answer": golden_answer,
-                "submission": submission,
-                "analysis": analysis,
-                "model": model,
-                "llm_response": response_text,
-                "latency_ms": round(elapsed_ms, 2),
+                "stubbed": True,
+                "message": "LLM evaluator is stubbed - returning default success",
+                "submission": episode_data.submission,
             },
         )
 

@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from jinja2 import FileSystemLoader, StrictUndefined, TemplateError, TemplateNotFound
 from jinja2.sandbox import SandboxedEnvironment
 
+from ..base import Episode
 from .task import Task
 
 logger = logging.getLogger(__name__)
@@ -99,29 +100,64 @@ class PromptContext:
 
 
 @dataclass
+@dataclass
 class JudgePromptContext:
     """Data container for judge template rendering context."""
 
     question: str
     golden_answer: str
-    submission: str
+    episode: Episode  # Full episode object instead of just submission
     task: Task
     evaluation_config: Dict[str, Any]
     model: str
     domain: str
     task_id: str
-    episode_id: str
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for Jinja2 template rendering."""
         return {
             "question": self.question,
             "golden_answer": self.golden_answer,
-            "submission": self.submission,
+            "submission": self.episode.submission,  # Extract submission from episode
+            "episode": {
+                "episode_id": self.episode.episode_id,
+                "start_time": self.episode.start_time,
+                "end_time": self.episode.end_time,
+                "duration": self.episode.duration,
+                "state": self.episode.state.value,  # Convert enum to string
+                "completion_reason": self.episode.completion_reason,
+                "submission": self.episode.submission,
+                "steps": [
+                    {
+                        "step_number": step.step_number,
+                        "timestamp": step.timestamp,
+                        "action": {
+                            "tool_name": step.action.tool_name,
+                            "parameters": step.action.parameters,
+                        },
+                        "response": step.response,
+                        "done": step.done,
+                    }
+                    for step in self.episode.steps
+                ],
+                "metadata": self.episode.metadata,
+                "context": self.episode.context,
+                "max_steps": self.episode.max_steps,
+                # Helper methods for template convenience
+                "get_last_n_steps": lambda n: (
+                    self.episode.steps[-n:] if len(self.episode.steps) >= n else self.episode.steps
+                ),
+                "get_first_n_steps": lambda n: self.episode.steps[:n],
+                "get_failed_steps": lambda: [
+                    step for step in self.episode.steps if step.response.get("exit_code", 0) != 0
+                ],
+                "get_commands_summary": lambda max_length=500: self._get_commands_summary(max_length),
+                "get_step_count": lambda: len(self.episode.steps),
+            },
+            "episode_id": self.episode.episode_id,  # Backward compatibility
             "model": self.model,
             "domain": self.domain,
             "task_id": self.task_id,
-            "episode_id": self.episode_id,
             "task": {
                 "task_id": self.task.task_id,
                 "title": self.task.title,
@@ -130,6 +166,21 @@ class JudgePromptContext:
             },
             "evaluation_config": self.evaluation_config,
         }
+
+    def _get_commands_summary(self, max_length: int) -> str:
+        """Generate a truncated summary of all commands executed."""
+        commands = []
+        for step in self.episode.steps:
+            if step.action.parameters.get("arguments"):
+                cmd = step.action.parameters["arguments"]
+                commands.append(f"Step {step.step_number}: {cmd}")
+
+        summary = "\n".join(commands)
+        if len(summary) > max_length:
+            # Truncate and add ellipsis
+            summary = summary[: max_length - 3] + "..."
+
+        return summary
 
 
 class PromptGenerator:
@@ -236,16 +287,13 @@ class PromptGenerator:
                 f"Unexpected error rendering agent prompt for task '{task.task_id}': {e}"
             ) from e
 
-    def render_judge_prompt_for_task(
-        self, task: Task, submission: str, episode_id: Optional[str] = None
-    ) -> "JudgePromptPayload":
+    def render_judge_prompt_for_episode(self, task: Task, episode: Episode) -> "JudgePromptPayload":
         """
-        Render judge prompts for a specific task using separate system and user templates.
+        Render judge prompts for a specific task using episode-based template rendering.
 
         Args:
             task: Task object containing judge system and user template configuration
-            submission: Agent submission to evaluate
-            episode_id: Optional episode identifier for context
+            episode: Complete episode object containing execution history and submission
 
         Returns:
             JudgePromptPayload with complete messages array ready for LLM API
@@ -255,6 +303,15 @@ class PromptGenerator:
             TemplateValidationError: If template files are missing or invalid
             EvaluationConfigError: If task not configured for LLM judge evaluation
         """
+        # Validate episode completeness first - fail fast on incomplete episodes
+        if not episode.is_complete:
+            from ..evaluation.exceptions import EvaluationConfigError
+
+            raise EvaluationConfigError(
+                f"Cannot generate judge prompt for incomplete episode '{episode.episode_id}'. "
+                f"Episode state: {episode.state.value}. Episodes must be COMPLETED or FAILED before evaluation."
+            )
+
         # Validate that task uses llm_judge strategy
         eval_config = task.evaluation_config
         if not eval_config or eval_config.get("strategy") != "llm_judge":
@@ -270,17 +327,16 @@ class PromptGenerator:
         judge_user_template = eval_config["criteria"]["judge_user_template"]
         model = eval_config["criteria"]["model"]
 
-        # Build judge prompt context
+        # Build judge prompt context with episode data
         context = JudgePromptContext(
             question=task.description,
             golden_answer=eval_config["criteria"]["golden_answer"],
-            submission=submission,
+            episode=episode,  # Pass full episode object
             task=task,
             evaluation_config=eval_config["criteria"],
             model=model,
             domain=task.domain,
             task_id=task.task_id,
-            episode_id=episode_id or "[not provided]",
         )
 
         # Render both system and user prompts from templates
@@ -290,9 +346,7 @@ class PromptGenerator:
         # Build OpenAI messages format - templates control everything
         messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
 
-        return JudgePromptPayload(
-            messages=messages, model=model, task_id=task.task_id, episode_id=episode_id or "[not provided]"
-        )
+        return JudgePromptPayload(messages=messages, model=model, task_id=task.task_id, episode_id=episode.episode_id)
 
     def render_judge_prompt(self, template_file: str, context: JudgePromptContext) -> str:
         """

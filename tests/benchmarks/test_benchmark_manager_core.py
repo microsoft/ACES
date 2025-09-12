@@ -523,3 +523,212 @@ tasks:
             BenchmarkManager("malware_classification", config_dir)
 
         assert "episode_attempts must be a positive integer" in str(exc_info.value)
+
+
+class TestBenchmarkManagerJudgeRenderer:
+    """Test cases for BenchmarkManager judge prompt renderer functionality."""
+
+    def test_create_renderer_success(self, tmp_path, temp_config_dir_helper):
+        """Test successful creation of judge prompt renderer for LLM judge task."""
+        # Create a basic config with LLM judge task
+        yaml_content = """
+domain: "test"
+
+benchmark_config:
+  episode_attempts: 1
+
+global_defaults:
+  execution_config:
+    timeout: 300
+  episode_config:
+    max_steps: 50
+
+allowed_executors:
+  - bash_executor
+
+tasks:
+  - task_id: "test_llm_task"
+    title: "Test LLM Task"
+    description: "Test description"
+    domain: "test"
+    prompt_template_file: "agent_template.md"
+    evaluation_config:
+      strategy: "llm_judge"
+      criteria:
+        model: "gpt-4"
+        judge_system_template: "system.md"
+        judge_user_template: "user.md"
+"""
+
+        config_dir = temp_config_dir_helper(tmp_path, yaml_content)
+        manager = BenchmarkManager("test", config_dir)
+
+        # Get the task with injected renderer
+        task = manager.get_task("test_llm_task")
+        assert task.evaluation_config["strategy"] == "llm_judge"
+        assert "judge_prompt_renderer" in task.evaluation_config
+
+        # Test the renderer function
+        renderer = task.evaluation_config["judge_prompt_renderer"]
+        assert callable(renderer)
+
+        # Mock episode
+        mock_episode = Mock()
+        mock_episode.episode_id = "test_episode"
+        mock_episode.submission = "test submission"
+
+        # Mock the prompt generator to return expected payload
+        mock_payload = Mock()
+        mock_payload.messages = [{"role": "system", "content": "Test"}]
+        mock_payload.model = "gpt-4"
+
+        with patch.object(manager.prompt_generator, 'render_judge_prompt_for_episode', return_value=mock_payload) as mock_render:
+            result = renderer(mock_episode)
+
+            # Verify the correct method was called
+            mock_render.assert_called_once_with(task, mock_episode)
+            assert result == mock_payload
+
+    def test_create_renderer_calls_correct_method(self, tmp_path, temp_config_dir_helper):
+        """Test that renderer calls render_judge_prompt_for_episode (regression test)."""
+        # Create a basic config with LLM judge task
+        yaml_content = """
+domain: "test"
+
+benchmark_config:
+  episode_attempts: 1
+
+global_defaults:
+  execution_config:
+    timeout: 300
+  episode_config:
+    max_steps: 50
+
+allowed_executors:
+  - bash_executor
+
+tasks:
+  - task_id: "test_llm_task"
+    title: "Test LLM Task"
+    description: "Test description"
+    domain: "test"
+    prompt_template_file: "agent_template.md"
+    evaluation_config:
+      strategy: "llm_judge"
+      criteria:
+        model: "gpt-4"
+        judge_system_template: "system.md"
+        judge_user_template: "user.md"
+"""
+
+        config_dir = temp_config_dir_helper(tmp_path, yaml_content)
+        manager = BenchmarkManager("test", config_dir)
+
+        # Get the task with injected renderer
+        task = manager.get_task("test_llm_task")
+        renderer = task.evaluation_config["judge_prompt_renderer"]
+
+        # Mock episode
+        mock_episode = Mock()
+
+        # This test specifically ensures we're calling the correct method name
+        with patch.object(manager.prompt_generator, 'render_judge_prompt_for_episode') as mock_correct_method:
+            with patch.object(manager.prompt_generator, 'render_judge_prompt_for_task') as mock_wrong_method:
+                mock_correct_method.return_value = Mock()
+
+                renderer(mock_episode)
+
+                # Should call the correct method
+                mock_correct_method.assert_called_once()
+                # Should NOT call the wrong method
+                mock_wrong_method.assert_not_called()
+
+    def test_create_renderer_handles_attribute_error(self, tmp_path, temp_config_dir_helper):
+        """Test renderer gracefully handles AttributeError (regression test for bug we fixed)."""
+        # Create a basic config with LLM judge task
+        yaml_content = """
+domain: "test"
+
+benchmark_config:
+  episode_attempts: 1
+
+global_defaults:
+  execution_config:
+    timeout: 300
+  episode_config:
+    max_steps: 50
+
+allowed_executors:
+  - bash_executor
+
+tasks:
+  - task_id: "test_llm_task"
+    title: "Test LLM Task"
+    description: "Test description"
+    domain: "test"
+    prompt_template_file: "agent_template.md"
+    evaluation_config:
+      strategy: "llm_judge"
+      criteria:
+        model: "gpt-4"
+        judge_system_template: "system.md"
+        judge_user_template: "user.md"
+"""
+
+        config_dir = temp_config_dir_helper(tmp_path, yaml_content)
+        manager = BenchmarkManager("test", config_dir)
+
+        # Get the task with injected renderer
+        task = manager.get_task("test_llm_task")
+        renderer = task.evaluation_config["judge_prompt_renderer"]
+
+        # Mock episode
+        mock_episode = Mock()
+
+        # Simulate the AttributeError that would occur with wrong method name
+        with patch.object(manager.prompt_generator, 'render_judge_prompt_for_episode',
+                         side_effect=AttributeError("'PromptGenerator' object has no attribute 'render_judge_prompt_for_task'")):
+
+            with pytest.raises(AttributeError) as exc_info:
+                renderer(mock_episode)
+
+            # Verify we get the specific error we were seeing
+            assert "render_judge_prompt_for_task" in str(exc_info.value)
+
+    def test_no_renderer_for_static_evaluation(self, tmp_path, temp_config_dir_helper):
+        """Test that static evaluation tasks don't get judge prompt renderer."""
+        # Create a basic config with static task
+        yaml_content = """
+domain: "test"
+
+benchmark_config:
+  episode_attempts: 1
+
+global_defaults:
+  execution_config:
+    timeout: 300
+  episode_config:
+    max_steps: 50
+
+allowed_executors:
+  - bash_executor
+
+tasks:
+  - task_id: "test_static_task"
+    title: "Test Static Task"
+    description: "Test description"
+    domain: "test"
+    prompt_template_file: "agent_template.md"
+    evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers: ["answer1"]
+"""
+
+        config_dir = temp_config_dir_helper(tmp_path, yaml_content)
+        manager = BenchmarkManager("test", config_dir)
+
+        # Get the task - should not have renderer injected
+        task = manager.get_task("test_static_task")
+        assert task.evaluation_config["strategy"] == "static"
+        assert "judge_prompt_renderer" not in task.evaluation_config

@@ -25,7 +25,12 @@ from ...models import (
     SessionCreateResponse,
     SessionTerminateResponse,
 )
-from ...models.rest.evaluation import EvaluationListResponse, EvaluationResponse, EvaluationSummaryResponse
+from ...models.rest.evaluation import (
+    EvaluationCriteriaResponse,
+    EvaluationListResponse,
+    EvaluationResponse,
+    EvaluationSummaryResponse,
+)
 from ..evaluation.exceptions import EvaluationNotFoundError, InvalidEvaluationRequestError, SessionEvaluationError
 
 if TYPE_CHECKING:
@@ -324,6 +329,50 @@ class SessionRestAPI:
                 raise HTTPException(status_code=422, detail=str(e))
             except SessionEvaluationError as e:
                 raise HTTPException(status_code=500, detail=str(e))
+
+        # Client-side scoring endpoint
+        @self.app.get("/api/v1/session/{session_id}/episodes/{episode_id}/evaluation-criteria")
+        async def get_evaluation_criteria_endpoint(session_id: str, episode_id: str) -> EvaluationCriteriaResponse:
+            """Get evaluation criteria package for client-side evaluation."""
+            logger.info(f"🔍 REST API: Getting evaluation criteria for session {session_id}, episode {episode_id}")
+            try:
+                criteria = await self.session_manager.get_evaluation_criteria(session_id, episode_id)
+
+                # Clean evaluation_config to remove non-serializable functions
+                from ...models.rest.evaluation import EvaluationCriteriaResponse
+
+                cleaned_evaluation_config = {}
+                for key, value in criteria.evaluation_config.items():
+                    if callable(value):
+                        logger.debug(f"Removing non-serializable function from evaluation_config: {key}")
+                    else:
+                        cleaned_evaluation_config[key] = value
+
+                # Create a clean criteria object for serialization
+                clean_criteria = EvaluationCriteriaResponse(
+                    session_id=criteria.session_id,
+                    episode_id=criteria.episode_id,
+                    task_id=criteria.task_id,
+                    submission=criteria.submission,
+                    task_context=criteria.task_context,
+                    evaluation_config=cleaned_evaluation_config,
+                    judge_messages=criteria.judge_messages,
+                )
+
+                logger.info(f"✅ REST API: Successfully returning evaluation criteria for episode {episode_id}")
+                return clean_criteria
+
+            except HTTPException as http_e:
+                logger.error(
+                    f"❌ REST API: HTTPException in evaluation criteria endpoint: {http_e.status_code} - {http_e.detail}"
+                )
+                raise
+            except RuntimeError as e:
+                logger.error(f"❌ REST API: RuntimeError in evaluation criteria endpoint: {e}")
+                raise HTTPException(status_code=400, detail=str(e))
+            except Exception as e:
+                logger.error(f"❌ REST API: Unexpected error in evaluation criteria endpoint: {type(e).__name__}: {e}")
+                raise HTTPException(status_code=500, detail=f"Failed to get evaluation criteria: {str(e)}")
 
     async def start_server(self) -> None:
         """Start the SessionRestAPI server."""

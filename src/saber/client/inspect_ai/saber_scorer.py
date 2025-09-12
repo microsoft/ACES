@@ -13,388 +13,317 @@ Following SABER's philosophy:
 """
 
 import logging
-from typing import List, Optional
+import re
+from typing import List
 
+from inspect_ai.model import ChatMessageSystem, ChatMessageUser, get_model
 from inspect_ai.scorer import Score, Scorer, Target, metric, scorer
 from inspect_ai.scorer._metric import Metric, SampleScore, ValueToFloat, value_to_float
 from inspect_ai.solver import TaskState
 from inspect_ai.util import store
 
-from ...models.rest.evaluation import EvaluationResultResponse
-from ..client_session import ClientSessionManager
-from ..exceptions import EvaluationNotFoundError, InvalidEvaluationRequestError, SessionEvaluationError
+from ...models.rest.evaluation import EvaluationCriteriaResponse
 
 logger = logging.getLogger(__name__)
 
 
 @metric  # type: ignore[misc]
-def saber_success(to_float: ValueToFloat = value_to_float()) -> Metric:
+def saber_client_score(to_float: ValueToFloat = value_to_float()) -> Metric:
     """
-    Metric for SABER task success rate.
+    Metric for SABER client-side evaluation score.
 
     Args:
         to_float: Function for mapping Value to float for computing metrics
 
     Returns:
-        Success rate metric function
+        Client evaluation metric function
     """
 
     def metric_fn(scores: List[SampleScore]) -> float:
         total = 0.0
         for item in scores:
-            total += to_float(item.score.value)
-        return total / float(len(scores))
-
-    return metric_fn
-
-
-@metric  # type: ignore[misc]
-def saber_completion(to_float: ValueToFloat = value_to_float()) -> Metric:
-    """
-    Metric for SABER task completion rate.
-
-    Args:
-        to_float: Function for mapping Value to float for computing metrics
-
-    Returns:
-        Completion rate metric function
-    """
-
-    def metric_fn(scores: List[SampleScore]) -> float:
-        total = 0.0
-        for item in scores:
-            # Extract completion score from metadata if available
-            completion_score = (
-                item.score.metadata.get("completion_score", item.score.value)
-                if item.score.metadata
-                else item.score.value
+            # Extract client score from metadata if available
+            client_score = (
+                item.score.metadata.get("client_score", item.score.value) if item.score.metadata else item.score.value
             )
-            total += to_float(completion_score)
+            total += to_float(client_score)
         return total / float(len(scores))
 
     return metric_fn
 
 
-@metric  # type: ignore[misc]
-def saber_server_score(to_float: ValueToFloat = value_to_float()) -> Metric:
+@scorer(metrics=[saber_client_score()])  # type: ignore[misc]
+def saber_scorer() -> Scorer:
     """
-    Metric for SABER server-side evaluation score.
+    SABER client-side scorer using inspect_ai capabilities.
 
-    Args:
-        to_float: Function for mapping Value to float for computing metrics
+    Retrieves evaluation criteria AND submission from server, then performs
+    local evaluation using inspect_ai's built-in scorers.
+
+    This enables parallel client/server evaluation while leveraging
+    inspect_ai's existing scoring infrastructure instead of reimplementing
+    evaluation logic.
 
     Returns:
-        Server evaluation metric function
-    """
-
-    def metric_fn(scores: List[SampleScore]) -> float:
-        total = 0.0
-        for item in scores:
-            # Extract server score from metadata if available
-            server_score = (
-                item.score.metadata.get("server_score", item.score.value) if item.score.metadata else item.score.value
-            )
-            total += to_float(server_score)
-        return total / float(len(scores))
-
-    return metric_fn
-
-
-@scorer(metrics=[saber_success(), saber_completion()])  # type: ignore[misc]
-def saber_task_scorer() -> Scorer:
-    """
-    SABER task scorer for inspect_ai framework.
-
-    This scorer retrieves evaluation results from the SABER server,
-    providing authoritative scoring based on server-side success criteria.
-    Follows SABER's fail-fast principles.
-
-    Returns:
-        Scorer function that retrieves server evaluation results
-    """
-    # Return the server scorer implementation
-    return saber_server_scorer()
-
-
-@scorer(metrics=[saber_server_score()])  # type: ignore[misc]
-def saber_server_scorer() -> Scorer:
-    """
-    Scorer that retrieves evaluation results from SABER server.
-
-    This scorer connects to the SABER server to get the authoritative
-    evaluation results based on server-side success criteria evaluation.
-    Follows fail-fast principles - if evaluation retrieval fails, the scorer fails.
-
-    The scorer expects session_id and episode_id to be available in the TaskState
-    metadata, typically set by the SABER agent during episode execution.
-
-    Returns:
-        Scorer function that retrieves server evaluation results
+        Scorer function that performs client-side evaluation
     """
 
     async def score(state: TaskState, target: Target) -> Score:
         """
-        Retrieve score from SABER server evaluation.
+        Perform client-side evaluation using server's evaluation criteria.
 
         Args:
             state: TaskState after execution containing SABER context
-            target: Target criteria (unused for server-side scoring)
+            target: Target criteria (unused - server provides authoritative criteria)
 
         Returns:
-            Score from server evaluation
+            Score from client-side evaluation
 
         Raises:
-            RuntimeError: If SABER context is missing or evaluation retrieval fails
+            RuntimeError: If SABER context is missing or evaluation fails
         """
         try:
-            # Extract SABER context from inspect_ai store
-            task_store = store()
-            session_manager = task_store.get("saber_session_manager")
-            session_id = task_store.get("saber_session_id")
+            # Get evaluation criteria + submission from server
+            criteria = await _get_evaluation_criteria(state)
 
-            # Get episode_id from task store (set by SABER agent)
-            current_episode = task_store.get("saber_current_episode")
-            episode_id = current_episode.episode_id if current_episode else None
+            # Use server's authoritative submission
+            submission = criteria.submission
 
-            # Validate SABER context
-            if not session_manager:
-                raise RuntimeError(
-                    "SABER session manager not found in context. " "This scorer requires SABER agent integration."
+            if not submission:
+                return Score(
+                    value=0.0,
+                    answer="",
+                    explanation="Client-side evaluation: Empty submission from server",
+                    metadata={
+                        "scorer_type": "saber_client_side",
+                        "error": "empty_submission",
+                        "session_id": criteria.session_id,
+                        "episode_id": criteria.episode_id,
+                        "task_id": criteria.task_id,
+                    },
                 )
 
-            if not session_id:
-                raise RuntimeError(
-                    "SABER session ID not found in context. " "This scorer requires an active SABER session."
-                )
+            # Delegate to appropriate evaluation strategy
+            if criteria.evaluation_config.get("strategy") == "static":
+                return await _evaluate_static(submission, criteria)
+            elif criteria.evaluation_config.get("strategy") == "llm_judge":
+                return await _evaluate_llm(submission, criteria, state)
+            else:
+                strategy = criteria.evaluation_config.get("strategy", "unknown")
+                raise RuntimeError(f"Unsupported evaluation strategy: {strategy}")
 
-            if not episode_id:
-                raise RuntimeError(
-                    "SABER episode ID not found in context. " "This scorer requires an active SABER episode."
-                )
-
-            logger.info(f"Retrieving server evaluation for session {session_id}, episode {episode_id}")
-
-            # Retrieve evaluation from server
-            evaluation = await session_manager.get_episode_evaluation(session_id, episode_id)
-
-            # Convert server evaluation to inspect_ai Score
-            return _convert_evaluation_to_score(evaluation)
-
-        except (EvaluationNotFoundError, SessionEvaluationError, InvalidEvaluationRequestError) as e:
-            # SABER fail-fast principle: evaluation errors should fail the scorer
-            logger.error(f"Server evaluation retrieval failed: {e}")
-            raise RuntimeError(f"Server evaluation failed: {e}") from e
+        except RuntimeError:
+            # Re-raise RuntimeErrors (fail-fast principle)
+            raise
         except Exception as e:
-            # Catch any other unexpected errors
-            logger.error(f"Unexpected error in server scorer: {e}")
-            raise RuntimeError(f"Server scorer error: {e}") from e
+            # Catch any other unexpected errors and fail fast
+            logger.error(f"Unexpected error in client-side scorer: {e}")
+            raise RuntimeError(f"Client-side scorer error: {e}") from e
 
     return score
 
 
-def _convert_evaluation_to_score(evaluation: EvaluationResultResponse) -> Score:
+async def _get_evaluation_criteria(state: TaskState) -> EvaluationCriteriaResponse:
     """
-    Convert server evaluation result to inspect_ai Score.
-
-    Args:
-        evaluation: Server evaluation result
-
-    Returns:
-        inspect_ai Score object with server evaluation data
-    """
-    # Calculate scaled score (server provides this directly)
-    scaled_score = evaluation.score
-
-    # Extract submission and analysis from details
-    submission = evaluation.details.get("submission", "")
-    analysis = evaluation.details.get("analysis", "")
-
-    # Create explanation combining strategy and analysis
-    explanation_parts = [
-        f"Server evaluation using {evaluation.strategy} strategy",
-        f"Raw score: {evaluation.raw_score}/{evaluation.max_score}",
-        f"Success: {evaluation.success}",
-    ]
-
-    if analysis:
-        explanation_parts.append(f"Analysis: {analysis}")
-
-    explanation = ". ".join(explanation_parts)
-
-    # Build comprehensive metadata
-    metadata = {
-        "episode_id": evaluation.episode_id,
-        "task_id": evaluation.task_id,
-        "strategy": evaluation.strategy,
-        "raw_score": evaluation.raw_score,
-        "max_score": evaluation.max_score,
-        "server_score": scaled_score,
-        "success": evaluation.success,
-        "timestamp": evaluation.timestamp.isoformat(),
-        "scorer_type": "saber_server_side",
-        "evaluation_details": evaluation.details,
-    }
-
-    return Score(
-        value=scaled_score,
-        answer=submission,
-        explanation=explanation,
-        metadata=metadata,
-    )
-
-
-async def _get_server_side_score(state: TaskState) -> Optional[float]:
-    """
-    Retrieve actual task score from SABER server.
-
-    This function attempts to retrieve the server-side evaluation score
-    from the SABER server. It's used by other scorers that need just the
-    numeric score value rather than the full Score object.
+    Retrieve evaluation criteria from SABER server.
 
     Args:
         state: TaskState with SABER context in inspect_ai store
 
     Returns:
-        Server evaluation score (0.0-1.0) or None if retrieval fails
+        Complete evaluation criteria package
+
+    Raises:
+        RuntimeError: If SABER context is missing or criteria retrieval fails
     """
+    # Extract SABER context from inspect_ai store
+    task_store = store()
+    session_manager = task_store.get("saber_session_manager")
+    session_id = task_store.get("saber_session_id")
+
+    # Get episode_id from task store (set by SABER agent)
+    current_episode = task_store.get("saber_current_episode")
+    episode_id = current_episode.episode_id if current_episode else None
+
+    # Validate SABER context (fail-fast)
+    if not session_manager:
+        raise RuntimeError(
+            "SABER session manager not found in context. " "This scorer requires SABER agent integration."
+        )
+
+    if not session_id:
+        raise RuntimeError("SABER session ID not found in context. " "This scorer requires an active SABER session.")
+
+    if not episode_id:
+        raise RuntimeError("SABER episode ID not found in context. " "This scorer requires an active SABER episode.")
+
+    logger.info(f"Retrieving evaluation criteria for session {session_id}, episode {episode_id}")
+
     try:
-        # Extract SABER context from inspect_ai store
-        task_store = store()
-        session_manager = task_store.get("saber_session_manager")
-        session_id = task_store.get("saber_session_id")
-        current_episode = task_store.get("saber_current_episode")
-        episode_id = current_episode.episode_id if current_episode else None
+        # Retrieve evaluation criteria from server (this needs to be implemented in session manager)
+        criteria = await session_manager.get_evaluation_criteria(session_id, episode_id)
 
-        # Validate context
-        if not session_manager or not session_id or not episode_id:
-            logger.debug("SABER context incomplete, cannot retrieve server score")
-            return None
-
-        # Retrieve evaluation from server
-        evaluation = await session_manager.get_episode_evaluation(session_id, episode_id)
-
-        logger.debug(f"Retrieved server score: {evaluation.score} for episode {episode_id}")
-        return float(evaluation.score)
+        logger.debug(f"Retrieved evaluation criteria: strategy={criteria.evaluation_config.get('strategy')}")
+        return criteria  # type: ignore[no-any-return]
 
     except Exception as e:
-        logger.debug(f"Server score retrieval failed: {e}")
-        return None
+        logger.error(f"Evaluation criteria retrieval failed: {e}")
+        raise RuntimeError(f"Failed to retrieve evaluation criteria: {e}") from e
 
 
-class SABERTaskScorer:
+async def _evaluate_static(submission: str, criteria: EvaluationCriteriaResponse) -> Score:
     """
-    Factory class for creating SABER task scorer instances.
+    Static evaluation using substring matching.
 
-    Provides convenience methods for different types of SABER scoring:
-    - Client-side basic scoring
-    - Server-side authoritative scoring
-    - Combined scoring approaches
-    - Evaluation retrieval utilities
+    Uses case-insensitive substring matching (contains) rather than exact
+    string matching, which is more practical for security tasks where agents
+    often provide longer responses containing expected flags/answers.
+
+    Args:
+        submission: Agent's submission to evaluate
+        criteria: Complete evaluation criteria from server
+
+    Returns:
+        Score from static evaluation
     """
+    expected_answers = criteria.evaluation_config.get("criteria", {}).get("expected_answers", [])
+    max_score = criteria.evaluation_config.get("scoring", {}).get("max_score", 1.0)
 
-    @staticmethod
-    def create_client_scorer() -> Scorer:
-        """
-        Create client-side SABER task scorer.
+    # Case-insensitive substring matching
+    submission_lower = submission.lower()
 
-        Returns:
-            Scorer that performs basic client-side evaluation
-        """
-        return saber_task_scorer()
+    for expected in expected_answers:
+        if expected.lower() in submission_lower:
+            # Found a match - success!
+            return Score(
+                value=max_score,
+                answer=submission,
+                explanation=f"Client-side static evaluation: Found expected answer '{expected}' in submission",
+                metadata={
+                    "strategy": "static",
+                    "scorer_type": "saber_client_side",
+                    "expected_answers": expected_answers,
+                    "matched_answer": expected,
+                    "evaluation_method": "substring_match",
+                    "client_score": max_score,
+                    "is_correct": True,
+                    "session_id": criteria.session_id,
+                    "episode_id": criteria.episode_id,
+                    "task_id": criteria.task_id,
+                },
+            )
 
-    @staticmethod
-    def create_server_scorer() -> Scorer:
-        """
-        Create server-side SABER task scorer.
+    # No matches found - failure
+    return Score(
+        value=0.0,
+        answer=submission,
+        explanation=(
+            f"Client-side static evaluation: Submission does not contain any expected answers: " f"{expected_answers}"
+        ),
+        metadata={
+            "strategy": "static",
+            "scorer_type": "saber_client_side",
+            "expected_answers": expected_answers,
+            "evaluation_method": "substring_match",
+            "client_score": 0.0,
+            "is_correct": False,
+            "session_id": criteria.session_id,
+            "episode_id": criteria.episode_id,
+            "task_id": criteria.task_id,
+        },
+    )
 
-        Returns:
-            Scorer that retrieves evaluation from SABER server
-        """
-        return saber_server_scorer()
 
-    @staticmethod
-    def create_default_scorer() -> Scorer:
-        """
-        Create default SABER task scorer.
+async def _evaluate_llm(submission: str, criteria: EvaluationCriteriaResponse, state: TaskState) -> Score:
+    """
+    LLM evaluation using pre-rendered judge messages with GRADE format.
 
-        Now returns server-side scorer for authoritative evaluation.
-        Falls back to client-side scoring if server evaluation fails.
+    Uses inspect_ai's generate() with pre-rendered judge prompts from the server.
+    This follows inspect_ai's intended flow and ensures identical evaluation
+    context between client and server.
 
-        Returns:
-            Default SABER task scorer
-        """
-        return saber_server_scorer()
+    Following SABER best practices:
+    - FAIL FAST: Clear error on missing judge messages
+    - NO BACKWARDS COMPATIBILITY: Use modern inspect_ai patterns
+    - Clean separation following AIR-Bench example patterns
 
-    @staticmethod
-    async def get_server_evaluation(
-        session_manager: ClientSessionManager, session_id: str, episode_id: str
-    ) -> EvaluationResultResponse:
-        """
-        Retrieve server evaluation for specific episode.
+    Args:
+        submission: Agent's submission to evaluate
+        criteria: Complete evaluation criteria from server
+        state: TaskState for inspect_ai compatibility
 
-        Args:
-            session_manager: Active session manager
-            session_id: Session ID
-            episode_id: Episode ID
+    Returns:
+        Score from LLM evaluation
+    """
+    if not criteria.judge_messages:
+        raise RuntimeError("LLM evaluation requires judge_messages but none provided")
 
-        Returns:
-            Server evaluation result
+    judge_messages = criteria.judge_messages
+    max_score = criteria.evaluation_config.get("scoring", {}).get("max_score", 1.0)
 
-        Raises:
-            EvaluationRetrievalError: If evaluation retrieval fails
-        """
-        return await session_manager.get_episode_evaluation(session_id, episode_id)
+    # Following inspect_ai patterns (similar to AIR-Bench example):
+    # 1. Clear the existing messages and start fresh for judge evaluation
+    # 2. Add system message first (if provided)
+    # 3. Add user message for judge evaluation
+    # 4. Use inspect_ai's natural message flow
 
-    @staticmethod
-    async def get_session_evaluations(
-        session_manager: ClientSessionManager, session_id: str, task_id: Optional[str] = None
-    ) -> List[EvaluationResultResponse]:
-        """
-        Retrieve all evaluations for session.
+    # Clear existing messages for clean judge evaluation context
+    state.messages.clear()
 
-        Args:
-            session_manager: Active session manager
-            session_id: Session ID
-            task_id: Optional task filter
+    # Add system message first (inspect_ai pattern)
+    if judge_messages.system_message:
+        state.messages.append(ChatMessageSystem(content=judge_messages.system_message))
 
-        Returns:
-            List of evaluation results
+    # Add user message for judge evaluation (following inspect_ai message patterns)
+    state.messages.append(ChatMessageUser(content=judge_messages.user_message))
 
-        Raises:
-            EvaluationRetrievalError: If evaluation retrieval fails
-        """
-        return await session_manager.get_session_evaluations(session_id, task_id)
+    try:
+        # Get the judge model for evaluation
+        judge_model = get_model(judge_messages.model)
 
-    @staticmethod
-    async def convert_server_evaluation_to_score(evaluation: EvaluationResultResponse) -> Score:
-        """
-        Convert server evaluation to inspect_ai Score.
+        # Generate judge response using inspect_ai's proper model pattern
+        response = await judge_model.generate(state.messages)
 
-        Args:
-            evaluation: Server evaluation result
+        # Update state with the judge response
+        state.output = response
 
-        Returns:
-            inspect_ai Score object
-        """
-        return _convert_evaluation_to_score(evaluation)
+        if not state.output or not state.output.completion:
+            raise RuntimeError("Judge model returned empty response")
 
-    @staticmethod
-    async def score_completed_episodes(
-        session_manager: ClientSessionManager, session_id: str, task_id: Optional[str] = None
-    ) -> List[Score]:
-        """
-        Score all completed episodes in session using server evaluations.
+        judge_response = state.output.completion
 
-        Args:
-            session_manager: Active session manager
-            session_id: Session ID
-            task_id: Optional task filter
+        # Parse the judge response for GRADE pattern
+        grade_pattern = r"GRADE:\s*([CI])"
+        match = re.search(grade_pattern, judge_response, re.IGNORECASE)
 
-        Returns:
-            List of inspect_ai Score objects
+        if match:
+            grade = match.group(1).upper()
+            is_correct = grade == "C"
+            score_value = max_score if is_correct else 0.0
 
-        Raises:
-            EvaluationRetrievalError: If evaluation retrieval fails
-        """
-        evaluations = await session_manager.get_session_evaluations(session_id, task_id)
-        return [_convert_evaluation_to_score(eval_result) for eval_result in evaluations]
+            return Score(
+                value=score_value,
+                answer=submission,
+                explanation=f"Client-side LLM evaluation: {judge_response}",
+                metadata={
+                    "strategy": "llm_judge",
+                    "scorer_type": "saber_client_side",
+                    "model": judge_messages.model,
+                    "is_correct": is_correct,
+                    "grade": grade,
+                    "client_score": score_value,
+                    "judge_response": judge_response,
+                    "session_id": criteria.session_id,
+                    "episode_id": criteria.episode_id,
+                    "task_id": criteria.task_id,
+                },
+            )
+        else:
+            # Grade pattern not found - fail fast with clear error
+            raise RuntimeError(
+                f"Grade pattern not found in judge response. " f"Expected 'GRADE: C' or 'GRADE: I' in: {judge_response}"
+            )
+
+    except Exception as e:
+        logger.error(f"LLM evaluation failed: {e}")
+        raise RuntimeError(f"LLM evaluation error: {e}") from e

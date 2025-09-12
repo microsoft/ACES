@@ -19,7 +19,7 @@ from ..models import (  # Use shared api models directly
     SessionCreateResponse,
     TaskInfo,
 )
-from ..models.rest.evaluation import EvaluationResultResponse
+from ..models.rest.evaluation import EvaluationCriteriaResponse, EvaluationResultResponse
 from .models import SessionManagerConfig
 
 logger = logging.getLogger(__name__)
@@ -349,6 +349,42 @@ class ClientSessionManager:
                     error_text = await response.text()
                     raise Exception(
                         f"Failed to get evaluations for session {session_id}: {response.status} - {error_text}"
+                    )
+
+    async def get_evaluation_criteria(self, session_id: str, episode_id: str) -> EvaluationCriteriaResponse:
+        """
+        Get evaluation criteria package for client-side evaluation.
+
+        Args:
+            session_id: Session ID containing the episode
+            episode_id: Episode ID to get evaluation criteria for
+
+        Returns:
+            Evaluation criteria package containing task context, evaluation config, and submission
+
+        Raises:
+            Exception: If evaluation criteria retrieval fails
+        """
+        logger.debug(f"Getting evaluation criteria for episode {episode_id} in session {session_id}")
+
+        url = f"{self.base_url}/api/v1/session/{session_id}/episodes/{episode_id}/evaluation-criteria"
+
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.timeout)) as session:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    logger.debug(f"Retrieved evaluation criteria for episode {episode_id}")
+                    # Parse the response into the proper model
+                    return EvaluationCriteriaResponse(**data)
+                elif response.status == 404:
+                    raise Exception(f"Episode {episode_id} not found or no evaluation criteria available")
+                elif response.status == 400:
+                    error_text = await response.text()
+                    raise Exception(f"Invalid request for evaluation criteria: {error_text}")
+                else:
+                    error_text = await response.text()
+                    raise Exception(
+                        f"Failed to get evaluation criteria for episode {episode_id}: {response.status} - {error_text}"
                     )
 
     def get_current_session_id(self) -> Optional[str]:

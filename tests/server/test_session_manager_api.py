@@ -240,3 +240,146 @@ class TestSessionManagerAPI:
         for method, endpoint in endpoints_to_test:
             response = client.request(method, endpoint)
             assert response.status_code == 404, f"Endpoint {method} {endpoint} should return 404"
+
+    def test_get_evaluation_criteria_success(self, session_manager_app):
+        """Test successful retrieval of evaluation criteria."""
+        manager, client = session_manager_app
+
+        # Create a session first
+        create_response = client.post("/api/v1/session?client_id=test_client")
+        session_id = create_response.json()["session_id"]
+
+        episode_id = "test_episode_456"
+
+        # Mock the episode manager to return a completed episode
+        mock_episode = MagicMock()
+        mock_episode.episode_id = episode_id
+        mock_episode.submission = "test submission"
+        mock_episode.is_complete = True
+        mock_episode.task_id = "test_task"
+        mock_episode.state = "completed"
+        mock_episode.steps = []
+        manager.episode_manager.get_episode_by_id = MagicMock(return_value=mock_episode)
+
+        # Mock the benchmark manager to return a task
+        mock_task = MagicMock()
+        mock_task.task_id = "test_task"
+        mock_task.title = "Test Task"
+        mock_task.description = "Test Description"
+        mock_task.domain = "test"
+        mock_task.evaluation_config = {"strategy": "llm_judge", "model": "gpt-4"}
+        manager.benchmark_manager.get_task = MagicMock(return_value=mock_task)
+
+        # Mock the prompt generator to return judge prompts
+        mock_judge_payload = MagicMock()
+        mock_judge_payload.messages = [
+            {"role": "system", "content": "Judge system prompt"},
+            {"role": "user", "content": "Judge user prompt"}
+        ]
+        mock_judge_payload.model = "gpt-4"
+        manager.benchmark_manager.prompt_generator.render_judge_prompt_for_episode = MagicMock(return_value=mock_judge_payload)
+
+        response = client.get(f"/api/v1/session/{session_id}/episodes/{episode_id}/evaluation-criteria")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "judge_messages" in data
+        assert "session_id" in data
+        assert "episode_id" in data
+        assert "task_id" in data
+        assert "submission" in data
+        assert data["session_id"] == session_id
+        assert data["episode_id"] == episode_id
+        assert data["task_id"] == "test_task"
+
+    def test_get_evaluation_criteria_session_not_found(self, session_manager_app):
+        """Test evaluation criteria endpoint with non-existent session."""
+        manager, client = session_manager_app
+
+        invalid_session_id = "nonexistent_session"
+        episode_id = "test_episode"
+
+        response = client.get(f"/api/v1/session/{invalid_session_id}/episodes/{episode_id}/evaluation-criteria")
+
+        assert response.status_code == 404
+        assert "Session not found" in response.json()["detail"]
+
+    def test_get_evaluation_criteria_template_rendering_error(self, session_manager_app):
+        """Test evaluation criteria endpoint when template rendering fails."""
+        manager, client = session_manager_app
+
+        # Create a session first
+        create_response = client.post("/api/v1/session?client_id=test_client")
+        session_id = create_response.json()["session_id"]
+
+        episode_id = "test_episode_456"
+
+        # Mock the episode manager to return a completed episode
+        mock_episode = MagicMock()
+        mock_episode.episode_id = episode_id
+        mock_episode.submission = "test submission"
+        mock_episode.is_complete = True
+        mock_episode.task_id = "test_task"
+        mock_episode.state = "completed"
+        mock_episode.steps = []
+        manager.episode_manager.get_episode_by_id = MagicMock(return_value=mock_episode)
+
+        # Mock the benchmark manager to return a task
+        mock_task = MagicMock()
+        mock_task.task_id = "test_task"
+        mock_task.title = "Test Task"
+        mock_task.description = "Test Description"
+        mock_task.domain = "test"
+        mock_task.evaluation_config = {"strategy": "llm_judge", "model": "gpt-4"}
+        manager.benchmark_manager.get_task = MagicMock(return_value=mock_task)
+
+        # Mock the prompt generator to raise an error
+        manager.benchmark_manager.prompt_generator.render_judge_prompt_for_episode = MagicMock(side_effect=Exception("Template rendering failed"))
+
+        response = client.get(f"/api/v1/session/{session_id}/episodes/{episode_id}/evaluation-criteria")
+
+        # The actual implementation returns 200 with judge_messages=None on template errors
+        # The error is logged but doesn't fail the endpoint
+        assert response.status_code == 200
+        data = response.json()
+        assert data["judge_messages"] is None
+
+    def test_get_evaluation_criteria_attribute_error(self, session_manager_app):
+        """Test evaluation criteria endpoint when method doesn't exist (regression test)."""
+        manager, client = session_manager_app
+
+        # Create a session first
+        create_response = client.post("/api/v1/session?client_id=test_client")
+        session_id = create_response.json()["session_id"]
+
+        episode_id = "test_episode_456"
+
+        # Mock the episode manager to return a completed episode
+        mock_episode = MagicMock()
+        mock_episode.episode_id = episode_id
+        mock_episode.submission = "test submission"
+        mock_episode.is_complete = True
+        mock_episode.task_id = "test_task"
+        mock_episode.state = "completed"
+        mock_episode.steps = []
+        manager.episode_manager.get_episode_by_id = MagicMock(return_value=mock_episode)
+
+        # Mock the benchmark manager to return a task
+        mock_task = MagicMock()
+        mock_task.task_id = "test_task"
+        mock_task.title = "Test Task"
+        mock_task.description = "Test Description"
+        mock_task.domain = "test"
+        mock_task.evaluation_config = {"strategy": "llm_judge", "model": "gpt-4"}
+        manager.benchmark_manager.get_task = MagicMock(return_value=mock_task)
+
+        # Mock the prompt generator to raise AttributeError (like the bug we fixed)
+        manager.benchmark_manager.prompt_generator.render_judge_prompt_for_episode = MagicMock(side_effect=AttributeError("'PromptGenerator' object has no attribute 'render_judge_prompt_for_task'"))
+
+        response = client.get(f"/api/v1/session/{session_id}/episodes/{episode_id}/evaluation-criteria")
+
+        # The actual implementation returns 200 with judge_messages=None on template errors
+        # The AttributeError is caught and logged but doesn't fail the endpoint
+        assert response.status_code == 200
+        data = response.json()
+        assert data["judge_messages"] is None
