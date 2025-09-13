@@ -148,6 +148,26 @@ class SABERConfigLoader:
         parallel_execution = config_data.get("parallel_execution", True)
         max_parallel_tasks = config_data.get("max_parallel_tasks", 4)
 
+        # Extract log upload configuration
+        log_upload_config = config_data.get("log_upload", {})
+        if not isinstance(log_upload_config, dict):
+            raise ValueError("'log_upload' section must be a dictionary")
+
+        log_upload_enabled = log_upload_config.get("enabled", True)
+        log_upload_max_retries = log_upload_config.get("max_retries", 3)
+        log_upload_timeout = log_upload_config.get("timeout", 30.0)
+        log_upload_fail_on_error = log_upload_config.get("fail_on_error", False)
+
+        # Validate log upload configuration
+        if not isinstance(log_upload_enabled, bool):
+            raise ValueError("'log_upload.enabled' must be a boolean")
+        if not isinstance(log_upload_max_retries, int) or log_upload_max_retries < 0:
+            raise ValueError("'log_upload.max_retries' must be a non-negative integer")
+        if not isinstance(log_upload_timeout, (int, float)) or log_upload_timeout <= 0:
+            raise ValueError("'log_upload.timeout' must be a positive number")
+        if not isinstance(log_upload_fail_on_error, bool):
+            raise ValueError("'log_upload.fail_on_error' must be a boolean")
+
         # Create SABERConfig using the factory method
         saber_config = SABERConfig.create(
             model=model,
@@ -167,6 +187,10 @@ class SABERConfigLoader:
             max_subprocesses=max_subprocesses,
             parallel_execution=parallel_execution,
             max_parallel_tasks=max_parallel_tasks,
+            log_upload_enabled=log_upload_enabled,
+            log_upload_max_retries=log_upload_max_retries,
+            log_upload_timeout=log_upload_timeout,
+            log_upload_fail_on_error=log_upload_fail_on_error,
         )
 
         return saber_config

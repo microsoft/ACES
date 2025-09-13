@@ -12,6 +12,7 @@ from saber.server.evaluation.evaluation_manager import EvaluationManager
 from saber.server.evaluation.exceptions import (
     EvaluationConfigError,
     IncompleteEpisodeError,
+    InvalidEvaluationRequestError,
     InvalidEvaluationStrategyError,
     MissingSubmissionError,
 )
@@ -211,3 +212,98 @@ class TestEvaluationManager:
         # Get trajectory should return empty list
         trajectory = await evaluation_manager.get_trajectory("session_123")
         assert trajectory == []
+
+    @pytest.mark.asyncio
+    async def test_override_evaluation_result_success(self, evaluation_manager):
+        """Test successful evaluation override."""
+        # Mock the store
+        mock_store = AsyncMock()
+        evaluation_manager.store = mock_store
+
+        # Create EpisodeEvaluationData
+        from saber.server.evaluation.models import EpisodeEvaluationData
+        evaluation_data = EpisodeEvaluationData(
+            episode_id="test_episode",
+            task_id="test_task",
+            submission="flag{override}",
+            executed_commands=["cat flag.txt"],
+            completion_reason="success",
+            step_count=1,
+            model="gpt-4",
+            choices=[{"message": {"content": "Found the flag"}}],
+            tokens={"total": 100, "prompt": 20, "completion": 80},
+            execution_time=30.5
+        )
+
+        # Call override method
+        result = await evaluation_manager.override_evaluation_result(
+            session_id="test_session",
+            episode_id="test_episode",
+            evaluation_data=evaluation_data,
+            strategy="static",
+            raw_score=1.0,
+            max_score=1.0,
+            score=1.0,
+            success=True,
+            details={"override": True}
+        )
+
+        # Verify result
+        assert result.episode_id == "test_episode"
+        assert result.task_id == "test_task"
+        assert result.strategy == "static"
+        assert result.raw_score == 1.0
+        assert result.max_score == 1.0
+        assert result.score == 1.0
+        assert result.success is True
+        assert result.submission == "flag{override}"
+        assert result.executed_commands == ["cat flag.txt"]
+        assert result.completion_reason == "success"
+        assert result.step_count == 1
+        assert result.model == "gpt-4"
+        assert result.choices == [{"message": {"content": "Found the flag"}}]
+        assert result.tokens == {"total": 100, "prompt": 20, "completion": 80}
+        assert result.execution_time == 30.5
+        assert result.details == {"override": True}
+
+        # Verify store.save was called
+        mock_store.save.assert_called_once()
+        call_args = mock_store.save.call_args
+        # Should be called with (result, session_id=session_id, golden_answer=None)
+        saved_result = call_args[0][0]  # First positional argument
+        session_id_arg = call_args[1]["session_id"]  # Keyword argument
+        assert saved_result.episode_id == "test_episode"
+        assert session_id_arg == "test_session"
+
+    @pytest.mark.asyncio
+    async def test_override_evaluation_result_episode_mismatch(self, evaluation_manager):
+        """Test evaluation override with mismatched episode IDs."""
+        from saber.server.evaluation.exceptions import InvalidEvaluationRequestError
+        from saber.server.evaluation.models import EpisodeEvaluationData
+
+        # Create EpisodeEvaluationData with different episode_id
+        evaluation_data = EpisodeEvaluationData(
+            episode_id="different_episode",
+            task_id="test_task",
+            submission="flag{override}",
+            executed_commands=[],
+            completion_reason="success",
+            step_count=1,
+            model="gpt-4",
+            choices=[],
+            tokens={},
+            execution_time=0.0
+        )
+
+        # Should raise validation error for mismatched episode IDs
+        with pytest.raises(InvalidEvaluationRequestError, match="Episode ID mismatch"):
+            await evaluation_manager.override_evaluation_result(
+                session_id="test_session",
+                episode_id="test_episode",
+                evaluation_data=evaluation_data,
+                strategy="static",
+                raw_score=1.0,
+                max_score=1.0,
+                score=1.0,
+                success=True
+            )

@@ -10,10 +10,11 @@ from unittest.mock import AsyncMock, Mock, patch
 from datetime import datetime, timezone
 
 from saber.client.inspect_ai.saber_scorer import (
-    saber_server_scorer,
-    _convert_evaluation_to_score,
-    _get_server_side_score,
-    SABERTaskScorer,
+    saber_scorer,
+    saber_client_score,
+    _get_evaluation_criteria,
+    _evaluate_static,
+    _evaluate_llm,
 )
 from saber.client.client_session import ClientSessionManager
 from saber.client.exceptions import (

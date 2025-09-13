@@ -163,6 +163,19 @@ class JudgePromptContext:
                 "title": self.task.title,
                 "description": self.task.description,
                 "domain": self.task.domain,
+                "subtasks": (
+                    [
+                        {
+                            "subtask_id": subtask.subtask_id,
+                            "title": subtask.title,
+                            "description": subtask.description,
+                            "objective": subtask.objective,
+                        }
+                        for subtask in self.task.subtasks
+                    ]
+                    if hasattr(self.task, "subtasks") and self.task.subtasks
+                    else []
+                ),
             },
             "evaluation_config": self.evaluation_config,
         }

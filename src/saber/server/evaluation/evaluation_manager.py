@@ -16,6 +16,7 @@ from .exceptions import (
     EvaluationConfigError,
     EvaluatorNotFoundError,
     IncompleteEpisodeError,
+    InvalidEvaluationRequestError,
     InvalidEvaluationStrategyError,
     MissingSubmissionError,
 )
@@ -222,6 +223,102 @@ class EvaluationManager:
                 "max_score": result.max_score,
                 "raw_score": result.raw_score,
                 "success": result.success,
+            },
+        )
+
+        return result
+
+    async def override_evaluation_result(
+        self,
+        session_id: str,
+        episode_id: str,
+        evaluation_data: EpisodeEvaluationData,
+        strategy: str,
+        raw_score: float,
+        max_score: float,
+        score: float,
+        success: bool,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> EvaluationResult:
+        """
+        Override existing evaluation result with externally provided evaluation data.
+
+        Args:
+            session_id: Session ID for context
+            episode_id: Episode ID being overridden (must match evaluation_data.episode_id)
+            evaluation_data: EpisodeEvaluationData containing episode information
+            strategy: Evaluation strategy used for this result
+            raw_score: Raw evaluation score
+            max_score: Maximum possible score
+            score: Normalized score (0.0 to max_score)
+            success: Whether the evaluation was successful
+            details: Optional additional evaluation details
+
+        Returns:
+            EvaluationResult with the overridden evaluation data
+
+        Raises:
+            InvalidEvaluationRequestError: If inputs are invalid
+            EvaluationConfigError: If evaluation data is inconsistent
+        """
+        # Fail-fast validation of inputs
+        if not session_id or not session_id.strip():
+            raise InvalidEvaluationRequestError("session_id cannot be empty")
+
+        if not episode_id or not episode_id.strip():
+            raise InvalidEvaluationRequestError("episode_id cannot be empty")
+
+        if episode_id != evaluation_data.episode_id:
+            raise InvalidEvaluationRequestError(
+                f"Episode ID mismatch: URL parameter '{episode_id}' does not match "
+                f"evaluation data episode_id '{evaluation_data.episode_id}'"
+            )
+
+        if not strategy or not strategy.strip():
+            raise InvalidEvaluationRequestError("strategy cannot be empty")
+
+        if max_score <= 0:
+            raise InvalidEvaluationRequestError("max_score must be greater than 0")
+
+        if raw_score < 0:
+            raise InvalidEvaluationRequestError("raw_score cannot be negative")
+
+        if score < 0 or score > max_score:
+            raise InvalidEvaluationRequestError(f"score must be between 0 and {max_score}")
+
+        logger.info(f"Overriding evaluation for episode {episode_id} in session {session_id} with strategy: {strategy}")
+
+        # Create EvaluationResult from the provided data
+        result = EvaluationResult.from_episode_data(
+            evaluation_data,
+            strategy=strategy,
+            raw_score=raw_score,
+            max_score=max_score,
+            score=score,
+            success=success,
+            details=details or {},
+        )
+
+        # Persist the override result (fail fast on any write issues)
+        try:
+            await self.store.save(result, session_id=session_id, golden_answer=None)
+        except Exception as e:
+            # Re-raise to enforce atomic contract (no silent persistence failures)
+            raise RuntimeError(f"Failed to persist override evaluation result: {e}") from e
+
+        logger.info(
+            "episode_evaluation_override_complete",
+            extra={
+                "event": "episode_evaluation_override_complete",
+                "episode_id": episode_id,
+                "session_id": session_id,
+                "task_id": evaluation_data.task_id,
+                "strategy": strategy,
+                "score": result.score,
+                "max_score": result.max_score,
+                "raw_score": result.raw_score,
+                "success": result.success,
+                "override": True,
             },
         )
 

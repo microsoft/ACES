@@ -10,11 +10,25 @@ Following SABER's philosophy:
 - Clean interface between inspect_ai scoring and SABER task evaluation
 - Explicit handling of server-side vs client-side scoring
 - No silent scoring failures that mask evaluation issues
+
+Configuration Options:
+- enable_override (bool): Submit client evaluation results to server override endpoint (default: True)
+- override_on_failure (bool): Submit overrides even when client score is 0 (default: True)
+- log_override_errors (bool): Log errors if override submission fails (default: True)
+
+Usage:
+    # Use default configuration (all overrides enabled)
+    scorer = saber_scorer()
+
+    # Disable override submission
+    scorer = saber_scorer(enable_override=False)
+
+    # Enable overrides but don't submit failures
+    scorer = saber_scorer(enable_override=True, override_on_failure=False)
 """
 
 import logging
-import re
-from typing import List
+from typing import Any, Dict, List
 
 from inspect_ai.model import ChatMessageSystem, ChatMessageUser, get_model
 from inspect_ai.scorer import Score, Scorer, Target, metric, scorer
@@ -22,7 +36,12 @@ from inspect_ai.scorer._metric import Metric, SampleScore, ValueToFloat, value_t
 from inspect_ai.solver import TaskState
 from inspect_ai.util import store
 
-from ...models.rest.evaluation import EvaluationCriteriaResponse
+from ...models.evaluation_utils import (
+    build_step_evaluation_explanation,
+    calculate_step_evaluation_score,
+    parse_step_evaluations,
+)
+from ...models.rest.evaluation import EvaluationCriteriaResponse, EvaluationOverrideRequest
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +72,9 @@ def saber_client_score(to_float: ValueToFloat = value_to_float()) -> Metric:
 
 
 @scorer(metrics=[saber_client_score()])  # type: ignore[misc]
-def saber_scorer() -> Scorer:
+def saber_scorer(
+    enable_override: bool = True, override_on_failure: bool = True, log_override_errors: bool = True
+) -> Scorer:
     """
     SABER client-side scorer using inspect_ai capabilities.
 
@@ -63,6 +84,11 @@ def saber_scorer() -> Scorer:
     This enables parallel client/server evaluation while leveraging
     inspect_ai's existing scoring infrastructure instead of reimplementing
     evaluation logic.
+
+    Args:
+        enable_override: Whether to submit evaluation overrides to server (default: True)
+        override_on_failure: Whether to submit overrides even when score is 0 (default: True)
+        log_override_errors: Whether to log override submission failures (default: True)
 
     Returns:
         Scorer function that performs client-side evaluation
@@ -105,12 +131,19 @@ def saber_scorer() -> Scorer:
 
             # Delegate to appropriate evaluation strategy
             if criteria.evaluation_config.get("strategy") == "static":
-                return await _evaluate_static(submission, criteria)
+                score_result = await _evaluate_static(submission, criteria)
             elif criteria.evaluation_config.get("strategy") == "llm_judge":
-                return await _evaluate_llm(submission, criteria, state)
+                score_result = await _evaluate_llm(submission, criteria, state)
             else:
                 strategy = criteria.evaluation_config.get("strategy", "unknown")
                 raise RuntimeError(f"Unsupported evaluation strategy: {strategy}")
+
+            # Submit evaluation override to server (if enabled)
+            await _submit_override_if_enabled(
+                score_result, criteria, enable_override, override_on_failure, log_override_errors
+            )
+
+            return score_result
 
         except RuntimeError:
             # Re-raise RuntimeErrors (fail-fast principle)
@@ -236,15 +269,15 @@ async def _evaluate_static(submission: str, criteria: EvaluationCriteriaResponse
 
 async def _evaluate_llm(submission: str, criteria: EvaluationCriteriaResponse, state: TaskState) -> Score:
     """
-    LLM evaluation using pre-rendered judge messages with GRADE format.
+    LLM evaluation using step-by-step analysis with STEP_EVALUATIONS format.
 
     Uses inspect_ai's generate() with pre-rendered judge prompts from the server.
     This follows inspect_ai's intended flow and ensures identical evaluation
     context between client and server.
 
     Following SABER best practices:
-    - FAIL FAST: Clear error on missing judge messages
-    - NO BACKWARDS COMPATIBILITY: Use modern inspect_ai patterns
+    - FAIL FAST: Clear error on missing judge messages or invalid response format
+    - NO BACKWARDS COMPATIBILITY: Use modern step-evaluation patterns
     - Clean separation following AIR-Bench example patterns
 
     Args:
@@ -253,7 +286,7 @@ async def _evaluate_llm(submission: str, criteria: EvaluationCriteriaResponse, s
         state: TaskState for inspect_ai compatibility
 
     Returns:
-        Score from LLM evaluation
+        Score from step-by-step LLM evaluation
     """
     if not criteria.judge_messages:
         raise RuntimeError("LLM evaluation requires judge_messages but none provided")
@@ -292,38 +325,314 @@ async def _evaluate_llm(submission: str, criteria: EvaluationCriteriaResponse, s
 
         judge_response = state.output.completion
 
-        # Parse the judge response for GRADE pattern
-        grade_pattern = r"GRADE:\s*([CI])"
-        match = re.search(grade_pattern, judge_response, re.IGNORECASE)
+        # Parse step evaluations from judge response
+        try:
+            step_evaluations = parse_step_evaluations(judge_response, criteria.task_id)
+        except RuntimeError as parse_error:
+            raise RuntimeError(f"Step evaluation parsing failed: {parse_error}") from parse_error
 
-        if match:
-            grade = match.group(1).upper()
-            is_correct = grade == "C"
-            score_value = max_score if is_correct else 0.0
+        # Calculate score and metadata using shared utility
+        score_value, is_correct, task_completed_at_step, subtasks_completed = calculate_step_evaluation_score(
+            step_evaluations, criteria.task_id, max_score
+        )
 
-            return Score(
-                value=score_value,
-                answer=submission,
-                explanation=f"Client-side LLM evaluation: {judge_response}",
-                metadata={
-                    "strategy": "llm_judge",
-                    "scorer_type": "saber_client_side",
-                    "model": judge_messages.model,
-                    "is_correct": is_correct,
-                    "grade": grade,
-                    "client_score": score_value,
-                    "judge_response": judge_response,
-                    "session_id": criteria.session_id,
-                    "episode_id": criteria.episode_id,
-                    "task_id": criteria.task_id,
-                },
-            )
-        else:
-            # Grade pattern not found - fail fast with clear error
-            raise RuntimeError(
-                f"Grade pattern not found in judge response. " f"Expected 'GRADE: C' or 'GRADE: I' in: {judge_response}"
-            )
+        # Build explanation using shared utility
+        explanation = (
+            f"Client-side {build_step_evaluation_explanation(is_correct, task_completed_at_step, subtasks_completed)}"
+        )
+
+        return Score(
+            value=score_value,
+            answer=submission,
+            explanation=explanation,
+            metadata={
+                "strategy": "llm_judge_step_evaluation",
+                "scorer_type": "saber_client_side",
+                "model": judge_messages.model,
+                "is_correct": is_correct,
+                "client_score": score_value,
+                "step_evaluations": [step_eval.model_dump() for step_eval in step_evaluations],
+                "task_completed_at_step": task_completed_at_step,
+                "subtasks_completed": subtasks_completed,
+                "total_steps_evaluated": len(step_evaluations),
+                "judge_response": judge_response,
+                "session_id": criteria.session_id,
+                "episode_id": criteria.episode_id,
+                "task_id": criteria.task_id,
+            },
+        )
 
     except Exception as e:
         logger.error(f"LLM evaluation failed: {e}")
         raise RuntimeError(f"LLM evaluation error: {e}") from e
+
+
+def _build_override_request(
+    score_result: Score, criteria: EvaluationCriteriaResponse, max_score: float
+) -> EvaluationOverrideRequest:
+    """
+    Build an evaluation override request from client-side scoring results.
+
+    Maps the inspect_ai Score object and evaluation context to the format
+    expected by the server's override endpoint.
+
+    Args:
+        score_result: The Score object from client-side evaluation
+        criteria: The evaluation criteria retrieved from server
+        max_score: Maximum possible score for this evaluation
+
+    Returns:
+        EvaluationOverrideRequest object for server submission
+
+    Raises:
+        RuntimeError: If required data is missing from score or criteria
+    """
+    # Validate required inputs
+    if not score_result:
+        raise RuntimeError("Score result is required for override request")
+    if not criteria:
+        raise RuntimeError("Evaluation criteria is required for override request")
+    if not criteria.episode_id:
+        raise RuntimeError("Episode ID is required for override request")
+    if not criteria.task_id:
+        raise RuntimeError("Task ID is required for override request")
+
+    # Extract metadata safely
+    metadata = score_result.metadata or {}
+    strategy = criteria.evaluation_config.get("strategy", "unknown")
+
+    # Build evaluation_data section (EpisodeEvaluationData format)
+    evaluation_data = {
+        "episode_id": criteria.episode_id,
+        "task_id": criteria.task_id,
+        "submission": criteria.submission or "",
+        "executed_commands": [],  # Client doesn't have command history
+        "completion_reason": "client_evaluation",
+        "step_count": 1,  # Client-side evaluation is single step
+        "model": _extract_model_info(criteria, metadata),
+        "choices": [{"message": {"content": score_result.explanation or ""}}],
+        "tokens": metadata.get("tokens", {}),
+        "execution_time": 0.0,  # Client doesn't track execution time
+    }
+
+    # Determine success status
+    is_correct = metadata.get("is_correct")
+    if is_correct is None:
+        # Fallback: consider non-zero scores as success
+        is_correct = score_result.value > 0
+
+    # Build details section
+    details = {
+        "client_scorer_type": "saber_client_side",
+        "original_explanation": score_result.explanation or "",
+        "evaluation_method": metadata.get("evaluation_method", strategy),
+        "client_metadata": metadata,
+        "server_strategy": strategy,
+        "override_timestamp": "client_submission",
+    }
+
+    # Create strongly typed override request
+    override_request = EvaluationOverrideRequest(
+        evaluation_data=evaluation_data,
+        strategy=f"client_side_{strategy}",
+        raw_score=score_result.value,
+        max_score=max_score,
+        score=score_result.value,
+        success=is_correct,
+        details=details,
+    )
+
+    logger.debug(
+        f"Built override request for episode {criteria.episode_id}: "
+        f"score={score_result.value}, success={is_correct}, strategy={strategy}"
+    )
+
+    return override_request
+
+
+def _extract_model_info(criteria: EvaluationCriteriaResponse, metadata: Dict[str, Any]) -> str:
+    """
+    Extract model information for override request.
+
+    Args:
+        criteria: Evaluation criteria containing judge messages
+        metadata: Score metadata that might contain model info
+
+    Returns:
+        Model name/identifier for the override request
+    """
+    # Try judge messages first (for LLM evaluation)
+    if criteria.judge_messages and criteria.judge_messages.model:
+        return criteria.judge_messages.model
+
+    # Try metadata
+    if metadata.get("model"):
+        return str(metadata["model"])
+
+    # Fallback based on strategy
+    strategy = criteria.evaluation_config.get("strategy", "unknown")
+    if strategy == "llm_judge":
+        return "unknown_llm_judge"
+    elif strategy == "static":
+        return "client_static_scorer"
+    else:
+        return "client_scorer"
+
+
+async def _submit_override_if_enabled(
+    score_result: Score,
+    criteria: EvaluationCriteriaResponse,
+    enable_override: bool,
+    override_on_failure: bool,
+    log_override_errors: bool,
+) -> None:
+    """
+    Submit evaluation override to server if configuration permits.
+
+    This function implements comprehensive error handling with graceful degradation:
+    - Configuration validation (early returns for disabled features)
+    - Input validation with detailed error messages
+    - Network/service error handling with retry logic
+    - Graceful degradation (never raises exceptions)
+
+    Args:
+        score_result: The Score result from client-side evaluation
+        criteria: Evaluation criteria containing server context
+        enable_override: Whether override submission is enabled
+        override_on_failure: Whether to submit overrides even for failed scores
+        log_override_errors: Whether to log detailed error information on override failures
+
+    Raises:
+        No exceptions - all errors are caught and optionally logged based on configuration
+    """
+    # Validate inputs before attempting submission
+    try:
+        if not score_result:
+            if log_override_errors:
+                logger.error("Override submission failed: score_result is None")
+            return
+
+        if not criteria:
+            if log_override_errors:
+                logger.error("Override submission failed: criteria is None")
+            return
+
+        if not criteria.session_id:
+            if log_override_errors:
+                logger.error("Override submission failed: missing session_id in criteria")
+            return
+
+        if not criteria.episode_id:
+            if log_override_errors:
+                logger.error("Override submission failed: missing episode_id in criteria")
+            return
+
+    except Exception as e:
+        if log_override_errors:
+            logger.error(f"Override submission failed during input validation: {e}")
+        return
+
+    # Check if override submission is enabled
+    if not enable_override:
+        logger.debug("Override submission disabled by configuration")
+        return
+
+    # Check if we should submit on failure
+    is_failure = score_result.value == 0.0
+    if is_failure and not override_on_failure:
+        logger.debug("Override submission skipped for failed score (override_on_failure=False)")
+        return
+
+    # Main override submission logic with comprehensive error handling
+    session_id = criteria.session_id
+    episode_id = criteria.episode_id
+
+    try:
+        # Extract session manager from store
+        task_store = store()
+        session_manager = task_store.get("saber_session_manager")
+
+        if not session_manager:
+            error_msg = (
+                "Override submission failed: session_manager not found in store. "
+                "Ensure SABER agent integration is properly configured."
+            )
+            if log_override_errors:
+                logger.error(error_msg)
+            else:
+                logger.debug(error_msg)
+            return
+
+        # Calculate max_score for override request
+        max_score = criteria.evaluation_config.get("scoring", {}).get("max_score", 1.0)
+
+        # Build override request with validation
+        try:
+            override_request = _build_override_request(score_result, criteria, max_score)
+        except Exception as build_error:
+            error_msg = (
+                f"Override request building failed for session {session_id}, episode {episode_id}: {build_error}"
+            )
+            if log_override_errors:
+                logger.error(error_msg)
+            else:
+                logger.debug(error_msg)
+            return
+
+        # Submit override to server with detailed logging
+        logger.info(
+            f"Submitting evaluation override for session {session_id}, episode {episode_id} "
+            f"(score: {score_result.value}, strategy: {criteria.evaluation_config.get('strategy', 'unknown')})"
+        )
+
+        try:
+            response = await session_manager.override_episode_evaluation(
+                session_id=session_id, episode_id=episode_id, override_request=override_request
+            )
+
+            logger.info(f"Override submission successful for session {session_id}, episode {episode_id}: {response}")
+
+        except AttributeError as attr_error:
+            error_msg = (
+                f"Override submission failed: session_manager missing override_episode_evaluation method: {attr_error}"
+            )
+            if log_override_errors:
+                logger.error(error_msg)
+            else:
+                logger.debug(error_msg)
+            return
+
+        except Exception as submission_error:
+            # Handle specific server/network errors
+            error_type = type(submission_error).__name__
+            error_msg = (
+                f"Override submission failed for session {session_id}, episode {episode_id} "
+                f"({error_type}): {submission_error}"
+            )
+
+            if log_override_errors:
+                logger.error(error_msg)
+                logger.debug(
+                    f"Override submission context: score={score_result.value}, "
+                    f"strategy={criteria.evaluation_config.get('strategy')}, max_score={max_score}"
+                )
+            else:
+                logger.debug(error_msg)
+            return
+
+    except Exception as e:
+        # Catch-all for any unexpected errors
+        error_type = type(e).__name__
+        error_msg = (
+            f"Unexpected error during override submission for session {session_id}, "
+            f"episode {episode_id} ({error_type}): {e}"
+        )
+
+        if log_override_errors:
+            logger.error(error_msg)
+            logger.debug(
+                f"Override submission unexpected error context: enable_override={enable_override}, "
+                f"override_on_failure={override_on_failure}"
+            )
+        else:
+            logger.debug(error_msg)

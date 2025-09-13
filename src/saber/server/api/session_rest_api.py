@@ -11,7 +11,7 @@ import logging
 from typing import TYPE_CHECKING, Optional
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 
 from ...models import (
     BenchmarkInfo,
@@ -27,7 +27,10 @@ from ...models import (
 )
 from ...models.rest.evaluation import (
     EvaluationCriteriaResponse,
+    EvaluationFileUploadResponse,
     EvaluationListResponse,
+    EvaluationOverrideRequest,
+    EvaluationOverrideResponse,
     EvaluationResponse,
     EvaluationSummaryResponse,
 )
@@ -329,6 +332,97 @@ class SessionRestAPI:
                 raise HTTPException(status_code=422, detail=str(e))
             except SessionEvaluationError as e:
                 raise HTTPException(status_code=500, detail=str(e))
+
+        # Evaluation file upload endpoint
+        @self.app.post("/api/v1/session/{session_id}/evaluations/upload", response_model=EvaluationFileUploadResponse)
+        async def upload_evaluation_file_endpoint(
+            session_id: str, file: UploadFile = File(...)
+        ) -> EvaluationFileUploadResponse:
+            """Upload external evaluation file (.eval) to session directory."""
+            logger.info(f"🔄 REST API: Uploading evaluation file for session {session_id}, filename: {file.filename}")
+
+            try:
+                # Validate session exists first
+                self.session_manager._get_session(session_id)
+
+                # Validate file extension
+                if not file.filename or not file.filename.endswith(".eval"):
+                    raise HTTPException(status_code=422, detail="File must have .eval extension")
+
+                # Save file via evaluation manager
+                file_size = await self.session_manager.save_evaluation_file(session_id, file)
+
+                logger.info(
+                    f"✅ REST API: Successfully uploaded evaluation file {file.filename} for session {session_id}"
+                )
+
+                return EvaluationFileUploadResponse(
+                    message="Evaluation file uploaded successfully",
+                    session_id=session_id,
+                    filename=file.filename,
+                    file_size=file_size,
+                )
+
+            except HTTPException:
+                # Re-raise HTTPException to preserve status codes (404, 422, etc.)
+                raise
+            except Exception as e:
+                logger.error(f"❌ REST API: Error uploading evaluation file: {type(e).__name__}: {e}")
+                raise HTTPException(status_code=500, detail=f"Failed to upload evaluation file: {str(e)}")
+
+        # Evaluation override endpoint
+        @self.app.put(
+            "/api/v1/session/{session_id}/evaluations/{episode_id}/override", response_model=EvaluationOverrideResponse
+        )
+        async def override_evaluation_endpoint(
+            session_id: str, episode_id: str, request: EvaluationOverrideRequest
+        ) -> EvaluationOverrideResponse:
+            """Override evaluation result with external evaluation data."""
+            logger.info(f"🔄 REST API: Overriding evaluation for session {session_id}, episode {episode_id}")
+
+            try:
+                # Call session manager to override evaluation
+                evaluation_result = await self.session_manager.override_episode_evaluation(
+                    session_id=session_id,
+                    episode_id=episode_id,
+                    override_request=request,
+                )
+
+                logger.info(
+                    f"✅ REST API: Successfully overridden evaluation for episode {episode_id} in session {session_id}"
+                )
+
+                # Convert to response model
+                from ...models.rest.evaluation import EvaluationResultResponse
+
+                evaluation_response = EvaluationResultResponse(
+                    episode_id=evaluation_result.episode_id,
+                    task_id=evaluation_result.task_id,
+                    strategy=evaluation_result.strategy,
+                    raw_score=evaluation_result.raw_score,
+                    max_score=evaluation_result.max_score,
+                    score=evaluation_result.score,
+                    success=evaluation_result.success,
+                    timestamp=evaluation_result.timestamp,
+                    details=evaluation_result.details,
+                )
+
+                return EvaluationOverrideResponse(
+                    message="Evaluation successfully overridden",
+                    evaluation_result=evaluation_response,
+                    session_id=session_id,
+                    episode_id=episode_id,
+                )
+
+            except HTTPException:
+                # Re-raise HTTPException to preserve status codes (404, 422, etc.)
+                raise
+            except InvalidEvaluationRequestError as e:
+                logger.error(f"❌ REST API: Invalid evaluation request: {e}")
+                raise HTTPException(status_code=422, detail=str(e))
+            except Exception as e:
+                logger.error(f"❌ REST API: Error overriding evaluation: {type(e).__name__}: {e}")
+                raise HTTPException(status_code=500, detail=f"Failed to override evaluation: {str(e)}")
 
         # Client-side scoring endpoint
         @self.app.get("/api/v1/session/{session_id}/episodes/{episode_id}/evaluation-criteria")

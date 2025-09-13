@@ -72,11 +72,6 @@ evaluation_config:
 - `criteria.judge_user_template`: User prompt template file (in `prompts/judge/` directory)
 - `scoring.max_score`: Maximum score for correct evaluation
 
-#### Available Models
-- `"gpt-4"` - Most capable, recommended for complex evaluations
-- `"gpt-3.5-turbo"` - Faster, suitable for simpler evaluations
-- `"gpt-4-turbo"` - Balance of capability and speed
-
 #### Template Requirements
 Templates must be placed in `{config_dir}/prompts/judge/` directory and use Jinja2 syntax.
 
@@ -109,7 +104,7 @@ evaluation_config:
   strategy: "llm_judge"
   criteria:
     golden_answer: "Agent should identify the IP address associated with the Manatee Tempest activity is 198.43.121.209"
-    model: "gpt-4"
+    model: "openai/azure/gpt-4"
     judge_system_template: "cybersecurity_incident_system.md"
     judge_user_template: "cybersecurity_incident_user.md"
   scoring:

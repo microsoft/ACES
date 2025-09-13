@@ -140,6 +140,12 @@ class SABERConfig:
     log_level: str = "INFO"
     log_dir: Optional[str] = None
 
+    # Log upload configuration
+    log_upload_enabled: bool = True
+    log_upload_max_retries: int = 3
+    log_upload_timeout: float = 30.0
+    log_upload_fail_on_error: bool = False
+
     # eval_async specific configuration
     max_samples: Optional[int] = None
     max_subprocesses: int = 1
@@ -166,6 +172,10 @@ class SABERConfig:
         max_subprocesses: int = 1,
         parallel_execution: bool = True,
         max_parallel_tasks: int = 4,
+        log_upload_enabled: bool = True,
+        log_upload_max_retries: int = 3,
+        log_upload_timeout: float = 30.0,
+        log_upload_fail_on_error: bool = False,
     ) -> "SABERConfig":
         """
         Factory method to create SABERConfig with proper validation.
@@ -188,6 +198,10 @@ class SABERConfig:
             max_subprocesses: Maximum subprocess count
             parallel_execution: Enable parallel execution
             max_parallel_tasks: Maximum parallel tasks
+            log_upload_enabled: Enable automatic log file upload to server
+            log_upload_max_retries: Maximum retry attempts for log upload
+            log_upload_timeout: Timeout for log upload requests in seconds
+            log_upload_fail_on_error: Whether to fail evaluation if log upload fails
 
         Returns:
             Configured SABERConfig instance
@@ -217,6 +231,10 @@ class SABERConfig:
             max_subprocesses=max_subprocesses,
             parallel_execution=parallel_execution,
             max_parallel_tasks=max_parallel_tasks,
+            log_upload_enabled=log_upload_enabled,
+            log_upload_max_retries=log_upload_max_retries,
+            log_upload_timeout=log_upload_timeout,
+            log_upload_fail_on_error=log_upload_fail_on_error,
         )
 
     def __post_init__(self) -> None:
@@ -261,6 +279,13 @@ class SABERConfig:
         # Validate agent_config type
         if not isinstance(self.agent_config, AgentConfig):
             raise TypeError("agent_config must be an AgentConfig instance")
+
+        # Validate log upload configuration
+        if self.log_upload_max_retries < 0:
+            raise ValueError(f"log_upload_max_retries must be non-negative, got: {self.log_upload_max_retries}")
+
+        if self.log_upload_timeout <= 0:
+            raise ValueError(f"log_upload_timeout must be positive, got: {self.log_upload_timeout}")
 
     # Legacy property accessors for backward compatibility during transition
     @property

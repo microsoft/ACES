@@ -8,9 +8,10 @@ and coordinating all server components. REST API functionality is handled by Ses
 import asyncio
 import uuid
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import HTTPException
+from fastapi import HTTPException, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
 from ..logging_config import (
@@ -22,8 +23,12 @@ from ..logging_config import (
     log_session_end,
 )
 from ..models import BenchmarkInfo, EpisodeEndResponse, EvalSubmission
-from ..models.rest.evaluation import EvaluationCriteriaResponse, JudgeMessages, TaskEvaluationContext
-from .api.events.tool_event_publisher import ToolEventPublisher
+from ..models.rest.evaluation import (
+    EvaluationCriteriaResponse,
+    EvaluationOverrideRequest,
+    JudgeMessages,
+    TaskEvaluationContext,
+)
 from .api.session_mcp_api import SessionMCPAPI
 from .api.session_rest_api import SessionRestAPI
 from .base import Action, CommandResult, Episode
@@ -32,6 +37,7 @@ from .benchmarks.task import Task
 from .episodes.constants import EpisodeTerminationReason
 from .episodes.episode_manager import EpisodeManager
 from .evaluation.evaluation_manager import EvaluationManager
+from .evaluation.models import EvaluationResult
 from .evaluation.session_evaluation_service import SessionEvaluationService
 from .execution.cleanup.cleanup_reason import CleanupReason
 from .execution.execution_manager import ExecutionManager
@@ -807,12 +813,23 @@ class SessionManager:
 
         logger.debug(f"✅ Task evaluation config: strategy={task.evaluation_config.get('strategy')}")
 
-        # Build task context
+        # Build task context with subtasks for step-level evaluation
+        subtasks_data = [
+            {
+                "subtask_id": subtask.subtask_id,
+                "title": subtask.title,
+                "description": subtask.description,
+                "objective": subtask.objective,
+            }
+            for subtask in task.subtasks
+        ]
+
         task_context = TaskEvaluationContext(
             task_id=task.task_id,
             title=task.title,
             description=task.description,
             domain=task.domain,
+            subtasks=subtasks_data,
         )
 
         # Initialize judge messages as None
@@ -880,18 +897,117 @@ class SessionManager:
         logger.info(f"Retrieved evaluation criteria for episode {episode_id} in session {session_id}")
         return evaluation_criteria
 
-    def get_tool_event_publisher(self) -> Optional[ToolEventPublisher]:
+    async def save_evaluation_file(self, session_id: str, file: UploadFile) -> int:
         """
-        Get tool event publisher instance - used by MCP API.
+        Save external evaluation file (.eval) to session directory.
+
+        Args:
+            session_id: ID of the client session
+            file: UploadFile containing the .eval file
 
         Returns:
-            Tool event publisher instance if available
+            int: File size in bytes
+
+        Raises:
+            HTTPException: If session doesn't exist (404) or file save fails (500)
         """
-        # Return the tool event publisher from REST API if available
-        if hasattr(self.rest_api, "tool_event_publisher"):
-            publisher = self.rest_api.tool_event_publisher
-            return publisher if isinstance(publisher, ToolEventPublisher) else None
-        return None
+        logger.info(f"🔄 Saving evaluation file {file.filename} for session {session_id}")
+
+        # Validate session exists (raises HTTPException if not found)
+        self._get_session(session_id)
+
+        try:
+            # Get the evaluation store base path
+            # Type-safe access to base_path - check if it's a file-based store
+            if hasattr(self.evaluation_manager.store, "base_path"):
+                store_base_path = Path(self.evaluation_manager.store.base_path)
+            else:
+                # Fallback for stores without base_path (though none currently exist)
+                raise ValueError("Evaluation store does not support file uploads")
+            session_dir = store_base_path / session_id
+
+            # Create session directory if it doesn't exist
+            session_dir.mkdir(parents=True, exist_ok=True)
+
+            # Save file to session directory
+            file_path = session_dir / file.filename
+
+            # Read file content
+            file_content = await file.read()
+            file_size = len(file_content)
+
+            # Write file to disk
+            with open(file_path, "wb") as f:
+                f.write(file_content)
+
+            logger.info(f"✅ Successfully saved evaluation file {file.filename} ({file_size} bytes) to {file_path}")
+            return file_size
+
+        except Exception as e:
+            logger.error(f"❌ Failed to save evaluation file {file.filename} for session {session_id}: {e}")
+            raise RuntimeError(f"Failed to save evaluation file: {str(e)}") from e
+
+    async def override_episode_evaluation(
+        self,
+        session_id: str,
+        episode_id: str,
+        override_request: EvaluationOverrideRequest,
+    ) -> EvaluationResult:
+        """
+        Override evaluation result for an episode with external evaluation data.
+
+        Args:
+            session_id: ID of the client session
+            episode_id: ID of the episode to override evaluation for
+            override_request: Typed override request containing all evaluation data
+
+        Returns:
+            EvaluationResult: The overridden evaluation result
+
+        Raises:
+            HTTPException: If session or episode not found
+            InvalidEvaluationRequestError: If evaluation data is invalid
+        """
+        logger.info(f"🔄 Overriding evaluation for session {session_id}, episode {episode_id}")
+
+        # Validate session exists
+        session = self._get_session(session_id)
+        if not session:
+            logger.error(f"❌ Session {session_id} not found")
+            raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+
+        # Validate episode exists
+        episode = self.episode_manager.get_episode_by_id(episode_id)
+        if not episode:
+            logger.error(f"❌ Episode {episode_id} not found")
+            raise HTTPException(status_code=404, detail=f"Episode {episode_id} not found")
+
+        logger.debug(f"✅ Session {session_id} and episode {episode_id} validated")
+
+        # Convert evaluation_data dict to EpisodeEvaluationData object
+        from .evaluation.models import EpisodeEvaluationData
+
+        try:
+            episode_eval_data = EpisodeEvaluationData(**override_request.evaluation_data)
+        except Exception as e:
+            logger.error(f"❌ Failed to parse evaluation data: {e}")
+            raise HTTPException(status_code=422, detail=f"Invalid evaluation data: {e}")
+
+        # Delegate to evaluation manager for override
+        evaluation_result = await self.evaluation_manager.override_evaluation_result(
+            session_id=session_id,
+            episode_id=episode_id,
+            evaluation_data=episode_eval_data,
+            strategy=override_request.strategy,
+            raw_score=override_request.raw_score,
+            max_score=override_request.max_score,
+            score=override_request.score,
+            success=override_request.success,
+            details=override_request.details,
+        )
+
+        logger.info(f"✅ Successfully overridden evaluation for episode {episode_id} in session {session_id}")
+        return evaluation_result
 
     def get_episode_by_id(self, episode_id: str) -> Optional[Episode]:
         """

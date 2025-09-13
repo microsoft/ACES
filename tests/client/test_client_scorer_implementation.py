@@ -166,18 +166,21 @@ class TestSABERClientScorer:
             with pytest.raises(RuntimeError, match="session manager not found"):
                 await _get_evaluation_criteria(state)
 
-    @patch('saber.client.inspect_ai.saber_scorer.model_graded_qa')
-    async def test_llm_evaluation_success(self, mock_llm_scorer, mock_llm_criteria, mock_task_state):
+    @patch('saber.client.inspect_ai.saber_scorer.get_model')
+    async def test_llm_evaluation_success(self, mock_get_model, mock_llm_criteria, mock_task_state):
         """Test successful LLM evaluation."""
-        # Mock the inspect_ai LLM scorer result
-        mock_scorer_instance = AsyncMock()
-        mock_scorer_instance.return_value = Score(
-            value="C",
-            answer="I found the flag in /etc/passwd: flag{test_flag}",
-            explanation="The submission correctly identifies the flag location and value",
-            metadata={"confidence": 0.95}
-        )
-        mock_llm_scorer.return_value = mock_scorer_instance
+        # Mock the judge model and its generate method
+        mock_judge_model = AsyncMock()
+        mock_response = Mock()
+        mock_response.completion = """
+STEP_EVALUATIONS:
+[1: whoami] - Successfully executed whoami command and got user information
+[2: find_flag] - Found flag in /etc/passwd file
+[2: task_1] - Main task completed: found the flag
+TASK_COMPLETION_STATUS: COMPLETED_AT_STEP_2
+"""
+        mock_judge_model.generate.return_value = mock_response
+        mock_get_model.return_value = mock_judge_model
 
         submission = "I found the flag in /etc/passwd: flag{test_flag}"
 
@@ -185,12 +188,13 @@ class TestSABERClientScorer:
 
         assert result.value == 1.0
         assert result.answer == submission
-        assert "Client-side LLM evaluation" in result.explanation
-        assert result.metadata["strategy"] == "llm_judge"
+        assert "Client-side" in result.explanation
+        assert result.metadata["strategy"] == "llm_judge_step_evaluation"
         assert result.metadata["scorer_type"] == "saber_client_side"
         assert result.metadata["is_correct"] is True
-        assert result.metadata["original_grade"] == "C"
         assert result.metadata["model"] == "gpt-4"
+        assert result.metadata["task_completed_at_step"] == 2
+        assert len(result.metadata["step_evaluations"]) == 3
 
     async def test_llm_evaluation_missing_judge_messages(self, mock_llm_criteria, mock_task_state):
         """Test LLM evaluation fails when judge messages are missing."""

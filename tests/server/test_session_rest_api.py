@@ -327,3 +327,269 @@ class TestSessionRestAPI:
                 response = client.request(method, endpoint)
 
             assert response.status_code == 404, f"Endpoint {method} {endpoint} should return 404"
+
+    def test_override_evaluation_endpoint_success(self, session_manager_app):
+        """Test successful evaluation override endpoint."""
+        manager, client = session_manager_app
+
+        # Create a session first
+        response = client.post("/api/v1/session?client_id=test_client")
+        assert response.status_code == 200
+        session_id = response.json()["session_id"]
+
+        # Mock the override method on the session manager
+        from saber.server.evaluation.models import EvaluationResult
+        from datetime import datetime, timezone
+
+        mock_result = EvaluationResult(
+            episode_id="test_episode",
+            task_id="test_task",
+            strategy="static",
+            raw_score=1.0,
+            max_score=1.0,
+            score=1.0,
+            success=True,
+            timestamp=datetime.now(timezone.utc),
+            details={"override": True},
+            submission="flag{override}",
+            executed_commands=["cat flag.txt"],
+            completion_reason="success",
+            step_count=1,
+            model="gpt-4",
+            choices=[{"message": {"content": "Found the flag"}}],
+            tokens={"total": 100, "prompt": 20, "completion": 80},
+            execution_time=30.5
+        )
+
+        manager.override_episode_evaluation = AsyncMock(return_value=mock_result)
+
+        # Test data
+        override_data = {
+            "evaluation_data": {
+                "episode_id": "test_episode",
+                "task_id": "test_task",
+                "submission": "flag{override}",
+                "executed_commands": ["cat flag.txt"],
+                "completion_reason": "success",
+                "step_count": 1,
+                "model": "gpt-4",
+                "choices": [{"message": {"content": "Found the flag"}}],
+                "tokens": {"total": 100, "prompt": 20, "completion": 80},
+                "execution_time": 30.5
+            },
+            "strategy": "static",
+            "raw_score": 1.0,
+            "max_score": 1.0,
+            "score": 1.0,
+            "success": True,
+            "details": {"override": True}
+        }
+
+        # Make the request
+        response = client.put(
+            f"/api/v1/session/{session_id}/evaluations/test_episode/override",
+            json=override_data
+        )
+
+        # Verify response
+        if response.status_code != 200:
+            print(f"Response status: {response.status_code}")
+            print(f"Response content: {response.json()}")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["message"] == "Evaluation successfully overridden"
+        assert data["session_id"] == session_id
+        assert data["episode_id"] == "test_episode"
+        assert data["evaluation_result"]["episode_id"] == "test_episode"
+        assert data["evaluation_result"]["task_id"] == "test_task"
+        assert data["evaluation_result"]["strategy"] == "static"
+        assert data["evaluation_result"]["score"] == 1.0
+        assert data["evaluation_result"]["success"] is True
+
+        # Verify the manager method was called
+        manager.override_episode_evaluation.assert_called_once()
+        call_args = manager.override_episode_evaluation.call_args
+
+        # Check the arguments passed to the method
+        assert call_args.kwargs["session_id"] == session_id
+        assert call_args.kwargs["episode_id"] == "test_episode"
+
+        # Check that the override_request has the correct data
+        override_request = call_args.kwargs["override_request"]
+        assert override_request.evaluation_data == override_data["evaluation_data"]
+        assert override_request.strategy == "static"
+        assert override_request.raw_score == 1.0
+        assert override_request.max_score == 1.0
+        assert override_request.score == 1.0
+        assert override_request.success is True
+        assert override_request.details == {"override": True}
+
+    def test_override_evaluation_endpoint_invalid_session(self, session_manager_app):
+        """Test evaluation override with invalid session."""
+        manager, client = session_manager_app
+
+        override_data = {
+            "evaluation_data": {
+                "episode_id": "test_episode",
+                "task_id": "test_task",
+                "submission": "flag{override}"
+            },
+            "strategy": "static",
+            "raw_score": 1.0,
+            "max_score": 1.0,
+            "score": 1.0,
+            "success": True
+        }
+
+        # Make request with invalid session
+        response = client.put(
+            "/api/v1/session/invalid_session/evaluations/test_episode/override",
+            json=override_data
+        )
+
+        # Should return 404
+        assert response.status_code == 404
+
+    def test_override_evaluation_endpoint_missing_data(self, session_manager_app):
+        """Test evaluation override with missing data."""
+        manager, client = session_manager_app
+
+        # Create a session first
+        response = client.post("/api/v1/session?client_id=test_client")
+        assert response.status_code == 200
+        session_id = response.json()["session_id"]
+
+        # Test with missing evaluation_data
+        incomplete_data = {
+            "strategy": "static",
+            "scores": {
+                "raw_score": 1.0,
+                "max_score": 1.0,
+                "score": 1.0,
+                "success": True
+            },
+            "success": True
+        }
+
+        # Make request with incomplete data
+        response = client.put(
+            f"/api/v1/session/{session_id}/evaluations/test_episode/override",
+            json=incomplete_data
+        )
+
+        # Should return 422 (validation error)
+        assert response.status_code == 422
+
+    def test_upload_evaluation_file_success(self, session_manager_app):
+        """Test successful evaluation file upload."""
+        manager, client = session_manager_app
+
+        # Create session first
+        create_response = client.post("/api/v1/session?client_id=test_client")
+        session_id = create_response.json()["session_id"]
+
+        # Create mock file content
+        file_content = b"mock evaluation file content"
+        file_name = "2025-09-12T18-30-19+00-00_task_6fNr9cmCDuFvbnoRnQeVmf.eval"
+
+        # Mock the save_evaluation_file method
+        with patch.object(manager, 'save_evaluation_file', return_value=len(file_content)) as mock_save:
+            # Upload file
+            response = client.post(
+                f"/api/v1/session/{session_id}/evaluations/upload",
+                files={"file": (file_name, file_content, "application/octet-stream")}
+            )
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["message"] == "Evaluation file uploaded successfully"
+            assert data["session_id"] == session_id
+            assert data["filename"] == file_name
+            assert data["file_size"] == len(file_content)
+            assert "upload_timestamp" in data
+
+            # Verify the save method was called
+            mock_save.assert_called_once()
+
+    def test_upload_evaluation_file_invalid_extension(self, session_manager_app):
+        """Test evaluation file upload with invalid extension."""
+        manager, client = session_manager_app
+
+        # Create session first
+        create_response = client.post("/api/v1/session?client_id=test_client")
+        session_id = create_response.json()["session_id"]
+
+        # Create file with invalid extension
+        file_content = b"invalid file content"
+        file_name = "invalid_file.txt"
+
+        # Upload file with invalid extension
+        response = client.post(
+            f"/api/v1/session/{session_id}/evaluations/upload",
+            files={"file": (file_name, file_content, "text/plain")}
+        )
+
+        assert response.status_code == 422
+        data = response.json()
+        assert "File must have .eval extension" in data["detail"]
+
+    def test_upload_evaluation_file_missing_filename(self, session_manager_app):
+        """Test evaluation file upload with no file parameter."""
+        manager, client = session_manager_app
+
+        # Create session first
+        create_response = client.post("/api/v1/session?client_id=test_client")
+        session_id = create_response.json()["session_id"]
+
+        # Upload without file parameter
+        response = client.post(f"/api/v1/session/{session_id}/evaluations/upload")
+
+        assert response.status_code == 422
+        data = response.json()
+        # This should be a validation error about missing required field
+        assert "field required" in str(data["detail"]).lower() or "missing" in str(data["detail"]).lower()
+
+    def test_upload_evaluation_file_nonexistent_session(self, session_manager_app):
+        """Test evaluation file upload for non-existent session."""
+        manager, client = session_manager_app
+
+        invalid_session_id = "nonexistent_session_123"
+        file_content = b"mock evaluation file content"
+        file_name = "test_file.eval"
+
+        # Upload file for non-existent session
+        response = client.post(
+            f"/api/v1/session/{invalid_session_id}/evaluations/upload",
+            files={"file": (file_name, file_content, "application/octet-stream")}
+        )
+
+        assert response.status_code == 404
+        data = response.json()
+        assert "Session not found" in data["detail"]
+
+    def test_upload_evaluation_file_save_failure(self, session_manager_app):
+        """Test evaluation file upload when save operation fails."""
+        manager, client = session_manager_app
+
+        # Create session first
+        create_response = client.post("/api/v1/session?client_id=test_client")
+        session_id = create_response.json()["session_id"]
+
+        file_content = b"mock evaluation file content"
+        file_name = "test_file.eval"
+
+        # Mock the save_evaluation_file method to raise an exception
+        with patch.object(manager, 'save_evaluation_file', side_effect=RuntimeError("Disk full")) as mock_save:
+            # Upload file
+            response = client.post(
+                f"/api/v1/session/{session_id}/evaluations/upload",
+                files={"file": (file_name, file_content, "application/octet-stream")}
+            )
+
+            assert response.status_code == 500
+            data = response.json()
+            assert "Failed to upload evaluation file" in data["detail"]
+            assert "Disk full" in data["detail"]
+
+            # Verify the save method was called
+            mock_save.assert_called_once()

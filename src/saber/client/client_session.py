@@ -19,7 +19,7 @@ from ..models import (  # Use shared api models directly
     SessionCreateResponse,
     TaskInfo,
 )
-from ..models.rest.evaluation import EvaluationCriteriaResponse, EvaluationResultResponse
+from ..models.rest.evaluation import EvaluationCriteriaResponse, EvaluationOverrideRequest, EvaluationResultResponse
 from .models import SessionManagerConfig
 
 logger = logging.getLogger(__name__)
@@ -387,6 +387,47 @@ class ClientSessionManager:
                         f"Failed to get evaluation criteria for episode {episode_id}: {response.status} - {error_text}"
                     )
 
+    async def override_episode_evaluation(
+        self, session_id: str, episode_id: str, override_request: EvaluationOverrideRequest
+    ) -> dict:
+        """
+        Submit evaluation override to server via REST API.
+
+        Args:
+            session_id: Session ID containing the episode
+            episode_id: Episode ID to override evaluation for
+            override_request: Strongly typed override request object
+
+        Returns:
+            Server response dict confirming override submission
+
+        Raises:
+            Exception: If override submission fails
+        """
+        logger.debug(f"Submitting evaluation override for episode {episode_id} in session {session_id}")
+
+        url = f"{self.base_url}/api/v1/session/{session_id}/evaluations/{episode_id}/override"
+
+        # Convert override request to JSON format for HTTP transmission
+        request_data = override_request.model_dump()
+
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.timeout)) as session:
+            async with session.put(url, json=request_data) as response:
+                if response.status == 200:
+                    response_data = await response.json()
+                    logger.debug(f"Successfully submitted override for episode {episode_id}")
+                    return dict(response_data)
+                elif response.status == 404:
+                    raise Exception(f"Episode {episode_id} not found for override submission")
+                elif response.status == 400:
+                    error_text = await response.text()
+                    raise Exception(f"Invalid override request for episode {episode_id}: {error_text}")
+                else:
+                    error_text = await response.text()
+                    raise Exception(
+                        f"Failed to submit override for episode {episode_id}: {response.status} - {error_text}"
+                    )
+
     def get_current_session_id(self) -> Optional[str]:
         """Get current session ID."""
         return self._current_session_id
@@ -396,6 +437,53 @@ class ClientSessionManager:
         if not self._current_session_id:
             raise RuntimeError("No active session - call create_session() first")
         return self._current_session_id
+
+    async def upload_evaluation_file(self, session_id: str, file_path: str, timeout: Optional[float] = None) -> dict:
+        """
+        Upload an evaluation file to the server via REST API.
+
+        Args:
+            session_id: Session ID to upload file for
+            file_path: Absolute path to the .eval file to upload
+            timeout: Upload timeout in seconds (defaults to instance timeout)
+
+        Returns:
+            dict: Upload response containing file info and status
+
+        Raises:
+            Exception: If file doesn't exist or upload fails
+        """
+        import os
+
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Eval file not found: {file_path}")
+
+        filename = os.path.basename(file_path)
+        logger.info(f"Uploading evaluation file {filename} for session {session_id}")
+
+        url = f"{self.base_url}/api/v1/session/{session_id}/evaluations/upload"
+
+        # Read file for upload
+        with open(file_path, "rb") as f:
+            file_content = f.read()
+
+        # Create form data for file upload
+        data = aiohttp.FormData()
+        data.add_field("file", file_content, filename=filename, content_type="application/octet-stream")
+
+        # Use provided timeout or fall back to instance timeout
+        upload_timeout = timeout if timeout is not None else self.timeout
+
+        async with aiohttp.ClientSession() as session:
+            timeout_config = aiohttp.ClientTimeout(total=upload_timeout)
+            async with session.post(url, data=data, timeout=timeout_config) as response:
+                if response.status == 200:
+                    response_data = await response.json()
+                    logger.info(f"Successfully uploaded evaluation file {filename}")
+                    return dict(response_data)
+                else:
+                    error_text = await response.text()
+                    raise Exception(f"Failed to upload evaluation file {filename}: {response.status} - {error_text}")
 
     async def cleanup(self) -> None:
         """Cleanup session manager resources."""

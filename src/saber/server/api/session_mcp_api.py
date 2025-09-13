@@ -8,8 +8,6 @@ are handled by SessionRestAPI.
 
 import json
 import logging
-import time
-import uuid
 
 # Forward declaration to avoid circular imports
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -372,121 +370,22 @@ class SessionMCPAPI:
         assert headers.session_id is not None
         assert headers.episode_id is not None
 
-        # Get task_id from the specific episode, not the session
+        # Get episode for validation
         episode = self.session_manager.get_episode_by_id(headers.episode_id)
         if not episode:
             return MCPToolCallResponse(
                 content=[{"type": "text", "text": f"Error: Episode {headers.episode_id} not found"}], isError=True
             )
-        task_id = episode.task_id
-
-        # Get step information for progress tracking from the specific episode
-        current_step = len(episode.steps) + 1  # +1 because we're about to start a new step
-        max_steps = episode.max_steps
-
-        # Generate unique call ID for tracking
-        call_id = str(uuid.uuid4())
-        start_time = time.time()
-
-        # Publish tool started event with task_id and step info
-        tool_event_publisher = self.session_manager.get_tool_event_publisher()
-        if tool_event_publisher:
-            try:
-                await tool_event_publisher.publish_tool_started(
-                    session_id=headers.session_id,
-                    episode_id=headers.episode_id,
-                    tool_name=name,
-                    arguments=arguments,
-                    call_id=call_id,
-                    task_id=task_id,
-                    current_step=current_step,
-                    max_steps=max_steps,
-                )
-                logger.debug(
-                    f"Published tool_call_started event: {name} (call_id={call_id}, "
-                    f"task_id={task_id}, episode_id={headers.episode_id}, step={current_step}/{max_steps}, "
-                    f"orchestration: {headers.orchestration_env})"
-                )
-            except Exception as e:
-                logger.error(f"Failed to publish tool_call_started event: {e}")
-                # Continue execution - event publishing failure shouldn't break tool execution
 
         try:
             # Execute action through SessionManager with explicit episode_id
             action = self._convert_to_action(name, arguments)
             command_result = await self.session_manager.execute_action(headers.session_id, headers.episode_id, action)
 
-            # Calculate execution time
-            execution_time_ms = (time.time() - start_time) * 1000
-
-            # Publish tool completed event
-            tool_event_publisher = self.session_manager.get_tool_event_publisher()
-            if tool_event_publisher:
-                try:
-                    # Get updated step info after tool execution from the specific episode
-                    updated_episode = self.session_manager.get_episode_by_id(headers.episode_id)
-                    completed_step = len(updated_episode.steps) if updated_episode else current_step
-
-                    await tool_event_publisher.publish_tool_completed(
-                        session_id=headers.session_id,
-                        episode_id=headers.episode_id,
-                        tool_name=name,
-                        call_id=call_id,
-                        success=command_result.success,
-                        arguments=arguments,
-                        result=(
-                            command_result.data.get("output")
-                            if command_result.success and command_result.data
-                            else command_result.stdout
-                        ),
-                        error=command_result.error if not command_result.success else None,
-                        execution_time_ms=execution_time_ms,
-                        task_id=task_id,
-                        current_step=completed_step,
-                        max_steps=max_steps,
-                    )
-                    logger.debug(
-                        f"Published tool_call_completed event: {name} "
-                        f"({'success' if command_result.success else 'failed'}, "
-                        f"task_id={task_id}, episode_id={headers.episode_id}, step={completed_step}/{max_steps}, "
-                        f"orchestration: {headers.orchestration_env})"
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to publish tool_call_completed event: {e}")
-
             # Convert result to MCP format using typed response
             return self._convert_to_mcp_result(command_result)
 
         except Exception as e:
-            # Calculate execution time for failed call
-            execution_time_ms = (time.time() - start_time) * 1000
-
-            # Publish tool failed event
-            tool_event_publisher = self.session_manager.get_tool_event_publisher()
-            if tool_event_publisher:
-                try:
-                    await tool_event_publisher.publish_tool_completed(
-                        session_id=headers.session_id,
-                        episode_id=headers.episode_id,
-                        tool_name=name,
-                        call_id=call_id,
-                        success=False,
-                        arguments=arguments,  # Include the original arguments
-                        result=None,
-                        error=str(e),
-                        execution_time_ms=execution_time_ms,
-                        task_id=task_id,
-                        current_step=current_step,
-                        max_steps=max_steps,
-                    )
-                    logger.debug(
-                        f"Published tool_call_completed (failed) event: {name} "
-                        f"(task_id={task_id}, episode_id={headers.episode_id}, step={current_step}/{max_steps}, "
-                        f"orchestration: {headers.orchestration_env})"
-                    )
-                except Exception as pub_error:
-                    logger.error(f"Failed to publish tool_call_completed (failed) event: {pub_error}")
-
             logger.error(f"Error handling call_tool {name}: {e}")
             return MCPToolCallResponse(
                 content=[{"type": "text", "text": f"Error: Tool execution failed: {str(e)}"}], isError=True
@@ -600,26 +499,29 @@ class SessionMCPAPI:
 
     def _convert_to_mcp_result(self, command_result: CommandResult) -> MCPToolCallResponse:
         """
-        Convert CommandResult to MCP-compatible result with episode termination signals.
+        Convert CommandResult to MCP-compatible result with direct access to execution data.
+
+        Following SABER best practices: fail fast, explicit state, no defensive programming.
+        Returns raw command execution data for direct client access.
 
         Args:
             command_result: Result from command execution
 
         Returns:
-            MCPToolCallResponse with optional termination metadata
+            MCPToolCallResponse with structured command execution data
         """
-        if command_result.success:
-            # Check if we need to add episode termination signals
-            result_text = str(command_result.data) if command_result.data else "Command executed successfully"
+        # Build structured result with direct access to command data
+        result_data = {
+            "stdout": command_result.stdout,
+            "stderr": command_result.stderr,
+            "exit_code": command_result.exit_code,
+        }
 
-            # Add episode termination signal if present in command result metadata
-            if hasattr(command_result, "metadata") and command_result.metadata:
-                if command_result.metadata.get("episode_terminated"):
-                    termination_reason = command_result.metadata.get("termination_reason", "server_terminated")
-                    result_text += f"\n[EPISODE_TERMINATED: {termination_reason}]"
+        # Add episode termination signal if present
+        if command_result.metadata.get("episode_terminated"):
+            result_data["episode_terminated"] = True
+            result_data["termination_reason"] = command_result.metadata.get("termination_reason", "server_terminated")
 
-            return MCPToolCallResponse(content=[{"type": "text", "text": result_text}], isError=False)
-        else:
-            return MCPToolCallResponse(
-                content=[{"type": "text", "text": f"Error: {command_result.error}"}], isError=True
-            )
+        return MCPToolCallResponse(
+            content=[{"type": "application/json", "data": result_data}], isError=not command_result.success
+        )

@@ -304,6 +304,24 @@ class SABEREvaluationOrchestrator:
             raise RuntimeError("Agent manager not initialized")
         return await self._agent_manager.create_task(dataset)
 
+    async def get_session_id(self) -> str:
+        """
+        Get the current session ID.
+
+        Returns:
+            Current session ID
+
+        Raises:
+            RuntimeError: If session manager not initialized or no active session
+        """
+        if self._session_manager is None:
+            raise RuntimeError("Session manager not initialized")
+
+        session_id = self._session_manager.get_current_session_id()
+        if session_id is None:
+            raise RuntimeError("No active session")
+        return session_id
+
     # Helper Methods
     def _session_manager_context(self) -> Any:  # TODO: Better type annotation
         """

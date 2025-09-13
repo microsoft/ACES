@@ -20,9 +20,6 @@ from .admin import (
 # Core domain models
 from .core import BenchmarkInfo, EvalSubmission, PolicyInfo, TaskInfo
 
-# Event streaming models
-from .events import ToolCallEventComplete, ToolCallEventProgress, ToolCallEventStart
-
 # HTTP headers
 from .headers import HTTPHeaders
 
@@ -106,10 +103,6 @@ __all__ = [
     "MCPToolNotFoundError",
     "MCPExecutionError",
     "MCPTimeoutError",
-    # Event streaming models
-    "ToolCallEventStart",
-    "ToolCallEventProgress",
-    "ToolCallEventComplete",
     # Administrative models
     "CleanupHistoryEntry",
     "CleanupHistoryResponse",

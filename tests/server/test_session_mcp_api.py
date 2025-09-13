@@ -135,8 +135,10 @@ class TestSessionMCPAPI:
 
         # Verify result format
         assert result.isError is False
-        assert result.content[0]["type"] == "text"
-        assert "output" in result.content[0]["text"]
+        assert result.content[0]["type"] == "application/json"
+        assert "stdout" in result.content[0]["data"]
+        assert "stderr" in result.content[0]["data"]
+        assert "exit_code" in result.content[0]["data"]
 
         # Verify execute_action was called correctly with both session_id and episode_id
         mcp_api.session_manager.execute_action.assert_called_once()
@@ -174,8 +176,10 @@ class TestSessionMCPAPI:
 
         # Verify error result format
         assert result.isError is True
-        assert result.content[0]["type"] == "text"
-        assert "Error: Command failed" in result.content[0]["text"]
+        assert result.content[0]["type"] == "application/json"
+        assert "stdout" in result.content[0]["data"]
+        assert "stderr" in result.content[0]["data"]
+        assert "exit_code" in result.content[0]["data"]
 
     @pytest.mark.asyncio
     async def test_handle_call_tool_missing_session(self, mcp_api):
@@ -292,8 +296,8 @@ class TestSessionMCPAPI:
 
         # Verify it executes without error and calls execute_action
         assert result.isError is False
-        assert result.content[0]["type"] == "text"
-        assert "Episode action completed" in result.content[0]["text"]
+        assert result.content[0]["type"] == "application/json"
+        assert "stdout" in result.content[0]["data"]
 
         # Verify execute_action was called with end_episode action
         mcp_api.session_manager.execute_action.assert_called_once()
@@ -324,8 +328,10 @@ class TestSessionMCPAPI:
         mcp_result = mcp_api._convert_to_mcp_result(command_result)
 
         assert mcp_result.isError is False
-        assert mcp_result.content[0]["type"] == "text"
-        assert "output" in mcp_result.content[0]["text"]
+        assert mcp_result.content[0]["type"] == "application/json"
+        assert "stdout" in mcp_result.content[0]["data"]
+        assert "stderr" in mcp_result.content[0]["data"]
+        assert "exit_code" in mcp_result.content[0]["data"]
 
     def test_convert_to_mcp_result_error(self, mcp_api):
         """Test conversion of error CommandResult to MCP format."""
@@ -334,8 +340,10 @@ class TestSessionMCPAPI:
         mcp_result = mcp_api._convert_to_mcp_result(command_result)
 
         assert mcp_result.isError is True
-        assert mcp_result.content[0]["type"] == "text"
-        assert "Error: Command execution failed" in mcp_result.content[0]["text"]
+        assert mcp_result.content[0]["type"] == "application/json"
+        assert "stdout" in mcp_result.content[0]["data"]
+        assert "stderr" in mcp_result.content[0]["data"]
+        assert "exit_code" in mcp_result.content[0]["data"]
 
     @pytest.mark.asyncio
     async def test_start_and_shutdown_mcp_server(self, mcp_api):
@@ -354,7 +362,8 @@ class TestSessionMCPAPI:
 
             # Test shutdown
             await mcp_api.shutdown_mcp_server()
-            mock_server.close.assert_called_once()
+            # FastMCP doesn't require explicit cleanup, just sets server to None
+            assert mcp_api.mcp_server is None
 
 
 class TestSessionMCPAPIOrchestration:
@@ -560,8 +569,8 @@ class TestSessionMCPAPIOrchestration:
 
         # Verify result format
         assert result.isError is False
-        assert result.content[0]["type"] == "text"
-        assert "output" in result.content[0]["text"]
+        assert result.content[0]["type"] == "application/json"
+        assert "stdout" in result.content[0]["data"]
 
         # Verify execute_action was called correctly
         mcp_api.session_manager.execute_action.assert_called_once()

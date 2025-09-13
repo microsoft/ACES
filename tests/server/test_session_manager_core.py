@@ -6,9 +6,12 @@ Tests session creation, termination, and basic server lifecycle.
 
 import uuid
 from datetime import datetime
+from io import BytesIO
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import UploadFile
 
 from saber.server.session_manager import ClientSession, SessionManager
 
@@ -267,6 +270,87 @@ class TestSessionManagerCore:
             assert "uptime_seconds" in session_stat
             assert "time_since_activity_seconds" in session_stat
             assert "is_active" in session_stat
+
+    @pytest.mark.asyncio
+    async def test_save_evaluation_file_success(self, session_manager, tmp_path):
+        """Test successful evaluation file save."""
+        # Create a session first
+        session = await session_manager.create_session("test_client")
+        session_id = session.session_id
+
+        # Mock the evaluation store base path
+        session_manager.evaluation_manager.store.base_path = tmp_path
+
+        # Create mock file
+        file_content = b"mock evaluation file content"
+        file_name = "2025-09-12T18-30-19+00-00_task_123.eval"
+
+        # Create UploadFile mock
+        file_like = BytesIO(file_content)
+        upload_file = UploadFile(filename=file_name, file=file_like)
+
+        # Save file
+        file_size = await session_manager.save_evaluation_file(session_id, upload_file)
+
+        # Verify file was saved
+        expected_path = tmp_path / session_id / file_name
+        assert expected_path.exists()
+        assert expected_path.read_bytes() == file_content
+        assert file_size == len(file_content)
+
+    @pytest.mark.asyncio
+    async def test_save_evaluation_file_nonexistent_session(self, session_manager, tmp_path):
+        """Test evaluation file save for non-existent session."""
+        # Mock the evaluation store base path
+        session_manager.evaluation_manager.store.base_path = tmp_path
+
+        # Create mock file
+        file_content = b"mock evaluation file content"
+        file_name = "test_file.eval"
+
+        # Create UploadFile mock
+        file_like = BytesIO(file_content)
+        upload_file = UploadFile(filename=file_name, file=file_like)
+
+        # Try to save file for non-existent session
+        with pytest.raises(Exception) as exc_info:
+            await session_manager.save_evaluation_file("nonexistent_session", upload_file)
+
+        assert "Session" in str(exc_info.value) and "not found" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_save_evaluation_file_creates_directory(self, session_manager, tmp_path):
+        """Test that save_evaluation_file creates session directory if it doesn't exist."""
+        # Create a session first
+        session = await session_manager.create_session("test_client")
+        session_id = session.session_id
+
+        # Mock the evaluation store base path
+        session_manager.evaluation_manager.store.base_path = tmp_path
+
+        # Ensure session directory doesn't exist initially
+        session_dir = tmp_path / session_id
+        assert not session_dir.exists()
+
+        # Create mock file
+        file_content = b"test content"
+        file_name = "test_file.eval"
+
+        # Create UploadFile mock
+        file_like = BytesIO(file_content)
+        upload_file = UploadFile(filename=file_name, file=file_like)
+
+        # Save file
+        await session_manager.save_evaluation_file(session_id, upload_file)
+
+        # Verify directory was created
+        assert session_dir.exists()
+        assert session_dir.is_dir()
+
+        # Verify file was saved
+        file_path = session_dir / file_name
+        assert file_path.exists()
+        assert file_path.read_bytes() == file_content
 
 
 class TestClientSession:

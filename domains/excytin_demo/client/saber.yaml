@@ -37,6 +37,13 @@ log_level: "INFO"
 log_dir: "./logs"
 ui_enabled: true
 
+# Log upload configuration
+log_upload:
+  enabled: true  # Enable automatic upload of eval log files to server
+  max_retries: 3  # Maximum retry attempts for failed uploads
+  timeout: 30.0  # Upload timeout in seconds
+  fail_on_error: false  # Whether to fail evaluation if log upload fails
+
 # eval_async specific configuration
 max_samples: null  # null means no limit
 max_subprocesses: 1  # parallel execution

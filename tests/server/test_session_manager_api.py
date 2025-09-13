@@ -293,16 +293,19 @@ class TestSessionManagerAPI:
         assert data["task_id"] == "test_task"
 
     def test_get_evaluation_criteria_session_not_found(self, session_manager_app):
-        """Test evaluation criteria endpoint with non-existent session."""
+        """Test evaluation criteria endpoint with non-existent episode."""
         manager, client = session_manager_app
 
         invalid_session_id = "nonexistent_session"
         episode_id = "test_episode"
 
+        # Mock episode_manager to return None for nonexistent episode
+        manager.episode_manager.get_episode_by_id = MagicMock(return_value=None)
+
         response = client.get(f"/api/v1/session/{invalid_session_id}/episodes/{episode_id}/evaluation-criteria")
 
         assert response.status_code == 404
-        assert "Session not found" in response.json()["detail"]
+        assert f"Episode {episode_id} not found" in response.json()["detail"]
 
     def test_get_evaluation_criteria_template_rendering_error(self, session_manager_app):
         """Test evaluation criteria endpoint when template rendering fails."""
