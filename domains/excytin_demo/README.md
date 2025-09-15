@@ -96,12 +96,20 @@ Ensure you have:
 - Access to the SABER repository
 
 ### 2. Build Images
+First reach out to Kyle DeProw or Anand Mudgerikar for Excytin data files. You will need to put the uncompressed data director at server/data such that the structure after uncompressing is:
+
+```
+├── server/
+│   ├── data/
+│   │   ├── csv_files
+│   │   └── sql_files
+```
 
 From the repository root:
 
 ```bash
-cd /path/to/SABER/domains/excytin_demo
-./build-images.sh
+cd /path/to/SABER/domains/excytin_demo/docker
+./build-images.sh --full-build
 ```
 
 This builds:
@@ -111,36 +119,11 @@ This builds:
 - `saber/excytin-incident-5:latest`   - Custom MySQL with SQL data (Docker-in-Docker workaround)"
 
 ### 3. Start Environment
+Copy client/.env.template to client/.env and set your secrets for the LLM endpoint. When done:
 
-**Option A: Quick Setup with Permissions Fix (Recommended)**
-```bash
-cd /path/to/SABER/domains/excytin_demo
-./setup-permissions.sh
 ```
-
-This automatically:
-- Sets proper user permissions for log files
-- Fixes existing log file ownership
-- Starts containers with your host user ID
-- Provides helpful usage examples
-
-**Option B: Manual Setup**
-```bash
-cd /path/to/SABER/domains/excytin_demo
-
-# Set environment variables for proper permissions
-export DOCKER_UID=$(id -u)
-export DOCKER_GID=$(id -g)
-
-# Fix existing log permissions (optional)
-sudo chown -R $DOCKER_UID:$DOCKER_GID ./client/logs/ ./server/logs/
-
-# Start containers
 docker compose up -d
 ```
-
-**Important: Log File Permissions**
-By default, Docker containers run as root and create log files with root ownership. The updated docker-compose.yml now includes user mapping (`user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"`) to ensure log files are created with your host user permissions, making them readable without sudo.
 
 This starts:
 - `saber-excytin-server` - Main SABER server (ports 8000/8001)
@@ -168,6 +151,14 @@ The excytin demo uses the unified SABER client with YAML configuration and inspe
 ```bash
 cd /path/to/SABER/domains/excytin_demo/client
 ./run_demo.sh
+```
+
+Once completed:
+```bash
+uv run python -m saber.client inspect view --log-dir ./client/logs --no-browser --host 0.0.0.0 --port 7577
+
+# ======== Running on http://0.0.0.0:7577 ========
+# Follow this to the web browser to see the results
 ```
 
 #### Advanced Usage
@@ -218,8 +209,6 @@ docker exec -it saber-excytin-client uv run python -m saber.client --config /app
 - ✅ **Agent execution completes**
 - ✅ **Structured logging works**
 - ✅ **Resource cleanup automatic**
-- ❌ No Docker containers spawned for episodes
-- ❌ No container logs captured (because no containers exist)
 
 ## Debugging
 
@@ -366,71 +355,3 @@ grep -i "mcp\|connection\|error" ./client/logs/saber_client_*/saber_client.log
 # Check server-side episode creation
 docker logs saber-excytin-server | grep -i "episode\|environment"
 ```
-
-## What Success Looks Like
-
-When everything works correctly:
-
-1. **Session and Episode Creation**: 
-   ```
-   Created session: <session-id>
-   Created episode: <episode-id>
-   ```
-
-2. **MCP Client Connection**:
-   ```
-   MCP client connected successfully
-   Discovered 3 MCP tools
-   ```
-
-3. **Agent Execution**:
-   ```
-   Tool execution completed: cli
-   Tool execution completed: python
-   Tool execution completed: file_operations
-   ```
-
-4. **Structured Logging**:
-   ```bash
-   ls ./client/logs/
-   # Shows timestamped client logs:
-   #   ├── saber_client_YYYYMMDD_HHMMSS/
-   #   │   └── saber_client.log          # Detailed execution logs
-   #   └── YYYY-MM-DDTHH-MM-SS_task_*.eval  # inspect_ai evaluation results
-   ```
-
-5. **Server-Side Container Management**:
-   ```bash
-   docker ps
-   # Shows permanent MySQL container and episode sandbox:
-   #   saber-excytin-incident-5         # Permanent database
-   #   saber-session-<id>-excytin-sandbox  # Episode sandbox (if active)
-   ```
-
-6. **Clean Resource Cleanup**:
-   ```
-   MCP client disconnected
-   Session <session-id> terminated successfully
-   ClientSessionManager cleanup completed
-   ```
-
-## Unified Architecture Benefits
-
-This new architecture provides:
-
-- **Direct Agent Execution**: No container overhead for agent runtime
-- **Fail-Fast Error Handling**: Immediate failure alerts with clear error messages
-- **Resource Management**: Automatic cleanup of sessions, episodes, and containers
-- **Structured Logging**: Timestamped logs compatible with inspect_ai tooling
-- **Real-time UI**: Progress bars and status updates during execution
-- **Modular Design**: Clean separation between client orchestration and server execution
-- **Tool Integration**: Direct MCP client connections for efficient tool usage
-
-## Next Steps
-
-This unified architecture serves as the foundation for more complex domains:
-- **webapp_pentest**: Multi-container pentesting scenarios with target applications
-- **malware_analysis**: Isolated sandbox environments for malware execution
-- **red_team_ops**: Complex attack chain scenarios across multiple targets
-
-The inspect_ai integration ensures consistent evaluation methodology across all domains while maintaining the flexibility for domain-specific customization.
