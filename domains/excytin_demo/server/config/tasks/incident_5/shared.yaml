@@ -1,0 +1,12 @@
+# Shared configuration for all incident_5 tasks
+# This configuration will be merged into the initial_context of all tasks in this directory
+
+initial_context:
+  database_connection:
+    hostname: "saber-excytin-incident-5"
+    port: 3306
+    username: "admin"
+    password: "admin"
+    database: "env_monitor_db"
+    ssl_mode: "disabled"
+    connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin env_monitor_db"

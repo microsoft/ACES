@@ -171,15 +171,50 @@ tasks:
 
 @pytest.fixture
 def temp_config_dir_helper():
-    """Helper fixture to create temporary config directories with YAML content and prompts directory."""
+    """Helper fixture to create temporary config directories with hierarchical task structure and prompts directory."""
     def _create_temp_config_dir(tmp_path, yaml_content):
         # Create the config directory
         config_dir = tmp_path / "config"
         config_dir.mkdir()
 
-        # Write the tasks.yaml file
-        tasks_file = config_dir / "tasks.yaml"
-        tasks_file.write_text(yaml_content)
+        # Parse the old YAML content to extract relevant parts
+        yaml_data = yaml.safe_load(yaml_content)
+
+        # Create the tasks directory
+        tasks_dir = config_dir / "tasks"
+        tasks_dir.mkdir()
+
+        # Create global.yaml with domain and benchmark_config
+        global_config = {
+            "domain": yaml_data.get("domain"),
+            "benchmark_config": yaml_data.get("benchmark_config", {}),
+            "global_defaults": yaml_data.get("global_defaults", {}),
+            "executors": yaml_data.get("executors", [])
+        }
+
+        # Add allowed_executors from top-level to executors if exists
+        if "allowed_executors" in yaml_data:
+            global_config["executors"] = yaml_data["allowed_executors"]
+
+        # Add permanent_environment if present
+        if "permanent_environment" in yaml_data:
+            global_config["permanent_environment"] = yaml_data["permanent_environment"]
+
+        global_file = tasks_dir / "global.yaml"
+        global_file.write_text(yaml.dump(global_config, default_flow_style=False))
+
+        # Create task files from the tasks list
+        if "tasks" in yaml_data and yaml_data["tasks"]:
+            # For each task, create a separate file or group them
+            for i, task in enumerate(yaml_data["tasks"]):
+                task_file = tasks_dir / f"task_{i+1}.yaml"
+                task_data = {"tasks": [task]}
+                task_file.write_text(yaml.dump(task_data, default_flow_style=False))
+        else:
+            # If no tasks, create an empty task file to satisfy the loader
+            task_file = tasks_dir / "empty_tasks.yaml"
+            task_data = {"tasks": []}
+            task_file.write_text(yaml.dump(task_data, default_flow_style=False))
 
         # Create the prompts directory
         prompts_dir = config_dir / "prompts"
@@ -190,6 +225,13 @@ def temp_config_dir_helper():
             template_file = prompts_dir / template_name
             template_file.write_text("# Sample Template\n\nThis is a sample prompt template for testing.")
 
+        # Create judge templates directory and files
+        judge_dir = prompts_dir / "judge"
+        judge_dir.mkdir(exist_ok=True)
+        for judge_template_name in ["system.md", "user.md"]:
+            judge_template_file = judge_dir / judge_template_name
+            judge_template_file.write_text("# Sample Judge Template\n\nThis is a sample judge template for testing.")
+
         return str(config_dir)
 
     return _create_temp_config_dir
@@ -197,9 +239,45 @@ def temp_config_dir_helper():
 
 @pytest.fixture
 def temp_config_dir(tmp_path, sample_task_yaml):
-    """Create a temporary directory with tasks.yaml configuration and return the directory path."""
-    tasks_file = tmp_path / "tasks.yaml"
-    tasks_file.write_text(sample_task_yaml)
+    """Create a temporary directory with hierarchical task configuration and return the directory path."""
+    # Parse the YAML content to extract relevant parts
+    yaml_data = yaml.safe_load(sample_task_yaml)
+
+    # Create the tasks directory
+    tasks_dir = tmp_path / "tasks"
+    tasks_dir.mkdir()
+
+    # Create global.yaml with domain and benchmark_config
+    global_config = {
+        "domain": yaml_data.get("domain"),
+        "benchmark_config": yaml_data.get("benchmark_config", {}),
+        "global_defaults": yaml_data.get("global_defaults", {}),
+        "executors": yaml_data.get("executors", [])
+    }
+
+    # Add allowed_executors from top-level to executors if exists
+    if "allowed_executors" in yaml_data:
+        global_config["executors"] = yaml_data["allowed_executors"]
+
+    # Add permanent_environment if present
+    if "permanent_environment" in yaml_data:
+        global_config["permanent_environment"] = yaml_data["permanent_environment"]
+
+    global_file = tasks_dir / "global.yaml"
+    global_file.write_text(yaml.dump(global_config, default_flow_style=False))
+
+    # Create task files from the tasks list
+    if "tasks" in yaml_data and yaml_data["tasks"]:
+        # For each task, create a separate file or group them
+        for i, task in enumerate(yaml_data["tasks"]):
+            task_file = tasks_dir / f"task_{i+1}.yaml"
+            task_data = {"tasks": [task]}
+            task_file.write_text(yaml.dump(task_data, default_flow_style=False))
+    else:
+        # If no tasks, create an empty task file to satisfy the loader
+        task_file = tasks_dir / "empty_tasks.yaml"
+        task_data = {"tasks": []}
+        task_file.write_text(yaml.dump(task_data, default_flow_style=False))
 
     # Create the prompts directory
     prompts_dir = tmp_path / "prompts"
@@ -209,6 +287,13 @@ def temp_config_dir(tmp_path, sample_task_yaml):
     for template_name in ["malware_family_analysis_prompt.md", "malware_analysis_prompt.md", "test_task_prompt.md"]:
         template_file = prompts_dir / template_name
         template_file.write_text("# Sample Template\n\nThis is a sample prompt template for testing.")
+
+    # Create judge templates directory and files
+    judge_dir = prompts_dir / "judge"
+    judge_dir.mkdir(exist_ok=True)
+    for judge_template_name in ["system.md", "user.md"]:
+        judge_template_file = judge_dir / judge_template_name
+        judge_template_file.write_text("# Sample Judge Template\n\nThis is a sample judge template for testing.")
 
     return str(tmp_path)  # Return directory path
 

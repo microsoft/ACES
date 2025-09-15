@@ -1,0 +1,15 @@
+domain: excytin_demo
+permanent_environment: excytin_incident_5
+
+global_defaults:
+  execution_config:
+    allowed_executors:
+      - bash
+      - python
+    timeout: 30
+
+  episode_config:
+    max_steps: 15
+
+  benchmark_config:
+    episode_attempts: 3

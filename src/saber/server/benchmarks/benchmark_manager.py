@@ -33,7 +33,7 @@ class BenchmarkManager:
         """
         self.domain = domain
         self.config_dir = Path(config_dir)
-        self.tasks_file_path = self.config_dir / "tasks.yaml"
+        self.tasks_dir_path = self.config_dir / "tasks"
         self.tasks: Dict[str, Task] = {}
         self.benchmark_config: Dict[str, Any] = {}
 
@@ -45,22 +45,22 @@ class BenchmarkManager:
         self.prompt_generator = PromptGenerator(str(prompts_dir))
 
         logger.info(f"Initializing BenchmarkManager for domain '{domain}' with config dir: {config_dir}")
-        logger.info(f"Tasks file: {self.tasks_file_path}")
+        logger.info(f"Tasks directory: {self.tasks_dir_path}")
 
         # Load tasks and benchmark configuration
-        self.load_tasks_from_yaml()
+        self.load_tasks_from_directory()
 
         # Validate all task templates at startup (fail-fast)
         self.validate_all_task_templates()
 
-    def load_tasks_from_yaml(self) -> None:
+    def load_tasks_from_directory(self) -> None:
         """
         Load and parse YAML task definitions and benchmark configuration using BenchmarkConfigLoader.
 
         Raises:
             InvalidTaskDefinitionException: If YAML is invalid or malformed
         """
-        self.tasks = self.config_loader.load_tasks_from_file(str(self.tasks_file_path))
+        self.tasks = self.config_loader.load_tasks_from_directory(str(self.tasks_dir_path))
         self.benchmark_config = self.config_loader.load_benchmark_config()
 
         # Inject judge prompt renderer functions for llm_judge tasks

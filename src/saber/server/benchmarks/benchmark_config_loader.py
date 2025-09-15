@@ -2,7 +2,7 @@
 
 from logging import getLogger
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import yaml
 
@@ -11,6 +11,30 @@ from .subtask import SubTask
 from .task import Task
 
 logger = getLogger(__name__)
+
+
+def deep_merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Deep merge two dictionaries, with override values taking precedence.
+
+    Args:
+        base: Base dictionary (e.g., global defaults)
+        override: Override dictionary (e.g., task specific config)
+
+    Returns:
+        New dictionary with deep merged values
+    """
+    result = base.copy()
+
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            # Recursively merge nested dictionaries
+            result[key] = deep_merge_dicts(result[key], value)
+        else:
+            # Override takes precedence for non-dict values or new keys
+            result[key] = value
+
+    return result
 
 
 class BenchmarkConfigLoader:
@@ -33,9 +57,77 @@ class BenchmarkConfigLoader:
         self.permanent_environment: Optional[str] = None
         self.yaml_data: Optional[Dict[str, Any]] = None
 
+    def load_tasks_from_directory(self, tasks_dir_path: str) -> Dict[str, Task]:
+        """
+        Load and parse YAML task definitions from directory structure into Task objects.
+
+        Expected structure:
+        tasks/
+        ├── global.yaml              # Global config + defaults
+        ├── task_file1.yaml          # 1-N tasks
+        ├── task_file2.yaml          # 1-N tasks
+        └── category/                # Optional subdirectories
+            └── more_tasks.yaml      # 1-N tasks
+
+        Args:
+            tasks_dir_path: Path to the tasks directory containing global.yaml and task files
+
+        Returns:
+            Dictionary mapping task_id to Task objects
+
+        Raises:
+            InvalidTaskDefinitionException: If YAML is invalid or malformed
+        """
+        tasks_dir = Path(tasks_dir_path)
+        logger.info(f"Loading tasks from directory: {tasks_dir}")
+
+        if not tasks_dir.exists():
+            raise InvalidTaskDefinitionException(f"Tasks directory not found: {tasks_dir}", str(tasks_dir))
+
+        if not tasks_dir.is_dir():
+            raise InvalidTaskDefinitionException(f"Tasks path is not a directory: {tasks_dir}", str(tasks_dir))
+
+        # Load global configuration first
+        global_config_path = tasks_dir / "global.yaml"
+        if not global_config_path.exists():
+            raise InvalidTaskDefinitionException(
+                f"Missing required global.yaml in tasks directory: {global_config_path}", str(global_config_path)
+            )
+
+        self._load_global_config(global_config_path)
+
+        # Discover all task files (exclude global.yaml)
+        task_files = self._discover_task_files(tasks_dir)
+        if not task_files:
+            raise InvalidTaskDefinitionException(f"No task files found in directory: {tasks_dir}", str(tasks_dir))
+
+        logger.info(f"Found {len(task_files)} task files to load")
+
+        # Load tasks from all files
+        all_tasks = {}
+        for task_file in task_files:
+            logger.info(f"Loading tasks from: {task_file}")
+            file_tasks = self._load_tasks_from_single_file(task_file)
+
+            # Check for duplicate task IDs across files
+            for task_id in file_tasks:
+                if task_id in all_tasks:
+                    raise InvalidTaskDefinitionException(
+                        f"Duplicate task_id '{task_id}' found in {task_file}. "
+                        f"Previously defined in another task file.",
+                        str(task_file),
+                    )
+
+            all_tasks.update(file_tasks)
+
+        logger.info(f"Successfully loaded {len(all_tasks)} tasks from {len(task_files)} files")
+        return all_tasks
+
     def load_tasks_from_file(self, tasks_file_path: str) -> Dict[str, Task]:
         """
-        Load and parse YAML task definitions from file into Task objects.
+        DEPRECATED: Load and parse YAML task definitions from single file into Task objects.
+
+        This method is deprecated. Use load_tasks_from_directory() instead.
 
         Args:
             tasks_file_path: Path to the YAML tasks definition file
@@ -124,6 +216,214 @@ class BenchmarkConfigLoader:
                 raise
             logger.error(f"Unexpected error loading tasks: {e}")
             raise InvalidTaskDefinitionException(f"Error loading tasks: {e}", str(tasks_path))
+
+    def _load_global_config(self, global_config_path: Path) -> None:
+        """
+        Load global configuration from global.yaml file.
+
+        Args:
+            global_config_path: Path to global.yaml file
+
+        Raises:
+            InvalidTaskDefinitionException: If global config is invalid
+        """
+        logger.info(f"Loading global configuration from: {global_config_path}")
+
+        try:
+            with open(global_config_path, "r", encoding="utf-8") as file:
+                global_data = yaml.safe_load(file)
+                logger.debug(f"Successfully loaded global YAML data from {global_config_path}")
+
+            if not isinstance(global_data, dict):
+                raise InvalidTaskDefinitionException("Global YAML root must be a dictionary", str(global_config_path))
+
+            # Validate domain consistency
+            yaml_domain = global_data.get("domain")
+            if yaml_domain != self.domain:
+                raise InvalidTaskDefinitionException(
+                    f"Domain mismatch in global.yaml: expected '{self.domain}', got '{yaml_domain}'",
+                    str(global_config_path),
+                )
+
+            # Store global data for processing
+            self.yaml_data = global_data
+
+            # Parse permanent environment configuration (optional)
+            self.permanent_environment = global_data.get("permanent_environment")
+            if self.permanent_environment:
+                logger.info(f"Found permanent environment configuration: {self.permanent_environment}")
+            else:
+                logger.info("No permanent environment configuration found")
+
+            # Parse global defaults configuration (optional)
+            self._parse_global_defaults()
+
+            # Parse benchmark configuration (optional)
+            self._parse_benchmark_config()
+
+            logger.info("Global configuration loaded successfully")
+
+        except yaml.YAMLError as e:
+            raise InvalidTaskDefinitionException(f"YAML parsing error in global.yaml: {e}", str(global_config_path))
+        except Exception as e:
+            if isinstance(e, InvalidTaskDefinitionException):
+                raise
+            raise InvalidTaskDefinitionException(f"Error loading global.yaml: {e}", str(global_config_path))
+
+    def _discover_task_files(self, tasks_dir: Path) -> List[Path]:
+        """
+        Discover all YAML task files in directory, excluding global.yaml and shared.yaml files.
+        Supports both flat and hierarchical organization.
+
+        Args:
+            tasks_dir: Path to tasks directory
+
+        Returns:
+            Sorted list of task file paths
+        """
+        task_files = []
+
+        # Find all .yaml and .yml files recursively, excluding global.yaml and shared.yaml
+        for pattern in ["**/*.yaml", "**/*.yml"]:
+            for yaml_file in tasks_dir.glob(pattern):
+                if yaml_file.name not in ["global.yaml", "global.yml", "shared.yaml", "shared.yml"]:
+                    task_files.append(yaml_file)
+
+        # Sort for deterministic loading order
+        task_files.sort()
+
+        logger.debug(f"Discovered {len(task_files)} task files: {[str(f.relative_to(tasks_dir)) for f in task_files]}")
+        return task_files
+
+    def _load_tasks_from_single_file(self, task_file_path: Path) -> Dict[str, Task]:
+        """
+        Load tasks from a single task file.
+
+        Args:
+            task_file_path: Path to task file
+
+        Returns:
+            Dictionary mapping task_id to Task objects
+
+        Raises:
+            InvalidTaskDefinitionException: If task file is invalid
+        """
+        try:
+            with open(task_file_path, "r", encoding="utf-8") as file:
+                file_data = yaml.safe_load(file)
+                logger.debug(f"Successfully loaded YAML data from {task_file_path}")
+
+            if not isinstance(file_data, dict):
+                raise InvalidTaskDefinitionException("Task file YAML root must be a dictionary", str(task_file_path))
+
+            # Load shared configuration for this directory if it exists
+            shared_config = self._load_shared_config(task_file_path.parent)
+
+            # Parse tasks from this file
+            tasks_data = file_data.get("tasks", [])
+            if not isinstance(tasks_data, list):
+                raise InvalidTaskDefinitionException(
+                    "'tasks' section must be a list of task objects", str(task_file_path)
+                )
+
+            if not tasks_data:
+                logger.warning(f"No tasks found in file: {task_file_path}")
+                return {}
+
+            tasks = {}
+            logger.debug(f"Found {len(tasks_data)} tasks in {task_file_path}")
+
+            for i, task_data in enumerate(tasks_data):
+                logger.debug(f"Parsing task {i+1}/{len(tasks_data)} from {task_file_path}")
+
+                # Merge shared config into task data (task-specific takes precedence)
+                merged_task_data = self._merge_shared_config(task_data, shared_config)
+
+                task = self._parse_task(merged_task_data)
+                tasks[task.task_id] = task
+                logger.info(f"Successfully loaded task '{task.task_id}' from {task_file_path.name}")
+
+            return tasks
+
+        except yaml.YAMLError as e:
+            raise InvalidTaskDefinitionException(f"YAML parsing error in {task_file_path}: {e}", str(task_file_path))
+        except Exception as e:
+            if isinstance(e, InvalidTaskDefinitionException):
+                raise
+            raise InvalidTaskDefinitionException(f"Error loading task file {task_file_path}: {e}", str(task_file_path))
+
+    def _load_shared_config(self, directory: Path) -> Dict[str, Any]:
+        """
+        Load shared configuration from shared.yaml in the given directory.
+
+        Args:
+            directory: Directory to check for shared.yaml
+
+        Returns:
+            Shared configuration dictionary (empty if no shared.yaml found)
+        """
+        shared_file = directory / "shared.yaml"
+
+        if not shared_file.exists():
+            logger.debug(f"No shared.yaml found in {directory}")
+            return {}
+
+        try:
+            with open(shared_file, "r", encoding="utf-8") as file:
+                shared_data = yaml.safe_load(file)
+                logger.debug(f"Successfully loaded shared config from {shared_file}")
+
+            if not isinstance(shared_data, dict):
+                raise InvalidTaskDefinitionException("Shared config YAML root must be a dictionary", str(shared_file))
+
+            logger.info(f"Loaded shared configuration from {shared_file}")
+            return shared_data
+
+        except yaml.YAMLError as e:
+            raise InvalidTaskDefinitionException(f"YAML parsing error in {shared_file}: {e}", str(shared_file))
+        except Exception as e:
+            raise InvalidTaskDefinitionException(f"Error loading shared config {shared_file}: {e}", str(shared_file))
+
+    def _merge_shared_config(self, task_data: Dict[str, Any], shared_config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Merge shared configuration into task data with proper precedence.
+
+        Task-specific configuration takes precedence over shared configuration.
+        Shared config is applied to initial_context and any other compatible fields.
+
+        Args:
+            task_data: Original task configuration
+            shared_config: Shared configuration from directory
+
+        Returns:
+            Merged task configuration
+        """
+        if not shared_config:
+            return task_data
+
+        # Create a deep copy to avoid modifying original data
+        merged_data = task_data.copy()
+
+        # Merge initial_context if both exist
+        if "initial_context" in shared_config and "initial_context" in merged_data:
+            # Task-specific initial_context takes precedence, but we deep merge with shared
+            shared_initial_context = shared_config["initial_context"]
+            task_initial_context = merged_data["initial_context"]
+
+            # Deep merge: shared first, then task-specific (task overrides shared)
+            merged_data["initial_context"] = deep_merge_dicts(shared_initial_context, task_initial_context)
+
+            logger.debug(f"Deep merged shared initial_context for task {task_data.get('task_id', 'unknown')}")
+
+        elif "initial_context" in shared_config:
+            # No task-specific initial_context, use shared
+            merged_data["initial_context"] = shared_config["initial_context"].copy()
+            logger.debug(f"Applied shared initial_context for task {task_data.get('task_id', 'unknown')}")
+
+        # Could extend this to merge other configuration sections as needed
+        # For now, we focus on initial_context as that's where database_connection lives
+
+        return merged_data
 
     def get_allowed_executors(self) -> Optional[list[str]]:
         """
@@ -282,8 +582,8 @@ class BenchmarkConfigLoader:
         task_execution_config = task_data.get("execution_config", {})
         global_execution_defaults = self.global_defaults.get("execution_config", {})
 
-        # Merge global defaults with task-specific config (task-specific takes precedence)
-        execution_config = {**global_execution_defaults, **task_execution_config}
+        # Deep merge global defaults with task-specific config (task-specific takes precedence)
+        execution_config = deep_merge_dicts(global_execution_defaults, task_execution_config)
         # Enforce required execution_config.timeout after merge (explicit or via global defaults)
         if "timeout" not in execution_config:
             raise InvalidTaskDefinitionException(
@@ -311,8 +611,8 @@ class BenchmarkConfigLoader:
         task_episode_config = task_data.get("episode_config", {})
         global_episode_defaults = self.global_defaults.get("episode_config", {})
 
-        # Merge global defaults with task-specific config (task-specific takes precedence)
-        episode_config = {**global_episode_defaults, **task_episode_config}
+        # Deep merge global defaults with task-specific config (task-specific takes precedence)
+        episode_config = deep_merge_dicts(global_episode_defaults, task_episode_config)
 
         # Enforce required episode_config.max_steps after merge
         if "max_steps" not in episode_config:
@@ -339,16 +639,16 @@ class BenchmarkConfigLoader:
                     f"Task '{task_id}' episode_attempts must be a positive integer, got: {episode_attempts}"
                 )
 
-        # Merge configurations in order of precedence:
+        # Deep merge configurations in order of precedence:
         # 1. Global defaults (lowest priority)
         # 2. Domain-level benchmark_config
         # 3. Task-level benchmark_config (highest priority)
-        merged_benchmark_config = {}
-        merged_benchmark_config.update(global_benchmark_defaults)
-        merged_benchmark_config.update(self.benchmark_config)
-        merged_benchmark_config.update(task_benchmark_config)
-
-        # Ensure final config has valid episode_attempts
+        merged_benchmark_config: Dict[str, Any] = {}
+        merged_benchmark_config = deep_merge_dicts(merged_benchmark_config, global_benchmark_defaults)
+        merged_benchmark_config = deep_merge_dicts(merged_benchmark_config, self.benchmark_config)
+        merged_benchmark_config = deep_merge_dicts(
+            merged_benchmark_config, task_benchmark_config
+        )  # Ensure final config has valid episode_attempts
         if "episode_attempts" not in merged_benchmark_config or merged_benchmark_config["episode_attempts"] < 1:
             raise InvalidTaskDefinitionException(
                 f"Task '{task_id}' does not have valid episode_attempts configuration. "

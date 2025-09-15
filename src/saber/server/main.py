@@ -66,7 +66,7 @@ async def main() -> None:
     mcp_port = int(os.getenv("SABER_MCP_PORT", "8001"))
 
     # Construct config file paths
-    tasks_config_path = os.path.join(config_dir, "tasks.yaml")
+    tasks_config_path = os.path.join(config_dir, "tasks")
     environments_config_path = os.path.join(config_dir, "environments.yaml")
 
     logger.info(f"Starting SABER server for domain: {domain_name}")

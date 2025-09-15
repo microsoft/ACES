@@ -26,6 +26,9 @@ def mock_episode_no_submission():
     episode.state = EpisodeState.COMPLETED
     episode.is_complete = True
     episode.submission = None
+    episode.start_time = datetime.now()
+    episode.end_time = datetime.now()
+    episode.steps = []
     return episode
 
 
@@ -224,7 +227,7 @@ class TestEpisodeBasedJudgePrompts:
 
     def test_render_judge_prompt_success(self, prompt_generator, mock_episode_complete, mock_task_llm_judge):
         """Test successful judge prompt rendering with episode data."""
-        result = prompt_generator.render_judge_prompt_for_task(mock_task_llm_judge, mock_episode_complete)
+        result = prompt_generator.render_judge_prompt_for_episode(mock_task_llm_judge, mock_episode_complete)
 
         assert isinstance(result, JudgePromptPayload)
         assert len(result.messages) == 2
@@ -245,7 +248,7 @@ class TestEpisodeBasedJudgePrompts:
     def test_render_judge_prompt_incomplete_episode_fails(self, prompt_generator, mock_episode_incomplete, mock_task_llm_judge):
         """Test that incomplete episodes fail fast."""
         with pytest.raises(EvaluationConfigError) as exc_info:
-            prompt_generator.render_judge_prompt_for_task(mock_task_llm_judge, mock_episode_incomplete)
+            prompt_generator.render_judge_prompt_for_episode(mock_task_llm_judge, mock_episode_incomplete)
 
         assert "incomplete episode" in str(exc_info.value).lower()
         assert "incomplete-episode-456" in str(exc_info.value)
@@ -254,7 +257,7 @@ class TestEpisodeBasedJudgePrompts:
     def test_render_judge_prompt_no_submission_fails(self, prompt_generator, mock_episode_no_submission, mock_task_llm_judge):
         """Test that episodes without submission fail fast."""
         with pytest.raises(EvaluationConfigError) as exc_info:
-            prompt_generator.render_judge_prompt_for_task(mock_task_llm_judge, mock_episode_no_submission)
+            prompt_generator.render_judge_prompt_for_episode(mock_task_llm_judge, mock_episode_no_submission)
 
         assert "without submission data" in str(exc_info.value).lower()
         assert "no-submission-789" in str(exc_info.value)
@@ -262,7 +265,7 @@ class TestEpisodeBasedJudgePrompts:
     def test_render_judge_prompt_non_llm_task_fails(self, prompt_generator, mock_episode_complete, mock_task_non_llm):
         """Test that non-LLM judge tasks fail fast."""
         with pytest.raises(EvaluationConfigError) as exc_info:
-            prompt_generator.render_judge_prompt_for_task(mock_task_non_llm, mock_episode_complete)
+            prompt_generator.render_judge_prompt_for_episode(mock_task_non_llm, mock_episode_complete)
 
         assert "not configured for LLM judge evaluation" in str(exc_info.value)
         assert "static" in str(exc_info.value)
@@ -289,14 +292,14 @@ class TestEpisodeBasedJudgePrompts:
         mock_prompt_generator = Mock()
         mock_expected_result = Mock()
 
-        mock_prompt_generator.render_judge_prompt_for_task.return_value = mock_expected_result
+        mock_prompt_generator.render_judge_prompt_for_episode.return_value = mock_expected_result
 
         # Create BenchmarkManager with mocked components
         with patch('saber.server.benchmarks.benchmark_manager.BenchmarkConfigLoader'), \
              patch('saber.server.benchmarks.benchmark_manager.PromptGenerator', return_value=mock_prompt_generator), \
              patch('pathlib.Path.exists', return_value=True), \
              patch('pathlib.Path.is_dir', return_value=True), \
-             patch.object(BenchmarkManager, 'load_tasks_from_yaml'), \
+             patch.object(BenchmarkManager, 'load_tasks_from_directory'), \
              patch.object(BenchmarkManager, '__init__', return_value=None):
 
             manager = BenchmarkManager("test_domain", "/tmp/config")
@@ -306,7 +309,7 @@ class TestEpisodeBasedJudgePrompts:
             result = manager.render_judge_prompt_for_episode("task1", mock_episode)
 
             assert result == mock_expected_result
-            mock_prompt_generator.render_judge_prompt_for_task.assert_called_once_with(mock_task, mock_episode)
+            mock_prompt_generator.render_judge_prompt_for_episode.assert_called_once_with(mock_task, mock_episode)
 
     def test_benchmark_manager_render_judge_prompt_task_not_found(self):
         """Test BenchmarkManager fails fast on missing task."""
@@ -316,7 +319,7 @@ class TestEpisodeBasedJudgePrompts:
              patch('saber.server.benchmarks.benchmark_manager.PromptGenerator'), \
              patch('pathlib.Path.exists', return_value=True), \
              patch('pathlib.Path.is_dir', return_value=True), \
-             patch.object(BenchmarkManager, 'load_tasks_from_yaml'):
+             patch.object(BenchmarkManager, 'load_tasks_from_directory'):
 
             manager = BenchmarkManager("test_domain", "/tmp/config")
             manager.tasks = {}  # No tasks
@@ -334,7 +337,7 @@ class TestEpisodeBasedJudgePrompts:
         (judge_dir / "security_user.md").write_text("User prompt")
 
         with patch('saber.server.benchmarks.benchmark_manager.BenchmarkConfigLoader'), \
-             patch.object(BenchmarkManager, 'load_tasks_from_yaml'):
+             patch.object(BenchmarkManager, 'load_tasks_from_directory'):
 
             manager = BenchmarkManager("test_domain", str(tmp_path))
             manager.tasks = {"task1": mock_task_llm_judge}
@@ -447,7 +450,7 @@ class TestJudgePromptTemplateFeatures:
         mock_task_llm_judge.evaluation_config["criteria"]["judge_system_template"] = "step_limit_system.md"
 
         prompt_generator = PromptGenerator(str(prompts_dir))
-        result = prompt_generator.render_judge_prompt_for_task(mock_task_llm_judge, complex_episode)
+        result = prompt_generator.render_judge_prompt_for_episode(mock_task_llm_judge, complex_episode)
 
         user_content = result.messages[1]["content"]
 
@@ -484,7 +487,7 @@ class TestJudgePromptTemplateFeatures:
         mock_task_llm_judge.evaluation_config["criteria"]["judge_system_template"] = "truncate_system.md"
 
         prompt_generator = PromptGenerator(str(prompts_dir))
-        result = prompt_generator.render_judge_prompt_for_task(mock_task_llm_judge, complex_episode)
+        result = prompt_generator.render_judge_prompt_for_episode(mock_task_llm_judge, complex_episode)
 
         user_content = result.messages[1]["content"]
 

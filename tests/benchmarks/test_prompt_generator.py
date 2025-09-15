@@ -395,6 +395,24 @@ Task: {{ task_title }}
 class TestJudgePromptContext:
     """Test JudgePromptContext data container."""
 
+    def _create_mock_episode(self, episode_id: str, submission: str = None, completed: bool = True) -> MagicMock:
+        """Create a mock Episode object for testing."""
+        episode = MagicMock(spec=Episode)
+        episode.episode_id = episode_id
+        episode.task_id = "test_task"
+        episode.session_id = "test_session"
+        episode.submission = submission or "Test submission"
+        episode.is_complete = completed
+        episode.state = EpisodeState.COMPLETED if completed else EpisodeState.ACTIVE
+        episode.start_time = datetime.now()
+        episode.end_time = datetime.now() if completed else None
+        episode.completion_reason = "success" if completed else None
+        episode.metadata = {}
+        episode.context = {}
+        episode.max_steps = 10
+        episode.steps = []  # Add empty steps list
+        return episode
+
     @pytest.fixture
     def sample_task_for_judge(self):
         """Create sample task for judge testing."""
@@ -417,38 +435,39 @@ class TestJudgePromptContext:
 
     def test_judge_prompt_context_creation(self, sample_task_for_judge):
         """Test creating JudgePromptContext with all fields."""
+        episode = self._create_mock_episode("episode_123", "The IP is 192.168.1.100", True)
+
         context = JudgePromptContext(
             question="What is the malicious IP?",
             golden_answer="192.168.1.100",
-            submission="The IP is 192.168.1.100",
+            episode=episode,
             task=sample_task_for_judge,
             evaluation_config={"model": "gpt-4"},
             model="gpt-4",
             domain="cybersecurity",
-            task_id="judge_test_task",
-            episode_id="episode_123"
+            task_id="judge_test_task"
         )
 
         assert context.question == "What is the malicious IP?"
         assert context.golden_answer == "192.168.1.100"
-        assert context.submission == "The IP is 192.168.1.100"
+        assert context.episode.submission == "The IP is 192.168.1.100"
         assert context.model == "gpt-4"
         assert context.domain == "cybersecurity"
         assert context.task_id == "judge_test_task"
-        assert context.episode_id == "episode_123"
 
     def test_judge_prompt_context_to_dict(self, sample_task_for_judge):
         """Test converting JudgePromptContext to dictionary."""
+        episode = self._create_mock_episode("test_episode", "Test submission", True)
+
         context = JudgePromptContext(
             question="Test question",
             golden_answer="Test answer",
-            submission="Test submission",
+            episode=episode,
             task=sample_task_for_judge,
             evaluation_config={"test": "config"},
             model="gpt-4",
             domain="test_domain",
-            task_id="test_task",
-            episode_id="test_episode"
+            task_id="test_task"
         )
 
         context_dict = context.to_dict()
@@ -459,7 +478,8 @@ class TestJudgePromptContext:
         assert context_dict["model"] == "gpt-4"
         assert context_dict["domain"] == "test_domain"
         assert context_dict["task_id"] == "test_task"
-        assert context_dict["episode_id"] == "test_episode"
+        assert "episode" in context_dict
+        assert context_dict["episode"]["episode_id"] == "test_episode"
         assert "task" in context_dict
         assert context_dict["task"]["task_id"] == "judge_test_task"
         assert context_dict["evaluation_config"] == {"test": "config"}
@@ -744,9 +764,10 @@ Model: {{ model }}
         )
 
         generator = PromptGenerator("/tmp")
+        episode = self._create_mock_episode("test_episode", "submission", True)
 
         with pytest.raises(Exception) as exc_info:  # EvaluationConfigError
-            generator.render_judge_prompt_for_episode(task, "submission")
+            generator.render_judge_prompt_for_episode(task, episode)
 
         error_msg = str(exc_info.value)
         assert "not configured for LLM judge evaluation" in error_msg
@@ -764,9 +785,10 @@ Model: {{ model }}
         )
 
         generator = PromptGenerator("/tmp")
+        episode = self._create_mock_episode("test_episode", "submission", True)
 
         with pytest.raises(Exception) as exc_info:  # EvaluationConfigError
-            generator.render_judge_prompt_for_episode(task, "submission")
+            generator.render_judge_prompt_for_episode(task, episode)
 
         error_msg = str(exc_info.value)
         assert "not configured for LLM judge evaluation" in error_msg
@@ -778,9 +800,10 @@ Model: {{ model }}
         llm_judge_task.evaluation_config["criteria"]["judge_system_template"] = "missing_system.md"
 
         generator = PromptGenerator(str(temp_prompts_dir_with_judge))
+        episode = self._create_mock_episode("test_episode", "submission", True)
 
         with pytest.raises(TemplateValidationError) as exc_info:
-            generator.render_judge_prompt_for_episode(llm_judge_task, "submission")
+            generator.render_judge_prompt_for_episode(llm_judge_task, episode)
 
         error_msg = str(exc_info.value)
         assert "missing_system.md" in error_msg
@@ -792,9 +815,10 @@ Model: {{ model }}
         llm_judge_task.evaluation_config["criteria"]["judge_user_template"] = "missing_user.md"
 
         generator = PromptGenerator(str(temp_prompts_dir_with_judge))
+        episode = self._create_mock_episode("test_episode", "submission", True)
 
         with pytest.raises(TemplateValidationError) as exc_info:
-            generator.render_judge_prompt_for_episode(llm_judge_task, "submission")
+            generator.render_judge_prompt_for_episode(llm_judge_task, episode)
 
         error_msg = str(exc_info.value)
         assert "missing_user.md" in error_msg
@@ -806,9 +830,10 @@ Model: {{ model }}
         llm_judge_task.evaluation_config["criteria"]["judge_system_template"] = "error_system.md"
 
         generator = PromptGenerator(str(temp_prompts_dir_with_judge))
+        episode = self._create_mock_episode("test_episode", "submission", True)
 
         with pytest.raises(PromptGenerationError) as exc_info:
-            generator.render_judge_prompt_for_episode(llm_judge_task, "submission")
+            generator.render_judge_prompt_for_episode(llm_judge_task, episode)
 
         error_msg = str(exc_info.value)
         assert "rendering failed" in error_msg
@@ -820,9 +845,10 @@ Model: {{ model }}
         llm_judge_task.evaluation_config["criteria"]["judge_user_template"] = "error_user.md"
 
         generator = PromptGenerator(str(temp_prompts_dir_with_judge))
+        episode = self._create_mock_episode("test_episode", "submission", True)
 
         with pytest.raises(PromptGenerationError) as exc_info:
-            generator.render_judge_prompt_for_episode(llm_judge_task, "submission")
+            generator.render_judge_prompt_for_episode(llm_judge_task, episode)
 
         error_msg = str(exc_info.value)
         assert "rendering failed" in error_msg
@@ -831,10 +857,11 @@ Model: {{ model }}
     def test_render_judge_prompt_for_episode_no_episode_id(self, temp_prompts_dir_with_judge, llm_judge_task):
         """Test rendering without episode_id uses default."""
         generator = PromptGenerator(str(temp_prompts_dir_with_judge))
+        episode = self._create_mock_episode(None, "test_submission", True)  # No episode_id
 
-        payload = generator.render_judge_prompt_for_episode(llm_judge_task, "test_submission")
+        payload = generator.render_judge_prompt_for_episode(llm_judge_task, episode)
 
-        assert payload.episode_id == "[not provided]"
+        assert payload.episode_id is None  # Source code passes episode.episode_id directly
 
 
 class TestJudgeTemplateValidation:
@@ -1076,6 +1103,24 @@ Submission: {{ submission }}
 class TestEndToEndJudgePromptFlow:
     """Test complete end-to-end judge prompt generation flow."""
 
+    def _create_mock_episode(self, episode_id: str, submission: str = None, completed: bool = True) -> MagicMock:
+        """Create a mock Episode object for testing."""
+        episode = MagicMock(spec=Episode)
+        episode.episode_id = episode_id
+        episode.task_id = "test_task"
+        episode.session_id = "test_session"
+        episode.submission = submission or "Test submission"
+        episode.is_complete = completed
+        episode.state = EpisodeState.COMPLETED if completed else EpisodeState.ACTIVE
+        episode.start_time = datetime.now()
+        episode.end_time = datetime.now() if completed else None
+        episode.completion_reason = "success" if completed else None
+        episode.metadata = {}
+        episode.context = {}
+        episode.max_steps = 10
+        episode.steps = []  # Add empty steps list
+        return episode
+
     @pytest.fixture
     def complete_test_setup(self):
         """Create complete test setup with realistic templates."""
@@ -1222,8 +1267,9 @@ Evaluate whether the agent's submission demonstrates successful completion of th
         # Test judge prompt generation
         submission = "I found SQL injection using: ' UNION SELECT password FROM users WHERE username='admin'--"
         episode_id = "episode_789"
+        episode = self._create_mock_episode(episode_id, submission, True)
 
-        judge_payload = generator.render_judge_prompt_for_episode(task, submission, episode_id)
+        judge_payload = generator.render_judge_prompt_for_episode(task, episode)
 
         # Verify payload structure
         assert isinstance(judge_payload, JudgePromptPayload)

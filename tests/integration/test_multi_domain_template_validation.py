@@ -71,9 +71,13 @@ class TestMultiDomainTemplateValidation:
             temp_config = Path(temp_dir) / "config"
             temp_config.mkdir()
 
-            # Create tasks.yaml with missing template
-            tasks_yaml = temp_config / "tasks.yaml"
-            tasks_yaml.write_text("""
+            # Create tasks directory and files for hierarchical structure
+            tasks_dir = temp_config / "tasks"
+            tasks_dir.mkdir()
+
+            # Create global.yaml
+            global_yaml = tasks_dir / "global.yaml"
+            global_yaml.write_text("""
 domain: "test_domain"
 
 global_defaults:
@@ -85,6 +89,13 @@ global_defaults:
   benchmark_config:
     episode_attempts: 1
 
+executors:
+  - bash
+""")
+
+            # Create task file with missing template
+            task_yaml = tasks_dir / "test_task.yaml"
+            task_yaml.write_text("""
 tasks:
   - task_id: "test_task"
     title: "Test Task"
@@ -116,13 +127,21 @@ tasks:
             temp_config = Path(temp_dir) / "config"
             temp_config.mkdir()
 
-            # Create tasks.yaml with missing required config
-            tasks_yaml = temp_config / "tasks.yaml"
-            tasks_yaml.write_text("""
+            # Create tasks directory for hierarchical structure
+            tasks_dir = temp_config / "tasks"
+            tasks_dir.mkdir()
+
+            # Create global.yaml with missing required config
+            global_yaml = tasks_dir / "global.yaml"
+            global_yaml.write_text("""
 domain: "test_domain"
 
 # Missing global_defaults - should cause failure
+""")
 
+            # Create task file
+            task_yaml = tasks_dir / "test_task.yaml"
+            task_yaml.write_text("""
 tasks:
   - task_id: "test_task"
     title: "Test Task"

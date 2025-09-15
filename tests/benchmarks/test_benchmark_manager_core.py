@@ -27,20 +27,20 @@ class TestBenchmarkManagerCore:
         """Helper to create BenchmarkManager from temp directory fixture."""
         return BenchmarkManager("malware_classification", temp_config_dir)
 
-    def test_load_tasks_from_yaml_success(self, tmp_path, temp_config_dir_helper, sample_task_yaml):
-        """Test successful loading of tasks from YAML."""
+    def test_load_tasks_from_directory_success(self, tmp_path, temp_config_dir_helper, sample_task_yaml):
+        """Test successful loading of tasks from directory structure."""
         temp_config_dir = temp_config_dir_helper(tmp_path, sample_task_yaml)
         manager = self._create_benchmark_manager_from_temp_config_dir(temp_config_dir)
 
         # Clear tasks and reload
         manager.tasks = {}
-        manager.load_tasks_from_yaml()
+        manager.load_tasks_from_directory()
 
         assert len(manager.tasks) == 1
         assert "malware_family_analysis" in manager.tasks
 
-    @patch.object(BenchmarkConfigLoader, "load_tasks_from_file")
-    def test_load_tasks_from_yaml_delegates_to_config_loader(self, mock_load, temp_config_dir):
+    @patch.object(BenchmarkConfigLoader, "load_tasks_from_directory")
+    def test_load_tasks_from_directory_delegates_to_config_loader(self, mock_load, temp_config_dir):
         """Test that loading delegates to BenchmarkConfigLoader."""
         mock_task = Mock(spec=Task)
         mock_task.prompt_template_file = "test_prompt.md"
@@ -53,8 +53,8 @@ class TestBenchmarkManagerCore:
         with patch.object(BenchmarkManager, 'validate_all_task_templates'):
             manager = self._create_benchmark_manager_from_temp_config_dir(temp_config_dir)
 
-        # Should be called with the full path to tasks.yaml
-        expected_path = str(Path(temp_config_dir) / "tasks.yaml")
+        # Should be called with the full path to tasks directory
+        expected_path = str(Path(temp_config_dir) / "tasks")
         mock_load.assert_called_with(expected_path)
         assert manager.tasks == mock_tasks
 
@@ -258,14 +258,14 @@ tasks:
         """Test that BenchmarkManager correctly handles file path types."""
         # Test with string path
         manager1 = self._create_benchmark_manager_from_temp_config_dir(temp_config_dir)
-        assert isinstance(manager1.tasks_file_path, Path)
+        assert isinstance(manager1.tasks_dir_path, Path)
 
         # Test with Path object
         path_obj = Path(temp_config_dir)
         manager2 = BenchmarkManager("malware_classification", path_obj)
-        assert isinstance(manager2.tasks_file_path, Path)
-        # The tasks_file_path should be the tasks.yaml file within the directory
-        assert manager2.tasks_file_path == path_obj / "tasks.yaml"
+        assert isinstance(manager2.tasks_dir_path, Path)
+        # The tasks_dir_path should be the tasks directory within the config directory
+        assert manager2.tasks_dir_path == path_obj / "tasks"
 
 
 class TestBenchmarkManagerBenchmarkConfig:
@@ -551,11 +551,15 @@ tasks:
     title: "Test LLM Task"
     description: "Test description"
     domain: "test"
-    prompt_template_file: "agent_template.md"
+    prompt_template_file: "test_task_prompt.md"
+    execution_config:
+      allowed_executors:
+        - bash_executor
     evaluation_config:
       strategy: "llm_judge"
       criteria:
         model: "gpt-4"
+        golden_answer: "Expected answer for test task"
         judge_system_template: "system.md"
         judge_user_template: "user.md"
 """
@@ -612,11 +616,15 @@ tasks:
     title: "Test LLM Task"
     description: "Test description"
     domain: "test"
-    prompt_template_file: "agent_template.md"
+    prompt_template_file: "test_task_prompt.md"
+    execution_config:
+      allowed_executors:
+        - bash_executor
     evaluation_config:
       strategy: "llm_judge"
       criteria:
         model: "gpt-4"
+        golden_answer: "Expected answer for test task"
         judge_system_template: "system.md"
         judge_user_template: "user.md"
 """
@@ -633,15 +641,12 @@ tasks:
 
         # This test specifically ensures we're calling the correct method name
         with patch.object(manager.prompt_generator, 'render_judge_prompt_for_episode') as mock_correct_method:
-            with patch.object(manager.prompt_generator, 'render_judge_prompt_for_task') as mock_wrong_method:
-                mock_correct_method.return_value = Mock()
+            mock_correct_method.return_value = Mock()
 
-                renderer(mock_episode)
+            renderer(mock_episode)
 
-                # Should call the correct method
-                mock_correct_method.assert_called_once()
-                # Should NOT call the wrong method
-                mock_wrong_method.assert_not_called()
+            # Should call the correct method
+            mock_correct_method.assert_called_once()
 
     def test_create_renderer_handles_attribute_error(self, tmp_path, temp_config_dir_helper):
         """Test renderer gracefully handles AttributeError (regression test for bug we fixed)."""
@@ -666,11 +671,15 @@ tasks:
     title: "Test LLM Task"
     description: "Test description"
     domain: "test"
-    prompt_template_file: "agent_template.md"
+    prompt_template_file: "test_task_prompt.md"
+    execution_config:
+      allowed_executors:
+        - bash_executor
     evaluation_config:
       strategy: "llm_judge"
       criteria:
         model: "gpt-4"
+        golden_answer: "Expected answer for test task"
         judge_system_template: "system.md"
         judge_user_template: "user.md"
 """
@@ -718,7 +727,10 @@ tasks:
     title: "Test Static Task"
     description: "Test description"
     domain: "test"
-    prompt_template_file: "agent_template.md"
+    prompt_template_file: "test_task_prompt.md"
+    execution_config:
+      allowed_executors:
+        - bash_executor
     evaluation_config:
       strategy: "static"
       criteria:

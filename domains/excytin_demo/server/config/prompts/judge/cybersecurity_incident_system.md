@@ -8,7 +8,6 @@ The investigation consists of these specific subtasks:
 {% for subtask in task.subtasks %}
 **{{ subtask.subtask_id }}**: {{ subtask.title }}
 - Description: {{ subtask.description }}
-- Objective: {{ subtask.objective }}
 {% endfor %}
 {% endif %}
 

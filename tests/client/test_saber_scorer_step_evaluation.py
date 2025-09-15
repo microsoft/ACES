@@ -1,8 +1,27 @@
 """
-Unit tests for step evaluation integration in the SABER client scorer.
+                  mock_post.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            # Execute scoring
+            target = Target(target="198.43.121.209")
+            score = await saber_scorer_instance(task_state_with_episode, target)
+
+            # Validate no completion scoreock_post.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            # Execute scoring
+            target = Target(target="198.43.121.209")
+            score = await saber_scorer_instance(task_state_with_episode, target)
+
+            # Validate partial completion scorests for step evaluation integration in the SABER client scorer.
 
 Tests the integration of step evaluation parsing with the inspect_ai
-scorer implementation, focusing on the end-to-end evaluation workflow.
+sco            mock_post.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            # Execute scoring
+            target = Target(target="198.43.121.209")
+            score = await saber_scorer_instance(task_state_with_episode, target)
+
+            # Validate partial completion score
+            assert score.value == 0.0ementation, focusing on the end-to-end evaluation workflow.
 """
 
 import pytest
@@ -58,12 +77,16 @@ class TestSaberScorerStepEvaluation:
         }
 
     @pytest.fixture
-    def saber_scorer(self, scorer_config):
-        """Create SaberScorer instance."""
-        return SaberScorer(**scorer_config)
+    def saber_scorer_instance(self, scorer_config):
+        """Create saber_scorer instance."""
+        return saber_scorer(
+            enable_override=scorer_config.get("enable_override", True),
+            override_on_failure=scorer_config.get("override_on_failure", True),
+            log_override_errors=scorer_config.get("log_override_errors", True)
+        )
 
     @pytest.mark.asyncio
-    async def test_successful_step_evaluation(self, saber_scorer, task_state_with_episode):
+    async def test_successful_step_evaluation(self, saber_scorer_instance, task_state_with_episode):
         """Test successful step evaluation with task completion."""
         # Mock the evaluation endpoint response
         mock_evaluation_response = {
@@ -92,9 +115,9 @@ class TestSaberScorerStepEvaluation:
             mock_post.return_value.__aenter__ = AsyncMock(return_value=mock_response)
             mock_post.return_value.__aexit__ = AsyncMock(return_value=None)
 
-            # Execute scoring
+            # Execute scoring - saber_scorer_instance is the scoring function
             target = Target(target="198.43.121.209")
-            score = await saber_scorer.score(task_state_with_episode, target)
+            score = await saber_scorer_instance(task_state_with_episode, target)
 
             # Verify score results
             assert isinstance(score, Score)
@@ -117,7 +140,7 @@ class TestSaberScorerStepEvaluation:
             assert step_evals[3]["objective_type"] == "task"
 
     @pytest.mark.asyncio
-    async def test_partial_step_evaluation(self, saber_scorer, task_state_with_episode):
+    async def test_partial_step_evaluation(self, saber_scorer_instance, task_state_with_episode):
         """Test partial step evaluation with only subtasks completed."""
         # Mock the evaluation endpoint response
         mock_evaluation_response = {
@@ -162,7 +185,7 @@ class TestSaberScorerStepEvaluation:
                 assert step_eval["objective_type"] == "subtask"
 
     @pytest.mark.asyncio
-    async def test_no_completions_evaluation(self, saber_scorer, task_state_with_episode):
+    async def test_no_completions_evaluation(self, saber_scorer_instance, task_state_with_episode):
         """Test evaluation with no completed objectives."""
         # Mock the evaluation endpoint response
         mock_evaluation_response = {
@@ -200,7 +223,7 @@ class TestSaberScorerStepEvaluation:
             assert score.metadata["step_evaluations"] == []
 
     @pytest.mark.asyncio
-    async def test_judge_parsing_error_handling(self, saber_scorer, task_state_with_episode):
+    async def test_judge_parsing_error_handling(self, saber_scorer_instance, task_state_with_episode):
         """Test handling of judge parsing errors."""
         # Mock the evaluation endpoint response with malformed step evaluations
         mock_evaluation_response = {
@@ -226,7 +249,7 @@ class TestSaberScorerStepEvaluation:
             target = Target(target="198.43.121.209")
 
             with pytest.raises(RuntimeError) as exc_info:
-                await saber_scorer.score(task_state_with_episode, target)
+                await saber_scorer_instance(task_state_with_episode, target)
 
             # Verify error message contains parsing details
             error_msg = str(exc_info.value)
@@ -234,7 +257,7 @@ class TestSaberScorerStepEvaluation:
             assert "Expected format" in error_msg
 
     @pytest.mark.asyncio
-    async def test_evaluation_endpoint_error_handling(self, saber_scorer, task_state_with_episode):
+    async def test_evaluation_endpoint_error_handling(self, saber_scorer_instance, task_state_with_episode):
         """Test handling of evaluation endpoint errors."""
         with patch('aiohttp.ClientSession.post') as mock_post:
             # Mock HTTP error
@@ -247,13 +270,20 @@ class TestSaberScorerStepEvaluation:
             target = Target(target="test_target")
 
             with pytest.raises(Exception) as exc_info:
-                await saber_scorer.score(task_state_with_episode, target)
+                await saber_scorer_instance(task_state_with_episode, target)
 
             assert "HTTP 500" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_missing_episode_data_error(self, saber_scorer):
+    async def test_missing_episode_data_error(self, scorer_config):
         """Test handling when episode data is missing from task state."""
+        # Create scorer instance
+        scorer_instance = saber_scorer(
+            enable_override=scorer_config.get("enable_override", True),
+            override_on_failure=scorer_config.get("override_on_failure", True),
+            log_override_errors=scorer_config.get("log_override_errors", True)
+        )
+
         # Create task state without episode data
         state = Mock(spec=TaskState)
         state.metadata = {}  # No episode_data
@@ -262,13 +292,13 @@ class TestSaberScorerStepEvaluation:
         target = Target(target="test_target")
 
         with pytest.raises(RuntimeError) as exc_info:
-            await saber_scorer.score(state, target)
+            await scorer_instance(state, target)
 
         error_msg = str(exc_info.value)
         assert "Episode data not found" in error_msg
 
     @pytest.mark.asyncio
-    async def test_step_evaluation_metadata_structure(self, saber_scorer, task_state_with_episode):
+    async def test_step_evaluation_metadata_structure(self, saber_scorer_instance, task_state_with_episode):
         """Test that step evaluation metadata has correct structure."""
         mock_evaluation_response = {
             "evaluation_result": {
@@ -298,7 +328,7 @@ class TestSaberScorerStepEvaluation:
             task_state_with_episode.metadata["episode_data"]["task_id"] = "main_task_id"
 
             target = Target(target="test_target")
-            score = await saber_scorer.score(task_state_with_episode, target)
+            score = await saber_scorer_instance(task_state_with_episode, target)
 
             # Verify score metadata structure
             metadata = score.metadata
@@ -346,7 +376,11 @@ class TestSaberScorerStepEvaluation:
         """Test that concurrent evaluations are handled correctly."""
         # Create scorer with higher concurrency
         scorer_config["concurrent_evaluations"] = 3
-        scorer = SaberScorer(**scorer_config)
+        scorer = saber_scorer(
+            enable_override=scorer_config.get("enable_override", True),
+            override_on_failure=scorer_config.get("override_on_failure", True),
+            log_override_errors=scorer_config.get("log_override_errors", True)
+        )
 
         # Create multiple task states
         task_states = []
@@ -391,7 +425,7 @@ class TestSaberScorerStepEvaluation:
             # Execute concurrent scoring
             target = Target(target="test")
             tasks = [
-                scorer.score(state, target)
+                scorer(state, target)
                 for state in task_states
             ]
 
