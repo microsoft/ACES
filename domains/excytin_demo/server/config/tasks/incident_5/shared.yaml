@@ -3,10 +3,10 @@
 
 initial_context:
   database_connection:
-    hostname: "saber-excytin-incident-5"
+    hostname: "incident-5-db"
     port: 3306
     username: "admin"
     password: "admin"
     database: "env_monitor_db"
     ssl_mode: "disabled"
-    connection_example: "mysql -h saber-excytin-incident-5 --skip-ssl -u admin -padmin env_monitor_db"
+    connection_example: "mysql -h incident-5-db --skip-ssl -u admin -padmin env_monitor_db"

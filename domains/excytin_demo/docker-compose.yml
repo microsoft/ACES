@@ -46,8 +46,8 @@ services:
       - ./client/logs:/app/logs:rw  # Mount logs directory for client-side container logging
       - ./client/.cache:/app/.cache:rw  # Mount cache directory with proper permissions
       - ./client/.local:/app/.local:rw  # Mount local directory with proper permissions
-      - ${HOME}/.azure:/root/.azure:rw  # Mount Azure CLI credentials for git authentication (read-write for session files)
-      # Note: Removed .git-credentials mount - using Azure CLI authentication instead
+      - ${HOME}/.azure:/app/.azure:rw  # Mount Azure CLI credentials aligned with HOME environment
+      - ${HOME}/.gitconfig:/app/.gitconfig:ro  # Mount git configuration for authentication
     environment:
       - HOME=/app  # Set HOME to writable directory
       - XDG_CACHE_HOME=/app/.cache  # Set cache directory to writable location
@@ -56,8 +56,8 @@ services:
       - PYTHONPATH=/app/src:/app/client/external/inspect_ai/src  # Fix path to match mount
       - PYTHONDONTWRITEBYTECODE=1  # Prevent .pyc files that can cache old code
       - DOCKER_SABER_SERVER=1  # Auto-detect Docker environment
-      - AZURE_CONFIG_DIR=/root/.azure  # Ensure Azure CLI uses mounted credentials
-      - GIT_CONFIG_GLOBAL=/root/.gitconfig  # Use mounted git config
+      - AZURE_CONFIG_DIR=/app/.azure  # Ensure Azure CLI uses mounted credentials aligned with HOME
+      - GIT_CONFIG_GLOBAL=/app/.gitconfig  # Use mounted git config
       # - SABER_DEBUG_MODE=true  # Uncomment to keep agent containers for debugging
     networks:
       - saber-excytin-network

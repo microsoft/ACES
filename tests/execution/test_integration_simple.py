@@ -48,7 +48,13 @@ class TestComponentIntegration:
         # Verify initialization
         assert execution_manager._configuration is not None
         assert execution_manager._executor_factory is not None
-        assert execution_manager._sandbox_manager is not None
+
+        # Sandbox environment manager starts as None and is initialized lazily
+        assert execution_manager._sandbox_environment_manager is None
+
+        # But it should be ready to be initialized when needed
+        assert hasattr(execution_manager, 'configure_for_task')
+        assert hasattr(execution_manager, 'is_sandbox_ready')
 
     def test_security_validator_configuration_integration(self):
         """Test SecurityValidator configuration and real validation."""

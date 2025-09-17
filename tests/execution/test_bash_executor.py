@@ -33,7 +33,7 @@ class TestBashExecutor:
     def mock_sandbox_manager(self):
         """Create a mock SandboxEnvironmentManager."""
         manager = MagicMock(spec=SandboxEnvironmentManager)
-        manager.get_sandbox_config.return_value = {
+        manager.sandbox_config = {
             "image": "saber/sandbox:latest",
             "network_mode": "none",
             "read_only_root": True,
@@ -261,7 +261,7 @@ class TestBashExecutorIntegration:
     def mock_sandbox_manager_with_env(self, mock_docker_sandbox_environment):
         """Create a mock SandboxEnvironmentManager that returns a Docker environment."""
         manager = MagicMock(spec=SandboxEnvironmentManager)
-        manager.get_sandbox_config.return_value = {
+        manager.sandbox_config = {
             "image": "saber/sandbox:latest",
             "network_mode": "none",
             "read_only_root": True,

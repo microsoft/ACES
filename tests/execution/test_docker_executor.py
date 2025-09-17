@@ -30,7 +30,7 @@ class TestDockerExecutor:
     def mock_sandbox_manager(self):
         """Create a mock SandboxEnvironmentManager."""
         manager = MagicMock(spec=SandboxEnvironmentManager)
-        manager.get_sandbox_config.return_value = {
+        manager.sandbox_config = {
             "image": "saber/sandbox:latest",
             "network_mode": "none",
             "read_only_root": True,
@@ -149,18 +149,18 @@ class TestDockerExecutor:
 
         docker_executor.cleanup_execution(episode_id)
 
-        docker_executor._sandbox_manager.cleanup_episode.assert_called_once_with(episode_id)
+        docker_executor._sandbox_manager.stop_episode_environment.assert_called_once_with(episode_id)
 
     def test_cleanup_execution_with_error(self, docker_executor):
         """Test execution cleanup with error (should not raise)."""
         episode_id = "test_episode_123"
 
-        docker_executor._sandbox_manager.cleanup_episode.side_effect = Exception("Cleanup error")
+        docker_executor._sandbox_manager.stop_episode_environment.side_effect = Exception("Cleanup error")
 
         # Should not raise an exception
         docker_executor.cleanup_execution(episode_id)
 
-        docker_executor._sandbox_manager.cleanup_episode.assert_called_once_with(episode_id)
+        docker_executor._sandbox_manager.stop_episode_environment.assert_called_once_with(episode_id)
 
     def test_validate_docker_parameters_valid(self, docker_executor):
         """Test validation of valid Docker parameters."""
@@ -233,7 +233,8 @@ class TestDockerExecutor:
 
     def test_get_docker_info_with_error(self, docker_executor):
         """Test getting Docker info when sandbox config retrieval fails."""
-        docker_executor._sandbox_manager.get_sandbox_config.side_effect = Exception("Config error")
+        # Simulate an exception by making sandbox_config access fail
+        del docker_executor._sandbox_manager.sandbox_config
 
         info = docker_executor.get_docker_info()
 

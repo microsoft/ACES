@@ -501,86 +501,15 @@ class TestMultiEpisodeIntegration:
 
     @pytest.mark.integration
     @pytest.mark.asyncio
+    @pytest.mark.skip(reason="SABERHarness and SABERHarnessConfig have been replaced by run_saber_eval_async")
     async def test_multi_episode_harness_integration(self, multi_episode_agents):
         """
         Test multi-episode execution through the SABERHarness with mocked dependencies.
 
-        This validates that the harness can orchestrate multiple episodes correctly
-        with our episode-first architecture.
+        This test is skipped because SABERHarness and SABERHarnessConfig were
+        replaced by run_saber_eval_async in the modern SABER architecture.
         """
-        logger.info("🚀 Starting multi-episode harness integration test...")
-
-        # Create harness configuration for multi-episode testing
-        config = SABERHarnessConfig(
-            server_url="http://localhost:9000",
-            parallelism=2,  # Allow concurrent episode execution
-            log_level="INFO"
-        )
-
-        # Use the first agent for this test
-        agent = multi_episode_agents[0]
-
-        # Mock the entire harness run method to avoid network calls
-        with patch('saber.client.saber_harness.SABERHarness') as mock_harness_class:
-            mock_harness = AsyncMock()
-
-            # Mock initialization
-            mock_harness.initialize = AsyncMock()
-
-            # Mock multi-episode execution results
-            mock_harness.run = AsyncMock(return_value=[
-                type('EpisodeResult', (), {
-                    'success': True,
-                    'task_id': 'harness_task_1',
-                    'episode_id': 'harness_episode_1',
-                    'attempt': 1,
-                    'flag': 'flag{harness_multi_episode_1}',
-                    'execution_time': 2.5
-                })(),
-                type('EpisodeResult', (), {
-                    'success': True,
-                    'task_id': 'harness_task_2',
-                    'episode_id': 'harness_episode_2',
-                    'attempt': 1,
-                    'flag': 'flag{harness_multi_episode_2}',
-                    'execution_time': 2.8
-                })()
-            ])
-
-            mock_harness_class.return_value = mock_harness
-
-            # Create and initialize harness
-            harness = mock_harness_class(config=config)
-            await harness.initialize(agent)
-
-            # Execute multi-episode workflow
-            logger.info("⚡ Executing multi-episode harness workflow...")
-            results = await harness.run()
-
-            # Verify multi-episode results
-            logger.info("🔍 Verifying multi-episode harness results...")
-
-            assert len(results) == 2, "Should have 2 episode results"
-
-            # Verify each episode result
-            for i, result in enumerate(results, 1):
-                assert result.success, f"Episode {i} should be successful"
-                assert result.task_id == f'harness_task_{i}', f"Episode {i} should have correct task_id"
-                assert result.episode_id == f'harness_episode_{i}', f"Episode {i} should have correct episode_id"
-                assert result.flag.startswith('flag{harness_multi_episode_'), f"Episode {i} should have valid flag"
-                assert result.execution_time > 0, f"Episode {i} should have positive execution time"
-
-            # Verify harness was called correctly
-            mock_harness.initialize.assert_called_once_with(agent)
-            mock_harness.run.assert_called_once()
-
-            logger.info("✅ Multi-episode harness integration test completed successfully")
-            logger.info(f"📊 Results: {len(results)} episodes executed successfully")
-
-            total_time = sum(result.execution_time for result in results)
-            logger.info(f"⏱️ Total execution time: {total_time:.2f}s")
-
-            return results
+        pass
 
     @pytest.mark.integration
     @pytest.mark.asyncio

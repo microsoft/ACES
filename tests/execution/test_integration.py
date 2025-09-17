@@ -48,8 +48,24 @@ class TestToolsIntegration:
     @pytest.fixture
     def registry(self, test_config, temp_config_dir):
         """Create ExecutionManager for integration testing."""
-        with patch("saber.server.execution.execution_manager.SandboxEnvironmentManager"):
-            return ExecutionManager(temp_config_dir)
+        with patch("saber.server.execution.execution_manager.SandboxEnvironmentManager") as mock_sandbox:
+            mock_sandbox_instance = MagicMock()
+            mock_sandbox_instance.is_ready.return_value = True
+            mock_sandbox.return_value = mock_sandbox_instance
+
+            execution_manager = ExecutionManager(temp_config_dir)
+
+            # Initialize sandbox manager manually for testing
+            execution_manager._sandbox_environment_manager = mock_sandbox_instance
+
+            # Update executor factory with the new sandbox manager
+            from saber.server.execution.executors.executor_factory import ExecutorFactory
+            execution_manager._executor_factory = ExecutorFactory(
+                sandbox_manager=mock_sandbox_instance,
+                configuration=execution_manager._configuration,
+            )
+
+            return execution_manager
 
     @pytest.fixture
     def real_registry(self, test_config, docker_cleanup, temp_config_dir):
@@ -88,7 +104,7 @@ class TestToolsIntegration:
         ))
         mock_env.get_container_id.return_value = "whitelist_container_456"
 
-        with patch.object(registry._sandbox_manager, "get_episode_environment", return_value=mock_env):
+        with patch.object(registry._sandbox_environment_manager, "get_episode_environment", return_value=mock_env):
             result = await registry.step(action, context)
 
         assert result.exit_code == 0
@@ -109,7 +125,7 @@ class TestToolsIntegration:
         ))
         mock_env.get_container_id.return_value = "concurrent_container"
 
-        with patch.object(registry._sandbox_manager, "get_episode_environment", return_value=mock_env):
+        with patch.object(registry._sandbox_environment_manager, "get_episode_environment", return_value=mock_env):
             # Execute all commands concurrently
             tasks = [
                 asyncio.create_task(registry.step(action, context))
@@ -136,7 +152,7 @@ class TestToolsIntegration:
         ))
         mock_env.get_container_id.return_value = "shell_test_container"
 
-        with patch.object(registry._sandbox_manager, "get_episode_environment", return_value=mock_env) as mock_get_env:
+        with patch.object(registry._sandbox_environment_manager, "get_episode_environment", return_value=mock_env) as mock_get_env:
             result = await registry.step(action, context)
 
         assert result.exit_code == 0
@@ -267,7 +283,7 @@ class TestToolsIntegration:
                 return mock_env2
             return None
 
-        with patch.object(registry._sandbox_manager, "get_episode_environment", side_effect=get_episode_env):
+        with patch.object(registry._sandbox_environment_manager, "get_episode_environment", side_effect=get_episode_env):
             result1 = await registry.step(action1, context1)
             result2 = await registry.step(action2, context2)
 
@@ -294,7 +310,7 @@ class TestToolsIntegration:
         ))
         mock_env.get_container_id.return_value = "error_test_container"
 
-        with patch.object(registry._sandbox_manager, "get_episode_environment", return_value=mock_env):
+        with patch.object(registry._sandbox_environment_manager, "get_episode_environment", return_value=mock_env):
             result = await registry.step(action, context)
 
         assert result.exit_code != 0
@@ -317,15 +333,13 @@ class TestToolsIntegration:
             assert result.exit_code != 0, f"Dangerous command should be blocked: {cmd}"
             assert "Command security validation failed" in result.error
 
-    def test_component_initialization_integration(self, test_config, temp_config_dir):
+    def test_component_initialization_integration(self, registry):
         """Test that all components are properly initialized together."""
-        with patch("saber.server.execution.sandbox.sandbox_environment_manager.SandboxEnvironmentManager"):
-            registry = ExecutionManager(temp_config_dir)
 
         # Verify all components exist and are correct types
         assert hasattr(registry, "_configuration")
         assert hasattr(registry, "_executor_factory")
-        assert hasattr(registry, "_sandbox_manager")
+        assert hasattr(registry, "_sandbox_environment_manager")
 
         # Verify component types
         assert isinstance(registry._configuration, dict)
@@ -335,7 +349,8 @@ class TestToolsIntegration:
         assert "bash" in available_executors
         assert "python" in available_executors
 
-        assert isinstance(registry._sandbox_manager, SandboxEnvironmentManager)
+        # sandbox_environment_manager should be set up by the registry fixture
+        assert registry._sandbox_environment_manager is not None
 
     @pytest.mark.asyncio
     async def test_realistic_malware_analysis_scenario(self, registry):
@@ -365,7 +380,7 @@ class TestToolsIntegration:
 
             context = {"episode_id": f"analysis_episode_{i}"}
 
-            with patch.object(registry._sandbox_manager, "get_episode_environment", return_value=mock_env):
+            with patch.object(registry._sandbox_environment_manager, "get_episode_environment", return_value=mock_env):
                 result = await registry.step(action, context)
                 results.append(result)
 

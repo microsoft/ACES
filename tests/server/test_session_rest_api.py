@@ -41,7 +41,7 @@ class TestSessionRestAPI:
         mock_episode_manager.get_episode = MagicMock()
 
         mock_permanent_environment_manager = MagicMock()
-        mock_container_cleanup_manager = MagicMock()
+        # Removed mock_container_cleanup_manager - CleanupManager eliminated
 
         with (
             patch("saber.server.session_manager.BenchmarkManager", return_value=mock_task_manager),

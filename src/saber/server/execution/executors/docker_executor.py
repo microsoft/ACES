@@ -16,7 +16,7 @@ from ..sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 from .base_executors import CommandExecutor
 
 if TYPE_CHECKING:
-    from ..sandbox.docker_sandbox_environment import DockerSandboxEnvironment
+    from ..sandbox.compose_orchestrator import ComposeOrchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -83,15 +83,15 @@ class DockerExecutor(CommandExecutor):
 
         return cls(sandbox_manager=sandbox_manager, docker_config=config, **merged_kwargs)
 
-    def get_episode_environment(self, episode_id: str) -> "DockerSandboxEnvironment":
+    def get_episode_environment(self, episode_id: str) -> "ComposeOrchestrator":
         """
-        Retrieve Docker environment for the given episode.
+        Retrieve Docker environment orchestrator for the given episode.
 
         Args:
             episode_id: Episode identifier
 
         Returns:
-            DockerSandboxEnvironment for the episode
+            ComposeOrchestrator for the episode
 
         Raises:
             SandboxExecutionError: If episode environment cannot be retrieved
@@ -133,7 +133,7 @@ class DockerExecutor(CommandExecutor):
         """
         try:
             # Let sandbox manager handle the cleanup
-            self._sandbox_manager.cleanup_episode(episode_id)
+            self._sandbox_manager.stop_episode_environment(episode_id)
             logger.debug(f"Cleaned up execution resources for episode {episode_id}")
         except Exception as e:
             logger.warning(f"Error during execution cleanup for episode {episode_id}: {e}")
@@ -179,7 +179,7 @@ class DockerExecutor(CommandExecutor):
         }
 
         try:
-            sandbox_config = self._sandbox_manager.get_sandbox_config()
+            sandbox_config = self._sandbox_manager.sandbox_config
             docker_info: Dict[str, Any] = {}
 
             # Extract relevant Docker configuration

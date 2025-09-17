@@ -39,7 +39,8 @@ from .episodes.episode_manager import EpisodeManager
 from .evaluation.evaluation_manager import EvaluationManager
 from .evaluation.models import EvaluationResult
 from .evaluation.session_evaluation_service import SessionEvaluationService
-from .execution.cleanup.cleanup_reason import CleanupReason
+
+# CleanupReason removed - using direct component cleanup
 from .execution.execution_manager import ExecutionManager
 from .policy.policy_manager import PolicyDocument, PolicyManager
 
@@ -183,6 +184,7 @@ class SessionManager:
         permanent_config = {
             "domain": domain_name,
             "config_dir": config_dir,
+            "logs_dir": str(Path(config_dir).parent / "logs"),  # Logs go to server/logs, not server/config/logs
             "enable_logging": True,
         }
         self.execution_manager.initialize_permanent_environment_manager(permanent_config)
@@ -343,7 +345,6 @@ class SessionManager:
                     logger.info(f"🧹 Checking orphaned cleanup for episode {episode_id}")
                     episode_cleanup = self.execution_manager.cleanup_episode(
                         episode_id,
-                        CleanupReason.SESSION_TERMINATED,
                         {"manual_termination": True, "orphaned_check": True},
                     )
                     if not episode_cleanup:
@@ -515,9 +516,7 @@ class SessionManager:
         # Cleanup episode containers immediately when episode ends
         try:
             logger.info(f"🧹 Starting episode cleanup for {episode_id}")
-            episode_cleanup = self.execution_manager.cleanup_episode(
-                episode_id, CleanupReason.EPISODE_COMPLETED, {"episode_end_reason": reason}
-            )
+            episode_cleanup = self.execution_manager.cleanup_episode(episode_id, {"episode_end_reason": reason})
             if episode_cleanup:
                 logger.info(f"✅ Episode cleanup completed for {episode_id}")
             else:
@@ -622,7 +621,7 @@ class SessionManager:
 
                 # Trigger immediate container cleanup through ExecutionManager
                 cleanup_success = self.execution_manager.cleanup_session(
-                    session_id, CleanupReason.ERROR_TRIGGERED, {"error": str(e), "error_type": type(e).__name__}
+                    session_id, {"error": str(e), "error_type": type(e).__name__}
                 )
                 if cleanup_success:
                     logger.info("Error-triggered container cleanup completed successfully")
@@ -1129,19 +1128,27 @@ class SessionManager:
             return
 
         try:
-            logger.info(f"Starting permanent environment: {permanent_env_name}")
+            logger.info(f"🏗️ Starting permanent environment: {permanent_env_name}")
 
-            # Load permanent environment specification through ExecutionManager
-            if self.execution_manager._environment_loader is None:
-                raise RuntimeError("Environment loader is not initialized")
-            permanent_env_spec = self.execution_manager._environment_loader.load_permanent_environment(
-                permanent_env_name
+            # Build path to permanent environment compose file
+            from pathlib import Path
+
+            permanent_compose_path = (
+                Path(self.config_dir) / "environments" / "permanent" / f"{permanent_env_name}.compose.yml"
             )
 
-            # Start permanent environment through ExecutionManager
-            self.execution_manager.start_permanent_environment(permanent_env_spec)
+            if not permanent_compose_path.exists():
+                raise RuntimeError(f"Permanent environment compose file not found: {permanent_compose_path}")
 
-            logger.info(f"Permanent environment '{permanent_env_name}' started successfully")
+            # Start permanent environment directly through PermanentEnvironmentManager
+            if not self.execution_manager._permanent_environment_manager:
+                raise RuntimeError("Permanent environment manager is not initialized")
+
+            self.execution_manager._permanent_environment_manager.start_permanent_environment_from_file(
+                permanent_compose_path
+            )
+
+            logger.info(f"🏗️ Permanent environment '{permanent_env_name}' started successfully")
 
         except Exception as e:
             logger.error(f"Failed to start permanent environment '{permanent_env_name}': {e}")

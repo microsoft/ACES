@@ -44,7 +44,7 @@ class TestExecutorFactory:
     def mock_sandbox_manager(self):
         """Create a mock SandboxEnvironmentManager."""
         manager = MagicMock(spec=SandboxEnvironmentManager)
-        manager.get_sandbox_config.return_value = {"image": "saber/sandbox:latest", "network_mode": "none"}
+        # Note: get_sandbox_config method removed - not needed in current interface
         return manager
 
     @pytest.fixture

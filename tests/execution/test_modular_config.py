@@ -24,7 +24,7 @@ class TestModularConfiguration:
     def mock_sandbox_manager(self):
         """Create a mock SandboxEnvironmentManager."""
         manager = MagicMock(spec=SandboxEnvironmentManager)
-        manager.get_sandbox_config.return_value = {
+        manager.sandbox_config = {
             "image": "saber/sandbox:latest",
             "network_mode": "none",
             "read_only_root": True,

@@ -1,5 +1,5 @@
 domain: excytin_demo
-permanent_environment: excytin_incident_5
+permanent_environment: incident_5
 
 global_defaults:
   execution_config:

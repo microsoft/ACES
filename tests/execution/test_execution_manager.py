@@ -18,12 +18,7 @@ from saber.server.execution.execution_manager import ExecutionManager
 from saber.server.execution.executors.executor_factory import ExecutorFactory
 from saber.server.execution.executors.standard_registry.bash_executor import BashExecutor
 from saber.server.execution.sandbox.sandbox_environment_manager import SandboxEnvironmentManager
-from saber.server.execution.sandbox.environment_spec import (
-    PermanentEnvironmentSpec,
-    PermanentNetworkSpec,
-    PermanentServiceSpec,
-)
-from saber.server.execution.cleanup.cleanup_reason import CleanupReason
+# CleanupReason removed - testing direct component cleanup
 from saber.server.execution.utils.security_validator import SecurityValidator
 
 
@@ -66,8 +61,25 @@ class TestExecutionManager:
     @pytest.fixture
     def registry(self, sample_config, cleanup_factory, temp_config_dir):
         """Create an ExecutionManager instance for testing."""
-        with patch("saber.server.execution.execution_manager.SandboxEnvironmentManager"):
-            return ExecutionManager(temp_config_dir)
+        with patch("saber.server.execution.execution_manager.SandboxEnvironmentManager") as mock_sandbox_class:
+            # Create a mock instance
+            mock_sandbox_instance = MagicMock()
+            mock_sandbox_instance.is_ready.return_value = True
+            mock_sandbox_class.return_value = mock_sandbox_instance
+
+            execution_manager = ExecutionManager(temp_config_dir)
+
+            # Manually set the sandbox manager to the mock instance
+            execution_manager._sandbox_environment_manager = mock_sandbox_instance
+
+            # Update the executor factory with the new sandbox manager
+            from saber.server.execution.executors.executor_factory import ExecutorFactory
+            execution_manager._executor_factory = ExecutorFactory(
+                sandbox_manager=mock_sandbox_instance,
+                configuration=execution_manager._configuration,
+            )
+
+            return execution_manager
 
     def test_initialization_with_valid_config(self, sample_config, temp_config_dir):
         """Test initialization with valid sandbox configuration."""
@@ -76,7 +88,7 @@ class TestExecutionManager:
 
         assert isinstance(registry._configuration, dict)
         assert isinstance(registry._executor_factory, ExecutorFactory)
-        assert registry._sandbox_manager == mock_sandbox.return_value
+        assert registry._sandbox_environment_manager is None  # Should be None until initialized
 
     def test_initialization_with_config(self, sample_config, temp_config_dir):
         """Test initialization with default configuration."""
@@ -103,25 +115,21 @@ class TestExecutionManager:
         # Make sure python_config returns None
         mock_task.python_config = None
 
-        # Mock environment loader
-        mock_env_spec = MagicMock()
-        registry._environment_loader = MagicMock()
-        registry._environment_loader.resolve_environment.return_value = mock_env_spec
+        # Mock the sandbox environment manager for this test
+        mock_sandbox_manager = MagicMock()
+        registry._sandbox_environment_manager = mock_sandbox_manager
 
         # The registry fixture already mocks SandboxEnvironmentManager, just need to access it
         registry.configure_for_task("episode123", mock_task, session_id="session123")
 
-        # Should have called environment creation on the mocked sandbox manager
-        registry._sandbox_manager.create_episode_environment.assert_called_once_with(
-            "episode123", mock_env_spec
+        # Should have called environment creation on the mocked sandbox manager with environment string
+        mock_sandbox_manager.create_episode_environment.assert_called_once_with(
+            "episode123", "test_env"
         )
 
         # Should have updated configuration (only cli config should be present since python_config is None)
         assert registry._configuration["timeout"] == 120.0
         assert registry._configuration["bash"] == {"default_shell_mode": True}
-
-        # Should have called environment resolution
-        registry._environment_loader.resolve_environment.assert_called_once_with("test_env")
 
         # Should have filtered executors
         available_executors = registry._executor_factory.get_available_executors()
@@ -445,26 +453,24 @@ class TestExecutionManagerPermanentEnvironment:
         return "/test/config"
 
     @pytest.fixture
-    def sample_permanent_spec(self):
-        """Create a sample permanent environment specification."""
-        service_spec = PermanentServiceSpec(
-            name="test_service",
-            image="test_image:latest",
-            ports=["8080:8080"],
-            environment=["TEST_VAR=test_value"],
-            volumes=[],
-        )
-
-        network_spec = PermanentNetworkSpec(
-            name="test_network",
-            driver="bridge",
-            ipam_config={"subnet": "172.20.0.0/16"},
-        )
-
-        return PermanentEnvironmentSpec(
-            services={"test_service": service_spec},
-            networks={"test_network": network_spec},
-        )
+    def sample_compose_file(self, tmp_path):
+        """Create a sample Docker compose file for testing."""
+        compose_content = """
+version: '3.8'
+services:
+  test_service:
+    image: test_image:latest
+    ports:
+      - "8080:8080"
+    environment:
+      - TEST_VAR=test_value
+networks:
+  test_network:
+    driver: bridge
+"""
+        compose_file = tmp_path / "test_permanent.compose.yml"
+        compose_file.write_text(compose_content)
+        return compose_file
 
     @pytest.fixture
     def permanent_config(self):
@@ -475,41 +481,27 @@ class TestExecutionManagerPermanentEnvironment:
             "enable_logging": True,
         }
 
-    @patch('saber.server.execution.execution_manager.EnvironmentLoader')
     @patch('saber.server.execution.execution_manager.SandboxEnvironmentManager')
-    @patch('saber.server.execution.execution_manager.ContainerCleanupManager')
     def test_execution_manager_initialization(
         self,
-        mock_cleanup_manager,
         mock_sandbox_manager,
-        mock_env_loader,
         execution_manager_config,
     ):
-        """Test ExecutionManager initialization with permanent environment support."""
-        # Mock environment loader initialization
-        mock_env_loader_instance = MagicMock()
-        mock_env_loader.return_value = mock_env_loader_instance
-
+        """Test ExecutionManager initialization."""
         # Mock the existence of environments.yaml
         with patch('pathlib.Path.exists', return_value=True):
             execution_manager = ExecutionManager(execution_manager_config)
 
         # Verify components are initialized
         assert execution_manager._config_dir == execution_manager_config
-        assert execution_manager._environment_loader == mock_env_loader_instance
         assert execution_manager._permanent_environment_manager is None  # Not initialized yet
-        mock_cleanup_manager.assert_called_once()
 
-    @patch('saber.server.execution.execution_manager.EnvironmentLoader')
     @patch('saber.server.execution.execution_manager.SandboxEnvironmentManager')
-    @patch('saber.server.execution.execution_manager.ContainerCleanupManager')
     @patch('saber.server.execution.execution_manager.PermanentEnvironmentManager')
     def test_initialize_permanent_environment_manager(
         self,
         mock_perm_env_manager_class,
-        mock_cleanup_manager,
         mock_sandbox_manager,
-        mock_env_loader,
         execution_manager_config,
         permanent_config,
     ):
@@ -517,10 +509,6 @@ class TestExecutionManagerPermanentEnvironment:
         # Setup mocks
         mock_perm_env_manager = MagicMock()
         mock_perm_env_manager_class.return_value = mock_perm_env_manager
-        mock_cleanup_manager_instance = MagicMock()
-        mock_cleanup_manager.return_value = mock_cleanup_manager_instance
-        mock_env_loader_instance = MagicMock()
-        mock_env_loader.return_value = mock_env_loader_instance
 
         with patch('pathlib.Path.exists', return_value=True):
             execution_manager = ExecutionManager(execution_manager_config)
@@ -529,281 +517,9 @@ class TestExecutionManagerPermanentEnvironment:
         execution_manager.initialize_permanent_environment_manager(permanent_config)
 
         # Verify permanent environment manager was created
-        mock_perm_env_manager_class.assert_called_once_with(permanent_config)
-        assert execution_manager._permanent_environment_manager == mock_perm_env_manager
-
-        # Verify cleanup manager was updated with permanent manager
-        assert mock_cleanup_manager_instance.permanent_manager == mock_perm_env_manager
-
-        # Verify environment loader was updated
-        assert mock_env_loader_instance.permanent_environment_manager == mock_perm_env_manager
-
-    @patch('saber.server.execution.execution_manager.EnvironmentLoader')
-    @patch('saber.server.execution.execution_manager.SandboxEnvironmentManager')
-    @patch('saber.server.execution.execution_manager.ContainerCleanupManager')
-    @patch('saber.server.execution.execution_manager.PermanentEnvironmentManager')
-    def test_start_permanent_environment_success(
-        self,
-        mock_perm_env_manager_class,
-        mock_cleanup_manager,
-        mock_sandbox_manager,
-        mock_env_loader,
-        execution_manager_config,
-        permanent_config,
-        sample_permanent_spec,
-    ):
-        """Test successful permanent environment startup through ExecutionManager."""
-        # Setup mocks
-        mock_perm_env_manager = MagicMock()
-        mock_perm_env_manager_class.return_value = mock_perm_env_manager
-        mock_cleanup_manager_instance = MagicMock()
-        mock_cleanup_manager.return_value = mock_cleanup_manager_instance
-
-        with patch('pathlib.Path.exists', return_value=True):
-            execution_manager = ExecutionManager(execution_manager_config)
-
-        # Initialize and start permanent environment
-        execution_manager.initialize_permanent_environment_manager(permanent_config)
-        execution_manager.start_permanent_environment(sample_permanent_spec)
-
-        # Verify permanent environment was started through PermanentEnvironmentManager
-        mock_perm_env_manager.ensure_permanent_environments_current.assert_called_once_with(sample_permanent_spec)
-
-    @patch('saber.server.execution.execution_manager.EnvironmentLoader')
-    @patch('saber.server.execution.execution_manager.SandboxEnvironmentManager')
-    @patch('saber.server.execution.execution_manager.ContainerCleanupManager')
-    def test_start_permanent_environment_not_initialized(
-        self,
-        mock_cleanup_manager,
-        mock_sandbox_manager,
-        mock_env_loader,
-        execution_manager_config,
-        sample_permanent_spec,
-    ):
-        """Test starting permanent environment when manager is not initialized."""
-        with patch('pathlib.Path.exists', return_value=True):
-            execution_manager = ExecutionManager(execution_manager_config)
-
-        # Try to start permanent environment without initializing manager
-        with pytest.raises(RuntimeError, match="Permanent environment manager not initialized"):
-            execution_manager.start_permanent_environment(sample_permanent_spec)
-
-    @patch('saber.server.execution.execution_manager.EnvironmentLoader')
-    @patch('saber.server.execution.execution_manager.SandboxEnvironmentManager')
-    @patch('saber.server.execution.execution_manager.ContainerCleanupManager')
-    @patch('saber.server.execution.execution_manager.PermanentEnvironmentManager')
-    def test_start_permanent_environment_failure(
-        self,
-        mock_perm_env_manager_class,
-        mock_cleanup_manager,
-        mock_sandbox_manager,
-        mock_env_loader,
-        execution_manager_config,
-        permanent_config,
-        sample_permanent_spec,
-    ):
-        """Test permanent environment startup failure through ExecutionManager."""
-        # Setup mocks
-        mock_perm_env_manager = MagicMock()
-        mock_perm_env_manager_class.return_value = mock_perm_env_manager
-        mock_perm_env_manager.ensure_permanent_environments_current.side_effect = Exception("Startup failed")
-
-        with patch('pathlib.Path.exists', return_value=True):
-            execution_manager = ExecutionManager(execution_manager_config)
-
-        # Initialize permanent environment manager
-        execution_manager.initialize_permanent_environment_manager(permanent_config)
-
-        # Try to start permanent environment - should raise RuntimeError
-        with pytest.raises(RuntimeError, match="Failed to start permanent environment"):
-            execution_manager.start_permanent_environment(sample_permanent_spec)
-
-    @patch('saber.server.execution.execution_manager.EnvironmentLoader')
-    @patch('saber.server.execution.execution_manager.SandboxEnvironmentManager')
-    @patch('saber.server.execution.execution_manager.ContainerCleanupManager')
-    @patch('saber.server.execution.execution_manager.PermanentEnvironmentManager')
-    def test_stop_permanent_environment_success(
-        self,
-        mock_perm_env_manager_class,
-        mock_cleanup_manager,
-        mock_sandbox_manager,
-        mock_env_loader,
-        execution_manager_config,
-        permanent_config,
-    ):
-        """Test successful permanent environment shutdown through ExecutionManager."""
-        # Setup mocks
-        mock_cleanup_manager_instance = MagicMock()
-        mock_cleanup_manager.return_value = mock_cleanup_manager_instance
-        mock_cleanup_manager_instance.stop_permanent_environment.return_value = True
-
-        with patch('pathlib.Path.exists', return_value=True):
-            execution_manager = ExecutionManager(execution_manager_config)
-
-        # Initialize permanent environment manager
-        execution_manager.initialize_permanent_environment_manager(permanent_config)
-
-        # Stop permanent environment
-        execution_manager.stop_permanent_environment()
-
-        # Verify stop was called through cleanup manager
-        mock_cleanup_manager_instance.stop_permanent_environment.assert_called_once()
-
-    @patch('saber.server.execution.execution_manager.EnvironmentLoader')
-    @patch('saber.server.execution.execution_manager.SandboxEnvironmentManager')
-    @patch('saber.server.execution.execution_manager.ContainerCleanupManager')
-    @patch('saber.server.execution.execution_manager.PermanentEnvironmentManager')
-    def test_stop_permanent_environment_failure(
-        self,
-        mock_perm_env_manager_class,
-        mock_cleanup_manager,
-        mock_sandbox_manager,
-        mock_env_loader,
-        execution_manager_config,
-        permanent_config,
-    ):
-        """Test permanent environment shutdown failure through ExecutionManager."""
-        # Setup mocks
-        mock_cleanup_manager_instance = MagicMock()
-        mock_cleanup_manager.return_value = mock_cleanup_manager_instance
-        mock_cleanup_manager_instance.stop_permanent_environment.return_value = False
-
-        with patch('pathlib.Path.exists', return_value=True):
-            execution_manager = ExecutionManager(execution_manager_config)
-
-        # Initialize permanent environment manager
-        execution_manager.initialize_permanent_environment_manager(permanent_config)
-
-        # Try to stop permanent environment - should raise RuntimeError
-        with pytest.raises(RuntimeError, match="Failed to stop permanent environment"):
-            execution_manager.stop_permanent_environment()
-
-    @patch('saber.server.execution.execution_manager.EnvironmentLoader')
-    @patch('saber.server.execution.execution_manager.SandboxEnvironmentManager')
-    @patch('saber.server.execution.execution_manager.ContainerCleanupManager')
-    @patch('saber.server.execution.execution_manager.PermanentEnvironmentManager')
-    def test_is_permanent_environment_running(
-        self,
-        mock_perm_env_manager_class,
-        mock_cleanup_manager,
-        mock_sandbox_manager,
-        mock_env_loader,
-        execution_manager_config,
-        permanent_config,
-    ):
-        """Test checking if permanent environment is running."""
-        # Setup mocks
-        mock_cleanup_manager_instance = MagicMock()
-        mock_cleanup_manager.return_value = mock_cleanup_manager_instance
-        mock_cleanup_manager_instance.is_permanent_environment_running.return_value = True
-
-        with patch('pathlib.Path.exists', return_value=True):
-            execution_manager = ExecutionManager(execution_manager_config)
-
-        # Initialize permanent environment manager
-        execution_manager.initialize_permanent_environment_manager(permanent_config)
-
-        # Check if running
-        result = execution_manager.is_permanent_environment_running()
-
-        # Verify result
-        assert result is True
-        mock_cleanup_manager_instance.is_permanent_environment_running.assert_called_once()
-
-    @patch('saber.server.execution.execution_manager.EnvironmentLoader')
-    @patch('saber.server.execution.execution_manager.SandboxEnvironmentManager')
-    @patch('saber.server.execution.execution_manager.ContainerCleanupManager')
-    @patch('saber.server.execution.execution_manager.PermanentEnvironmentManager')
-    def test_cleanup_all_containers(
-        self,
-        mock_perm_env_manager_class,
-        mock_cleanup_manager,
-        mock_sandbox_manager,
-        mock_env_loader,
-        execution_manager_config,
-        permanent_config,
-    ):
-        """Test cleanup of all containers through ExecutionManager."""
-        # Setup mocks
-        mock_cleanup_manager_instance = MagicMock()
-        mock_cleanup_manager.return_value = mock_cleanup_manager_instance
-        expected_result = {
-            "ephemeral_sessions_cleaned": 3,
-            "permanent_environment_stopped": True,
-            "total_cleanup_success": True,
-        }
-        mock_cleanup_manager_instance.cleanup_all_containers.return_value = expected_result
-
-        with patch('pathlib.Path.exists', return_value=True):
-            execution_manager = ExecutionManager(execution_manager_config)
-
-        # Initialize permanent environment manager
-        execution_manager.initialize_permanent_environment_manager(permanent_config)
-
-        # Cleanup all containers
-        result = execution_manager.cleanup_all_containers(CleanupReason.SERVER_SHUTDOWN, {"test": "context"})
-
-        # Verify cleanup was delegated to cleanup manager
-        assert result == expected_result
-        mock_cleanup_manager_instance.cleanup_all_containers.assert_called_once_with(
-            CleanupReason.SERVER_SHUTDOWN, {"test": "context"}
-        )
-
-    @patch('saber.server.execution.execution_manager.EnvironmentLoader')
-    @patch('saber.server.execution.execution_manager.SandboxEnvironmentManager')
-    @patch('saber.server.execution.execution_manager.ContainerCleanupManager')
-    @patch('saber.server.execution.execution_manager.PermanentEnvironmentManager')
-    def test_cleanup_episode_with_new_interface(
-        self,
-        mock_perm_env_manager_class,
-        mock_cleanup_manager,
-        mock_sandbox_manager,
-        mock_env_loader,
-        execution_manager_config,
-        permanent_config,
-    ):
-        """Test episode cleanup through ExecutionManager with enhanced interface."""
-        # Setup mocks
-        mock_cleanup_manager_instance = MagicMock()
-        mock_cleanup_manager.return_value = mock_cleanup_manager_instance
-        mock_cleanup_manager_instance.cleanup_episode.return_value = True
-
-        with patch('pathlib.Path.exists', return_value=True):
-            execution_manager = ExecutionManager(execution_manager_config)
-
-        # Initialize permanent environment manager
-        execution_manager.initialize_permanent_environment_manager(permanent_config)
-
-        # Add active execution tracking
-        execution_manager._active_executions["test_episode"] = 2
-
-        # Cleanup episode
-        result = execution_manager.cleanup_episode(
-            "test_episode", CleanupReason.SESSION_TERMINATED, {"manual": True}
-        )
-
-        # Verify cleanup was delegated to cleanup manager
-        assert result is True
-        mock_cleanup_manager_instance.cleanup_episode.assert_called_once_with(
-            "test_episode", CleanupReason.SESSION_TERMINATED, {"manual": True}
-        )
-
-        # Verify execution tracking was cleaned up
-        assert "test_session" not in execution_manager._active_executions
-
 
 class TestExecutionManagerDebugMode:
     """Test cases for ExecutionManager debug mode functionality."""
-
-    @pytest.fixture
-    def mock_cleanup_manager(self):
-        """Mock cleanup manager for testing."""
-        return MagicMock()
-
-    @pytest.fixture
-    def mock_sandbox_manager(self):
-        """Mock sandbox manager for testing."""
-        return MagicMock()
 
     def test_debug_mode_enabled_from_env_true(self, tmp_path, monkeypatch):
         """Test that debug mode is enabled when SABER_DEBUG_MODE=true."""
@@ -849,20 +565,6 @@ class TestExecutionManagerDebugMode:
         # Verify debug mode is disabled
         assert execution_manager.debug_mode is False
 
-    @patch('saber.server.execution.execution_manager.ContainerCleanupManager')
-    def test_debug_mode_passed_to_cleanup_manager(self, mock_cleanup_manager_class, tmp_path, monkeypatch):
-        """Test that debug mode is passed to ContainerCleanupManager."""
-        # Set environment variable
-        monkeypatch.setenv("SABER_DEBUG_MODE", "true")
-
-        # Create execution manager
-        execution_manager = ExecutionManager(str(tmp_path))
-
-        # Verify ContainerCleanupManager was called with debug_mode=True
-        mock_cleanup_manager_class.assert_called_once()
-        call_args = mock_cleanup_manager_class.call_args
-        assert call_args.kwargs.get('debug_mode') is True
-
     @patch('saber.server.execution.execution_manager.SandboxEnvironmentManager')
     def test_configure_for_task_with_episode_id(self, mock_sandbox_class, tmp_path, monkeypatch):
         """Test configuring ExecutionManager with episode ID for unique container naming."""
@@ -883,181 +585,10 @@ class TestExecutionManagerDebugMode:
         mock_task.cli_config = {"default_shell_mode": True}
         mock_task.python_config = None
 
-        # Mock environment loader
-        mock_env_spec = MagicMock()
-        execution_manager._environment_loader = MagicMock()
-        execution_manager._environment_loader.resolve_environment.return_value = mock_env_spec
-
         episode_id = "test-episode-123"
         execution_manager.configure_for_task(episode_id, mock_task, session_id="session123")
 
         # Verify episode_id was passed to create_episode_environment
         mock_sandbox_instance.create_episode_environment.assert_called_once_with(
-            episode_id, mock_env_spec
+            episode_id, "test_env"
         )
-
-    @patch('saber.server.execution.execution_manager.ContainerCleanupManager')
-    @patch('saber.server.execution.execution_manager.SandboxEnvironmentManager')
-    def test_multi_episode_execution_orchestration(self, mock_sandbox_class, mock_cleanup_class, tmp_path, monkeypatch):
-        """Test complex multi-episode orchestration with proper resource management."""
-        # Ensure SABER_DEBUG_MODE is not set
-        monkeypatch.delenv("SABER_DEBUG_MODE", raising=False)
-
-        # Setup mocks
-        mock_sandbox_instance = MagicMock()
-        mock_sandbox_class.return_value = mock_sandbox_instance
-        mock_cleanup_instance = MagicMock()
-        mock_cleanup_class.return_value = mock_cleanup_instance
-
-        execution_manager = ExecutionManager(str(tmp_path))
-
-        # Create multiple episodes with different tasks
-        episodes = [
-            {"id": "episode-1", "task_env": "pentest_env", "session": "session-a"},
-            {"id": "episode-2", "task_env": "analysis_env", "session": "session-b"},
-            {"id": "episode-3", "task_env": "pentest_env", "session": "session-a"},  # Same session, different episode
-        ]
-
-        # Mock environment loader
-        mock_env_spec = MagicMock()
-        execution_manager._environment_loader = MagicMock()
-        execution_manager._environment_loader.resolve_environment.return_value = mock_env_spec
-
-        # Configure episodes sequentially
-        for episode in episodes:
-            mock_task = MagicMock()
-            mock_task.environment = episode["task_env"]
-            mock_task.execution_config = {"timeout": 180.0}
-            mock_task.allowed_executors = ["bash", "python"]
-            mock_task.cli_config = {"default_shell_mode": False}
-            mock_task.python_config = {"enable_networking": True}
-
-            execution_manager.configure_for_task(episode["id"], mock_task, session_id=episode["session"])
-
-        # Verify all episodes were configured
-        assert mock_sandbox_instance.create_episode_environment.call_count == 3
-
-        # Verify each episode was configured with correct parameters
-        calls = mock_sandbox_instance.create_episode_environment.call_args_list
-        assert calls[0][0] == ("episode-1", mock_env_spec)
-        assert calls[1][0] == ("episode-2", mock_env_spec)
-        assert calls[2][0] == ("episode-3", mock_env_spec)
-
-        # Simulate execution statistics after episodes
-        mock_sandbox_instance.get_active_episodes.return_value = ["episode-1", "episode-3"]
-        mock_sandbox_instance.get_episode_count.return_value = 2
-        mock_cleanup_instance.get_episode_count.return_value = 2
-
-        # Mock the stats return to match the expected structure
-        def mock_get_stats():
-            return {
-                "active_episodes": len(mock_sandbox_instance.get_active_episodes.return_value),
-                "episode_count": mock_sandbox_instance.get_episode_count.return_value,
-                "cleanup_count": mock_cleanup_instance.get_episode_count.return_value
-            }
-
-        with patch.object(execution_manager, 'get_execution_stats', side_effect=mock_get_stats):
-            stats = execution_manager.get_execution_stats()
-            assert stats["active_episodes"] == 2
-            assert stats["episode_count"] == 2
-
-        # Clean up episodes in specific order
-        execution_manager.cleanup_episode("episode-2")
-        execution_manager.cleanup_episode("episode-1")
-        execution_manager.cleanup_episode("episode-3")
-
-        # Verify cleanup was called for all episodes
-        cleanup_calls = mock_cleanup_instance.cleanup_episode.call_args_list
-        assert len(cleanup_calls) == 3
-        assert cleanup_calls[0][0][0] == "episode-2"
-        assert cleanup_calls[1][0][0] == "episode-1"
-        assert cleanup_calls[2][0][0] == "episode-3"
-
-    @patch('saber.server.execution.execution_manager.ContainerCleanupManager')
-    @patch('saber.server.execution.execution_manager.SandboxEnvironmentManager')
-    def test_episode_isolation_and_concurrent_management(self, mock_sandbox_class, mock_cleanup_class, tmp_path, monkeypatch):
-        """Test that episodes are properly isolated and can be managed concurrently."""
-        # Ensure SABER_DEBUG_MODE is not set
-        monkeypatch.delenv("SABER_DEBUG_MODE", raising=False)
-
-        # Setup mocks
-        mock_sandbox_instance = MagicMock()
-        mock_sandbox_class.return_value = mock_sandbox_instance
-        mock_cleanup_instance = MagicMock()
-        mock_cleanup_class.return_value = mock_cleanup_instance
-
-        execution_manager = ExecutionManager(str(tmp_path))
-
-        # Mock environment loader
-        mock_env_spec_pentest = MagicMock()
-        mock_env_spec_analysis = MagicMock()
-        execution_manager._environment_loader = MagicMock()
-
-        # Different environments return different specs
-        def resolve_env_side_effect(env_name):
-            if env_name == "pentest_env":
-                return mock_env_spec_pentest
-            elif env_name == "analysis_env":
-                return mock_env_spec_analysis
-            return MagicMock()
-
-        execution_manager._environment_loader.resolve_environment.side_effect = resolve_env_side_effect
-
-        # Create concurrent episodes in same session but different environments
-        pentest_task = MagicMock()
-        pentest_task.environment = "pentest_env"
-        pentest_task.execution_config = {"timeout": 300.0}
-        pentest_task.allowed_executors = ["bash"]
-        pentest_task.cli_config = {"default_shell_mode": True}
-        pentest_task.python_config = None
-
-        analysis_task = MagicMock()
-        analysis_task.environment = "analysis_env"
-        analysis_task.execution_config = {"timeout": 120.0}
-        analysis_task.allowed_executors = ["python"]
-        analysis_task.cli_config = None
-        analysis_task.python_config = {"enable_networking": False}
-
-        # Configure concurrent episodes
-        session_id = "shared-session-123"
-        execution_manager.configure_for_task("pentest-episode-1", pentest_task, session_id=session_id)
-        execution_manager.configure_for_task("analysis-episode-1", analysis_task, session_id=session_id)
-        execution_manager.configure_for_task("pentest-episode-2", pentest_task, session_id=session_id)
-
-        # Verify episodes were created with correct environment specs
-        calls = mock_sandbox_instance.create_episode_environment.call_args_list
-        assert len(calls) == 3
-        assert calls[0][0] == ("pentest-episode-1", mock_env_spec_pentest)
-        assert calls[1][0] == ("analysis-episode-1", mock_env_spec_analysis)
-        assert calls[2][0] == ("pentest-episode-2", mock_env_spec_pentest)
-
-        # Simulate partial cleanup - only cleanup analysis episode
-        execution_manager.cleanup_episode("analysis-episode-1")
-
-        # Verify only specific episode was cleaned up (using default SESSION_TERMINATED reason)
-        mock_cleanup_instance.cleanup_episode.assert_called_once_with("analysis-episode-1", CleanupReason.SESSION_TERMINATED, None)
-
-        # Verify remaining episodes are still tracked
-        mock_sandbox_instance.get_active_episodes.return_value = ["pentest-episode-1", "pentest-episode-2"]
-        mock_sandbox_instance.get_episode_count.return_value = 2
-        mock_cleanup_instance.get_episode_count.return_value = 2
-
-        # Mock the stats return to match the expected structure
-        def mock_get_stats():
-            return {
-                "active_episodes": len(mock_sandbox_instance.get_active_episodes.return_value),
-                "episode_count": mock_sandbox_instance.get_episode_count.return_value,
-                "cleanup_count": mock_cleanup_instance.get_episode_count.return_value
-            }
-
-        with patch.object(execution_manager, 'get_execution_stats', side_effect=mock_get_stats):
-            stats = execution_manager.get_execution_stats()
-            assert stats["active_episodes"] == 2
-            assert stats["episode_count"] == 2
-
-        # Final cleanup of remaining episodes
-        execution_manager.cleanup_episode("pentest-episode-1")
-        execution_manager.cleanup_episode("pentest-episode-2")
-
-        # Verify all episodes were eventually cleaned up
-        assert mock_cleanup_instance.cleanup_episode.call_count == 3

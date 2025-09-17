@@ -11,9 +11,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..base import Action, CommandResult
-from .cleanup.cleanup_manager import ContainerCleanupManager
-from .cleanup.cleanup_reason import CleanupReason
-from .environment_loader import EnvironmentLoader
+
+# CleanupManager removed - using direct component cleanup
 from .executors.docker_executor import DockerExecutor
 from .executors.executor_factory import ExecutorFactory
 from .sandbox.permanent_environment_manager import PermanentEnvironmentManager
@@ -40,8 +39,8 @@ class ExecutionManager:
         Task-specific configuration will be provided when sessions are created.
         """
         self._config_dir = config_dir
-        self._environment_loader = None
         self._permanent_environment_manager: Optional[PermanentEnvironmentManager] = None
+        self._sandbox_environment_manager: Optional[SandboxEnvironmentManager] = None
 
         # Check for debug mode from environment variable
         self._debug_mode = os.getenv("SABER_DEBUG_MODE", "false").lower() in ("true", "1", "yes")
@@ -50,49 +49,36 @@ class ExecutionManager:
         else:
             logger.debug("SABER Debug Mode disabled - Normal cleanup behavior")
 
-        # Initialize environment loader if config directory is provided
+        # Load custom executors from the config directory if provided
         if config_dir:
-            environments_path = Path(config_dir) / "environments.yaml"
-            if environments_path.exists():
-
-                # Environment loader will be updated when permanent environment manager is initialized
-                self._environment_loader = EnvironmentLoader(str(environments_path), None)
-                logger.info(f"Environment loader initialized with: {environments_path}")
-
-            # Load custom executors from the same directory
             self._load_custom_executors(config_dir)
 
         self._configuration: Dict[str, Any] = {}
 
-        # Initialize sandbox manager with basic logging config (will be updated per episode)
-        initial_sandbox_config = {
-            "domain": "execution",
-            "logs_directory": str(Path(config_dir) / "logs"),
-            "enable_container_logging": True,
-        }
-
-        self._sandbox_manager = SandboxEnvironmentManager(initial_sandbox_config)
-
-        # Single executor factory with episode registration support
-        self._executor_factory = ExecutorFactory(
-            sandbox_manager=self._sandbox_manager,
-            configuration=self._configuration,
-        )
-
-        # Initialize unified container cleanup manager (permanent manager will be added later)
-        self._cleanup_manager = ContainerCleanupManager(
-            sandbox_manager=self._sandbox_manager,
-            permanent_manager=None,  # Will be set when permanent environment is initialized
-            debug_mode=self._debug_mode,
-        )
+        # Executor factory will be created when sandbox manager is available
+        self._executor_factory: Optional[ExecutorFactory] = None
 
         # Episode-specific execution tracking for concurrent commands
         self._active_executions: Dict[str, int] = {}  # episode_id -> count of active executions
         self._max_concurrent_per_episode = 3  # Allow multiple concurrent commands per episode
 
         logger.info("ExecutionManager initialized for concurrent execution")
-        logger.info(f"Available executor types: {self._executor_factory.get_available_executors()}")
         logger.info(f"Max concurrent executions per episode: {self._max_concurrent_per_episode}")
+
+    @property
+    def executor_factory(self) -> ExecutorFactory:
+        """Get the executor factory, creating it if needed."""
+        if self._executor_factory is None:
+            if self._sandbox_environment_manager is None:
+                raise RuntimeError(
+                    "Cannot create executor factory: sandbox environment manager not initialized. "
+                    "Call configure_for_task() first."
+                )
+            self._executor_factory = ExecutorFactory(
+                sandbox_manager=self._sandbox_environment_manager,
+                configuration=self._configuration,
+            )
+        return self._executor_factory
 
     def is_sandbox_ready(self) -> bool:
         """
@@ -101,7 +87,7 @@ class ExecutionManager:
         Returns:
             True if sandbox manager is ready, False otherwise
         """
-        return self._sandbox_manager.is_ready() if self._sandbox_manager else False
+        return self._sandbox_environment_manager is not None and self._sandbox_environment_manager.is_ready()
 
     def _load_custom_executors(self, config_dir: str) -> None:
         """
@@ -215,7 +201,7 @@ class ExecutionManager:
         Raises:
             ValueError: If executor type is not supported
         """
-        return self._executor_factory.get_executor(executor_type, episode_id)
+        return self.executor_factory.get_executor(executor_type, episode_id)
 
     def _get_episode_executor_factory(self, episode_id: Optional[str] = None) -> ExecutorFactory:
         """
@@ -227,7 +213,7 @@ class ExecutionManager:
         Returns:
             The shared ExecutorFactory instance
         """
-        return self._executor_factory
+        return self.executor_factory
 
     def get_available_executors(self, episode_id: Optional[str] = None) -> List[str]:
         """
@@ -239,7 +225,7 @@ class ExecutionManager:
         Returns:
             List of executor type names
         """
-        return self._executor_factory.get_available_executors(episode_id)
+        return self.executor_factory.get_available_executors(episode_id)
 
     def configure_for_task(
         self,
@@ -256,30 +242,45 @@ class ExecutionManager:
             session_id: Optional session identifier for compatibility/logging
         """
         # Resolve environment if specified in task
-        environment_spec = None
-
         if task.environment:
-            if not self._environment_loader:
-                logger.error(f"Environment specified but no environment loader available for episode {episode_id}")
-                raise RuntimeError("Environment loader not initialized but environment specified in task")
+            logger.info(f"Task specifies environment: {task.environment}")
 
+            # Ensure sandbox manager is initialized
+            if self._sandbox_environment_manager is None:
+                # Initialize with default configuration for the current task domain
+                # Calculate correct server directory (parent of config directory)
+                server_dir = Path(self._config_dir).parent
+
+                sandbox_config = {
+                    "domain": "excytin_demo",  # Default domain
+                    "config_dir": self._config_dir,  # Pass config_dir for proper path resolution
+                    "logs_dir": str(server_dir / "logs"),  # Logs go to server/logs, not server/config/logs
+                    "enable_container_logging": True,
+                }
+                self._sandbox_environment_manager = SandboxEnvironmentManager(sandbox_config)
+
+                # Reset executor factory so it gets recreated with the new sandbox manager
+                self._executor_factory = None
+
+                logger.info("SandboxEnvironmentManager lazily initialized for task configuration")
+
+            # Create the episode environment using the SandboxManager
+            logger.info(f"Creating sandbox environment for episode {episode_id}")
             try:
-                logger.info(f"🔍 DEBUG: About to resolve environment: {task.environment}")
-                environment_spec = self._environment_loader.resolve_environment(task.environment)
-                logger.info(f"✅ Resolved environment for episode {episode_id}: {task.environment}")
-                logger.info(f"🔍 DEBUG: Environment spec: {environment_spec}")
+                self._sandbox_environment_manager.create_episode_environment(episode_id, task.environment)
+                logger.info(f"✅ Created sandbox environment for episode {episode_id}")
             except Exception as e:
-                logger.error(f"❌ Failed to resolve environment for episode {episode_id}: {e}")
+                logger.error(f"❌ FAILED to create sandbox environment for episode {episode_id}: {e}")
                 raise
         else:
-            logger.warning("⚠️ DEBUG: Task has no environment specified")
+            logger.warning("No environment specified for this task - episode will run without sandbox environment")
 
         # Start with task's execution config
         execution_config = task.execution_config.copy()
 
         # Add executor-specific configurations generically
         # Look for any config key that ends with "_config" and maps to an executor type
-        executor_types = self._executor_factory.get_available_executors()
+        executor_types = self.executor_factory.get_available_executors()
         for executor_type in executor_types:
             config_attr = f"{executor_type}_config"
             if hasattr(task, config_attr):
@@ -291,33 +292,11 @@ class ExecutionManager:
         # Create new configuration for this task
         self._configuration = execution_config
 
-        # Update sandbox manager with resolved environment spec and logging config
-        # Note: Sandbox configuration setup reserved for future container management features
-
-        if environment_spec:
-            # Store allowed_executors in the environment spec for later retrieval
-            if hasattr(task, "allowed_executors") and task.allowed_executors:
-                # Note: SandboxEnvironmentSpec doesn't have allowed_executors attribute
-                # Store this information in episode configuration instead
-                logger.info(f"Task has allowed_executors: {task.allowed_executors}")
-
-            # Create the episode environment using the SandboxManager initialized in constructor
-            logger.info(f"Creating sandbox environment for episode {episode_id}")
-            try:
-                self._sandbox_manager.create_episode_environment(episode_id, environment_spec)
-                logger.info(f"✅ Created sandbox environment for episode {episode_id}")
-            except Exception as e:
-                logger.error(f"❌ FAILED to create sandbox environment for episode {episode_id}: {e}")
-                logger.error(f"❌ Environment spec was: {environment_spec}")
-                raise
-        else:
-            logger.warning("No environment specified for this task - episode will run without sandbox environment")
-
         # Register episode configuration with the single executor factory
         allowed_executors = task.allowed_executors
         episode_config = execution_config
 
-        self._executor_factory.register_episode_configuration(
+        self.executor_factory.register_episode_configuration(
             episode_id=episode_id, allowed_executors=allowed_executors, episode_config=episode_config
         )
 
@@ -342,7 +321,7 @@ class ExecutionManager:
         Returns:
             List containing MCP tool definitions for all executors or episode-specific executors
         """
-        return self._executor_factory.get_all_mcp_tools(episode_id)
+        return self.executor_factory.get_all_mcp_tools(episode_id)
 
     def list_commands(self, episode_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """
@@ -356,9 +335,9 @@ class ExecutionManager:
         """
         commands = []
 
-        for executor_type in self._executor_factory.get_available_executors(episode_id):
+        for executor_type in self.executor_factory.get_available_executors(episode_id):
             try:
-                executor = self._executor_factory.get_executor(executor_type, episode_id)
+                executor = self.executor_factory.get_executor(executor_type, episode_id)
                 metadata = getattr(executor, "_executor_metadata", {})
 
                 command_info = {
@@ -401,45 +380,40 @@ class ExecutionManager:
             "episode_execution_counts": self._active_executions.copy(),
         }
 
-    def cleanup_episode(
-        self, episode_id: str, reason: Optional[CleanupReason] = None, context: Optional[Dict[str, Any]] = None
-    ) -> bool:
+    def cleanup_episode(self, episode_id: str, context: Optional[Dict[str, Any]] = None) -> bool:
         """
         Clean up episode resources including Docker containers.
 
         Args:
             episode_id: The episode ID to clean up
-            reason: Standardized cleanup reason
-            context: Additional context for debugging
+            context: Additional context for debugging (optional)
 
         Returns:
             True if cleanup was successful, False otherwise
         """
-        if reason is None:
-            reason = CleanupReason.SESSION_TERMINATED
-
-        logger.info(
-            f"🔥 EPISODE CLEANUP: ExecutionManager.cleanup_episode() called for episode {episode_id}, reason: {reason}"
-        )
+        logger.info(f"🔥 EPISODE CLEANUP: ExecutionManager.cleanup_episode() called for episode {episode_id}")
 
         cleanup_success = True
 
-        # Clean up episode environment through unified cleanup manager
+        # Clean up episode environment directly through sandbox manager
         try:
-            logger.info(f"🧹 Calling cleanup manager for episode {episode_id}")
-            container_cleanup_success = self._cleanup_manager.cleanup_episode(episode_id, reason, context)
-            if container_cleanup_success:
-                logger.info(f"✅ Episode container cleanup completed for episode {episode_id}")
+            if self._sandbox_environment_manager is not None:
+                logger.info(f"🧹 Calling sandbox manager cleanup for episode {episode_id}")
+                container_cleanup_success = self._sandbox_environment_manager.stop_episode_environment(episode_id)
+                if container_cleanup_success:
+                    logger.info(f"✅ Episode container cleanup completed for episode {episode_id}")
+                else:
+                    logger.error(f"❌ Episode container cleanup failed for episode {episode_id}")
+                    cleanup_success = False
             else:
-                logger.error(f"❌ Episode container cleanup failed for episode {episode_id}")
-                cleanup_success = False
+                logger.warning(f"⚠️  No sandbox manager available for episode cleanup: {episode_id}")
         except Exception as e:
             logger.error(f"❌ Failed to cleanup episode containers for episode {episode_id}: {e}")
             cleanup_success = False
 
         # Unregister episode configuration from executor factory
         try:
-            self._executor_factory.unregister_episode_configuration(episode_id)
+            self.executor_factory.unregister_episode_configuration(episode_id)
             logger.info(f"✅ Episode configuration unregistered from executor factory for episode {episode_id}")
         except Exception as e:
             logger.error(f"❌ Failed to unregister episode configuration for episode {episode_id}: {e}")
@@ -464,16 +438,29 @@ class ExecutionManager:
             config: Configuration dictionary for permanent environment settings
         """
         try:
+            # Initialize sandbox manager now that we have the domain
+            domain = config.get("domain", "excytin_demo")
+
+            # Calculate correct server directory (parent of config directory)
+            server_dir = Path(self._config_dir).parent
+
+            sandbox_config = {
+                "domain": domain,
+                "config_dir": self._config_dir,  # Pass config_dir for proper path resolution
+                "logs_dir": str(server_dir / "logs"),  # Logs go to server/logs, not server/config/logs
+                "enable_container_logging": True,
+            }
+
+            if self._sandbox_environment_manager is None:
+                self._sandbox_environment_manager = SandboxEnvironmentManager(sandbox_config)
+
+                # Reset executor factory so it gets recreated with the new sandbox manager
+                self._executor_factory = None
+
+                logger.info(f"SandboxEnvironmentManager initialized for domain: {domain}")
+
             # Initialize permanent environment manager
             self._permanent_environment_manager = PermanentEnvironmentManager(config)
-
-            # Update cleanup manager with permanent environment support
-            self._cleanup_manager.permanent_manager = self._permanent_environment_manager
-
-            # Update environment loader with permanent environment connectivity
-            if self._environment_loader:
-                self._environment_loader.permanent_environment_manager = self._permanent_environment_manager
-                logger.info("Environment loader configured with permanent environment connectivity")
 
             logger.info("ExecutionManager: Permanent environment manager initialized")
 
@@ -483,36 +470,41 @@ class ExecutionManager:
 
     def start_permanent_environment(self, environment_spec: Any) -> None:
         """
-        Start permanent environment through unified container lifecycle management.
+        DEPRECATED: Start permanent environment through unified container lifecycle management.
+
+        This method is deprecated and will be removed. The environment specification approach
+        has been replaced with static compose files. Update your code to use the new file-based
+        approach with start_permanent_environment_from_file().
 
         Args:
-            environment_spec: Permanent environment specification
+            environment_spec: Permanent environment specification (DEPRECATED)
 
         Raises:
-            RuntimeError: If permanent environment manager is not initialized or startup fails
+            NotImplementedError: Always raised to enforce migration to new approach
         """
-        if not self._permanent_environment_manager:
-            raise RuntimeError("Permanent environment manager not initialized")
-
-        try:
-            # Use ensure_permanent_environments_current for configuration change detection
-            self._permanent_environment_manager.ensure_permanent_environments_current(environment_spec)
-            logger.info("ExecutionManager: Permanent environment started successfully")
-        except Exception as e:
-            logger.error(f"ExecutionManager: Failed to start permanent environment: {e}")
-            raise RuntimeError(f"Failed to start permanent environment: {e}")
+        raise NotImplementedError(
+            "start_permanent_environment() is deprecated and no longer supported. "
+            "The environment specification system has been removed in favor of static compose files. "
+            "Update your code to use start_permanent_environment_from_file() instead."
+        )
 
     def stop_permanent_environment(self) -> None:
         """
-        Stop permanent environment through unified container lifecycle management.
+        Stop permanent environment through direct manager call.
 
         Raises:
             RuntimeError: If permanent environment shutdown fails
         """
-        if not self._cleanup_manager.stop_permanent_environment():
-            raise RuntimeError("Failed to stop permanent environment")
+        if not self._permanent_environment_manager:
+            logger.warning("No permanent environment manager configured")
+            return
 
-        logger.info("ExecutionManager: Permanent environment stopped successfully")
+        try:
+            self._permanent_environment_manager.stop_permanent_environment()
+            logger.info("ExecutionManager: Permanent environment stopped successfully")
+        except Exception as e:
+            logger.error(f"Failed to stop permanent environment: {e}")
+            raise RuntimeError(f"Failed to stop permanent environment: {e}")
 
     def is_permanent_environment_running(self) -> bool:
         """
@@ -521,46 +513,82 @@ class ExecutionManager:
         Returns:
             True if permanent environment is running, False otherwise
         """
-        return self._cleanup_manager.is_permanent_environment_running()
+        if not self._permanent_environment_manager:
+            return False
+        return self._permanent_environment_manager.is_running()
 
-    def cleanup_all_containers(
-        self, reason: Optional[CleanupReason] = None, context: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+    def cleanup_all_containers(self, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Clean up all containers (ephemeral and permanent) for server shutdown.
 
         Args:
-            reason: Standardized cleanup reason (typically SERVER_SHUTDOWN)
             context: Additional context for debugging
 
         Returns:
             Dictionary with cleanup results
         """
-        if reason is None:
-            reason = CleanupReason.SERVER_SHUTDOWN
+        logger.info("🧹 FULL CLEANUP START: Starting cleanup of all containers (ephemeral + permanent)")
 
-        return self._cleanup_manager.cleanup_all_containers(reason, context)
+        # Clean up all ephemeral episode containers
+        try:
+            if self._sandbox_environment_manager is not None:
+                self._sandbox_environment_manager.cleanup_all_episodes()
+                ephemeral_episodes_cleaned = len(self._sandbox_environment_manager.get_active_episodes())
+                ephemeral_success = True
+            else:
+                logger.warning("⚠️  No sandbox manager available for ephemeral cleanup")
+                ephemeral_episodes_cleaned = 0
+                ephemeral_success = True  # Not a failure if no manager exists
+        except Exception as e:
+            logger.error(f"Failed to cleanup ephemeral episodes: {e}")
+            ephemeral_episodes_cleaned = 0
+            ephemeral_success = False
 
-    def cleanup_session(self, session_id: str, reason: CleanupReason, context: Optional[Dict[str, Any]] = None) -> bool:
+        # Clean up permanent environment
+        permanent_success = True
+        try:
+            self.stop_permanent_environment()
+        except Exception as e:
+            logger.error(f"Failed to stop permanent environment: {e}")
+            permanent_success = False
+
+        result = {
+            "ephemeral_episodes_cleaned": ephemeral_episodes_cleaned,
+            "permanent_environment_stopped": permanent_success,
+            "total_cleanup_success": ephemeral_success and permanent_success,
+            "context": context,
+        }
+
+        logger.info(
+            f"🧹 FULL CLEANUP COMPLETE: Ephemeral episodes: {ephemeral_episodes_cleaned}, "
+            f"Permanent stopped: {permanent_success}, Overall success: {result['total_cleanup_success']}"
+        )
+
+        return result
+
+    def cleanup_session(self, session_id: str, context: Optional[Dict[str, Any]] = None) -> bool:
         """
         Clean up all containers and resources for a specific session.
 
         Args:
             session_id: The session ID to clean up
-            reason: Standardized cleanup reason
-            context: Additional context for debugging
+            context: Additional context for debugging (optional)
 
         Returns:
             True if cleanup was successful, False otherwise
         """
         try:
             # Clean up session environment if it exists
-            if hasattr(self._sandbox_manager, "cleanup_session"):
-                self._sandbox_manager.cleanup_session(session_id)
-            elif hasattr(self._sandbox_manager, "get_session_environment"):
+            if self._sandbox_environment_manager is not None and hasattr(
+                self._sandbox_environment_manager, "cleanup_session"
+            ):
+                self._sandbox_environment_manager.cleanup_session(session_id)
+            elif self._sandbox_environment_manager is not None and hasattr(
+                self._sandbox_environment_manager, "get_session_environment"
+            ):
                 # Try to get and stop the session environment
                 try:
-                    env = self._sandbox_manager.get_session_environment(session_id)
+                    env = self._sandbox_environment_manager.get_session_environment(session_id)
                     if env and hasattr(env, "stop"):
                         env.stop()
                 except Exception as e:

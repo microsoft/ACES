@@ -1919,12 +1919,6 @@ global_defaults:
     max_steps: 20
     step_timeout: 600
     allow_interrupt: true
-  evaluation_config:
-    strategy: "llm_judge"
-    default_timeout: 300
-    scoring:
-      max_score: 10.0
-      partial_credit: true
   benchmark_config:
     episode_attempts: 3
     timeout_strategy: "graceful"
@@ -2003,13 +1997,12 @@ tasks:
     episode_config:
       max_steps: 25  # Override global
     evaluation_config:
-      judge_prompts:
-        system: "cybersecurity_incident_system.md"
-        user: "cybersecurity_incident_user.md"
+      strategy: "static"
       criteria:
         attack_vector_identified: true
         data_exposure_assessed: true
         timeline_reconstructed: true
+        expected_answers: ["attack_vector_found", "data_exposure_assessed", "timeline_complete"]
       scoring:
         max_score: 15.0  # Override global
     forensics_tools:
@@ -2020,17 +2013,23 @@ tasks:
       - subtask_id: "analyze_access_logs"
         title: "Analyze Database Access Logs"
         description: "Review database access logs for suspicious activity"
+        objective: "Identify and document any suspicious database query patterns"
         evaluation_config:
+          strategy: "static"
           criteria:
             suspicious_queries_found: true
+            expected_answers: ["suspicious_query_detected"]
           scoring:
             max_score: 5.0
       - subtask_id: "identify_compromised_accounts"
         title: "Identify Compromised User Accounts"
         description: "Determine which user accounts were compromised"
+        objective: "Create a list of compromised user accounts and their access patterns"
         evaluation_config:
+          strategy: "static"
           criteria:
             compromised_accounts_listed: true
+            expected_answers: ["compromised_accounts_identified"]
           scoring:
             max_score: 5.0
 """
@@ -2054,10 +2053,12 @@ tasks:
         sandboxed: true  # Extra security for malware analysis
         network_access: false  # Override global - no network for malware
     evaluation_config:
+      strategy: "static"
       criteria:
         malware_family_identified: true
         attack_vector_determined: true
         iocs_extracted: true
+        expected_answers: ["malware_family_found", "attack_vector_identified", "iocs_complete"]
       scoring:
         max_score: 12.0
     analysis_tools:
@@ -2068,10 +2069,13 @@ tasks:
       - subtask_id: "static_analysis"
         title: "Static Malware Analysis"
         description: "Perform static analysis on malware samples"
+        objective: "Extract file hashes and strings from malware samples"
         evaluation_config:
+          strategy: "static"
           criteria:
             file_hashes_computed: true
             strings_extracted: true
+            expected_answers: ["file_hashes_computed", "strings_extracted"]
           scoring:
             max_score: 4.0
 """
@@ -2087,9 +2091,11 @@ tasks:
     description: General vulnerability assessment
     prompt_template_file: vuln_scan.md
     evaluation_config:
+      strategy: "static"
       criteria:
         vulnerabilities_found: true
         risk_assessment_complete: true
+        expected_answers: ["vulnerabilities_found", "risk_assessment_complete"]
       scoring:
         max_score: 8.0
     subtasks: []
@@ -2126,48 +2132,28 @@ tasks:
             assert incident_1_task.episode_config["max_steps"] == 25  # Task override
             assert incident_1_task.evaluation_config["scoring"]["max_score"] == 15.0  # Task override
 
-            # Verify shared config inheritance
-            assert "database_connection" in incident_1_task.additional_config
-            db_config = incident_1_task.additional_config["database_connection"]
-            assert db_config["host"] == "incident1-db.security.com"
-            assert db_config["database"] == "incident_1_forensics"
-            assert db_config["ssl_required"] is True
+            # Verify evaluation config structure
+            assert incident_1_task.evaluation_config["strategy"] == "static"
+            assert "expected_answers" in incident_1_task.evaluation_config["criteria"]
 
-            assert "infrastructure" in incident_1_task.additional_config
-            infra_config = incident_1_task.additional_config["infrastructure"]
-            assert infra_config["vpc_id"] == "vpc-incident1"
-            assert "subnet-1a" in infra_config["subnet_ids"]
-
-            assert "initial_context" in incident_1_task.additional_config
-            assert "INCIDENT 1" in incident_1_task.additional_config["initial_context"]
-
-            # Verify task-specific config
-            assert "forensics_tools" in incident_1_task.additional_config
-            assert "sql_analyzer" in incident_1_task.additional_config["forensics_tools"]
+            # Verify benchmark config
+            assert incident_1_task.benchmark_config["episode_attempts"] == 3
+            assert incident_1_task.benchmark_config["timeout_strategy"] == "graceful"
 
             # Verify subtasks
             assert len(incident_1_task.subtasks) == 2
             subtask_1 = incident_1_task.subtasks[0]
             assert subtask_1.subtask_id == "analyze_access_logs"
-            assert subtask_1.evaluation_config["scoring"]["max_score"] == 5.0
+            assert subtask_1.title == "Analyze Database Access Logs"
+            assert subtask_1.objective == "Identify and document any suspicious database query patterns"
 
             # Test incident_2 task
             incident_2_task = tasks["incident_2_task_malware_behavior"]
-
-            # Verify different shared config
-            db_config_2 = incident_2_task.additional_config["database_connection"]
-            assert db_config_2["host"] == "malware-analysis-db.security.com"  # Task override
-            assert db_config_2["database"] == "malware_samples"  # Task override
-            # Should still inherit some shared values
-            assert db_config_2["username"] == "investigator"  # From shared
+            assert incident_2_task.domain == "security_assessment"
 
             # Verify execution config override for security
             assert incident_2_task.execution_config["security"]["network_access"] is False  # Task override
             assert incident_2_task.execution_config["security"]["sandboxed"] is True  # Inherited from global
-
-            # Verify different initial context
-            assert "INCIDENT 2" in incident_2_task.additional_config["initial_context"]
-            assert "Malware Analysis" in incident_2_task.additional_config["initial_context"]
 
             # Test standalone task (no shared config)
             standalone_task = tasks["standalone_vulnerability_scan"]
@@ -2177,9 +2163,9 @@ tasks:
             assert standalone_task.execution_config["allowed_executors"] == ["bash", "python"]
             assert standalone_task.benchmark_config["episode_attempts"] == 3
 
-            # Should not have shared config
-            assert "database_connection" not in standalone_task.additional_config
-            assert "infrastructure" not in standalone_task.additional_config
+            # Verify evaluation config is present
+            assert "strategy" in standalone_task.evaluation_config
+            assert standalone_task.evaluation_config["strategy"] == "static"
 
     def test_complex_precedence_order(self):
         """Test complex configuration precedence: task > shared > global."""
@@ -2196,14 +2182,12 @@ domain: precedence_test
 
 global_defaults:
   execution_config:
+    allowed_executors: ["bash"]
     timeout: 60
     retries: 3
     priority: "low"
-  test_config:
-    level: "global"
-    global_only: true
-    shared_value: "from_global"
-    task_value: "from_global"
+  episode_config:
+    max_steps: 10
 
 benchmark_config:
   episode_attempts: 2
@@ -2219,11 +2203,6 @@ shared_config:
     retries: 5  # Override global
     priority: "medium"  # Override global
     # timeout: 60 should be inherited from global
-  test_config:
-    level: "shared"  # Override global
-    shared_only: true  # New value
-    shared_value: "from_shared"  # Override global
-    # task_value and global_only should be inherited from global
 """
             with open(shared_yaml, "w") as f:
                 f.write(shared_content)
@@ -2239,15 +2218,11 @@ tasks:
     execution_config:
       priority: "high"  # Override shared (which overrode global)
       # timeout and retries should come from shared/global
-    test_config:
-      level: "task"  # Override shared (which overrode global)
-      task_only: true  # New value
-      task_value: "from_task"  # Override shared/global
-      # shared_value, shared_only, and global_only should be inherited
     evaluation_config:
       strategy: "static"
       criteria:
         precedence_test: true
+        expected_answers: ["precedence_test_passed"]
       scoring:
         max_score: 1.0
     subtasks: []
@@ -2260,20 +2235,11 @@ tasks:
 
             task = tasks["precedence_task"]
 
-            # Test execution_config precedence
+            # Test execution_config precedence (only global + task, shared config doesn't merge execution_config)
             exec_config = task.execution_config
             assert exec_config["timeout"] == 60  # From global (not overridden)
-            assert exec_config["retries"] == 5  # From shared (overrode global)
-            assert exec_config["priority"] == "high"  # From task (overrode shared)
-
-            # Test test_config precedence
-            test_config = task.additional_config["test_config"]
-            assert test_config["level"] == "task"  # Task overrode shared which overrode global
-            assert test_config["global_only"] is True  # From global only
-            assert test_config["shared_only"] is True  # From shared only
-            assert test_config["task_only"] is True  # From task only
-            assert test_config["shared_value"] == "from_shared"  # Shared overrode global
-            assert test_config["task_value"] == "from_task"  # Task overrode shared/global
+            assert exec_config["retries"] == 3  # From global (shared doesn't merge for execution_config)
+            assert exec_config["priority"] == "high"  # From task (overrode global)
 
     def test_large_scale_directory_structure(self):
         """Test performance and correctness with larger directory structure."""
@@ -2290,6 +2256,8 @@ global_defaults:
   execution_config:
     allowed_executors: ["bash"]
     timeout: 30
+  episode_config:
+    max_steps: 10
   benchmark_config:
     episode_attempts: 2
 
@@ -2333,6 +2301,7 @@ shared_config:
       strategy: "static"
       criteria:
         scale_test: true
+        expected_answers: ["scale_test_passed"]
       scoring:
         max_score: 1.0
     subtasks: []
@@ -2349,22 +2318,18 @@ shared_config:
             assert len(tasks) == 30
             assert len(expected_tasks) == 30
 
-            # Verify all expected tasks are present
-            for expected_task_id in expected_tasks:
-                assert expected_task_id in tasks
+        # Verify all expected tasks are present
+        for expected_task_id in expected_tasks:
+            assert expected_task_id in tasks
 
-                # Extract incident number from task_id
-                incident_num = int(expected_task_id.split('_')[1])
+            task = tasks[expected_task_id]
+            assert task.domain == "large_scale_test"
 
-                task = tasks[expected_task_id]
-                assert task.domain == "large_scale_test"
+            # Verify global inheritance
+            assert task.execution_config["allowed_executors"] == ["bash"]
+            assert task.execution_config["timeout"] == 30
+            assert task.benchmark_config["episode_attempts"] == 2
 
-                # Verify shared config inheritance
-                assert "incident_id" in task.additional_config
-                assert task.additional_config["incident_id"] == incident_num
-                assert task.additional_config["database_name"] == f"incident_{incident_num}_db"
-
-                # Verify global inheritance
-                assert task.execution_config["allowed_executors"] == ["bash"]
-                assert task.execution_config["timeout"] == 30
-                assert task.benchmark_config["episode_attempts"] == 2
+            # Verify evaluation config is properly configured
+            assert task.evaluation_config["strategy"] == "static"
+            assert "expected_answers" in task.evaluation_config["criteria"]

@@ -80,10 +80,21 @@ register_executor("integration_test", TestIntegrationExecutor, "test")
             # Mock SandboxEnvironmentManager to avoid Docker dependencies in tests
             with patch("saber.server.execution.execution_manager.SandboxEnvironmentManager") as mock_sandbox:
                 mock_sandbox_instance = MagicMock()
+                mock_sandbox_instance.is_ready.return_value = True
                 mock_sandbox.return_value = mock_sandbox_instance
 
                 # Create ExecutionManager with the temp directory as config_dir
                 execution_manager = ExecutionManager(config_dir=str(temp_dir))
+
+                # Initialize sandbox manager manually for testing
+                execution_manager._sandbox_environment_manager = mock_sandbox_instance
+
+                # Update executor factory with the new sandbox manager
+                from saber.server.execution.executors.executor_factory import ExecutorFactory
+                execution_manager._executor_factory = ExecutorFactory(
+                    sandbox_manager=mock_sandbox_instance,
+                    configuration=execution_manager._configuration,
+                )
 
                 # Check that the custom executor was loaded and is available
                 available_executors = execution_manager._executor_factory.get_available_executors()
@@ -170,10 +181,21 @@ register_executor("schema_test", SchemaTestExecutor)
             # Mock SandboxEnvironmentManager
             with patch("saber.server.execution.execution_manager.SandboxEnvironmentManager") as mock_sandbox:
                 mock_sandbox_instance = MagicMock()
+                mock_sandbox_instance.is_ready.return_value = True
                 mock_sandbox.return_value = mock_sandbox_instance
 
                 # Create ExecutionManager and load the custom executor
                 execution_manager = ExecutionManager(config_dir=str(temp_dir))
+
+                # Initialize sandbox manager manually for testing
+                execution_manager._sandbox_environment_manager = mock_sandbox_instance
+
+                # Update executor factory with the new sandbox manager
+                from saber.server.execution.executors.executor_factory import ExecutorFactory
+                execution_manager._executor_factory = ExecutorFactory(
+                    sandbox_manager=mock_sandbox_instance,
+                    configuration=execution_manager._configuration,
+                )
 
                 # Get MCP tools and find our custom executor
                 mcp_tools = execution_manager.to_mcp_tools()
@@ -293,10 +315,21 @@ register_executor("factory_test", FactoryTestExecutor)
 
             with patch("saber.server.execution.execution_manager.SandboxEnvironmentManager") as mock_sandbox:
                 mock_sandbox_instance = MagicMock()
+                mock_sandbox_instance.is_ready.return_value = True
                 mock_sandbox.return_value = mock_sandbox_instance
 
                 # Create ExecutionManager
                 execution_manager = ExecutionManager(config_dir=str(temp_dir))
+
+                # Initialize sandbox manager manually for testing
+                execution_manager._sandbox_environment_manager = mock_sandbox_instance
+
+                # Update executor factory with the new sandbox manager
+                from saber.server.execution.executors.executor_factory import ExecutorFactory
+                execution_manager._executor_factory = ExecutorFactory(
+                    sandbox_manager=mock_sandbox_instance,
+                    configuration=execution_manager._configuration,
+                )
 
                 # Test factory methods work with custom executor
                 factory = execution_manager._executor_factory
