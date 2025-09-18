@@ -232,14 +232,16 @@ class ExecutionManager:
         episode_id: str,
         task: Any,
         session_id: Optional[str] = None,
+        target_episode_id: Optional[str] = None,
     ) -> None:
         """
-        Configure ExecutionManager for a specific task/episode.
+        Configure ExecutionManager for a specific task/episode with optional network attachment.
 
         Args:
             episode_id: Episode identifier for unique container naming and configuration
             task: Task object containing execution parameters and environment specification
             session_id: Optional session identifier for compatibility/logging
+            target_episode_id: Optional episode ID to attach network to
         """
         # Resolve environment if specified in task
         if task.environment:
@@ -265,9 +267,14 @@ class ExecutionManager:
                 logger.info("SandboxEnvironmentManager lazily initialized for task configuration")
 
             # Create the episode environment using the SandboxManager
-            logger.info(f"Creating sandbox environment for episode {episode_id}")
+            logger.info(
+                f"Creating sandbox environment for episode {episode_id}"
+                + (f" (attach to {target_episode_id})" if target_episode_id else "")
+            )
             try:
-                self._sandbox_environment_manager.create_episode_environment(episode_id, task.environment)
+                self._sandbox_environment_manager.create_episode_environment(
+                    episode_id, task.environment, target_episode_id
+                )
                 logger.info(f"✅ Created sandbox environment for episode {episode_id}")
             except Exception as e:
                 logger.error(f"❌ FAILED to create sandbox environment for episode {episode_id}: {e}")

@@ -142,9 +142,11 @@ class SessionRestAPI:
 
         @self.app.post("/api/v1/session/{session_id}/episodes", response_model=EpisodeCreateResponse)
         async def create_episode_endpoint(session_id: str, task_id: str) -> EpisodeCreateResponse:
-            """Create a new episode for a specific task."""
+            """Create a new episode for a specific task with automatic dependency resolution."""
             try:
                 logger.info(f"🔄 Episode creation endpoint called: session_id={session_id}, task_id={task_id}")
+
+                # Create episode with automatic dependency resolution
                 episode = await self.session_manager.start_episode(session_id, task_id)
                 logger.info(f"✅ Episode created successfully: episode_id={episode.episode_id}")
 
@@ -162,8 +164,10 @@ class SessionRestAPI:
                     task_id=task_id,
                     session_id=session_id,
                     state=episode.state.value,
-                    message="Episode created successfully",
+                    message="Episode created successfully"
+                    + (f" (attached to {episode.attached_to_episode_id})" if episode.attached_to_episode_id else ""),
                     episode_context=episode_context,
+                    attached_to_episode_id=episode.attached_to_episode_id,
                 )
                 logger.info("✅ Episode response created successfully, returning to client")
                 return response
@@ -177,7 +181,11 @@ class SessionRestAPI:
 
         @self.app.delete("/api/v1/session/{session_id}/episodes/{episode_id}", response_model=EpisodeEndResponse)
         async def end_episode_endpoint(
-            session_id: str, episode_id: str, reason: str = "manual_termination", result: Optional[str] = None
+            session_id: str,
+            episode_id: str,
+            reason: str = "manual_termination",
+            result: Optional[str] = None,
+            cascade_end_attached_episodes: bool = False,
         ) -> EpisodeEndResponse:
             """End a specific episode."""
             # Parse EvalSubmission from JSON result
@@ -197,16 +205,55 @@ class SessionRestAPI:
                     logger.error(f"Failed to parse EvalSubmission from result: {e}")
                     # Continue without eval_submission
 
-            response = await self.session_manager.end_episode(session_id, episode_id, reason, eval_submission)
+            response = await self.session_manager.end_episode(
+                session_id, episode_id, reason, eval_submission, cascade_end_attached_episodes
+            )
             return response
+
+        @self.app.get("/api/v1/tasks", response_model=BenchmarkInfo)
+        async def get_tasks_endpoint() -> BenchmarkInfo:
+            """
+            Get task list with episode attempts for client orchestration.
+            Returns BenchmarkInfo object with all configured tasks.
+            Each task reports its own configured episode_attempts.
+            """
+            logger.debug("Tasks endpoint called")
+            try:
+                benchmark_info: BenchmarkInfo = self.session_manager.get_benchmark_info()
+                logger.debug(
+                    f"Got benchmark info: {benchmark_info.total_tasks} tasks, {benchmark_info.total_episodes} episodes"
+                )
+
+                # Test serialization before returning
+                try:
+                    benchmark_info.model_dump()
+                    logger.debug("Benchmark info serialization successful")
+                except Exception as ser_e:
+                    logger.error(f"Benchmark info serialization failed: {ser_e}")
+                    raise
+
+                return benchmark_info
+            except HTTPException:
+                # Re-raise HTTPException to preserve status codes
+                raise
+            except Exception as e:
+                logger.error(f"Error in tasks endpoint: {e}")
+                logger.error(f"Exception type: {type(e)}")
+                import traceback
+
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                raise HTTPException(status_code=500, detail=f"Failed to get tasks: {str(e)}")
 
         @self.app.get("/api/v1/benchmark", response_model=BenchmarkInfo)
         async def get_benchmark_endpoint() -> BenchmarkInfo:
             """
-            Get complete benchmark task list with episode attempts for client orchestration.
+            Legacy endpoint: Get complete benchmark task list with episode attempts for client orchestration.
+
+            DEPRECATED: Use /api/v1/tasks instead. This endpoint will be removed in a future version.
             Returns BenchmarkInfo object with typed data structure.
             Each task reports its own configured episode_attempts.
             """
+            logger.warning("DEPRECATED: /api/v1/benchmark endpoint called. Use /api/v1/tasks instead.")
             logger.debug("Benchmark endpoint called")
             try:
                 benchmark_info: BenchmarkInfo = self.session_manager.get_benchmark_info()

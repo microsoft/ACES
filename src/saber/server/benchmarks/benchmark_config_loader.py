@@ -461,6 +461,25 @@ class BenchmarkConfigLoader:
         """
         return self.global_defaults.copy()
 
+    def get_dependency_config(self) -> Dict[str, float]:
+        """
+        Get dependency resolution configuration from global defaults.
+
+        Returns:
+            Dict containing dependency configuration with fallback defaults:
+            - wait_seconds: Maximum time to wait for dependencies (default: 10.0)
+            - retry_interval: Initial retry interval (default: 0.5)
+            - max_retry_interval: Maximum retry interval (default: 2.0)
+        """
+        dependency_config = self.global_defaults.get("dependency_config", {})
+
+        # Provide sensible defaults
+        return {
+            "wait_seconds": dependency_config.get("wait_seconds", 10.0),
+            "retry_interval": dependency_config.get("retry_interval", 0.5),
+            "max_retry_interval": dependency_config.get("max_retry_interval", 2.0),
+        }
+
     def _parse_global_defaults(self) -> None:
         """
         Parse global defaults configuration from YAML data.
@@ -483,7 +502,7 @@ class BenchmarkConfigLoader:
             raise InvalidTaskDefinitionException("global_defaults must be a dictionary")
 
         # Validate structure of global defaults
-        valid_sections = ["execution_config", "episode_config", "benchmark_config"]
+        valid_sections = ["execution_config", "episode_config", "benchmark_config", "dependency_config"]
         for section_name in global_defaults_data:
             if section_name not in valid_sections:
                 raise InvalidTaskDefinitionException(
@@ -690,6 +709,7 @@ class BenchmarkConfigLoader:
             episode_config=episode_config,
             benchmark_config=merged_benchmark_config,
             evaluation_config=evaluation_config,
+            depends_on_task_id=task_data.get("depends_on_task_id"),
         )
 
         logger.debug(f"Created task '{task_id}' with {len(subtasks)} subtasks")

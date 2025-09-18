@@ -147,6 +147,13 @@ class Episode(BaseModel):
     submission: Optional[str] = Field(None, description="Final submission for evaluation")
     eval_submission: Optional[EvalSubmission] = Field(None, description="Rich evaluation submission data")
 
+    # Episode dependency tracking fields
+    depends_on_task_id: Optional[str] = Field(
+        None, description="Task ID this episode depends on and needs to connect to"
+    )
+    attached_to_episode_id: Optional[str] = Field(None, description="Episode ID this episode is attached to")
+    attached_episode_ids: List[str] = Field(default_factory=list, description="Episode IDs attached to this episode")
+
     class Config:
         """Pydantic configuration."""
 
@@ -175,3 +182,20 @@ class Episode(BaseModel):
             if step.action.parameters.get("arguments"):
                 commands.append(step.action.parameters["arguments"])
         return commands
+
+    def attach_to_episode(self, target_episode_id: str) -> None:
+        """Attach this episode to another episode."""
+        self.attached_to_episode_id = target_episode_id
+
+    def add_attached_episode(self, episode_id: str) -> None:
+        """Add an episode ID to the list of episodes attached to this one."""
+        if episode_id not in self.attached_episode_ids:
+            self.attached_episode_ids.append(episode_id)
+
+    def has_attached_episode_with_task(self, task_id: str, episodes_by_id: Dict[str, "Episode"]) -> bool:
+        """Check if this episode already has an attached episode with the specified task_id."""
+        for attached_episode_id in self.attached_episode_ids:
+            attached_episode = episodes_by_id.get(attached_episode_id)
+            if attached_episode and attached_episode.task_id == task_id:
+                return True
+        return False

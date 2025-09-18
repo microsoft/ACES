@@ -17,7 +17,7 @@ services:
       - EPISODE_ID=${EPISODE_ID:-default}
     networks:
       - excytin-database
-      - excytin-isolated
+      - saber-episode-network
     restart: "no"
     healthcheck:
       test: ["CMD", "test", "-d", "/workspace"]
@@ -42,12 +42,3 @@ networks:
   excytin-database:
     external: true
     name: ${PERMANENT_NETWORK_PREFIX}excytin-database
-
-  # Episode-specific isolated network for complete episode isolation
-  excytin-isolated:
-    driver: bridge
-    internal: true
-    labels:
-      - "saber.domain=excytin"
-      - "saber.network.type=isolated"
-      - "saber.episode.id=${EPISODE_ID:-default}"

@@ -105,15 +105,15 @@ def validate_config_files(config_dir: str) -> tuple[str, str]:
     """Validate that required config files exist."""
 
     tasks_config_dir = os.path.join(config_dir, "tasks")
-    environments_config = os.path.join(config_dir, "environments.yaml")
+    environments_config_dir = os.path.join(config_dir, "environments")
 
     if not os.path.exists(tasks_config_dir):
         raise FileNotFoundError(f"Tasks configuration directory not found: {tasks_config_dir}")
 
-    if not os.path.exists(environments_config):
-        raise FileNotFoundError(f"Environments configuration file not found: {environments_config}")
+    if not os.path.exists(environments_config_dir):
+        raise FileNotFoundError(f"Environments configuration directory not found: {environments_config_dir}")
 
-    return tasks_config_dir, environments_config
+    return tasks_config_dir, environments_config_dir
 
 
 async def start_server(args: argparse.Namespace) -> None:

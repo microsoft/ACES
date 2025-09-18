@@ -1,5 +1,7 @@
 """EpisodeManager implementation for RL-friendly task execution."""
 
+import asyncio
+import time
 from dataclasses import asdict
 from datetime import datetime
 from logging import getLogger
@@ -74,6 +76,130 @@ class EpisodeManager:
         if episode:
             self.completed_episodes[episode_id] = episode
         return episode
+
+    def find_available_episode_for_dependency(
+        self, session_id: str, target_task_id: str, dependent_task_id: str
+    ) -> Optional[str]:
+        """
+        Find an available running episode with the target_task_id that can be attached to.
+
+        Args:
+            session_id: Session ID to search within
+            target_task_id: Task ID we need to find a running episode for
+            dependent_task_id: Task ID of the episode that wants to attach
+
+        Returns:
+            Episode ID of available episode, or None if none found
+
+        Raises:
+            ValueError: If a circular dependency would be created
+        """
+        # Prevent circular dependencies
+        if target_task_id == dependent_task_id:
+            raise ValueError(f"Circular dependency detected: task {dependent_task_id} cannot depend on itself")
+
+        session_episodes = self.get_active_episodes_for_session(session_id)
+
+        for episode in session_episodes:
+            # Must be the target task and in ACTIVE state
+            if episode.task_id == target_task_id and episode.state == EpisodeState.ACTIVE:
+                # Check if this episode already has an attachment from the dependent task
+                if not episode.has_attached_episode_with_task(dependent_task_id, self.episodes):
+                    logger.info(
+                        f"Found available episode {episode.episode_id} with task_id {target_task_id} for dependency"
+                    )
+                    return episode.episode_id
+                else:
+                    logger.debug(f"Episode {episode.episode_id} already has attachment from task {dependent_task_id}")
+
+        logger.warning(
+            f"No available episodes found with task_id {target_task_id} for dependency in session {session_id}"
+        )
+        return None
+
+    async def find_available_episode_for_dependency_with_retry(
+        self,
+        session_id: str,
+        target_task_id: str,
+        dependent_task_id: str,
+        max_wait_seconds: float = 10.0,
+        retry_interval: float = 0.5,
+        max_retry_interval: float = 2.0,
+    ) -> Optional[str]:
+        """
+        Find an available running episode with retry logic to handle race conditions.
+
+        Args:
+            session_id: Session ID to search within
+            target_task_id: Task ID we need to find a running episode for
+            dependent_task_id: Task ID of the episode that wants to attach
+            max_wait_seconds: Maximum total time to wait for dependency (default 10 seconds)
+            retry_interval: Initial retry interval in seconds (default 0.5 seconds)
+            max_retry_interval: Maximum retry interval for exponential backoff (default 2 seconds)
+
+        Returns:
+            Episode ID of available episode, or None if none found within timeout
+
+        Raises:
+            ValueError: If a circular dependency would be created
+        """
+        start_time = time.time()
+        current_retry_interval = retry_interval
+
+        logger.info(f"Searching for dependency {target_task_id} with retry logic (max wait: {max_wait_seconds}s)")
+
+        while True:
+            # Try to find the dependency using the existing synchronous method
+            try:
+                episode_id = self.find_available_episode_for_dependency(
+                    session_id=session_id, target_task_id=target_task_id, dependent_task_id=dependent_task_id
+                )
+
+                if episode_id:
+                    elapsed = time.time() - start_time
+                    logger.info(f"Found dependency {target_task_id} after {elapsed:.2f}s: {episode_id}")
+                    return episode_id
+
+            except ValueError as e:
+                # Circular dependency or other validation error - don't retry these
+                logger.error(f"Dependency validation error (not retrying): {e}")
+                raise
+
+            # Check if we've exceeded the maximum wait time
+            elapsed = time.time() - start_time
+            if elapsed >= max_wait_seconds:
+                logger.warning(f"Dependency search timed out after {elapsed:.2f}s for task {target_task_id}")
+                return None
+
+            # Wait before retrying (exponential backoff)
+            logger.debug(
+                f"Dependency {target_task_id} not found, retrying in {current_retry_interval:.2f}s "
+                f"(elapsed: {elapsed:.2f}s)"
+            )
+            await asyncio.sleep(current_retry_interval)
+
+            # Exponential backoff with maximum
+            current_retry_interval = min(current_retry_interval * 1.5, max_retry_interval)
+
+    def attach_episode_to_episode(self, dependent_episode_id: str, target_episode_id: str) -> None:
+        """
+        Attach one episode to another, updating both episodes' tracking fields.
+
+        Args:
+            dependent_episode_id: ID of episode being attached
+            target_episode_id: ID of episode being attached to
+        """
+        dependent_episode = self.episodes.get(dependent_episode_id)
+        target_episode = self.episodes.get(target_episode_id)
+
+        if not dependent_episode or not target_episode:
+            raise ValueError(f"Episode not found: dependent={dependent_episode_id}, target={target_episode_id}")
+
+        # Update attachment tracking
+        dependent_episode.attach_to_episode(target_episode_id)
+        target_episode.add_attached_episode(dependent_episode_id)
+
+        logger.info(f"Episode {dependent_episode_id} attached to episode {target_episode_id}")
 
     def configure_for_task(self, episode_id: str, task: Any) -> None:
         """
@@ -151,7 +277,13 @@ class EpisodeManager:
 
         return False, ""
 
-    def start_episode(self, session_id: str, task_id: str, initial_context: Optional[Dict[str, Any]] = None) -> Episode:
+    def start_episode(
+        self,
+        session_id: str,
+        task_id: str,
+        initial_context: Optional[Dict[str, Any]] = None,
+        task: Optional[Any] = None,
+    ) -> Episode:
         """
         Start a new episode for a session with the provided task.
 
@@ -159,6 +291,7 @@ class EpisodeManager:
             session_id: ID of the session starting the episode
             task_id: Task ID to execute
             initial_context: Initial context for the episode
+            task: Optional task object for dependency tracking
 
         Returns:
             New Episode instance
@@ -176,6 +309,8 @@ class EpisodeManager:
             eval_submission=None,
             completion_reason=None,
             submission=None,
+            depends_on_task_id=task.depends_on_task_id if task else None,
+            attached_to_episode_id=None,  # Will be set later if episode is attached
         )
 
         # Add episode to session's episode tracking

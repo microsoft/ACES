@@ -7,7 +7,7 @@ with MCP integration and comprehensive security validation in Docker containers.
 
 import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, mock_open, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, mock_open, patch
 
 import pytest
 
@@ -87,7 +87,7 @@ class TestExecutionManager:
             registry = ExecutionManager(temp_config_dir)
 
         assert isinstance(registry._configuration, dict)
-        assert isinstance(registry._executor_factory, ExecutorFactory)
+        assert registry._executor_factory is None  # Lazy initialization - should be None initially
         assert registry._sandbox_environment_manager is None  # Should be None until initialized
 
     def test_initialization_with_config(self, sample_config, temp_config_dir):
@@ -124,7 +124,7 @@ class TestExecutionManager:
 
         # Should have called environment creation on the mocked sandbox manager with environment string
         mock_sandbox_manager.create_episode_environment.assert_called_once_with(
-            "episode123", "test_env"
+            "episode123", "test_env", None
         )
 
         # Should have updated configuration (only cli config should be present since python_config is None)
@@ -240,8 +240,12 @@ class TestExecutionManager:
         """Test MCP tools conversion with CLI configuration."""
         sample_config["bash"]["default_shell_mode"] = True
 
-        with patch("saber.server.execution.execution_manager.SandboxEnvironmentManager"):
+        with patch("saber.server.execution.execution_manager.SandboxEnvironmentManager") as mock_sandbox_cls:
             registry = ExecutionManager(temp_config_dir)
+
+            # Force initialization by setting up a mock sandbox manager
+            mock_sandbox_manager = Mock()
+            registry._sandbox_environment_manager = mock_sandbox_manager
 
         # Mock the factory's response
         mock_tools = [
@@ -259,7 +263,8 @@ class TestExecutionManager:
             }
         ]
 
-        with patch.object(registry._executor_factory, "get_all_mcp_tools", return_value=mock_tools):
+        # Now access the property to create the factory and patch it
+        with patch.object(registry.executor_factory, "get_all_mcp_tools", return_value=mock_tools):
             mcp_tools = registry.to_mcp_tools()
 
         tool = mcp_tools[0]
@@ -590,5 +595,5 @@ class TestExecutionManagerDebugMode:
 
         # Verify episode_id was passed to create_episode_environment
         mock_sandbox_instance.create_episode_environment.assert_called_once_with(
-            episode_id, "test_env"
+            episode_id, "test_env", None
         )

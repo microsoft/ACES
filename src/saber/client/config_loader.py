@@ -12,7 +12,7 @@ Following SABER's philosophy:
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 
 import yaml
 
@@ -25,7 +25,7 @@ class SABERConfigLoader:
     """Simple configuration loader for SABER YAML configs."""
 
     @staticmethod
-    def load_from_file(config_path: Path) -> SABERConfig:
+    def load_from_file(config_path: Union[str, Path]) -> SABERConfig:
         """
         Load SABER configuration from YAML file.
 
@@ -40,6 +40,10 @@ class SABERConfigLoader:
             ValueError: If configuration is invalid
             yaml.YAMLError: If YAML parsing fails
         """
+
+        # Convert string to Path if necessary
+        if isinstance(config_path, str):
+            config_path = Path(config_path)
 
         if not config_path.exists():
             raise FileNotFoundError(f"Configuration file not found: {config_path}")
@@ -89,7 +93,18 @@ class SABERConfigLoader:
         if not model:
             raise ValueError("Configuration must specify 'model' field")
 
-        model_args = config_data.get("model_args", {})
+        # Handle both nested model format (legacy) and flat format (new)
+        if isinstance(model, dict):
+            # Legacy nested format: model: {name: "...", args: {...}}
+            model_name = model.get("name")
+            if not model_name:
+                raise ValueError("Configuration model section must specify 'name' field")
+            model_args = model.get("args", {})
+            model = model_name  # Use the name as the model string
+        else:
+            # New flat format: model: "model_name", model_args: {...}
+            model_args = config_data.get("model_args", {})
+
         if not isinstance(model_args, dict):
             raise ValueError("'model_args' must be a dictionary")
 
@@ -136,11 +151,13 @@ class SABERConfigLoader:
         # Extract agent parameters
         debug_mode = agent_config.get("debug_mode", False)
 
-        # Extract execution configuration
-        log_level = config_data.get("log_level", "INFO")
-        log_dir = config_data.get("log_dir")
-        ui_enabled = config_data.get("ui_enabled", True)
-        container_timeout = config_data.get("container_timeout", 300)
+        # Extract execution configuration (check both top-level and execution section)
+        execution_config = config_data.get("execution", {})
+
+        log_level = config_data.get("log_level", execution_config.get("log_level", "INFO"))
+        log_dir = config_data.get("log_dir", execution_config.get("log_dir"))
+        ui_enabled = config_data.get("ui_enabled", execution_config.get("ui_enabled", True))
+        container_timeout = config_data.get("container_timeout", execution_config.get("container_timeout", 300))
 
         # Extract eval_async configuration
         max_samples = config_data.get("max_samples")

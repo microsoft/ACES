@@ -132,13 +132,16 @@ class SandboxEnvironmentManager:
 
         return compose_file_path
 
-    def create_episode_environment(self, episode_id: str, sandbox_environment: str) -> bool:
+    def create_episode_environment(
+        self, episode_id: str, sandbox_environment: str, target_episode_id: Optional[str] = None
+    ) -> bool:
         """
         Create episode-specific sandbox environment using static compose file.
 
         Args:
             episode_id: Episode identifier for unique container naming
             sandbox_environment: Name of sandbox environment (e.g., "excytin_sandbox")
+            target_episode_id: Optional episode ID to attach network to
 
         Returns:
             True if environment created successfully
@@ -159,10 +162,14 @@ class SandboxEnvironmentManager:
             # Create new orchestrator for this episode with logging configuration
             orchestrator = ComposeOrchestrator(logging_config=self.logging_config)
 
-            # Create environment configuration with permanent network prefix
+            # Create environment configuration with permanent network prefix and optional network attachment
             # This allows sandbox environments to reference permanent environment networks
             permanent_network_prefix = f"{self.domain}_permanent_environment_"
-            config = ComposeEnvironmentConfig(episode_id=episode_id, permanent_network_prefix=permanent_network_prefix)
+            config = ComposeEnvironmentConfig(
+                episode_id=episode_id,
+                permanent_network_prefix=permanent_network_prefix,
+                target_episode_id=target_episode_id,
+            )
 
             # Start environment with configuration
             orchestrator.start_environment(str(compose_file_path), config)

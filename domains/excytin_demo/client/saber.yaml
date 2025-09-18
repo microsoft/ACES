@@ -13,6 +13,11 @@ server:
 # Task configuration
 tasks:
   task_ids: ["incident_5_task_1", ] # "incident_5_task_2", "incident_5_task_3", "incident_5_task_4", "incident_5_task_5"]
+  task_type: "individual"  # Type of tasks to retrieve/validate from server: "individual", "composite", or "all"
+                          # IMPORTANT: When task_ids are specified, this validates that all specified tasks match this type
+                          # "individual" - Only individual tasks allowed (fails if any task_ids are composite)
+                          # "composite" - Only composite tasks allowed (fails if any task_ids are individual)
+                          # "all" - Both individual and composite tasks allowed (no validation)
 
 # Agent configuration (use agent registry)
 agent:

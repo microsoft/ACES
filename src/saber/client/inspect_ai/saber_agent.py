@@ -142,13 +142,29 @@ async def create_saber_inspect_agent(
             logger.info(f"Using initial prompt from metadata: {initial_prompt[:100]}...")
 
             # Create episode
-            episode = await session_manager.create_episode(session_id, task_id)
-            task_store.set("saber_current_episode", episode)
+            episode_response = await session_manager.create_episode(session_id, task_id)
+            task_store.set("saber_current_episode", episode_response)
+
+            # Log episode dependency information for agent context
+            if episode_response.attached_to_episode_id:
+                logger.info(
+                    f"🤖 Agent episode context: {episode_response.episode_id} attached to parent episode "
+                    f"{episode_response.attached_to_episode_id}"
+                )
+                logger.info(
+                    f"🔗 This agent will operate in a dependent episode context with shared state from episode "
+                    f"{episode_response.attached_to_episode_id}"
+                )
+                # Store attachment info for potential agent use
+                task_store.set("saber_attached_to_episode_id", episode_response.attached_to_episode_id)
+            else:
+                logger.info(f"🤖 Agent episode context: {episode_response.episode_id} created as independent episode")
+                task_store.set("saber_attached_to_episode_id", None)
 
             # Create MCP server connection with episode headers
             mcp_headers = {
                 HTTPHeaders.SESSION_ID: session_id,
-                HTTPHeaders.EPISODE_ID: episode.episode_id,
+                HTTPHeaders.EPISODE_ID: episode_response.episode_id,
                 HTTPHeaders.TASK_ID: task_id,
                 HTTPHeaders.ORCHESTRATION_ENV: OrchestrationEnvironment.INSPECT,
             }
@@ -177,7 +193,7 @@ async def create_saber_inspect_agent(
 
                 # Create EvalSubmission object from ModelOutput
                 eval_submission = EvalSubmission(
-                    episode_id=episode.episode_id,
+                    episode_id=episode_response.episode_id,
                     task_id=task_id,
                     model=getattr(output, "model", "unknown"),
                     choices=[
@@ -190,17 +206,29 @@ async def create_saber_inspect_agent(
                 )
 
                 # End episode with the EvalSubmission object
+                # If this episode is attached to another episode, cascade-end the parent episode
+                cascade_end = episode_response.attached_to_episode_id is not None
+                if cascade_end:
+                    logger.info(
+                        f"🔗 Episode {episode_response.episode_id} will cascade-end parent episode "
+                        f"{episode_response.attached_to_episode_id}"
+                    )
+
                 await session_manager.end_episode(
-                    episode.session_id, episode.episode_id, reason="completed", result=eval_submission
+                    episode_response.session_id,
+                    episode_response.episode_id,
+                    reason="completed",
+                    result=eval_submission,
+                    cascade_end_attached_episodes=cascade_end,
                 )
 
-                logger.info(f"Successfully completed episode {episode.episode_id} for agent {agent_id}")
+                logger.info(f"Successfully completed episode {episode_response.episode_id} for agent {agent_id}")
                 return result
 
             except Exception as e:
                 # Create EvalSubmission object for error case
                 error_submission = EvalSubmission(
-                    episode_id=episode.episode_id,
+                    episode_id=episode_response.episode_id,
                     task_id=task_id,
                     model="unknown",
                     choices=[],
@@ -210,10 +238,22 @@ async def create_saber_inspect_agent(
                 )
 
                 # End episode with error - still pass EvalSubmission object
+                # If this episode is attached to another episode, cascade-end the parent episode
+                cascade_end = episode_response.attached_to_episode_id is not None
+                if cascade_end:
+                    logger.info(
+                        f"🔗 Episode {episode_response.episode_id} failed - will cascade-end parent episode "
+                        f"{episode_response.attached_to_episode_id}"
+                    )
+
                 await session_manager.end_episode(
-                    episode.session_id, episode.episode_id, reason="error", result=error_submission
+                    episode_response.session_id,
+                    episode_response.episode_id,
+                    reason="error",
+                    result=error_submission,
+                    cascade_end_attached_episodes=cascade_end,
                 )
-                logger.error(f"Episode {episode.episode_id} failed for agent {agent_id}: {e}")
+                logger.error(f"Episode {episode_response.episode_id} failed for agent {agent_id}: {e}")
                 raise
 
         return execute

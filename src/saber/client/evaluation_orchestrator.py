@@ -239,7 +239,7 @@ class SABEREvaluationOrchestrator:
                 logger.info(f"Using configured task IDs: {self.config.task_ids}")
                 return self.config.task_ids
             else:
-                logger.info("Discovering all available tasks")
+                logger.info("Discovering available tasks")
                 # Session manager handles HTTP communication
                 if self._session_manager is None:
                     raise RuntimeError("Session manager not initialized")

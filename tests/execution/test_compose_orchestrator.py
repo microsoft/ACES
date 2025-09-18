@@ -89,7 +89,8 @@ services:
         assert cmd[0] == "docker"
         assert cmd[1] == "compose"
         assert cmd[2] == "-f"
-        assert str(cmd[3]) == str(temp_compose_file)  # Convert both to string for comparison
+        # cmd[3] is now the processed compose file (with network injection), so just verify it's a file path
+        assert str(cmd[3]).endswith('.yml')
         assert cmd[4] == "-p"
         assert cmd[5] == "saber-episode-test-episode-123"
         assert cmd[6] == "up"

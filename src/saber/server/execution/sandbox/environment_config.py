@@ -27,6 +27,7 @@ class ComposeEnvironmentConfig:
 
     # Network configuration
     permanent_network_prefix: Optional[str] = None
+    target_episode_id: Optional[str] = None  # Episode to attach to for network sharing
 
     # Additional environment variables for compose substitution
     additional_variables: Optional[Dict[str, str]] = None
@@ -53,6 +54,9 @@ class ComposeEnvironmentConfig:
         # Network configuration
         if self.permanent_network_prefix:
             env_vars["PERMANENT_NETWORK_PREFIX"] = self.permanent_network_prefix
+
+        if self.target_episode_id:
+            env_vars["TARGET_EPISODE_ID"] = self.target_episode_id
 
         # Additional custom variables
         if self.additional_variables:

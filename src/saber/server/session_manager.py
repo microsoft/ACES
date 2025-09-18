@@ -374,7 +374,7 @@ class SessionManager:
 
     async def start_episode(self, session_id: str, task_id: str) -> Episode:
         """
-        Initialize episode for a task.
+        Initialize episode for a task with automatic dependency resolution.
 
         Args:
             session_id: ID of the client session
@@ -389,13 +389,59 @@ class SessionManager:
         # Get the task object to access its configuration
         task = self.benchmark_manager.get_task(task_id)
 
-        # Start episode through episode manager
+        # Start episode through episode manager (pass task for dependency tracking)
         episode = self.episode_manager.start_episode(
-            session_id=session_id, task_id=task_id, initial_context=task.initial_context.copy()
+            session_id=session_id, task_id=task_id, initial_context=task.initial_context.copy(), task=task
         )
 
-        # Configure execution manager with task object and episode ID for unique container naming
-        self.execution_manager.configure_for_task(episode.episode_id, task, session_id=session_id)
+        # Handle automatic dependency resolution if task specifies depends_on_task_id
+        effective_attach_to_episode_id = None
+        if task.depends_on_task_id:
+            logger.info(f"Task {task_id} requires dependency on task {task.depends_on_task_id}")
+
+            # Get dependency configuration from benchmark manager
+            dependency_config = self.benchmark_manager.get_dependency_config()
+
+            # Find available episode with the required task_id (with retry logic)
+            try:
+                available_episode_id = await self.episode_manager.find_available_episode_for_dependency_with_retry(
+                    session_id=session_id,
+                    target_task_id=task.depends_on_task_id,
+                    dependent_task_id=task_id,
+                    max_wait_seconds=dependency_config["wait_seconds"],
+                    retry_interval=dependency_config["retry_interval"],
+                    max_retry_interval=dependency_config["max_retry_interval"],
+                )
+            except ValueError as e:
+                # Circular dependency or other validation error
+                dependency_error = ValueError(f"Dependency validation failed: {e}")
+                self.episode_manager.remove_episode_on_error(episode.episode_id, dependency_error)
+                raise ValueError(f"Cannot create episode for task {task_id}: {e}")
+
+            if available_episode_id:
+                effective_attach_to_episode_id = available_episode_id
+                # Attach the episodes at the episode manager level
+                self.episode_manager.attach_episode_to_episode(episode.episode_id, available_episode_id)
+                logger.info(
+                    f"Episode {episode.episode_id} automatically attached to {available_episode_id} "
+                    f"due to dependency on task {task.depends_on_task_id}"
+                )
+            else:
+                # Fail after retry period - required dependency not available
+                dependency_error = ValueError(
+                    f"No available episodes with required dependency task_id {task.depends_on_task_id} "
+                    f"(waited {dependency_config['wait_seconds']}s)"
+                )
+                self.episode_manager.remove_episode_on_error(episode.episode_id, dependency_error)
+                raise ValueError(
+                    f"Cannot create episode for task {task_id}: no available episodes with required dependency "
+                    f"task_id {task.depends_on_task_id} after waiting {dependency_config['wait_seconds']}s"
+                )
+
+        # Configure execution manager with task object, episode ID, and attachment (automatic only)
+        self.execution_manager.configure_for_task(
+            episode.episode_id, task, session_id=session_id, target_episode_id=effective_attach_to_episode_id
+        )
 
         # Generate & store prompt (fail-fast if misconfigured)
         prompt = self.benchmark_manager.get_task_prompt(task.task_id)
@@ -443,6 +489,7 @@ class SessionManager:
         episode_id: str,
         reason: str = EpisodeTerminationReason.COMPLETED,
         submission: Optional[EvalSubmission] = None,
+        cascade_end_attached_episodes: bool = False,
     ) -> EpisodeEndResponse:
         """
         End a specific episode for a session with evaluation.
@@ -452,6 +499,7 @@ class SessionManager:
             episode_id: ID of the specific episode to end
             reason: Reason for episode termination (use EpisodeTerminationReason enum values)
             submission: Required submission for evaluation
+            cascade_end_attached_episodes: If True, also end episodes that this episode is attached to
 
         Returns:
             EpisodeEndResponse with evaluation result
@@ -525,6 +573,33 @@ class SessionManager:
             logger.error(f"Episode cleanup error for {episode_id}: {e}")
 
         logger.info(f"Ended episode {episode_id} for session {session_id} with reason: {reason}")
+
+        # Handle cascade termination of attached episodes if requested
+        if cascade_end_attached_episodes and completed_episode.attached_to_episode_id:
+            attached_episode_id = completed_episode.attached_to_episode_id
+            logger.info(f"🔗 Cascade termination requested: ending attached episode {attached_episode_id}")
+
+            try:
+                # Check if the attached episode is still active
+                attached_episode = self.episode_manager.get_episode_by_id(attached_episode_id)
+                if attached_episode and not attached_episode.is_complete:
+                    # End the attached episode with cascade completion reason
+                    cascade_reason = f"cascade_completed_by_{episode_id}"
+                    await self.end_episode(
+                        session_id=session_id,
+                        episode_id=attached_episode_id,
+                        reason=cascade_reason,
+                        submission=None,  # Attached episodes don't get submissions from dependent episodes
+                        cascade_end_attached_episodes=False,  # Prevent infinite recursion
+                    )
+                    logger.info(f"✅ Successfully cascade-ended attached episode {attached_episode_id}")
+                else:
+                    logger.info(
+                        f"ℹ️ Attached episode {attached_episode_id} is already complete, skipping cascade termination"
+                    )
+            except Exception as e:
+                logger.error(f"❌ Failed to cascade-end attached episode {attached_episode_id}: {e}")
+                # Don't fail the main episode end operation due to cascade failures
 
         # Build response with evaluation result - success derived from evaluation (evaluation_result always present)
         return EpisodeEndResponse(

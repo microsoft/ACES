@@ -68,6 +68,9 @@ class EpisodeCreateResponse(BaseModel):
     state: str = Field(description="Initial episode state")
     message: str = Field(description="Success message")
     episode_context: Optional[EpisodeContext] = Field(None, description="Episode context with limits and metadata")
+    attached_to_episode_id: Optional[str] = Field(
+        None, description="Episode ID this episode is attached to due to dependencies"
+    )
 
 
 class EpisodeListResponse(BaseModel):

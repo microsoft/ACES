@@ -89,6 +89,9 @@ class ComposeOrchestrator:
         # Convert config to environment variables
         env_vars = config.to_env_dict()
 
+        # Apply network auto-injection for saber-episode-network
+        processed_compose_path = self._inject_episode_network(compose_file_path, config)
+
         # Add environment variables to the current environment
         env = os.environ.copy()
         env.update(env_vars)
@@ -105,11 +108,14 @@ class ComposeOrchestrator:
                 },
             )
 
-        # Log the resolved compose configuration
-        self._log_resolved_compose_config(compose_file_path, env_vars)
+        # Log the resolved compose configuration (use processed path to include network injection)
+        self._log_resolved_compose_config(processed_compose_path, env_vars)
 
-        # Run docker compose up with the provided environment variables
-        command = ["docker", "compose", "-f", compose_file_path, "-p", self.project_name, "up", "-d"]
+        # Validate execution service exists before running Docker command (fail-fast)
+        temp_execution_service = self._identify_execution_service(Path(processed_compose_path))
+
+        # Run docker compose up with the processed compose file and provided environment variables
+        command = ["docker", "compose", "-f", processed_compose_path, "-p", self.project_name, "up", "-d"]
 
         logger.info(f"Starting compose environment with project name: {self.project_name}")
         logger.debug(f"Environment variables: {env_vars}")
@@ -134,8 +140,8 @@ class ComposeOrchestrator:
                     project_name=self.project_name, config_type=config.config_type
                 )
 
-            # Identify the execution service after successful startup
-            self.execution_service_name = self._identify_execution_service(Path(compose_file_path))
+            # Store the execution service name that was validated earlier
+            self.execution_service_name = temp_execution_service
             logger.info(f"Identified execution service: {self.execution_service_name}")
 
             logger.info(f"Successfully started environment for project: {self.project_name}")
@@ -234,10 +240,6 @@ class ComposeOrchestrator:
                             network_names = [str(networks)]
                         logger.info(f"  {service_name}: {network_names}")
 
-            # Save resolved compose file to disk
-            if self.container_logger:
-                self._save_resolved_compose_file(compose_file_path, resolved_content, env_vars)
-
         except Exception as e:
             logger.error(f"Could not log resolved compose config: {e}")
             import traceback
@@ -290,58 +292,6 @@ class ComposeOrchestrator:
                 f.write(resolved_content)
 
             logger.info(f"Saved resolved compose config to: {output_file}")
-
-        except Exception as e:
-            logger.warning(f"Could not save resolved compose config to disk: {e}")
-
-    def _save_resolved_compose_file(
-        self, original_compose_path: str, resolved_content: str, env_vars: Dict[str, str]
-    ) -> None:
-        """
-        Save the resolved compose configuration to the compose-configs directory.
-
-        Args:
-            original_compose_path: Path to the original compose file
-            resolved_content: Resolved compose content with variables substituted
-            env_vars: Environment variables used for substitution
-        """
-        try:
-            if not self.container_logger:
-                return
-
-            from datetime import datetime
-            from pathlib import Path
-
-            # Get logs directory from container logger config
-            logs_dir = Path(self.container_logger.logs_directory)
-            compose_configs_dir = logs_dir / "compose-configs"
-            compose_configs_dir.mkdir(parents=True, exist_ok=True)
-
-            # Generate timestamp and filename
-            timestamp = datetime.now().isoformat()
-            original_filename = Path(original_compose_path).stem
-            config_type = self.config_type
-            project_name = self.project_name or "unknown"
-
-            # Create filename: timestamp_configtype_projectname_originalname.yml
-            resolved_filename = f"{timestamp}_{config_type}_{project_name}_{original_filename}.yml"
-            resolved_file_path = compose_configs_dir / resolved_filename
-
-            # Write resolved compose content
-            with open(resolved_file_path, "w") as f:
-                f.write(resolved_content)
-
-            # Also write environment variables used
-            env_filename = f"{timestamp}_{config_type}_{project_name}_{original_filename}.env"
-            env_file_path = compose_configs_dir / env_filename
-
-            with open(env_file_path, "w") as f:
-                f.write("# Environment variables used for compose resolution\n")
-                for key, value in env_vars.items():
-                    f.write(f"{key}={value}\n")
-
-            logger.info(f"Saved resolved compose config: {resolved_file_path}")
-            logger.info(f"Saved environment variables: {env_file_path}")
 
         except Exception as e:
             logger.warning(f"Could not save resolved compose config to disk: {e}")
@@ -833,3 +783,92 @@ class ComposeOrchestrator:
             error_msg = f"Timeout validating compose file {compose_file_path}"
             logger.error(error_msg)
             raise RuntimeError(error_msg)
+
+    def _inject_episode_network(self, compose_file_path: str, config: ComposeEnvironmentConfig) -> str:
+        """
+        Inject saber-episode-network definition into compose file based on attachment mode.
+        Enforces standardized network naming and provides fail-fast validation.
+
+        Args:
+            compose_file_path: Path to original compose file
+            config: Environment configuration containing target_episode_id
+
+        Returns:
+            Path to processed compose file with network injection
+
+        Raises:
+            ValueError: If compose file uses non-standard isolation networks
+        """
+        import tempfile
+
+        try:
+            # Parse the original compose file
+            with open(compose_file_path, "r") as f:
+                compose_data = yaml.safe_load(f)
+
+            if compose_data is None:
+                compose_data = {}
+
+            # Validate network usage - fail fast if non-standard networks detected
+            if "services" in compose_data:
+                for service_name, service_config in compose_data["services"].items():
+                    if "networks" in service_config:
+                        networks = service_config["networks"]
+                        if isinstance(networks, list):
+                            network_list = networks
+                        elif isinstance(networks, dict):
+                            network_list = list(networks.keys())
+                        else:
+                            continue
+
+                        # Check for problematic isolation network names
+                        for network in network_list:
+                            if (
+                                any(keyword in network.lower() for keyword in ["isolated", "episode", "sandbox"])
+                                and network != "saber-episode-network"
+                            ):
+                                error_msg = (
+                                    f"SABER Network Naming Error: Service '{service_name}' uses non-standard "
+                                    f"isolation network '{network}'. Please use 'saber-episode-network' for "
+                                    f"episode isolation instead. This ensures proper network attachment functionality."
+                                )
+                                logger.error(error_msg)
+                                raise ValueError(error_msg)
+
+            # Ensure networks section exists
+            if "networks" not in compose_data:
+                compose_data["networks"] = {}
+
+            # Auto-inject saber-episode-network definition
+            if config.target_episode_id:
+                # ATTACHED MODE: Reference existing target episode's network
+                compose_data["networks"]["saber-episode-network"] = {
+                    "external": True,
+                    "name": f"saber-episode-{config.target_episode_id}",
+                }
+                logger.info(f"Injected external network reference to episode {config.target_episode_id}")
+            else:
+                # NORMAL MODE: Create new isolated network for this episode
+                compose_data["networks"]["saber-episode-network"] = {
+                    "name": f"saber-episode-{config.episode_id}",
+                    "internal": True,
+                    "driver": "bridge",
+                    "labels": ["saber.network.type=isolated", f"saber.episode.id={config.episode_id}"],
+                }
+                logger.info(f"Injected new isolated network for episode {config.episode_id}")
+
+            # Create temporary file for the modified compose content
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as temp_file:
+                yaml.dump(compose_data, temp_file, default_flow_style=False)
+                temp_path = temp_file.name
+
+            logger.debug(f"Created processed compose file: {temp_path}")
+            return temp_path
+
+        except Exception as e:
+            logger.error(f"Failed to inject episode network: {e}")
+            # Re-raise validation errors to fail fast
+            if isinstance(e, ValueError):
+                raise
+            # Fall back to original file on other errors
+            return compose_file_path

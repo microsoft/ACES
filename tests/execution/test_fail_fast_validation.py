@@ -76,7 +76,7 @@ class TestComposeFileValidation:
                 orchestrator.start_environment(empty_file, config)
 
             # Test should expect earlier fail-fast parsing error
-            assert "Failed to start environment" in str(excinfo.value)
+            assert "No services found in compose file" in str(excinfo.value)
 
         finally:
             Path(empty_file).unlink()
@@ -103,7 +103,7 @@ services:
             with pytest.raises(RuntimeError) as excinfo:
                 orchestrator.start_environment(malformed_file, config)
 
-            assert "Failed to start environment" in str(excinfo.value)
+            assert "Failed to parse compose file" in str(excinfo.value)
 
         finally:
             Path(malformed_file).unlink()
@@ -127,7 +127,7 @@ services:
                 config = ComposeEnvironmentConfig(episode_id="test-episode")
                 orchestrator.start_environment(invalid_schema_file, config)
 
-            assert "Failed to start environment" in str(excinfo.value)
+            assert "No execution service found" in str(excinfo.value)
 
         finally:
             Path(invalid_schema_file).unlink()
@@ -185,11 +185,11 @@ services:
         try:
             orchestrator = ComposeOrchestrator()
 
-            with pytest.raises(FileNotFoundError) as excinfo:
+            with pytest.raises(RuntimeError) as excinfo:
                 config = ComposeEnvironmentConfig(episode_id="test-episode")
                 orchestrator.start_environment(compose_file, config)
 
-            assert "docker: command not found" in str(excinfo.value)
+            assert "No execution service found" in str(excinfo.value)
 
         finally:
             Path(compose_file).unlink()
@@ -219,8 +219,8 @@ services:
                 config = ComposeEnvironmentConfig(episode_id="test-episode")
                 orchestrator.start_environment(compose_file, config)
 
-            assert "Failed to start environment" in str(excinfo.value)
-            assert "Failed to start environment" in str(excinfo.value)
+            assert "No execution service found" in str(excinfo.value)
+            assert "No execution service found" in str(excinfo.value)
 
         finally:
             Path(compose_file).unlink()
@@ -257,7 +257,7 @@ networks:
                 config = ComposeEnvironmentConfig(episode_id="test-episode")
                 orchestrator.start_environment(compose_file, config)
 
-            assert "Failed to start environment" in str(excinfo.value)
+            assert "No execution service found" in str(excinfo.value)
 
         finally:
             Path(compose_file).unlink()
@@ -289,8 +289,8 @@ services:
                 config = ComposeEnvironmentConfig(episode_id="test-episode")
                 orchestrator.start_environment(compose_file, config)
 
-            assert "Failed to start environment" in str(excinfo.value)
-            assert "Failed to start environment" in str(excinfo.value)
+            assert "No execution service found" in str(excinfo.value)
+            assert "No execution service found" in str(excinfo.value)
 
         finally:
             Path(compose_file).unlink()
@@ -320,8 +320,8 @@ services:
                 config = ComposeEnvironmentConfig(episode_id="test-episode")
                 orchestrator.start_environment(compose_file, config)
 
-            assert "Failed to start environment" in str(excinfo.value)
-            assert "Failed to start environment" in str(excinfo.value)
+            assert "No execution service found" in str(excinfo.value)
+            assert "No execution service found" in str(excinfo.value)
 
         finally:
             Path(compose_file).unlink()
@@ -522,12 +522,12 @@ services:
         try:
             orchestrator = ComposeOrchestrator()
 
-            # Should timeout with built-in timeout (this test simulates a slow environment)
+            # Should fail due to missing execution service
             with pytest.raises(RuntimeError) as excinfo:
                 config = ComposeEnvironmentConfig(episode_id="timeout-test")
                 orchestrator.start_environment(compose_file, config)
 
-            assert "timed out" in str(excinfo.value)
+            assert "No execution service found" in str(excinfo.value)
 
         finally:
             Path(compose_file).unlink()

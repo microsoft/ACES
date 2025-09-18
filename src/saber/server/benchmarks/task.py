@@ -28,6 +28,7 @@ class Task:
         episode_config: Optional[Dict[str, Any]] = None,
         benchmark_config: Optional[Dict[str, Any]] = None,
         evaluation_config: Optional[Dict[str, Any]] = None,
+        depends_on_task_id: Optional[str] = None,
     ):
         """
         Initialize a task.
@@ -49,6 +50,7 @@ class Task:
             episode_config: Episode-specific configuration (max_steps, timeouts, etc.)
             benchmark_config: Benchmark-specific configuration (episode_attempts, etc.)
             evaluation_config: Evaluation configuration (strategy, criteria, scoring)
+            depends_on_task_id: Task ID that episodes of this task should connect to when created
         """
         self.task_id = task_id
         self.domain = domain
@@ -63,6 +65,7 @@ class Task:
         self.episode_config = episode_config or {}
         self.benchmark_config = benchmark_config or {}
         self.evaluation_config = evaluation_config or {}
+        self.depends_on_task_id = depends_on_task_id
 
         # Create lookup map for efficient subtask access
         self._subtask_map = {st.subtask_id: st for st in self.subtasks}
@@ -151,6 +154,7 @@ class Task:
             "episode_config": self.episode_config,
             "benchmark_config": self.benchmark_config,
             "evaluation_config": self.evaluation_config,
+            "depends_on_task_id": self.depends_on_task_id,
             "subtask_count": len(self.subtasks),
             "episode_attempts": self.get_episode_attempts(),
         }

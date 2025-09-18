@@ -106,7 +106,23 @@ class ClientSessionManager:
                     data = await response.json()
                     episode_response = EpisodeCreateResponse(**data)
 
-                    logger.info(f"Created episode: {episode_response.episode_id}")
+                    # Log episode creation with enhanced dependency information
+                    logger.info(f"✅ Created episode: {episode_response.episode_id} for task: {task_id}")
+
+                    if episode_response.attached_to_episode_id:
+                        logger.info(
+                            f"🔗 Episode dependency attachment: {episode_response.episode_id} → "
+                            f"{episode_response.attached_to_episode_id}"
+                        )
+                        logger.info(
+                            f"📋 Episode {episode_response.episode_id} automatically attached to running episode "
+                            f"{episode_response.attached_to_episode_id} due to task dependencies"
+                        )
+                    else:
+                        logger.info(
+                            f"🔸 Episode {episode_response.episode_id} created as independent episode (no dependencies)"
+                        )
+
                     return episode_response
                 else:
                     error_text = await response.text()
@@ -155,7 +171,7 @@ class ClientSessionManager:
 
     async def get_available_tasks(self) -> List[TaskInfo]:
         """
-        Get all available tasks from SABER server.
+        Get available tasks from SABER server.
 
         Returns:
             List of TaskInfo objects from server
@@ -163,9 +179,9 @@ class ClientSessionManager:
         Raises:
             Exception: If task discovery fails
         """
-        logger.info("Discovering all available tasks via REST API")
+        logger.info("Discovering available tasks via REST API")
 
-        url = f"{self.base_url}/api/v1/benchmark"
+        url = f"{self.base_url}/api/v1/tasks"
 
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.timeout)) as session:
             async with session.get(url) as response:
@@ -194,7 +210,7 @@ class ClientSessionManager:
         """
         logger.info(f"Retrieving {len(task_ids)} tasks via REST API")
 
-        # Get all available tasks as TaskInfo objects
+        # Get all available tasks
         all_tasks = await self.get_available_tasks()
 
         # Filter to requested task IDs
@@ -238,7 +254,12 @@ class ClientSessionManager:
                     # Don't raise - termination failures shouldn't break cleanup
 
     async def end_episode(
-        self, session_id: str, episode_id: str, reason: str = "completed", result: Optional[EvalSubmission] = None
+        self,
+        session_id: str,
+        episode_id: str,
+        reason: str = "completed",
+        result: Optional[EvalSubmission] = None,
+        cascade_end_attached_episodes: bool = False,
     ) -> None:
         """
         End an episode via REST API.
@@ -248,11 +269,12 @@ class ClientSessionManager:
             episode_id: Episode ID
             reason: Completion reason
             result: Optional EvalSubmission data
+            cascade_end_attached_episodes: If True, also end episodes that this episode is attached to
         """
         logger.debug(f"Ending episode {episode_id} with reason: {reason}")
 
         url = f"{self.base_url}/api/v1/session/{session_id}/episodes/{episode_id}"
-        params = {"reason": reason}
+        params = {"reason": reason, "cascade_end_attached_episodes": cascade_end_attached_episodes}
         if result:
             params["result"] = result.model_dump_json()
 

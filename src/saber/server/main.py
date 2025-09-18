@@ -67,7 +67,7 @@ async def main() -> None:
 
     # Construct config file paths
     tasks_config_path = os.path.join(config_dir, "tasks")
-    environments_config_path = os.path.join(config_dir, "environments.yaml")
+    environments_config_path = os.path.join(config_dir, "environments")
 
     logger.info(f"Starting SABER server for domain: {domain_name}")
     logger.info(f"Config directory: {config_dir}")
@@ -78,11 +78,11 @@ async def main() -> None:
 
     # Verify config files exist
     if not os.path.exists(tasks_config_path):
-        logger.error(f"Tasks config file not found: {tasks_config_path}")
+        logger.error(f"Tasks config directory not found: {tasks_config_path}")
         sys.exit(1)
 
     if not os.path.exists(environments_config_path):
-        logger.error(f"Environments config file not found: {environments_config_path}")
+        logger.error(f"Environments config directory not found: {environments_config_path}")
         sys.exit(1)
 
     try:

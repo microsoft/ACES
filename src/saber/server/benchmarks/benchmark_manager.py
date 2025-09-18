@@ -321,3 +321,15 @@ class BenchmarkManager:
         """
         task = self.get_task(task_id)
         return self.prompt_generator.render_judge_prompt_for_episode(task, episode)
+
+    def get_dependency_config(self) -> Dict[str, float]:
+        """
+        Get dependency resolution configuration from global configuration.
+
+        Returns:
+            Dict containing dependency configuration:
+            - wait_seconds: Maximum time to wait for dependencies
+            - retry_interval: Initial retry interval
+            - max_retry_interval: Maximum retry interval
+        """
+        return self.config_loader.get_dependency_config()
