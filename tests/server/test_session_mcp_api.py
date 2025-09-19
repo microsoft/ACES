@@ -101,8 +101,8 @@ class TestSessionMCPAPI:
             end_episode_tool.description
             == "End the current episode and optionally record a discovered flag/target/objective"
         )
-        assert end_episode_tool.inputSchema.required == []
-        assert "submission" in end_episode_tool.inputSchema.properties
+        assert end_episode_tool.inputSchema["required"] == []
+        assert "submission" in end_episode_tool.inputSchema["properties"]
 
         mcp_api.session_manager.execution_manager.to_mcp_tools.assert_called_once()
 
@@ -660,3 +660,197 @@ class TestSessionMCPAPIOrchestration:
             with pytest.raises(ValueError, match="Invalid orchestration environment ' standalone '"):
                 asyncio.run(mcp_api._get_headers())
             assert mcp_api.mcp_server is None
+
+
+class TestCustomListToolsHandler:
+    """Test custom list_tools handler for episode-specific tool filtering."""
+
+    @pytest.fixture
+    def session_manager_with_tools(self):
+        """Create mock SessionManager with executor tools for testing."""
+        mock_manager = MagicMock()
+        mock_manager.domain_name = "test_domain"
+        mock_manager.execution_manager = MagicMock()
+
+        # Mock available executors
+        mock_manager.execution_manager.get_available_executors.return_value = [
+            "bash", "python", "curl", "nmap", "sqli"
+        ]
+
+        # Mock episode-specific tools
+        mock_manager.execution_manager.to_mcp_tools.return_value = [
+            {
+                "name": "bash",
+                "description": "Execute bash commands",
+                "inputSchema": {"type": "object", "properties": {"command": {"type": "string"}}}
+            },
+            {
+                "name": "curl",
+                "description": "Execute HTTP requests",
+                "inputSchema": {"type": "object", "properties": {"url": {"type": "string"}}}
+            }
+        ]
+
+        return mock_manager
+
+    @pytest.fixture
+    def mcp_api_with_tools(self, session_manager_with_tools):
+        """Create SessionMCPAPI instance with mock tools."""
+        api = SessionMCPAPI(session_manager_with_tools, host="127.0.0.1", port=3001)
+        return api
+
+    @pytest.mark.asyncio
+    async def test_custom_list_tools_handler_compatibility(self, mcp_api_with_tools):
+        """Test that custom list_tools handler returns objects identical to FastMCP's default."""
+        from fastmcp import FastMCP
+        from fastmcp.tools.tool import Tool as FastMCPTool
+        from mcp.types import Tool as MCPTool
+        from saber.models.mcp import MCPToolSchema
+
+        # Setup FastMCP server for comparison
+        fastmcp_server = FastMCP("test-server")
+
+        # Add some test tools to FastMCP for comparison
+        @fastmcp_server.tool
+        def bash(command: str) -> str:
+            """Execute bash commands"""
+            return f"executed: {command}"
+
+        @fastmcp_server.tool
+        def curl(url: str) -> str:
+            """Execute HTTP requests"""
+            return f"requested: {url}"
+
+        # Get FastMCP's default tool list format
+        fastmcp_tools = await fastmcp_server._mcp_list_tools()
+
+        # Mock our MCP API's headers to have episode context
+        with patch.object(mcp_api_with_tools, '_get_headers') as mock_get_headers:
+            mock_get_headers.return_value = RequestHeaders(
+                session_id="test-session",
+                episode_id="test-episode",
+                orchestration_env=OrchestrationEnvironment.STANDALONE,
+                task_id="test-task",
+                client_id="test-client"
+            )
+
+            # Get our custom handler's tool list
+            custom_response = await mcp_api_with_tools.handle_list_tools()
+            custom_tools = custom_response.tools
+
+        # Compare the structure and types
+        assert len(custom_tools) == 3, f"Expected 3 tools (2 executor + 1 hardcoded), got {len(custom_tools)}"
+        assert len(fastmcp_tools) == 2, f"Expected 2 FastMCP tools, got {len(fastmcp_tools)}"
+
+        # Check that both return MCPTool objects
+        for tool in fastmcp_tools:
+            assert isinstance(tool, MCPTool), f"FastMCP tool should be MCPTool, got {type(tool)}"
+
+        for tool in custom_tools:
+            assert isinstance(tool, MCPTool), f"Custom tool should be MCPTool (mcp.types.Tool), got {type(tool)}"
+
+        # Convert our tools to the same format for comparison (exclude hardcoded tools)
+        fastmcp_tool_names = {tool.name for tool in fastmcp_tools}
+        custom_executor_tools = [tool for tool in custom_tools if tool.name != "end_episode"]
+        custom_tool_names = {tool.name for tool in custom_executor_tools}
+
+        assert fastmcp_tool_names == custom_tool_names, f"Executor tool names should match: {fastmcp_tool_names} vs {custom_tool_names}"
+
+        # Verify hardcoded tool is present
+        hardcoded_tools = [tool for tool in custom_tools if tool.name == "end_episode"]
+        assert len(hardcoded_tools) == 1, "Should have exactly one end_episode tool"
+
+        # Check individual tool structure compatibility
+        fastmcp_bash = next(t for t in fastmcp_tools if t.name == "bash")
+        custom_bash = next(t for t in custom_tools if t.name == "bash")
+
+        # Both should have the same required fields
+        assert hasattr(fastmcp_bash, 'name')
+        assert hasattr(fastmcp_bash, 'description')
+        assert hasattr(fastmcp_bash, 'inputSchema')
+
+        assert hasattr(custom_bash, 'name')
+        assert hasattr(custom_bash, 'description')
+        assert hasattr(custom_bash, 'inputSchema')
+
+        # Names should match
+        assert fastmcp_bash.name == custom_bash.name
+
+        # Input schemas should be dictionaries
+        assert isinstance(fastmcp_bash.inputSchema, dict)
+        assert isinstance(custom_bash.inputSchema, dict)
+
+    @pytest.mark.asyncio
+    async def test_custom_handler_episode_filtering(self, mcp_api_with_tools):
+        """Test that custom handler properly filters tools by episode."""
+
+        # Mock different episodes with different allowed tools
+        with patch.object(mcp_api_with_tools, '_get_headers') as mock_get_headers:
+            # Test blue team episode (limited tools)
+            mock_get_headers.return_value = RequestHeaders(
+                session_id="test-session",
+                episode_id="blue-episode",
+                orchestration_env=OrchestrationEnvironment.STANDALONE,
+                task_id="blue-task",
+                client_id="test-client"
+            )
+
+            # Mock blue team episode tools (should be filtered)
+            mcp_api_with_tools.session_manager.execution_manager.to_mcp_tools.return_value = [
+                {
+                    "name": "bash",
+                    "description": "Execute bash commands",
+                    "inputSchema": {"type": "object", "properties": {"command": {"type": "string"}}}
+                }
+            ]
+
+            blue_response = await mcp_api_with_tools.handle_list_tools()
+            blue_tools = blue_response.tools
+
+            # Should only have bash for blue team (plus end_episode hardcoded tool)
+            assert len(blue_tools) == 2  # 1 executor tool + 1 hardcoded tool
+            blue_executor_tools = [tool for tool in blue_tools if tool.name != "end_episode"]
+            assert len(blue_executor_tools) == 1
+            assert blue_executor_tools[0].name == "bash"            # Test red team episode (more tools)
+            mock_get_headers.return_value = RequestHeaders(
+                session_id="test-session",
+                episode_id="red-episode",
+                orchestration_env=OrchestrationEnvironment.STANDALONE,
+                task_id="red-task",
+                client_id="test-client"
+            )
+
+            # Mock red team episode tools (should have more tools)
+            mcp_api_with_tools.session_manager.execution_manager.to_mcp_tools.return_value = [
+                {
+                    "name": "bash",
+                    "description": "Execute bash commands",
+                    "inputSchema": {"type": "object", "properties": {"command": {"type": "string"}}}
+                },
+                {
+                    "name": "curl",
+                    "description": "Execute HTTP requests",
+                    "inputSchema": {"type": "object", "properties": {"url": {"type": "string"}}}
+                },
+                {
+                    "name": "nmap",
+                    "description": "Network scanning",
+                    "inputSchema": {"type": "object", "properties": {"target": {"type": "string"}}}
+                }
+            ]
+
+            red_response = await mcp_api_with_tools.handle_list_tools()
+            red_tools = red_response.tools
+
+            # Should have multiple tools for red team (plus end_episode hardcoded tool)
+            assert len(red_tools) == 4  # 3 executor tools + 1 hardcoded tool
+            red_executor_tools = [tool for tool in red_tools if tool.name != "end_episode"]
+            assert len(red_executor_tools) == 3
+            red_tool_names = {tool.name for tool in red_executor_tools}
+            assert red_tool_names == {"bash", "curl", "nmap"}        # Verify that execution_manager.to_mcp_tools was called with episode_id
+        assert mcp_api_with_tools.session_manager.execution_manager.to_mcp_tools.call_count == 2
+
+        # Check the calls were made with correct episode IDs
+        calls = mcp_api_with_tools.session_manager.execution_manager.to_mcp_tools.call_args_list
+        assert calls[0][0][0] == "blue-episode"  # First call with blue episode
+        assert calls[1][0][0] == "red-episode"   # Second call with red episode

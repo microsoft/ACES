@@ -609,9 +609,30 @@ class SessionManager:
                 )
 
         # Configure execution manager with task object, episode ID, and attachment (automatic only)
-        self.execution_manager.configure_for_task(
-            episode.episode_id, task, session_id=session_id, target_episode_id=effective_attach_to_episode_id
-        )
+        # This includes Docker Compose environment creation and health checks
+        try:
+            self.execution_manager.configure_for_task(
+                episode.episode_id, task, session_id=session_id, target_episode_id=effective_attach_to_episode_id
+            )
+        except Exception as e:
+            logger.error(f"Failed to configure execution environment for episode {episode.episode_id}: {e}")
+            # Cleanup episode since execution environment configuration failed (including health checks)
+            self.episode_manager.remove_episode_on_error(episode.episode_id, e)
+
+            # Create specific error message for health check failures vs other failures
+            if "ComposeHealthCheckError" in str(type(e)) or "health" in str(e).lower():
+                error_detail = (
+                    f"Episode creation failed due to Docker environment health check failure for task {task_id}. "
+                    f"All containers must be healthy before episode creation can proceed. "
+                    f"Details: {str(e)}"
+                )
+            else:
+                error_detail = (
+                    f"Failed to create execution environment for task {task_id}. "
+                    f"This may be due to Docker Compose health check failures or other environment issues: {str(e)}"
+                )
+
+            raise HTTPException(status_code=500, detail=error_detail)
 
         # Generate & store prompt (fail-fast if misconfigured)
         prompt = self.benchmark_manager.get_task_prompt(task.task_id)
@@ -1009,6 +1030,10 @@ class SessionManager:
         """
         Get complete evaluation criteria package for client-side evaluation.
 
+        This method returns evaluation criteria for both complete and incomplete episodes.
+        For incomplete episodes, the submission will be None and judge messages will
+        not be rendered (since they require a submission).
+
         Args:
             session_id: ID of the client session (for context only)
             episode_id: ID of the specific episode
@@ -1018,12 +1043,12 @@ class SessionManager:
 
         Raises:
             HTTPException: If episode or task not found
-            RuntimeError: If episode not complete or missing submission
+            RuntimeError: If complete episode is missing submission
         """
         logger.info(f"🔍 Getting evaluation criteria for session {session_id}, episode {episode_id}")
 
         # Get episode data - no session validation needed since evaluation criteria
-        # should be available for any completed episode regardless of session state
+        # should be available for any episode (complete or incomplete) regardless of session state
         episode = self.episode_manager.get_episode_by_id(episode_id)
         if not episode:
             logger.error(f"❌ Episode {episode_id} not found")
@@ -1034,16 +1059,22 @@ class SessionManager:
             f"steps={len(episode.steps)}"
         )
 
-        # Ensure episode is complete and has submission
-        if not episode.is_complete:
-            logger.error(f"❌ Episode {episode_id} is not complete (state: {episode.state})")
-            raise RuntimeError(f"Cannot get evaluation criteria for incomplete episode {episode_id}")
+        # Check if episode has submission (for complete episodes)
+        submission_value = getattr(episode, "submission", None)
+        logger.debug(
+            f"📋 Episode {episode_id} submission value: {repr(submission_value)} (type: {type(submission_value)})"
+        )
 
-        if not hasattr(episode, "submission") or not episode.submission:
-            logger.error(f"❌ Episode {episode_id} missing submission attribute")
-            raise RuntimeError(f"Episode {episode_id} missing required submission for evaluation")
+        has_submission = hasattr(episode, "submission") and episode.submission is not None and episode.submission != ""
+        if episode.is_complete and not has_submission:
+            logger.error(f"❌ Complete episode {episode_id} missing submission attribute")
+            raise RuntimeError(f"Complete episode {episode_id} missing required submission for evaluation")
 
-        logger.debug(f"✅ Episode {episode_id} is complete with submission: {episode.submission[:100]}...")
+        if has_submission:
+            submission_preview = episode.submission[:100] if episode.submission else ""
+            logger.debug(f"✅ Episode {episode_id} has submission: {submission_preview}...")
+        else:
+            logger.debug(f"📝 Episode {episode_id} has no submission (incomplete episode)")
 
         # Get task information
         task = self.benchmark_manager.get_task(episode.task_id)
@@ -1082,8 +1113,8 @@ class SessionManager:
         # Initialize judge messages as None
         judge_messages = None
 
-        # Add judge messages for LLM evaluation if needed
-        if task.evaluation_config.get("strategy") == "llm_judge":
+        # Add judge messages for LLM evaluation if needed and submission is available
+        if task.evaluation_config.get("strategy") == "llm_judge" and has_submission:
             try:
                 logger.debug(f"Rendering judge prompts for episode {episode_id} with task {task.task_id}")
                 # Use PromptGenerator to render judge prompts
@@ -1131,11 +1162,14 @@ class SessionManager:
                 judge_messages = None
 
         # Build and return evaluation criteria response
+        final_submission = episode.submission if has_submission else None
+        logger.debug(f"📤 Final submission for response: {repr(final_submission)} (type: {type(final_submission)})")
+
         evaluation_criteria = EvaluationCriteriaResponse(
             session_id=session_id,
             episode_id=episode_id,
             task_id=task.task_id,
-            submission=episode.submission,
+            submission=final_submission,
             task_context=task_context,
             evaluation_config=task.evaluation_config,
             judge_messages=judge_messages,

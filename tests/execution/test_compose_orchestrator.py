@@ -19,8 +19,14 @@ class TestComposeOrchestrator:
 
     @pytest.fixture
     def orchestrator(self):
-        """Create a ComposeOrchestrator instance."""
-        return ComposeOrchestrator()
+        """Create a ComposeOrchestrator instance with mocked health checker."""
+        with patch('saber.server.execution.sandbox.compose_orchestrator.ComposeHealthChecker') as mock_health_checker_class:
+            # Setup mock health checker
+            mock_health_checker = MagicMock()
+            mock_health_checker_class.return_value = mock_health_checker
+
+            orchestrator = ComposeOrchestrator()
+            yield orchestrator
 
     @pytest.fixture
     def temp_compose_file(self):
@@ -68,7 +74,7 @@ services:
     @patch('subprocess.run')
     def test_start_environment_success(self, mock_run, orchestrator, temp_compose_file):
         """Test successful environment start."""
-        # Setup mock
+        # Setup mocks
         mock_run.return_value = Mock(stdout="Container started", stderr="", returncode=0)
 
         # Create config for sandbox environment
@@ -80,7 +86,7 @@ services:
         # Test
         orchestrator.start_environment(temp_compose_file, config)
 
-        # Verify
+        # Verify subprocess was called
         mock_run.assert_called_once()
         call_args = mock_run.call_args
 
@@ -100,6 +106,9 @@ services:
         assert call_args[1]['check'] is True
         assert call_args[1]['capture_output'] is True
         assert call_args[1]['text'] is True
+
+        # Verify health check was called
+        orchestrator.health_checker.wait_for_all_services_healthy.assert_called_once()
 
     @patch('subprocess.run')
     def test_start_environment_with_episode_id(self, mock_run, orchestrator, temp_compose_file):

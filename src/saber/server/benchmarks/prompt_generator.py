@@ -613,6 +613,7 @@ class PromptGenerator:
             for subtask in task.subtasks:
                 subtasks_data.append(
                     {
+                        "subtask_id": subtask.subtask_id,
                         "title": subtask.title,
                         "description": subtask.description,
                         "objective": subtask.objective,

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
+import mcp.types as mcp_types
 from pydantic import BaseModel, Field
 
 
@@ -94,6 +95,8 @@ class RequestHeaders:
 class MCPPropertySchema(BaseModel):
     """Schema definition for a single property in MCP input schema."""
 
+    model_config = {"extra": "forbid"}
+
     type: str = Field(description="JSON Schema type (string, integer, number, boolean, array, object)")
     description: Optional[str] = Field(None, description="Property description")
     title: Optional[str] = Field(None, description="Property title (from JSON Schema)")
@@ -102,6 +105,14 @@ class MCPPropertySchema(BaseModel):
     minimum: Optional[Union[int, float]] = Field(None, description="Minimum value for numeric properties")
     maximum: Optional[Union[int, float]] = Field(None, description="Maximum value for numeric properties")
     pattern: Optional[str] = Field(None, description="Regex pattern for string properties")
+    items: Optional[Dict[str, Any]] = Field(None, description="Schema for array items (for array type)")
+
+    def model_dump(self, **kwargs: Any) -> Dict[str, Any]:
+        """Override model_dump to exclude None values from JSON schema generation."""
+        # Set exclude_none=True by default unless explicitly overridden
+        if "exclude_none" not in kwargs:
+            kwargs["exclude_none"] = True
+        return super().model_dump(**kwargs)
 
 
 class MCPInputSchema(BaseModel):
@@ -110,6 +121,13 @@ class MCPInputSchema(BaseModel):
     type: str = Field(default="object", description="Schema type (always 'object' for tool parameters)")
     properties: Dict[str, MCPPropertySchema] = Field(description="Parameter property definitions")
     required: List[str] = Field(default_factory=list, description="List of required parameter names")
+
+    def model_dump(self, **kwargs: Any) -> Dict[str, Any]:
+        """Override model_dump to exclude None values from JSON schema generation."""
+        # Set exclude_none=True by default unless explicitly overridden
+        if "exclude_none" not in kwargs:
+            kwargs["exclude_none"] = True
+        return super().model_dump(**kwargs)
 
 
 class MCPToolSchema(BaseModel):
@@ -123,7 +141,7 @@ class MCPToolSchema(BaseModel):
 class MCPToolListResponse(BaseModel):
     """Response model for MCP tool listing."""
 
-    tools: List[MCPToolSchema] = Field(description="Available tools")
+    tools: List[mcp_types.Tool] = Field(description="Available tools")
     session_id: Optional[str] = Field(None, description="Session context")
     episode_id: Optional[str] = Field(None, description="Episode context")
 

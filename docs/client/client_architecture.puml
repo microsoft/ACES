@@ -113,7 +113,7 @@ package "SABER Client Infrastructure - Current Implementation" {
             +base_url: str
             +client_session: ClientSession
             --
-            +list_tools(): List[MCPToolSchema]
+            +list_tools(): List[mcp.types.Tool]
             +call_tool(request: MCPToolCallRequest): Any
             +close(): void
             --

@@ -289,8 +289,8 @@ tasks:
         finally:
             os.unlink(temp_path)
 
-    def test_llm_missing_golden_answer(self):
-        """Test that LLM strategy without golden_answer fails validation."""
+    def test_llm_optional_golden_answer(self):
+        """Test that LLM strategy works with or without golden_answer."""
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
             f.write("""
 domain: "test_domain"
@@ -313,6 +313,8 @@ tasks:
       strategy: "llm_judge"
       criteria:
         model: "gpt-4"
+        judge_system_template: "system_template.md"
+        judge_user_template: "user_template.md"
       scoring:
         max_score: 1.0
     subtasks: []
@@ -321,9 +323,10 @@ tasks:
 
         try:
             loader = BenchmarkConfigLoader("test_domain")
-
-            with pytest.raises(InvalidTaskDefinitionException, match="llm_judge strategy requires 'golden_answer'"):
-                loader.load_tasks_from_file(temp_path)
+            # This should NOT raise an exception now that golden_answer is optional
+            tasks = loader.load_tasks_from_file(temp_path)
+            assert len(tasks) == 1
+            assert tasks[0].task_id == "llm_no_golden_task"
 
         finally:
             os.unlink(temp_path)

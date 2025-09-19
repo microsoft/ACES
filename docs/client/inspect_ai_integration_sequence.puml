@@ -100,7 +100,7 @@ loop for each task/episode
         MCPClient -> Server: POST /mcp/list_tools
         Server -> ExecMgr: to_mcp_tools()
         activate ExecMgr
-        ExecMgr --> Server: List[MCPToolSchema]
+        ExecMgr --> Server: List[mcp.types.Tool]
         Server --> MCPClient: tools_response
         MCPClient --> Agent: available_tools
 

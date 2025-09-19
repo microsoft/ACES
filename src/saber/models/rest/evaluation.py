@@ -88,8 +88,10 @@ class EvaluationCriteriaResponse(BaseModel):
     episode_id: str = Field(description="Episode identifier")
     task_id: str = Field(description="Task identifier")
 
-    # Authoritative submission to evaluate
-    submission: str = Field(description="Exact submission content to evaluate (from server)")
+    # Authoritative submission to evaluate (None for incomplete episodes)
+    submission: Optional[str] = Field(
+        None, description="Exact submission content to evaluate (from server, None for incomplete episodes)"
+    )
 
     # Task context for evaluation
     task_context: TaskEvaluationContext = Field(description="Task information for evaluation")

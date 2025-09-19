@@ -12,11 +12,12 @@ import logging
 # Forward declaration to avoid circular imports
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+import mcp.types as mcp_types
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_http_headers
 
 from ...models import EvalSubmission, HTTPHeaders, OrchestrationEnvironment, RequestHeaders
-from ...models.mcp import MCPInputSchema, MCPPropertySchema, MCPToolCallResponse, MCPToolListResponse, MCPToolSchema
+from ...models.mcp import MCPToolCallResponse, MCPToolListResponse, MCPToolSchema
 from ..base import Action, CommandResult
 from .mcp_tool_generator import MCPToolGenerator
 
@@ -192,6 +193,9 @@ class SessionMCPAPI:
         # Register hardcoded MCP API tools
         self._register_hardcoded_tools()
 
+        # Override FastMCP's list_tools handler with episode-specific filtering
+        self._override_list_tools_handler()
+
     def _register_hardcoded_tools(self) -> None:
         """Register hardcoded MCP API tools with the FastMCP server."""
         if not self.mcp_server:
@@ -289,46 +293,37 @@ class SessionMCPAPI:
             headers = await self._get_headers()
 
             # Get tools from execution manager with episode context
-            tools_data: List[Dict[str, Any]] = self.session_manager.execution_manager.to_mcp_tools(headers.episode_id)
-
-            # Convert executor tools to typed MCPToolSchema objects
-            executor_mcp_tools = [
-                MCPToolSchema(name=tool["name"], description=tool["description"], inputSchema=tool["inputSchema"])
-                for tool in tools_data
-            ]
+            executor_tools: List[mcp_types.Tool] = self.session_manager.execution_manager.to_mcp_tools(
+                headers.episode_id
+            )
 
             # Only add hardcoded MCP API tools for STANDALONE orchestration
             # For INSPECT orchestration, we rely on the framework's native capabilities
             hardcoded_tools_data = []
             if headers.orchestration_env == OrchestrationEnvironment.STANDALONE:
                 hardcoded_tools_data = [
-                    MCPToolSchema(
+                    mcp_types.Tool(
                         name="end_episode",
                         description="End the current episode and optionally record a discovered flag/target/objective",
-                        inputSchema=MCPInputSchema(
-                            type="object",
-                            properties={
-                                "submission": MCPPropertySchema(
-                                    type="string",
-                                    description="Optional flag, target, or objective discovered during episode",
-                                    title=None,
-                                    default="",  # Use empty string instead of None
-                                    enum=None,
-                                    minimum=None,
-                                    maximum=None,
-                                    pattern=None,
-                                )
+                        inputSchema={
+                            "type": "object",
+                            "properties": {
+                                "submission": {
+                                    "type": "string",
+                                    "description": "Optional flag, target, or objective discovered during episode",
+                                    "default": "",  # Use empty string as default
+                                }
                             },
-                            required=[],  # Keep as optional since it has a default
-                        ),
+                            "required": [],  # Keep as optional since it has a default
+                        },
                     )
                 ]
 
             # Combine executor tools and hardcoded tools (if any)
-            mcp_tools = executor_mcp_tools + hardcoded_tools_data
+            mcp_tools = executor_tools + hardcoded_tools_data
 
             logger.debug(
-                f"Returning {len(mcp_tools)} tools ({len(tools_data)} executor tools + "
+                f"Returning {len(mcp_tools)} tools ({len(executor_tools)} executor tools + "
                 f"{len(hardcoded_tools_data)} hardcoded tool{'s' if len(hardcoded_tools_data) != 1 else ''}) "
                 f"for MCP discovery"
                 f"{f' for episode {headers.episode_id}' if headers.has_episode_context else ' (no episode context)'}"
@@ -525,3 +520,42 @@ class SessionMCPAPI:
         return MCPToolCallResponse(
             content=[{"type": "application/json", "data": result_data}], isError=not command_result.success
         )
+
+    def _override_list_tools_handler(self) -> None:
+        """Override FastMCP's default list_tools handler with episode-specific filtering."""
+        try:
+            if not self.mcp_server:
+                raise RuntimeError("MCP server not initialized")
+
+            # Access FastMCP's internal _mcp_server and override the list_tools handler
+            if hasattr(self.mcp_server, "_mcp_server"):
+                # Register our custom handler to override the default
+                self.mcp_server._mcp_server.list_tools()(self._custom_list_tools_handler)
+                logger.info("✅ Successfully overrode FastMCP list_tools handler with episode-specific filtering")
+            else:
+                logger.warning("⚠️ FastMCP internal structure changed - unable to override list_tools handler")
+                logger.warning("    Tool discovery will fall back to global tool registration (no episode filtering)")
+
+        except Exception as e:
+            logger.error(f"Failed to override list_tools handler: {e}")
+            logger.warning("Tool discovery will fall back to global tool registration (no episode filtering)")
+
+    async def _custom_list_tools_handler(self) -> List[mcp_types.Tool]:
+        """
+        Custom list_tools handler that provides episode-specific tool filtering.
+
+        This method overrides FastMCP's default tool discovery to return only the tools
+        that are available for the current episode context based on HTTP headers.
+
+        Returns:
+            List of mcp.types.Tool objects filtered by episode context
+        """
+        try:
+            # Call our existing handle_list_tools method which has episode filtering logic
+            response = await self.handle_list_tools()
+            return response.tools
+
+        except Exception as e:
+            logger.error(f"Error in custom list_tools handler: {e}")
+            # Fall back to empty tools list on error
+            return []

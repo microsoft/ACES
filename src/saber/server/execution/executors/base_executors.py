@@ -159,17 +159,19 @@ class CommandExecutor(ABC):
         required: List[str] = []
 
         for param_name, param_def in self._parameters.items():
-            # Build parameter schema
-            property_schema = MCPPropertySchema(
-                type=param_def.type.value,
-                description=param_def.description,
-                title=None,
-                default=param_def.default,
-                enum=param_def.enum_values,
-                minimum=None,
-                maximum=None,
-                pattern=None,
-            )
+            # Build parameter schema with conditional field setting to avoid None values
+            property_schema_kwargs: Dict[str, Any] = {
+                "type": param_def.type.value,
+                "description": param_def.description,
+            }
+
+            # Only set optional fields if they have actual values
+            if param_def.default is not None:
+                property_schema_kwargs["default"] = param_def.default
+            if param_def.enum_values is not None:
+                property_schema_kwargs["enum"] = param_def.enum_values
+
+            property_schema = MCPPropertySchema(**property_schema_kwargs)
 
             # Add range constraints for numbers
             if param_def.type.value in ("integer", "number"):
@@ -181,6 +183,10 @@ class CommandExecutor(ABC):
             # Add pattern for strings
             if param_def.type.value == "string" and param_def.pattern:
                 property_schema.pattern = param_def.pattern
+
+            # Add items for arrays
+            if param_def.type.value == "array" and param_def.items:
+                property_schema.items = param_def.items
 
             properties[param_name] = property_schema
 

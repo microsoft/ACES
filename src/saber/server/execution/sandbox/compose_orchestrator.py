@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 import yaml
 
 from ..logging import ContainerLoggingManager
+from .compose_health_checker import ComposeHealthChecker
 from .environment_config import ComposeEnvironmentConfig
 
 try:
@@ -51,6 +52,9 @@ class ComposeOrchestrator:
         self.container_logger = None
         if logging_config:
             self.container_logger = ContainerLoggingManager(logging_config)
+
+        # Initialize health checker for episode service verification
+        self.health_checker = ComposeHealthChecker()
 
     @property
     def docker_client(self) -> Any:
@@ -89,8 +93,8 @@ class ComposeOrchestrator:
         # Convert config to environment variables
         env_vars = config.to_env_dict()
 
-        # Apply network auto-injection for saber-episode-network
-        processed_compose_path = self._inject_episode_network(compose_file_path, config)
+        # Apply network auto-injection for saber-episode-network and resolve environment variables
+        processed_compose_path = self._inject_episode_network(compose_file_path, config, env_vars)
 
         # Add environment variables to the current environment
         env = os.environ.copy()
@@ -143,6 +147,22 @@ class ComposeOrchestrator:
             # Store the execution service name that was validated earlier
             self.execution_service_name = temp_execution_service
             logger.info(f"Identified execution service: {self.execution_service_name}")
+
+            # MANDATORY HEALTH CHECK: Wait for all services to become healthy
+            # FAIL-FAST: Episode creation will fail if any service is not healthy
+            logger.info(f"🔍 Starting mandatory health checks for all services in project: {self.project_name}")
+            logger.info(f"🔍 Health check will use processed compose file: {processed_compose_path}")
+            logger.info(f"🔍 Original compose file was: {compose_file_path}")
+
+            # Use the processed compose file (with variables resolved) for health checks
+            # NO TRY-CATCH: Health check failures will propagate up and fail episode creation
+            self.health_checker.wait_for_all_services_healthy(
+                compose_file_path=processed_compose_path,  # Use processed file, not original
+                project_name=self.project_name,
+                timeout_seconds=180,  # 3 minutes for health checks - reasonable for complex environments
+                check_interval=2.0,  # Check every 2 seconds
+            )
+            logger.info(f"✅ All services are healthy for project: {self.project_name}")
 
             logger.info(f"Successfully started environment for project: {self.project_name}")
             return result
@@ -784,27 +804,53 @@ class ComposeOrchestrator:
             logger.error(error_msg)
             raise RuntimeError(error_msg)
 
-    def _inject_episode_network(self, compose_file_path: str, config: ComposeEnvironmentConfig) -> str:
+    def _inject_episode_network(
+        self, compose_file_path: str, config: ComposeEnvironmentConfig, env_vars: Optional[Dict[str, str]] = None
+    ) -> str:
         """
-        Inject saber-episode-network definition into compose file based on attachment mode.
-        Enforces standardized network naming and provides fail-fast validation.
+        Create a processed compose file with episode network injection and environment variable resolution.
+
+        Reads the original compose file, injects the appropriate episode network configuration,
+        resolves environment variables, and writes to a temporary file. Returns the path to the
+        temporary processed file.
 
         Args:
             compose_file_path: Path to original compose file
             config: Environment configuration containing target_episode_id
+            env_vars: Environment variables for variable substitution
 
         Returns:
-            Path to processed compose file with network injection
+            Path to processed compose file with network injection and variable resolution
 
         Raises:
             ValueError: If compose file uses non-standard isolation networks
         """
+        import re
         import tempfile
 
         try:
             # Parse the original compose file
             with open(compose_file_path, "r") as f:
-                compose_data = yaml.safe_load(f)
+                compose_content = f.read()
+
+            # First resolve environment variables if provided
+            if env_vars:
+
+                def replace_var(match: Any) -> str:
+                    var_expr = match.group(1)
+                    if ":-" in var_expr:
+                        var_name, default = var_expr.split(":-", 1)
+                        return str(env_vars.get(var_name, default))
+                    else:
+                        return str(env_vars.get(var_expr, match.group(0)))  # Return original if not found
+
+                # Pattern to match ${VAR} or ${VAR:-default}
+                pattern = r"\$\{([^}]+)\}"
+                compose_content = re.sub(pattern, replace_var, compose_content)
+                logger.debug("Resolved environment variables in compose file")
+
+            # Parse the resolved content
+            compose_data = yaml.safe_load(compose_content)
 
             if compose_data is None:
                 compose_data = {}
@@ -857,12 +903,12 @@ class ComposeOrchestrator:
                 }
                 logger.info(f"Injected new isolated network for episode {config.episode_id}")
 
-            # Create temporary file for the modified compose content
+            # Create temporary file for the modified compose content with resolved variables
             with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as temp_file:
                 yaml.dump(compose_data, temp_file, default_flow_style=False)
                 temp_path = temp_file.name
 
-            logger.debug(f"Created processed compose file: {temp_path}")
+            logger.debug(f"Created processed compose file with resolved variables: {temp_path}")
             return temp_path
 
         except Exception as e:
@@ -872,3 +918,31 @@ class ComposeOrchestrator:
                 raise
             # Fall back to original file on other errors
             return compose_file_path
+
+    def _cleanup_failed_environment(self, project_name: str) -> None:
+        """
+        Cleanup a failed environment by stopping and removing containers.
+
+        Used when health checks fail during environment startup to ensure
+        no orphaned containers are left running.
+
+        Args:
+            project_name: Docker Compose project name to clean up
+        """
+        logger.warning(f"🧹 Cleaning up failed environment: {project_name}")
+        try:
+            # Stop and remove containers for this project
+            cleanup_command = ["docker", "compose", "-p", project_name, "down", "--volumes", "--remove-orphans"]
+
+            result = subprocess.run(cleanup_command, capture_output=True, text=True, timeout=60)
+
+            if result.returncode == 0:
+                logger.info(f"✅ Successfully cleaned up failed environment: {project_name}")
+            else:
+                logger.warning(
+                    f"⚠️ Partial cleanup for {project_name} - some resources may remain. " f"stderr: {result.stderr}"
+                )
+        except subprocess.TimeoutExpired:
+            logger.error(f"❌ Cleanup timeout for project {project_name}")
+        except Exception as e:
+            logger.error(f"❌ Error during cleanup for project {project_name}: {e}")

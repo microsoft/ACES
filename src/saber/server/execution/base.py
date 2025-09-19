@@ -34,6 +34,7 @@ class Parameter:
     min_value: Optional[Union[int, float]] = None
     max_value: Optional[Union[int, float]] = None
     pattern: Optional[str] = None  # For string validation
+    items: Optional[dict] = None  # For array type validation
 
     def validate_value(self, value: Any) -> tuple[bool, Optional[str]]:
         """
@@ -60,6 +61,22 @@ class Parameter:
             return False, f"Parameter '{self.name}' must be an object"
         elif self.type == ParameterType.NUMBER and not isinstance(value, (int, float)):
             return False, f"Parameter '{self.name}' must be a number"
+
+        # Array items validation
+        if self.type == ParameterType.ARRAY and self.items and isinstance(value, list):
+            item_type = self.items.get("type")
+            if item_type == "string":
+                for i, item in enumerate(value):
+                    if not isinstance(item, str):
+                        return False, f"Parameter '{self.name}' array item {i} must be a string"
+            elif item_type == "integer":
+                for i, item in enumerate(value):
+                    if not isinstance(item, int):
+                        return False, f"Parameter '{self.name}' array item {i} must be an integer"
+            elif item_type == "number":
+                for i, item in enumerate(value):
+                    if not isinstance(item, (int, float)):
+                        return False, f"Parameter '{self.name}' array item {i} must be a number"
 
         # Enum validation
         if self.enum_values and value not in self.enum_values:

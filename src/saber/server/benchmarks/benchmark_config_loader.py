@@ -785,10 +785,12 @@ class BenchmarkConfigLoader:
                 )
 
         elif strategy == "llm_judge":
+            # golden_answer is optional for llm_judge strategy
             golden_answer = criteria.get("golden_answer")
-            if not golden_answer or not isinstance(golden_answer, str):
+            if golden_answer is not None and not isinstance(golden_answer, str):
                 raise InvalidTaskDefinitionException(
-                    f"Task '{task_id}': llm_judge strategy requires 'golden_answer' as a string in criteria"
+                    f"Task '{task_id}': llm_judge strategy golden_answer must be a string if provided, "
+                    f"got: {type(golden_answer)}"
                 )
 
             model = criteria.get("model")

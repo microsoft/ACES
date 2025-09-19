@@ -126,6 +126,7 @@ class SessionRestAPI:
                 description=task_dict["description"],
                 episode_id=episode_id,
                 episode_context=episode_context,
+                initial_context=task_dict.get("initial_context"),
             )
 
         @self.app.get("/api/v1/session/{session_id}/episodes/{episode_id}/policy", response_model=PolicyResponse)

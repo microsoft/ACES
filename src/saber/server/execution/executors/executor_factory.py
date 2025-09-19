@@ -8,6 +8,8 @@ of command executors, supporting scaling to many executor types.
 import logging
 from typing import Any, Dict, List, Optional
 
+import mcp.types as mcp_types
+
 from ..sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 from .docker_executor import DockerExecutor
 from .executor_registry import executor_registry
@@ -189,16 +191,16 @@ class ExecutorFactory:
         self._executor_instances[executor_type] = executor
         return executor
 
-    def get_all_mcp_tools(self, episode_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_all_mcp_tools(self, episode_id: Optional[str] = None) -> List[mcp_types.Tool]:
         """
-        Get MCP tool definitions for available executors.
+        Get MCP tool definitions for available executors as mcp.types.Tool objects.
 
         Args:
             episode_id: Optional episode ID to filter tools by episode's allowed executors.
                        If None, returns all tools with a warning.
 
         Returns:
-            List of MCP tool definitions
+            List of mcp.types.Tool objects ready for FastMCP consumption
         """
         tools = []
 
@@ -218,19 +220,27 @@ class ExecutorFactory:
             try:
                 executor = self.get_executor(executor_type, episode_id=episode_id)
 
-                # Get the tool definition with executor type prefix
+                # Get the tool schema as a dictionary
                 tool_schema = executor.to_mcp_schema()
                 metadata = getattr(executor, "_executor_metadata", {})
 
-                # Keep as Pydantic object - don't convert to raw JSON Schema
-                # The MCP protocol will handle serialization/deserialization
-                tool_def = {
-                    "name": metadata.get("name", executor_type),
-                    "description": metadata.get("description", f"{executor_type.title()} executor"),
-                    "inputSchema": tool_schema,  # Keep as MCPInputSchema object
-                }
+                # Convert tool_schema to dict if it's a Pydantic object
+                if hasattr(tool_schema, "model_dump"):
+                    input_schema_dict = tool_schema.model_dump()
+                elif hasattr(tool_schema, "dict"):
+                    input_schema_dict = tool_schema.dict()
+                else:
+                    # Assume it's already a dict or convert to dict
+                    input_schema_dict = dict(tool_schema) if hasattr(tool_schema, "__iter__") else {}
 
-                tools.append(tool_def)
+                # Create mcp.types.Tool object directly
+                mcp_tool = mcp_types.Tool(
+                    name=metadata.get("name", executor_type),
+                    description=metadata.get("description", f"{executor_type.title()} executor"),
+                    inputSchema=input_schema_dict,  # Must be a plain dict for FastMCP compatibility
+                )
+
+                tools.append(mcp_tool)
 
             except Exception as e:
                 logger.error(f"Failed to get MCP schema for executor {executor_type}: {e}")

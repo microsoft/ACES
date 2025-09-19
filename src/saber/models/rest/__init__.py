@@ -50,6 +50,9 @@ class EpisodeTaskResponse(BaseModel):
     description: str = Field(description="Task description")
     episode_id: str = Field(description="Episode identifier")
     episode_context: EpisodeContext = Field(description="Episode context information")
+    initial_context: Optional[Dict[str, Any]] = Field(
+        None, description="Task initial context with target services and configuration"
+    )
 
 
 class PolicyResponse(BaseModel):

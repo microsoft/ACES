@@ -10,6 +10,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import mcp.types as mcp_types
+
 from ..base import Action, CommandResult
 
 # CleanupManager removed - using direct component cleanup
@@ -93,7 +95,7 @@ class ExecutionManager:
         """
         Load custom executors from the configuration directory.
 
-        Looks for Python files ending with '_executor.py' in the config directory
+        Looks for Python files ending with '_executor.py' in the config/executors directory
         and loads them to allow registration of custom executors.
 
         Args:
@@ -102,23 +104,46 @@ class ExecutionManager:
         try:
             from .executors.executor_registry import load_executors_from_directory
 
-            # Load custom executors from the config directory
-            results = load_executors_from_directory(config_dir)
+            # Look for custom executors in the executors subdirectory
+            executors_dir = os.path.join(config_dir, "executors")
 
-            if results:
-                successful_loads = [file for file, result in results.items() if result == "loaded_successfully"]
-                if successful_loads:
-                    logger.info(f"Loaded custom executor definitions from {len(successful_loads)} files")
-                    for file_path in successful_loads:
-                        logger.debug(f"Loaded custom executors from: {file_path}")
+            # If executors directory doesn't exist, also try loading from the config dir directly
+            directories_to_check = [executors_dir, config_dir]
 
-                failed_loads = [(file, result) for file, result in results.items() if result != "loaded_successfully"]
-                if failed_loads:
-                    logger.warning(f"Failed to load {len(failed_loads)} custom executor files")
-                    for file_path, error in failed_loads:
-                        logger.warning(f"Failed to load {file_path}: {error}")
+            total_successful = 0
+            total_failed = 0
+
+            for directory in directories_to_check:
+                if not os.path.exists(directory):
+                    continue
+
+                logger.debug(f"Checking for custom executors in: {directory}")
+                # Load custom executors from the directory
+                results = load_executors_from_directory(directory)
+
+                if results:
+                    successful_loads = [file for file, result in results.items() if result == "loaded_successfully"]
+                    if successful_loads:
+                        total_successful += len(successful_loads)
+                        logger.info(
+                            f"Loaded custom executor definitions from {len(successful_loads)} files in {directory}"
+                        )
+                        for file_path in successful_loads:
+                            logger.debug(f"Loaded custom executors from: {file_path}")
+
+                    failed_loads = [
+                        (file, result) for file, result in results.items() if result != "loaded_successfully"
+                    ]
+                    if failed_loads:
+                        total_failed += len(failed_loads)
+                        logger.warning(f"Failed to load {len(failed_loads)} custom executor files from {directory}")
+                        for file_path, error in failed_loads:
+                            logger.warning(f"Failed to load {file_path}: {error}")
+
+            if total_successful == 0 and total_failed == 0:
+                logger.debug(f"No custom executor files found in {config_dir} or {executors_dir}")
             else:
-                logger.debug(f"No custom executor files found in {config_dir}")
+                logger.info(f"Custom executor loading complete: {total_successful} loaded, {total_failed} failed")
 
         except ImportError:
             logger.warning("Custom executor registry not available - custom executors will not be loaded")
@@ -318,7 +343,7 @@ class ExecutionManager:
         if configured_executors:
             logger.info(f"Episode {episode_id} configured executor-specific settings for: {configured_executors}")
 
-    def to_mcp_tools(self, episode_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    def to_mcp_tools(self, episode_id: Optional[str] = None) -> List[mcp_types.Tool]:
         """
         Convert available executors to MCP format, optionally filtered by episode configuration.
 
@@ -326,7 +351,7 @@ class ExecutionManager:
             episode_id: Optional episode identifier to filter tools for episode-specific allowed executors
 
         Returns:
-            List containing MCP tool definitions for all executors or episode-specific executors
+            List containing mcp.types.Tool objects for all executors or episode-specific executors
         """
         return self.executor_factory.get_all_mcp_tools(episode_id)
 

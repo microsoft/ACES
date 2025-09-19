@@ -53,8 +53,20 @@ class MCPToolGenerator:
             param_names.append(param_name)
             # Get Python type from JSON schema type - param_def is now MCPPropertySchema
             param_type = self._json_type_to_python_type(param_def.type)
-            # Make all parameters required (no default values)
-            params.append(f"{param_name}: {param_type}")
+
+            # Check if parameter is required or optional
+            if param_name in required:
+                # Required parameter - no default value
+                params.append(f"{param_name}: {param_type}")
+            else:
+                # Optional parameter - use Optional type and default to None
+                if param_def.default is not None:
+                    # Use the actual default value from schema
+                    default_repr = repr(param_def.default)
+                    params.append(f"{param_name}: Optional[{param_type}] = {default_repr}")
+                else:
+                    # Default to None for optional parameters without explicit default
+                    params.append(f"{param_name}: Optional[{param_type}] = None")
 
         # No Context parameter needed - we'll use get_context() inside the function
 
