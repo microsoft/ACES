@@ -47,7 +47,7 @@ class TestComponentIntegration:
 
         # Verify initialization
         assert execution_manager._configuration is not None
-        assert execution_manager._executor_factory is not None
+        assert execution_manager._executor_factory is None  # Lazy initialization - should be None initially
 
         # Sandbox environment manager starts as None and is initialized lazily
         assert execution_manager._sandbox_environment_manager is None

@@ -244,6 +244,9 @@ class SessionManager:
             except Exception as e:
                 logger.error(f"Error stopping permanent environment: {e}")
 
+        # Clean up SABER episode networks before shutting down MCP server
+        await self._cleanup_saber_episode_networks()
+
         # Shutdown MCP server first
         await self.mcp_api.shutdown_mcp_server()
 
@@ -257,6 +260,173 @@ class SessionManager:
             await self.terminate_session(session_id)
 
         logger.info("SessionManager shutdown complete")
+
+    async def _cleanup_episode_network(self, episode_id: str) -> None:
+        """Clean up Docker network for a specific episode"""
+        network_name = f"saber-episode-{episode_id}"
+        try:
+            # Check if network exists
+            result = await asyncio.create_subprocess_exec(
+                "docker",
+                "network",
+                "ls",
+                "--format",
+                "{{.Name}}",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await result.communicate()
+
+            if result.returncode == 0:
+                existing_networks = stdout.decode().strip().split("\n")
+                if network_name in existing_networks:
+                    logger.info(f"🗑️ Removing episode network: {network_name}")
+
+                    # Remove any containers still connected to the network
+                    inspect_result = await asyncio.create_subprocess_exec(
+                        "docker",
+                        "network",
+                        "inspect",
+                        network_name,
+                        "--format",
+                        "{{range .Containers}}{{.Name}} {{end}}",
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    inspect_stdout, inspect_stderr = await inspect_result.communicate()
+
+                    if inspect_result.returncode == 0:
+                        container_names = inspect_stdout.decode().strip().split()
+                        for container_name in container_names:
+                            if container_name:  # Skip empty strings
+                                logger.info(f"🧹 Forcing removal of container: {container_name}")
+                                rm_result = await asyncio.create_subprocess_exec(
+                                    "docker",
+                                    "rm",
+                                    "-f",
+                                    container_name,
+                                    stdout=asyncio.subprocess.PIPE,
+                                    stderr=asyncio.subprocess.PIPE,
+                                )
+                                await rm_result.communicate()
+
+                    # Remove the network
+                    rm_network_result = await asyncio.create_subprocess_exec(
+                        "docker",
+                        "network",
+                        "rm",
+                        network_name,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    await rm_network_result.communicate()
+
+                    if rm_network_result.returncode == 0:
+                        logger.info(f"✅ Successfully removed episode network: {network_name}")
+                    else:
+                        logger.warning(f"❌ Failed to remove episode network: {network_name}")
+
+        except Exception as e:
+            logger.error(f"Error cleaning up episode network {network_name}: {e}")
+
+    async def _cleanup_saber_episode_networks(self) -> None:
+        """Clean up all SABER episode networks to prevent Docker subnet pool exhaustion."""
+        import asyncio
+
+        logger.info("🧹 Starting SABER episode network cleanup...")
+
+        try:
+            # Get all SABER episode networks
+            result = await asyncio.create_subprocess_exec(
+                "docker",
+                "network",
+                "ls",
+                "--filter",
+                "name=saber-episode-",
+                "--format",
+                "{{.Name}}",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await result.communicate()
+
+            if result.returncode != 0:
+                logger.warning(f"Failed to list SABER episode networks: {stderr.decode()}")
+                return
+
+            network_names = stdout.decode().strip().split("\n")
+            network_names = [name.strip() for name in network_names if name.strip()]
+
+            if not network_names:
+                logger.info("🧹 No SABER episode networks found to clean up")
+                return
+
+            logger.info(f"🧹 Found {len(network_names)} SABER episode networks to clean up")
+
+            # First, try to stop and remove any containers using these networks
+            for network_name in network_names:
+                try:
+                    # Get containers connected to this network
+                    inspect_result = await asyncio.create_subprocess_exec(
+                        "docker",
+                        "network",
+                        "inspect",
+                        network_name,
+                        "--format",
+                        "{{range .Containers}}{{.Name}} {{end}}",
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    containers_stdout, _ = await inspect_result.communicate()
+
+                    if inspect_result.returncode == 0:
+                        container_names = containers_stdout.decode().strip().split()
+                        if container_names:
+                            logger.info(f"🧹 Removing {len(container_names)} containers from network {network_name}")
+                            for container_name in container_names:
+                                # Force remove containers
+                                await asyncio.create_subprocess_exec(
+                                    "docker",
+                                    "rm",
+                                    "-f",
+                                    container_name,
+                                    stdout=asyncio.subprocess.DEVNULL,
+                                    stderr=asyncio.subprocess.DEVNULL,
+                                )
+                except Exception as e:
+                    logger.warning(f"🧹 Error cleaning containers for network {network_name}: {e}")
+
+            # Now remove the networks
+            cleaned_count = 0
+            for network_name in network_names:
+                try:
+                    remove_result = await asyncio.create_subprocess_exec(
+                        "docker",
+                        "network",
+                        "rm",
+                        network_name,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    rm_stdout, rm_stderr = await remove_result.communicate()
+
+                    if remove_result.returncode == 0:
+                        cleaned_count += 1
+                        logger.debug(f"🧹 Cleaned up network: {network_name}")
+                    else:
+                        logger.warning(f"🧹 Failed to remove network {network_name}: {rm_stderr.decode()}")
+
+                except Exception as e:
+                    logger.warning(f"🧹 Error removing network {network_name}: {e}")
+
+            logger.info(
+                f"🧹 SABER episode network cleanup completed: {cleaned_count}/{len(network_names)} networks cleaned"
+            )
+
+        except Exception as e:
+            logger.error(f"🧹 SABER episode network cleanup failed: {e}")
+            # Don't let network cleanup failure block server shutdown
+            pass
 
     async def create_session(self, client_id: str) -> ClientSession:
         """
@@ -569,6 +739,9 @@ class SessionManager:
                 logger.info(f"✅ Episode cleanup completed for {episode_id}")
             else:
                 logger.warning(f"❌ Episode cleanup failed for {episode_id}")
+
+            # Additional cleanup: ensure episode network is removed to prevent subnet pool exhaustion
+            await self._cleanup_episode_network(episode_id)
         except Exception as e:
             logger.error(f"Episode cleanup error for {episode_id}: {e}")
 

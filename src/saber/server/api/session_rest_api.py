@@ -11,7 +11,7 @@ import logging
 from typing import TYPE_CHECKING, Optional
 
 import uvicorn
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 
 from ...models import (
     BenchmarkInfo,
@@ -183,30 +183,45 @@ class SessionRestAPI:
         async def end_episode_endpoint(
             session_id: str,
             episode_id: str,
+            request: Request,
             reason: str = "manual_termination",
-            result: Optional[str] = None,
-            cascade_end_attached_episodes: bool = False,
+            cascade_end_attached_episodes: str = "false",
         ) -> EpisodeEndResponse:
             """End a specific episode."""
-            # Parse EvalSubmission from JSON result
+
+            # Parse EvalSubmission from query parameter OR request body
             eval_submission = None
-            if result:
+            result_data = None
+
+            # First try to get from query parameters (legacy method)
+            result_param = request.query_params.get("result")
+            if result_param:
+                result_data = result_param
+            else:
+                # Try to get from request body
+                try:
+                    body = await request.body()
+                    if body:
+                        body_text = body.decode("utf-8")
+                        result_data = body_text
+                except Exception as e:
+                    logger.warning(f"Failed to read request body: {e}")
+
+            if result_data:
                 try:
                     import json
 
-                    result_dict = json.loads(result)
+                    result_dict = json.loads(result_data)
                     eval_submission = EvalSubmission(**result_dict)
-                    logger.info(
-                        f"Parsed EvalSubmission: model={eval_submission.model}, "
-                        f"tokens={eval_submission.tokens.get('total_tokens', 0)}, "
-                        f"time={eval_submission.time}"
-                    )
                 except Exception as e:
                     logger.error(f"Failed to parse EvalSubmission from result: {e}")
                     # Continue without eval_submission
 
+            # Convert string boolean parameter to actual boolean
+            cascade_bool = cascade_end_attached_episodes.lower() in ("true", "1", "yes", "on")
+
             response = await self.session_manager.end_episode(
-                session_id, episode_id, reason, eval_submission, cascade_end_attached_episodes
+                session_id, episode_id, reason, eval_submission, cascade_bool
             )
             return response
 

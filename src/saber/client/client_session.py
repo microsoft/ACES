@@ -274,14 +274,20 @@ class ClientSessionManager:
         logger.debug(f"Ending episode {episode_id} with reason: {reason}")
 
         url = f"{self.base_url}/api/v1/session/{session_id}/episodes/{episode_id}"
-        params = {"reason": reason, "cascade_end_attached_episodes": cascade_end_attached_episodes}
+        params = {"reason": reason, "cascade_end_attached_episodes": str(cascade_end_attached_episodes).lower()}
+        data = None
+        headers = {}
+
         if result:
-            params["result"] = result.model_dump_json()
+            result_json = result.model_dump_json()
+            # Send as request body instead of query parameter for large data
+            data = result_json
+            headers["Content-Type"] = "application/json"
 
         try:
             async with aiohttp.ClientSession() as session:
                 timeout = aiohttp.ClientTimeout(total=self.timeout)
-                async with session.delete(url, params=params, timeout=timeout) as response:
+                async with session.delete(url, params=params, data=data, headers=headers, timeout=timeout) as response:
                     if response.status == 200:
                         logger.debug(f"Episode {episode_id} ended successfully")
                     else:

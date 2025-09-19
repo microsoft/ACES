@@ -119,6 +119,7 @@ class TestSessionManagerAPI:
         mock_episode.state = EpisodeState.ACTIVE
         mock_episode.max_steps = 10
         mock_episode.metadata = {"test": "data"}
+        mock_episode.attached_to_episode_id = None  # Set proper type for new dependency feature
 
         # Create session first
         create_response = client.post("/api/v1/session?client_id=test_client")

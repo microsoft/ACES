@@ -13,7 +13,7 @@ with SABER infrastructure (MCP tools, session management, episode handling).
 """
 
 import logging
-from typing import Any, List
+from typing import Any, Dict, List
 
 from inspect_ai.agent import Agent, AgentState, agent
 from inspect_ai.model import ModelOutput
@@ -191,19 +191,62 @@ async def create_saber_inspect_agent(
                 result: AgentState = await actual_agent(state)
                 output: ModelOutput = result.output
 
+                # Extract values from ModelOutput for EvalSubmission
+                processed_model = getattr(output, "model", "unknown") or "unknown"
+                processed_choices = getattr(output, "choices", []) or []
+                processed_submission = output.completion if output.completion else "No submission provided"
+                processed_tokens = output.usage.model_dump() if output.usage else {}
+                processed_time = getattr(output, "time", 0.0) or 0.0
+
+                # Clean the tokens dict to remove problematic values
+                def clean_dict(d: Any) -> Any:
+                    """Remove None/False values to prevent server-side type coercion issues."""
+                    if isinstance(d, dict):
+                        cleaned = {}
+                        for k, v in d.items():
+                            if v is None or v is False:
+                                continue
+                            else:
+                                cleaned[k] = clean_dict(v)
+                        return cleaned
+                    elif isinstance(d, list):
+                        return [clean_dict(item) for item in d if item is not None and item is not False]
+                    else:
+                        return d
+
+                # Clean tokens to prevent server-side validation issues
+                cleaned_tokens: Dict[str, Any] = clean_dict(processed_tokens)
+
                 # Create EvalSubmission object from ModelOutput
+                processed_choices_for_eval: List[Dict[str, Any]] = []
+                for choice in processed_choices:
+                    if hasattr(choice, "dict"):
+                        choice_dict = choice.dict()
+                        # Clean None values to prevent server-side type coercion to False
+                        cleaned_choice_dict = clean_dict(choice_dict)
+                        processed_choices_for_eval.append(cleaned_choice_dict)
+                    else:
+                        processed_choices_for_eval.append(choice)
+
                 eval_submission = EvalSubmission(
                     episode_id=episode_response.episode_id,
                     task_id=task_id,
-                    model=getattr(output, "model", "unknown"),
-                    choices=[
-                        choice.dict() if hasattr(choice, "dict") else choice
-                        for choice in getattr(output, "choices", [])
-                    ],
-                    submission=output.completion if output.completion else "No submission provided",
-                    tokens=output.usage.model_dump() if output.usage else {},
-                    time=getattr(output, "time", 0.0),
+                    model=processed_model,
+                    choices=processed_choices_for_eval,
+                    submission=processed_submission,
+                    tokens=cleaned_tokens,
+                    time=processed_time,
                 )
+
+                # Test JSON serialization before sending to server
+                try:
+                    json_result = eval_submission.model_dump_json()
+                    logger.info(f"✅ JSON serialization successful, length: {len(json_result)} chars")
+                    logger.debug(f"✅ JSON content: {json_result}")
+                except Exception as json_error:
+                    logger.error(f"❌ JSON serialization failed: {json_error}")
+                    logger.error(f"❌ EvalSubmission data: {eval_submission.model_dump()}")
+                    raise
 
                 # End episode with the EvalSubmission object
                 # If this episode is attached to another episode, cascade-end the parent episode
@@ -214,6 +257,7 @@ async def create_saber_inspect_agent(
                         f"{episode_response.attached_to_episode_id}"
                     )
 
+                logger.info(f"🔄 Calling end_episode for {episode_response.episode_id} with EvalSubmission")
                 await session_manager.end_episode(
                     episode_response.session_id,
                     episode_response.episode_id,
@@ -221,11 +265,15 @@ async def create_saber_inspect_agent(
                     result=eval_submission,
                     cascade_end_attached_episodes=cascade_end,
                 )
+                logger.info(f"✅ end_episode call completed successfully for {episode_response.episode_id}")
 
                 logger.info(f"Successfully completed episode {episode_response.episode_id} for agent {agent_id}")
                 return result
 
             except Exception as e:
+                logger.error(f"❌ Exception occurred during agent execution: {type(e).__name__}: {e}")
+                logger.error(f"❌ Exception details: {str(e)}")
+
                 # Create EvalSubmission object for error case
                 error_submission = EvalSubmission(
                     episode_id=episode_response.episode_id,
