@@ -105,7 +105,7 @@ class JudgePromptContext:
     """Data container for judge template rendering context."""
 
     question: str
-    golden_answer: str
+    golden_answer: Optional[str]  # Make optional for defensive tasks
     episode: Episode  # Full episode object instead of just submission
     task: Task
     evaluation_config: Dict[str, Any]
@@ -170,6 +170,7 @@ class JudgePromptContext:
                             "title": subtask.title,
                             "description": subtask.description,
                             "objective": subtask.objective,
+                            **({"hint": subtask.hint} if hasattr(subtask, "hint") and subtask.hint else {}),
                         }
                         for subtask in self.task.subtasks
                     ]
@@ -340,10 +341,13 @@ class PromptGenerator:
         judge_user_template = eval_config["criteria"]["judge_user_template"]
         model = eval_config["criteria"]["model"]
 
+        # Extract golden_answer if present (optional for defensive tasks)
+        golden_answer = eval_config["criteria"].get("golden_answer")
+
         # Build judge prompt context with episode data
         context = JudgePromptContext(
             question=task.description,
-            golden_answer=eval_config["criteria"]["golden_answer"],
+            golden_answer=golden_answer,  # Now optional
             episode=episode,  # Pass full episode object
             task=task,
             evaluation_config=eval_config["criteria"],
@@ -611,14 +615,16 @@ class PromptGenerator:
         subtasks_data = []
         if task.subtasks:
             for subtask in task.subtasks:
-                subtasks_data.append(
-                    {
-                        "subtask_id": subtask.subtask_id,
-                        "title": subtask.title,
-                        "description": subtask.description,
-                        "objective": subtask.objective,
-                    }
-                )
+                subtask_dict = {
+                    "subtask_id": subtask.subtask_id,
+                    "title": subtask.title,
+                    "description": subtask.description,
+                    "objective": subtask.objective,
+                }
+                # Include hint field if it exists
+                if hasattr(subtask, "hint") and subtask.hint:
+                    subtask_dict["hint"] = subtask.hint
+                subtasks_data.append(subtask_dict)
         # Allowed executors now required (validated above)
         allowed_executors = task.allowed_executors or []
 

@@ -289,7 +289,22 @@ async def _evaluate_llm(submission: str, criteria: EvaluationCriteriaResponse, s
         Score from step-by-step LLM evaluation
     """
     if not criteria.judge_messages:
-        raise RuntimeError("LLM evaluation requires judge_messages but none provided")
+        # Enhanced error message with actionable debugging information
+        strategy = criteria.evaluation_config.get("strategy", "unknown")
+        task_id = criteria.task_id
+        episode_id = criteria.episode_id
+        session_id = criteria.session_id
+
+        error_details = [
+            f"LLM evaluation strategy '{strategy}' requires judge_messages but none provided",
+            f"Task: {task_id}, Episode: {episode_id}, Session: {session_id}",
+            "This indicates server-side prompt template rendering failed.",
+            "Check server logs for template rendering errors.",
+            "Verify judge template files exist and are syntactically correct.",
+        ]
+
+        # Fail fast with comprehensive error context
+        raise RuntimeError(" | ".join(error_details))
 
     judge_messages = criteria.judge_messages
     max_score = criteria.evaluation_config.get("scoring", {}).get("max_score", 1.0)

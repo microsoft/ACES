@@ -1,5 +1,7 @@
 """SubTask implementation for task management system."""
 
+from typing import Optional
+
 from pydantic import BaseModel, Field
 
 
@@ -16,6 +18,7 @@ class SubTask(BaseModel):
     title: str = Field(..., description="Human-readable title")
     description: str = Field(..., description="Detailed description of the subtask")
     objective: str = Field(..., description="Primary objective to accomplish")
+    hint: Optional[str] = Field(None, description="Optional hint to guide without spoiling the challenge")
 
     def is_dependent_on(self, subtask_id: str) -> bool:
         """

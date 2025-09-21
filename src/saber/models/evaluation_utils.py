@@ -72,6 +72,11 @@ def parse_step_evaluations(judge_response: str, task_id: str) -> List[StepEvalua
             step_number = int(step_number_str)
             objective_id = objective_id.strip()
 
+            # Validate step number (must be >= 1)
+            if step_number < 1:
+                logger.warning(f"Invalid step number {step_number} in evaluation, skipping entry for '{objective_id}'")
+                continue
+
             # Determine objective type
             objective_type = "task" if objective_id == task_id else "subtask"
 
