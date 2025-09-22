@@ -129,7 +129,8 @@ class BashExecutor(DockerExecutor):
         Build the command arguments from the provided command string.
 
         This method always executes commands via shell for maximum compatibility
-        with Bash tools and shell features.
+        with Bash tools and shell features. Includes intelligent shell escaping
+        for curl commands to prevent parameter interpretation issues.
 
         Args:
             parameters: Tool parameters including the command string
@@ -146,8 +147,53 @@ class BashExecutor(DockerExecutor):
         if not command_str:
             raise ValueError("Command string cannot be empty")
 
+        # Apply intelligent shell escaping for curl commands with problematic characters
+        command_str = self._apply_intelligent_escaping(command_str)
+
         # Always execute via shell for maximum Bash compatibility
         return ["/bin/sh", "-c", command_str]
+
+    def _apply_intelligent_escaping(self, command_str: str) -> str:
+        """
+        Apply intelligent shell escaping to prevent parameter interpretation issues.
+        
+        Specifically targets curl commands with template injection payloads that
+        contain shell metacharacters like $, {, }, which cause "Bad substitution" errors.
+        
+        Args:
+            command_str: Original command string
+            
+        Returns:
+            Command string with intelligent escaping applied
+        """
+        import re
+        
+        # Pattern to match curl commands with -d parameter containing shell metacharacters
+        curl_pattern = r'curl\s+([^"]*?)\s+-d\s+"([^"]*)"'
+        
+        def escape_curl_data(match):
+            prefix = match.group(1)  # curl options before -d
+            data = match.group(2)    # the data payload
+            
+            # Check if data contains shell metacharacters that need escaping
+            shell_metacharacters = ['$', '`', '\\', '!']
+            needs_escaping = any(char in data for char in shell_metacharacters)
+            
+            if needs_escaping:
+                # Use single quotes to prevent shell interpretation
+                return f"curl {prefix} -d '{data}'"
+            else:
+                # Keep original double quotes
+                return f'curl {prefix} -d "{data}"'
+        
+        # Apply escaping to curl commands
+        escaped_command = re.sub(curl_pattern, escape_curl_data, command_str)
+        
+        # Log escaping application for debugging
+        if escaped_command != command_str:
+            logger.debug(f"Applied shell escaping: '{command_str}' -> '{escaped_command}'")
+        
+        return escaped_command
 
     async def execute(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> CommandResult:
         """
