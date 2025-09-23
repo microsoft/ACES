@@ -15,6 +15,7 @@ from contextlib import AsyncExitStack
 from types import TracebackType
 from typing import Any, List, Optional
 
+from ..models import TaskInfo
 from .agent import AgentManager
 from .client_session import ClientSessionManager
 from .dataset_manager import DatasetManager
@@ -95,10 +96,16 @@ class SABEREvaluationOrchestrator:
             self._session_manager = ClientSessionManager(config=self.config.session_config)
             await self._exit_stack.enter_async_context(self._session_manager_context())
 
-            # Initialize agent manager
+            # Discover available tasks early to provide to agent manager
+            logger.info("Discovering available tasks from server")
+            available_tasks = await self.discover_tasks()
+            available_task_ids = [task.task_id for task in available_tasks]
+            logger.info(f"Discovered {len(available_task_ids)} tasks: {available_task_ids}")
+
+            # Initialize agent manager with available task IDs
             logger.info("Initializing agent manager")
             self._agent_manager = AgentManager(self.config, self._session_manager)
-            await self._exit_stack.enter_async_context(self._agent_manager)
+            await self._exit_stack.enter_async_context(self._agent_manager_context(available_task_ids))
 
             # Initialize dataset manager
             logger.info("Initializing dataset manager")
@@ -168,9 +175,18 @@ class SABEREvaluationOrchestrator:
 
         errors = []
 
-        # Validate model configuration
-        if not self.config.model:
-            errors.append("model specification is required")
+        # Validate model configuration - ALL agents must specify their own models
+        agents_without_models = []
+
+        if self.config.agents:
+            for i, agent in enumerate(self.config.agents):
+                if not hasattr(agent, "model") or not agent.model:
+                    agents_without_models.append(f"agents[{i}].id='{agent.id}'")
+
+        if agents_without_models:
+            errors.append(f"All agents must specify a 'model' field. Agents missing models: {agents_without_models}")
+
+        # Global model is no longer required (or used)
 
         # Validate session configuration
         if not self.config.session_config:
@@ -178,16 +194,9 @@ class SABEREvaluationOrchestrator:
         elif not self.config.session_config.base_url:
             errors.append("session_config.base_url is required")
 
-        # Validate agent specification
-        if not self.config.agent_id and not self.config.agent_path:
-            errors.append("either agent_id or agent_path must be provided")
-
-        # Validate agent file exists if specified
-        if self.config.agent_path:
-            from pathlib import Path
-
-            if not Path(self.config.agent_path).exists():
-                errors.append(f"agent file not found: {self.config.agent_path}")
+        # Validate agent assignments (new format only)
+        if not self.config.agents:
+            errors.append("at least one agent assignment is required")
 
         # Validate numeric configurations
         if hasattr(self.config, "max_parallel_tasks") and self.config.max_parallel_tasks <= 0:
@@ -224,12 +233,12 @@ class SABEREvaluationOrchestrator:
 
     # Execution Methods
 
-    async def discover_tasks(self) -> List[str]:
+    async def discover_tasks(self) -> List[TaskInfo]:
         """
         Discover tasks by coordinating between session manager and configuration.
 
         Returns:
-            List of task IDs to evaluate
+            List of TaskInfo objects available for evaluation
 
         Raises:
             DatasetCreationError: Task discovery failed
@@ -237,17 +246,25 @@ class SABEREvaluationOrchestrator:
         try:
             if self.config.task_ids:
                 logger.info(f"Using configured task IDs: {self.config.task_ids}")
-                return self.config.task_ids
+                # For configured task IDs, we need to fetch the full TaskInfo objects
+                if self._session_manager is None:
+                    raise RuntimeError("Session manager not initialized")
+                all_tasks_data = await self._session_manager.get_available_tasks()
+                # Filter to only the configured task IDs
+                configured_tasks = [task for task in all_tasks_data if task.task_id in self.config.task_ids]
+                if len(configured_tasks) != len(self.config.task_ids):
+                    found_ids = [task.task_id for task in configured_tasks]
+                    missing_ids = set(self.config.task_ids) - set(found_ids)
+                    raise ValueError(f"Configured task IDs not found on server: {missing_ids}")
+                return configured_tasks
             else:
                 logger.info("Discovering available tasks")
                 # Session manager handles HTTP communication
                 if self._session_manager is None:
                     raise RuntimeError("Session manager not initialized")
                 tasks_data = await self._session_manager.get_available_tasks()
-                # Extract just the task IDs - tasks_data is a list of TaskInfo objects
-                task_ids = [task.task_id for task in tasks_data]
-                logger.info(f"Discovered {len(task_ids)} available tasks")
-                return task_ids
+                logger.info(f"Discovered {len(tasks_data)} available tasks")
+                return tasks_data
         except Exception as e:
             raise DatasetCreationError(
                 f"Task discovery failed: {e}",
@@ -290,19 +307,58 @@ class SABEREvaluationOrchestrator:
                 suggestion="Check that all task IDs exist on the server",
             ) from e
 
-    async def create_task(self, dataset: List[Any]) -> Any:  # TODO: Better types when available
+    async def create_multi_task_evaluation(
+        self, task_ids: List[str]
+    ) -> List[Any]:  # TODO: Should be List[Task] when available
         """
-        Create inspect_ai Task using agent manager.
+        Create inspect_ai Tasks using direct agent creation approach.
+
+        This method works for any number of tasks (1 or many) by grouping them
+        by agent assignment and creating unified datasets per agent.
 
         Args:
-            dataset: inspect_ai dataset
+            task_ids: List of task IDs to create tasks for
 
         Returns:
-            Configured inspect_ai Task
+            List of configured inspect_ai Tasks with direct agents
+
+        Raises:
+            DatasetCreationError: Dataset creation failed
+            AgentInitializationError: Agent assignment failed
         """
-        if self._agent_manager is None:
-            raise RuntimeError("Agent manager not initialized")
-        return await self._agent_manager.create_task(dataset)
+        try:
+            # Session manager gets full task data via HTTP
+            if self._session_manager is None:
+                raise RuntimeError("Session manager not initialized")
+            tasks_data = await self._session_manager.get_tasks(task_ids)
+
+            # Create TaskAgentResolver for agent-grouped datasets
+            from .agent.task_agent_resolver import TaskAgentResolver
+
+            task_agent_resolver = TaskAgentResolver(self.config)
+            task_agent_resolver.initialize(task_ids)
+
+            # Dataset manager creates agent-grouped datasets
+            if self._dataset_manager is None:
+                raise RuntimeError("Dataset manager not initialized")
+            agent_datasets = await self._dataset_manager.create_agent_datasets(tasks_data, task_agent_resolver)
+
+            # Agent manager creates tasks with direct agents (agent-grouped approach)
+            if self._agent_manager is None:
+                raise RuntimeError("Agent manager not initialized")
+
+            # Use the new create_agent_tasks method for agent-grouped datasets
+            tasks = await self._agent_manager.create_agent_tasks(agent_datasets)
+
+            logger.info(f"Successfully created {len(tasks)} agent-grouped tasks with direct agents")
+            return tasks
+
+        except Exception as e:
+            raise DatasetCreationError(
+                f"Multi-task evaluation creation failed: {e}",
+                details={"task_ids": task_ids, "task_count": len(task_ids)},
+                suggestion="Check that all task IDs exist and agent assignments are valid",
+            ) from e
 
     async def get_session_id(self) -> str:
         """
@@ -335,6 +391,8 @@ class SABEREvaluationOrchestrator:
                 self.session_manager = session_manager
 
             async def __aenter__(self) -> Any:
+                # Initialize the session manager by creating a session
+                await self.session_manager.create_session()
                 return self.session_manager
 
             async def __aexit__(
@@ -347,3 +405,30 @@ class SABEREvaluationOrchestrator:
                     # Don't raise - cleanup errors shouldn't mask original exception
 
         return SessionManagerContext(self._session_manager)
+
+    def _agent_manager_context(self, available_task_ids: List[str]) -> Any:
+        """
+        Create async context manager for agent manager with task IDs.
+
+        This wrapper ensures agent manager gets available task IDs during initialization.
+        """
+
+        class AgentManagerContext:
+            def __init__(self, agent_manager: Any, task_ids: List[str]) -> None:
+                self.agent_manager = agent_manager
+                self.task_ids = task_ids
+
+            async def __aenter__(self) -> Any:
+                # Agent manager needs available task IDs for TaskAgentResolver initialization
+                await self.agent_manager.__aenter__(available_task_ids=self.task_ids)
+                return self.agent_manager
+
+            async def __aexit__(
+                self, exc_type: Optional[type], exc_val: Optional[BaseException], exc_tb: Optional[TracebackType]
+            ) -> None:
+                try:
+                    await self.agent_manager.__aexit__(exc_type, exc_val, exc_tb)
+                except Exception as e:
+                    logger.error(f"Agent manager cleanup error: {e}")
+
+        return AgentManagerContext(self._agent_manager, available_task_ids)

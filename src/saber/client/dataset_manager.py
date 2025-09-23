@@ -4,12 +4,21 @@ SABER Dataset Manager
 Manages task discovery and dataset creation for SABER evaluations.
 Extracted from SABEREvalManager to separate dataset concerns from agent management.
 
-NEW COMPONENT: Focuses solely on dataset-related operations.
+BREAKING CHANGE: Supports mult            raise DatasetCreationError(
+                f"Failed to create dataset from {len(tasks_data)} tasks: {e}",
+                details={"task_count": len(tasks_data), "error_type": type(e).__name__},
+                suggestion="Check that task data is valid, agent assignments are configured, "
+                          "and inspect_ai conversion is working",
+            ) from ek datasets keyed by task_id for agent assignment.
 """
 
+import hashlib
 import logging
 from types import TracebackType
-from typing import Any, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from .agent.task_agent_resolver import TaskAgentResolver
 
 from ..models import TaskInfo  # Use server models directly
 from .client_session import ClientSessionManager
@@ -21,13 +30,16 @@ logger = logging.getLogger(__name__)
 
 class DatasetManager:
     """
-    Manages SABER task discovery and dataset creation.
+    Manages SABER task discovery and dataset creation with multi-task support.
 
     Responsibilities:
     - Task discovery via shared session manager
-    - Dataset creation and transformation
-    - Task filtering and selection
+    - Multi-task dataset creation keyed by task_id
+    - Task filtering and agent assignment coordination
     - Dataset caching/optimization (future)
+
+    Breaking Change: Now creates datasets keyed by task_id to support
+    task-specific agent assignment.
 
     This manager uses ClientSessionManager for all HTTP communication
     and focuses purely on data transformation logic.
@@ -123,4 +135,91 @@ class DatasetManager:
                 f"Failed to create dataset from {len(tasks_data)} tasks: {e}",
                 details={"task_count": len(tasks_data), "error_type": type(e).__name__},
                 suggestion="Check that task data is valid and inspect_ai conversion is working",
+            ) from e
+
+    async def create_agent_datasets(
+        self, tasks_data: List[TaskInfo], task_agent_resolver: "TaskAgentResolver"
+    ) -> Dict[str, List[Any]]:
+        """
+        Create SABER datasets grouped by agent assignment instead of task_id.
+
+        This groups tasks by which agent will handle them, creating combined datasets
+        for agents that handle multiple tasks.
+
+        Args:
+            tasks_data: List of TaskInfo objects from session manager
+            task_agent_resolver: TaskAgentResolver to determine agent assignments
+
+        Returns:
+            Dictionary mapping agent_id to combined inspect_ai dataset
+
+        Raises:
+            DatasetCreationError: If dataset creation fails
+        """
+        if not self._initialized:
+            raise RuntimeError("DatasetManager not initialized - use as async context manager")
+
+        if not tasks_data:
+            raise DatasetCreationError(
+                "Cannot create datasets from empty task data",
+                details={"task_count": 0},
+                suggestion="Ensure tasks are available on the server",
+            )
+
+        logger.info(f"Creating agent-grouped datasets from {len(tasks_data)} tasks")
+
+        try:
+            # Import conversion function
+            from .inspect_ai.saber_dataset import create_saber_dataset
+
+            # Group tasks by agent assignment using composite key (agent_id + task_hash)
+            agent_task_groups: Dict[str, List[TaskInfo]] = {}
+
+            for task_info in tasks_data:
+                task_id = task_info.task_id
+
+                # Get agent assignment for this task
+                assignment = task_agent_resolver.get_assignment_for_task(task_id)
+
+                # Create composite key: agent_id + hash of sorted tasks
+                # This ensures agents with same ID but different task sets get separate datasets
+                tasks_sorted = sorted(assignment.tasks)
+                tasks_str = "+".join(tasks_sorted)
+                tasks_hash = hashlib.sha256(tasks_str.encode()).hexdigest()[:8]  # Use first 8 chars
+                agent_composite_key = f"{assignment.id}_{tasks_hash}"
+
+                # Group tasks by composite agent key
+                if agent_composite_key not in agent_task_groups:
+                    agent_task_groups[agent_composite_key] = []
+                agent_task_groups[agent_composite_key].append(task_info)
+
+                logger.debug(
+                    f"Assigned task '{task_id}' to agent group '{agent_composite_key}' "
+                    f"(from assignment '{assignment.id}' with tasks {assignment.tasks})"
+                )
+
+            # Create combined datasets for each agent group
+            agent_datasets: Dict[str, List[Any]] = {}
+
+            for agent_composite_key, agent_tasks in agent_task_groups.items():
+                # Create combined dataset from all tasks assigned to this agent group
+                combined_dataset = await create_saber_dataset(agent_tasks)
+                agent_datasets[agent_composite_key] = combined_dataset
+
+                task_ids = [task.task_id for task in agent_tasks]
+                logger.info(
+                    f"Created combined dataset for agent group '{agent_composite_key}' "
+                    f"from tasks {task_ids} with {len(combined_dataset)} total samples"
+                )
+
+            logger.info(f"Successfully created {len(agent_datasets)} agent-grouped datasets")
+            return agent_datasets
+
+        except Exception as e:
+            logger.error(f"Agent dataset creation failed: {e}")
+            raise DatasetCreationError(
+                f"Failed to create agent datasets from {len(tasks_data)} tasks: {e}",
+                details={"task_count": len(tasks_data), "error_type": type(e).__name__},
+                suggestion="Check that task data is valid, agent assignments are configured, "
+                "and inspect_ai conversion is working",
             ) from e

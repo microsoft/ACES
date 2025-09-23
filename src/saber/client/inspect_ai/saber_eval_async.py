@@ -2,22 +2,20 @@
 SABER eval_async Integration
 
 Main entrypoint for SABER execution using inspect_ai's eval_async framework.
-This replaces the old container-based SABER harness with direct agent execution
-using the new SABERAgent architecture and direct MCP integration.
 
-Following SABER's new philosophy:
-- Direct agent execution without container overhead
-- Direct MCP integration with session/episode context
-- Tool call limiting via inspect-ai capabilities
-- Clean separation between infrastructure and agent logic
-- Full backwards incompatibility for clean architecture
+Following SABER best practices:
+- Clean separation between orchestration (SABER) and evaluation (inspect_ai)
+- Stateless orchestration service design
+- Per-task agent assignment via meta-agent architecture
+- Fail-fast design with clear error messages
 """
 
 import logging
 import os
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Dict, Optional, Union
 
+from dotenv import load_dotenv
 from inspect_ai import eval_async
 from inspect_ai.log import EvalLog
 
@@ -160,14 +158,19 @@ async def run_saber_eval_async(config: SABERConfig) -> Union[EvalLog, None]:
         EvaluationExecutionError: If eval_async execution fails
     """
 
+    # Load environment variables early before any Task creation
+    # This ensures Azure OpenAI and other LLM configs are available
+    # Use explicit parameters to ensure loading works in Docker containers
+    load_dotenv(dotenv_path=".env", override=True, verbose=True)
+
     logger.info("Starting SABER eval_async execution with orchestrator architecture")
     server_url = config.session_config.base_url if config.session_config else "unknown"
     logger.info(f"Server: {server_url}")
-    logger.info(f"Agent: {config.agent_id or config.agent_path}")
+    logger.info(f"Agent assignments: {len(config.agents)} configured")
     logger.info(f"Tasks: {config.task_ids or 'all available'}")
 
     # Initialize eval_kwargs early to prevent UnboundLocalError in exception handler
-    eval_kwargs = {}
+    eval_kwargs: Dict[str, Any] = {}
 
     # Create orchestrator and keep it alive for the entire evaluation
     orchestrator = SABEREvaluationOrchestrator(config)
@@ -180,21 +183,23 @@ async def run_saber_eval_async(config: SABERConfig) -> Union[EvalLog, None]:
 
         # Discover tasks (either configured or all available)
         logger.info("Discovering tasks")
-        task_ids = await orchestrator.discover_tasks()
+        available_tasks = await orchestrator.discover_tasks()
+        task_ids = [task.task_id for task in available_tasks]
 
         # Create inspect_ai dataset from SABER tasks
         logger.info("Creating dataset")
         dataset = await orchestrator.create_dataset(task_ids)
         logger.info(f"Created dataset with {len(dataset)} samples")
 
-        # Create inspect_ai Task with SABER agent
-        logger.info("Creating inspect_ai task")
-        task = await orchestrator.create_task(dataset)
+        # Create inspect_ai Tasks with agent-grouped multi-agent support
+        logger.info("Creating inspect_ai tasks with agent-grouped architecture")
+        tasks_to_run = await orchestrator.create_multi_task_evaluation(task_ids)
 
-        # Configure eval_async parameters - simplified approach
+        # Configure eval_async parameters - no global model, agents specify their own
         eval_kwargs = {
-            "tasks": task,
-            "model": config.model,
+            "tasks": tasks_to_run,
+            # No global model - each agent specifies its own via meta-agent routing
+            "log_level": "debug",  # Enable verbose logging to see more details
         }
 
         # Add optional parameters only if they're specified
@@ -214,8 +219,14 @@ async def run_saber_eval_async(config: SABERConfig) -> Union[EvalLog, None]:
         else:
             logger.warning("No log directory configured, eval logs will not be saved")
 
+        # Use configured log level from config
         if hasattr(config, "log_level") and config.log_level:
-            eval_kwargs["log_level"] = config.log_level
+            eval_kwargs["log_level"] = config.log_level.lower()
+            logger.info(f"Using configured log level: {config.log_level}")
+        else:
+            # Use default log level if not specified
+            eval_kwargs["log_level"] = "warning"  # Default to warning level
+            logger.info("Using default log level: warning")
 
         # Configure parallel execution
         if hasattr(config, "parallel_execution") and config.parallel_execution:
@@ -227,8 +238,23 @@ async def run_saber_eval_async(config: SABERConfig) -> Union[EvalLog, None]:
 
         # Execute eval_async (inspect_ai specific, stays at entrypoint level)
         logger.info("Starting eval_async execution")
-        eval_log = await eval_async(**eval_kwargs)
-        logger.info("eval_async execution completed successfully")
+        logger.info(f"📊 eval_async parameters: {eval_kwargs}")
+        logger.info(f"📊 Number of tasks: {len(tasks_to_run)}")
+        for i, task in enumerate(tasks_to_run):
+            logger.info(
+                f"📊 Task {i}: {getattr(task, 'name', 'unknown')} with {len(getattr(task, 'dataset', []))} samples"
+            )
+            logger.info(f"📊 Task {i} solver type: {type(getattr(task, 'solver', None))}")
+
+        try:
+            eval_log = await eval_async(**eval_kwargs)
+            logger.info("eval_async execution completed successfully")
+        except Exception as e:
+            logger.error(f"❌ eval_async failed with error: {type(e).__name__}: {e}")
+            import traceback
+
+            logger.error(f"❌ Full traceback: {traceback.format_exc()}")
+            raise
 
         # Upload log files to server if enabled and session-specific log directory was used
         if config.log_upload_enabled and session_log_dir and session_id:
@@ -411,7 +437,7 @@ async def run_saber_eval_async(config: SABERConfig) -> Union[EvalLog, None]:
         error_details = {
             "error_type": type(e).__name__,
             "server_url": config.session_config.base_url if config.session_config else "unknown",
-            "agent_spec": config.agent_id or config.agent_path,
+            "agent_assignments": len(config.agents),
             "task_ids": config.task_ids,
         }
 

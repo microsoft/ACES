@@ -52,6 +52,12 @@ class AgentInitializationError(SABEREvaluationError):
     pass
 
 
+class AgentConfigurationError(SABEREvaluationError):
+    """Agent configuration validation failed."""
+
+    pass
+
+
 class DatasetCreationError(SABEREvaluationError):
     """Dataset creation or task discovery failed."""
 

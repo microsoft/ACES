@@ -7,7 +7,6 @@ raw dictionaries with proper Pydantic models.
 """
 
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -46,15 +45,25 @@ class SessionManagerConfig(BaseModel):
         extra = "forbid"  # Don't allow extra fields for strict typing
 
 
-class AgentConfig(BaseModel):
-    """Strictly typed agent configuration for container execution."""
+class AgentAssignment(BaseModel):
+    """Agent assignment with kwargs support for task-specific agent assignment."""
 
-    # Core agent behavior settings
-    debug_mode: bool = Field(default=False, description="Enable debug mode")
+    id: str = Field(..., description="Agent identifier from registry")
+    model: Optional[str] = Field(default=None, description="Model to use for this agent (overrides global model)")
+    tasks: List[str] = Field(..., description="Task IDs or '*' for wildcard assignment")
+    kwargs: Dict[str, Any] = Field(default_factory=dict, description="Agent-specific parameters")
 
-    # Allow additional fields for extensibility
     class Config:
-        extra = "allow"
+        extra = "forbid"  # Fail fast on unknown fields
+
+    def model_post_init(self, __context: Any) -> None:
+        """Validate assignment after creation."""
+        if not self.id:
+            raise ValueError("Agent ID cannot be empty")
+        if not self.tasks:
+            raise ValueError("Tasks list cannot be empty")
+        if "*" in self.tasks and len(self.tasks) > 1:
+            raise ValueError("Wildcard '*' cannot be combined with specific task IDs")
 
 
 class AgentInfo(BaseModel):
@@ -86,7 +95,6 @@ class AgentExecutionParams(BaseModel):
     agent_file: str = Field(description="Path to agent file")
     initial_prompt: str = Field(description="Initial prompt for agent")
     task_id: str = Field(description="Task identifier")
-    agent_config: AgentConfig = Field(description="Agent configuration")
     timeout: int = Field(default=300, description="Execution timeout in seconds")
 
 
@@ -114,11 +122,12 @@ class ContainerExecutionResult(BaseModel):
 @dataclass
 class SABERConfig:
     """
-    Main SABER configuration using inspect_ai model specifications.
-    Clean configuration with no legacy support - fail fast design.
+    Main SABER configuration with per-agent model specification.
+    No backwards compatibility - enforces new multi-agent configuration with agent-specific models.
     """
 
-    model: str  # Required model spec, no default
+    # Global model is optional - agents specify their own models
+    model: Optional[str] = None  # Deprecated - use per-agent models instead
     model_args: Dict[str, Any] = field(default_factory=dict)
 
     # Session manager configuration (unified REST + MCP)
@@ -127,10 +136,8 @@ class SABERConfig:
     # Task configuration
     task_ids: Optional[List[str]] = None
 
-    # Agent configuration - modernized, no legacy support
-    agent_id: Optional[str] = None  # Agent ID from registry (preferred)
-    agent_path: Optional[str] = None  # Path to agent Python file
-    agent_config: Optional[AgentConfig] = field(default=None)
+    # Multi-agent configuration (required - new format only)
+    agents: List[AgentAssignment] = field(default_factory=list)
 
     # Container configuration
     container_timeout: int = 300
@@ -158,12 +165,10 @@ class SABERConfig:
         model: str,
         rest_url: str,
         mcp_url: str,
+        agents: List[AgentAssignment],
         client_id: str = "saber-client",
         model_args: Optional[Dict[str, Any]] = None,
         task_ids: Optional[List[str]] = None,
-        agent_id: Optional[str] = None,
-        agent_path: Optional[str] = None,
-        debug_mode: bool = False,
         log_level: str = "INFO",
         log_dir: Optional[str] = None,
         ui_enabled: bool = True,
@@ -178,18 +183,16 @@ class SABERConfig:
         log_upload_fail_on_error: bool = False,
     ) -> "SABERConfig":
         """
-        Factory method to create SABERConfig with proper validation.
+        Factory method to create SABERConfig with multi-agent assignments.
 
         Args:
             model: Model specification (required)
             rest_url: SABER server REST API URL
             mcp_url: SABER server MCP URL
+            agents: List of agent task assignments (required)
             client_id: Client identifier
             model_args: Model arguments dictionary
             task_ids: List of task IDs to execute
-            agent_id: Agent ID from registry
-            agent_path: Path to agent Python file
-            debug_mode: Enable debug mode
             log_level: Logging level
             log_dir: Log directory path
             ui_enabled: Enable UI
@@ -212,17 +215,12 @@ class SABERConfig:
         # Create session config
         session_config = SessionManagerConfig.from_urls(rest_url=rest_url, mcp_url=mcp_url, client_id=client_id)
 
-        # Create agent config
-        agent_config = AgentConfig(debug_mode=debug_mode)
-
         return cls(
             model=model,
             model_args=model_args or {},
             session_config=session_config,
             task_ids=task_ids,
-            agent_id=agent_id,
-            agent_path=agent_path,
-            agent_config=agent_config,
+            agents=agents,
             container_timeout=container_timeout,
             ui_enabled=ui_enabled,
             log_level=log_level,
@@ -245,20 +243,15 @@ class SABERConfig:
         if not self.session_config:
             raise ValueError("session_config is required")
 
-        # Validate agent specification - exactly one required
-        if not self.agent_id and not self.agent_path:
-            raise ValueError("Either agent_id or agent_path must be provided")
+        # Validate agent configuration - new format required
+        if not self.agents:
+            raise ValueError("agents configuration is required")
 
-        if self.agent_id and self.agent_path:
-            raise ValueError("Cannot specify both agent_id and agent_path - choose one")
+        if not isinstance(self.agents, list):
+            raise TypeError("agents must be a list")
 
-        if self.agent_path:
-            agent_path_obj = Path(self.agent_path)
-            if not agent_path_obj.exists():
-                raise FileNotFoundError(f"Agent file not found: {self.agent_path}")
-
-        if not self.agent_config:
-            raise ValueError("agent_config is required")
+        # Validate agent assignments
+        self._validate_agent_assignments()
 
         # Validate container_timeout
         if self.container_timeout <= 0:
@@ -276,10 +269,6 @@ class SABERConfig:
         if not isinstance(self.model_args, dict):
             raise TypeError("model_args must be a dictionary")
 
-        # Validate agent_config type
-        if not isinstance(self.agent_config, AgentConfig):
-            raise TypeError("agent_config must be an AgentConfig instance")
-
         # Validate log upload configuration
         if self.log_upload_max_retries < 0:
             raise ValueError(f"log_upload_max_retries must be non-negative, got: {self.log_upload_max_retries}")
@@ -287,18 +276,40 @@ class SABERConfig:
         if self.log_upload_timeout <= 0:
             raise ValueError(f"log_upload_timeout must be positive, got: {self.log_upload_timeout}")
 
-    # Legacy property accessors for backward compatibility during transition
-    @property
-    def saber_rest_url(self) -> str:
-        """Legacy property accessor for REST URL."""
-        return self.session_config.base_url if self.session_config else ""
+    def _validate_agent_assignments(self) -> None:
+        """Validate agent assignments following the design requirements."""
+        if not self.agents:
+            raise ValueError("At least one agent assignment is required")
 
-    @property
-    def saber_mcp_url(self) -> str:
-        """Legacy property accessor for MCP URL."""
-        return self.session_config.mcp_server_url if self.session_config else ""
+        # NOTE: Allow duplicate agent IDs with different kwargs/tasks
+        # This enables the same agent type to be configured differently for different tasks
 
+        # Check for multiple wildcard assignments
+        wildcard_count = sum(1 for assignment in self.agents if "*" in assignment.tasks)
+        if wildcard_count > 1:
+            raise ValueError("Only one agent can have wildcard '*' assignment")
+
+        # Check for task conflicts (same task assigned to multiple agents)
+        explicit_tasks = set()
+        for assignment in self.agents:
+            for task in assignment.tasks:
+                if task != "*":
+                    if task in explicit_tasks:
+                        raise ValueError(f"Task '{task}' assigned to multiple agents")
+                    explicit_tasks.add(task)
+
+    # Legacy property accessor with deprecation warning
     @property
-    def client_id(self) -> str:
-        """Legacy property accessor for client ID."""
-        return self.session_config.client_id if self.session_config else ""
+    def agent_assignments(self) -> List[AgentAssignment]:
+        """
+        Legacy property for backwards compatibility (deprecated).
+
+        Returns:
+            List of agent assignments
+
+        Note: This property is deprecated. Use .agents directly.
+        """
+        import warnings
+
+        warnings.warn("agent_assignments is deprecated, use .agents instead", DeprecationWarning, stacklevel=2)
+        return self.agents

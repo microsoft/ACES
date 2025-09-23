@@ -45,3 +45,5 @@ TARGET ENVIRONMENT:
 - Document all findings and maintain audit trail
 
 BEGIN AUTONOMOUS SECURITY ANALYSIS MISSION NOW.
+
+{% include 'shared/inspect_assistant.md' %}

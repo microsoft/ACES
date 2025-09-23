@@ -16,6 +16,7 @@ import logging
 from typing import Any, Dict, List
 
 from inspect_ai.agent import Agent, AgentState, agent
+from inspect_ai.agent._types import AgentPrompt
 from inspect_ai.model import ModelOutput
 from inspect_ai.tool import Tool, mcp_server_http
 
@@ -169,9 +170,12 @@ async def create_saber_inspect_agent(
                 HTTPHeaders.ORCHESTRATION_ENV: OrchestrationEnvironment.INSPECT,
             }
 
+            if not config.session_config:
+                raise ValueError("session_config is required for SABER agents")
+
             saber_server = mcp_server_http(
                 name="SABER Security Tools",
-                url=f"{config.saber_mcp_url}/mcp",
+                url=f"{config.session_config.mcp_server_url}/mcp",
                 headers=mcp_headers,
             )
 
@@ -179,13 +183,16 @@ async def create_saber_inspect_agent(
             all_tools = list(tools) + [saber_server]
 
             # Create the actual agent with SABER tools using the specified implementation
-            actual_agent = agent_implementation(
-                name=f"SABER {agent_id.title()} Agent",
-                prompt=initial_prompt,
-                tools=all_tools,
+            agent_kwargs = {
+                "name": f"SABER {agent_id.title()} Agent",
+                "prompt": AgentPrompt(
+                    instructions=initial_prompt, handoff_prompt=None, assistant_prompt=None, submit_prompt=None
+                ),
+                "tools": all_tools,
                 **kwargs,
-            )
+            }
 
+            actual_agent = agent_implementation(**agent_kwargs)
             try:
                 # Run the agent
                 result: AgentState = await actual_agent(state)

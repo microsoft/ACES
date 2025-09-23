@@ -42,47 +42,87 @@ class SABERAgentFactory:
         self.registry = registry
 
     async def create_agent(
-        self, agent_id: str, config: SABERConfig, session_manager: ClientSessionManager, **kwargs: Any
+        self, agent_class: str, config: SABERConfig, session_manager: ClientSessionManager, **kwargs: Any
     ) -> Any:
         """
-        Create SABER agent instance from configuration.
+        Create SABER agent instance from agent class with kwargs validation.
 
         Args:
-            agent_id: Agent identifier from config
+            agent_class: Agent class identifier (e.g., "mcp_agent_claude")
             config: SABER configuration
             session_manager: Session manager for SABER infrastructure
-            **kwargs: Additional agent-specific parameters
+            **kwargs: Additional agent-specific parameters (validated and forwarded)
 
         Returns:
             Agent instance (type depends on implementation)
 
         Raises:
-            SABERAgentNotFoundError: If agent not found in registry
+            SABERAgentNotFoundError: If agent class not found in registry
             SABERAgentRegistrationError: If agent creation fails
+            ValueError: If kwargs validation fails
         """
-        logger.info(f"Creating SABER agent: {agent_id}")
+        logger.info(f"Creating SABER agent: {agent_class}")
+        logger.debug(f"Agent creation kwargs: {list(kwargs.keys())}")
 
         # Get agent specification (fail-fast if not found)
         try:
-            spec = self.registry.get_agent_spec(agent_id)
-            factory_func = self.registry.get_factory_func(agent_id)
+            spec = self.registry.get_agent_spec(agent_class)
+            factory_func = self.registry.get_factory_func(agent_class)
         except SABERAgentNotFoundError as e:
-            logger.error(f"Failed to find SABER agent '{agent_id}': {e}")
+            logger.error(f"Failed to find SABER agent '{agent_class}': {e}")
             raise
 
-        # Create agent using factory function
+        # Validate kwargs against agent specification if validation is available
+        validated_kwargs = self._validate_kwargs(agent_class, spec, kwargs)
+
+        # Create agent using factory function with validated kwargs
         try:
-            agent = await factory_func(config=config, session_manager=session_manager, agent_id=agent_id, **kwargs)
+            agent = await factory_func(
+                config=config, session_manager=session_manager, agent_id=agent_class, **validated_kwargs
+            )
 
             logger.info(
-                f"Successfully created SABER agent: {agent_id} "
+                f"Successfully created SABER agent: {agent_class} "
                 f"(type: {spec.implementation_type}, factory: {spec.factory_func})"
             )
             return agent
 
         except Exception as e:
-            logger.error(f"Failed to create SABER agent '{agent_id}': {e}")
-            raise SABERAgentRegistrationError(f"SABER agent creation failed for '{agent_id}': {e}") from e
+            logger.error(f"Failed to create SABER agent '{agent_class}': {e}")
+            raise SABERAgentRegistrationError(f"SABER agent creation failed for '{agent_class}': {e}") from e
+
+    def _validate_kwargs(self, agent_class: str, spec: Any, kwargs: dict[str, Any]) -> dict[str, Any]:
+        """
+        Validate and prepare kwargs for agent creation.
+
+        Args:
+            agent_class: Agent class identifier
+            spec: Agent specification from registry
+            kwargs: Raw kwargs to validate
+
+        Returns:
+            Validated kwargs dictionary
+
+        Raises:
+            ValueError: If validation fails
+        """
+        if not kwargs:
+            logger.debug(f"No kwargs provided for agent '{agent_class}'")
+            return {}
+
+        # For now, do basic validation - could be enhanced with schema validation
+        validated = kwargs.copy()
+
+        # Log potentially problematic kwargs
+        common_conflicts = ["config", "session_manager", "agent_id"]
+        for conflict in common_conflicts:
+            if conflict in validated:
+                logger.warning(
+                    f"Agent '{agent_class}' kwargs contains '{conflict}' which may conflict with factory parameters"
+                )
+
+        logger.debug(f"Validated {len(validated)} kwargs for agent '{agent_class}': {list(validated.keys())}")
+        return validated
 
     def list_available_agents(self) -> list[str]:
         """List all available agent IDs.

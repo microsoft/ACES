@@ -1,9 +1,6 @@
 # SABER Configuration - Excytin Demo
 # Updated for unified eval_async architecture with proper nested configuration
 
-# Model configuration (inspect_ai format for Azure OpenAI)
-model: "openai/azure/gpt-4.1"
-
 # Server configuration (nested structure)
 server:
   rest_url: "http://saber-excytin-server:8000"
@@ -14,10 +11,11 @@ server:
 tasks:
   task_ids: ["incident_5_task_1", ] # "incident_5_task_2", "incident_5_task_3", "incident_5_task_4", "incident_5_task_5"]
 
-# Agent configuration (use agent registry)
-agent:
-  id: "inspect_react"
-  debug_mode: false
+# Multi-agent configuration with task-specific assignments
+agents:
+  - id: "inspect_react"
+    model: "openai/azure/gpt-4.1"
+    tasks: ["*"]  # Wildcard assignment for all tasks
 
 # Execution configuration
 log_level: "INFO"

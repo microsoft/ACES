@@ -795,44 +795,36 @@ def run_command(config: Optional[Path], verbose: bool, no_log_file: bool) -> Non
             # Re-setup logging with config's log directory
             logger = setup_client_logging(verbose=verbose, log_to_file=True, log_dir=Path(saber_config.log_dir))
 
-        agent_path = saber_config.agent_path
-        agent_id = getattr(saber_config, "agent_id", None)
-
-        if not agent_path and not agent_id:
-            logger.error("Either agent_path or agent_id must be specified in configuration file")
-            click.echo("❌ Either agent_path or agent_id must be specified in configuration file", err=True)
+        # Validate agents configuration (new format)
+        if not saber_config.agents:
+            logger.error("No agents found in configuration")
+            click.echo("❌ No agents found in configuration", err=True)
             sys.exit(1)
 
         logger.info(f"Loaded configuration from: {config_file_path}")
-        if agent_id:
-            logger.info(f"Agent ID: {agent_id}")
-        if agent_path:
-            logger.info(f"Agent path: {agent_path}")
-        logger.info(f"SABER REST URL: {saber_config.saber_rest_url}")
-        logger.info(f"SABER MCP URL: {saber_config.saber_mcp_url}")
+        logger.info(f"Agent assignments: {len(saber_config.agents)} configured")
+        for assignment in saber_config.agents:
+            logger.info(f"  - Agent '{assignment.id}' handles tasks: {assignment.tasks}")
+        if saber_config.session_config:
+            logger.info(f"SABER REST URL: {saber_config.session_config.base_url}")
+            logger.info(f"SABER MCP URL: {saber_config.session_config.mcp_server_url}")
+        else:
+            logger.info("No session config available")
 
     except Exception as e:
         logger.error(f"Error loading config file: {e}")
         click.echo(f"❌ Error loading config file: {e}", err=True)
         sys.exit(1)
 
-    # Validate agent file exists (only if using agent_path)
-    if agent_path and not Path(agent_path).exists():
-        logger.error(f"Agent file not found: {agent_path}")
-        click.echo(f"❌ Agent file not found: {agent_path}", err=True)
-        sys.exit(1)
-
     logger.info("Starting SABER eval_async execution")
 
-    if agent_id:
-        click.echo(f"🚀 Starting SABER evaluation with agent ID: {agent_id}")
-    elif agent_path:
-        click.echo(f"🚀 Starting SABER evaluation with agent: {Path(agent_path).name}")
-    else:
-        click.echo("🚀 Starting SABER evaluation")
+    click.echo(f"🚀 Starting SABER evaluation with {len(saber_config.agents)} agent assignments")
+    for assignment in saber_config.agents:
+        tasks_str = ", ".join(assignment.tasks) if assignment.tasks != ["*"] else "all tasks"
+        click.echo(f"   • {assignment.id} → {tasks_str}")
 
-    click.echo(f"📊 Server: {saber_config.saber_rest_url}")
-    click.echo(f"🔗 MCP: {saber_config.saber_mcp_url}")
+    click.echo(f"📊 Server: {saber_config.session_config.base_url if saber_config.session_config else 'N/A'}")
+    click.echo(f"🔗 MCP: {saber_config.session_config.mcp_server_url if saber_config.session_config else 'N/A'}")
     click.echo()
 
     # INSPECT-AI EVAL_ASYNC PATTERN - eval_async controls everything
