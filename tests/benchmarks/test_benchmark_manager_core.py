@@ -317,7 +317,7 @@ tasks:
         assert config["max_duration_minutes"] == 30
 
     def test_start_benchmark_success(self, tmp_path, temp_config_dir_helper):
-        """Test successful benchmark session start."""
+        """Test successful benchmark session start with multi-prompt validation."""
         yaml_content = """
 domain: "webapp_pentest"
 
@@ -325,6 +325,10 @@ benchmark_config:
   episode_attempts: 3
 
 global_defaults:
+  prompts:
+    instruction: "test_task_prompt.md"
+    assistant: "test_task_prompt.md"
+    submit: "test_task_prompt.md"
   execution_config:
     timeout: 300
   episode_config:
@@ -338,7 +342,6 @@ tasks:
   - task_id: "task1"
     title: "Task 1"
     description: "First task"
-    prompt_template_file: "test_task_prompt.md"
     execution_config:
       allowed_executors:
         - bash_executor
@@ -354,7 +357,6 @@ tasks:
   - task_id: "task2"
     title: "Task 2"
     description: "Second task"
-    prompt_template_file: "test_task_prompt.md"
     execution_config:
       allowed_executors:
         - bash_executor
@@ -380,6 +382,28 @@ tasks:
         assert result["total_tasks"] == 2
         assert "task1" in [task["task_id"] for task in result["tasks"]]
         assert "task2" in [task["task_id"] for task in result["tasks"]]
+
+        # Enhanced: Validate that each task has proper prompt structure
+        for task_dict in result["tasks"]:
+            # Each task should have generated prompts in TaskInfo structure
+            # Note: These tasks use legacy prompt_template_file, so they should have
+            # instruction_prompt, assistant_prompt, and submit_prompt all containing
+            # the same content from the single template (backward compatibility)
+            assert "instruction_prompt" in task_dict
+            assert "assistant_prompt" in task_dict
+            assert "submit_prompt" in task_dict
+
+            # All prompts should be non-empty strings
+            assert isinstance(task_dict["instruction_prompt"], str)
+            assert isinstance(task_dict["assistant_prompt"], str)
+            assert isinstance(task_dict["submit_prompt"], str)
+            assert len(task_dict["instruction_prompt"]) > 0
+            assert len(task_dict["assistant_prompt"]) > 0
+            assert len(task_dict["submit_prompt"]) > 0
+
+            # Deprecated fields should not exist
+            assert "initial_prompt" not in task_dict
+            assert "prompt" not in task_dict
 
     def test_list_benchmark_tasks_with_episode_attempts(self, tmp_path, temp_config_dir_helper):
         """Test listing tasks with episode attempts information."""
@@ -744,3 +768,137 @@ tasks:
         task = manager.get_task("test_static_task")
         assert task.evaluation_config["strategy"] == "static"
         assert "judge_prompt_renderer" not in task.evaluation_config
+
+
+class TestBenchmarkManagerMultiPrompt:
+    """Test cases for BenchmarkManager multi-prompt functionality."""
+
+    def test_multi_prompt_task_loading(self, tmp_path, temp_config_dir_helper, sample_multi_prompt_task_yaml):
+        """Test successful loading of tasks with multi-prompt configuration."""
+        temp_config_dir = temp_config_dir_helper(tmp_path, sample_multi_prompt_task_yaml)
+        manager = BenchmarkManager("cybersecurity", temp_config_dir)
+
+        assert len(manager.tasks) == 1
+        assert "multi_prompt_security_task" in manager.tasks
+
+        task = manager.tasks["multi_prompt_security_task"]
+
+        # Verify multi-prompt structure is set
+        assert hasattr(task, 'prompts')
+        assert isinstance(task.prompts, dict)
+
+        # Verify all three prompt types are present
+        assert 'instruction' in task.prompts
+        assert 'assistant' in task.prompts
+        assert 'submit' in task.prompts
+
+        assert task.prompts['instruction'] == "instructions/security_analysis_instruction.md"
+        assert task.prompts['assistant'] == "assistants/security_analysis_assistant.md"
+        assert task.prompts['submit'] == "submits/security_analysis_submit.md"
+
+    def test_get_benchmark_info_with_multi_prompts(self, tmp_path, temp_config_dir_helper, sample_multi_prompt_task_yaml):
+        """Test that get_benchmark_info generates all three prompts for multi-prompt tasks."""
+        temp_config_dir = temp_config_dir_helper(tmp_path, sample_multi_prompt_task_yaml)
+        manager = BenchmarkManager("cybersecurity", temp_config_dir)
+
+        benchmark_info = manager.get_benchmark_info()
+
+        assert benchmark_info.domain == "cybersecurity"
+        assert benchmark_info.total_tasks == 1
+        assert len(benchmark_info.tasks) == 1
+
+        task_info = benchmark_info.tasks[0]
+        assert task_info.task_id == "multi_prompt_security_task"
+
+        # Verify all three prompts are generated and non-empty
+        assert hasattr(task_info, 'instruction_prompt')
+        assert hasattr(task_info, 'assistant_prompt')
+        assert hasattr(task_info, 'submit_prompt')
+
+        assert task_info.instruction_prompt is not None
+        assert task_info.assistant_prompt is not None
+        assert task_info.submit_prompt is not None
+
+        assert len(task_info.instruction_prompt) > 0
+        assert len(task_info.assistant_prompt) > 0
+        assert len(task_info.submit_prompt) > 0
+
+        # Verify prompts contain expected content
+        assert "security analyst" in task_info.instruction_prompt.lower()
+        assert "assistant" in task_info.assistant_prompt.lower()
+        assert "submit" in task_info.submit_prompt.lower()
+
+    def test_multi_prompt_task_info_structure(self, tmp_path, temp_config_dir_helper, sample_multi_prompt_task_yaml):
+        """Test that TaskInfo objects have the correct multi-prompt structure."""
+        temp_config_dir = temp_config_dir_helper(tmp_path, sample_multi_prompt_task_yaml)
+        manager = BenchmarkManager("cybersecurity", temp_config_dir)
+
+        benchmark_info = manager.get_benchmark_info()
+        task_info = benchmark_info.tasks[0]
+
+        # Convert to dict to verify structure
+        task_dict = task_info.model_dump()
+
+        # Verify multi-prompt fields exist
+        assert 'instruction_prompt' in task_dict
+        assert 'assistant_prompt' in task_dict
+        assert 'submit_prompt' in task_dict
+
+        # Verify deprecated single prompt field does NOT exist
+        assert 'initial_prompt' not in task_dict
+        assert 'prompt' not in task_dict
+
+    def test_prompt_generator_multi_prompt_rendering(self, tmp_path, temp_config_dir_helper, sample_multi_prompt_task_yaml):
+        """Test that PromptGenerator correctly renders all three prompt types."""
+        temp_config_dir = temp_config_dir_helper(tmp_path, sample_multi_prompt_task_yaml)
+        manager = BenchmarkManager("cybersecurity", temp_config_dir)
+
+        task_id = "multi_prompt_security_task"
+        task = manager.get_task(task_id)
+
+        # Test direct prompt rendering
+        rendered_prompts = manager.prompt_generator.render_agent_prompts_for_task(task)
+
+        # Verify all three prompt types are rendered
+        expected_prompt_types = {'instruction', 'assistant', 'submit'}
+        actual_prompt_types = set(rendered_prompts.keys())
+
+        assert expected_prompt_types == actual_prompt_types, f"Expected {expected_prompt_types}, got {actual_prompt_types}"
+
+        # Verify each prompt is rendered and non-empty
+        for prompt_type, prompt_content in rendered_prompts.items():
+            assert prompt_content is not None
+            assert len(prompt_content) > 0
+            assert isinstance(prompt_content, str)
+
+    def test_multi_prompt_fails_fast_on_missing_prompts(self, tmp_path, temp_config_dir_helper):
+        """Test that the system fails fast when any prompt type is missing."""
+        # Create configuration with missing assistant prompt
+        incomplete_yaml = """
+domain: "incomplete_domain"
+
+benchmark_config:
+  episode_attempts: 1
+
+executors:
+  - bash_executor
+
+tasks:
+  - task_id: "incomplete_task"
+    title: "Incomplete Task"
+    description: "A task missing one of the required prompt types"
+    prompts:
+      instruction: "instructions/test_instruction.md"
+      # Missing assistant and submit prompts
+    subtasks: []
+"""
+
+        temp_config_dir = temp_config_dir_helper(tmp_path, incomplete_yaml)
+
+        # Should fail fast during BenchmarkManager initialization
+        with pytest.raises(InvalidTaskDefinitionException) as exc_info:
+            BenchmarkManager("incomplete_domain", temp_config_dir)
+
+        # Verify the error message indicates which prompt is missing
+        error_message = str(exc_info.value)
+        assert "missing 'assistant' prompt" in error_message

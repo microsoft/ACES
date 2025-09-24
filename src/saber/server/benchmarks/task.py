@@ -19,7 +19,7 @@ class Task:
         domain: str,
         title: str,
         description: str,
-        prompt_template_file: str,
+        prompts: Dict[str, str],
         subtasks: Optional[List[SubTask]] = None,
         initial_context: Optional[Dict[str, Any]] = None,
         environment: Optional[Union[str, Dict[str, Any]]] = None,
@@ -38,7 +38,8 @@ class Task:
             domain: Security domain this task belongs to
             title: Human-readable title
             description: Detailed description of the task
-            prompt_template_file: Required path to Jinja2 template file for prompt generation
+            prompts: Dictionary with three required prompt types:
+                {"instruction": "file.md", "assistant": "file.md", "submit": "file.md"}
             subtasks: List of subtasks
             initial_context: Initial context provided when the task starts
             environment: Environment specification that can be:
@@ -52,11 +53,22 @@ class Task:
             evaluation_config: Evaluation configuration (strategy, criteria, scoring)
             depends_on_task_id: Task ID that episodes of this task should connect to when created
         """
+        # Validate prompts dictionary - fail fast
+        if not isinstance(prompts, dict):
+            raise ValueError(f"Task '{task_id}': prompts must be a dictionary")
+
+        required_prompt_types = ["instruction", "assistant", "submit"]
+        for prompt_type in required_prompt_types:
+            if prompt_type not in prompts:
+                raise ValueError(f"Task '{task_id}': missing required prompt type '{prompt_type}'")
+            if not isinstance(prompts[prompt_type], str) or not prompts[prompt_type].strip():
+                raise ValueError(f"Task '{task_id}': prompt type '{prompt_type}' must be a non-empty string")
+
         self.task_id = task_id
         self.domain = domain
         self.title = title
         self.description = description
-        self.prompt_template_file = prompt_template_file
+        self.prompts = prompts
         self.subtasks = subtasks or []
         self.initial_context = initial_context or {}
         self.environment = environment
@@ -145,7 +157,7 @@ class Task:
             "domain": self.domain,
             "title": self.title,
             "description": self.description,
-            "prompt_template_file": self.prompt_template_file,
+            "prompts": self.prompts,
             "subtasks": [subtask.to_dict() if hasattr(subtask, "to_dict") else subtask for subtask in self.subtasks],
             "initial_context": self.initial_context,
             "environment": self.environment,

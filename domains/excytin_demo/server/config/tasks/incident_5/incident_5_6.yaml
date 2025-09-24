@@ -3,7 +3,6 @@ tasks:
     title: incident_5_task_51
     description: Can you identify the executable file name of the process that attempted
       to access the Primary Refresh Token (PRT) as part of the related alerts?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -48,7 +47,6 @@ tasks:
     description: A related alert indicated a possible compromised user account dropping
       ransomware-related files. Can you identify the name of the specific file associated
       with the ransomware activity?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -97,7 +95,6 @@ tasks:
     title: incident_5_task_53
     description: During this incident, what specific command line was observed that
       could indicate system recovery setting tampering on the device?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -145,7 +142,6 @@ tasks:
     title: incident_5_task_54
     description: What is the command line used by the process that tampered with the
       system recovery settings?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -188,7 +184,6 @@ tasks:
     title: incident_5_task_55
     description: As part of this incident, a ransomware payload was also remotely launched.
       Can you identify the IP address involved in the ransomware activity?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -227,7 +222,6 @@ tasks:
     title: incident_5_task_56
     description: As per the recent alert, what is the name of the file that shows the
       potentially compromised assets exhibiting ransomware-like behavior?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -267,7 +261,6 @@ tasks:
     title: incident_5_task_57
     description: Can you identify the command line details for the process that reflects
       the suspicious WMI process creation on the same machine `vnevado-win10s`?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -309,7 +302,6 @@ tasks:
     title: incident_5_task_58
     description: A related alert indicates possible ransomware activity involving a
       known malicious file extension. Can you identify the file involved in this activity?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -348,7 +340,6 @@ tasks:
     title: incident_5_task_59
     description: Can you identify the Security Identifier (Sid) associated with the
       suspicious remote activity observed in this incident?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -390,7 +381,6 @@ tasks:
     description: On the same host `vnevado-win10s`, there was a tampering activity observed.
       Can you identify the command that was executed to disable the automatic Windows
       recovery features?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 

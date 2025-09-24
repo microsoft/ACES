@@ -11,7 +11,7 @@ server:
 tasks:
   task_ids: ["incident_5_task_1", ] # "incident_5_task_2", "incident_5_task_3", "incident_5_task_4", "incident_5_task_5"]
 
-# Multi-agent configuration with task-specific assignments
+# Agent configuration
 agents:
   - id: "inspect_react"
     model: "openai/azure/gpt-4.1"

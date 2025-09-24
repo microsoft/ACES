@@ -3,7 +3,6 @@ tasks:
     title: incident_5_task_31
     description: What was the URL blocked due to Command and Control (C2) behavior in
       this incident?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -52,7 +51,6 @@ tasks:
     title: incident_5_task_32
     description: Can you provide the command line of the process that was created using
       WMI on the host?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -95,7 +93,6 @@ tasks:
     title: incident_5_task_33
     description: Can you identify the SID of the account involved in the suspicious
       remote activity on 2024-07-04 at 22:35:00.896765+00:00?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -134,7 +131,6 @@ tasks:
     title: incident_5_task_34
     description: As part of the Manatee Tempest activity group, what is the IP address
       associated with their activity in this incident?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -179,7 +175,6 @@ tasks:
     title: incident_5_task_35
     description: Can you identify the AadUserId associated with the possible attempt
       to access the Primary Refresh Token (PRT)?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -227,7 +222,6 @@ tasks:
     description: Following these activities, there was an indication of ransomware behavior
       detected in the file system on a device. Can you determine the AadDeviceId of
       the host where this ransomware activity was detected?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -276,7 +270,6 @@ tasks:
     title: incident_5_task_37
     description: From the subsequent alert, what was the name of the Windows Sysinternals
       tool that was renamed before it was launched?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -314,7 +307,6 @@ tasks:
     title: incident_5_task_38
     description: What is the Azure Active Directory (AAD) device ID of the host where
       the possible attempt to access the Primary Refresh Token (PRT) was detected?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -352,7 +344,6 @@ tasks:
     title: incident_5_task_39
     description: What was the URL associated with the command and control behavior detected
       in the end alert?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -403,7 +394,6 @@ tasks:
   - task_id: incident_5_task_40
     title: incident_5_task_40
     description: Can you identify the AadDeviceId related to this alert?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 

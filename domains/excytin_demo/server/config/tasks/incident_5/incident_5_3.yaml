@@ -3,7 +3,6 @@ tasks:
     title: incident_5_task_21
     description: What is the name of the executable file used in the PSExec activity
       on `Vnevado-jump` server?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -40,7 +39,6 @@ tasks:
     title: incident_5_task_22
     description: What is the command line of the process that modified the LSASS process
       memory?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -91,7 +89,6 @@ tasks:
     title: incident_5_task_23
     description: What was the URL associated with the command and control behavior that
       was blocked?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -143,7 +140,6 @@ tasks:
     title: incident_5_task_24
     description: Can you identify the SID of the account associated with the suspicious
       remote activity observed on this machine?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -184,7 +180,6 @@ tasks:
     title: incident_5_task_25
     description: What is the host name of the machine where suspicious 'GenRansom' behavior
       was detected, indicating the machine is actively running malware?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -230,7 +225,6 @@ tasks:
     title: incident_5_task_26
     description: Can you identify the AadUserId of the account related to the CommandAndControl
       malware that was detected during lateral movement?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -281,7 +275,6 @@ tasks:
     title: incident_5_task_27
     description: What is the process ID and the exact time when the `bcdedit /set recoveryenabled
       no` command was executed as part of the system recovery setting tampering?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -325,7 +318,6 @@ tasks:
     title: incident_5_task_28
     description: Can you identify the URL associated with the blocked command and control
       behavior related to the malware infection?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -367,7 +359,6 @@ tasks:
     title: incident_5_task_29
     description: In relation to the attempt to access Primary Refresh Token (PRT), can
       you identify the name of the process involved in this activity?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -406,7 +397,6 @@ tasks:
     title: incident_5_task_30
     description: What is the IP address associated with the suspicious remote activity
       observed on this machine?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 

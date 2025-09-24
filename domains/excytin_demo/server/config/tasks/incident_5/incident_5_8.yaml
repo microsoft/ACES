@@ -3,7 +3,6 @@ tasks:
     title: incident_5_task_71
     description: In this incident, potentially compromised assets are exhibiting ransomware-like
       behavior. Can you identify the name of the file that has been impacted by ransomware?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -43,7 +42,6 @@ tasks:
     title: incident_5_task_72
     description: Can you identify the malicious IP address associated with the Manatee
       Tempest group activities?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -84,7 +82,6 @@ tasks:
     description: Relating to this incident, a possible attempt to access the Primary
       Refresh Token (PRT) was detected. Can you identify the file name of the process
       involved in this attempt?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -124,7 +121,6 @@ tasks:
     title: incident_5_task_74
     description: What is the AadDeviceId of the host connected to the end alert which
       involves the same Manatee Tempest activity group?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -168,7 +164,6 @@ tasks:
     title: incident_5_task_75
     description: Following this alert, we also detected malicious command and control
       behavior. Can you provide the URL associated with this command and control behavior?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -208,7 +203,6 @@ tasks:
     title: incident_5_task_76
     description: Can you identify the command line of the suspicious WMI process that
       was observed?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -249,7 +243,6 @@ tasks:
     description: Immediately after this detection, another suspicious WMI process was
       created on the machine. Can you find the command line used by this newly created
       WMI process?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -290,7 +283,6 @@ tasks:
     title: incident_5_task_78
     description: Can you identify the URL that was associated with the command and control
       behavior which was blocked?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -345,7 +337,6 @@ tasks:
     description: The answer points to browsercore.exe running at the specified time.
       This should be further scrutinized to confirm the activity related to PRT access
       attempt mentioned.
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -390,7 +381,6 @@ tasks:
     description: After detecting the execution of this malicious tool, there was an
       event involving the renaming and launching of a Windows Sysinternals tool. What
       file name was used in this second alert?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 

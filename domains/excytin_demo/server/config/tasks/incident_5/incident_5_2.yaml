@@ -3,7 +3,6 @@ tasks:
     title: incident_5_task_11
     description: A related alert indicates the presence of a file associated with Mimikatz.
       Can you identify the name of this file that was detected?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -40,7 +39,6 @@ tasks:
     title: incident_5_task_12
     description: Can you identify the malicious URL that was associated with the command
       and control behavior blocked during the incident on 2024-07-04?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -78,7 +76,6 @@ tasks:
     title: incident_5_task_13
     description: What is the command line of the process that was executed when the
       'CommandAndControl' malware was detected during lateral movement?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -118,7 +115,6 @@ tasks:
     title: incident_5_task_14
     description: What is the name of the account involved in the system recovery setting
       tampering incident?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -177,7 +173,6 @@ tasks:
     title: incident_5_task_15
     description: What is the hostname of the target device in the 'CommandAndControl'
       malware attempt?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -214,7 +209,6 @@ tasks:
     description: There was another instance of a similar process being run on the same
       host in this incident. Can you identify the Process ID and the command line of
       this process?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -260,7 +254,6 @@ tasks:
     title: incident_5_task_17
     description: What is the Azure Active Directory (AAD) Device ID of the host involved
       in this suspicious WMI process creation event?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -300,7 +293,6 @@ tasks:
     title: incident_5_task_18
     description: Can you identify the SID of the account which was involved in the suspicious
       remote activity?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -342,7 +334,6 @@ tasks:
     description: Related to this alert, there was a possible attempt to access the Primary
       Refresh Token (PRT). What is the file name of the process that was used in this
       attempt?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -382,7 +373,6 @@ tasks:
     title: incident_5_task_20
     description: As part of this investigation, could you identify the IP address of
       the device that the attacker possibly moved to laterally?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 

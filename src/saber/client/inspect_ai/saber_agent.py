@@ -136,11 +136,22 @@ async def create_saber_inspect_agent(
                 raise ValueError("Task ID not found in sample metadata")
             task_store.set("saber_task_id", task_id)
 
-            # Get initial prompt from sample metadata
-            initial_prompt = current_state.metadata.get("initial_prompt")
-            if initial_prompt is None:
-                raise ValueError("Initial prompt not found in sample metadata")
-            logger.info(f"Using initial prompt from metadata: {initial_prompt[:100]}...")
+            # Get all three prompts from sample metadata
+            instruction_prompt = current_state.metadata.get("instruction_prompt")
+            assistant_prompt = current_state.metadata.get("assistant_prompt")
+            submit_prompt = current_state.metadata.get("submit_prompt")
+
+            # Fail fast if any prompts are missing
+            if instruction_prompt is None:
+                raise ValueError("Instruction prompt not found in sample metadata")
+            if assistant_prompt is None:
+                raise ValueError("Assistant prompt not found in sample metadata")
+            if submit_prompt is None:
+                raise ValueError("Submit prompt not found in sample metadata")
+
+            logger.info(f"Using instruction prompt: {instruction_prompt[:100]}...")
+            logger.info(f"Using assistant prompt: {assistant_prompt[:100]}...")
+            logger.info(f"Using submit prompt: {submit_prompt[:100]}...")
 
             # Create episode
             episode_response = await session_manager.create_episode(session_id, task_id)
@@ -184,9 +195,12 @@ async def create_saber_inspect_agent(
 
             # Create the actual agent with SABER tools using the specified implementation
             agent_kwargs = {
-                "name": f"SABER {agent_id.title()} Agent",
+                "name": f"SABER_{agent_id.title()}_Agent",
                 "prompt": AgentPrompt(
-                    instructions=initial_prompt, handoff_prompt=None, assistant_prompt=None, submit_prompt=None
+                    instructions=instruction_prompt,
+                    handoff_prompt=None,
+                    assistant_prompt=assistant_prompt,
+                    submit_prompt=submit_prompt,
                 ),
                 "tools": all_tools,
                 **kwargs,

@@ -634,9 +634,12 @@ class SessionManager:
 
             raise HTTPException(status_code=500, detail=error_detail)
 
-        # Generate & store prompt (fail-fast if misconfigured)
-        prompt = self.benchmark_manager.get_task_prompt(task.task_id)
-        self.policy_manager.set_episode_policy(episode.episode_id, session_id, prompt)
+        # Generate & store all three prompts (fail-fast if misconfigured)
+        rendered_prompts = self.benchmark_manager.prompt_generator.render_agent_prompts_for_task(task)
+        # For now, use the instruction prompt as the policy prompt (backward compatibility)
+        # TODO: Update PolicyManager to handle all three prompts in structured format
+        instruction_prompt = rendered_prompts["instruction"]
+        self.policy_manager.set_episode_policy(episode.episode_id, session_id, instruction_prompt)
 
         # Configure episode manager with task object
         self.episode_manager.configure_for_task(episode.episode_id, task)

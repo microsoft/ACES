@@ -3,7 +3,6 @@ tasks:
     title: incident_5_task_81
     description: Which device was the ransomware payload remotely launched on as indicated
       by the end alert?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -43,7 +42,6 @@ tasks:
     title: incident_5_task_82
     description: What is the file name of the process involved in the suspicious WMI
       process creation observed on the machine after the attempt to access PRT?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -82,7 +80,6 @@ tasks:
     title: incident_5_task_83
     description: During the system recovery setting tampering, what process and command
       line was used to disable automatic Windows recovery features?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -124,7 +121,6 @@ tasks:
     title: incident_5_task_84
     description: What command line and process ID were used for the tampering of system
       recovery settings observed earlier?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -166,7 +162,6 @@ tasks:
     description: In a related alert, there is evidence of system recovery settings being
       tampered with on the same device. Can you determine the command line used to delete
       all volume shadow copies on this system?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -207,7 +202,6 @@ tasks:
   - task_id: incident_5_task_86
     title: incident_5_task_86
     description: What is the URL associated with the activity from Manatee Tempest?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -252,7 +246,6 @@ tasks:
     description: Related to this alert, there was also an incident where file backups
       were deleted. Can you identify the command used in the process that deleted the
       file snapshots and shadow copies?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -291,7 +284,6 @@ tasks:
     title: incident_5_task_88
     description: What is the name of the file involved in the suspicious access to the
       LSASS service?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -328,7 +320,6 @@ tasks:
     title: incident_5_task_89
     description: Can you identify the SID of the account that was possibly compromised
       and observed delivering ransomware-related files?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -366,7 +357,6 @@ tasks:
     title: incident_5_task_90
     description: What was the Process ID and command line observed during the suspicious
       hands-on keyboard user behavior?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 

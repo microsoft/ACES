@@ -2,6 +2,11 @@ domain: excytin_demo
 permanent_environment: incident_5
 
 global_defaults:
+  prompts:
+    instruction: "instructions/excytin_demo.md"
+    assistant: "assistants/inspect_assistant.md"
+    submit: "submits/inspect_submit.md"
+
   execution_config:
     allowed_executors:
       - bash

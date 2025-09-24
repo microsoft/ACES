@@ -3,7 +3,6 @@ tasks:
     title: incident_5_task_61
     description: Regarding the system recovery setting tampering, which process was
       used to delete all volume shadow copies on the system?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -44,7 +43,6 @@ tasks:
     title: incident_5_task_62
     description: In the context of this security incident, can you provide the command
       line that was used to delete all file snapshots and shadow copies?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -88,7 +86,6 @@ tasks:
     description: In connection to the potential ransomware activity, it was found that
       all file backups were deleted. Can you determine the name of the process that
       executed this deletion?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -132,7 +129,6 @@ tasks:
     title: incident_5_task_64
     description: What is the IP address associated with the malicious Manatee Tempest
       activity?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -176,7 +172,6 @@ tasks:
     title: incident_5_task_65
     description: What was the command line of the process detected with the known credential
       theft tool execution?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -221,7 +216,6 @@ tasks:
     description: Regarding the system recovery setting tampering observed on this device,
       what command line was executed by the process using `vssblatemp.exe` and what
       was the corresponding Process Id and creation time?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -264,7 +258,6 @@ tasks:
     title: incident_5_task_67
     description: What IP address was involved in the ransomware payload that was remotely
       launched following the attempt to access the Primary Refresh Token (PRT)?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -301,7 +294,6 @@ tasks:
     title: incident_5_task_68
     description: What is the host name of the device where 'CommandAndControl' malware
       was detected during lateral movement?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -351,7 +343,6 @@ tasks:
     title: incident_5_task_69
     description: Can you identify the process command used that might have tampered
       with the system recovery settings?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -393,7 +384,6 @@ tasks:
     title: incident_5_task_70
     description: What is the hostname of the device where a possible attempt to access
       Primary Refresh Token (PRT) was detected?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 

@@ -4,7 +4,6 @@ tasks:
     description: During this investigation, a potentially compromised user account was
       identified. Can you provide the SID of the user account that may be operating
       with ransomware-like behavior?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -54,7 +53,6 @@ tasks:
     description: Following this incident, 'CommandAndControl' malware was detected on
       another device during lateral movement. What is the AadDeviceId of this affected
       device?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -96,7 +94,6 @@ tasks:
     description: There was suspicious remote activity involving this malware incident.
       Can you identify the AadDeviceId of the host involved in this suspicious remote
       activity?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -145,7 +142,6 @@ tasks:
     description: In relation to the malicious credential theft tool execution detected
       in this multi-stage incident, can you identify the file name of the tool that
       was executed?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -200,7 +196,6 @@ tasks:
     title: incident_5_task_45
     description: Can you provide the command line details of the suspicious WMI process
       observed on the machine?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -243,7 +238,6 @@ tasks:
     title: incident_5_task_46
     description: What is the name of the credential theft tool detected on the device
       `vnevado-win10v`?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -282,7 +276,6 @@ tasks:
     description: Following this alert regarding system tampering, there was also a command
       and control behavior blocked. Can you identify the URL associated with the blocked
       behavior?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -322,7 +315,6 @@ tasks:
     title: incident_5_task_48
     description: What is the AadDeviceId of the host where 'CommandAndControl' malware
       was detected during lateral movement at 2024-07-04 22:35:03.912589?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -364,7 +356,6 @@ tasks:
     description: During this incident, there was also a detected attempt to access the
       Primary Refresh Token (PRT). What is the AadDeviceId of the host involved in this
       attempt?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -406,7 +397,6 @@ tasks:
     title: incident_5_task_50
     description: What is the IP address from which the ransomware payload was remotely
       launched?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 

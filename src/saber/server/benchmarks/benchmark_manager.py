@@ -107,6 +107,9 @@ class BenchmarkManager:
             episode_config = task.episode_config or {}
             max_steps = episode_config.get("max_steps", 100)
 
+            # Render all three prompts for this task
+            rendered_prompts = self.prompt_generator.render_agent_prompts_for_task(task)
+
             task_info = TaskInfo(
                 task_id=task.task_id,
                 title=task.title,
@@ -114,7 +117,10 @@ class BenchmarkManager:
                 episode_attempts=episode_attempts,
                 subtask_count=len(task.subtasks),
                 max_steps=max_steps,
-                initial_prompt=self.get_task_prompt(task.task_id),
+                # NEW: Three distinct prompts (replaces initial_prompt)
+                instruction_prompt=rendered_prompts["instruction"],
+                assistant_prompt=rendered_prompts["assistant"],
+                submit_prompt=rendered_prompts["submit"],
             )
             task_infos.append(task_info)
             total_episodes += episode_attempts
@@ -250,8 +256,12 @@ class BenchmarkManager:
 
         for task_id, task in self.tasks.items():
             try:
-                # Validate template exists and syntax is correct
-                self.prompt_generator.validate_template(task.prompt_template_file)
+                # Validate all three prompt templates exist and syntax is correct
+                for prompt_type, template_file in task.prompts.items():
+                    self.prompt_generator.validate_template(template_file)
+                    logger.debug(
+                        f"Template validation passed for task '{task_id}' {prompt_type} template: '{template_file}'"
+                    )
 
                 # Validate that we can build context for this task (ensures required config is present)
                 self.prompt_generator.validate_task_context(task)
@@ -285,23 +295,6 @@ class BenchmarkManager:
             raise TemplateValidationError(error_summary)
 
         logger.info(f"All {len(self.tasks)} task templates validated successfully for domain '{self.domain}'")
-
-    def get_task_prompt(self, task_id: str) -> str:
-        """
-        Generate prompt for a specific task using template rendering.
-
-        Args:
-            task_id: ID of the task to generate prompt for
-
-        Returns:
-            Rendered prompt string
-
-        Raises:
-            TaskNotFoundException: If task is not found
-            PromptGenerationError: If prompt generation fails
-        """
-        task = self.get_task(task_id)
-        return self.prompt_generator.render_agent_prompt_for_task(task)
 
     def render_judge_prompt_for_episode(self, task_id: str, episode: Episode) -> Any:
         """

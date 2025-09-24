@@ -247,58 +247,58 @@ class PromptGenerator:
 
         logger.info(f"PromptGenerator initialized with templates from: {self.prompts_dir}")
 
-    def render_agent_prompt_for_task(self, task: Task) -> str:
+    def render_agent_prompts_for_task(self, task: Task) -> Dict[str, str]:
         """
-        Render agent prompt for a specific task using its template file.
+        Render all three prompt types for a specific task.
 
         Args:
-            task: Task object with prompt_template_file specified
+            task: Task object with prompts dictionary
 
         Returns:
-            Rendered agent prompt string ready for PolicyManager
+            Dictionary with rendered prompts: {"instruction": "...", "assistant": "...", "submit": "..."}
 
         Raises:
             PromptGenerationError: If template rendering fails
             TemplateValidationError: If template file is missing or invalid
         """
-        if not task.prompt_template_file:
-            raise PromptGenerationError(f"Task '{task.task_id}' missing required prompt_template_file")
+        rendered_prompts = {}
 
-        self._assert_safe_template_name(task.prompt_template_file)
+        for prompt_type in ["instruction", "assistant", "submit"]:
+            template_file = task.prompts.get(prompt_type)
+            if not template_file:
+                raise PromptGenerationError(f"Task '{task.task_id}' missing {prompt_type} prompt template")
+
+            rendered_prompts[prompt_type] = self._render_single_prompt(task, template_file, prompt_type)
+
+        return rendered_prompts
+
+    def _render_single_prompt(self, task: Task, template_file: str, prompt_type: str) -> str:
+        """Render a single prompt template."""
+        self._assert_safe_template_name(template_file)
 
         try:
-            # Load template - fail fast if not found
-            template = self.jinja_env.get_template(task.prompt_template_file)
-
-            # Build rendering context from task
+            template = self.jinja_env.get_template(template_file)
             context = self._build_context_from_task(task)
-
-            # Render template with context
             rendered_prompt = str(template.render(context.to_dict()))
 
-            logger.debug(
-                f"Successfully rendered agent prompt for task '{task.task_id}' "
-                f"using template '{task.prompt_template_file}'"
-            )
+            logger.debug(f"Successfully rendered {prompt_type} prompt for task '{task.task_id}'")
             return rendered_prompt
 
         except TemplateNotFound as e:
-            # Could be root template or an included template
-            missing_name = getattr(e, "name", task.prompt_template_file)
-            location = "included template" if missing_name != task.prompt_template_file else "template file"
+            missing_name = getattr(e, "name", template_file)
+            location = "included template" if missing_name != template_file else "template file"
             raise TemplateValidationError(
-                f"{location} not found for task '{task.task_id}': {missing_name}. " f"Expected under {self.prompts_dir}"
+                f"{prompt_type} {location} not found for task '{task.task_id}': {missing_name}"
             ) from e
 
         except TemplateError as e:
             raise PromptGenerationError(
-                f"Template rendering failed for task '{task.task_id}' "
-                f"using template '{task.prompt_template_file}': {e}"
+                f"{prompt_type} template rendering failed for task '{task.task_id}': {e}"
             ) from e
 
         except Exception as e:
             raise PromptGenerationError(
-                f"Unexpected error rendering agent prompt for task '{task.task_id}': {e}"
+                f"Unexpected error rendering {prompt_type} prompt for task '{task.task_id}': {e}"
             ) from e
 
     def render_judge_prompt_for_episode(self, task: Task, episode: Episode) -> "JudgePromptPayload":
@@ -561,14 +561,17 @@ class PromptGenerator:
         invalid_templates = []
 
         for task in tasks:
-            if not task.prompt_template_file:
-                missing_templates.append(f"Task '{task.task_id}' missing prompt_template_file")
-                continue
+            # Validate all three prompt templates
+            for prompt_type in ["instruction", "assistant", "submit"]:
+                template_file = task.prompts.get(prompt_type)
+                if not template_file:
+                    missing_templates.append(f"Task '{task.task_id}' missing {prompt_type} prompt template")
+                    continue
 
-            try:
-                self.validate_template(task.prompt_template_file)
-            except TemplateValidationError as e:
-                invalid_templates.append(str(e))
+                try:
+                    self.validate_template(template_file)
+                except TemplateValidationError as e:
+                    invalid_templates.append(f"Task '{task.task_id}' {prompt_type} template: {str(e)}")
 
         # Collect all errors and fail fast with complete list
         errors = missing_templates + invalid_templates

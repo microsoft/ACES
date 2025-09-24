@@ -501,15 +501,37 @@ class BenchmarkConfigLoader:
         if not isinstance(global_defaults_data, dict):
             raise InvalidTaskDefinitionException("global_defaults must be a dictionary")
 
+        # Parse global prompts defaults (optional)
+        if "prompts" in global_defaults_data:
+            prompts_config = global_defaults_data["prompts"]
+            if not isinstance(prompts_config, dict):
+                raise InvalidTaskDefinitionException("global_defaults.prompts must be a dictionary")
+
+            # Validate prompt types if provided - partial prompts are allowed in global defaults
+            for prompt_type, template_file in prompts_config.items():
+                if prompt_type not in ["instruction", "assistant", "submit"]:
+                    raise InvalidTaskDefinitionException(
+                        f"global_defaults.prompts contains invalid prompt type '{prompt_type}'. "
+                        f"Valid types: instruction, assistant, submit"
+                    )
+                if not isinstance(template_file, str) or not template_file.strip():
+                    raise InvalidTaskDefinitionException(
+                        f"global_defaults.prompts.{prompt_type} must be a non-empty string"
+                    )
+
+            logger.info(f"Loaded global prompts configuration: {prompts_config}")
+        else:
+            logger.info("No global prompts defaults specified")
+
         # Validate structure of global defaults
-        valid_sections = ["execution_config", "episode_config", "benchmark_config", "dependency_config"]
+        valid_sections = ["execution_config", "episode_config", "benchmark_config", "dependency_config", "prompts"]
         for section_name in global_defaults_data:
             if section_name not in valid_sections:
                 raise InvalidTaskDefinitionException(
                     f"Invalid section '{section_name}' in global_defaults. " f"Valid sections are: {valid_sections}"
                 )
 
-            if not isinstance(global_defaults_data[section_name], dict):
+            if section_name != "prompts" and not isinstance(global_defaults_data[section_name], dict):
                 raise InvalidTaskDefinitionException(f"global_defaults.{section_name} must be a dictionary")
 
         # Store global defaults
@@ -574,7 +596,7 @@ class BenchmarkConfigLoader:
         Returns:
             Task instance
         """
-        required_fields = ["task_id", "title", "description", "prompt_template_file"]
+        required_fields = ["task_id", "title", "description"]
         for field in required_fields:
             if field not in task_data:
                 logger.error(f"Missing required field '{field}' in task definition")
@@ -583,10 +605,41 @@ class BenchmarkConfigLoader:
         task_id = task_data["task_id"]
         title = task_data["title"]
         description = task_data["description"]
-        prompt_template_file = task_data["prompt_template_file"]
         initial_context = task_data.get("initial_context", {})
 
         logger.debug(f"Parsing task '{task_id}': {title}")
+
+        # NEW: Parse prompts with global defaults inheritance
+        if "prompts" in task_data:
+            task_prompts = task_data["prompts"]
+            if not isinstance(task_prompts, dict):
+                raise InvalidTaskDefinitionException(f"Task '{task_id}' prompts must be a dictionary")
+        else:
+            task_prompts = {}
+
+        # Inherit from global defaults, allow task-level overrides
+        final_prompts = {}
+        global_prompts = self.global_defaults.get("prompts", {})
+
+        for prompt_type in ["instruction", "assistant", "submit"]:
+            if prompt_type in task_prompts:
+                final_prompts[prompt_type] = task_prompts[prompt_type]
+            elif prompt_type in global_prompts:
+                final_prompts[prompt_type] = global_prompts[prompt_type]
+            else:
+                raise InvalidTaskDefinitionException(
+                    f"Task '{task_id}' missing '{prompt_type}' prompt and no global default provided"
+                )
+
+        # Validate template files exist
+        for prompt_type, template_file in final_prompts.items():
+            if not isinstance(template_file, str) or not template_file.strip():
+                raise InvalidTaskDefinitionException(
+                    f"Task '{task_id}' {prompt_type} template file must be a non-empty string, got: {template_file}"
+                )
+            # Note: Template file existence will be validated by PromptGenerator during startup
+
+        logger.debug(f"Task '{task_id}' resolved prompts: {final_prompts}")
 
         # Get sandbox environment string (resolution happens in execution layer)
         # Support both 'environment' and 'sandbox_environment' for flexibility
@@ -700,7 +753,7 @@ class BenchmarkConfigLoader:
             domain=self.domain,
             title=title,
             description=description,
-            prompt_template_file=prompt_template_file,
+            prompts=final_prompts,
             subtasks=subtasks,
             initial_context=initial_context,
             environment=sandbox_environment,

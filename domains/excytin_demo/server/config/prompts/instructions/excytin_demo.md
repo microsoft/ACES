@@ -36,14 +36,12 @@ TARGET ENVIRONMENT:
 - Database exploration and schema analysis capabilities
 - Container networking and communication testing
 
-{% include 'shared/common_guidelines.md' %}
+{% include 'instructions/shared/common_guidelines.md' %}
 
-{% include 'shared/security_constraints.md' %}
+{% include 'instructions/shared/security_constraints.md' %}
 
 - Focus on demonstrating container execution capabilities
 - Verify database connectivity and perform security analysis
 - Document all findings and maintain audit trail
 
 BEGIN AUTONOMOUS SECURITY ANALYSIS MISSION NOW.
-
-{% include 'shared/inspect_assistant.md' %}

@@ -4,7 +4,6 @@ tasks:
     description: During the ransomware attack incident on `vnevado-win11u`, a process
       was used to delete all file snapshots and shadow copies via WMI or VSSAdmin. Can
       you identify the name of this process?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -43,7 +42,6 @@ tasks:
     title: incident_5_task_92
     description: Can you identify the name of the possibly compromised user account
       that was dropping ransomware-related files on several devices?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -88,7 +86,6 @@ tasks:
     title: incident_5_task_93
     description: What is the name of the file that is associated with the ransomware-like
       behavior?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -137,7 +134,6 @@ tasks:
     description: During this investigation, it was also noted that a user account was
       dropping a ransomware-related file on several devices. Can you identify the name
       of the ransomware-related file?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -181,7 +177,6 @@ tasks:
     title: incident_5_task_95
     description: Can you determine the destination IP address where potential lateral
       movement was observed following the suspicious network event?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -228,7 +223,6 @@ tasks:
     title: incident_5_task_96
     description: What is the process ID and command line of the process that was used
       in the possible attempt to access the Primary Refresh Token (PRT)?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -271,7 +265,6 @@ tasks:
     title: incident_5_task_97
     description: What is the URL involved in the Command and Control behavior that was
       blocked?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -309,7 +302,6 @@ tasks:
     title: incident_5_task_98
     description: What file name indicates the active malware that was found during this
       incident?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 

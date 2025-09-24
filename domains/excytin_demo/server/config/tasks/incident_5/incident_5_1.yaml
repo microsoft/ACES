@@ -53,7 +53,6 @@ tasks:
     title: incident_5_task_2
     description: What is the command line of the suspicious process involved in the
       user behavior change on device `vnevado-win11u`?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -93,7 +92,6 @@ tasks:
     title: incident_5_task_3
     description: Can you identify the IP address involved in the malicious credential
       theft tool execution detected?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -136,7 +134,6 @@ tasks:
     title: incident_5_task_4
     description: What is the URL associated with the Manatee Tempest activity group
       in this incident?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -177,7 +174,6 @@ tasks:
     title: incident_5_task_5
     description: Can you identify the hostname of the device where system recovery setting
       tampering was observed?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -221,7 +217,6 @@ tasks:
     title: incident_5_task_6
     description: As per the recent observation, what is the IP address identified in
       connection with the Manatee Tempest activity group?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -261,7 +256,6 @@ tasks:
     description: Alongside the usage of `vssblatemp.exe`, another process was used to
       disable recovery features. What was the command and process ID of the other process
       involved?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -301,7 +295,6 @@ tasks:
   - task_id: incident_5_task_8
     title: incident_5_task_8
     description: What is the host name of the device involved in this tampering incident?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -335,7 +328,6 @@ tasks:
     title: incident_5_task_9
     description: Related to this alert, there was an active malware detected subsequently.
       Can you identify the name of the malware file detected on the machine?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 
@@ -383,7 +375,6 @@ tasks:
     title: incident_5_task_10
     description: What is the name of the file associated with the ransomware-like behavior
       identified in the potentially compromised assets?
-    prompt_template_file: excytin_demo.md
 
     sandbox_environment: excytin_sandbox
 

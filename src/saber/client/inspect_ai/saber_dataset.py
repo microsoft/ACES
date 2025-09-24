@@ -112,7 +112,10 @@ def _convert_saber_task_to_sample(task_info: TaskInfo, attempt: int = 1) -> Samp
     task_metadata = {
         "saber_task": task_info.model_dump(),
         "task_id": task_info.task_id,
-        "initial_prompt": task_info.initial_prompt,
+        # NEW: Three distinct prompts (replaces initial_prompt)
+        "instruction_prompt": task_info.instruction_prompt,
+        "assistant_prompt": task_info.assistant_prompt,
+        "submit_prompt": task_info.submit_prompt,
         "attempt": attempt,
         "total_attempts": task_info.episode_attempts,
         "tool_call_limit": task_info.max_steps,

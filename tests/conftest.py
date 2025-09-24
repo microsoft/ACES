@@ -81,6 +81,10 @@ benchmark_config:
   episode_attempts: 3
 
 global_defaults:
+  prompts:
+    instruction: "malware_family_analysis_prompt.md"
+    assistant: "malware_family_analysis_prompt.md"
+    submit: "malware_family_analysis_prompt.md"
   execution_config:
     timeout: 300
   episode_config:
@@ -94,7 +98,6 @@ tasks:
   - task_id: "malware_family_analysis"
     title: "Malware Family Classification and Analysis"
     description: "Analyze malware sample to determine family, capabilities, and threat level"
-    prompt_template_file: "malware_family_analysis_prompt.md"
     execution_config:
       allowed_executors:
         - bash_executor
@@ -135,6 +138,10 @@ benchmark_config:
   episode_attempts: 5
 
 global_defaults:
+  prompts:
+    instruction: "malware_analysis_prompt.md"
+    assistant: "malware_analysis_prompt.md"
+    submit: "malware_analysis_prompt.md"
   execution_config:
     timeout: 300
   episode_config:
@@ -148,7 +155,6 @@ tasks:
   - task_id: "malware_analysis_with_env"
     title: "Malware Analysis with Environment"
     description: "Analyze malware sample in a multi-container environment"
-    prompt_template_file: "malware_analysis_prompt.md"
     environment: "excytin_db1"
     initial_context:
       sample_path: "/data/samples/unknown_sample.exe"
@@ -220,10 +226,29 @@ def temp_config_dir_helper():
         prompts_dir = config_dir / "prompts"
         prompts_dir.mkdir()
 
-        # Create some sample prompt template files
+        # Create some sample prompt template files (legacy single-prompt format)
         for template_name in ["malware_family_analysis_prompt.md", "malware_analysis_prompt.md", "test_task_prompt.md"]:
             template_file = prompts_dir / template_name
             template_file.write_text("# Sample Template\n\nThis is a sample prompt template for testing.")
+
+        # Create multi-prompt directory structure
+        instructions_dir = prompts_dir / "instructions"
+        instructions_dir.mkdir(exist_ok=True)
+        assistants_dir = prompts_dir / "assistants"
+        assistants_dir.mkdir(exist_ok=True)
+        submits_dir = prompts_dir / "submits"
+        submits_dir.mkdir(exist_ok=True)
+
+        # Create multi-prompt template files
+        multi_prompt_templates = [
+            ("instructions/security_analysis_instruction.md", "# Security Analysis Instruction\n\nYou are a security analyst. Your task is to..."),
+            ("assistants/security_analysis_assistant.md", "# Security Analysis Assistant\n\nAs an assistant, help the agent by..."),
+            ("submits/security_analysis_submit.md", "# Security Analysis Submit\n\nWhen submitting findings, ensure you..."),
+        ]
+
+        for template_path, content in multi_prompt_templates:
+            template_file = prompts_dir / template_path
+            template_file.write_text(content)
 
         # Create judge templates directory and files
         judge_dir = prompts_dir / "judge"
@@ -475,4 +500,61 @@ tasks:
     description: "A test task with invalid episode_attempts"
     prompt_template_file: "test_task_prompt.md"
     subtasks: []
+"""
+
+
+@pytest.fixture
+def sample_multi_prompt_task_yaml():
+    """Sample YAML content for multi-prompt task configuration testing."""
+    return """
+domain: "cybersecurity"
+
+benchmark_config:
+  episode_attempts: 2
+
+global_defaults:
+  execution_config:
+    timeout: 300
+  episode_config:
+    max_steps: 50
+
+executors:
+  - bash_executor
+  - python_executor
+
+tasks:
+  - task_id: "multi_prompt_security_task"
+    title: "Multi-Prompt Security Analysis"
+    description: "A security task with separate instruction, assistant, and submit prompts"
+    prompts:
+      instruction: "instructions/security_analysis_instruction.md"
+      assistant: "assistants/security_analysis_assistant.md"
+      submit: "submits/security_analysis_submit.md"
+    execution_config:
+      allowed_executors:
+        - bash_executor
+        - python_executor
+    evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers:
+          - "vulnerability_found"
+      scoring:
+        points: 100
+    initial_context:
+      target_url: "http://example.com"
+      scan_timeout: 300
+    subtasks:
+      - subtask_id: "reconnaissance"
+        title: "Reconnaissance"
+        description: "Gather information about the target"
+        objective: "Identify potential attack vectors"
+        completion_conditions: ["nmap_scan", "directory_enumeration"]
+        depends_on: []
+      - subtask_id: "vulnerability_assessment"
+        title: "Vulnerability Assessment"
+        description: "Identify security vulnerabilities"
+        objective: "Find exploitable vulnerabilities"
+        completion_conditions: ["vulnerability_scan", "manual_testing"]
+        depends_on: ["reconnaissance"]
 """
