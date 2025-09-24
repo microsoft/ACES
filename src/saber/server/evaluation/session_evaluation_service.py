@@ -1,18 +1,21 @@
 """
 SessionEvaluationService - Business logic layer for evaluation retrieval.
 
+Logging Category: EVALUATION
+
 Provides session-scoped evaluation retrieval operations with fail-fast behavior.
 No backwards compatibility or defensive programming fallbacks.
 """
 
-import logging
 from typing import Any, Dict, List, Optional
+
+from saber.logging_config import LogCategory, get_saber_logger
 
 from .exceptions import EvaluationNotFoundError, InvalidEvaluationRequestError, SessionEvaluationError
 from .models import EvaluationResult
 from .store import EvaluationStore
 
-logger = logging.getLogger(__name__)
+logger = get_saber_logger(LogCategory.EVALUATION, __name__)
 
 
 class SessionEvaluationService:
@@ -26,7 +29,13 @@ class SessionEvaluationService:
             store: EvaluationStore implementation for data access
         """
         self.store = store
-        logger.info("SessionEvaluationService initialized")
+        logger.info(
+            "Evaluation session service initialized",
+            extra={
+                "event": "session_evaluation_service_initialized",
+                "store_type": type(store).__name__,
+            },
+        )
 
     async def get_evaluation(self, session_id: str, episode_id: str) -> EvaluationResult:
         """
@@ -44,11 +53,29 @@ class SessionEvaluationService:
             InvalidEvaluationRequestError: If parameters are invalid
             SessionEvaluationError: If session access fails
         """
-        logger.debug(f"Retrieving evaluation for episode {episode_id} in session {session_id}")
+        logger.debug(
+            "Retrieving evaluation",
+            extra={
+                "event": "session_evaluation_retrieval_requested",
+                "session_id": session_id,
+                "episode_id": episode_id,
+            },
+        )
 
         try:
             result = await self.store.get(session_id, episode_id)
-            logger.info(f"Retrieved evaluation for episode {episode_id}, score: {result.score}/{result.max_score}")
+            logger.info(
+                "Evaluation retrieved",
+                extra={
+                    "event": "session_evaluation_retrieved",
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                    "score": result.score,
+                    "max_score": result.max_score,
+                    "strategy": result.strategy,
+                    "success": result.success,
+                },
+            )
             return result
         except (EvaluationNotFoundError, InvalidEvaluationRequestError):
             # Re-raise these specific errors as-is (fail-fast)
@@ -74,12 +101,26 @@ class SessionEvaluationService:
             InvalidEvaluationRequestError: If parameters are invalid
             SessionEvaluationError: If session access fails
         """
-        filter_desc = f" for task {task_id}" if task_id else ""
-        logger.debug(f"Listing evaluations for session {session_id}{filter_desc}")
+        logger.debug(
+            "Listing session evaluations",
+            extra={
+                "event": "session_evaluations_listing_requested",
+                "session_id": session_id,
+                "task_id": task_id,
+            },
+        )
 
         try:
             results = await self.store.list_by_session(session_id, task_id)
-            logger.info(f"Retrieved {len(results)} evaluations for session {session_id}{filter_desc}")
+            logger.info(
+                "Session evaluations listed",
+                extra={
+                    "event": "session_evaluations_listed",
+                    "session_id": session_id,
+                    "task_id": task_id,
+                    "evaluation_count": len(results),
+                },
+            )
             return results
         except InvalidEvaluationRequestError:
             # Re-raise validation errors as-is (fail-fast)
@@ -102,7 +143,13 @@ class SessionEvaluationService:
             InvalidEvaluationRequestError: If parameters are invalid
             SessionEvaluationError: If session access fails
         """
-        logger.debug(f"Generating summary for session {session_id}")
+        logger.debug(
+            "Session summary requested",
+            extra={
+                "event": "session_evaluation_summary_requested",
+                "session_id": session_id,
+            },
+        )
 
         try:
             # Get all evaluations for the session
@@ -156,7 +203,15 @@ class SessionEvaluationService:
             }
 
             logger.info(
-                f"Generated summary for session {session_id}: {successful_episodes}/{total_episodes} successful"
+                "Session summary generated",
+                extra={
+                    "event": "session_evaluation_summary_generated",
+                    "session_id": session_id,
+                    "total_episodes": total_episodes,
+                    "successful_episodes": successful_episodes,
+                    "average_score": summary["average_score"],
+                    "task_count": len(task_summaries),
+                },
             )
             return summary
 

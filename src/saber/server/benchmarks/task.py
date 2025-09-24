@@ -1,11 +1,14 @@
-"""Task implementation for task management system."""
+"""Task implementation for task management system.
 
-from logging import getLogger
+Logging category: ``LogCategory.TASK_MANAGER``.
+"""
+
 from typing import Any, Dict, List, Optional, Set, Union
 
+from ...logging_config import LogCategory, get_saber_logger
 from .subtask import SubTask
 
-logger = getLogger(__name__)
+logger = get_saber_logger(LogCategory.TASK_MANAGER, __name__)
 
 
 class Task:
@@ -92,6 +95,14 @@ class Task:
         subtask.task_id = self.task_id  # Ensure consistency
         self.subtasks.append(subtask)
         self._subtask_map[subtask.subtask_id] = subtask
+        logger.debug(
+            "Subtask registered",
+            extra={
+                "event": "task_subtask_registered",
+                "task_id": self.task_id,
+                "subtask_id": subtask.subtask_id,
+            },
+        )
 
     def get_subtask_by_id(self, subtask_id: str) -> Optional[SubTask]:
         """
@@ -139,6 +150,13 @@ class Task:
             KeyError: If episode_attempts is not configured (should not happen with proper validation)
         """
         if "episode_attempts" not in self.benchmark_config:
+            logger.error(
+                "Task missing episode_attempts configuration",
+                extra={
+                    "event": "task_missing_episode_attempts",
+                    "task_id": self.task_id,
+                },
+            )
             raise KeyError(
                 f"Task '{self.task_id}' does not have episode_attempts configured. "
                 "This indicates a validation error in BenchmarkConfigLoader."

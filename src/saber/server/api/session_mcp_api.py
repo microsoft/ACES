@@ -4,10 +4,11 @@ SessionMCPAPI implementation for SABER domain server.
 The SessionMCPAPI handles Model Context Protocol server functionality,
 providing tool discovery and tool execution only. All other operations
 are handled by SessionRestAPI.
+
+Logging category: MCP_API.
 """
 
 import json
-import logging
 
 # Forward declaration to avoid circular imports
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -16,6 +17,7 @@ import mcp.types as mcp_types
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_http_headers
 
+from ...logging_config import get_api_logger, log_operation_failure, log_operation_start, log_operation_success
 from ...models import EvalSubmission, HTTPHeaders, OrchestrationEnvironment, RequestHeaders
 from ...models.mcp import MCPToolCallResponse, MCPToolListResponse, MCPToolSchema
 from ..base import Action, CommandResult
@@ -24,7 +26,7 @@ from .mcp_tool_generator import MCPToolGenerator
 if TYPE_CHECKING:
     from ..session_manager import SessionManager
 
-logger = logging.getLogger(__name__)
+logger = get_api_logger(__name__, is_mcp=True)
 
 
 class SessionMCPAPI:
@@ -50,7 +52,15 @@ class SessionMCPAPI:
         self.mcp_server: Optional[FastMCP] = None
         self.tool_generator = MCPToolGenerator()
 
-        logger.info(f"SessionMCPAPI initialized for domain '{session_manager.domain_name}' on {host}:{port}")
+        logger.info(
+            "MCP API initialized",
+            extra={
+                "event": "mcp_api_initialized",
+                "domain": session_manager.domain_name,
+                "host": host,
+                "port": port,
+            },
+        )
 
     async def _get_headers(self) -> RequestHeaders:
         """
@@ -66,31 +76,22 @@ class SessionMCPAPI:
         Raises:
             ValueError: If mandatory headers are missing or invalid
         """
+        available_headers: list[str] | None = None
         try:
             headers = get_http_headers()
             available_headers = list(headers.keys())
 
             # Extract session ID (optional)
-            session_id = None
-            for header_name, header_value in headers.items():
-                if header_name.lower() == HTTPHeaders.SESSION_ID.lower():
-                    session_id = str(header_value)
-                    logger.info(f"✅ Found session_id in header: {session_id}")
-                    break
-
-            if not session_id:
-                logger.info(f"❌ No {HTTPHeaders.SESSION_ID} header found. Available headers: {available_headers}")
+            session_id = next(
+                (str(value) for name, value in headers.items() if name.lower() == HTTPHeaders.SESSION_ID.lower()),
+                None,
+            )
 
             # Extract episode ID (optional)
-            episode_id = None
-            for header_name, header_value in headers.items():
-                if header_name.lower() == HTTPHeaders.EPISODE_ID.lower():
-                    episode_id = str(header_value)
-                    logger.info(f"✅ Found episode_id in header: {episode_id}")
-                    break
-
-            if not episode_id:
-                logger.debug(f"No {HTTPHeaders.EPISODE_ID} header found. Available headers: {available_headers}")
+            episode_id = next(
+                (str(value) for name, value in headers.items() if name.lower() == HTTPHeaders.EPISODE_ID.lower()),
+                None,
+            )
 
             # Extract orchestration environment (MANDATORY)
             orchestration_env_value = None
@@ -114,7 +115,13 @@ class SessionMCPAPI:
                 )
 
             orchestration_env = OrchestrationEnvironment(orchestration_env_value)
-            logger.info(f"✅ Found orchestration_env in header: {orchestration_env}")
+            logger.debug(
+                "Resolved orchestration environment",
+                extra={
+                    "event": "mcp_orchestration_env_resolved",
+                    "orchestration_env": orchestration_env.value,
+                },
+            )
 
             # Extract task ID (optional)
             task_id = None
@@ -139,31 +146,68 @@ class SessionMCPAPI:
                 client_id=client_id,
             )
 
-            logger.debug(f"Parsed request headers: {request_headers.context_summary}")
+            logger.debug(
+                "Parsed MCP headers",
+                extra={
+                    "event": "mcp_headers_parsed",
+                    "session_id": request_headers.session_id,
+                    "episode_id": request_headers.episode_id,
+                    "orchestration_env": request_headers.orchestration_env.value,
+                    "task_id": request_headers.task_id,
+                    "client_id": request_headers.client_id,
+                },
+            )
             return request_headers
 
         except ValueError:
             # Re-raise validation errors as-is
             raise
-        except Exception as e:
-            logger.error(f"Error parsing headers: {e}")
-            raise ValueError(f"Failed to parse request headers: {e}") from e
+        except Exception as exc:
+            extras: Dict[str, Any] = {"event": "mcp_headers_parse_failed"}
+            if available_headers is not None:
+                extras["available_headers"] = available_headers
+            log_operation_failure(
+                logger,
+                "parse_mcp_headers",
+                exc,
+                **extras,
+            )
+            raise ValueError(f"Failed to parse request headers: {exc}") from exc
 
     async def start_mcp_server(self) -> None:
         """Start the MCP server."""
         try:
+            log_operation_start(
+                logger,
+                "start_mcp_server",
+                domain=self.session_manager.domain_name,
+                host=self.host,
+                port=self.port,
+            )
             self.mcp_server = FastMCP(f"SABER-{self.session_manager.domain_name}-MCP")
 
             # Register MCP handlers
             self._setup_mcp_handlers()
 
-            logger.info(f"Starting SABER {self.session_manager.domain_name} MCP server on {self.host}:{self.port}")
-
             # Use HTTP transport for production deployment (exposes /mcp endpoint)
             await self.mcp_server.run_async(transport="http", host=self.host, port=self.port)
 
+            log_operation_success(
+                logger,
+                "start_mcp_server",
+                domain=self.session_manager.domain_name,
+                host=self.host,
+                port=self.port,
+            )
         except Exception as e:
-            logger.error(f"Failed to start MCP server: {e}")
+            log_operation_failure(
+                logger,
+                "start_mcp_server",
+                e,
+                domain=self.session_manager.domain_name,
+                host=self.host,
+                port=self.port,
+            )
             raise
 
     async def shutdown_mcp_server(self) -> None:
@@ -172,10 +216,19 @@ class SessionMCPAPI:
             if self.mcp_server:
                 # FastMCP doesn't require explicit cleanup
                 self.mcp_server = None
-            logger.info("MCP server shutdown complete")
+            log_operation_success(
+                logger,
+                "shutdown_mcp_server",
+                domain=self.session_manager.domain_name,
+            )
 
         except Exception as e:
-            logger.error(f"Error during MCP server shutdown: {e}")
+            log_operation_failure(
+                logger,
+                "shutdown_mcp_server",
+                e,
+                domain=self.session_manager.domain_name,
+            )
 
     def _setup_mcp_handlers(self) -> None:
         """Setup MCP protocol handlers."""
@@ -184,7 +237,14 @@ class SessionMCPAPI:
 
         # Get available executors and register tools for each
         available_executors = self.session_manager.execution_manager.get_available_executors()
-        logger.info(f"Registering MCP tools for executors: {available_executors}")
+        logger.info(
+            "Registering MCP tools",
+            extra={
+                "event": "mcp_register_tools",
+                "executor_count": len(available_executors),
+                "executors": available_executors,
+            },
+        )
 
         # Dynamically register a tool for each executor
         for executor_name in available_executors:
@@ -234,11 +294,18 @@ class SessionMCPAPI:
                 else:
                     return str(mcp_result.content[0]["text"])
 
-            except Exception as e:
-                logger.error(f"Error in end_episode tool: {e}")
-                return json.dumps({"success": False, "error": str(e)})
+            except Exception as exc:
+                log_operation_failure(
+                    logger,
+                    "mcp_end_episode_tool",
+                    exc,
+                )
+                return json.dumps({"success": False, "error": str(exc)})
 
-        logger.debug("Registered hardcoded MCP tool: end_episode")
+        logger.debug(
+            "Registered hardcoded MCP tool",
+            extra={"event": "mcp_tool_registered", "tool_name": "end_episode"},
+        )
 
     def _register_executor_tool(self, executor_name: str) -> None:
         """
@@ -262,7 +329,13 @@ class SessionMCPAPI:
 
             # Validate the typed schema
             if not self.tool_generator.validate_mcp_tool_schema(mcp_tool_schema):
-                logger.error(f"Invalid MCP schema for executor '{executor_name}'")
+                logger.error(
+                    "Invalid MCP schema for executor",
+                    extra={
+                        "event": "mcp_executor_schema_invalid",
+                        "executor_name": executor_name,
+                    },
+                )
                 return
 
             # Generate the dynamic tool function using typed schema
@@ -274,10 +347,21 @@ class SessionMCPAPI:
             if self.mcp_server is not None:
                 self.mcp_server.tool(name=executor_name)(executor_tool)
 
-            logger.debug(f"Registered MCP tool: {executor_name}")
+            logger.debug(
+                "Registered MCP tool",
+                extra={
+                    "event": "mcp_tool_registered",
+                    "tool_name": executor_name,
+                },
+            )
 
-        except Exception as e:
-            logger.error(f"Failed to register MCP tool for executor '{executor_name}': {e}")
+        except Exception as exc:
+            log_operation_failure(
+                logger,
+                "register_mcp_executor_tool",
+                exc,
+                executor_name=executor_name,
+            )
             raise
 
     async def handle_list_tools(self) -> MCPToolListResponse:
@@ -323,17 +407,26 @@ class SessionMCPAPI:
             mcp_tools = executor_tools + hardcoded_tools_data
 
             logger.debug(
-                f"Returning {len(mcp_tools)} tools ({len(executor_tools)} executor tools + "
-                f"{len(hardcoded_tools_data)} hardcoded tool{'s' if len(hardcoded_tools_data) != 1 else ''}) "
-                f"for MCP discovery"
-                f"{f' for episode {headers.episode_id}' if headers.has_episode_context else ' (no episode context)'}"
-                f" {headers.context_summary}"
+                "Returning MCP tools",
+                extra={
+                    "event": "mcp_tools_listed",
+                    "total_tools": len(mcp_tools),
+                    "executor_tool_count": len(executor_tools),
+                    "hardcoded_tool_count": len(hardcoded_tools_data),
+                    "session_id": headers.session_id,
+                    "episode_id": headers.episode_id,
+                    "orchestration_env": headers.orchestration_env.value,
+                },
             )
 
             return MCPToolListResponse(tools=mcp_tools, session_id=headers.session_id, episode_id=headers.episode_id)
 
-        except Exception as e:
-            logger.error(f"Error handling list_tools: {e}")
+        except Exception as exc:
+            log_operation_failure(
+                logger,
+                "list_mcp_tools",
+                exc,
+            )
             return MCPToolListResponse(tools=[], session_id=None, episode_id=None)
 
     async def handle_call_tool(self, name: str, arguments: Dict[str, Any]) -> MCPToolCallResponse:
@@ -380,10 +473,17 @@ class SessionMCPAPI:
             # Convert result to MCP format using typed response
             return self._convert_to_mcp_result(command_result)
 
-        except Exception as e:
-            logger.error(f"Error handling call_tool {name}: {e}")
+        except Exception as exc:
+            log_operation_failure(
+                logger,
+                "call_mcp_tool",
+                exc,
+                tool_name=name,
+                session_id=headers.session_id,
+                episode_id=headers.episode_id,
+            )
             return MCPToolCallResponse(
-                content=[{"type": "text", "text": f"Error: Tool execution failed: {str(e)}"}], isError=True
+                content=[{"type": "text", "text": f"Error: Tool execution failed: {exc}"}], isError=True
             )
 
     async def _handle_end_episode_call(
@@ -420,18 +520,29 @@ class SessionMCPAPI:
                     isError=True,
                 )
 
+            log_operation_start(
+                logger,
+                "mcp_end_episode",
+                session_id=session_id,
+                episode_id=episode_id,
+                orchestration_env=orchestration_env.value,
+            )
+
             # Extract optional result/flag/objective from parameters.submission
             result = ""
-            logger.info(
-                f"Handling end_episode call for session {session_id}, episode {episode_id}, arguments: {arguments} "
-                f"[orchestration: {orchestration_env}]"
-            )
             if "parameters" in arguments and isinstance(arguments["parameters"], dict):
                 result = arguments["parameters"].get("submission", "")
 
             # If there's a result, record it as an action before ending the episode
             if result:
-                logger.info(f"Recording episode result: {result}")
+                logger.debug(
+                    "Recording MCP submission before episode end",
+                    extra={
+                        "event": "mcp_end_episode_submission_recorded",
+                        "session_id": session_id,
+                        "episode_id": episode_id,
+                    },
+                )
 
                 # Create an action to record the episode result
                 result_action = Action(
@@ -442,12 +553,7 @@ class SessionMCPAPI:
                 await self.session_manager.execute_action(session_id, episode_id, result_action)
 
             # End the episode through SessionManager, passing the result
-            logger.warning(
-                f"🔥 MCP END EPISODE: Agent called end_episode tool for session {session_id}, episode {episode_id} "
-                f"[orchestration: {orchestration_env}]"
-            )
             if result:
-                logger.info(f"Episode ending with result: {result}")
                 # Create EvalSubmission object from MCP string submission
                 mcp_submission = EvalSubmission(
                     episode_id=episode_id,
@@ -462,7 +568,14 @@ class SessionMCPAPI:
             else:
                 await self.session_manager.end_episode(session_id, episode_id, "agent_completed")
 
-            logger.info(f"Episode ended for session {session_id}")
+            log_operation_success(
+                logger,
+                "mcp_end_episode",
+                session_id=session_id,
+                episode_id=episode_id,
+                orchestration_env=orchestration_env.value,
+                submission_present=bool(result),
+            )
 
             # Return the submission as text for React agent to extract as the answer
             # The React agent expects result.text to contain the actual answer for scoring
@@ -471,10 +584,17 @@ class SessionMCPAPI:
             # Return submission result with typed response
             return MCPToolCallResponse(content=[{"type": "text", "text": response_text}], isError=False)
 
-        except Exception as e:
-            logger.error(f"Error handling end_episode tool call: {e}")
+        except Exception as exc:
+            log_operation_failure(
+                logger,
+                "mcp_end_episode",
+                exc,
+                session_id=session_id,
+                episode_id=episode_id,
+                orchestration_env=orchestration_env.value,
+            )
             return MCPToolCallResponse(
-                content=[{"type": "text", "text": f"Error: Failed to end episode: {str(e)}"}], isError=True
+                content=[{"type": "text", "text": f"Error: Failed to end episode: {exc}"}], isError=True
             )
 
     def _convert_to_action(self, tool_name: str, arguments: Dict[str, Any]) -> Action:
@@ -531,14 +651,26 @@ class SessionMCPAPI:
             if hasattr(self.mcp_server, "_mcp_server"):
                 # Register our custom handler to override the default
                 self.mcp_server._mcp_server.list_tools()(self._custom_list_tools_handler)
-                logger.info("✅ Successfully overrode FastMCP list_tools handler with episode-specific filtering")
+                logger.info(
+                    "Overrode FastMCP list_tools handler",
+                    extra={"event": "mcp_list_tools_override_enabled"},
+                )
             else:
-                logger.warning("⚠️ FastMCP internal structure changed - unable to override list_tools handler")
-                logger.warning("    Tool discovery will fall back to global tool registration (no episode filtering)")
+                logger.warning(
+                    "FastMCP internal structure changed; list_tools override unavailable",
+                    extra={"event": "mcp_list_tools_override_unavailable"},
+                )
 
-        except Exception as e:
-            logger.error(f"Failed to override list_tools handler: {e}")
-            logger.warning("Tool discovery will fall back to global tool registration (no episode filtering)")
+        except Exception as exc:
+            log_operation_failure(
+                logger,
+                "override_mcp_list_tools_handler",
+                exc,
+            )
+            logger.warning(
+                "Tool discovery will fall back to global registration",
+                extra={"event": "mcp_list_tools_override_fallback"},
+            )
 
     async def _custom_list_tools_handler(self) -> List[mcp_types.Tool]:
         """
@@ -555,7 +687,11 @@ class SessionMCPAPI:
             response = await self.handle_list_tools()
             return response.tools
 
-        except Exception as e:
-            logger.error(f"Error in custom list_tools handler: {e}")
+        except Exception as exc:
+            log_operation_failure(
+                logger,
+                "custom_list_tools_handler",
+                exc,
+            )
             # Fall back to empty tools list on error
             return []

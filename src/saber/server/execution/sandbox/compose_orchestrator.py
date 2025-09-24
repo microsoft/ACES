@@ -1,11 +1,11 @@
-"""
-Simple Docker Compose orchestrator for environment management.
+"""Simple Docker Compose orchestrator for environment management.
+
+Logging Category: DOCKER
 
 Provides basic start/stop operations for Docker Compose files with episode isolation support.
 Includes command execution capabilities for designated execution services.
 """
 
-import logging
 import os
 import subprocess
 import time
@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
+
+from saber.logging_config import LogCategory, get_saber_logger
 
 from ..logging import ContainerLoggingManager
 from .compose_health_checker import ComposeHealthChecker
@@ -27,7 +29,7 @@ DOCKER_AVAILABLE = docker is not None
 
 from ...base import CommandResult
 
-logger = logging.getLogger(__name__)
+logger = get_saber_logger(LogCategory.DOCKER, __name__)
 
 
 class ComposeOrchestrator:
@@ -112,6 +114,25 @@ class ComposeOrchestrator:
                 },
             )
 
+        logger.info(
+            "Compose environment start requested",
+            extra={
+                "event": "compose_environment_start_requested",
+                "project_name": self.project_name,
+                "config_type": config.config_type,
+                "compose_file": str(compose_file_path),
+                "episode_id": config.episode_id,
+            },
+        )
+        logger.debug(
+            "Compose environment variables prepared",
+            extra={
+                "event": "compose_environment_variables_prepared",
+                "project_name": self.project_name,
+                "env_vars": env_vars,
+            },
+        )
+
         # Log the resolved compose configuration (use processed path to include network injection)
         self._log_resolved_compose_config(processed_compose_path, env_vars)
 
@@ -120,9 +141,6 @@ class ComposeOrchestrator:
 
         # Run docker compose up with the processed compose file and provided environment variables
         command = ["docker", "compose", "-f", processed_compose_path, "-p", self.project_name, "up", "-d"]
-
-        logger.info(f"Starting compose environment with project name: {self.project_name}")
-        logger.debug(f"Environment variables: {env_vars}")
 
         try:
             result = subprocess.run(command, env=env, capture_output=True, text=True, check=True)
@@ -146,13 +164,25 @@ class ComposeOrchestrator:
 
             # Store the execution service name that was validated earlier
             self.execution_service_name = temp_execution_service
-            logger.info(f"Identified execution service: {self.execution_service_name}")
+            logger.debug(
+                "Execution service identified",
+                extra={
+                    "event": "compose_execution_service_identified",
+                    "project_name": self.project_name,
+                    "execution_service": self.execution_service_name,
+                },
+            )
 
             # MANDATORY HEALTH CHECK: Wait for all services to become healthy
-            # FAIL-FAST: Episode creation will fail if any service is not healthy
-            logger.info(f"🔍 Starting mandatory health checks for all services in project: {self.project_name}")
-            logger.info(f"🔍 Health check will use processed compose file: {processed_compose_path}")
-            logger.info(f"🔍 Original compose file was: {compose_file_path}")
+            logger.debug(
+                "Compose environment health checks starting",
+                extra={
+                    "event": "compose_environment_health_checks_starting",
+                    "project_name": self.project_name,
+                    "processed_compose_file": processed_compose_path,
+                    "original_compose_file": str(compose_file_path),
+                },
+            )
 
             # Use the processed compose file (with variables resolved) for health checks
             # NO TRY-CATCH: Health check failures will propagate up and fail episode creation
@@ -162,9 +192,24 @@ class ComposeOrchestrator:
                 timeout_seconds=180,  # 3 minutes for health checks - reasonable for complex environments
                 check_interval=2.0,  # Check every 2 seconds
             )
-            logger.info(f"✅ All services are healthy for project: {self.project_name}")
+            logger.info(
+                "Compose environment healthy",
+                extra={
+                    "event": "compose_environment_health_checks_completed",
+                    "project_name": self.project_name,
+                },
+            )
 
-            logger.info(f"Successfully started environment for project: {self.project_name}")
+            logger.info(
+                "Compose environment started",
+                extra={
+                    "event": "compose_environment_started",
+                    "project_name": self.project_name,
+                    "config_type": config.config_type,
+                    "compose_file": str(compose_file_path),
+                    "episode_id": config.episode_id,
+                },
+            )
             return result
         except subprocess.CalledProcessError as e:
             # Log the failure
@@ -180,9 +225,19 @@ class ComposeOrchestrator:
                     additional_data={"error": str(e)},
                 )
 
-            logger.error(f"Failed to start environment: {e}")
-            logger.error(f"stdout: {e.stdout}")
-            logger.error(f"stderr: {e.stderr}")
+            logger.error(
+                "Compose environment start failed",
+                extra={
+                    "event": "compose_environment_start_failed",
+                    "project_name": self.project_name,
+                    "config_type": config.config_type,
+                    "compose_file": str(compose_file_path),
+                    "episode_id": config.episode_id,
+                    "return_code": getattr(e, "returncode", None),
+                    "stdout": e.stdout,
+                    "stderr": e.stderr,
+                },
+            )
             raise RuntimeError(f"Failed to start environment: {e}")
         except subprocess.TimeoutExpired as e:
             # Log timeout failure
@@ -198,7 +253,17 @@ class ComposeOrchestrator:
                     additional_data={"timeout": e.timeout},
                 )
 
-            logger.error(f"Environment start timed out: {e}")
+            logger.error(
+                "Compose environment start timed out",
+                extra={
+                    "event": "compose_environment_start_timeout",
+                    "project_name": self.project_name,
+                    "config_type": config.config_type,
+                    "compose_file": str(compose_file_path),
+                    "episode_id": config.episode_id,
+                    "timeout_seconds": e.timeout,
+                },
+            )
             raise RuntimeError(f"Environment start timed out after {e.timeout} seconds")
 
     def _log_resolved_compose_config(self, compose_file_path: str, env_vars: Dict[str, str]) -> None:
@@ -232,39 +297,63 @@ class ComposeOrchestrator:
             resolved_content = re.sub(pattern, replace_var, compose_content)
 
             # Parse and log the resolved YAML
-            resolved_config = yaml.safe_load(resolved_content)
+            resolved_config = yaml.safe_load(resolved_content) or {}
 
-            logger.info("Resolved compose configuration:")
-            logger.info(f"Project: {self.project_name}")
+            logger.debug(
+                "Compose configuration resolved",
+                extra={
+                    "event": "compose_configuration_resolved",
+                    "project_name": self.project_name,
+                    "processed_compose_file": compose_file_path,
+                },
+            )
 
             # Save resolved compose file to disk
             self._save_resolved_compose_config(compose_file_path, resolved_content, resolved_config)
 
             # Log network configuration specifically
             if "networks" in resolved_config:
-                logger.info("Networks:")
-                for network_name, network_config in resolved_config["networks"].items():
-                    logger.info(f"  {network_name}: {network_config}")
+                logger.debug(
+                    "Compose networks discovered",
+                    extra={
+                        "event": "compose_networks_discovered",
+                        "project_name": self.project_name,
+                        "networks": resolved_config["networks"],
+                    },
+                )
 
             # Log services and their network connections
             if "services" in resolved_config:
-                logger.info("Service network connections:")
+                service_networks: Dict[str, List[str]] = {}
                 for service_name, service_config in resolved_config["services"].items():
                     if "networks" in service_config:
                         networks = service_config["networks"]
                         if isinstance(networks, dict):
                             network_names = list(networks.keys())
                         elif isinstance(networks, list):
-                            network_names = networks
+                            network_names = [str(entry) for entry in networks]
                         else:
                             network_names = [str(networks)]
-                        logger.info(f"  {service_name}: {network_names}")
+                        service_networks[service_name] = network_names
+                if service_networks:
+                    logger.debug(
+                        "Compose service network connections discovered",
+                        extra={
+                            "event": "compose_service_networks_discovered",
+                            "project_name": self.project_name,
+                            "service_networks": service_networks,
+                        },
+                    )
 
         except Exception as e:
-            logger.error(f"Could not log resolved compose config: {e}")
-            import traceback
-
-            logger.error(f"Full traceback: {traceback.format_exc()}")
+            logger.error(
+                "Compose configuration logging failed",
+                extra={
+                    "event": "compose_configuration_logging_failed",
+                    "processed_compose_file": compose_file_path,
+                    "error": str(e),
+                },
+            )
 
     def _save_resolved_compose_config(
         self, compose_file_path: str, resolved_content: str, resolved_config: Dict[str, Any]
@@ -311,10 +400,26 @@ class ComposeOrchestrator:
                 f.write("# Variables resolved and substituted\n\n")
                 f.write(resolved_content)
 
-            logger.info(f"Saved resolved compose config to: {output_file}")
+            logger.debug(
+                "Compose configuration persisted",
+                extra={
+                    "event": "compose_configuration_persisted",
+                    "project_name": self.project_name,
+                    "output_file": str(output_file),
+                    "config_type": self.config_type,
+                },
+            )
 
         except Exception as e:
-            logger.warning(f"Could not save resolved compose config to disk: {e}")
+            logger.warning(
+                "Compose configuration persistence skipped",
+                extra={
+                    "event": "compose_configuration_persist_failed",
+                    "project_name": self.project_name,
+                    "compose_file": compose_file_path,
+                    "error": str(e),
+                },
+            )
 
     def _parse_compose_file(self, compose_file_path: Path) -> Dict[str, Any]:
         """
@@ -533,7 +638,16 @@ class ComposeOrchestrator:
                 f"Ensure environment is started and container is healthy."
             )
 
-        logger.debug(f"Executing command in container {container.name}: {' '.join(command)}")
+        logger.debug(
+            "Container command execution started",
+            extra={
+                "event": "container_command_execution_started",
+                "container_name": container.name,
+                "command": command,
+                "working_dir": working_dir,
+                "timeout_seconds": timeout,
+            },
+        )
 
         start_time = time.time()
 
@@ -566,17 +680,39 @@ class ComposeOrchestrator:
                 stdout=stdout, stderr=stderr, exit_code=exec_result.exit_code, execution_time=execution_time
             )
 
-            logger.debug(f"Command completed in {execution_time:.2f}s with exit code {exec_result.exit_code}")
+            logger.debug(
+                "Container command execution completed",
+                extra={
+                    "event": "container_command_execution_completed",
+                    "container_name": container.name,
+                    "command": command,
+                    "exit_code": exec_result.exit_code,
+                    "execution_time_seconds": round(execution_time, 2),
+                },
+            )
 
             return result
 
         except Exception as e:
             execution_time = time.time() - start_time
-            error_msg = f"Command execution failed: {str(e)}"
-            logger.error(f"{error_msg} (after {execution_time:.2f}s)")
+            logger.error(
+                "Container command execution failed",
+                extra={
+                    "event": "container_command_execution_failed",
+                    "container_name": container.name,
+                    "command": command,
+                    "error": str(e),
+                    "execution_time_seconds": round(execution_time, 2),
+                },
+            )
 
             # Return error result instead of raising
-            return CommandResult(stdout="", stderr=error_msg, exit_code=1, execution_time=execution_time)
+            return CommandResult(
+                stdout="",
+                stderr=f"Command execution failed: {str(e)}",
+                exit_code=1,
+                execution_time=execution_time,
+            )
 
     def get_execution_container(self) -> Any:
         """
@@ -586,13 +722,26 @@ class ComposeOrchestrator:
             Docker container object if found, None otherwise
         """
         if not self.execution_service_name:
-            logger.error("No execution service identified. Environment must be started first.")
+            logger.error(
+                "Execution service missing",
+                extra={
+                    "event": "execution_service_missing",
+                },
+            )
             return None
 
         try:
             # Get the actual container name using compose file + episode_id
             actual_container_name = self._get_actual_container_name(self.execution_service_name)
-            logger.info(f"Looking for execution container: {actual_container_name}")
+            logger.info(
+                "Execution container lookup started",
+                extra={
+                    "event": "execution_container_lookup_started",
+                    "container_name": actual_container_name,
+                    "execution_service": self.execution_service_name,
+                    "episode_id": self.episode_id,
+                },
+            )
 
             # Try to get the container
             try:
@@ -602,12 +751,26 @@ class ComposeOrchestrator:
                 container.reload()  # Refresh container state
                 if container.status != "running":
                     logger.error(
-                        f"Execution container '{actual_container_name}' exists but is not running "
-                        f"(status: {container.status})"
+                        "Execution container not running",
+                        extra={
+                            "event": "execution_container_not_running",
+                            "container_name": actual_container_name,
+                            "status": container.status,
+                            "execution_service": self.execution_service_name,
+                            "episode_id": self.episode_id,
+                        },
                     )
                     return None
 
-                logger.info(f"Found running execution container: {actual_container_name}")
+                logger.info(
+                    "Execution container ready",
+                    extra={
+                        "event": "execution_container_ready",
+                        "container_name": actual_container_name,
+                        "execution_service": self.execution_service_name,
+                        "episode_id": self.episode_id,
+                    },
+                )
                 return container
 
             except Exception as e:
@@ -615,17 +778,51 @@ class ComposeOrchestrator:
                 if docker and hasattr(docker, "errors") and isinstance(e, docker.errors.NotFound):
                     # Log available containers for debugging
                     all_containers = self.docker_client.containers.list(all=True)
-                    logger.error(f"Execution container '{actual_container_name}' not found.")
-                    logger.error(f"Available containers ({len(all_containers)}):")
-                    for c in all_containers:
-                        logger.error(f"  - {c.name} ({c.image.tags[0] if c.image.tags else 'no-tag'}) - {c.status}")
+                    available_containers = []
+                    for container_item in all_containers:
+                        image_obj = getattr(container_item, "image", None)
+                        image_tags = getattr(image_obj, "tags", []) if image_obj else []
+                        available_containers.append(
+                            {
+                                "name": container_item.name,
+                                "status": container_item.status,
+                                "image": image_tags[0] if image_tags else None,
+                            }
+                        )
+                    logger.error(
+                        "Execution container not found",
+                        extra={
+                            "event": "execution_container_not_found",
+                            "container_name": actual_container_name,
+                            "execution_service": self.execution_service_name,
+                            "episode_id": self.episode_id,
+                            "available_containers": available_containers,
+                        },
+                    )
                 else:
-                    logger.error(f"Error finding execution container: {e}")
+                    logger.error(
+                        "Execution container lookup failed",
+                        extra={
+                            "event": "execution_container_lookup_failed",
+                            "container_name": actual_container_name,
+                            "execution_service": self.execution_service_name,
+                            "episode_id": self.episode_id,
+                            "error": str(e),
+                        },
+                    )
 
                 return None
 
         except Exception as e:
-            logger.error(f"Error resolving execution container: {e}")
+            logger.error(
+                "Execution container resolution failed",
+                extra={
+                    "event": "execution_container_resolution_failed",
+                    "execution_service": self.execution_service_name,
+                    "episode_id": self.episode_id,
+                    "error": str(e),
+                },
+            )
             return None
 
     def stop_environment(
@@ -692,14 +889,39 @@ class ComposeOrchestrator:
                 project_name=active_project_name, config_type=self.config_type
             )
 
-        logger.info(f"Stopping environment: {compose_file_path}{display_name}")
+        logger.info(
+            "Compose environment stop requested",
+            extra={
+                "event": "compose_environment_stop_requested",
+                "compose_file": str(compose_file_path),
+                "project_name": active_project_name,
+                "episode_id": episode_id,
+                "display_name": display_name.strip() or None,
+            },
+        )
 
         try:
             result = subprocess.run(cmd, env=env, capture_output=True, text=True, check=True, timeout=60)
 
-            logger.info(f"Environment stopped successfully: {compose_file_path}")
+            logger.info(
+                "Compose environment stopped",
+                extra={
+                    "event": "compose_environment_stopped",
+                    "compose_file": str(compose_file_path),
+                    "project_name": active_project_name,
+                    "episode_id": episode_id,
+                },
+            )
             if result.stdout:
-                logger.debug(f"Docker compose output: {result.stdout}")
+                logger.debug(
+                    "Compose stop command output",
+                    extra={
+                        "event": "compose_environment_stop_output",
+                        "compose_file": str(compose_file_path),
+                        "project_name": active_project_name,
+                        "stdout": result.stdout,
+                    },
+                )
 
             # Log successful stop
             if self.container_logger and active_project_name:
@@ -734,11 +956,29 @@ class ComposeOrchestrator:
                 )
 
             error_msg = f"Failed to stop environment {compose_file_path}: {e.stderr}"
-            logger.error(error_msg)
+            logger.error(
+                "Compose environment stop failed",
+                extra={
+                    "event": "compose_environment_stop_failed",
+                    "compose_file": str(compose_file_path),
+                    "project_name": active_project_name,
+                    "episode_id": episode_id,
+                    "return_code": getattr(e, "returncode", None),
+                    "stderr": e.stderr,
+                },
+            )
             raise RuntimeError(error_msg)
         except subprocess.TimeoutExpired:
             error_msg = f"Timeout stopping environment {compose_file_path}"
-            logger.error(error_msg)
+            logger.error(
+                "Compose environment stop timed out",
+                extra={
+                    "event": "compose_environment_stop_timeout",
+                    "compose_file": str(compose_file_path),
+                    "project_name": active_project_name,
+                    "episode_id": episode_id,
+                },
+            )
             raise RuntimeError(error_msg)
 
     def cleanup_episode(self, episode_id: str) -> None:
@@ -753,7 +993,14 @@ class ComposeOrchestrator:
         """
         project_name = f"saber-episode-{episode_id}"
 
-        logger.info(f"Cleaning up episode: {episode_id}")
+        logger.info(
+            "Episode cleanup requested",
+            extra={
+                "event": "episode_cleanup_requested",
+                "episode_id": episode_id,
+                "project_name": project_name,
+            },
+        )
 
         try:
             # Stop and remove all containers for this episode project
@@ -761,17 +1008,47 @@ class ComposeOrchestrator:
 
             result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=60)
 
-            logger.info(f"Episode cleanup completed: {episode_id}")
+            logger.info(
+                "Episode cleanup completed",
+                extra={
+                    "event": "episode_cleanup_completed",
+                    "episode_id": episode_id,
+                    "project_name": project_name,
+                },
+            )
             if result.stdout:
-                logger.debug(f"Docker compose cleanup output: {result.stdout}")
+                logger.debug(
+                    "Episode cleanup output",
+                    extra={
+                        "event": "episode_cleanup_output",
+                        "episode_id": episode_id,
+                        "stdout": result.stdout,
+                    },
+                )
 
         except subprocess.CalledProcessError as e:
             error_msg = f"Failed to cleanup episode {episode_id}: {e.stderr}"
-            logger.error(error_msg)
+            logger.error(
+                "Episode cleanup failed",
+                extra={
+                    "event": "episode_cleanup_failed",
+                    "episode_id": episode_id,
+                    "project_name": project_name,
+                    "stderr": e.stderr,
+                    "return_code": getattr(e, "returncode", None),
+                },
+            )
             raise RuntimeError(error_msg)
         except subprocess.TimeoutExpired:
             error_msg = f"Timeout cleaning up episode {episode_id}"
-            logger.error(error_msg)
+            logger.error(
+                "Episode cleanup timed out",
+                extra={
+                    "event": "episode_cleanup_timeout",
+                    "episode_id": episode_id,
+                    "project_name": project_name,
+                },
+            )
             raise RuntimeError(error_msg)
 
     def validate_compose_file(self, compose_file_path: Path) -> None:
@@ -793,15 +1070,35 @@ class ComposeOrchestrator:
 
             subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30)
 
-            logger.debug(f"Compose file validation passed: {compose_file_path}")
+            logger.debug(
+                "Compose file validation passed",
+                extra={
+                    "event": "compose_file_validation_passed",
+                    "compose_file": str(compose_file_path),
+                },
+            )
 
         except subprocess.CalledProcessError as e:
             error_msg = f"Invalid compose file {compose_file_path}: {e.stderr}"
-            logger.error(error_msg)
+            logger.error(
+                "Compose file validation failed",
+                extra={
+                    "event": "compose_file_validation_failed",
+                    "compose_file": str(compose_file_path),
+                    "stderr": e.stderr,
+                    "return_code": getattr(e, "returncode", None),
+                },
+            )
             raise RuntimeError(error_msg)
         except subprocess.TimeoutExpired:
             error_msg = f"Timeout validating compose file {compose_file_path}"
-            logger.error(error_msg)
+            logger.error(
+                "Compose file validation timed out",
+                extra={
+                    "event": "compose_file_validation_timeout",
+                    "compose_file": str(compose_file_path),
+                },
+            )
             raise RuntimeError(error_msg)
 
     def _inject_episode_network(
@@ -847,7 +1144,14 @@ class ComposeOrchestrator:
                 # Pattern to match ${VAR} or ${VAR:-default}
                 pattern = r"\$\{([^}]+)\}"
                 compose_content = re.sub(pattern, replace_var, compose_content)
-                logger.debug("Resolved environment variables in compose file")
+                logger.debug(
+                    "Compose file environment variables resolved",
+                    extra={
+                        "event": "compose_file_env_variables_resolved",
+                        "compose_file": compose_file_path,
+                        "resolved_variables": list(env_vars.keys()),
+                    },
+                )
 
             # Parse the resolved content
             compose_data = yaml.safe_load(compose_content)
@@ -878,7 +1182,15 @@ class ComposeOrchestrator:
                                     f"isolation network '{network}'. Please use 'saber-episode-network' for "
                                     f"episode isolation instead. This ensures proper network attachment functionality."
                                 )
-                                logger.error(error_msg)
+                                logger.error(
+                                    "Compose network validation failed",
+                                    extra={
+                                        "event": "compose_network_validation_failed",
+                                        "compose_file": compose_file_path,
+                                        "service_name": service_name,
+                                        "network": network,
+                                    },
+                                )
                                 raise ValueError(error_msg)
 
             # Ensure networks section exists
@@ -892,7 +1204,15 @@ class ComposeOrchestrator:
                     "external": True,
                     "name": f"saber-episode-{config.target_episode_id}",
                 }
-                logger.info(f"Injected external network reference to episode {config.target_episode_id}")
+                logger.debug(
+                    "Compose network injection configured",
+                    extra={
+                        "event": "compose_network_injection_configured",
+                        "mode": "attached",
+                        "target_episode_id": config.target_episode_id,
+                        "compose_file": compose_file_path,
+                    },
+                )
             else:
                 # NORMAL MODE: Create new isolated network for this episode
                 compose_data["networks"]["saber-episode-network"] = {
@@ -901,18 +1221,42 @@ class ComposeOrchestrator:
                     "driver": "bridge",
                     "labels": ["saber.network.type=isolated", f"saber.episode.id={config.episode_id}"],
                 }
-                logger.info(f"Injected new isolated network for episode {config.episode_id}")
+                logger.debug(
+                    "Compose network injection configured",
+                    extra={
+                        "event": "compose_network_injection_configured",
+                        "mode": "isolated",
+                        "episode_id": config.episode_id,
+                        "compose_file": compose_file_path,
+                    },
+                )
 
             # Create temporary file for the modified compose content with resolved variables
             with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as temp_file:
                 yaml.dump(compose_data, temp_file, default_flow_style=False)
                 temp_path = temp_file.name
 
-            logger.debug(f"Created processed compose file with resolved variables: {temp_path}")
+            logger.debug(
+                "Processed compose file created",
+                extra={
+                    "event": "processed_compose_file_created",
+                    "compose_file": compose_file_path,
+                    "processed_file": temp_path,
+                },
+            )
             return temp_path
 
         except Exception as e:
-            logger.error(f"Failed to inject episode network: {e}")
+            logger.error(
+                "Compose network injection failed",
+                extra={
+                    "event": "compose_network_injection_failed",
+                    "compose_file": compose_file_path,
+                    "episode_id": config.episode_id,
+                    "target_episode_id": config.target_episode_id,
+                    "error": str(e),
+                },
+            )
             # Re-raise validation errors to fail fast
             if isinstance(e, ValueError):
                 raise
@@ -929,7 +1273,13 @@ class ComposeOrchestrator:
         Args:
             project_name: Docker Compose project name to clean up
         """
-        logger.warning(f"🧹 Cleaning up failed environment: {project_name}")
+        logger.warning(
+            "Failed environment cleanup started",
+            extra={
+                "event": "failed_environment_cleanup_started",
+                "project_name": project_name,
+            },
+        )
         try:
             # Stop and remove containers for this project
             cleanup_command = ["docker", "compose", "-p", project_name, "down", "--volumes", "--remove-orphans"]
@@ -937,12 +1287,37 @@ class ComposeOrchestrator:
             result = subprocess.run(cleanup_command, capture_output=True, text=True, timeout=60)
 
             if result.returncode == 0:
-                logger.info(f"✅ Successfully cleaned up failed environment: {project_name}")
+                logger.info(
+                    "Failed environment cleanup completed",
+                    extra={
+                        "event": "failed_environment_cleanup_completed",
+                        "project_name": project_name,
+                    },
+                )
             else:
                 logger.warning(
-                    f"⚠️ Partial cleanup for {project_name} - some resources may remain. " f"stderr: {result.stderr}"
+                    "Failed environment cleanup partial",
+                    extra={
+                        "event": "failed_environment_cleanup_partial",
+                        "project_name": project_name,
+                        "stderr": result.stderr,
+                        "return_code": result.returncode,
+                    },
                 )
         except subprocess.TimeoutExpired:
-            logger.error(f"❌ Cleanup timeout for project {project_name}")
+            logger.error(
+                "Failed environment cleanup timed out",
+                extra={
+                    "event": "failed_environment_cleanup_timeout",
+                    "project_name": project_name,
+                },
+            )
         except Exception as e:
-            logger.error(f"❌ Error during cleanup for project {project_name}: {e}")
+            logger.error(
+                "Failed environment cleanup error",
+                extra={
+                    "event": "failed_environment_cleanup_error",
+                    "project_name": project_name,
+                    "error": str(e),
+                },
+            )

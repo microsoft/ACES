@@ -1,11 +1,7 @@
 """
 SABER Models - Centralized model exports.
 
-This module provi    # Core domain models
-    "BenchmarkInfo",
-    "PolicyInfo",
-    "TaskInfo",
-    "EvalSubmission",convenient imports for all SABER models organized by category.
+Provides convenient imports for all SABER models organized by category.
 """
 
 # Administrative models

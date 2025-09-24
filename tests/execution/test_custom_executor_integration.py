@@ -107,9 +107,19 @@ register_executor("integration_test", TestIntegrationExecutor, "test")
 
                 # Check that it appears in MCP tools
                 mcp_tools = execution_manager.to_mcp_tools()
-                integration_tools = [tool for tool in mcp_tools if "integration_test" in tool["name"]]
+                integration_tools = []
+                for tool in mcp_tools:
+                    tool_name = getattr(tool, "name", None)
+                    if tool_name is None and isinstance(tool, dict):
+                        tool_name = tool.get("name")
+                    if tool_name and "integration_test" in tool_name:
+                        integration_tools.append(tool)
                 assert len(integration_tools) == 1
-                assert integration_tools[0]["description"] == "Test executor for integration testing"
+                integration_tool = integration_tools[0]
+                tool_description = getattr(integration_tool, "description", None)
+                if tool_description is None and isinstance(integration_tool, dict):
+                    tool_description = integration_tool.get("description")
+                assert tool_description == "Test executor for integration testing"
 
     def test_custom_executor_mcp_schema_generation(self, cleanup_factory):
         """Test that custom executors generate proper MCP schemas."""
@@ -199,14 +209,28 @@ register_executor("schema_test", SchemaTestExecutor)
 
                 # Get MCP tools and find our custom executor
                 mcp_tools = execution_manager.to_mcp_tools()
-                schema_tools = [tool for tool in mcp_tools if "schema_test" in tool["name"]]
+                schema_tools = []
+                for tool in mcp_tools:
+                    tool_name = getattr(tool, "name", None)
+                    if tool_name is None and isinstance(tool, dict):
+                        tool_name = tool.get("name")
+                    if tool_name and "schema_test" in tool_name:
+                        schema_tools.append(tool)
                 assert len(schema_tools) == 1
 
                 tool = schema_tools[0]
-                assert tool["description"] == "Test executor for MCP schema validation"
+                tool_description = getattr(tool, "description", None)
+                if tool_description is None and isinstance(tool, dict):
+                    tool_description = tool.get("description")
+                assert tool_description == "Test executor for MCP schema validation"
 
                 # Check the schema structure
-                input_schema = tool["inputSchema"]
+                input_schema = getattr(tool, "input_schema", None)
+                if input_schema is None:
+                    input_schema = getattr(tool, "inputSchema", None)
+                if input_schema is None and isinstance(tool, dict):
+                    input_schema = tool.get("input_schema") or tool.get("inputSchema")
+                assert input_schema is not None
                 # Handle both dict and MCPInputSchema object formats
                 if hasattr(input_schema, 'type'):
                     # It's an MCPInputSchema object

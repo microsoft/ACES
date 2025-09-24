@@ -3,18 +3,26 @@ Docker-based Python script executor for executing Python code in isolated contai
 
 This module provides a secure Python executor that accepts Python code and executes
 it in Docker containers with proper security validation.
+
+Logging category: ``LogCategory.DOCKER``.
 """
 
-import logging
 from typing import Any, Dict, Optional
 
+from .....logging_config import (
+    LogCategory,
+    get_saber_logger,
+    log_operation_failure,
+    log_operation_start,
+    log_operation_success,
+)
 from ....base import CommandResult
 from ...base import Parameter, ParameterType, ValidationResult
 from ...exceptions import SandboxExecutionError
 from ...sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 from ..docker_executor import DockerExecutor
 
-logger = logging.getLogger(__name__)
+logger = get_saber_logger(LogCategory.DOCKER, __name__)
 
 
 class PythonExecutor(DockerExecutor):
@@ -266,9 +274,16 @@ class PythonExecutor(DockerExecutor):
                 "episode_id": episode_id,
                 "container_ready": environment is not None,
             }
-        except Exception as e:
-            logger.error(f"Failed to get Python environment info: {e}")
-            return {"error": str(e)}
+        except Exception as exc:
+            logger.error(
+                "Failed to collect Python environment information",
+                extra={
+                    "event": "python_env_inspection_failed",
+                    "episode_id": episode_id,
+                    "error": str(exc),
+                },
+            )
+            return {"error": str(exc)}
 
     def parse_python_output(self, stdout: str, stderr: str, return_code: int, script_path: str) -> CommandResult:
         """
@@ -344,7 +359,15 @@ class PythonExecutor(DockerExecutor):
 
             # Log any warnings
             if code_validation.warnings:
-                logger.warning(f"Python code warnings: {', '.join(code_validation.warnings)}")
+                for warning in code_validation.warnings:
+                    logger.warning(
+                        "Python code validation warning",
+                        extra={
+                            "event": "python_code_warning",
+                            "episode_id": episode_id,
+                            "warning": warning,
+                        },
+                    )
 
             # Build Python script
             script_content = self.build_python_script(parameters, context)
@@ -355,15 +378,48 @@ class PythonExecutor(DockerExecutor):
             # Create script file using echo (simple approach)
             working_dir = parameters.get("working_dir", "/workspace")
             timeout = int(self.get_timeout())
+            log_operation_start(
+                logger,
+                "python_script_execution",
+                episode_id=episode_id,
+                timeout_seconds=timeout,
+                working_dir=working_dir,
+                has_template=bool(parameters.get("template")),
+            )
             create_script_cmd = ["sh", "-c", f"cd {working_dir} && cat > {script_path} << 'EOF'\n{script_content}\nEOF"]
             create_result = await environment.execute_command(command=create_script_cmd, timeout=timeout)
 
             if create_result.exit_code != 0:
+                log_operation_failure(
+                    logger,
+                    "python_script_execution",
+                    RuntimeError("failed_to_create_script"),
+                    episode_id=episode_id,
+                    step="create_script",
+                    exit_code=create_result.exit_code,
+                )
+                logger.error(
+                    "Failed to create Python script in container",
+                    extra={
+                        "event": "python_script_creation_failed",
+                        "episode_id": episode_id,
+                        "exit_code": create_result.exit_code,
+                        "stderr_preview": create_result.stderr[:200],
+                    },
+                )
                 return CommandResult.error_result(error=f"Failed to create script file: {create_result.stderr}")
 
             # Execute Python script
             python_cmd = ["sh", "-c", f"cd {working_dir} && python3 {script_path}"]
             result = await environment.execute_command(command=python_cmd, timeout=timeout)
+
+            log_operation_success(
+                logger,
+                "python_script_execution",
+                episode_id=episode_id,
+                exit_code=result.exit_code,
+                execution_time=result.execution_time,
+            )
 
             # Parse output
             tool_result = self.parse_python_output(result.stdout, result.stderr, result.exit_code, script_path)
@@ -382,9 +438,22 @@ class PythonExecutor(DockerExecutor):
 
             return tool_result
 
-        except Exception as e:
-            logger.error(f"Python script execution error: {e}")
-            return CommandResult.error_result(f"Python execution failed: {str(e)}")
+        except Exception as exc:
+            log_operation_failure(
+                logger,
+                "python_script_execution",
+                exc,
+                episode_id=context.get("episode_id"),
+            )
+            logger.error(
+                "Python script execution error",
+                extra={
+                    "event": "python_script_execution_error",
+                    "episode_id": context.get("episode_id"),
+                    "error": str(exc),
+                },
+            )
+            return CommandResult.error_result(f"Python execution failed: {str(exc)}")
 
     def validate_parameters(self, parameters: Dict[str, Any]) -> ValidationResult:
         """

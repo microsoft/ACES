@@ -1,5 +1,6 @@
-"""
-Permanent environment manager for Docker execution environments.
+"""Permanent environment manager for Docker execution environments.
+
+Logging Category: DOCKER
 
 This module manages Docker permanent environments that persist across all sessions,
 providing lifecycle management for long-running services and networks.
@@ -8,12 +9,13 @@ providing lifecycle management for long-running services and networks.
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from ....logging_config import get_execution_logger
+from saber.logging_config import LogCategory, get_saber_logger
+
 from ..exceptions import SandboxExecutionError
 from .compose_orchestrator import ComposeOrchestrator
 from .environment_config import ComposeEnvironmentConfig
 
-logger = get_execution_logger(__name__)
+logger = get_saber_logger(LogCategory.DOCKER, __name__)
 
 
 class PermanentEnvironmentManager:
@@ -67,9 +69,15 @@ class PermanentEnvironmentManager:
         # Initialize orchestrator with logging
         self.orchestrator = ComposeOrchestrator(logging_config=logging_config)
 
-        logger.info("PermanentEnvironmentManager initializing...")
-        logger.info(f"Project name: {self.compose_project_name}")
-        logger.info(f"Container logging enabled - logs directory: {logs_dir}")
+        logger.info(
+            "Permanent environment manager initialized",
+            extra={
+                "event": "permanent_env_manager_initialized",
+                "domain": self.domain,
+                "project_name": self.compose_project_name,
+                "logs_directory": str(logs_dir),
+            },
+        )
 
     def start_permanent_environment_from_file(self, compose_file_path: Path) -> None:
         """
@@ -82,11 +90,25 @@ class PermanentEnvironmentManager:
             SandboxExecutionError: If permanent environment cannot be started
         """
         if self._is_running:
-            logger.warning("Permanent environment is already running")
+            logger.warning(
+                "Permanent environment start skipped",
+                extra={
+                    "event": "permanent_env_start_skipped",
+                    "project_name": self.compose_project_name,
+                    "compose_file": str(compose_file_path),
+                },
+            )
             return
 
         try:
-            logger.info(f"Starting permanent environment from: {compose_file_path}")
+            logger.info(
+                "Permanent environment start requested",
+                extra={
+                    "event": "permanent_env_start_requested",
+                    "compose_file": str(compose_file_path),
+                    "project_name": self.compose_project_name,
+                },
+            )
 
             # Store compose file path for parameter-less stop
             self._compose_file_path = compose_file_path
@@ -96,12 +118,27 @@ class PermanentEnvironmentManager:
             self.orchestrator.start_environment(str(compose_file_path), config)
 
             self._is_running = True
-            logger.info(f"Permanent environment started successfully from: {compose_file_path}")
+            logger.info(
+                "Permanent environment started",
+                extra={
+                    "event": "permanent_env_started",
+                    "compose_file": str(compose_file_path),
+                    "project_name": self.compose_project_name,
+                },
+            )
 
         except Exception as e:
             # Clear stored path on failure
             self._compose_file_path = None
-            logger.error(f"Failed to start permanent environment from {compose_file_path}: {e}")
+            logger.error(
+                "Permanent environment start failed",
+                extra={
+                    "event": "permanent_env_start_failed",
+                    "compose_file": str(compose_file_path),
+                    "project_name": self.compose_project_name,
+                    "error": str(e),
+                },
+            )
             raise SandboxExecutionError(f"Failed to start permanent environment: {e}")
 
     def stop_permanent_environment(self) -> None:
@@ -112,14 +149,27 @@ class PermanentEnvironmentManager:
             SandboxExecutionError: If permanent environment cannot be stopped or no file path stored
         """
         if not self._is_running:
-            logger.warning("Permanent environment is not running")
+            logger.warning(
+                "Permanent environment stop skipped",
+                extra={
+                    "event": "permanent_env_stop_skipped",
+                    "project_name": self.compose_project_name,
+                },
+            )
             return
 
         if not self._compose_file_path:
             raise SandboxExecutionError("No compose file path stored - cannot stop permanent environment")
 
         try:
-            logger.info(f"Stopping permanent environment from: {self._compose_file_path}")
+            logger.info(
+                "Permanent environment stop requested",
+                extra={
+                    "event": "permanent_env_stop_requested",
+                    "compose_file": str(self._compose_file_path),
+                    "project_name": self.compose_project_name,
+                },
+            )
 
             # Use orchestrator to stop the environment with explicit project name
             self.orchestrator.stop_environment(self._compose_file_path, project_name=self.compose_project_name)
@@ -127,10 +177,24 @@ class PermanentEnvironmentManager:
             self._is_running = False
             self._compose_file_path = None  # Clear stored path
 
-            logger.info("Permanent environment stopped successfully")
+            logger.info(
+                "Permanent environment stopped",
+                extra={
+                    "event": "permanent_env_stopped",
+                    "project_name": self.compose_project_name,
+                },
+            )
 
         except Exception as e:
-            logger.error(f"Failed to stop permanent environment: {e}")
+            logger.error(
+                "Permanent environment stop failed",
+                extra={
+                    "event": "permanent_env_stop_failed",
+                    "project_name": self.compose_project_name,
+                    "compose_file": str(self._compose_file_path),
+                    "error": str(e),
+                },
+            )
             raise SandboxExecutionError(f"Failed to stop permanent environment: {e}")
 
     def is_running(self) -> bool:

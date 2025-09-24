@@ -4,21 +4,29 @@ Simple SABER Configuration Loader
 Replaces the old HarnessConfigLoader with a simple YAML loader that works
 with the new SABERConfig format and eval_async integration.
 
+Logging category: CONFIG
+
 Following SABER's philosophy:
 - Fail fast when configuration files are invalid or missing
 - Clean validation of required fields
 - No silent fallbacks that mask configuration issues
 """
 
-import logging
 from pathlib import Path
 from typing import Any, Dict, Union
 
 import yaml
 
+from ..logging_config import (
+    LogCategory,
+    get_saber_logger,
+    log_operation_failure,
+    log_operation_start,
+    log_operation_success,
+)
 from .models import AgentAssignment, SABERConfig
 
-logger = logging.getLogger(__name__)
+logger = get_saber_logger(LogCategory.CONFIG, __name__)
 
 
 class SABERConfigLoader:
@@ -45,31 +53,77 @@ class SABERConfigLoader:
         if isinstance(config_path, str):
             config_path = Path(config_path)
 
+        operation = "load_saber_config"
+        operation_context = {"config_path": str(config_path)}
+        log_operation_start(logger, operation, **operation_context)
+
         if not config_path.exists():
+            log_operation_failure(
+                logger,
+                operation,
+                "configuration_file_missing",
+                **operation_context,
+            )
             raise FileNotFoundError(f"Configuration file not found: {config_path}")
 
-        logger.info(f"Loading SABER configuration from: {config_path}")
-
+        stage = "open_file"
         try:
-            with open(config_path, "r") as f:
-                config_data = yaml.safe_load(f)
-        except yaml.YAMLError as e:
-            raise ValueError(f"Failed to parse YAML configuration: {e}") from e
+            with open(config_path, "r", encoding="utf-8") as file_handle:
+                stage = "parse_yaml"
+                config_data = yaml.safe_load(file_handle)
 
-        if not config_data:
-            raise ValueError(f"Configuration file is empty: {config_path}")
+            stage = "validate_structure"
+            if not config_data:
+                raise ValueError("Configuration file is empty")
 
-        if not isinstance(config_data, dict):
-            raise ValueError(f"Configuration must be a YAML dictionary, got: {type(config_data)}")
+            if not isinstance(config_data, dict):
+                raise ValueError(f"Configuration must be a YAML dictionary, got: {type(config_data)}")
 
-        # Convert YAML config to SABERConfig
-        saber_config = SABERConfigLoader._convert_yaml_to_saber_config(config_data, config_path)
+            stage = "convert_to_model"
+            saber_config = SABERConfigLoader._convert_yaml_to_saber_config(config_data, config_path)
 
-        logger.info("SABER configuration loaded successfully")
+        except yaml.YAMLError as exc:
+            log_operation_failure(
+                logger,
+                operation,
+                exc,
+                stage=stage,
+                error_type="YAMLError",
+                **operation_context,
+            )
+            raise ValueError(f"Failed to parse YAML configuration: {exc}") from exc
+        except Exception as exc:
+            log_operation_failure(
+                logger,
+                operation,
+                exc,
+                stage=stage,
+                error_type=exc.__class__.__name__,
+                **operation_context,
+            )
+            raise
+
+        log_operation_success(
+            logger,
+            operation,
+            agent_count=len(saber_config.agents),
+            has_session_config=bool(saber_config.session_config),
+            **operation_context,
+        )
+
         if saber_config.session_config:
-            logger.debug(f"Config: rest_url={saber_config.session_config.base_url}, model={saber_config.model}")
+            logger.debug(
+                "Session configuration resolved",
+                extra={
+                    "rest_url": saber_config.session_config.base_url,
+                    "model": saber_config.model,
+                },
+            )
         else:
-            logger.debug(f"Config: model={saber_config.model} (no session config)")
+            logger.debug(
+                "Session configuration missing",
+                extra={"model": saber_config.model},
+            )
 
         return saber_config
 

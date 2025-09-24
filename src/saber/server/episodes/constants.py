@@ -1,4 +1,7 @@
-"""Constants and enums for episode management."""
+"""Episode management constants.
+
+Logging Category: EPISODE (no active instrumentation required in this module).
+"""
 
 from enum import Enum
 

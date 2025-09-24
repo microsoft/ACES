@@ -1,6 +1,8 @@
 """
 SABER Server CLI Entry Point
 
+Log Category: CONFIG
+
 Provides command-line interface for starting SABER domain servers.
 Usage: python -m saber.server --start --domain <domain_name> [options]
 """
@@ -13,13 +15,10 @@ import signal
 import sys
 from typing import Optional
 
-from ..logging_config import setup_file_logging
+from ..logging_config import LogCategory, get_saber_logger, init_logging
 from .session_manager import SessionManager
 
-# Configure basic logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-
-logger = logging.getLogger(__name__)
+logger = get_saber_logger(LogCategory.CONFIG, __name__)
 
 
 def setup_cli() -> argparse.ArgumentParser:
@@ -123,20 +122,32 @@ async def start_server(args: argparse.Namespace) -> None:
 
     async def shutdown_handler() -> None:
         """Handle graceful shutdown."""
-        logger.info("Shutdown signal received, initiating graceful shutdown...")
+        logger.info(
+            "Shutdown signal received; initiating graceful shutdown",
+            extra={"event": "server_shutdown_initiated"},
+        )
         if session_manager:
             try:
                 await session_manager.shutdown()
-                logger.info("Graceful shutdown completed")
+                logger.info(
+                    "Graceful shutdown completed",
+                    extra={"event": "server_shutdown_completed"},
+                )
             except Exception as e:
-                logger.error(f"Error during graceful shutdown: {e}")
+                logger.exception(
+                    "Error during graceful shutdown",
+                    extra={"event": "server_shutdown_failed", "error": str(e)},
+                )
         shutdown_event.set()
 
     # Setup signal handlers for graceful shutdown using asyncio
     loop = asyncio.get_running_loop()
 
     def signal_handler() -> None:
-        logger.info("Signal received, scheduling shutdown...")
+        logger.info(
+            "Signal received; scheduling shutdown",
+            extra={"event": "server_shutdown_signal_received"},
+        )
         asyncio.create_task(shutdown_handler())
 
     # Register signal handlers (only available on Unix systems)
@@ -145,25 +156,35 @@ async def start_server(args: argparse.Namespace) -> None:
             loop.add_signal_handler(signal.SIGTERM, signal_handler)
         if hasattr(signal, "SIGINT"):
             loop.add_signal_handler(signal.SIGINT, signal_handler)
-        logger.info("Signal handlers registered for graceful shutdown")
+        logger.info(
+            "Signal handlers registered for graceful shutdown",
+            extra={"event": "server_signal_handlers_registered"},
+        )
     except NotImplementedError:
         # Windows doesn't support add_signal_handler
-        logger.warning("Signal handlers not available on this platform")
+        logger.warning(
+            "Signal handlers not available on this platform",
+            extra={"event": "server_signal_handlers_unavailable", "platform": sys.platform},
+        )
 
     try:
-        # Setup file logging early in the startup process
-        setup_file_logging()
-
         # Find and validate configuration
         config_dir = find_config_directory(args.domain, args.config_dir)
         tasks_config, environments_config = validate_config_files(config_dir)
 
-        logger.info(f"Starting SABER server for domain: {args.domain}")
-        logger.info(f"Configuration directory: {config_dir}")
-        logger.info(f"Tasks config: {tasks_config}")
-        logger.info(f"Environments config: {environments_config}")
-        logger.info(f"REST API: {args.host}:{args.port}")
-        logger.info(f"MCP API: {args.host}:{args.mcp_port}")
+        logger.info(
+            "Starting SABER server",
+            extra={
+                "event": "server_starting",
+                "domain": args.domain,
+                "rest_host": args.host,
+                "rest_port": args.port,
+                "mcp_port": args.mcp_port,
+                "config_dir": config_dir,
+                "tasks_config": tasks_config,
+                "environments_config": environments_config,
+            },
+        )
 
         # Initialize SessionManager
         session_manager = SessionManager(
@@ -175,10 +196,10 @@ async def start_server(args: argparse.Namespace) -> None:
             mcp_port=args.mcp_port,
         )
 
-        logger.info("SessionManager initialized successfully")
-
-        # Start the server
-        logger.info("Starting SABER server...")
+        logger.info(
+            "SessionManager initialized",
+            extra={"event": "session_manager_initialized", "domain": args.domain},
+        )
 
         # Create a task for the server so we can wait for either server completion or shutdown signal
         server_task = asyncio.create_task(session_manager.start_server())
@@ -197,21 +218,31 @@ async def start_server(args: argparse.Namespace) -> None:
                 pass
 
     except KeyboardInterrupt:
-        logger.info("Received shutdown signal, stopping server...")
+        logger.info(
+            "Keyboard interrupt received; stopping server",
+            extra={"event": "server_shutdown_keyboard_interrupt"},
+        )
         if session_manager:
             await session_manager.shutdown()
     except Exception as e:
-        logger.error(f"Failed to start SABER server: {e}")
+        logger.exception(
+            "Failed to start SABER server",
+            extra={"event": "server_start_failed", "error": str(e)},
+        )
         if session_manager:
             try:
                 await session_manager.shutdown()
             except Exception as shutdown_error:
-                logger.error(f"Error during emergency shutdown: {shutdown_error}")
+                logger.exception(
+                    "Error during emergency shutdown",
+                    extra={"event": "server_emergency_shutdown_failed", "error": str(shutdown_error)},
+                )
         sys.exit(1)
 
 
 def main() -> None:
     """Main CLI entry point."""
+    init_logging()
     parser = setup_cli()
     args = parser.parse_args()
 
@@ -226,7 +257,10 @@ def main() -> None:
     try:
         asyncio.run(start_server(args))
     except KeyboardInterrupt:
-        logger.info("Server stopped")
+        logger.info(
+            "Server stopped",
+            extra={"event": "server_stopped"},
+        )
         sys.exit(0)
 
 

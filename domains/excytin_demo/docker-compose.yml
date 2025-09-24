@@ -24,7 +24,7 @@ services:
       - SABER_PORT=8000
       - SABER_MCP_PORT=8001
       - PYTHONPATH=/app/src
-      - SABER_LOG_LEVEL=DEBUG
+      #- SABER_LOG_LEVEL=DEBUG
       - SABER_LOGS_DIRECTORY=/app/logs  # Enable enhanced container logging
       - SABER_ENABLE_CONTAINER_LOGGING=true  # Enable container debug logging
       # - SABER_DEBUG_MODE=true  # Uncomment to skip container cleanup for debugging

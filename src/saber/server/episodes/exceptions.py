@@ -1,4 +1,7 @@
-"""Exceptions for the episode management system."""
+"""Episode management exceptions.
+
+Logging Category: EPISODE (no logging hooks required in this module).
+"""
 
 
 class EpisodeManagerException(Exception):

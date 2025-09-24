@@ -7,14 +7,17 @@ Following SABER best practices:
 - Fail-fast design
 - Type-safe implementation
 
+Logging category: AGENT.
+
 This is the LOW-LEVEL registry that maps names to raw inspect_ai agent functions.
 It should NOT contain any SABER-specific logic - just pure inspect_ai mappings.
 """
 
-import logging
 from typing import Any, Callable, Dict, List
 
-logger = logging.getLogger(__name__)
+from ...logging_config import LogCategory, get_saber_logger
+
+logger = get_saber_logger(LogCategory.AGENT, __name__)
 
 
 class InspectAIImplementationNotFoundError(Exception):
@@ -58,7 +61,13 @@ class InspectAIImplementationRegistry:
             raise ValueError(f"inspect_ai implementation '{name}' is already registered")
 
         cls._implementations[name] = agent_func
-        logger.info(f"Registered inspect_ai implementation: {name}")
+        logger.info(
+            "inspect_ai implementation registered",
+            extra={
+                "event": "inspect_ai_implementation_registered",
+                "implementation": name,
+            },
+        )
 
     @classmethod
     def get_implementation(cls, name: str) -> Callable[..., Any]:
@@ -93,8 +102,15 @@ class InspectAIImplementationRegistry:
     @classmethod
     def clear_registry(cls) -> None:
         """Clear all implementations (primarily for testing)."""
+        cleared_count = len(cls._implementations)
         cls._implementations.clear()
-        logger.debug("Cleared inspect_ai implementation registry")
+        logger.debug(
+            "inspect_ai implementation registry cleared",
+            extra={
+                "event": "inspect_ai_registry_cleared",
+                "cleared_count": cleared_count,
+            },
+        )
 
 
 def register_inspect_ai_implementation(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -127,9 +143,22 @@ def _register_builtin_implementations() -> None:
         from inspect_ai.agent import react
 
         InspectAIImplementationRegistry.register_implementation("react", react)
-        logger.info("Registered built-in inspect_ai.agent.react")
-    except ImportError:
-        logger.warning("Could not import inspect_ai.agent.react - may not be available")
+        logger.info(
+            "built-in inspect_ai react implementation registered",
+            extra={
+                "event": "inspect_ai_builtin_registered",
+                "implementation": "react",
+            },
+        )
+    except ImportError as exc:
+        logger.warning(
+            "inspect_ai react implementation import failed",
+            extra={
+                "event": "inspect_ai_builtin_missing",
+                "implementation": "react",
+                "error": str(exc),
+            },
+        )
 
     # Register other inspect_ai agents as they become available
     # try:

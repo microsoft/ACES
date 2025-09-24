@@ -1,5 +1,6 @@
-"""
-Constants for evaluation system.
+"""Evaluation system constants.
+
+Logging Category: EVALUATION (no logging hooks defined in this module).
 """
 
 # Evaluation strategy constants

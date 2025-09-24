@@ -4,11 +4,19 @@ Docker-based SQL executor for executing SQL queries in isolated containers.
 This module provides a secure SQL executor that accepts SQL query strings over the MCP protocol
 and executes them in Docker containers. It's designed to work with the Excytin threat investigation
 environment and other SQL-based execution environments.
+
+Logging category: ``LogCategory.DOCKER``.
 """
 
-import logging
 from typing import Any, Dict, List, Optional
 
+from .....logging_config import (
+    LogCategory,
+    get_saber_logger,
+    log_operation_failure,
+    log_operation_start,
+    log_operation_success,
+)
 from ....base import CommandResult
 from ...base import Parameter, ParameterType, ValidationResult
 from ...exceptions import SandboxExecutionError
@@ -16,7 +24,7 @@ from ...sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 from ...utils.security_validator import SecurityValidator
 from ..docker_executor import DockerExecutor
 
-logger = logging.getLogger(__name__)
+logger = get_saber_logger(LogCategory.DOCKER, __name__)
 
 
 class SQLExecutor(DockerExecutor):
@@ -321,15 +329,22 @@ class SQLExecutor(DockerExecutor):
                     error=f"Parameter validation failed: {', '.join(validation_result.errors)}"
                 )
 
-            # Log any security warnings
-            if validation_result.warnings:
-                for warning in validation_result.warnings:
-                    logger.warning(f"SQL security warning: {warning}")
-
             # Extract episode ID from context
             episode_id = context.get("episode_id")
             if not episode_id:
                 raise SandboxExecutionError("episode_id required in context for SQL execution")
+
+            # Log any security warnings with structured context
+            if validation_result.warnings:
+                for warning in validation_result.warnings:
+                    logger.warning(
+                        "SQL query validation warning",
+                        extra={
+                            "event": "sql_query_warning",
+                            "episode_id": episode_id,
+                            "warning": warning,
+                        },
+                    )
 
             # Get Docker environment for episode
             environment = self.get_episode_environment(episode_id)
@@ -350,28 +365,48 @@ class SQLExecutor(DockerExecutor):
             else:
                 return CommandResult.error_result(f"Unsupported database type: {connection_info['protocol']}")
 
-            # Log query execution
-            logger.warning(
-                f"🔍 SQL QUERY START: episode={episode_id}, timeout={timeout}s, "
-                f"database={connection_info['database']}, "
-                f"query='{query[:100]}{'...' if len(query) > 100 else ''}'"
+            # Log query execution start
+            log_operation_start(
+                logger,
+                "sql_query_execution",
+                episode_id=episode_id,
+                timeout_seconds=timeout,
+                database=connection_info["database"],
+                query_preview=query[:100],
+                query_length=len(query),
             )
 
             # Execute the command
             try:
                 result = await environment.execute_command(command=command_args, timeout=timeout)
-                logger.warning(
-                    f"🔍 SQL QUERY SUCCESS: episode={episode_id}, exit_code={result.exit_code}, "
-                    f"execution_time={result.execution_time:.2f}s"
+                log_operation_success(
+                    logger,
+                    "sql_query_execution",
+                    episode_id=episode_id,
+                    exit_code=result.exit_code,
+                    execution_time=result.execution_time,
                 )
-            except Exception as e:
-                if "timed out" in str(e).lower():
+            except Exception as exc:
+                if "timed out" in str(exc).lower():
                     logger.warning(
-                        f"🔍 SQL QUERY TIMEOUT: episode={episode_id}, timeout={timeout}s, "
-                        f"query='{query[:50]}...' - {str(e)}"
+                        "SQL query timed out",
+                        extra={
+                            "event": "sql_query_timeout",
+                            "episode_id": episode_id,
+                            "timeout_seconds": timeout,
+                            "query_preview": query[:50],
+                            "error": str(exc),
+                        },
                     )
                 else:
-                    logger.warning(f"🔍 SQL QUERY ERROR: episode={episode_id}, error='{str(e)}'")
+                    logger.warning(
+                        "SQL query execution raised exception",
+                        extra={
+                            "event": "sql_query_exception",
+                            "episode_id": episode_id,
+                            "error": str(exc),
+                        },
+                    )
                 raise
 
             # Parse output
@@ -393,9 +428,22 @@ class SQLExecutor(DockerExecutor):
 
             return tool_result
 
-        except Exception as e:
-            logger.error(f"SQL query execution error: {e}")
-            return CommandResult.error_result(f"SQL query execution failed: {str(e)}")
+        except Exception as exc:
+            log_operation_failure(
+                logger,
+                "sql_query_execution",
+                exc,
+                episode_id=context.get("episode_id"),
+            )
+            logger.error(
+                "SQL query execution error",
+                extra={
+                    "event": "sql_query_execution_error",
+                    "episode_id": context.get("episode_id"),
+                    "error": str(exc),
+                },
+            )
+            return CommandResult.error_result(f"SQL query execution failed: {str(exc)}")
 
     def parse_output(self, stdout: str, stderr: str, return_code: int, query: str) -> CommandResult:
         """

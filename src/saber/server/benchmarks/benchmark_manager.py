@@ -1,9 +1,18 @@
-"""BenchmarkManager implementation for task definition management."""
+"""BenchmarkManager implementation for task definition management.
 
-from logging import getLogger
+Logging category: TASK_MANAGER.
+"""
+
 from pathlib import Path
 from typing import Any, Callable, Dict, List
 
+from ...logging_config import (
+    LogCategory,
+    get_saber_logger,
+    log_operation_failure,
+    log_operation_start,
+    log_operation_success,
+)
 from ...models import BenchmarkInfo, TaskInfo
 from ..base import Episode
 from .benchmark_config_loader import BenchmarkConfigLoader
@@ -12,7 +21,7 @@ from .prompt_generator import PromptGenerator, TemplateValidationError
 from .subtask import SubTask
 from .task import Task
 
-logger = getLogger(__name__)
+logger = get_saber_logger(LogCategory.TASK_MANAGER, __name__)
 
 
 class BenchmarkManager:
@@ -44,8 +53,15 @@ class BenchmarkManager:
         prompts_dir = self.config_dir / "prompts"
         self.prompt_generator = PromptGenerator(str(prompts_dir))
 
-        logger.info(f"Initializing BenchmarkManager for domain '{domain}' with config dir: {config_dir}")
-        logger.info(f"Tasks directory: {self.tasks_dir_path}")
+        logger.info(
+            "BenchmarkManager initialization",
+            extra={
+                "event": "benchmark_manager_init",
+                "domain": self.domain,
+                "config_dir": str(self.config_dir),
+                "tasks_dir": str(self.tasks_dir_path),
+            },
+        )
 
         # Load tasks and benchmark configuration
         self.load_tasks_from_directory()
@@ -60,16 +76,29 @@ class BenchmarkManager:
         Raises:
             InvalidTaskDefinitionException: If YAML is invalid or malformed
         """
-        self.tasks = self.config_loader.load_tasks_from_directory(str(self.tasks_dir_path))
-        self.benchmark_config = self.config_loader.load_benchmark_config()
+        operation_context = {
+            "domain": self.domain,
+            "tasks_dir": str(self.tasks_dir_path),
+        }
+        log_operation_start(logger, "benchmark_manager_load_tasks", **operation_context)
 
-        # Inject judge prompt renderer functions for llm_judge tasks
-        self._inject_judge_prompt_renderers()
+        try:
+            self.tasks = self.config_loader.load_tasks_from_directory(str(self.tasks_dir_path))
+            self.benchmark_config = self.config_loader.load_benchmark_config()
 
-        logger.info(
-            f"BenchmarkManager initialization complete. Loaded {len(self.tasks)} tasks for domain '{self.domain}'"
-        )
-        logger.info(f"Benchmark config: {self.benchmark_config}")
+            # Inject judge prompt renderer functions for llm_judge tasks
+            self._inject_judge_prompt_renderers()
+
+            log_operation_success(
+                logger,
+                "benchmark_manager_load_tasks",
+                task_count=len(self.tasks),
+                benchmark_config_keys=list(self.benchmark_config.keys()),
+                **operation_context,
+            )
+        except Exception as exc:  # pragma: no cover - fail fast on loader errors
+            log_operation_failure(logger, "benchmark_manager_load_tasks", exc, **operation_context)
+            raise
 
     def _inject_judge_prompt_renderers(self) -> None:
         """
@@ -90,7 +119,13 @@ class BenchmarkManager:
 
                 # Inject the renderer function into the evaluation config
                 eval_config["judge_prompt_renderer"] = create_renderer(task)
-                logger.debug(f"Injected judge prompt renderer for task '{task.task_id}'")
+                logger.debug(
+                    "Injected judge prompt renderer",
+                    extra={
+                        "event": "benchmark_judge_prompt_renderer_injected",
+                        "task_id": task.task_id,
+                    },
+                )
 
     def get_benchmark_info(self) -> BenchmarkInfo:
         """
@@ -250,51 +285,101 @@ class BenchmarkManager:
         Raises:
             TemplateValidationError: If any template or context validation fails
         """
-        logger.info(f"Validating all task templates for domain '{self.domain}'")
+        operation_context: Dict[str, Any] = {
+            "domain": self.domain,
+            "task_count": len(self.tasks),
+        }
+        log_operation_start(logger, "benchmark_template_validation", **operation_context)
 
-        validation_errors = []
+        validation_errors: List[Dict[str, Any]] = []
 
         for task_id, task in self.tasks.items():
+            task_context = {
+                "task_id": task_id,
+            }
             try:
                 # Validate all three prompt templates exist and syntax is correct
                 for prompt_type, template_file in task.prompts.items():
                     self.prompt_generator.validate_template(template_file)
+                    task_context[f"{prompt_type}_template"] = template_file
                     logger.debug(
-                        f"Template validation passed for task '{task_id}' {prompt_type} template: '{template_file}'"
+                        "Template validation passed",
+                        extra={
+                            "event": "template_validation_success",
+                            "task_id": task_id,
+                            "prompt_type": prompt_type,
+                            "template_file": template_file,
+                        }
                     )
 
                 # Validate that we can build context for this task (ensures required config is present)
                 self.prompt_generator.validate_task_context(task)
 
-                # Validate judge templates for llm_judge tasks
                 eval_config = task.evaluation_config
                 if eval_config and eval_config.get("strategy") == "llm_judge":
-                    judge_system_template = eval_config["criteria"]["judge_system_template"]
-                    judge_user_template = eval_config["criteria"]["judge_user_template"]
+                    criteria = eval_config.get("criteria", {})
+                    judge_system_template = criteria.get("judge_system_template")
+                    judge_user_template = criteria.get("judge_user_template")
 
                     self.prompt_generator.validate_judge_template(judge_system_template)
                     self.prompt_generator.validate_judge_template(judge_user_template)
 
                     logger.debug(
-                        f"Judge template validation passed for task '{task_id}': "
-                        f"system='{judge_system_template}', user='{judge_user_template}'"
+                        "Judge templates validated",
+                        extra={
+                            "event": "benchmark_judge_templates_valid",
+                            "task_id": task_id,
+                            "judge_system_template": judge_system_template,
+                            "judge_user_template": judge_user_template,
+                        },
                     )
 
-                logger.debug(f"Template validation passed for task '{task_id}'")
+                logger.debug(
+                    "Task template validation passed",
+                    extra={
+                        "event": "benchmark_task_template_valid",
+                        **task_context,
+                    },
+                )
 
-            except Exception as e:
-                error_msg = f"Task '{task_id}': {str(e)}"
-                validation_errors.append(error_msg)
-                logger.error(f"Template validation failed for task '{task_id}': {e}")
+            except Exception as exc:
+                error_payload = {
+                    "task_id": task_id,
+                    "error": str(exc),
+                }
+                validation_errors.append(error_payload)
+                logger.error(
+                    "Task template validation failed",
+                    extra={
+                        "event": "benchmark_task_template_invalid",
+                        **task_context,
+                        "error": str(exc),
+                    },
+                )
 
         if validation_errors:
-            error_summary = f"Template validation failed for domain '{self.domain}'. Errors:\n" + "\n".join(
-                f"  - {err}" for err in validation_errors
+            error_lines = [f"Task '{err['task_id']}': {err['error']}" for err in validation_errors]
+            summary_text = f"Template validation failed for domain '{self.domain}'. Errors:\n" + "\n".join(
+                f"  - {line}" for line in error_lines
             )
-            logger.error(error_summary)
-            raise TemplateValidationError(error_summary)
+            exception = TemplateValidationError(summary_text)
+            log_operation_failure(
+                logger,
+                "benchmark_template_validation",
+                exception,
+                **operation_context,
+                validation_error_count=len(validation_errors),
+                validation_errors=validation_errors,
+                error_summary=summary_text,
+            )
+            raise exception
 
-        logger.info(f"All {len(self.tasks)} task templates validated successfully for domain '{self.domain}'")
+        log_operation_success(
+            logger,
+            "benchmark_template_validation",
+            validated_task_count=len(self.tasks),
+            **operation_context,
+        )
 
     def render_judge_prompt_for_episode(self, task_id: str, episode: Episode) -> Any:
         """

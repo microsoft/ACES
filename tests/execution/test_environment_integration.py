@@ -20,6 +20,31 @@ from saber.server.execution.sandbox.environment_config import ComposeEnvironment
 from saber.server.execution.exceptions import SandboxExecutionError
 
 
+@pytest.fixture(autouse=True)
+def stub_docker_commands():
+    """Patch docker compose invocations and health checks for deterministic tests."""
+
+    def fake_run(cmd, *args, **kwargs):
+        stdout = ""
+        if "ps" in cmd:
+            stdout = "test-service\n"
+        elif "logs" in cmd:
+            stdout = "mock log output\n"
+        return subprocess.CompletedProcess(cmd, 0, stdout, "")
+
+    with patch(
+        "saber.server.execution.sandbox.compose_health_checker.ComposeHealthChecker.wait_for_all_services_healthy",
+        return_value=None,
+    ), patch(
+        "saber.server.execution.sandbox.compose_orchestrator.subprocess.run",
+        side_effect=fake_run,
+    ), patch(
+        "saber.server.execution.logging.container_logging_manager.subprocess.run",
+        side_effect=fake_run,
+    ):
+        yield
+
+
 class TestEnvironmentLifecycleIntegration:
     """Integration tests for complete environment lifecycle."""
 
@@ -63,36 +88,43 @@ networks:
 
     def test_compose_orchestrator_lifecycle(self, temp_compose_file):
         """Test complete ComposeOrchestrator lifecycle."""
-        orchestrator = ComposeOrchestrator()
         episode_id = "test-integration-episode"
 
-        try:
-            # Create config for the start environment call
-            config = ComposeEnvironmentConfig(
-                episode_id=episode_id,
-                config_type="sandbox"
-            )
+        with patch("saber.server.execution.sandbox.compose_orchestrator.ComposeHealthChecker") as mock_checker_cls, patch(
+            "saber.server.execution.sandbox.compose_orchestrator.subprocess.run"
+        ) as mock_run:
+            mock_checker = mock_checker_cls.return_value
+            mock_checker.wait_for_all_services_healthy.return_value = None
 
-            # Start environment
-            orchestrator.start_environment(str(temp_compose_file), config)
+            completed = subprocess.CompletedProcess(args=["docker"], returncode=0, stdout="", stderr="")
+            mock_run.return_value = completed
 
-            # Verify environment is running (this may complete quickly for hello-world)
-            # The hello-world container exits immediately, so we just verify the start was successful
+            orchestrator = ComposeOrchestrator()
 
-            # Stop environment
-            orchestrator.stop_environment(temp_compose_file, episode_id)
-
-            # Cleanup episode
-            orchestrator.cleanup_episode(episode_id)
-
-        except Exception:
-            # Ensure cleanup on any failure
             try:
+                # Create config for the start environment call
+                config = ComposeEnvironmentConfig(
+                    episode_id=episode_id,
+                    config_type="sandbox"
+                )
+
+                # Start environment
+                orchestrator.start_environment(str(temp_compose_file), config)
+
+                # Stop environment
                 orchestrator.stop_environment(temp_compose_file, episode_id)
+
+                # Cleanup episode
                 orchestrator.cleanup_episode(episode_id)
-            except:
-                pass
-            raise
+
+            except Exception:
+                # Ensure cleanup on any failure
+                try:
+                    orchestrator.stop_environment(temp_compose_file, episode_id)
+                    orchestrator.cleanup_episode(episode_id)
+                except Exception:
+                    pass
+                raise
 
     def test_sandbox_environment_manager_lifecycle(self, minimal_compose_content, temp_directory):
         """Test complete SandboxEnvironmentManager lifecycle."""
@@ -111,6 +143,7 @@ networks:
         try:
             config = {
                 "domain": "integration-test",
+                "enable_logging": False,
             }
 
             manager = SandboxEnvironmentManager(config)
@@ -167,7 +200,8 @@ networks:
         config = {
             "domain": "integration-test",
             "compose_directory": str(temp_directory),
-            "permanent_environments": ["permanent"]
+            "permanent_environments": ["permanent"],
+            "enable_logging": False,
         }
 
         # Mock container logging manager since we don't need actual logging for this test

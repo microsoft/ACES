@@ -5,6 +5,8 @@ Scorer implementation for SABER tasks within inspect_ai framework.
 This provides both client-side and server-side scoring capabilities
 while maintaining compatibility with SABER's server-side success criteria evaluation.
 
+Logging category: EVALUATION.
+
 Following SABER's philosophy:
 - Fail fast when scoring prerequisites are not met
 - Clean interface between inspect_ai scoring and SABER task evaluation
@@ -27,7 +29,6 @@ Usage:
     scorer = saber_scorer(enable_override=True, override_on_failure=False)
 """
 
-import logging
 from typing import Any, Dict, List
 
 from inspect_ai.model import ChatMessageSystem, ChatMessageUser, get_model
@@ -36,6 +37,13 @@ from inspect_ai.scorer._metric import Metric, SampleScore, ValueToFloat, value_t
 from inspect_ai.solver import TaskState
 from inspect_ai.util import store
 
+from ...logging_config import (
+    LogCategory,
+    get_saber_logger,
+    log_operation_failure,
+    log_operation_start,
+    log_operation_success,
+)
 from ...models.evaluation_utils import (
     build_step_evaluation_explanation,
     calculate_step_evaluation_score,
@@ -43,7 +51,7 @@ from ...models.evaluation_utils import (
 )
 from ...models.rest.evaluation import EvaluationCriteriaResponse, EvaluationOverrideRequest
 
-logger = logging.getLogger(__name__)
+logger = get_saber_logger(LogCategory.EVALUATION, __name__)
 
 
 @metric  # type: ignore[misc]
@@ -148,10 +156,16 @@ def saber_scorer(
         except RuntimeError:
             # Re-raise RuntimeErrors (fail-fast principle)
             raise
-        except Exception as e:
+        except Exception as exc:
             # Catch any other unexpected errors and fail fast
-            logger.error(f"Unexpected error in client-side scorer: {e}")
-            raise RuntimeError(f"Client-side scorer error: {e}") from e
+            logger.error(
+                "Client-side scorer encountered unexpected error",
+                extra={
+                    "event": "client_scorer_unexpected_error",
+                    "error": str(exc),
+                },
+            )
+            raise RuntimeError(f"Client-side scorer error: {exc}") from exc
 
     return score
 
@@ -190,18 +204,43 @@ async def _get_evaluation_criteria(state: TaskState) -> EvaluationCriteriaRespon
     if not episode_id:
         raise RuntimeError("SABER episode ID not found in context. " "This scorer requires an active SABER episode.")
 
-    logger.info(f"Retrieving evaluation criteria for session {session_id}, episode {episode_id}")
+    log_operation_start(
+        logger,
+        "evaluation_criteria_fetch",
+        session_id=session_id,
+        episode_id=episode_id,
+    )
 
     try:
         # Retrieve evaluation criteria from server (this needs to be implemented in session manager)
         criteria = await session_manager.get_evaluation_criteria(session_id, episode_id)
+    except Exception as exc:
+        log_operation_failure(
+            logger,
+            "evaluation_criteria_fetch",
+            exc,
+            session_id=session_id,
+            episode_id=episode_id,
+        )
+        raise RuntimeError(f"Failed to retrieve evaluation criteria: {exc}") from exc
 
-        logger.debug(f"Retrieved evaluation criteria: strategy={criteria.evaluation_config.get('strategy')}")
-        return criteria  # type: ignore[no-any-return]
-
-    except Exception as e:
-        logger.error(f"Evaluation criteria retrieval failed: {e}")
-        raise RuntimeError(f"Failed to retrieve evaluation criteria: {e}") from e
+    log_operation_success(
+        logger,
+        "evaluation_criteria_fetch",
+        session_id=session_id,
+        episode_id=episode_id,
+        strategy=criteria.evaluation_config.get("strategy", "unknown"),
+    )
+    logger.debug(
+        "Evaluation criteria retrieved",
+        extra={
+            "event": "evaluation_criteria_received",
+            "session_id": session_id,
+            "episode_id": episode_id,
+            "strategy": criteria.evaluation_config.get("strategy", "unknown"),
+        },
+    )
+    return criteria  # type: ignore[no-any-return]
 
 
 async def _evaluate_static(submission: str, criteria: EvaluationCriteriaResponse) -> Score:
@@ -377,9 +416,20 @@ async def _evaluate_llm(submission: str, criteria: EvaluationCriteriaResponse, s
             },
         )
 
-    except Exception as e:
-        logger.error(f"LLM evaluation failed: {e}")
-        raise RuntimeError(f"LLM evaluation error: {e}") from e
+    except Exception as exc:
+        logger.error(
+            "LLM evaluation failed",
+            extra={
+                "event": "llm_evaluation_failed",
+                "error": str(exc),
+                "session_id": criteria.session_id,
+                "episode_id": criteria.episode_id,
+                "task_id": criteria.task_id,
+                "strategy": criteria.evaluation_config.get("strategy", "unknown"),
+                "judge_model": judge_messages.model if judge_messages else None,
+            },
+        )
+        raise RuntimeError(f"LLM evaluation error: {exc}") from exc
 
 
 def _build_override_request(
@@ -458,8 +508,15 @@ def _build_override_request(
     )
 
     logger.debug(
-        f"Built override request for episode {criteria.episode_id}: "
-        f"score={score_result.value}, success={is_correct}, strategy={strategy}"
+        "Override request constructed",
+        extra={
+            "event": "override_request_built",
+            "episode_id": criteria.episode_id,
+            "task_id": criteria.task_id,
+            "score": score_result.value,
+            "success": is_correct,
+            "strategy": strategy,
+        },
     )
 
     return override_request
@@ -520,134 +577,200 @@ async def _submit_override_if_enabled(
     Raises:
         No exceptions - all errors are caught and optionally logged based on configuration
     """
-    # Validate inputs before attempting submission
-    try:
-        if not score_result:
-            if log_override_errors:
-                logger.error("Override submission failed: score_result is None")
-            return
 
-        if not criteria:
-            if log_override_errors:
-                logger.error("Override submission failed: criteria is None")
-            return
-
-        if not criteria.session_id:
-            if log_override_errors:
-                logger.error("Override submission failed: missing session_id in criteria")
-            return
-
-        if not criteria.episode_id:
-            if log_override_errors:
-                logger.error("Override submission failed: missing episode_id in criteria")
-            return
-
-    except Exception as e:
+    def _log_override_failure(message: str, extra: Dict[str, Any]) -> None:
         if log_override_errors:
-            logger.error(f"Override submission failed during input validation: {e}")
+            logger.error(message, extra=extra)
+        else:
+            logger.debug(message, extra=extra)
+
+    if not score_result:
+        _log_override_failure(
+            "Override submission aborted: missing score result",
+            extra={
+                "event": "override_input_validation_failed",
+                "reason": "missing_score_result",
+            },
+        )
         return
 
-    # Check if override submission is enabled
-    if not enable_override:
-        logger.debug("Override submission disabled by configuration")
+    if not criteria:
+        _log_override_failure(
+            "Override submission aborted: missing evaluation criteria",
+            extra={
+                "event": "override_input_validation_failed",
+                "reason": "missing_criteria",
+            },
+        )
         return
 
-    # Check if we should submit on failure
-    is_failure = score_result.value == 0.0
-    if is_failure and not override_on_failure:
-        logger.debug("Override submission skipped for failed score (override_on_failure=False)")
-        return
-
-    # Main override submission logic with comprehensive error handling
     session_id = criteria.session_id
     episode_id = criteria.episode_id
 
+    if not session_id:
+        _log_override_failure(
+            "Override submission aborted: missing session identifier",
+            extra={
+                "event": "override_input_validation_failed",
+                "reason": "missing_session_id",
+                "episode_id": episode_id,
+            },
+        )
+        return
+
+    if not episode_id:
+        _log_override_failure(
+            "Override submission aborted: missing episode identifier",
+            extra={
+                "event": "override_input_validation_failed",
+                "reason": "missing_episode_id",
+                "session_id": session_id,
+            },
+        )
+        return
+
+    if not enable_override:
+        logger.debug(
+            "Override submission disabled by configuration",
+            extra={
+                "event": "override_disabled",
+                "session_id": session_id,
+                "episode_id": episode_id,
+            },
+        )
+        return
+
+    is_failure = score_result.value == 0.0
+    if is_failure and not override_on_failure:
+        logger.debug(
+            "Override submission skipped because score indicates failure",
+            extra={
+                "event": "override_skipped_for_failure",
+                "session_id": session_id,
+                "episode_id": episode_id,
+                "score": score_result.value,
+                "override_on_failure": override_on_failure,
+            },
+        )
+        return
+
+    strategy = criteria.evaluation_config.get("strategy", "unknown")
+    max_score = criteria.evaluation_config.get("scoring", {}).get("max_score", 1.0)
+
+    task_store = store()
+    session_manager = task_store.get("saber_session_manager")
+
+    if not session_manager:
+        _log_override_failure(
+            "Override submission failed: session manager unavailable",
+            extra={
+                "event": "override_session_manager_missing",
+                "session_id": session_id,
+                "episode_id": episode_id,
+                "strategy": strategy,
+                "override_on_failure": override_on_failure,
+            },
+        )
+        return
+
     try:
-        # Extract session manager from store
-        task_store = store()
-        session_manager = task_store.get("saber_session_manager")
-
-        if not session_manager:
-            error_msg = (
-                "Override submission failed: session_manager not found in store. "
-                "Ensure SABER agent integration is properly configured."
-            )
-            if log_override_errors:
-                logger.error(error_msg)
-            else:
-                logger.debug(error_msg)
-            return
-
-        # Calculate max_score for override request
-        max_score = criteria.evaluation_config.get("scoring", {}).get("max_score", 1.0)
-
-        # Build override request with validation
-        try:
-            override_request = _build_override_request(score_result, criteria, max_score)
-        except Exception as build_error:
-            error_msg = (
-                f"Override request building failed for session {session_id}, episode {episode_id}: {build_error}"
-            )
-            if log_override_errors:
-                logger.error(error_msg)
-            else:
-                logger.debug(error_msg)
-            return
-
-        # Submit override to server with detailed logging
-        logger.info(
-            f"Submitting evaluation override for session {session_id}, episode {episode_id} "
-            f"(score: {score_result.value}, strategy: {criteria.evaluation_config.get('strategy', 'unknown')})"
+        override_request = _build_override_request(score_result, criteria, max_score)
+    except Exception as build_error:
+        _log_override_failure(
+            "Override submission failed while constructing request",
+            extra={
+                "event": "override_request_build_failed",
+                "session_id": session_id,
+                "episode_id": episode_id,
+                "strategy": strategy,
+                "error": str(build_error),
+                "override_on_failure": override_on_failure,
+            },
         )
+        return
 
-        try:
-            response = await session_manager.override_episode_evaluation(
-                session_id=session_id, episode_id=episode_id, override_request=override_request
-            )
+    log_operation_start(
+        logger,
+        "override_submission",
+        session_id=session_id,
+        episode_id=episode_id,
+        strategy=strategy,
+        score=score_result.value,
+        submitted_on_failure=is_failure,
+    )
 
-            logger.info(f"Override submission successful for session {session_id}, episode {episode_id}: {response}")
-
-        except AttributeError as attr_error:
-            error_msg = (
-                f"Override submission failed: session_manager missing override_episode_evaluation method: {attr_error}"
-            )
-            if log_override_errors:
-                logger.error(error_msg)
-            else:
-                logger.debug(error_msg)
-            return
-
-        except Exception as submission_error:
-            # Handle specific server/network errors
-            error_type = type(submission_error).__name__
-            error_msg = (
-                f"Override submission failed for session {session_id}, episode {episode_id} "
-                f"({error_type}): {submission_error}"
-            )
-
-            if log_override_errors:
-                logger.error(error_msg)
-                logger.debug(
-                    f"Override submission context: score={score_result.value}, "
-                    f"strategy={criteria.evaluation_config.get('strategy')}, max_score={max_score}"
-                )
-            else:
-                logger.debug(error_msg)
-            return
-
-    except Exception as e:
-        # Catch-all for any unexpected errors
-        error_type = type(e).__name__
-        error_msg = (
-            f"Unexpected error during override submission for session {session_id}, "
-            f"episode {episode_id} ({error_type}): {e}"
+    try:
+        response = await session_manager.override_episode_evaluation(
+            session_id=session_id,
+            episode_id=episode_id,
+            override_request=override_request,
         )
+    except AttributeError as attr_error:
+        log_operation_failure(
+            logger,
+            "override_submission",
+            attr_error,
+            session_id=session_id,
+            episode_id=episode_id,
+            strategy=strategy,
+        )
+        _log_override_failure(
+            "Override submission failed: session manager missing override endpoint",
+            extra={
+                "event": "override_submission_method_missing",
+                "session_id": session_id,
+                "episode_id": episode_id,
+                "strategy": strategy,
+                "error": str(attr_error),
+                "override_on_failure": override_on_failure,
+            },
+        )
+        return
+    except Exception as submission_error:
+        log_operation_failure(
+            logger,
+            "override_submission",
+            submission_error,
+            session_id=session_id,
+            episode_id=episode_id,
+            strategy=strategy,
+        )
+        _log_override_failure(
+            "Override submission failed during server call",
+            extra={
+                "event": "override_submission_failed",
+                "session_id": session_id,
+                "episode_id": episode_id,
+                "strategy": strategy,
+                "score": score_result.value,
+                "max_score": max_score,
+                "error": str(submission_error),
+                "error_type": type(submission_error).__name__,
+                "override_on_failure": override_on_failure,
+            },
+        )
+        return
 
-        if log_override_errors:
-            logger.error(error_msg)
-            logger.debug(
-                f"Override submission unexpected error context: enable_override={enable_override}, "
-                f"override_on_failure={override_on_failure}"
-            )
-        else:
-            logger.debug(error_msg)
+    log_operation_success(
+        logger,
+        "override_submission",
+        session_id=session_id,
+        episode_id=episode_id,
+        strategy=strategy,
+        score=score_result.value,
+        submitted_on_failure=is_failure,
+        response_type=type(response).__name__,
+    )
+    logger.info(
+        "Override submission succeeded",
+        extra={
+            "event": "override_submission_success",
+            "session_id": session_id,
+            "episode_id": episode_id,
+            "strategy": strategy,
+            "score": score_result.value,
+            "submitted_on_failure": is_failure,
+            "response_type": type(response).__name__,
+            "override_on_failure": override_on_failure,
+        },
+    )

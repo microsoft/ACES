@@ -1,6 +1,8 @@
 """
 Docker Compose Health Checker for Episode Services.
 
+Logging Category: DOCKER
+
 This module provides health checking capabilities for Docker Compose environments
 used in SABER episodes. It verifies that all services in a compose environment
 are healthy before allowing episode execution to proceed.
@@ -9,7 +11,6 @@ FAIL-FAST DESIGN: This module follows a fail-fast approach - any health check
 failure immediately raises an exception. No silent failures or fallbacks.
 """
 
-import logging
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -24,7 +25,9 @@ except ImportError:
     docker = None  # type: ignore
     DOCKER_AVAILABLE = False
 
-logger = logging.getLogger(__name__)
+from saber.logging_config import LogCategory, get_saber_logger
+
+logger = get_saber_logger(LogCategory.DOCKER, __name__)
 
 
 class ComposeHealthCheckError(Exception):
@@ -80,22 +83,59 @@ class ComposeHealthChecker:
             ComposeHealthCheckError: If services fail to become healthy within timeout
             RuntimeError: If compose file cannot be read or Docker is unavailable
         """
-        logger.info(
-            f"Starting health check for compose project '{project_name}' "
-            f"(timeout: {timeout_seconds}s, interval: {check_interval}s)"
+        logger.debug(
+            "Compose health check started",
+            extra={
+                "event": "compose_health_check_started",
+                "project_name": project_name,
+                "compose_file": compose_file_path,
+                "timeout_seconds": timeout_seconds,
+                "check_interval_seconds": check_interval,
+            },
         )
-        logger.info(f"🔍 HEALTH CHECK: Reading compose file: {compose_file_path}")
+        logger.debug(
+            "Compose file read requested",
+            extra={
+                "event": "compose_health_check_reading_file",
+                "compose_file": compose_file_path,
+            },
+        )
 
         # Parse compose file to get service definitions
         services = self._parse_compose_services(compose_file_path)
         if not services:
+            logger.error(
+                "Compose health check found no services",
+                extra={
+                    "event": "compose_health_check_no_services",
+                    "project_name": project_name,
+                    "compose_file": compose_file_path,
+                },
+            )
             raise ComposeHealthCheckError(
                 f"EPISODE CREATION FAILED: No services found in compose file: {compose_file_path}. "
                 f"Cannot validate health for empty environment."
             )
 
-        logger.info(f"Found {len(services)} services to check: {list(services.keys())}")
-        logger.info(f"🔍 HEALTH CHECK: First service config sample: {list(services.items())[0] if services else 'N/A'}")
+        logger.debug(
+            "Compose services discovered",
+            extra={
+                "event": "compose_health_check_services_discovered",
+                "project_name": project_name,
+                "service_count": len(services),
+                "service_names": list(services.keys()),
+            },
+        )
+        if services:
+            first_service_name = next(iter(services))
+            logger.debug(
+                "First compose service inspected",
+                extra={
+                    "event": "compose_health_check_first_service_inspected",
+                    "project_name": project_name,
+                    "service_name": first_service_name,
+                },
+            )
 
         # Validate that we can access Docker before starting health checks
         try:
@@ -117,24 +157,55 @@ class ComposeHealthChecker:
                 healthy_count = sum(1 for status in health_status.values() if status["healthy"])
                 total_count = len(health_status)
 
-                logger.debug(f"Health check progress: {healthy_count}/{total_count} services healthy")
+                logger.debug(
+                    "Compose health check progress",
+                    extra={
+                        "event": "compose_health_check_progress",
+                        "project_name": project_name,
+                        "service_count": total_count,
+                        "healthy_services": healthy_count,
+                        "elapsed_seconds": round(time.time() - start_time, 2),
+                    },
+                )
 
                 # If all services are healthy, we're done
                 if healthy_count == total_count:
                     elapsed = time.time() - start_time
-                    logger.info(f"✅ All {total_count} services are healthy after {elapsed:.1f}s")
+                    logger.debug(
+                        "Compose services healthy",
+                        extra={
+                            "event": "compose_health_check_success",
+                            "project_name": project_name,
+                            "service_count": total_count,
+                            "elapsed_seconds": round(elapsed, 2),
+                        },
+                    )
                     return
 
                 # Log status of unhealthy services
                 for service_name, status in health_status.items():
                     if not status["healthy"]:
                         logger.debug(
-                            f"Service '{service_name}': {status['reason']} "
-                            f"(container: {status.get('container_name', 'unknown')})"
+                            "Compose service unhealthy",
+                            extra={
+                                "event": "compose_health_check_service_unhealthy",
+                                "project_name": project_name,
+                                "service_name": service_name,
+                                "reason": status["reason"],
+                                "container_name": status.get("container_name", "unknown"),
+                                "status": status.get("status"),
+                            },
                         )
 
             except Exception as e:
-                logger.warning(f"Health check attempt failed, will retry: {e}")
+                logger.warning(
+                    "Compose health check attempt failed",
+                    extra={
+                        "event": "compose_health_check_attempt_failed",
+                        "project_name": project_name,
+                        "error": str(e),
+                    },
+                )
                 # Continue retrying - the outer timeout will handle ultimate failure
 
             time.sleep(check_interval)
@@ -163,6 +234,17 @@ class ComposeHealthChecker:
 
         error_msg += f"\nProject: {project_name}\nCompose file: {compose_file_path}"
 
+        logger.error(
+            "Compose services failed health check",
+            extra={
+                "event": "compose_health_check_failed",
+                "project_name": project_name,
+                "compose_file": compose_file_path,
+                "timeout_seconds": timeout_seconds,
+                "unhealthy_services": unhealthy_services,
+            },
+        )
+
         raise ComposeHealthCheckError(error_msg)
 
     def _parse_compose_services(self, compose_file_path: str) -> Dict[str, Dict[str, Any]]:
@@ -178,7 +260,13 @@ class ComposeHealthChecker:
         Raises:
             RuntimeError: If compose file cannot be read or parsed
         """
-        logger.info(f"🔍 _parse_compose_services: Opening file {compose_file_path}")
+        logger.debug(
+            "Parsing compose services",
+            extra={
+                "event": "compose_health_check_parse_services",
+                "compose_file": compose_file_path,
+            },
+        )
 
         try:
             compose_path = Path(compose_file_path)
@@ -187,8 +275,14 @@ class ComposeHealthChecker:
 
             with open(compose_path, "r") as f:
                 compose_content = f.read()
-                logger.info(f"🔍 _parse_compose_services: File content length: {len(compose_content)} chars")
-                logger.info(f"🔍 _parse_compose_services: First 300 chars: {compose_content[:300]}...")
+                logger.debug(
+                    "Compose file read",
+                    extra={
+                        "event": "compose_health_check_file_read",
+                        "compose_file": compose_file_path,
+                        "content_length": len(compose_content),
+                    },
+                )
 
                 compose_data = yaml.safe_load(compose_content)
 
@@ -196,13 +290,14 @@ class ComposeHealthChecker:
             if not services:
                 raise RuntimeError(f"No services section found in: {compose_file_path}")
 
-            logger.info(f"🔍 _parse_compose_services: Parsed services: {list(services.keys())}")
-            if services:
-                first_service_name = list(services.keys())[0]
-                logger.info(
-                    f"🔍 _parse_compose_services: First service '{first_service_name}' config: "
-                    f"{services[first_service_name]}"
-                )
+            logger.debug(
+                "Compose services parsed",
+                extra={
+                    "event": "compose_health_check_services_parsed",
+                    "compose_file": compose_file_path,
+                    "service_count": len(services),
+                },
+            )
 
             return services
 
@@ -257,7 +352,14 @@ class ComposeHealthChecker:
         # If we have critical errors, log them but don't fail immediately
         # Let the timeout mechanism handle the failure with full context
         if critical_errors:
-            logger.warning(f"Critical errors during health check: {critical_errors}")
+            logger.warning(
+                "Critical errors during compose health check",
+                extra={
+                    "event": "compose_health_check_critical_errors",
+                    "project_name": project_name,
+                    "errors": critical_errors,
+                },
+            )
 
         return health_status
 

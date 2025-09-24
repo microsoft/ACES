@@ -1,16 +1,25 @@
-"""BenchmarkConfigLoader for loading and parsing YAML task definitions and benchmark configurations."""
+"""Benchmark configuration loader for benchmark task definitions.
 
-from logging import getLogger
+Logging category: CONFIG.
+"""
+
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
 
+from ...logging_config import (
+    LogCategory,
+    get_saber_logger,
+    log_operation_failure,
+    log_operation_start,
+    log_operation_success,
+)
 from .exceptions import InvalidTaskDefinitionException
 from .subtask import SubTask
 from .task import Task
 
-logger = getLogger(__name__)
+logger = get_saber_logger(LogCategory.CONFIG, __name__)
 
 
 def deep_merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
@@ -79,49 +88,103 @@ class BenchmarkConfigLoader:
             InvalidTaskDefinitionException: If YAML is invalid or malformed
         """
         tasks_dir = Path(tasks_dir_path)
-        logger.info(f"Loading tasks from directory: {tasks_dir}")
+        operation_context = {
+            "domain": self.domain,
+            "tasks_dir": str(tasks_dir),
+        }
+        log_operation_start(logger, "benchmark_tasks_directory_load", **operation_context)
 
-        if not tasks_dir.exists():
-            raise InvalidTaskDefinitionException(f"Tasks directory not found: {tasks_dir}", str(tasks_dir))
+        try:
+            if not tasks_dir.exists():
+                error = InvalidTaskDefinitionException(f"Tasks directory not found: {tasks_dir}", str(tasks_dir))
+                log_operation_failure(logger, "benchmark_tasks_directory_load", error, **operation_context)
+                raise error
 
-        if not tasks_dir.is_dir():
-            raise InvalidTaskDefinitionException(f"Tasks path is not a directory: {tasks_dir}", str(tasks_dir))
+            if not tasks_dir.is_dir():
+                error = InvalidTaskDefinitionException(f"Tasks path is not a directory: {tasks_dir}", str(tasks_dir))
+                log_operation_failure(logger, "benchmark_tasks_directory_load", error, **operation_context)
+                raise error
 
-        # Load global configuration first
-        global_config_path = tasks_dir / "global.yaml"
-        if not global_config_path.exists():
-            raise InvalidTaskDefinitionException(
-                f"Missing required global.yaml in tasks directory: {global_config_path}", str(global_config_path)
+            # Load global configuration first
+            global_config_path = tasks_dir / "global.yaml"
+            if not global_config_path.exists():
+                error = InvalidTaskDefinitionException(
+                    f"Missing required global.yaml in tasks directory: {global_config_path}",
+                    str(global_config_path),
+                )
+                log_operation_failure(logger, "benchmark_tasks_directory_load", error, **operation_context)
+                raise error
+
+            self._load_global_config(global_config_path)
+
+            # Discover all task files (exclude global.yaml)
+            task_files = self._discover_task_files(tasks_dir)
+            if not task_files:
+                error = InvalidTaskDefinitionException(
+                    f"No task files found in directory: {tasks_dir}",
+                    str(tasks_dir),
+                )
+                log_operation_failure(logger, "benchmark_tasks_directory_load", error, **operation_context)
+                raise error
+
+            logger.info(
+                "Discovered task files",
+                extra={
+                    "event": "benchmark_task_files_discovered",
+                    "domain": self.domain,
+                    "tasks_dir": str(tasks_dir),
+                    "task_file_count": len(task_files),
+                    "task_files": [str(path.relative_to(tasks_dir)) for path in task_files],
+                },
             )
 
-        self._load_global_config(global_config_path)
+            # Load tasks from all files
+            all_tasks: Dict[str, Task] = {}
+            for task_file in task_files:
+                logger.info(
+                    "Loading benchmark task file",
+                    extra={
+                        "event": "benchmark_task_file_loading",
+                        "task_file": str(task_file),
+                        "domain": self.domain,
+                    },
+                )
+                file_tasks = self._load_tasks_from_single_file(task_file)
 
-        # Discover all task files (exclude global.yaml)
-        task_files = self._discover_task_files(tasks_dir)
-        if not task_files:
-            raise InvalidTaskDefinitionException(f"No task files found in directory: {tasks_dir}", str(tasks_dir))
+                # Check for duplicate task IDs across files
+                for task_id in file_tasks:
+                    if task_id in all_tasks:
+                        error_message = (
+                            f"Duplicate task_id '{task_id}' found in {task_file}. "
+                            "Previously defined in another task file."
+                        )
+                        error = InvalidTaskDefinitionException(error_message, str(task_file))
+                        log_operation_failure(
+                            logger,
+                            "benchmark_tasks_directory_load",
+                            error,
+                            duplicate_task_id=task_id,
+                            conflicting_file=str(task_file),
+                            **operation_context,
+                        )
+                        raise error
 
-        logger.info(f"Found {len(task_files)} task files to load")
+                all_tasks.update(file_tasks)
 
-        # Load tasks from all files
-        all_tasks = {}
-        for task_file in task_files:
-            logger.info(f"Loading tasks from: {task_file}")
-            file_tasks = self._load_tasks_from_single_file(task_file)
+            log_operation_success(
+                logger,
+                "benchmark_tasks_directory_load",
+                task_count=len(all_tasks),
+                task_file_count=len(task_files),
+                **operation_context,
+            )
+            return all_tasks
 
-            # Check for duplicate task IDs across files
-            for task_id in file_tasks:
-                if task_id in all_tasks:
-                    raise InvalidTaskDefinitionException(
-                        f"Duplicate task_id '{task_id}' found in {task_file}. "
-                        f"Previously defined in another task file.",
-                        str(task_file),
-                    )
-
-            all_tasks.update(file_tasks)
-
-        logger.info(f"Successfully loaded {len(all_tasks)} tasks from {len(task_files)} files")
-        return all_tasks
+        except InvalidTaskDefinitionException:
+            raise
+        except Exception as exc:  # pragma: no cover - fail fast for unexpected issues
+            log_operation_failure(logger, "benchmark_tasks_directory_load", exc, **operation_context)
+            raise
 
     def load_tasks_from_file(self, tasks_file_path: str) -> Dict[str, Task]:
         """
@@ -139,83 +202,120 @@ class BenchmarkConfigLoader:
             InvalidTaskDefinitionException: If YAML is invalid or malformed
         """
         tasks_path = Path(tasks_file_path)
-        logger.info(f"Loading tasks from YAML file: {tasks_path}")
+        operation_context = {
+            "domain": self.domain,
+            "tasks_file": str(tasks_path),
+        }
+        log_operation_start(logger, "benchmark_tasks_file_load", **operation_context)
 
         try:
             if not tasks_path.exists():
-                logger.error(f"Tasks file not found: {tasks_path}")
-                raise InvalidTaskDefinitionException(f"Tasks file not found: {tasks_path}", str(tasks_path))
+                error = InvalidTaskDefinitionException(f"Tasks file not found: {tasks_path}", str(tasks_path))
+                log_operation_failure(logger, "benchmark_tasks_file_load", error, **operation_context)
+                raise error
 
             with open(tasks_path, "r", encoding="utf-8") as file:
                 self.yaml_data = yaml.safe_load(file)
-                logger.debug(f"Successfully loaded YAML data from {tasks_path}")
 
             if not isinstance(self.yaml_data, dict):
-                logger.error("YAML root must be a dictionary (got sequence or scalar)")
-                raise InvalidTaskDefinitionException("YAML root must be a dictionary", str(tasks_path))
+                error = InvalidTaskDefinitionException("YAML root must be a dictionary", str(tasks_path))
+                log_operation_failure(logger, "benchmark_tasks_file_load", error, **operation_context)
+                raise error
 
-            # Validate domain consistency
             yaml_domain = self.yaml_data.get("domain")
             if yaml_domain != self.domain:
-                logger.error(f"Domain mismatch: expected '{self.domain}', got '{yaml_domain}'")
-                raise InvalidTaskDefinitionException(
+                error = InvalidTaskDefinitionException(
                     f"Domain mismatch: expected '{self.domain}', got '{yaml_domain}'",
                     str(tasks_path),
                 )
+                log_operation_failure(logger, "benchmark_tasks_file_load", error, **operation_context)
+                raise error
 
-            # Parse permanent environment configuration (optional)
             self.permanent_environment = self.yaml_data.get("permanent_environment")
-            if self.permanent_environment:
-                logger.info(f"Found permanent environment configuration: {self.permanent_environment}")
-            else:
-                logger.info("No permanent environment configuration found")
+            logger.info(
+                "Permanent environment configuration processed",
+                extra={
+                    "event": "benchmark_permanent_environment_detected",
+                    "domain": self.domain,
+                    "tasks_file": str(tasks_path),
+                    "permanent_environment": self.permanent_environment,
+                    "configured": bool(self.permanent_environment),
+                },
+            )
 
-            # Parse global defaults configuration (optional)
             self._parse_global_defaults()
-
-            # Parse benchmark configuration (optional)
             self._parse_benchmark_config()
 
-            # Parse tasks
             tasks_data = self.yaml_data.get("tasks", [])
             if not isinstance(tasks_data, list):
-                logger.error("Tasks section must be a list of task objects")
-                raise InvalidTaskDefinitionException("Tasks must be a list", str(tasks_path))
+                error = InvalidTaskDefinitionException("Tasks must be a list", str(tasks_path))
+                log_operation_failure(logger, "benchmark_tasks_file_load", error, **operation_context)
+                raise error
 
-            # Parse executors configuration (optional)
             executors_data = self.yaml_data.get("executors")
             if executors_data is not None:
                 if not isinstance(executors_data, list):
-                    logger.error("executors field must be a list")
-                    raise InvalidTaskDefinitionException("Executors must be a list", str(tasks_path))
+                    error = InvalidTaskDefinitionException("Executors must be a list", str(tasks_path))
+                    log_operation_failure(logger, "benchmark_tasks_file_load", error, **operation_context)
+                    raise error
 
                 self.allowed_executors = executors_data
-                logger.info(f"Loaded executor configuration: {self.allowed_executors}")
             else:
                 self.allowed_executors = None
-                logger.info("No executor configuration found, all executors will be available")
 
-            tasks = {}
-            logger.info(f"Found {len(tasks_data)} tasks to load")
+            logger.info(
+                "Executors configuration processed",
+                extra={
+                    "event": "benchmark_executors_configuration_processed",
+                    "tasks_file": str(tasks_path),
+                    "domain": self.domain,
+                    "executor_count": len(self.allowed_executors or []),
+                    "restricts_executors": self.allowed_executors is not None,
+                },
+            )
 
-            for i, task_data in enumerate(tasks_data):
-                logger.debug(f"Parsing task {i+1}/{len(tasks_data)}")
+            tasks: Dict[str, Task] = {}
+            logger.info(
+                "Parsing tasks from YAML file",
+                extra={
+                    "event": "benchmark_tasks_parse_start",
+                    "tasks_file": str(tasks_path),
+                    "domain": self.domain,
+                    "task_count": len(tasks_data),
+                },
+            )
+
+            for index, task_data in enumerate(tasks_data):
+                logger.debug(
+                    "Parsing benchmark task entry",
+                    extra={
+                        "event": "benchmark_task_entry_parsing",
+                        "tasks_file": str(tasks_path),
+                        "domain": self.domain,
+                        "task_index": index,
+                        "total_tasks": len(tasks_data),
+                    },
+                )
                 task = self._parse_task(task_data)
                 tasks[task.task_id] = task
-                logger.info(f"Successfully loaded task '{task.task_id}' " f"with {len(task.subtasks)} subtasks")
 
-            logger.info(f"BenchmarkConfigLoader completed. Loaded {len(tasks)} tasks " f"for domain '{self.domain}'")
-
+            log_operation_success(
+                logger,
+                "benchmark_tasks_file_load",
+                task_count=len(tasks),
+                **operation_context,
+            )
             return tasks
 
-        except yaml.YAMLError as e:
-            logger.error(f"YAML parsing error: {e}")
-            raise InvalidTaskDefinitionException(f"YAML parsing error: {e}", str(tasks_path))
-        except Exception as e:
-            if isinstance(e, InvalidTaskDefinitionException):
-                raise
-            logger.error(f"Unexpected error loading tasks: {e}")
-            raise InvalidTaskDefinitionException(f"Error loading tasks: {e}", str(tasks_path))
+        except yaml.YAMLError as exc:
+            error = InvalidTaskDefinitionException(f"YAML parsing error: {exc}", str(tasks_path))
+            log_operation_failure(logger, "benchmark_tasks_file_load", error, **operation_context)
+            raise error
+        except InvalidTaskDefinitionException:
+            raise
+        except Exception as exc:  # pragma: no cover - unexpected errors should fail fast
+            log_operation_failure(logger, "benchmark_tasks_file_load", exc, **operation_context)
+            raise InvalidTaskDefinitionException(f"Error loading tasks: {exc}", str(tasks_path))
 
     def _load_global_config(self, global_config_path: Path) -> None:
         """
@@ -227,48 +327,62 @@ class BenchmarkConfigLoader:
         Raises:
             InvalidTaskDefinitionException: If global config is invalid
         """
-        logger.info(f"Loading global configuration from: {global_config_path}")
+        operation_context = {
+            "domain": self.domain,
+            "global_config_path": str(global_config_path),
+        }
+        log_operation_start(logger, "benchmark_global_config_load", **operation_context)
 
         try:
             with open(global_config_path, "r", encoding="utf-8") as file:
                 global_data = yaml.safe_load(file)
-                logger.debug(f"Successfully loaded global YAML data from {global_config_path}")
 
             if not isinstance(global_data, dict):
-                raise InvalidTaskDefinitionException("Global YAML root must be a dictionary", str(global_config_path))
+                error = InvalidTaskDefinitionException("Global YAML root must be a dictionary", str(global_config_path))
+                log_operation_failure(logger, "benchmark_global_config_load", error, **operation_context)
+                raise error
 
-            # Validate domain consistency
             yaml_domain = global_data.get("domain")
             if yaml_domain != self.domain:
-                raise InvalidTaskDefinitionException(
+                error = InvalidTaskDefinitionException(
                     f"Domain mismatch in global.yaml: expected '{self.domain}', got '{yaml_domain}'",
                     str(global_config_path),
                 )
+                log_operation_failure(logger, "benchmark_global_config_load", error, **operation_context)
+                raise error
 
-            # Store global data for processing
             self.yaml_data = global_data
 
-            # Parse permanent environment configuration (optional)
             self.permanent_environment = global_data.get("permanent_environment")
-            if self.permanent_environment:
-                logger.info(f"Found permanent environment configuration: {self.permanent_environment}")
-            else:
-                logger.info("No permanent environment configuration found")
+            logger.info(
+                "Global permanent environment processed",
+                extra={
+                    "event": "benchmark_global_permanent_environment",
+                    "domain": self.domain,
+                    "global_config_path": str(global_config_path),
+                    "permanent_environment": self.permanent_environment,
+                    "configured": bool(self.permanent_environment),
+                },
+            )
 
-            # Parse global defaults configuration (optional)
             self._parse_global_defaults()
-
-            # Parse benchmark configuration (optional)
             self._parse_benchmark_config()
 
-            logger.info("Global configuration loaded successfully")
+            log_operation_success(
+                logger,
+                "benchmark_global_config_load",
+                **operation_context,
+            )
 
-        except yaml.YAMLError as e:
-            raise InvalidTaskDefinitionException(f"YAML parsing error in global.yaml: {e}", str(global_config_path))
-        except Exception as e:
-            if isinstance(e, InvalidTaskDefinitionException):
-                raise
-            raise InvalidTaskDefinitionException(f"Error loading global.yaml: {e}", str(global_config_path))
+        except yaml.YAMLError as exc:
+            error = InvalidTaskDefinitionException(f"YAML parsing error in global.yaml: {exc}", str(global_config_path))
+            log_operation_failure(logger, "benchmark_global_config_load", error, **operation_context)
+            raise error
+        except InvalidTaskDefinitionException:
+            raise
+        except Exception as exc:  # pragma: no cover - unexpected file failures
+            log_operation_failure(logger, "benchmark_global_config_load", exc, **operation_context)
+            raise InvalidTaskDefinitionException(f"Error loading global.yaml: {exc}", str(global_config_path))
 
     def _discover_task_files(self, tasks_dir: Path) -> List[Path]:
         """
@@ -292,7 +406,16 @@ class BenchmarkConfigLoader:
         # Sort for deterministic loading order
         task_files.sort()
 
-        logger.debug(f"Discovered {len(task_files)} task files: {[str(f.relative_to(tasks_dir)) for f in task_files]}")
+        logger.debug(
+            "Discovered task files",
+            extra={
+                "event": "benchmark_task_files_discovered_debug",
+                "domain": self.domain,
+                "tasks_dir": str(tasks_dir),
+                "task_file_count": len(task_files),
+                "task_files": [str(f.relative_to(tasks_dir)) for f in task_files],
+            },
+        )
         return task_files
 
     def _load_tasks_from_single_file(self, task_file_path: Path) -> Dict[str, Task]:
@@ -308,13 +431,20 @@ class BenchmarkConfigLoader:
         Raises:
             InvalidTaskDefinitionException: If task file is invalid
         """
+        operation_context = {
+            "domain": self.domain,
+            "task_file": str(task_file_path),
+        }
+        log_operation_start(logger, "benchmark_task_file_parse", **operation_context)
+
         try:
             with open(task_file_path, "r", encoding="utf-8") as file:
                 file_data = yaml.safe_load(file)
-                logger.debug(f"Successfully loaded YAML data from {task_file_path}")
 
             if not isinstance(file_data, dict):
-                raise InvalidTaskDefinitionException("Task file YAML root must be a dictionary", str(task_file_path))
+                error = InvalidTaskDefinitionException("Task file YAML root must be a dictionary", str(task_file_path))
+                log_operation_failure(logger, "benchmark_task_file_parse", error, **operation_context)
+                raise error
 
             # Load shared configuration for this directory if it exists
             shared_config = self._load_shared_config(task_file_path.parent)
@@ -322,35 +452,89 @@ class BenchmarkConfigLoader:
             # Parse tasks from this file
             tasks_data = file_data.get("tasks", [])
             if not isinstance(tasks_data, list):
-                raise InvalidTaskDefinitionException(
+                error = InvalidTaskDefinitionException(
                     "'tasks' section must be a list of task objects", str(task_file_path)
                 )
+                log_operation_failure(logger, "benchmark_task_file_parse", error, **operation_context)
+                raise error
 
             if not tasks_data:
-                logger.warning(f"No tasks found in file: {task_file_path}")
+                logger.warning(
+                    "Task file contained no tasks",
+                    extra={
+                        "event": "benchmark_task_file_empty",
+                        "domain": self.domain,
+                        "task_file": str(task_file_path),
+                    },
+                )
+                log_operation_success(
+                    logger,
+                    "benchmark_task_file_parse",
+                    task_count=0,
+                    **operation_context,
+                )
                 return {}
 
             tasks = {}
-            logger.debug(f"Found {len(tasks_data)} tasks in {task_file_path}")
+            logger.debug(
+                "Benchmark task entries discovered",
+                extra={
+                    "event": "benchmark_task_entries_discovered",
+                    "domain": self.domain,
+                    "task_file": str(task_file_path),
+                    "task_count": len(tasks_data),
+                },
+            )
 
             for i, task_data in enumerate(tasks_data):
-                logger.debug(f"Parsing task {i+1}/{len(tasks_data)} from {task_file_path}")
+                logger.debug(
+                    "Parsing task from file",
+                    extra={
+                        "event": "benchmark_task_parsing",
+                        "domain": self.domain,
+                        "task_file": str(task_file_path),
+                        "task_index": i,
+                        "total_tasks": len(tasks_data),
+                    },
+                )
 
                 # Merge shared config into task data (task-specific takes precedence)
                 merged_task_data = self._merge_shared_config(task_data, shared_config)
 
                 task = self._parse_task(merged_task_data)
                 tasks[task.task_id] = task
-                logger.info(f"Successfully loaded task '{task.task_id}' from {task_file_path.name}")
+                logger.info(
+                    "Benchmark task parsed",
+                    extra={
+                        "event": "benchmark_task_parsed",
+                        "domain": self.domain,
+                        "task_file": str(task_file_path),
+                        "task_id": task.task_id,
+                        "subtask_count": len(task.subtasks),
+                    },
+                )
 
+            log_operation_success(
+                logger,
+                "benchmark_task_file_parse",
+                task_count=len(tasks),
+                **operation_context,
+            )
             return tasks
 
-        except yaml.YAMLError as e:
-            raise InvalidTaskDefinitionException(f"YAML parsing error in {task_file_path}: {e}", str(task_file_path))
-        except Exception as e:
-            if isinstance(e, InvalidTaskDefinitionException):
-                raise
-            raise InvalidTaskDefinitionException(f"Error loading task file {task_file_path}: {e}", str(task_file_path))
+        except yaml.YAMLError as exc:
+            error = InvalidTaskDefinitionException(
+                f"YAML parsing error in {task_file_path}: {exc}", str(task_file_path)
+            )
+            log_operation_failure(logger, "benchmark_task_file_parse", error, **operation_context)
+            raise error
+        except InvalidTaskDefinitionException:
+            raise
+        except Exception as exc:  # pragma: no cover - fail fast on unexpected errors
+            log_operation_failure(logger, "benchmark_task_file_parse", exc, **operation_context)
+            raise InvalidTaskDefinitionException(
+                f"Error loading task file {task_file_path}: {exc}", str(task_file_path)
+            )
 
     def _load_shared_config(self, directory: Path) -> Dict[str, Any]:
         """
@@ -365,18 +549,30 @@ class BenchmarkConfigLoader:
         shared_file = directory / "shared.yaml"
 
         if not shared_file.exists():
-            logger.debug(f"No shared.yaml found in {directory}")
+            logger.debug(
+                "No shared configuration found",
+                extra={
+                    "event": "benchmark_shared_config_missing",
+                    "directory": str(directory),
+                },
+            )
             return {}
 
         try:
             with open(shared_file, "r", encoding="utf-8") as file:
                 shared_data = yaml.safe_load(file)
-                logger.debug(f"Successfully loaded shared config from {shared_file}")
 
             if not isinstance(shared_data, dict):
                 raise InvalidTaskDefinitionException("Shared config YAML root must be a dictionary", str(shared_file))
 
-            logger.info(f"Loaded shared configuration from {shared_file}")
+            logger.info(
+                "Shared configuration loaded",
+                extra={
+                    "event": "benchmark_shared_config_loaded",
+                    "shared_file": str(shared_file),
+                    "keys": list(shared_data.keys()),
+                },
+            )
             return shared_data
 
         except yaml.YAMLError as e:
@@ -412,13 +608,24 @@ class BenchmarkConfigLoader:
 
             # Deep merge: shared first, then task-specific (task overrides shared)
             merged_data["initial_context"] = deep_merge_dicts(shared_initial_context, task_initial_context)
-
-            logger.debug(f"Deep merged shared initial_context for task {task_data.get('task_id', 'unknown')}")
+            logger.debug(
+                "Merged shared initial context",
+                extra={
+                    "event": "benchmark_initial_context_merged",
+                    "task_id": task_data.get("task_id", "unknown"),
+                },
+            )
 
         elif "initial_context" in shared_config:
             # No task-specific initial_context, use shared
             merged_data["initial_context"] = shared_config["initial_context"].copy()
-            logger.debug(f"Applied shared initial_context for task {task_data.get('task_id', 'unknown')}")
+            logger.debug(
+                "Applied shared initial context",
+                extra={
+                    "event": "benchmark_initial_context_applied",
+                    "task_id": task_data.get("task_id", "unknown"),
+                },
+            )
 
         # Could extend this to merge other configuration sections as needed
         # For now, we focus on initial_context as that's where database_connection lives
@@ -495,7 +702,13 @@ class BenchmarkConfigLoader:
         if global_defaults_data is None:
             # No global defaults specified - use empty dict
             self.global_defaults = {}
-            logger.info("No global_defaults section found, using empty defaults")
+            logger.info(
+                "No global defaults configured",
+                extra={
+                    "event": "benchmark_global_defaults_missing",
+                    "domain": self.domain,
+                },
+            )
             return
 
         if not isinstance(global_defaults_data, dict):
@@ -536,7 +749,14 @@ class BenchmarkConfigLoader:
 
         # Store global defaults
         self.global_defaults = global_defaults_data.copy()
-        logger.info(f"Loaded global defaults configuration: {self.global_defaults}")
+        logger.info(
+            "Loaded global defaults configuration",
+            extra={
+                "event": "benchmark_global_defaults_loaded",
+                "domain": self.domain,
+                "sections": list(self.global_defaults.keys()),
+            },
+        )
 
     def _parse_benchmark_config(self) -> None:
         """
@@ -583,8 +803,15 @@ class BenchmarkConfigLoader:
 
         # Store final benchmark configuration
         self.benchmark_config = merged_config
-
-        logger.info(f"Loaded benchmark configuration: {self.benchmark_config}")
+        logger.info(
+            "Loaded benchmark configuration",
+            extra={
+                "event": "benchmark_config_loaded",
+                "domain": self.domain,
+                "keys": list(self.benchmark_config.keys()),
+                "episode_attempts": self.benchmark_config.get("episode_attempts"),
+            },
+        )
 
     def _parse_task(self, task_data: Dict[str, Any]) -> Task:
         """
@@ -596,177 +823,255 @@ class BenchmarkConfigLoader:
         Returns:
             Task instance
         """
-        required_fields = ["task_id", "title", "description"]
-        for field in required_fields:
-            if field not in task_data:
-                logger.error(f"Missing required field '{field}' in task definition")
-                raise InvalidTaskDefinitionException(f"Missing required field: {field}")
+        candidate_task_id = task_data.get("task_id", "unknown")
+        operation_context = {
+            "domain": self.domain,
+            "task_id": candidate_task_id,
+        }
+        failure_context: Dict[str, Any] = {}
+        log_operation_start(logger, "benchmark_task_parse", **operation_context)
 
-        task_id = task_data["task_id"]
-        title = task_data["title"]
-        description = task_data["description"]
-        initial_context = task_data.get("initial_context", {})
+        try:
+            # Updated required fields - removed prompt_template_file, prompts are handled separately
+            required_fields = ["task_id", "title", "description"]
+            for field in required_fields:
+                if field not in task_data:
+                    failure_context = {"missing_field": field}
+                    raise InvalidTaskDefinitionException(f"Missing required field: {field}")
 
-        logger.debug(f"Parsing task '{task_id}': {title}")
+            task_id = task_data["task_id"]
+            operation_context["task_id"] = task_id
+            title = task_data["title"]
+            description = task_data["description"]
+            initial_context = task_data.get("initial_context", {})
 
-        # NEW: Parse prompts with global defaults inheritance
-        if "prompts" in task_data:
-            task_prompts = task_data["prompts"]
-            if not isinstance(task_prompts, dict):
-                raise InvalidTaskDefinitionException(f"Task '{task_id}' prompts must be a dictionary")
-        else:
-            task_prompts = {}
+            logger.debug(
+                "Parsing benchmark task",
+                extra={
+                    "event": "benchmark_task_parsing_start",
+                    "domain": self.domain,
+                    "task_id": task_id,
+                    "title": title,
+                },
+            )
 
-        # Inherit from global defaults, allow task-level overrides
-        final_prompts = {}
-        global_prompts = self.global_defaults.get("prompts", {})
-
-        for prompt_type in ["instruction", "assistant", "submit"]:
-            if prompt_type in task_prompts:
-                final_prompts[prompt_type] = task_prompts[prompt_type]
-            elif prompt_type in global_prompts:
-                final_prompts[prompt_type] = global_prompts[prompt_type]
+            # NEW: Parse prompts with global defaults inheritance
+            if "prompts" in task_data:
+                task_prompts = task_data["prompts"]
+                if not isinstance(task_prompts, dict):
+                    raise InvalidTaskDefinitionException(f"Task '{task_id}' prompts must be a dictionary")
             else:
+                task_prompts = {}
+
+            # Inherit from global defaults, allow task-level overrides
+            final_prompts = {}
+            global_prompts = self.global_defaults.get("prompts", {})
+
+            for prompt_type in ["instruction", "assistant", "submit"]:
+                if prompt_type in task_prompts:
+                    final_prompts[prompt_type] = task_prompts[prompt_type]
+                elif prompt_type in global_prompts:
+                    final_prompts[prompt_type] = global_prompts[prompt_type]
+                else:
+                    raise InvalidTaskDefinitionException(
+                        f"Task '{task_id}' missing '{prompt_type}' prompt and no global default provided"
+                    )
+
+            # Validate template files exist
+            for prompt_type, template_file in final_prompts.items():
+                if not isinstance(template_file, str) or not template_file.strip():
+                    raise InvalidTaskDefinitionException(
+                        f"Task '{task_id}' {prompt_type} template file must be a non-empty string, got: {template_file}"
+                    )
+                # Note: Template file existence will be validated by PromptGenerator during startup
+
+            logger.debug(
+                "Task prompts resolved",
+                extra={
+                    "event": "benchmark_task_prompts_resolved", 
+                    "task_id": task_id,
+                    "resolved_prompts": final_prompts,
+                }
+            )
+
+            sandbox_environment = task_data.get("environment") or task_data.get("sandbox_environment")
+            logger.debug(
+                "Resolved task environment settings",
+                extra={
+                    "event": "benchmark_task_environment_resolved",
+                    "task_id": task_id,
+                    "resolved_environment": sandbox_environment,
+                    "environment_field": task_data.get("environment"),
+                    "sandbox_environment_field": task_data.get("sandbox_environment"),
+                },
+            )
+
+            task_execution_config = task_data.get("execution_config", {})
+            global_execution_defaults = self.global_defaults.get("execution_config", {})
+
+            execution_config = deep_merge_dicts(global_execution_defaults, task_execution_config)
+            if "timeout" not in execution_config:
+                failure_context = {"missing_field": "execution_config.timeout"}
+                message = f"Task '{task_id}' missing required execution_config.timeout " "(no implicit default)"
+                raise InvalidTaskDefinitionException(message)
+            if not isinstance(execution_config["timeout"], int) or execution_config["timeout"] <= 0:
+                failure_context = {"invalid_field": "execution_config.timeout", "value": execution_config["timeout"]}
+                message = (
+                    f"Task '{task_id}' execution_config.timeout must be positive int, "
+                    f"got: {execution_config['timeout']}"
+                )
+                raise InvalidTaskDefinitionException(message)
+
+            if "allowed_executors" not in execution_config and self.allowed_executors is not None:
+                execution_config["allowed_executors"] = self.allowed_executors
+            if "allowed_executors" not in execution_config:
+                failure_context = {"missing_field": "execution_config.allowed_executors"}
+                message = f"Task '{task_id}' missing required allowed_executors " "(no implicit default)"
+                raise InvalidTaskDefinitionException(message)
+            if not isinstance(execution_config["allowed_executors"], list) or not execution_config["allowed_executors"]:
+                failure_context = {
+                    "invalid_field": "execution_config.allowed_executors",
+                    "value": execution_config["allowed_executors"],
+                }
+                message = (
+                    f"Task '{task_id}' allowed_executors must be a non-empty list, "
+                    f"got: {execution_config['allowed_executors']}"
+                )
+                raise InvalidTaskDefinitionException(message)
+
+            task_episode_config = task_data.get("episode_config", {})
+            global_episode_defaults = self.global_defaults.get("episode_config", {})
+
+            episode_config = deep_merge_dicts(global_episode_defaults, task_episode_config)
+
+            if "max_steps" not in episode_config:
+                failure_context = {"missing_field": "episode_config.max_steps"}
+                message = f"Task '{task_id}' missing required episode_config.max_steps " "(no implicit default)"
+                raise InvalidTaskDefinitionException(message)
+            if not isinstance(episode_config["max_steps"], int) or episode_config["max_steps"] <= 0:
+                failure_context = {
+                    "invalid_field": "episode_config.max_steps",
+                    "value": episode_config["max_steps"],
+                }
+                message = (
+                    f"Task '{task_id}' episode_config.max_steps must be positive int, "
+                    f"got: {episode_config['max_steps']}"
+                )
+                raise InvalidTaskDefinitionException(message)
+
+            task_benchmark_config = task_data.get("benchmark_config", {})
+            global_benchmark_defaults = self.global_defaults.get("benchmark_config", {})
+
+            if not isinstance(task_benchmark_config, dict):
+                failure_context = {"invalid_field": "benchmark_config", "value": task_benchmark_config}
                 raise InvalidTaskDefinitionException(
-                    f"Task '{task_id}' missing '{prompt_type}' prompt and no global default provided"
+                    f"Task '{task_id}' benchmark_config must be a dictionary if provided"
                 )
 
-        # Validate template files exist
-        for prompt_type, template_file in final_prompts.items():
-            if not isinstance(template_file, str) or not template_file.strip():
-                raise InvalidTaskDefinitionException(
-                    f"Task '{task_id}' {prompt_type} template file must be a non-empty string, got: {template_file}"
+            if "episode_attempts" in task_benchmark_config:
+                episode_attempts = task_benchmark_config["episode_attempts"]
+                if not isinstance(episode_attempts, int) or episode_attempts < 1:
+                    failure_context = {
+                        "invalid_field": "benchmark_config.episode_attempts",
+                        "value": episode_attempts,
+                    }
+                    raise InvalidTaskDefinitionException(
+                        f"Task '{task_id}' episode_attempts must be a positive integer, got: {episode_attempts}"
+                    )
+
+            merged_benchmark_config: Dict[str, Any] = {}
+            merged_benchmark_config = deep_merge_dicts(merged_benchmark_config, global_benchmark_defaults)
+            merged_benchmark_config = deep_merge_dicts(merged_benchmark_config, self.benchmark_config)
+            merged_benchmark_config = deep_merge_dicts(merged_benchmark_config, task_benchmark_config)
+            if "episode_attempts" not in merged_benchmark_config or merged_benchmark_config["episode_attempts"] < 1:
+                failure_context = {"missing_field": "benchmark_config.episode_attempts"}
+                message = (
+                    f"Task '{task_id}' does not have valid episode_attempts configuration. "
+                    "Each task must have episode_attempts either from domain-level benchmark_config "
+                    "or task-level override."
                 )
-            # Note: Template file existence will be validated by PromptGenerator during startup
+                raise InvalidTaskDefinitionException(message)
 
-        logger.debug(f"Task '{task_id}' resolved prompts: {final_prompts}")
-
-        # Get sandbox environment string (resolution happens in execution layer)
-        # Support both 'environment' and 'sandbox_environment' for flexibility
-        sandbox_environment = task_data.get("environment") or task_data.get("sandbox_environment")
-
-        # 🔍 DEBUG: Log what environment was parsed
-        logger.info(f"🔍 DEBUG: Task '{task_id}' environment from YAML: {sandbox_environment}")
-        logger.info(f"🔍 DEBUG: Raw task_data environment field: {task_data.get('environment')}")
-        logger.info(f"🔍 DEBUG: Raw task_data sandbox_environment field: {task_data.get('sandbox_environment')}")
-
-        # Get execution configuration with global defaults fallback
-        task_execution_config = task_data.get("execution_config", {})
-        global_execution_defaults = self.global_defaults.get("execution_config", {})
-
-        # Deep merge global defaults with task-specific config (task-specific takes precedence)
-        execution_config = deep_merge_dicts(global_execution_defaults, task_execution_config)
-        # Enforce required execution_config.timeout after merge (explicit or via global defaults)
-        if "timeout" not in execution_config:
-            raise InvalidTaskDefinitionException(
-                f"Task '{task_id}' missing required execution_config.timeout (no implicit default)"
-            )
-        if not isinstance(execution_config["timeout"], int) or execution_config["timeout"] <= 0:
-            raise InvalidTaskDefinitionException(
-                f"Task '{task_id}' execution_config.timeout must be positive int, got: {execution_config['timeout']}"
-            )
-
-        # Resolve allowed_executors precedence: task-level explicit > global defaults > domain-level executors
-        if "allowed_executors" not in execution_config and self.allowed_executors is not None:
-            execution_config["allowed_executors"] = self.allowed_executors
-        if "allowed_executors" not in execution_config:
-            raise InvalidTaskDefinitionException(
-                f"Task '{task_id}' missing required allowed_executors (no implicit default)"
-            )
-        if not isinstance(execution_config["allowed_executors"], list) or not execution_config["allowed_executors"]:
-            raise InvalidTaskDefinitionException(
-                f"Task '{task_id}' allowed_executors must be a non-empty list, "
-                f"got: {execution_config['allowed_executors']}"
-            )
-
-        # Get episode configuration with global defaults fallback
-        task_episode_config = task_data.get("episode_config", {})
-        global_episode_defaults = self.global_defaults.get("episode_config", {})
-
-        # Deep merge global defaults with task-specific config (task-specific takes precedence)
-        episode_config = deep_merge_dicts(global_episode_defaults, task_episode_config)
-
-        # Enforce required episode_config.max_steps after merge
-        if "max_steps" not in episode_config:
-            raise InvalidTaskDefinitionException(
-                f"Task '{task_id}' missing required episode_config.max_steps (no implicit default)"
-            )
-        if not isinstance(episode_config["max_steps"], int) or episode_config["max_steps"] <= 0:
-            raise InvalidTaskDefinitionException(
-                f"Task '{task_id}' episode_config.max_steps must be positive int, got: {episode_config['max_steps']}"
-            )
-
-        # Get task-level benchmark configuration with global defaults fallback
-        task_benchmark_config = task_data.get("benchmark_config", {})
-        global_benchmark_defaults = self.global_defaults.get("benchmark_config", {})
-
-        if not isinstance(task_benchmark_config, dict):
-            raise InvalidTaskDefinitionException(f"Task '{task_id}' benchmark_config must be a dictionary if provided")
-
-        # Validate task-level episode_attempts if provided
-        if "episode_attempts" in task_benchmark_config:
-            episode_attempts = task_benchmark_config["episode_attempts"]
-            if not isinstance(episode_attempts, int) or episode_attempts < 1:
+            evaluation_config = task_data.get("evaluation_config")
+            if not evaluation_config:
+                failure_context = {"missing_field": "evaluation_config"}
                 raise InvalidTaskDefinitionException(
-                    f"Task '{task_id}' episode_attempts must be a positive integer, got: {episode_attempts}"
+                    f"Task '{task_id}' missing required evaluation_config section. "
+                    "All tasks MUST have evaluation configuration."
                 )
 
-        # Deep merge configurations in order of precedence:
-        # 1. Global defaults (lowest priority)
-        # 2. Domain-level benchmark_config
-        # 3. Task-level benchmark_config (highest priority)
-        merged_benchmark_config: Dict[str, Any] = {}
-        merged_benchmark_config = deep_merge_dicts(merged_benchmark_config, global_benchmark_defaults)
-        merged_benchmark_config = deep_merge_dicts(merged_benchmark_config, self.benchmark_config)
-        merged_benchmark_config = deep_merge_dicts(
-            merged_benchmark_config, task_benchmark_config
-        )  # Ensure final config has valid episode_attempts
-        if "episode_attempts" not in merged_benchmark_config or merged_benchmark_config["episode_attempts"] < 1:
-            raise InvalidTaskDefinitionException(
-                f"Task '{task_id}' does not have valid episode_attempts configuration. "
-                "Each task must have episode_attempts either from domain-level benchmark_config or task-level override."
+            self._validate_evaluation_config(evaluation_config, task_id)
+
+            subtasks_data = task_data.get("subtasks", [])
+            subtasks = []
+
+            logger.debug(
+                "Parsing task subtasks",
+                extra={
+                    "event": "benchmark_task_subtasks_parsing",
+                    "task_id": task_id,
+                    "subtask_count": len(subtasks_data),
+                },
+            )
+            for index, subtask_data in enumerate(subtasks_data):
+                logger.debug(
+                    "Parsing subtask",
+                    extra={
+                        "event": "benchmark_subtask_parsing",
+                        "task_id": task_id,
+                        "subtask_index": index,
+                        "total_subtasks": len(subtasks_data),
+                    },
+                )
+                subtask = self._parse_subtask(subtask_data, task_id)
+                subtasks.append(subtask)
+                logger.debug(
+                    "Subtask parsed",
+                    extra={
+                        "event": "benchmark_subtask_parsed",
+                        "task_id": task_id,
+                        "subtask_id": subtask.subtask_id,
+                    },
+                )
+
+            # Create Task with new prompts parameter (instead of prompt_template_file)
+            task = Task(
+                task_id=task_id,
+                domain=self.domain,
+                title=title,
+                description=description,
+                prompts=final_prompts,  # Use the multi-prompt structure
+                subtasks=subtasks,
+                initial_context=initial_context,
+                environment=sandbox_environment,
+                allowed_executors=execution_config.get("allowed_executors", self.allowed_executors),
+                execution_config=execution_config,
+                episode_config=episode_config,
+                benchmark_config=merged_benchmark_config,
+                evaluation_config=evaluation_config,
+                depends_on_task_id=task_data.get("depends_on_task_id"),
             )
 
-        # Validate evaluation configuration (REQUIRED - no backwards compatibility)
-        evaluation_config = task_data.get("evaluation_config")
-        if not evaluation_config:
-            raise InvalidTaskDefinitionException(
-                f"Task '{task_id}' missing required evaluation_config section. "
-                "All tasks MUST have evaluation configuration."
+            log_operation_success(
+                logger,
+                "benchmark_task_parse",
+                subtask_count=len(subtasks),
+                **operation_context,
             )
+            return task
 
-        self._validate_evaluation_config(evaluation_config, task_id)
-
-        # Parse subtasks
-        subtasks_data = task_data.get("subtasks", [])
-        subtasks = []
-
-        logger.debug(f"Task '{task_id}' has {len(subtasks_data)} subtasks")
-        for j, subtask_data in enumerate(subtasks_data):
-            logger.debug(f"Parsing subtask {j+1}/{len(subtasks_data)} for task '{task_id}'")
-            subtask = self._parse_subtask(subtask_data, task_id)
-            subtasks.append(subtask)
-            logger.debug(f"Successfully parsed subtask '{subtask.subtask_id}'")
-
-        task = Task(
-            task_id=task_id,
-            domain=self.domain,
-            title=title,
-            description=description,
-            prompts=final_prompts,
-            subtasks=subtasks,
-            initial_context=initial_context,
-            environment=sandbox_environment,
-            allowed_executors=execution_config.get("allowed_executors", self.allowed_executors),
-            execution_config=execution_config,
-            episode_config=episode_config,
-            benchmark_config=merged_benchmark_config,
-            evaluation_config=evaluation_config,
-            depends_on_task_id=task_data.get("depends_on_task_id"),
-        )
-
-        logger.debug(f"Created task '{task_id}' with {len(subtasks)} subtasks")
-        return task
+        except InvalidTaskDefinitionException as exc:
+            log_operation_failure(
+                logger,
+                "benchmark_task_parse",
+                exc,
+                **operation_context,
+                **failure_context,
+            )
+            raise
+        except Exception as exc:  # pragma: no cover - fail fast for unexpected parsing errors
+            log_operation_failure(logger, "benchmark_task_parse", exc, **operation_context)
+            raise
 
     def _parse_subtask(self, subtask_data: Dict[str, Any], task_id: str) -> SubTask:
         """

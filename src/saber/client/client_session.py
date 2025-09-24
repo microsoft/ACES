@@ -6,11 +6,11 @@ MCP tools are now handled natively by inspect_ai via mcp_server_http().
 """
 
 import asyncio
-import logging
 from typing import List, Optional
 
 import aiohttp
 
+from ..logging_config import get_session_manager_logger
 from ..models import (  # Use shared api models directly
     BenchmarkInfo,
     EpisodeCreateResponse,
@@ -22,7 +22,7 @@ from ..models import (  # Use shared api models directly
 from ..models.rest.evaluation import EvaluationCriteriaResponse, EvaluationOverrideRequest, EvaluationResultResponse
 from .models import SessionManagerConfig
 
-logger = logging.getLogger(__name__)
+logger = get_session_manager_logger(__name__)
 
 
 class ClientSessionManager:
@@ -49,7 +49,10 @@ class ClientSessionManager:
         self.timeout = config.rest_timeout
         self._current_session_id: Optional[str] = None
 
-        logger.debug(f"Initialized ClientSessionManager for: {self.base_url}")
+        logger.debug(
+            "ClientSessionManager initialized",
+            extra={"base_url": self.base_url, "client_id": self.client_id},
+        )
 
     async def create_session(self) -> str:
         """
@@ -61,7 +64,10 @@ class ClientSessionManager:
         Raises:
             Exception: If session creation fails
         """
-        logger.info(f"Creating new SABER session for client: {self.client_id}")
+        logger.info(
+            "Creating SABER session",
+            extra={"event": "session_create_requested", "client_id": self.client_id},
+        )
 
         url = f"{self.base_url}/api/v1/session"
         params = {"client_id": self.client_id}
@@ -74,10 +80,26 @@ class ClientSessionManager:
                     session_response = SessionCreateResponse(**data)
                     self._current_session_id = session_response.session_id
 
-                    logger.info(f"Created session: {session_response.session_id}")
+                    logger.info(
+                        "SABER session created",
+                        extra={
+                            "event": "session_created",
+                            "session_id": session_response.session_id,
+                            "client_id": self.client_id,
+                        },
+                    )
                     return session_response.session_id
                 else:
                     error_text = await response.text()
+                    logger.error(
+                        "Session creation failed",
+                        extra={
+                            "event": "session_create_failed",
+                            "client_id": self.client_id,
+                            "status_code": response.status,
+                            "response_text": error_text,
+                        },
+                    )
                     raise Exception(f"Failed to create session: {response.status} - {error_text}")
 
     async def create_episode(self, session_id: str, task_id: str) -> EpisodeCreateResponse:
@@ -94,7 +116,14 @@ class ClientSessionManager:
         Raises:
             Exception: If episode creation fails
         """
-        logger.info(f"Creating episode for session {session_id}, task {task_id}")
+        logger.info(
+            "Creating episode",
+            extra={
+                "event": "episode_create_requested",
+                "session_id": session_id,
+                "task_id": task_id,
+            },
+        )
 
         url = f"{self.base_url}/api/v1/session/{session_id}/episodes"
         params = {"task_id": task_id}
@@ -106,26 +135,40 @@ class ClientSessionManager:
                     data = await response.json()
                     episode_response = EpisodeCreateResponse(**data)
 
-                    # Log episode creation with enhanced dependency information
-                    logger.info(f"✅ Created episode: {episode_response.episode_id} for task: {task_id}")
+                    logger.info(
+                        "Episode created",
+                        extra={
+                            "event": "episode_created",
+                            "session_id": session_id,
+                            "episode_id": episode_response.episode_id,
+                            "task_id": task_id,
+                            "attached_to_episode_id": episode_response.attached_to_episode_id,
+                        },
+                    )
 
                     if episode_response.attached_to_episode_id:
                         logger.info(
-                            f"🔗 Episode dependency attachment: {episode_response.episode_id} → "
-                            f"{episode_response.attached_to_episode_id}"
-                        )
-                        logger.info(
-                            f"📋 Episode {episode_response.episode_id} automatically attached to running episode "
-                            f"{episode_response.attached_to_episode_id} due to task dependencies"
-                        )
-                    else:
-                        logger.info(
-                            f"🔸 Episode {episode_response.episode_id} created as independent episode (no dependencies)"
+                            "Episode attached to dependency",
+                            extra={
+                                "event": "episode_dependency_attached",
+                                "episode_id": episode_response.episode_id,
+                                "attached_to_episode_id": episode_response.attached_to_episode_id,
+                            },
                         )
 
                     return episode_response
                 else:
                     error_text = await response.text()
+                    logger.error(
+                        "Episode creation failed",
+                        extra={
+                            "event": "episode_create_failed",
+                            "session_id": session_id,
+                            "task_id": task_id,
+                            "status_code": response.status,
+                            "response_text": error_text,
+                        },
+                    )
                     raise Exception(f"Failed to create episode: {response.status} - {error_text}")
 
     async def get_policy_response(self, session_id: str, episode_id: str) -> Optional[PolicyResponse]:
@@ -142,7 +185,14 @@ class ClientSessionManager:
         Raises:
             Exception: If policy request fails
         """
-        logger.debug(f"Getting policy response for episode {episode_id}")
+        logger.debug(
+            "Fetching policy response",
+            extra={
+                "event": "policy_request_started",
+                "session_id": session_id,
+                "episode_id": episode_id,
+            },
+        )
 
         url = f"{self.base_url}/api/v1/session/{session_id}/episodes/{episode_id}/policy"
 
@@ -154,19 +204,49 @@ class ClientSessionManager:
                         data = await response.json()
                         policy_response = PolicyResponse(prompt=data.get("prompt", ""), domain=data.get("domain"))
 
-                        logger.debug(f"Retrieved policy response for episode {episode_id}")
+                        logger.debug(
+                            "Policy response received",
+                            extra={
+                                "event": "policy_request_completed",
+                                "session_id": session_id,
+                                "episode_id": episode_id,
+                                "domain": policy_response.domain,
+                            },
+                        )
                         return policy_response
                     elif response.status == 404:
-                        logger.debug(f"No policy available for episode {episode_id}")
+                        logger.debug(
+                            "Policy not available",
+                            extra={
+                                "event": "policy_not_found",
+                                "session_id": session_id,
+                                "episode_id": episode_id,
+                            },
+                        )
                         return None
                     else:
                         error_text = await response.text()
                         raise Exception(f"Failed to get policy: {response.status} - {error_text}")
         except asyncio.TimeoutError:
-            logger.warning(f"Policy request timeout for episode {episode_id}")
+            logger.warning(
+                "Policy request timed out",
+                extra={
+                    "event": "policy_request_timeout",
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                },
+            )
             return None
-        except Exception as e:
-            logger.error(f"Policy request failed for episode {episode_id}: {e}")
+        except Exception as exc:
+            logger.exception(
+                "Policy request failed",
+                extra={
+                    "event": "policy_request_failed",
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                    "error": str(exc),
+                },
+            )
             raise
 
     async def get_available_tasks(self) -> List[TaskInfo]:
@@ -179,7 +259,10 @@ class ClientSessionManager:
         Raises:
             Exception: If task discovery fails
         """
-        logger.info("Discovering available tasks via REST API")
+        logger.info(
+            "Discovering available tasks",
+            extra={"event": "task_discovery_started", "base_url": self.base_url},
+        )
 
         url = f"{self.base_url}/api/v1/tasks"
 
@@ -189,10 +272,24 @@ class ClientSessionManager:
                     data = await response.json()
                     # Parse the BenchmarkInfo response
                     benchmark_info = BenchmarkInfo(**data)
-                    logger.info(f"Discovered {len(benchmark_info.tasks)} available tasks")
+                    logger.info(
+                        "Tasks discovered",
+                        extra={
+                            "event": "task_discovery_completed",
+                            "task_count": len(benchmark_info.tasks),
+                        },
+                    )
                     return benchmark_info.tasks
                 else:
                     error_text = await response.text()
+                    logger.error(
+                        "Task discovery failed",
+                        extra={
+                            "event": "task_discovery_failed",
+                            "status_code": response.status,
+                            "response_text": error_text,
+                        },
+                    )
                     raise Exception(f"Failed to get available tasks: {response.status} - {error_text}")
 
     async def get_tasks(self, task_ids: List[str]) -> List[TaskInfo]:
@@ -208,7 +305,14 @@ class ClientSessionManager:
         Raises:
             Exception: If task retrieval fails
         """
-        logger.info(f"Retrieving {len(task_ids)} tasks via REST API")
+        logger.info(
+            "Retrieving tasks",
+            extra={
+                "event": "task_retrieval_requested",
+                "requested_task_count": len(task_ids),
+                "task_ids": task_ids,
+            },
+        )
 
         # Get all available tasks
         all_tasks = await self.get_available_tasks()
@@ -222,9 +326,23 @@ class ClientSessionManager:
 
         if missing_ids:
             available_ids = {task.task_id for task in all_tasks}
-            raise Exception(f"Tasks not found: {missing_ids}. " f"Available tasks: {sorted(available_ids)}")
+            logger.error(
+                "Requested tasks not found",
+                extra={
+                    "event": "task_retrieval_missing",
+                    "missing_task_ids": sorted(missing_ids),
+                    "available_task_ids": sorted(available_ids),
+                },
+            )
+            raise Exception(f"Tasks not found: {missing_ids}. Available tasks: {sorted(available_ids)}")
 
-        logger.info(f"Retrieved {len(requested_tasks)} tasks successfully as TaskInfo objects")
+        logger.info(
+            "Tasks retrieved",
+            extra={
+                "event": "task_retrieval_completed",
+                "retrieved_task_count": len(requested_tasks),
+            },
+        )
         return requested_tasks
 
     async def terminate_session(self, session_id: str) -> None:
@@ -237,7 +355,10 @@ class ClientSessionManager:
         Raises:
             Exception: If session termination fails
         """
-        logger.info(f"Terminating session: {session_id}")
+        logger.info(
+            "Terminating session",
+            extra={"event": "session_termination_requested", "session_id": session_id},
+        )
 
         url = f"{self.base_url}/api/v1/session/{session_id}"
 
@@ -245,12 +366,23 @@ class ClientSessionManager:
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             async with session.delete(url, timeout=timeout) as response:
                 if response.status == 200:
-                    logger.info(f"Session {session_id} terminated successfully")
+                    logger.info(
+                        "Session terminated",
+                        extra={"event": "session_terminated", "session_id": session_id},
+                    )
                     if self._current_session_id == session_id:
                         self._current_session_id = None
                 else:
                     error_text = await response.text()
-                    logger.warning(f"Failed to terminate session {session_id}: {response.status} - {error_text}")
+                    logger.warning(
+                        "Session termination failed",
+                        extra={
+                            "event": "session_termination_failed",
+                            "session_id": session_id,
+                            "status_code": response.status,
+                            "response_text": error_text,
+                        },
+                    )
                     # Don't raise - termination failures shouldn't break cleanup
 
     async def end_episode(
@@ -271,7 +403,17 @@ class ClientSessionManager:
             result: Optional EvalSubmission data
             cascade_end_attached_episodes: If True, also end episodes that this episode is attached to
         """
-        logger.debug(f"Ending episode {episode_id} with reason: {reason}")
+        logger.debug(
+            "Ending episode",
+            extra={
+                "event": "episode_end_requested",
+                "session_id": session_id,
+                "episode_id": episode_id,
+                "reason": reason,
+                "cascade_end_attached_episodes": cascade_end_attached_episodes,
+                "has_result": result is not None,
+            },
+        )
 
         url = f"{self.base_url}/api/v1/session/{session_id}/episodes/{episode_id}"
         params = {"reason": reason, "cascade_end_attached_episodes": str(cascade_end_attached_episodes).lower()}
@@ -289,12 +431,36 @@ class ClientSessionManager:
                 timeout = aiohttp.ClientTimeout(total=self.timeout)
                 async with session.delete(url, params=params, data=data, headers=headers, timeout=timeout) as response:
                     if response.status == 200:
-                        logger.debug(f"Episode {episode_id} ended successfully")
+                        logger.debug(
+                            "Episode ended",
+                            extra={
+                                "event": "episode_end_completed",
+                                "session_id": session_id,
+                                "episode_id": episode_id,
+                            },
+                        )
                     else:
                         error_text = await response.text()
-                        logger.warning(f"Failed to end episode {episode_id}: {response.status} - {error_text}")
-        except Exception as e:
-            logger.warning(f"Episode end request failed for {episode_id}: {e}")
+                        logger.warning(
+                            "Failed to end episode",
+                            extra={
+                                "event": "episode_end_failed",
+                                "session_id": session_id,
+                                "episode_id": episode_id,
+                                "status_code": response.status,
+                                "response_text": error_text,
+                            },
+                        )
+        except Exception as exc:
+            logger.warning(
+                "Episode end request error",
+                extra={
+                    "event": "episode_end_request_error",
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                    "error": str(exc),
+                },
+            )
             # Don't raise - episode end failures shouldn't break cleanup
 
     async def update_episode_status(self, episode_id: str, status: str) -> None:
@@ -305,7 +471,14 @@ class ClientSessionManager:
             episode_id: Episode ID
             status: New status
         """
-        logger.debug(f"Updating episode {episode_id} status to: {status}")
+        logger.debug(
+            "Updating episode status",
+            extra={
+                "event": "episode_status_update_requested",
+                "episode_id": episode_id,
+                "status": status,
+            },
+        )
 
         # TODO: Implement if server supports status updates
         await asyncio.sleep(0.01)
@@ -324,7 +497,14 @@ class ClientSessionManager:
         Raises:
             Exception: If evaluation retrieval fails
         """
-        logger.debug(f"Getting evaluation for episode {episode_id} in session {session_id}")
+        logger.debug(
+            "Fetching episode evaluation",
+            extra={
+                "event": "evaluation_fetch_requested",
+                "session_id": session_id,
+                "episode_id": episode_id,
+            },
+        )
 
         url = f"{self.base_url}/api/v1/session/{session_id}/evaluations/{episode_id}"
 
@@ -332,12 +512,37 @@ class ClientSessionManager:
             async with session.get(url) as response:
                 if response.status == 200:
                     data = await response.json()
-                    logger.debug(f"Retrieved evaluation for episode {episode_id}")
+                    logger.debug(
+                        "Episode evaluation retrieved",
+                        extra={
+                            "event": "evaluation_fetch_completed",
+                            "session_id": session_id,
+                            "episode_id": episode_id,
+                        },
+                    )
                     return EvaluationResultResponse(**data["evaluation_result"])
                 elif response.status == 404:
+                    logger.warning(
+                        "Episode evaluation not found",
+                        extra={
+                            "event": "evaluation_not_found",
+                            "session_id": session_id,
+                            "episode_id": episode_id,
+                        },
+                    )
                     raise Exception(f"Evaluation not found for episode {episode_id}")
                 else:
                     error_text = await response.text()
+                    logger.error(
+                        "Failed to fetch episode evaluation",
+                        extra={
+                            "event": "evaluation_fetch_failed",
+                            "session_id": session_id,
+                            "episode_id": episode_id,
+                            "status_code": response.status,
+                            "response_text": error_text,
+                        },
+                    )
                     raise Exception(
                         f"Failed to get evaluation for episode {episode_id}: {response.status} - {error_text}"
                     )
@@ -359,7 +564,12 @@ class ClientSessionManager:
             Exception: If evaluation retrieval fails
         """
         logger.debug(
-            f"Getting evaluations for session {session_id}" + (f" with task filter {task_id}" if task_id else "")
+            "Fetching session evaluations",
+            extra={
+                "event": "session_evaluations_fetch_requested",
+                "session_id": session_id,
+                "task_id": task_id,
+            },
         )
 
         url = f"{self.base_url}/api/v1/session/{session_id}/evaluations"
@@ -371,10 +581,28 @@ class ClientSessionManager:
             async with session.get(url, params=params) as response:
                 if response.status == 200:
                     data = await response.json()
-                    logger.debug(f"Retrieved {data['total_count']} evaluations for session {session_id}")
+                    logger.debug(
+                        "Session evaluations retrieved",
+                        extra={
+                            "event": "session_evaluations_fetch_completed",
+                            "session_id": session_id,
+                            "task_id": task_id,
+                            "evaluation_count": data["total_count"],
+                        },
+                    )
                     return [EvaluationResultResponse(**eval_data) for eval_data in data["evaluations"]]
                 else:
                     error_text = await response.text()
+                    logger.error(
+                        "Failed to fetch session evaluations",
+                        extra={
+                            "event": "session_evaluations_fetch_failed",
+                            "session_id": session_id,
+                            "task_id": task_id,
+                            "status_code": response.status,
+                            "response_text": error_text,
+                        },
+                    )
                     raise Exception(
                         f"Failed to get evaluations for session {session_id}: {response.status} - {error_text}"
                     )
@@ -393,7 +621,14 @@ class ClientSessionManager:
         Raises:
             Exception: If evaluation criteria retrieval fails
         """
-        logger.debug(f"Getting evaluation criteria for episode {episode_id} in session {session_id}")
+        logger.debug(
+            "Fetching evaluation criteria",
+            extra={
+                "event": "evaluation_criteria_fetch_requested",
+                "session_id": session_id,
+                "episode_id": episode_id,
+            },
+        )
 
         url = f"{self.base_url}/api/v1/session/{session_id}/episodes/{episode_id}/evaluation-criteria"
 
@@ -401,16 +636,50 @@ class ClientSessionManager:
             async with session.get(url) as response:
                 if response.status == 200:
                     data = await response.json()
-                    logger.debug(f"Retrieved evaluation criteria for episode {episode_id}")
+                    logger.debug(
+                        "Evaluation criteria retrieved",
+                        extra={
+                            "event": "evaluation_criteria_fetch_completed",
+                            "session_id": session_id,
+                            "episode_id": episode_id,
+                        },
+                    )
                     # Parse the response into the proper model
                     return EvaluationCriteriaResponse(**data)
                 elif response.status == 404:
+                    logger.warning(
+                        "Evaluation criteria not found",
+                        extra={
+                            "event": "evaluation_criteria_not_found",
+                            "session_id": session_id,
+                            "episode_id": episode_id,
+                        },
+                    )
                     raise Exception(f"Episode {episode_id} not found or no evaluation criteria available")
                 elif response.status == 400:
                     error_text = await response.text()
+                    logger.error(
+                        "Invalid evaluation criteria request",
+                        extra={
+                            "event": "evaluation_criteria_invalid_request",
+                            "session_id": session_id,
+                            "episode_id": episode_id,
+                            "response_text": error_text,
+                        },
+                    )
                     raise Exception(f"Invalid request for evaluation criteria: {error_text}")
                 else:
                     error_text = await response.text()
+                    logger.error(
+                        "Failed to fetch evaluation criteria",
+                        extra={
+                            "event": "evaluation_criteria_fetch_failed",
+                            "session_id": session_id,
+                            "episode_id": episode_id,
+                            "status_code": response.status,
+                            "response_text": error_text,
+                        },
+                    )
                     raise Exception(
                         f"Failed to get evaluation criteria for episode {episode_id}: {response.status} - {error_text}"
                     )
@@ -432,7 +701,14 @@ class ClientSessionManager:
         Raises:
             Exception: If override submission fails
         """
-        logger.debug(f"Submitting evaluation override for episode {episode_id} in session {session_id}")
+        logger.debug(
+            "Submitting evaluation override",
+            extra={
+                "event": "evaluation_override_submitted",
+                "session_id": session_id,
+                "episode_id": episode_id,
+            },
+        )
 
         url = f"{self.base_url}/api/v1/session/{session_id}/evaluations/{episode_id}/override"
 
@@ -443,15 +719,49 @@ class ClientSessionManager:
             async with session.put(url, json=request_data) as response:
                 if response.status == 200:
                     response_data = await response.json()
-                    logger.debug(f"Successfully submitted override for episode {episode_id}")
+                    logger.debug(
+                        "Evaluation override accepted",
+                        extra={
+                            "event": "evaluation_override_completed",
+                            "session_id": session_id,
+                            "episode_id": episode_id,
+                        },
+                    )
                     return dict(response_data)
                 elif response.status == 404:
+                    logger.warning(
+                        "Evaluation override target not found",
+                        extra={
+                            "event": "evaluation_override_not_found",
+                            "session_id": session_id,
+                            "episode_id": episode_id,
+                        },
+                    )
                     raise Exception(f"Episode {episode_id} not found for override submission")
                 elif response.status == 400:
                     error_text = await response.text()
+                    logger.error(
+                        "Invalid evaluation override payload",
+                        extra={
+                            "event": "evaluation_override_invalid_request",
+                            "session_id": session_id,
+                            "episode_id": episode_id,
+                            "response_text": error_text,
+                        },
+                    )
                     raise Exception(f"Invalid override request for episode {episode_id}: {error_text}")
                 else:
                     error_text = await response.text()
+                    logger.error(
+                        "Evaluation override submission failed",
+                        extra={
+                            "event": "evaluation_override_failed",
+                            "session_id": session_id,
+                            "episode_id": episode_id,
+                            "status_code": response.status,
+                            "response_text": error_text,
+                        },
+                    )
                     raise Exception(
                         f"Failed to submit override for episode {episode_id}: {response.status} - {error_text}"
                     )
@@ -487,7 +797,15 @@ class ClientSessionManager:
             raise FileNotFoundError(f"Eval file not found: {file_path}")
 
         filename = os.path.basename(file_path)
-        logger.info(f"Uploading evaluation file {filename} for session {session_id}")
+        logger.info(
+            "Uploading evaluation file",
+            extra={
+                "event": "evaluation_file_upload_started",
+                "session_id": session_id,
+                "filename": filename,
+                "file_path": file_path,
+            },
+        )
 
         url = f"{self.base_url}/api/v1/session/{session_id}/evaluations/upload"
 
@@ -507,10 +825,27 @@ class ClientSessionManager:
             async with session.post(url, data=data, timeout=timeout_config) as response:
                 if response.status == 200:
                     response_data = await response.json()
-                    logger.info(f"Successfully uploaded evaluation file {filename}")
+                    logger.info(
+                        "Evaluation file uploaded",
+                        extra={
+                            "event": "evaluation_file_upload_completed",
+                            "session_id": session_id,
+                            "filename": filename,
+                        },
+                    )
                     return dict(response_data)
                 else:
                     error_text = await response.text()
+                    logger.error(
+                        "Evaluation file upload failed",
+                        extra={
+                            "event": "evaluation_file_upload_failed",
+                            "session_id": session_id,
+                            "filename": filename,
+                            "status_code": response.status,
+                            "response_text": error_text,
+                        },
+                    )
                     raise Exception(f"Failed to upload evaluation file {filename}: {response.status} - {error_text}")
 
     async def cleanup(self) -> None:
@@ -518,4 +853,7 @@ class ClientSessionManager:
         if self._current_session_id:
             await self.terminate_session(self._current_session_id)
 
-        logger.info("ClientSessionManager cleanup completed")
+        logger.info(
+            "ClientSessionManager cleanup completed",
+            extra={"event": "client_session_manager_cleanup", "session_id": self._current_session_id},
+        )

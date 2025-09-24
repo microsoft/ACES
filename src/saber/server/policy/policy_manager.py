@@ -1,15 +1,18 @@
 """
 Stub PolicyManager implementation for SABER domain server.
 
+Logging Category: POLICY
+
 This is a minimal implementation to support SessionManager development.
 """
 
-import logging
 from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field
 
-logger = logging.getLogger(__name__)
+from saber.logging_config import LogCategory, get_saber_logger
+
+logger = get_saber_logger(LogCategory.POLICY, __name__)
 
 
 class PolicyDocument(BaseModel):
@@ -34,7 +37,13 @@ class PolicyManager:
     def __init__(self, domain_name: str):
         self.domain_name = domain_name
         self._episode_policies: Dict[str, PolicyDocument] = {}
-        logger.info(f"PolicyManager initialized for domain '{domain_name}' (prompt generation external)")
+        logger.info(
+            "Policy manager initialized",
+            extra={
+                "event": "policy_manager_initialized",
+                "domain": domain_name,
+            },
+        )
 
     def set_episode_policy(
         self,
@@ -57,10 +66,13 @@ class PolicyManager:
             )
         self._episode_policies[episode_id] = PolicyDocument(prompt=pre_generated_prompt)
         logger.info(
-            "PolicyManager stored prompt for episode %s (session %s, %d chars)",
-            episode_id,
-            session_id,
-            len(pre_generated_prompt),
+            "Episode policy stored",
+            extra={
+                "event": "episode_policy_stored",
+                "episode_id": episode_id,
+                "session_id": session_id,
+                "prompt_length": len(pre_generated_prompt),
+            },
         )
 
     def get_policy(self, episode_id: Optional[str] = None) -> PolicyDocument:
@@ -90,7 +102,13 @@ class PolicyManager:
         """
         if episode_id in self._episode_policies:
             del self._episode_policies[episode_id]
-            logger.debug(f"Cleaned up policy for episode {episode_id}")
+            logger.debug(
+                "Episode policy removed",
+                extra={
+                    "event": "episode_policy_removed",
+                    "episode_id": episode_id,
+                },
+            )
 
     async def validate_action(self, action: str) -> bool:
         """

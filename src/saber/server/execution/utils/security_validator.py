@@ -1,11 +1,12 @@
 """
 Security validation utilities for command execution.
 
+Logging Category: SECURITY
+
 This module provides utilities for validating command security,
 including pattern detection, argument validation, and path safety checks.
 """
 
-import logging
 import re
 import shlex
 from pathlib import Path
@@ -24,8 +25,6 @@ from .security_constants import (
     SHELL_METACHARACTERS_PATTERN,
     SUSPICIOUS_EXTENSIONS,
 )
-
-logger = logging.getLogger(__name__)
 
 
 class SecurityValidator:

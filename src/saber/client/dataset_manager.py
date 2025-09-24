@@ -4,28 +4,31 @@ SABER Dataset Manager
 Manages task discovery and dataset creation for SABER evaluations.
 Extracted from SABEREvalManager to separate dataset concerns from agent management.
 
-BREAKING CHANGE: Supports mult            raise DatasetCreationError(
-                f"Failed to create dataset from {len(tasks_data)} tasks: {e}",
-                details={"task_count": len(tasks_data), "error_type": type(e).__name__},
-                suggestion="Check that task data is valid, agent assignments are configured, "
-                          "and inspect_ai conversion is working",
-            ) from ek datasets keyed by task_id for agent assignment.
+Logging category: HARNESS
+
+BREAKING CHANGE: Supports multi-datasets keyed by task_id for agent assignment.
 """
 
 import hashlib
-import logging
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
     from .agent.task_agent_resolver import TaskAgentResolver
 
+from ..logging_config import (
+    LogCategory,
+    get_saber_logger,
+    log_operation_failure,
+    log_operation_start,
+    log_operation_success,
+)
 from ..models import TaskInfo  # Use server models directly
 from .client_session import ClientSessionManager
 from .exceptions import DatasetCreationError
 from .models import SABERConfig
 
-logger = logging.getLogger(__name__)
+logger = get_saber_logger(LogCategory.HARNESS, __name__)
 
 
 class DatasetManager:
@@ -57,7 +60,13 @@ class DatasetManager:
         self.config = config
         self._initialized = False
 
-        logger.debug("Initialized DatasetManager with shared ClientSessionManager")
+        logger.debug(
+            "Initialized dataset manager",
+            extra={
+                "session_manager_type": type(session_manager).__name__,
+                "has_task_ids": bool(config.task_ids),
+            },
+        )
 
     async def __aenter__(self) -> "DatasetManager":
         """
@@ -67,14 +76,14 @@ class DatasetManager:
             Initialized dataset manager
         """
         if self._initialized:
-            logger.debug("DatasetManager already initialized")
+            logger.debug("Dataset manager already initialized", extra={"id": id(self)})
             return self
 
-        logger.info("Initializing dataset manager")
+        logger.info("Initializing dataset manager", extra={"id": id(self)})
 
         # Future: Add any initialization logic here (caching, etc.)
         self._initialized = True
-        logger.info("Dataset manager initialized successfully")
+        logger.info("Dataset manager initialized", extra={"id": id(self)})
         return self
 
     async def __aexit__(
@@ -84,15 +93,15 @@ class DatasetManager:
         Exit async context manager and cleanup dataset resources.
         """
         if not self._initialized:
-            logger.debug("No dataset manager resources to cleanup")
+            logger.debug("Dataset manager cleanup skipped", extra={"id": id(self)})
             return
 
-        logger.info("Cleaning up dataset manager resources")
+        logger.info("Cleaning up dataset manager resources", extra={"id": id(self)})
 
         # Future: Add cleanup logic here (cache cleanup, etc.)
 
         self._initialized = False
-        logger.info("Dataset manager cleanup completed")
+        logger.info("Dataset manager cleanup completed", extra={"id": id(self)})
 
     async def create_dataset(self, tasks_data: List[TaskInfo]) -> List[Any]:
         """
@@ -111,13 +120,21 @@ class DatasetManager:
             raise RuntimeError("DatasetManager not initialized - use as async context manager")
 
         if not tasks_data:
+            log_operation_failure(
+                logger,
+                "create_dataset",
+                "empty_task_data",
+                task_count=0,
+            )
             raise DatasetCreationError(
                 "Cannot create dataset from empty task data",
                 details={"task_count": 0},
                 suggestion="Ensure tasks are available on the server",
             )
 
-        logger.info(f"Creating dataset from {len(tasks_data)} tasks")
+        operation = "create_dataset"
+        task_count = len(tasks_data)
+        log_operation_start(logger, operation, task_count=task_count)
 
         try:
             # Import conversion function
@@ -126,16 +143,27 @@ class DatasetManager:
             # Create inspect_ai dataset using the conversion function with TaskInfo objects
             dataset = await create_saber_dataset(tasks_data)
 
-            logger.info(f"Successfully created dataset with {len(dataset)} samples")
+            log_operation_success(
+                logger,
+                operation,
+                task_count=task_count,
+                sample_count=len(dataset),
+            )
             return dataset
 
-        except Exception as e:
-            logger.error(f"Dataset creation failed: {e}")
+        except Exception as exc:
+            log_operation_failure(
+                logger,
+                operation,
+                exc,
+                task_count=task_count,
+                error_type=type(exc).__name__,
+            )
             raise DatasetCreationError(
-                f"Failed to create dataset from {len(tasks_data)} tasks: {e}",
-                details={"task_count": len(tasks_data), "error_type": type(e).__name__},
+                f"Failed to create dataset from {task_count} tasks: {exc}",
+                details={"task_count": task_count, "error_type": type(exc).__name__},
                 suggestion="Check that task data is valid and inspect_ai conversion is working",
-            ) from e
+            ) from exc
 
     async def create_agent_datasets(
         self, tasks_data: List[TaskInfo], task_agent_resolver: "TaskAgentResolver"
@@ -160,13 +188,26 @@ class DatasetManager:
             raise RuntimeError("DatasetManager not initialized - use as async context manager")
 
         if not tasks_data:
+            log_operation_failure(
+                logger,
+                "create_agent_datasets",
+                "empty_task_data",
+                task_count=0,
+            )
             raise DatasetCreationError(
                 "Cannot create datasets from empty task data",
                 details={"task_count": 0},
                 suggestion="Ensure tasks are available on the server",
             )
 
-        logger.info(f"Creating agent-grouped datasets from {len(tasks_data)} tasks")
+        operation = "create_agent_datasets"
+        task_count = len(tasks_data)
+        log_operation_start(
+            logger,
+            operation,
+            task_count=task_count,
+            resolver_type=type(task_agent_resolver).__name__,
+        )
 
         try:
             # Import conversion function
@@ -194,8 +235,13 @@ class DatasetManager:
                 agent_task_groups[agent_composite_key].append(task_info)
 
                 logger.debug(
-                    f"Assigned task '{task_id}' to agent group '{agent_composite_key}' "
-                    f"(from assignment '{assignment.id}' with tasks {assignment.tasks})"
+                    "Assigned task to agent group",
+                    extra={
+                        "task_id": task_id,
+                        "agent_group": agent_composite_key,
+                        "assignment_id": assignment.id,
+                        "assignment_tasks": assignment.tasks,
+                    },
                 )
 
             # Create combined datasets for each agent group
@@ -208,18 +254,33 @@ class DatasetManager:
 
                 task_ids = [task.task_id for task in agent_tasks]
                 logger.info(
-                    f"Created combined dataset for agent group '{agent_composite_key}' "
-                    f"from tasks {task_ids} with {len(combined_dataset)} total samples"
+                    "Created combined dataset for agent group",
+                    extra={
+                        "agent_group": agent_composite_key,
+                        "task_ids": task_ids,
+                        "sample_count": len(combined_dataset),
+                    },
                 )
 
-            logger.info(f"Successfully created {len(agent_datasets)} agent-grouped datasets")
+            log_operation_success(
+                logger,
+                operation,
+                task_count=task_count,
+                dataset_count=len(agent_datasets),
+            )
             return agent_datasets
 
-        except Exception as e:
-            logger.error(f"Agent dataset creation failed: {e}")
+        except Exception as exc:
+            log_operation_failure(
+                logger,
+                operation,
+                exc,
+                task_count=task_count,
+                error_type=type(exc).__name__,
+            )
             raise DatasetCreationError(
-                f"Failed to create agent datasets from {len(tasks_data)} tasks: {e}",
-                details={"task_count": len(tasks_data), "error_type": type(e).__name__},
+                f"Failed to create agent datasets from {task_count} tasks: {exc}",
+                details={"task_count": task_count, "error_type": type(exc).__name__},
                 suggestion="Check that task data is valid, agent assignments are configured, "
                 "and inspect_ai conversion is working",
-            ) from e
+            ) from exc

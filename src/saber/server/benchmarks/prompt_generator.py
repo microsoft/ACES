@@ -1,5 +1,7 @@
 """Prompt generation service for SABER benchmark tasks.
 
+Logging Category: TASK_MANAGER
+
 Responsibilities:
     * Load and render Jinja2 templates for both agent prompts and judge prompts
     * Agent prompts: Task-specific prompts for AI agents during episode execution
@@ -17,7 +19,6 @@ Priority Fixes Implemented:
     6. Distinguish missing root template vs missing included template.
 """
 
-import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,10 +27,12 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from jinja2 import FileSystemLoader, StrictUndefined, TemplateError, TemplateNotFound
 from jinja2.sandbox import SandboxedEnvironment
 
+from saber.logging_config import LogCategory, get_saber_logger
+
 from ..base import Episode
 from .task import Task
 
-logger = logging.getLogger(__name__)
+logger = get_saber_logger(LogCategory.TASK_MANAGER, __name__)
 
 
 class PromptGenerationError(Exception):
@@ -245,7 +248,13 @@ class PromptGenerator:
             lstrip_blocks=False,
         )
 
-        logger.info(f"PromptGenerator initialized with templates from: {self.prompts_dir}")
+        logger.info(
+            "Prompt generator initialized",
+            extra={
+                "event": "prompt_generator_initialized",
+                "prompts_directory": str(self.prompts_dir),
+            },
+        )
 
     def render_agent_prompts_for_task(self, task: Task) -> Dict[str, str]:
         """
@@ -281,7 +290,16 @@ class PromptGenerator:
             context = self._build_context_from_task(task)
             rendered_prompt = str(template.render(context.to_dict()))
 
-            logger.debug(f"Successfully rendered {prompt_type} prompt for task '{task.task_id}'")
+            logger.debug(
+                "Agent prompt rendered",
+                extra={
+                    "event": "agent_prompt_rendered",
+                    "task_id": task.task_id,
+                    "prompt_type": prompt_type,
+                    "template_file": template_file,
+                    "prompt_length": len(rendered_prompt),
+                },
+            )
             return rendered_prompt
 
         except TemplateNotFound as e:
@@ -395,8 +413,13 @@ class PromptGenerator:
             rendered_prompt = str(template.render(context.to_dict()))
 
             logger.debug(
-                f"Successfully rendered judge prompt for task '{context.task_id}' "
-                f"using template '{judge_template_path}'"
+                "Judge prompt rendered",
+                extra={
+                    "event": "judge_prompt_rendered",
+                    "task_id": context.task_id,
+                    "template_file": judge_template_path,
+                    "prompt_length": len(rendered_prompt),
+                },
             )
             return rendered_prompt
 
@@ -467,7 +490,15 @@ class PromptGenerator:
                 )
             # Compile root template only (Jinja2 will parse dependency syntax during traversal above)
             self.jinja_env.get_template(template_file)
-            logger.debug("Template validation successful: %s (deps=%d)", template_file, len(visited) - 1)
+            dependency_count = max(len(visited) - 1, 0)
+            logger.debug(
+                "Agent template validated",
+                extra={
+                    "event": "agent_template_validated",
+                    "template_file": template_file,
+                    "dependency_count": dependency_count,
+                },
+            )
             return True
 
         except TemplateNotFound as e:
@@ -536,7 +567,15 @@ class PromptGenerator:
 
             # Compile root template to validate syntax
             self.jinja_env.get_template(judge_template_path)
-            logger.debug("Judge template validation successful: %s (deps=%d)", template_file, len(visited) - 1)
+            dependency_count = max(len(visited) - 1, 0)
+            logger.debug(
+                "Judge template validated",
+                extra={
+                    "event": "judge_template_validated",
+                    "template_file": template_file,
+                    "dependency_count": dependency_count,
+                },
+            )
             return True
 
         except TemplateNotFound as e:
@@ -555,7 +594,13 @@ class PromptGenerator:
         Raises:
             TemplateValidationError: If any template is missing or invalid
         """
-        logger.info(f"Validating templates for {len(tasks)} tasks...")
+        logger.info(
+            "Task template validation started",
+            extra={
+                "event": "task_template_validation_started",
+                "task_count": len(tasks),
+            },
+        )
 
         missing_templates = []
         invalid_templates = []
@@ -579,7 +624,13 @@ class PromptGenerator:
             error_msg = "Template validation failed:\n" + "\n".join(f"  - {error}" for error in errors)
             raise TemplateValidationError(error_msg)
 
-        logger.info(f"All {len(tasks)} task templates validated successfully")
+        logger.info(
+            "Task template validation completed",
+            extra={
+                "event": "task_template_validation_completed",
+                "task_count": len(tasks),
+            },
+        )
 
     def _build_context_from_task(self, task: Task) -> PromptContext:
         """

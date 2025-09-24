@@ -4,17 +4,25 @@ SABER Evaluation Orchestrator
 Top-level orchestration component for SABER evaluations with proper resource management,
 upfront validation, and fail-fast error handling.
 
+Logging category: EVALUATION.
+
 This component replaces the function-based eval_async approach with a clean
 async context manager that handles component lifecycle and error recovery.
 
 BREAKING CHANGE: No backwards compatibility with old run_saber_eval_async function.
 """
 
-import logging
 from contextlib import AsyncExitStack
 from types import TracebackType
 from typing import Any, List, Optional
 
+from ..logging_config import (
+    LogCategory,
+    get_saber_logger,
+    log_operation_failure,
+    log_operation_start,
+    log_operation_success,
+)
 from ..models import TaskInfo
 from .agent import AgentManager
 from .client_session import ClientSessionManager
@@ -22,7 +30,7 @@ from .dataset_manager import DatasetManager
 from .exceptions import AgentInitializationError, ConfigurationValidationError, DatasetCreationError
 from .models import SABERConfig
 
-logger = logging.getLogger(__name__)
+logger = get_saber_logger(LogCategory.EVALUATION, __name__)
 
 
 class SABEREvaluationOrchestrator:
@@ -60,7 +68,10 @@ class SABEREvaluationOrchestrator:
         self._dataset_manager: Optional["DatasetManager"] = None
         self._validated = False
 
-        logger.debug("Initialized SABEREvaluationOrchestrator")
+        logger.debug(
+            "Evaluation orchestrator instantiated",
+            extra={"event": "orchestrator_instantiated"},
+        )
 
     async def __aenter__(self) -> "SABEREvaluationOrchestrator":
         """
@@ -81,7 +92,7 @@ class SABEREvaluationOrchestrator:
             ServerConnectivityError: Cannot reach SABER server
             AgentInitializationError: Agent setup failed
         """
-        logger.info("Starting SABER evaluation orchestrator initialization")
+        log_operation_start(logger, "orchestrator_initialization")
 
         self._exit_stack = AsyncExitStack()
 
@@ -90,25 +101,44 @@ class SABEREvaluationOrchestrator:
             await self._validate_configuration()
 
             # Initialize shared session manager
-            logger.info("Initializing shared session manager")
+            logger.info(
+                "Initializing shared session manager",
+                extra={"event": "session_manager_initializing"},
+            )
             if self.config.session_config is None:
                 raise ValueError("Session config is required but not provided")
             self._session_manager = ClientSessionManager(config=self.config.session_config)
             await self._exit_stack.enter_async_context(self._session_manager_context())
 
             # Discover available tasks early to provide to agent manager
-            logger.info("Discovering available tasks from server")
+            logger.info(
+                "Discovering available tasks from server",
+                extra={"event": "task_discovery_request"},
+            )
             available_tasks = await self.discover_tasks()
             available_task_ids = [task.task_id for task in available_tasks]
-            logger.info(f"Discovered {len(available_task_ids)} tasks: {available_task_ids}")
+            logger.info(
+                "Available tasks discovered",
+                extra={
+                    "event": "task_discovery_result",
+                    "task_count": len(available_task_ids),
+                    "task_ids": available_task_ids,
+                },
+            )
 
             # Initialize agent manager with available task IDs
-            logger.info("Initializing agent manager")
+            logger.info(
+                "Initializing agent manager",
+                extra={"event": "agent_manager_initializing"},
+            )
             self._agent_manager = AgentManager(self.config, self._session_manager)
             await self._exit_stack.enter_async_context(self._agent_manager_context(available_task_ids))
 
             # Initialize dataset manager
-            logger.info("Initializing dataset manager")
+            logger.info(
+                "Initializing dataset manager",
+                extra={"event": "dataset_manager_initializing"},
+            )
             self._dataset_manager = DatasetManager(self._session_manager, self.config)
             await self._exit_stack.enter_async_context(self._dataset_manager)
 
@@ -116,7 +146,12 @@ class SABEREvaluationOrchestrator:
             await self._validate_components()
 
             self._validated = True
-            logger.info("SABER evaluation orchestrator initialized successfully")
+            log_operation_success(
+                logger,
+                "orchestrator_initialization",
+                session_id=(self._session_manager.get_current_session_id() if self._session_manager else None),
+                components_initialized=3,
+            )
             return self
 
         except Exception as e:
@@ -124,6 +159,12 @@ class SABEREvaluationOrchestrator:
             if self._exit_stack:
                 await self._exit_stack.__aexit__(type(e), e, e.__traceback__)
                 self._exit_stack = None
+            log_operation_failure(
+                logger,
+                "orchestrator_initialization",
+                e,
+                stage="initialization",
+            )
             raise
 
     async def __aexit__(
@@ -135,7 +176,10 @@ class SABEREvaluationOrchestrator:
         Handles cleanup gracefully and logs any cleanup errors without
         raising them (cleanup errors shouldn't mask the original error).
         """
-        logger.info("Cleaning up SABER evaluation orchestrator")
+        logger.info(
+            "Cleaning up evaluation orchestrator",
+            extra={"event": "orchestrator_cleanup_start"},
+        )
 
         cleanup_errors = []
 
@@ -144,8 +188,14 @@ class SABEREvaluationOrchestrator:
             try:
                 await self._exit_stack.__aexit__(exc_type, exc_val, exc_tb)
             except Exception as e:
-                cleanup_errors.append(f"Exit stack cleanup: {e}")
-                logger.error(f"Error during exit stack cleanup: {e}")
+                cleanup_errors.append({"component": "exit_stack", "error": str(e)})
+                logger.error(
+                    "Error during exit stack cleanup",
+                    extra={
+                        "event": "exit_stack_cleanup_error",
+                        "error": str(e),
+                    },
+                )
 
         # Reset state
         self._exit_stack = None
@@ -156,9 +206,19 @@ class SABEREvaluationOrchestrator:
 
         # Log cleanup errors but don't raise (don't mask original exception)
         if cleanup_errors:
-            logger.warning(f"Cleanup completed with {len(cleanup_errors)} errors: {cleanup_errors}")
+            logger.warning(
+                "Cleanup completed with errors",
+                extra={
+                    "event": "orchestrator_cleanup_errors",
+                    "error_count": len(cleanup_errors),
+                    "errors": cleanup_errors,
+                },
+            )
         else:
-            logger.info("SABER evaluation orchestrator cleanup completed successfully")
+            logger.info(
+                "Evaluation orchestrator cleanup completed successfully",
+                extra={"event": "orchestrator_cleanup_complete"},
+            )
 
     # Validation Methods
 
@@ -171,7 +231,10 @@ class SABEREvaluationOrchestrator:
         Raises:
             ConfigurationValidationError: Configuration is invalid
         """
-        logger.debug("Validating SABER configuration")
+        logger.debug(
+            "Validating evaluation configuration",
+            extra={"event": "config_validation_start"},
+        )
 
         errors = []
 
@@ -203,13 +266,24 @@ class SABEREvaluationOrchestrator:
             errors.append(f"max_parallel_tasks must be positive, got: {self.config.max_parallel_tasks}")
 
         if errors:
+            logger.error(
+                "Configuration validation failed",
+                extra={
+                    "event": "config_validation_failed",
+                    "error_count": len(errors),
+                    "errors": errors,
+                },
+            )
             raise ConfigurationValidationError(
                 f"Configuration validation failed: {len(errors)} errors found",
                 details={"validation_errors": errors},
                 suggestion="Fix configuration errors and retry",
             )
 
-        logger.debug("Configuration validation passed")
+        logger.debug(
+            "Configuration validation passed",
+            extra={"event": "config_validation_complete"},
+        )
 
     async def _validate_components(self) -> None:
         """
@@ -218,18 +292,45 @@ class SABEREvaluationOrchestrator:
         Raises:
             AgentInitializationError: Components not properly initialized
         """
-        logger.debug("Validating component initialization")
+        logger.debug(
+            "Validating component initialization",
+            extra={"event": "component_validation_start"},
+        )
 
         if not self._session_manager:
+            logger.error(
+                "Session manager missing during component validation",
+                extra={
+                    "event": "component_validation_failed",
+                    "missing_component": "session_manager",
+                },
+            )
             raise AgentInitializationError("Session manager not initialized")
 
         if not self._agent_manager:
+            logger.error(
+                "Agent manager missing during component validation",
+                extra={
+                    "event": "component_validation_failed",
+                    "missing_component": "agent_manager",
+                },
+            )
             raise AgentInitializationError("Agent manager not initialized")
 
         if not self._dataset_manager:
+            logger.error(
+                "Dataset manager missing during component validation",
+                extra={
+                    "event": "component_validation_failed",
+                    "missing_component": "dataset_manager",
+                },
+            )
             raise AgentInitializationError("Dataset manager not initialized")
 
-        logger.debug("Component validation passed")
+        logger.debug(
+            "Component validation passed",
+            extra={"event": "component_validation_complete"},
+        )
 
     # Execution Methods
 
@@ -243,29 +344,81 @@ class SABEREvaluationOrchestrator:
         Raises:
             DatasetCreationError: Task discovery failed
         """
+        configured_task_ids = list(self.config.task_ids or [])
+        session_id: Optional[str] = None
+        operation_details: dict[str, Any] = {}
+        if configured_task_ids:
+            operation_details["configured_task_ids"] = configured_task_ids
+
         try:
-            if self.config.task_ids:
-                logger.info(f"Using configured task IDs: {self.config.task_ids}")
-                # For configured task IDs, we need to fetch the full TaskInfo objects
-                if self._session_manager is None:
-                    raise RuntimeError("Session manager not initialized")
+            if self._session_manager is None:
+                raise RuntimeError("Session manager not initialized")
+
+            session_id = self._session_manager.get_current_session_id()
+            log_operation_start(
+                logger,
+                "task_discovery",
+                session_id=session_id,
+                **operation_details,
+            )
+
+            if configured_task_ids:
+                logger.info(
+                    "Using configured task IDs",
+                    extra={
+                        "event": "task_discovery_configured",
+                        "configured_task_ids": configured_task_ids,
+                        "task_count": len(configured_task_ids),
+                    },
+                )
                 all_tasks_data = await self._session_manager.get_available_tasks()
-                # Filter to only the configured task IDs
-                configured_tasks = [task for task in all_tasks_data if task.task_id in self.config.task_ids]
-                if len(configured_tasks) != len(self.config.task_ids):
+                configured_tasks = [task for task in all_tasks_data if task.task_id in configured_task_ids]
+                if len(configured_tasks) != len(configured_task_ids):
                     found_ids = [task.task_id for task in configured_tasks]
-                    missing_ids = set(self.config.task_ids) - set(found_ids)
+                    missing_ids = sorted(set(configured_task_ids) - set(found_ids))
+                    logger.error(
+                        "Configured task IDs missing on server",
+                        extra={
+                            "event": "task_discovery_missing_tasks",
+                            "requested_task_ids": configured_task_ids,
+                            "found_task_ids": found_ids,
+                            "missing_task_ids": missing_ids,
+                        },
+                    )
                     raise ValueError(f"Configured task IDs not found on server: {missing_ids}")
+
+                log_operation_success(
+                    logger,
+                    "task_discovery",
+                    session_id=session_id,
+                    requested_task_count=len(configured_task_ids),
+                    resolved_task_count=len(configured_tasks),
+                    **operation_details,
+                )
                 return configured_tasks
-            else:
-                logger.info("Discovering available tasks")
-                # Session manager handles HTTP communication
-                if self._session_manager is None:
-                    raise RuntimeError("Session manager not initialized")
-                tasks_data = await self._session_manager.get_available_tasks()
-                logger.info(f"Discovered {len(tasks_data)} available tasks")
-                return tasks_data
+
+            logger.info(
+                "Discovering available tasks",
+                extra={"event": "task_discovery_request_all"},
+            )
+            tasks_data = await self._session_manager.get_available_tasks()
+            log_operation_success(
+                logger,
+                "task_discovery",
+                session_id=session_id,
+                task_count=len(tasks_data),
+            )
+            return tasks_data
+
         except Exception as e:
+            failure_context = dict(operation_details)
+            log_operation_failure(
+                logger,
+                "task_discovery",
+                e,
+                session_id=session_id,
+                **failure_context,
+            )
             raise DatasetCreationError(
                 f"Task discovery failed: {e}",
                 details={
@@ -290,6 +443,18 @@ class SABEREvaluationOrchestrator:
         Raises:
             DatasetCreationError: Dataset creation failed
         """
+        task_count = len(task_ids)
+        session_id: Optional[str] = None
+        if self._session_manager is not None:
+            session_id = self._session_manager.get_current_session_id()
+
+        log_operation_start(
+            logger,
+            "dataset_creation",
+            session_id=session_id,
+            task_count=task_count,
+            requested_task_ids=task_ids,
+        )
         try:
             # Session manager gets full task data via HTTP
             if self._session_manager is None:
@@ -299,8 +464,23 @@ class SABEREvaluationOrchestrator:
             # Dataset manager transforms data to inspect_ai format
             if self._dataset_manager is None:
                 raise RuntimeError("Dataset manager not initialized")
-            return await self._dataset_manager.create_dataset(tasks_data)
+            dataset = await self._dataset_manager.create_dataset(tasks_data)
+            log_operation_success(
+                logger,
+                "dataset_creation",
+                session_id=session_id,
+                task_count=task_count,
+            )
+            return dataset
         except Exception as e:
+            log_operation_failure(
+                logger,
+                "dataset_creation",
+                e,
+                session_id=session_id,
+                task_count=task_count,
+                requested_task_ids=task_ids,
+            )
             raise DatasetCreationError(
                 f"Dataset creation failed: {e}",
                 details={"task_ids": task_ids, "task_count": len(task_ids)},
@@ -326,6 +506,18 @@ class SABEREvaluationOrchestrator:
             DatasetCreationError: Dataset creation failed
             AgentInitializationError: Agent assignment failed
         """
+        task_count = len(task_ids)
+        session_id: Optional[str] = None
+        if self._session_manager is not None:
+            session_id = self._session_manager.get_current_session_id()
+
+        log_operation_start(
+            logger,
+            "multi_task_evaluation_build",
+            session_id=session_id,
+            task_count=task_count,
+            requested_task_ids=task_ids,
+        )
         try:
             # Session manager gets full task data via HTTP
             if self._session_manager is None:
@@ -350,10 +542,32 @@ class SABEREvaluationOrchestrator:
             # Use the new create_agent_tasks method for agent-grouped datasets
             tasks = await self._agent_manager.create_agent_tasks(agent_datasets)
 
-            logger.info(f"Successfully created {len(tasks)} agent-grouped tasks with direct agents")
+            logger.info(
+                "Created agent-grouped tasks",
+                extra={
+                    "event": "multi_task_evaluation_built",
+                    "requested_task_count": len(task_ids),
+                    "generated_task_count": len(tasks),
+                },
+            )
+            log_operation_success(
+                logger,
+                "multi_task_evaluation_build",
+                session_id=session_id,
+                task_count=task_count,
+                generated_task_count=len(tasks),
+            )
             return tasks
 
         except Exception as e:
+            log_operation_failure(
+                logger,
+                "multi_task_evaluation_build",
+                e,
+                session_id=session_id,
+                task_count=task_count,
+                requested_task_ids=task_ids,
+            )
             raise DatasetCreationError(
                 f"Multi-task evaluation creation failed: {e}",
                 details={"task_ids": task_ids, "task_count": len(task_ids)},
@@ -401,7 +615,13 @@ class SABEREvaluationOrchestrator:
                 try:
                     await self.session_manager.cleanup()
                 except Exception as e:
-                    logger.error(f"Session manager cleanup error: {e}")
+                    logger.error(
+                        "Session manager cleanup error",
+                        extra={
+                            "event": "session_manager_cleanup_error",
+                            "error": str(e),
+                        },
+                    )
                     # Don't raise - cleanup errors shouldn't mask original exception
 
         return SessionManagerContext(self._session_manager)
@@ -429,6 +649,12 @@ class SABEREvaluationOrchestrator:
                 try:
                     await self.agent_manager.__aexit__(exc_type, exc_val, exc_tb)
                 except Exception as e:
-                    logger.error(f"Agent manager cleanup error: {e}")
+                    logger.error(
+                        "Agent manager cleanup error",
+                        extra={
+                            "event": "agent_manager_cleanup_error",
+                            "error": str(e),
+                        },
+                    )
 
         return AgentManagerContext(self._agent_manager, available_task_ids)

@@ -12,7 +12,6 @@ This module creates SABER-aware agents that wrap inspect_ai implementations
 with SABER infrastructure (MCP tools, session management, episode handling).
 """
 
-import logging
 from typing import Any, Dict, List
 
 from inspect_ai.agent import Agent, AgentState, agent
@@ -20,13 +19,21 @@ from inspect_ai.agent._types import AgentPrompt
 from inspect_ai.model import ModelOutput
 from inspect_ai.tool import Tool, mcp_server_http
 
+from ...logging_config import (
+    LogCategory,
+    get_saber_logger,
+    log_context,
+    log_operation_failure,
+    log_operation_start,
+    log_operation_success,
+)
 from ...models import EvalSubmission, HTTPHeaders, OrchestrationEnvironment
 from ..agent.registry import register_saber_agent
 from ..client_session import ClientSessionManager
 from ..models import SABERConfig
 from .agent_implementations import InspectAIImplementationNotFoundError, InspectAIImplementationRegistry
 
-logger = logging.getLogger(__name__)
+logger = get_saber_logger(LogCategory.AGENT, __name__)
 
 
 @register_saber_agent(
@@ -64,7 +71,7 @@ async def create_react_agent(
 
 async def create_saber_inspect_agent(
     config: SABERConfig,
-    session_manager: ClientSessionManager,
+    session_manager: ClientSessionManager | None,
     agent_id: str = "saber_agent",
     implementation_name: str = "react",
     **kwargs: Any,
@@ -91,18 +98,37 @@ async def create_saber_inspect_agent(
         InspectAIImplementationNotFoundError: If implementation not found
         ValueError: If required parameters are missing
     """
-    logger.info(f"Creating SABER-integrated inspect_ai agent: {agent_id} (implementation: {implementation_name})")
+    log_operation_start(
+        logger,
+        "create_saber_inspect_agent",
+        agent_id=agent_id,
+        implementation=implementation_name,
+    )
 
-    # Get the raw inspect_ai implementation from low-level registry
     try:
+        # Get the raw inspect_ai implementation from low-level registry
         agent_implementation = InspectAIImplementationRegistry.get_implementation(implementation_name)
-    except InspectAIImplementationNotFoundError as e:
-        logger.error(f"Failed to get inspect_ai implementation '{implementation_name}': {e}")
+    except InspectAIImplementationNotFoundError as exc:
+        log_operation_failure(
+            logger,
+            "create_saber_inspect_agent",
+            exc,
+            agent_id=agent_id,
+            implementation=implementation_name,
+        )
         raise
 
     # Validate required parameters
     if session_manager is None:
-        raise ValueError("Session manager is required but not provided")
+        error = ValueError("Session manager is required but not provided")
+        log_operation_failure(
+            logger,
+            "create_saber_inspect_agent",
+            error,
+            agent_id=agent_id,
+            implementation=implementation_name,
+        )
+        raise error
 
     # Create a SABER-aware agent using inspect_ai's @agent decorator
     @agent  # type: ignore[misc]
@@ -112,21 +138,17 @@ async def create_saber_inspect_agent(
         async def execute(state: AgentState, tools: List[Tool]) -> AgentState:
             """Agent execution function - called for each sample when sample metadata is available."""
 
-            # Import what we need for SABER context initialization
             from inspect_ai.solver._task_state import sample_state
             from inspect_ai.util import store
 
-            # Initialize SABER context
             task_store = store()
             task_store.set("saber_session_manager", session_manager)
 
-            # Get session ID
             session_id = session_manager.get_current_session_id()
             if session_id is None:
                 raise ValueError("Session ID not available from session manager")
             task_store.set("saber_session_id", session_id)
 
-            # Get task_id from current sample metadata
             current_state = sample_state()
             if current_state is None:
                 raise ValueError("Current task state is not available")
@@ -149,186 +171,279 @@ async def create_saber_inspect_agent(
             if submit_prompt is None:
                 raise ValueError("Submit prompt not found in sample metadata")
 
-            logger.info(f"Using instruction prompt: {instruction_prompt[:100]}...")
-            logger.info(f"Using assistant prompt: {assistant_prompt[:100]}...")
-            logger.info(f"Using submit prompt: {submit_prompt[:100]}...")
-
-            # Create episode
-            episode_response = await session_manager.create_episode(session_id, task_id)
-            task_store.set("saber_current_episode", episode_response)
-
-            # Log episode dependency information for agent context
-            if episode_response.attached_to_episode_id:
-                logger.info(
-                    f"🤖 Agent episode context: {episode_response.episode_id} attached to parent episode "
-                    f"{episode_response.attached_to_episode_id}"
+            with log_context(session_id=session_id, agent_id=agent_id, task_id=task_id):
+                logger.debug(
+                    "Multi-prompt prompts retrieved from metadata",
+                    extra={
+                        "event": "agent_prompts_loaded",
+                        "instruction_preview": instruction_prompt[:100],
+                        "assistant_preview": assistant_prompt[:100],
+                        "submit_preview": submit_prompt[:100],
+                    },
                 )
-                logger.info(
-                    f"🔗 This agent will operate in a dependent episode context with shared state from episode "
-                    f"{episode_response.attached_to_episode_id}"
-                )
-                # Store attachment info for potential agent use
+
+                episode_response = await session_manager.create_episode(session_id, task_id)
+                task_store.set("saber_current_episode", episode_response)
                 task_store.set("saber_attached_to_episode_id", episode_response.attached_to_episode_id)
-            else:
-                logger.info(f"🤖 Agent episode context: {episode_response.episode_id} created as independent episode")
-                task_store.set("saber_attached_to_episode_id", None)
 
-            # Create MCP server connection with episode headers
-            mcp_headers = {
-                HTTPHeaders.SESSION_ID: session_id,
-                HTTPHeaders.EPISODE_ID: episode_response.episode_id,
-                HTTPHeaders.TASK_ID: task_id,
-                HTTPHeaders.ORCHESTRATION_ENV: OrchestrationEnvironment.INSPECT,
-            }
+                with log_context(episode_id=episode_response.episode_id):
+                    logger.info(
+                        "Episode created for agent execution",
+                        extra={
+                            "event": "agent_episode_created",
+                            "episode_id": episode_response.episode_id,
+                            "attached_episode_id": episode_response.attached_to_episode_id,
+                        },
+                    )
 
-            if not config.session_config:
-                raise ValueError("session_config is required for SABER agents")
+                    if not config.session_config:
+                        raise ValueError("session_config is required for SABER agents")
 
-            saber_server = mcp_server_http(
-                name="SABER Security Tools",
-                url=f"{config.session_config.mcp_server_url}/mcp",
-                headers=mcp_headers,
-            )
+                    mcp_headers = {
+                        HTTPHeaders.SESSION_ID: session_id,
+                        HTTPHeaders.EPISODE_ID: episode_response.episode_id,
+                        HTTPHeaders.TASK_ID: task_id,
+                        HTTPHeaders.ORCHESTRATION_ENV: OrchestrationEnvironment.INSPECT,
+                    }
 
-            # Combine all tools (passed tools + SABER MCP tools)
-            all_tools = list(tools) + [saber_server]
+                    saber_server = mcp_server_http(
+                        name="SABER Security Tools",
+                        url=f"{config.session_config.mcp_server_url}/mcp",
+                        headers=mcp_headers,
+                    )
 
-            # Create the actual agent with SABER tools using the specified implementation
-            agent_kwargs = {
-                "name": f"SABER_{agent_id.title()}_Agent",
-                "prompt": AgentPrompt(
-                    instructions=instruction_prompt,
-                    handoff_prompt=None,
-                    assistant_prompt=assistant_prompt,
-                    submit_prompt=submit_prompt,
-                ),
-                "tools": all_tools,
-                **kwargs,
-            }
+                    all_tools = list(tools) + [saber_server]
 
-            actual_agent = agent_implementation(**agent_kwargs)
-            try:
-                # Run the agent
-                result: AgentState = await actual_agent(state)
-                output: ModelOutput = result.output
+                    # Create the actual agent with SABER tools using multi-prompt structure
+                    agent_kwargs = {
+                        "name": f"SABER {agent_id.title()} Agent",
+                        "prompt": AgentPrompt(
+                            instructions=instruction_prompt,
+                            handoff_prompt=None,
+                            assistant_prompt=assistant_prompt,
+                            submit_prompt=submit_prompt,
+                        ),
+                        "tools": all_tools,
+                        **kwargs,
+                    }
 
-                # Extract values from ModelOutput for EvalSubmission
-                processed_model = getattr(output, "model", "unknown") or "unknown"
-                processed_choices = getattr(output, "choices", []) or []
-                processed_submission = output.completion if output.completion else "No submission provided"
-                processed_tokens = output.usage.model_dump() if output.usage else {}
-                processed_time = getattr(output, "time", 0.0) or 0.0
+                    log_operation_start(
+                        logger,
+                        "agent_execution",
+                        agent_id=agent_id,
+                        implementation=implementation_name,
+                        session_id=session_id,
+                        task_id=task_id,
+                        episode_id=episode_response.episode_id,
+                    )
 
-                # Clean the tokens dict to remove problematic values
-                def clean_dict(d: Any) -> Any:
-                    """Remove None/False values to prevent server-side type coercion issues."""
-                    if isinstance(d, dict):
-                        cleaned = {}
-                        for k, v in d.items():
-                            if v is None or v is False:
-                                continue
+                    actual_agent = agent_implementation(**agent_kwargs)
+                    try:
+                        result: AgentState = await actual_agent(state)
+                        output: ModelOutput = result.output
+
+                        processed_model = getattr(output, "model", "unknown") or "unknown"
+                        processed_choices = getattr(output, "choices", []) or []
+                        processed_submission = output.completion if output.completion else "No submission provided"
+                        processed_tokens = output.usage.model_dump() if output.usage else {}
+                        processed_time = getattr(output, "time", 0.0) or 0.0
+
+                        def clean_dict(payload: Any) -> Any:
+                            """Remove None/False values to prevent server-side type coercion issues."""
+
+                            if isinstance(payload, dict):
+                                cleaned: Dict[str, Any] = {}
+                                for key, value in payload.items():
+                                    if value is None or value is False:
+                                        continue
+                                    cleaned[key] = clean_dict(value)
+                                return cleaned
+                            if isinstance(payload, list):
+                                return [clean_dict(item) for item in payload if item is not None and item is not False]
+                            return payload
+
+                        cleaned_tokens: Dict[str, Any] = clean_dict(processed_tokens)
+
+                        processed_choices_for_eval: List[Dict[str, Any]] = []
+                        for choice in processed_choices:
+                            if hasattr(choice, "dict"):
+                                choice_dict = choice.dict()
+                                cleaned_choice_dict = clean_dict(choice_dict)
+                                processed_choices_for_eval.append(cleaned_choice_dict)
                             else:
-                                cleaned[k] = clean_dict(v)
-                        return cleaned
-                    elif isinstance(d, list):
-                        return [clean_dict(item) for item in d if item is not None and item is not False]
-                    else:
-                        return d
+                                processed_choices_for_eval.append(choice)
 
-                # Clean tokens to prevent server-side validation issues
-                cleaned_tokens: Dict[str, Any] = clean_dict(processed_tokens)
+                        eval_submission = EvalSubmission(
+                            episode_id=episode_response.episode_id,
+                            task_id=task_id,
+                            model=processed_model,
+                            choices=processed_choices_for_eval,
+                            submission=processed_submission,
+                            tokens=cleaned_tokens,
+                            time=processed_time,
+                        )
 
-                # Create EvalSubmission object from ModelOutput
-                processed_choices_for_eval: List[Dict[str, Any]] = []
-                for choice in processed_choices:
-                    if hasattr(choice, "dict"):
-                        choice_dict = choice.dict()
-                        # Clean None values to prevent server-side type coercion to False
-                        cleaned_choice_dict = clean_dict(choice_dict)
-                        processed_choices_for_eval.append(cleaned_choice_dict)
-                    else:
-                        processed_choices_for_eval.append(choice)
+                        try:
+                            json_result = eval_submission.model_dump_json()
+                            logger.debug(
+                                "EvalSubmission serialized to JSON",
+                                extra={
+                                    "event": "eval_submission_serialized",
+                                    "payload_bytes": len(json_result),
+                                },
+                            )
+                        except Exception as json_error:
+                            logger.error(
+                                "EvalSubmission serialization failed",
+                                extra={
+                                    "event": "eval_submission_serialization_failed",
+                                    "error": str(json_error),
+                                    "episode_id": episode_response.episode_id,
+                                },
+                            )
+                            logger.debug(
+                                "EvalSubmission payload snapshot",
+                                extra={
+                                    "event": "eval_submission_serialization_payload",
+                                    "payload": eval_submission.model_dump(),
+                                },
+                            )
+                            raise
 
-                eval_submission = EvalSubmission(
-                    episode_id=episode_response.episode_id,
-                    task_id=task_id,
-                    model=processed_model,
-                    choices=processed_choices_for_eval,
-                    submission=processed_submission,
-                    tokens=cleaned_tokens,
-                    time=processed_time,
-                )
+                        cascade_end = episode_response.attached_to_episode_id is not None
+                        if cascade_end:
+                            logger.info(
+                                "Episode completion will cascade-end parent episode",
+                                extra={
+                                    "event": "episode_cascade_completion",
+                                    "episode_id": episode_response.episode_id,
+                                    "parent_episode_id": episode_response.attached_to_episode_id,
+                                },
+                            )
 
-                # Test JSON serialization before sending to server
-                try:
-                    json_result = eval_submission.model_dump_json()
-                    logger.info(f"✅ JSON serialization successful, length: {len(json_result)} chars")
-                    logger.debug(f"✅ JSON content: {json_result}")
-                except Exception as json_error:
-                    logger.error(f"❌ JSON serialization failed: {json_error}")
-                    logger.error(f"❌ EvalSubmission data: {eval_submission.model_dump()}")
-                    raise
+                        logger.info(
+                            "Ending episode with evaluation submission",
+                            extra={
+                                "event": "end_episode_invocation",
+                                "episode_id": episode_response.episode_id,
+                                "cascade_end": cascade_end,
+                            },
+                        )
+                        await session_manager.end_episode(
+                            episode_response.session_id,
+                            episode_response.episode_id,
+                            reason="completed",
+                            result=eval_submission,
+                            cascade_end_attached_episodes=cascade_end,
+                        )
+                        logger.info(
+                            "Episode ended successfully",
+                            extra={
+                                "event": "episode_completed",
+                                "episode_id": episode_response.episode_id,
+                                "cascade_end": cascade_end,
+                            },
+                        )
 
-                # End episode with the EvalSubmission object
-                # If this episode is attached to another episode, cascade-end the parent episode
-                cascade_end = episode_response.attached_to_episode_id is not None
-                if cascade_end:
-                    logger.info(
-                        f"🔗 Episode {episode_response.episode_id} will cascade-end parent episode "
-                        f"{episode_response.attached_to_episode_id}"
-                    )
+                        log_operation_success(
+                            logger,
+                            "agent_execution",
+                            agent_id=agent_id,
+                            implementation=implementation_name,
+                            episode_id=episode_response.episode_id,
+                            task_id=task_id,
+                        )
+                        return result
 
-                logger.info(f"🔄 Calling end_episode for {episode_response.episode_id} with EvalSubmission")
-                await session_manager.end_episode(
-                    episode_response.session_id,
-                    episode_response.episode_id,
-                    reason="completed",
-                    result=eval_submission,
-                    cascade_end_attached_episodes=cascade_end,
-                )
-                logger.info(f"✅ end_episode call completed successfully for {episode_response.episode_id}")
+                    except Exception as exc:
+                        log_operation_failure(
+                            logger,
+                            "agent_execution",
+                            exc,
+                            agent_id=agent_id,
+                            implementation=implementation_name,
+                            episode_id=episode_response.episode_id,
+                            task_id=task_id,
+                        )
 
-                logger.info(f"Successfully completed episode {episode_response.episode_id} for agent {agent_id}")
-                return result
+                        logger.error(
+                            "Agent execution failed",
+                            extra={
+                                "event": "agent_execution_failed",
+                                "error": str(exc),
+                                "exception_type": type(exc).__name__,
+                                "episode_id": episode_response.episode_id,
+                            },
+                        )
 
-            except Exception as e:
-                logger.error(f"❌ Exception occurred during agent execution: {type(e).__name__}: {e}")
-                logger.error(f"❌ Exception details: {str(e)}")
+                        error_submission = EvalSubmission(
+                            episode_id=episode_response.episode_id,
+                            task_id=task_id,
+                            model="unknown",
+                            choices=[],
+                            submission=f"Episode failed: {str(exc)}",
+                            tokens={},
+                            time=0.0,
+                        )
 
-                # Create EvalSubmission object for error case
-                error_submission = EvalSubmission(
-                    episode_id=episode_response.episode_id,
-                    task_id=task_id,
-                    model="unknown",
-                    choices=[],
-                    submission=f"Episode failed: {str(e)}",
-                    tokens={},
-                    time=0.0,
-                )
+                        cascade_end = episode_response.attached_to_episode_id is not None
+                        if cascade_end:
+                            logger.info(
+                                "Episode failure will cascade-end parent episode",
+                                extra={
+                                    "event": "episode_cascade_failure",
+                                    "episode_id": episode_response.episode_id,
+                                    "parent_episode_id": episode_response.attached_to_episode_id,
+                                },
+                            )
 
-                # End episode with error - still pass EvalSubmission object
-                # If this episode is attached to another episode, cascade-end the parent episode
-                cascade_end = episode_response.attached_to_episode_id is not None
-                if cascade_end:
-                    logger.info(
-                        f"🔗 Episode {episode_response.episode_id} failed - will cascade-end parent episode "
-                        f"{episode_response.attached_to_episode_id}"
-                    )
-
-                await session_manager.end_episode(
-                    episode_response.session_id,
-                    episode_response.episode_id,
-                    reason="error",
-                    result=error_submission,
-                    cascade_end_attached_episodes=cascade_end,
-                )
-                logger.error(f"Episode {episode_response.episode_id} failed for agent {agent_id}: {e}")
-                raise
+                        logger.info(
+                            "Ending episode after failure",
+                            extra={
+                                "event": "end_episode_after_failure",
+                                "episode_id": episode_response.episode_id,
+                                "cascade_end": cascade_end,
+                            },
+                        )
+                        await session_manager.end_episode(
+                            episode_response.session_id,
+                            episode_response.episode_id,
+                            reason="error",
+                            result=error_submission,
+                            cascade_end_attached_episodes=cascade_end,
+                        )
+                        logger.error(
+                            "Episode ended with failure",
+                            extra={
+                                "event": "episode_failed",
+                                "episode_id": episode_response.episode_id,
+                                "cascade_end": cascade_end,
+                            },
+                        )
+                        raise
 
         return execute
 
-    # Return the SABER-aware agent
-    return saber_inspect_agent()
+    try:
+        created_agent = saber_inspect_agent()
+    except Exception as exc:
+        log_operation_failure(
+            logger,
+            "create_saber_inspect_agent",
+            exc,
+            agent_id=agent_id,
+            implementation=implementation_name,
+        )
+        raise
+
+    log_operation_success(
+        logger,
+        "create_saber_inspect_agent",
+        agent_id=agent_id,
+        implementation=implementation_name,
+    )
+
+    return created_agent
 
 
 # Register additional inspect_ai implementations as they become available

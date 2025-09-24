@@ -4,12 +4,20 @@ Docker-based Bash executor for executing validated shell commands.
 This module provides a secure Bash executor that accepts command strings over the MCP protocol
 and executes them in Docker containers. Security validation is performed at the executor level
 before execution.
+
+Logging category: ``LogCategory.DOCKER``.
 """
 
-import logging
 import re
 from typing import Any, Dict, List, Optional
 
+from .....logging_config import (
+    LogCategory,
+    get_saber_logger,
+    log_operation_failure,
+    log_operation_start,
+    log_operation_success,
+)
 from ....base import CommandResult
 from ...base import Parameter, ParameterType, ValidationResult
 from ...exceptions import SandboxExecutionError
@@ -17,7 +25,7 @@ from ...sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 from ...utils.security_validator import SecurityValidator
 from ..docker_executor import DockerExecutor
 
-logger = logging.getLogger(__name__)
+logger = get_saber_logger(LogCategory.DOCKER, __name__)
 
 
 class BashExecutor(DockerExecutor):
@@ -190,7 +198,14 @@ class BashExecutor(DockerExecutor):
 
         # Log escaping application for debugging
         if escaped_command != command_str:
-            logger.debug(f"Applied shell escaping: '{command_str}' -> '{escaped_command}'")
+            logger.debug(
+                "Applied intelligent shell escaping",
+                extra={
+                    "event": "bash_command_shell_escaped",
+                    "original_command_preview": command_str[:120],
+                    "escaped_command_preview": escaped_command[:120],
+                },
+            )
 
         return escaped_command
 
@@ -221,15 +236,22 @@ class BashExecutor(DockerExecutor):
                     error=f"Parameter validation failed: {', '.join(validation_result.errors)}"
                 )
 
-            # Log any security warnings
-            if validation_result.warnings:
-                for warning in validation_result.warnings:
-                    logger.warning(f"Bash security warning: {warning}")
-
             # Extract episode ID from context
             episode_id = context.get("episode_id")
             if not episode_id:
                 raise SandboxExecutionError("episode_id required in context for Docker execution")
+
+            # Log any security warnings after we know the episode context
+            if validation_result.warnings:
+                for warning in validation_result.warnings:
+                    logger.warning(
+                        "Bash command security warning",
+                        extra={
+                            "event": "bash_command_security_warning",
+                            "episode_id": episode_id,
+                            "warning": warning,
+                        },
+                    )
 
             # Get Docker environment for episode
             environment = self.get_episode_environment(episode_id)
@@ -237,9 +259,14 @@ class BashExecutor(DockerExecutor):
 
             # 🔥 BASH TIMEOUT LOGGING: Log command start with timeout info
             command_str = parameters.get("command", "")
-            logger.warning(
-                f"🔥 BASH COMMAND START: episode={episode_id}, timeout={timeout}s, "
-                f"command='{command_str[:100]}{'...' if len(command_str) > 100 else ''}'"
+            command_preview = command_str[:100]
+            log_operation_start(
+                logger,
+                "bash_command_execution",
+                episode_id=episode_id,
+                timeout_seconds=timeout,
+                command_preview=command_preview,
+                command_length=len(command_str),
             )
 
             # Execute command via shell (shell handles all command sequences naturally)
@@ -247,18 +274,34 @@ class BashExecutor(DockerExecutor):
 
             try:
                 result = await environment.execute_command(command=command_args, timeout=timeout)
-                logger.warning(
-                    f"🔥 BASH COMMAND SUCCESS: episode={episode_id}, exit_code={result.exit_code}, "
-                    f"execution_time={result.execution_time:.2f}s"
+                log_operation_success(
+                    logger,
+                    "bash_command_execution",
+                    episode_id=episode_id,
+                    exit_code=result.exit_code,
+                    execution_time=result.execution_time,
                 )
             except Exception as e:
                 if "timed out" in str(e).lower():
                     logger.warning(
-                        f"🔥 BASH COMMAND TIMEOUT: episode={episode_id}, timeout={timeout}s, "
-                        f"command='{command_str[:50]}...' - {str(e)}"
+                        "Bash command timed out",
+                        extra={
+                            "event": "bash_command_timeout",
+                            "episode_id": episode_id,
+                            "timeout_seconds": timeout,
+                            "command_preview": command_str[:50],
+                            "error": str(e),
+                        },
                     )
                 else:
-                    logger.warning(f"🔥 BASH COMMAND ERROR: episode={episode_id}, error='{str(e)}'")
+                    logger.warning(
+                        "Bash command execution raised exception",
+                        extra={
+                            "event": "bash_command_exception",
+                            "episode_id": episode_id,
+                            "error": str(e),
+                        },
+                    )
                 raise
 
             # Parse output using existing logic
@@ -279,7 +322,20 @@ class BashExecutor(DockerExecutor):
             return tool_result
 
         except Exception as e:
-            logger.error(f"Docker command execution error: {e}")
+            log_operation_failure(
+                logger,
+                "bash_command_execution",
+                e,
+                episode_id=context.get("episode_id"),
+            )
+            logger.error(
+                "Docker command execution error",
+                extra={
+                    "event": "bash_command_execution_error",
+                    "episode_id": context.get("episode_id"),
+                    "error": str(e),
+                },
+            )
             return CommandResult.error_result(f"Docker command execution failed: {str(e)}")
 
     def parse_output(self, stdout: str, stderr: str, return_code: int) -> CommandResult:

@@ -1,5 +1,6 @@
-"""
-Executor Registry for SABER Framework.
+"""Executor Registry for SABER Framework.
+
+Logging Category: EXECUTION
 
 This module provides a unified registration system for all executors,
 both standard framework executors and user-defined custom executors.
@@ -7,13 +8,14 @@ All executors must register themselves through this registry.
 """
 
 import importlib.util
-import logging
 from pathlib import Path
 from typing import Any, Dict, Type
 
+from saber.logging_config import LogCategory, get_saber_logger
+
 from .docker_executor import DockerExecutor
 
-logger = logging.getLogger(__name__)
+logger = get_saber_logger(LogCategory.EXECUTION, __name__)
 
 
 class ExecutorRegistry:
@@ -28,7 +30,10 @@ class ExecutorRegistry:
         """Initialize the executor registry."""
         self._registered_executors: Dict[str, Type[DockerExecutor]] = {}
         self._registration_sources: Dict[str, str] = {}  # Track where each executor came from
-        logger.info("ExecutorRegistry initialized")
+        logger.info(
+            "Executor registry initialized",
+            extra={"event": "executor_registry_initialized"},
+        )
 
     def register_executor_class(
         self, executor_type: str, executor_class: Type[DockerExecutor], source: str = "external"
@@ -59,7 +64,15 @@ class ExecutorRegistry:
         self._registered_executors[executor_type] = executor_class
         self._registration_sources[executor_type] = source
 
-        logger.info(f"Registered executor '{executor_type}' from source: {source}")
+        logger.info(
+            "Executor registered",
+            extra={
+                "event": "executor_registered",
+                "executor_type": executor_type,
+                "source": source,
+                "executor_class": executor_class.__name__,
+            },
+        )
 
     def register_executor_from_file(self, executor_type: str, file_path: str, class_name: str) -> None:
         """
@@ -102,7 +115,16 @@ class ExecutorRegistry:
             self.register_executor_class(executor_type, executor_class, f"file:{file_path}")
 
         except Exception as e:
-            logger.error(f"Failed to register executor from file {file_path}: {e}")
+            logger.error(
+                "Executor registration from file failed",
+                extra={
+                    "event": "executor_registration_from_file_failed",
+                    "executor_type": executor_type,
+                    "file_path": file_path,
+                    "class_name": class_name,
+                    "error": str(e),
+                },
+            )
             raise
 
     def load_executors_from_directory(self, directory_path: str) -> Dict[str, str]:
@@ -125,7 +147,14 @@ class ExecutorRegistry:
         results = {}
         executor_files = list(directory.glob("*executor*.py"))  # More flexible pattern
 
-        logger.info(f"Loading {len(executor_files)} executor definition files from {directory_path}")
+        logger.info(
+            "Executor definition files discovery started",
+            extra={
+                "event": "executor_definition_discovery_started",
+                "directory_path": directory_path,
+                "candidate_count": len(executor_files),
+            },
+        )
 
         for file_path in executor_files:
             try:
@@ -140,15 +169,34 @@ class ExecutorRegistry:
                 spec.loader.exec_module(module)
 
                 results[str(file_path)] = "loaded_successfully"
-                logger.info(f"Loaded executor definitions from {file_path}")
+                logger.info(
+                    "Executor definition file loaded",
+                    extra={
+                        "event": "executor_definition_loaded",
+                        "file_path": str(file_path),
+                    },
+                )
 
             except Exception as e:
                 error_msg = f"Failed to load: {e}"
                 results[str(file_path)] = error_msg
-                logger.warning(f"Failed to load executor file {file_path}: {e}")
+                logger.warning(
+                    "Executor definition file load failed",
+                    extra={
+                        "event": "executor_definition_load_failed",
+                        "file_path": str(file_path),
+                        "error": str(e),
+                    },
+                )
 
         logger.info(
-            f"Loaded {len([r for r in results.values() if r == 'loaded_successfully'])} executor definition files"
+            "Executor definition files discovery completed",
+            extra={
+                "event": "executor_definition_discovery_completed",
+                "directory_path": directory_path,
+                "successful_count": len([r for r in results.values() if r == "loaded_successfully"]),
+                "total_files": len(executor_files),
+            },
         )
         return results
 
@@ -163,9 +211,21 @@ class ExecutorRegistry:
             del self._registered_executors[executor_type]
             if executor_type in self._registration_sources:
                 del self._registration_sources[executor_type]
-            logger.info(f"Unregistered executor: {executor_type}")
+            logger.info(
+                "Executor unregistered",
+                extra={
+                    "event": "executor_unregistered",
+                    "executor_type": executor_type,
+                },
+            )
         else:
-            logger.warning(f"Attempted to unregister unknown executor: {executor_type}")
+            logger.warning(
+                "Executor unregister skipped",
+                extra={
+                    "event": "executor_unregistered_unknown",
+                    "executor_type": executor_type,
+                },
+            )
 
     def list_registered_executors(self) -> Dict[str, Dict[str, Any]]:
         """
@@ -222,7 +282,13 @@ class ExecutorRegistry:
         executor_types = list(self._registered_executors.keys())
         for executor_type in executor_types:
             self.unregister_executor(executor_type)
-        logger.info(f"Cleared {len(executor_types)} executors")
+        logger.info(
+            "All executors cleared",
+            extra={
+                "event": "executors_cleared",
+                "cleared_count": len(executor_types),
+            },
+        )
 
     def _validate_executor_class(self, executor_class: Type[DockerExecutor]) -> None:
         """

@@ -1,6 +1,8 @@
 """
 Evaluation result persistence layer.
 
+Logging Category: EVALUATION
+
 Phase 1 introduces the contract and fail-fast behavior. Phase 2/3 can
 swap implementation (DB, object store, etc.) without changing callers.
 
@@ -13,8 +15,12 @@ import json
 from pathlib import Path
 from typing import List, Optional
 
+from saber.logging_config import LogCategory, get_saber_logger
+
 from .exceptions import EvaluationNotFoundError, InvalidEvaluationRequestError, SessionEvaluationError
 from .models import EvaluationResult
+
+logger = get_saber_logger(LogCategory.EVALUATION, __name__)
 
 
 class EvaluationStore:
@@ -54,6 +60,13 @@ class JsonFileEvaluationStore(EvaluationStore):
     def __init__(self, base_dir: str = "data/evaluations") -> None:
         self.base_path = Path(base_dir)
         self.base_path.mkdir(parents=True, exist_ok=True)
+        logger.info(
+            "JSON evaluation store initialized",
+            extra={
+                "event": "json_evaluation_store_initialized",
+                "base_directory": str(self.base_path),
+            },
+        )
 
     async def save(
         self,
@@ -94,6 +107,19 @@ class JsonFileEvaluationStore(EvaluationStore):
         try:
             with artifact_path.open("w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2, sort_keys=True)
+            logger.info(
+                "Evaluation result persisted",
+                extra={
+                    "event": "evaluation_result_persisted",
+                    "session_id": session_id,
+                    "task_id": result.task_id,
+                    "episode_id": result.episode_id,
+                    "artifact_path": str(artifact_path),
+                    "strategy": result.strategy,
+                    "score": result.score,
+                    "max_score": result.max_score,
+                },
+            )
         except Exception as e:  # Fail fast
             raise RuntimeError(f"Failed to persist evaluation result to {artifact_path}: {e}") from e  # noqa: E501
 
@@ -205,11 +231,14 @@ class JsonFileEvaluationStore(EvaluationStore):
                 results.append(self._json_to_evaluation_result(data))
             except Exception as e:
                 # Log and skip corrupted files - don't fail entire listing
-                # This follows fail-fast for the specific file but allows listing to continue
-                import logging
-
-                logger = logging.getLogger(__name__)
-                logger.warning(f"Skipping corrupted evaluation file {artifact_path}: {e}")
+                logger.warning(
+                    "Corrupted evaluation file skipped",
+                    extra={
+                        "event": "evaluation_file_skipped",
+                        "artifact_path": str(artifact_path),
+                        "error": str(e),
+                    },
+                )
         return results
 
     def _json_to_evaluation_result(self, data: dict) -> EvaluationResult:

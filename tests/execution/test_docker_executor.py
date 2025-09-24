@@ -157,8 +157,8 @@ class TestDockerExecutor:
 
         docker_executor._sandbox_manager.stop_episode_environment.side_effect = Exception("Cleanup error")
 
-        # Should not raise an exception
-        docker_executor.cleanup_execution(episode_id)
+        with pytest.raises(SandboxExecutionError, match="Failed to clean up execution resources"):
+            docker_executor.cleanup_execution(episode_id)
 
         docker_executor._sandbox_manager.stop_episode_environment.assert_called_once_with(episode_id)
 

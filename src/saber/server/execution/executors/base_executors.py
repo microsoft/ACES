@@ -2,17 +2,19 @@
 Base executor implementations for common command patterns.
 
 This module provides the base CommandExecutor class for implementing custom command executors.
+
+Logging category: ``LogCategory.TASK_EXEC``.
 """
 
-import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
+from ....logging_config import LogCategory, get_saber_logger
 from ....models import MCPInputSchema, MCPPropertySchema
 from ...base import CommandResult
 from ..base import Parameter, ValidationResult
 
-logger = logging.getLogger(__name__)
+logger = get_saber_logger(LogCategory.TASK_EXEC, __name__)
 
 
 class CommandExecutor(ABC):
@@ -106,7 +108,14 @@ class CommandExecutor(ABC):
         """
         timeout = self._config.get("timeout")
         if timeout is None:
-            logger.warning(f"No timeout configured for {self.__class__.__name__}, using default 300.0 seconds")
+            logger.warning(
+                "Executor timeout missing; using default",
+                extra={
+                    "event": "executor_timeout_default",
+                    "executor_type": self.__class__.__name__,
+                    "default_timeout": 300.0,
+                },
+            )
             return 300.0
         return float(timeout)
 

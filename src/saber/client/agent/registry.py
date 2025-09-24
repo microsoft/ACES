@@ -12,19 +12,19 @@ This is the HIGH-LEVEL registry that client code should interact with.
 It composes low-level agent implementations with SABER infrastructure.
 """
 
-import logging
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from ...logging_config import get_agent_logger
 from ..client_session import ClientSessionManager
 from ..models import SABERConfig
 
 if TYPE_CHECKING:
     from inspect_ai.agent import Agent
 
-logger = logging.getLogger(__name__)
+logger = get_agent_logger(__name__)
 
 
 class SABERAgentSpec(BaseModel):
@@ -142,8 +142,24 @@ class SABERAgentRegistry:
         cls._agents[name] = spec
         cls._factory_funcs[name] = factory_func
 
-        logger.info(f"Registered SABER agent: {name} (type: {implementation_type}, factory: {spec.factory_func})")
-        logger.debug(f"Total registered agents: {list(cls._agents.keys())}")
+        logger.info(
+            "Agent registered",
+            extra={
+                "event": "agent_registered",
+                "agent_name": name,
+                "implementation_type": implementation_type,
+                "factory": spec.factory_func,
+                "capability_count": len(spec.capabilities),
+                "tag_count": len(spec.tags),
+            },
+        )
+        logger.debug(
+            "Registry agent count",
+            extra={
+                "event": "agent_registry_size",
+                "count": len(cls._agents),
+            },
+        )
 
     @classmethod
     def get_agent_spec(cls, name: str) -> SABERAgentSpec:
@@ -159,9 +175,15 @@ class SABERAgentRegistry:
             SABERAgentNotFoundError: If agent not found
         """
         if name not in cls._agents:
-            available = list(cls._agents.keys())
-            logger.error(f"Agent '{name}' not found. Available agents: {available}")
-            logger.debug(f"All registered agents: {cls._agents}")
+            available = sorted(cls._agents.keys())
+            logger.error(
+                "Agent lookup failed",
+                extra={
+                    "event": "agent_not_found",
+                    "agent_name": name,
+                    "available_agents": available,
+                },
+            )
             raise SABERAgentNotFoundError(f"SABER agent '{name}' not found. Available: {available}")
 
         return cls._agents[name]
@@ -180,7 +202,15 @@ class SABERAgentRegistry:
             SABERAgentNotFoundError: If agent not found
         """
         if name not in cls._factory_funcs:
-            available = list(cls._factory_funcs.keys())
+            available = sorted(cls._factory_funcs.keys())
+            logger.error(
+                "Agent factory lookup failed",
+                extra={
+                    "event": "agent_factory_not_found",
+                    "agent_name": name,
+                    "available_factories": available,
+                },
+            )
             raise SABERAgentNotFoundError(f"SABER agent factory for '{name}' not found. Available: {available}")
 
         return cls._factory_funcs[name]
@@ -211,7 +241,10 @@ class SABERAgentRegistry:
         """Clear all registered SABER agents (primarily for testing)."""
         cls._agents.clear()
         cls._factory_funcs.clear()
-        logger.debug("Cleared SABER agent registry")
+        logger.debug(
+            "Cleared agent registry",
+            extra={"event": "agent_registry_cleared"},
+        )
 
 
 def register_saber_agent(

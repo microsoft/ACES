@@ -244,15 +244,23 @@ tasks:
         import logging
 
         with caplog.at_level(logging.INFO):
-            manager = self._create_benchmark_manager_from_temp_config_dir(temp_config_dir)
+            self._create_benchmark_manager_from_temp_config_dir(temp_config_dir)
 
-        # Check for initialization logs
+        structured_events = [getattr(record, "_structured", {}) for record in caplog.records]
+
+        # Check for initialization logs with structured payloads
+        assert any(event.get("event") == "benchmark_manager_init" for event in structured_events)
+
+        # Ensure load operation completed and reported task count
         assert any(
-            "Initializing BenchmarkManager for domain 'malware_classification'" in record.message
-            for record in caplog.records
+            event.get("event") == "operation_completed"
+            and event.get("operation") == "benchmark_manager_load_tasks"
+            for event in structured_events
         )
-        assert any("BenchmarkManager initialization complete" in record.message for record in caplog.records)
-        assert any("Loaded 1 tasks" in record.message for record in caplog.records)
+        assert any(
+            event.get("operation") == "benchmark_manager_load_tasks" and event.get("task_count") == 1
+            for event in structured_events
+        )
 
     def test_task_manager_file_path_handling(self, temp_config_dir):
         """Test that BenchmarkManager correctly handles file path types."""

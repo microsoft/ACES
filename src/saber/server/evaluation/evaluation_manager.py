@@ -1,12 +1,15 @@
 """
 Enhanced EvaluationManager implementation for SABER domain server.
 
+Logging Category: EVALUATION
+
 This implementation provides fail-fast evaluation capabilities with no backwards compatibility.
 """
 
-import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
+
+from saber.logging_config import LogCategory, get_saber_logger
 
 from ..base import Episode
 from ..benchmarks.task import Task
@@ -23,7 +26,7 @@ from .exceptions import (
 from .models import EpisodeEvaluationData, EvaluationConfig, EvaluationResult
 from .store import EvaluationStore, JsonFileEvaluationStore
 
-logger = logging.getLogger(__name__)
+logger = get_saber_logger(LogCategory.EVALUATION, __name__)
 
 
 class EvaluationManager:
@@ -64,7 +67,15 @@ class EvaluationManager:
                 f"Unsupported store type: {type(store)}. Provide EvaluationStore, path string, or Path object."
             )
 
-        logger.info("EvaluationManager initialized with evaluators: %s", list(self.evaluators.keys()))
+        logger.info(
+            "Evaluation manager initialized",
+            extra={
+                "event": "evaluation_manager_initialized",
+                "evaluators": sorted(self.evaluators.keys()),
+                "config_dir": config_dir,
+                "store_type": type(self.store).__name__,
+            },
+        )
 
     def configure_for_task(self, task: Task) -> None:
         """
@@ -101,7 +112,16 @@ class EvaluationManager:
         self._validate_strategy_config(config, task.task_id)
 
         self.evaluation_configs[task.task_id] = config
-        logger.info(f"Configured evaluation for task {task.task_id} with strategy: {config.strategy}")
+        logger.info(
+            "Task evaluation configured",
+            extra={
+                "event": "task_evaluation_configured",
+                "task_id": task.task_id,
+                "strategy": config.strategy,
+                "criteria_keys": sorted(config.criteria.keys()),
+                "scoring_keys": sorted(config.scoring.keys()),
+            },
+        )
 
     def _validate_strategy_config(self, config: EvaluationConfig, task_id: str) -> None:
         """
@@ -189,13 +209,28 @@ class EvaluationManager:
         # Log enhanced evaluation data if available
         if hasattr(episode, "eval_submission") and episode.eval_submission:
             eval_submission = episode.eval_submission
-            logger.info(
-                f"Enhanced evaluation data: model={eval_submission.model}, "
-                f"tokens={eval_submission.tokens.get('total_tokens', 0)}, "
-                f"time={eval_submission.time}"
+            logger.debug(
+                "Episode evaluation submission metadata",
+                extra={
+                    "event": "episode_evaluation_submission_metadata",
+                    "episode_id": episode.episode_id,
+                    "task_id": episode.task_id,
+                    "model": eval_submission.model,
+                    "total_tokens": eval_submission.tokens.get("total_tokens", 0),
+                    "evaluation_time": eval_submission.time,
+                },
             )
 
-        logger.info(f"Evaluating episode {episode.episode_id} with strategy: {config.strategy}")
+        logger.info(
+            "Episode evaluation started",
+            extra={
+                "event": "episode_evaluation_started",
+                "episode_id": episode.episode_id,
+                "task_id": task.task_id,
+                "strategy": config.strategy,
+                "step_count": len(episode.steps),
+            },
+        )
 
         # Pass episode object to LLM evaluator for enhanced judge prompt context
         if config.strategy == EVAL_STRATEGY_LLM_JUDGE:
@@ -213,7 +248,7 @@ class EvaluationManager:
             # Re-raise to enforce atomic contract (no silent persistence failures)
             raise
         logger.info(
-            "episode_evaluation_complete",
+            "Episode evaluation completed",
             extra={
                 "event": "episode_evaluation_complete",
                 "episode_id": episode.episode_id,
@@ -286,7 +321,20 @@ class EvaluationManager:
         if score < 0 or score > max_score:
             raise InvalidEvaluationRequestError(f"score must be between 0 and {max_score}")
 
-        logger.info(f"Overriding evaluation for episode {episode_id} in session {session_id} with strategy: {strategy}")
+        logger.info(
+            "Episode evaluation override requested",
+            extra={
+                "event": "episode_evaluation_override_requested",
+                "episode_id": episode_id,
+                "session_id": session_id,
+                "task_id": evaluation_data.task_id,
+                "strategy": strategy,
+                "raw_score": raw_score,
+                "max_score": max_score,
+                "score": score,
+                "success": success,
+            },
+        )
 
         # Create EvaluationResult from the provided data
         result = EvaluationResult.from_episode_data(
@@ -307,7 +355,7 @@ class EvaluationManager:
             raise RuntimeError(f"Failed to persist override evaluation result: {e}") from e
 
         logger.info(
-            "episode_evaluation_override_complete",
+            "Episode evaluation override completed",
             extra={
                 "event": "episode_evaluation_override_complete",
                 "episode_id": episode_id,
@@ -327,16 +375,29 @@ class EvaluationManager:
     # Legacy logging methods for compatibility with existing SessionManager
     async def log_session_start(self, session_id: str, client_id: str) -> None:
         """Log session start event."""
-        logger.info(f"Session started: {session_id} for client {client_id}")
+        logger.info(
+            "Evaluation session started",
+            extra={
+                "event": "evaluation_session_started",
+                "session_id": session_id,
+                "client_id": client_id,
+            },
+        )
 
     async def log_session_end(self, session_id: str) -> None:
         """Log session end event."""
-        logger.info(f"Session ended: {session_id}")
+        logger.info(
+            "Evaluation session ended",
+            extra={
+                "event": "evaluation_session_ended",
+                "session_id": session_id,
+            },
+        )
 
     async def log_episode_start(self, session_id: str, episode_id: str, task_id: str) -> None:
         """Log episode start event (legacy compatibility)."""
         logger.info(
-            "episode_start",
+            "Evaluation episode started",
             extra={
                 "event": "episode_start",
                 "session_id": session_id,
@@ -347,11 +408,27 @@ class EvaluationManager:
 
     async def log_episode_end(self, session_id: str, completion_reason: str) -> None:
         """Log episode end event."""
-        logger.info(f"Episode ended in session {session_id}: {completion_reason}")
+        logger.info(
+            "Evaluation episode ended",
+            extra={
+                "event": "evaluation_episode_ended",
+                "session_id": session_id,
+                "completion_reason": completion_reason,
+            },
+        )
 
     async def log_action(self, session_id: str, episode_id: str, action: Any, result: Any) -> None:
         """Log action execution event."""
-        logger.info(f"Action logged for episode {episode_id} in session {session_id}: {action.tool_name}")
+        logger.debug(
+            "Evaluation action recorded",
+            extra={
+                "event": "evaluation_action_recorded",
+                "session_id": session_id,
+                "episode_id": episode_id,
+                "action_tool": getattr(action, "tool_name", None),
+                "result_type": type(result).__name__ if result is not None else None,
+            },
+        )
 
     async def get_trajectory(self, session_id: str) -> List[Any]:
         """Get trajectory for a session (legacy stub)."""

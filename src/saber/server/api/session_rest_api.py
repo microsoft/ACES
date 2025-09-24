@@ -3,9 +3,9 @@ SessionRestAPI implementation for SABER domain server.
 
 The SessionRestAPI handles REST API endpoints for session management, episodes,
 policy, status, and events. Tool execution is handled by SessionMCPAPI.
-"""
 
-import logging
+Logging category: REST_API.
+"""
 
 # Forward declaration to avoid circular imports
 from typing import TYPE_CHECKING, Optional
@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Optional
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 
+from ...logging_config import get_api_logger, log_operation_failure, log_operation_start, log_operation_success
 from ...models import (
     BenchmarkInfo,
     EpisodeContext,
@@ -39,7 +40,7 @@ from ..evaluation.exceptions import EvaluationNotFoundError, InvalidEvaluationRe
 if TYPE_CHECKING:
     from ..session_manager import SessionManager
 
-logger = logging.getLogger(__name__)
+logger = get_api_logger(__name__)
 
 
 class SessionRestAPI:
@@ -73,7 +74,15 @@ class SessionRestAPI:
         # Setup API routes
         self._setup_routes()
 
-        logger.info(f"SessionRestAPI initialized for domain '{session_manager.domain_name}' on {host}:{port}")
+        logger.info(
+            "REST API initialized",
+            extra={
+                "event": "rest_api_initialized",
+                "domain": session_manager.domain_name,
+                "host": host,
+                "port": port,
+            },
+        )
 
     def _setup_routes(self) -> None:
         """Setup FastAPI routes for the session management API."""
@@ -87,7 +96,15 @@ class SessionRestAPI:
         @self.app.delete("/api/v1/session/{session_id}", response_model=SessionTerminateResponse)
         async def terminate_session_endpoint(session_id: str) -> SessionTerminateResponse:
             """Terminate a client session."""
-            logger.warning(f"🔥 REST API TERMINATION: DELETE /api/v1/session/{session_id} endpoint called")
+            logger.warning(
+                "Terminate session requested",
+                extra={
+                    "event": "session_termination_requested",
+                    "session_id": session_id,
+                    "http_method": "DELETE",
+                    "path": "/api/v1/session/{session_id}",
+                },
+            )
             await self.session_manager.terminate_session(session_id)
             return SessionTerminateResponse(message="Session terminated successfully")
 
@@ -145,11 +162,15 @@ class SessionRestAPI:
         async def create_episode_endpoint(session_id: str, task_id: str) -> EpisodeCreateResponse:
             """Create a new episode for a specific task with automatic dependency resolution."""
             try:
-                logger.info(f"🔄 Episode creation endpoint called: session_id={session_id}, task_id={task_id}")
+                log_operation_start(
+                    logger,
+                    "create_episode",
+                    session_id=session_id,
+                    task_id=task_id,
+                )
 
                 # Create episode with automatic dependency resolution
                 episode = await self.session_manager.start_episode(session_id, task_id)
-                logger.info(f"✅ Episode created successfully: episode_id={episode.episode_id}")
 
                 # Create episode context with limits and metadata
                 episode_context = EpisodeContext(
@@ -158,7 +179,6 @@ class SessionRestAPI:
                     max_steps=episode.max_steps,
                     metadata=episode.metadata,
                 )
-                logger.info("✅ Episode context created successfully")
 
                 response = EpisodeCreateResponse(
                     episode_id=episode.episode_id,
@@ -170,15 +190,36 @@ class SessionRestAPI:
                     episode_context=episode_context,
                     attached_to_episode_id=episode.attached_to_episode_id,
                 )
-                logger.info("✅ Episode response created successfully, returning to client")
+                log_operation_success(
+                    logger,
+                    "create_episode",
+                    session_id=session_id,
+                    task_id=task_id,
+                    episode_id=episode.episode_id,
+                    episode_state=episode.state.value,
+                )
                 return response
-            except HTTPException:
-                # Re-raise HTTPException to preserve status codes (404, 422, etc.)
+            except HTTPException as exc:
+                logger.warning(
+                    "Episode creation failed",
+                    extra={
+                        "event": "create_episode_failed",
+                        "session_id": session_id,
+                        "task_id": task_id,
+                        "status_code": exc.status_code,
+                        "detail": exc.detail,
+                    },
+                )
                 raise
-            except Exception as e:
-                logger.error(f"❌ Error in episode creation endpoint: {type(e).__name__}: {str(e)}")
-                logger.error("❌ Full traceback:", exc_info=True)
-                raise HTTPException(status_code=500, detail=f"Failed to create episode: {str(e)}")
+            except Exception as exc:
+                log_operation_failure(
+                    logger,
+                    "create_episode",
+                    exc,
+                    session_id=session_id,
+                    task_id=task_id,
+                )
+                raise HTTPException(status_code=500, detail=f"Failed to create episode: {exc}") from exc
 
         @self.app.delete("/api/v1/session/{session_id}/episodes/{episode_id}", response_model=EpisodeEndResponse)
         async def end_episode_endpoint(
@@ -205,8 +246,16 @@ class SessionRestAPI:
                     if body:
                         body_text = body.decode("utf-8")
                         result_data = body_text
-                except Exception as e:
-                    logger.warning(f"Failed to read request body: {e}")
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to read request body",
+                        extra={
+                            "event": "request_body_read_failed",
+                            "session_id": session_id,
+                            "episode_id": episode_id,
+                            "error": str(exc),
+                        },
+                    )
 
             if result_data:
                 try:
@@ -214,8 +263,16 @@ class SessionRestAPI:
 
                     result_dict = json.loads(result_data)
                     eval_submission = EvalSubmission(**result_dict)
-                except Exception as e:
-                    logger.error(f"Failed to parse EvalSubmission from result: {e}")
+                except Exception as exc:
+                    logger.error(
+                        "Failed to parse evaluation submission",
+                        extra={
+                            "event": "evaluation_submission_parse_failed",
+                            "session_id": session_id,
+                            "episode_id": episode_id,
+                            "error": str(exc),
+                        },
+                    )
                     # Continue without eval_submission
 
             # Convert string boolean parameter to actual boolean
@@ -233,66 +290,41 @@ class SessionRestAPI:
             Returns BenchmarkInfo object with all configured tasks.
             Each task reports its own configured episode_attempts.
             """
-            logger.debug("Tasks endpoint called")
+            logger.debug("Tasks endpoint requested", extra={"event": "tasks_requested"})
             try:
                 benchmark_info: BenchmarkInfo = self.session_manager.get_benchmark_info()
                 logger.debug(
-                    f"Got benchmark info: {benchmark_info.total_tasks} tasks, {benchmark_info.total_episodes} episodes"
+                    "Tasks retrieved",
+                    extra={
+                        "event": "tasks_retrieved",
+                        "task_count": benchmark_info.total_tasks,
+                        "episode_count": benchmark_info.total_episodes,
+                    },
                 )
 
                 # Test serialization before returning
                 try:
                     benchmark_info.model_dump()
-                    logger.debug("Benchmark info serialization successful")
-                except Exception as ser_e:
-                    logger.error(f"Benchmark info serialization failed: {ser_e}")
-                    raise
+                except Exception as serialization_exc:
+                    logger.exception(
+                        "Benchmark info serialization failed",
+                        extra={
+                            "event": "benchmark_info_serialization_failed",
+                            "task_count": benchmark_info.total_tasks,
+                            "episode_count": benchmark_info.total_episodes,
+                        },
+                    )
+                    raise HTTPException(
+                        status_code=500, detail="Failed to serialize benchmark info"
+                    ) from serialization_exc
 
                 return benchmark_info
             except HTTPException:
                 # Re-raise HTTPException to preserve status codes
                 raise
-            except Exception as e:
-                logger.error(f"Error in tasks endpoint: {e}")
-                logger.error(f"Exception type: {type(e)}")
-                import traceback
-
-                logger.error(f"Traceback: {traceback.format_exc()}")
-                raise HTTPException(status_code=500, detail=f"Failed to get tasks: {str(e)}")
-
-        @self.app.get("/api/v1/benchmark", response_model=BenchmarkInfo)
-        async def get_benchmark_endpoint() -> BenchmarkInfo:
-            """
-            Legacy endpoint: Get complete benchmark task list with episode attempts for client orchestration.
-
-            DEPRECATED: Use /api/v1/tasks instead. This endpoint will be removed in a future version.
-            Returns BenchmarkInfo object with typed data structure.
-            Each task reports its own configured episode_attempts.
-            """
-            logger.warning("DEPRECATED: /api/v1/benchmark endpoint called. Use /api/v1/tasks instead.")
-            logger.debug("Benchmark endpoint called")
-            try:
-                benchmark_info: BenchmarkInfo = self.session_manager.get_benchmark_info()
-                logger.debug(
-                    f"Got benchmark info: {benchmark_info.total_tasks} tasks, {benchmark_info.total_episodes} episodes"
-                )
-
-                # Test serialization before returning
-                try:
-                    benchmark_info.model_dump()
-                    logger.debug("Benchmark info serialization successful")
-                except Exception as ser_e:
-                    logger.error(f"Benchmark info serialization failed: {ser_e}")
-                    raise
-
-                return benchmark_info
-            except Exception as e:
-                logger.error(f"Error in benchmark endpoint: {e}")
-                logger.error(f"Exception type: {type(e)}")
-                import traceback
-
-                logger.error(f"Traceback: {traceback.format_exc()}")
-                raise
+            except Exception as exc:
+                logger.exception("Failed to retrieve tasks", extra={"event": "tasks_retrieval_failed"})
+                raise HTTPException(status_code=500, detail=f"Failed to get tasks: {exc}") from exc
 
         @self.app.get("/api/v1/health", response_model=HealthResponse)
         async def health_check() -> HealthResponse:
@@ -402,7 +434,12 @@ class SessionRestAPI:
             session_id: str, file: UploadFile = File(...)
         ) -> EvaluationFileUploadResponse:
             """Upload external evaluation file (.eval) to session directory."""
-            logger.info(f"🔄 REST API: Uploading evaluation file for session {session_id}, filename: {file.filename}")
+            log_operation_start(
+                logger,
+                "upload_evaluation_file",
+                session_id=session_id,
+                filename=file.filename,
+            )
 
             try:
                 # Validate session exists first
@@ -410,13 +447,25 @@ class SessionRestAPI:
 
                 # Validate file extension
                 if not file.filename or not file.filename.endswith(".eval"):
+                    logger.warning(
+                        "Invalid evaluation file extension",
+                        extra={
+                            "event": "evaluation_file_extension_invalid",
+                            "session_id": session_id,
+                            "filename": file.filename,
+                        },
+                    )
                     raise HTTPException(status_code=422, detail="File must have .eval extension")
 
                 # Save file via evaluation manager
                 file_size = await self.session_manager.save_evaluation_file(session_id, file)
 
-                logger.info(
-                    f"✅ REST API: Successfully uploaded evaluation file {file.filename} for session {session_id}"
+                log_operation_success(
+                    logger,
+                    "upload_evaluation_file",
+                    session_id=session_id,
+                    filename=file.filename,
+                    file_size=file_size,
                 )
 
                 return EvaluationFileUploadResponse(
@@ -429,9 +478,15 @@ class SessionRestAPI:
             except HTTPException:
                 # Re-raise HTTPException to preserve status codes (404, 422, etc.)
                 raise
-            except Exception as e:
-                logger.error(f"❌ REST API: Error uploading evaluation file: {type(e).__name__}: {e}")
-                raise HTTPException(status_code=500, detail=f"Failed to upload evaluation file: {str(e)}")
+            except Exception as exc:
+                log_operation_failure(
+                    logger,
+                    "upload_evaluation_file",
+                    exc,
+                    session_id=session_id,
+                    filename=file.filename,
+                )
+                raise HTTPException(status_code=500, detail=f"Failed to upload evaluation file: {exc}") from exc
 
         # Evaluation override endpoint
         @self.app.put(
@@ -441,7 +496,12 @@ class SessionRestAPI:
             session_id: str, episode_id: str, request: EvaluationOverrideRequest
         ) -> EvaluationOverrideResponse:
             """Override evaluation result with external evaluation data."""
-            logger.info(f"🔄 REST API: Overriding evaluation for session {session_id}, episode {episode_id}")
+            log_operation_start(
+                logger,
+                "override_evaluation",
+                session_id=session_id,
+                episode_id=episode_id,
+            )
 
             try:
                 # Call session manager to override evaluation
@@ -451,8 +511,14 @@ class SessionRestAPI:
                     override_request=request,
                 )
 
-                logger.info(
-                    f"✅ REST API: Successfully overridden evaluation for episode {episode_id} in session {session_id}"
+                log_operation_success(
+                    logger,
+                    "override_evaluation",
+                    session_id=session_id,
+                    episode_id=episode_id,
+                    strategy=evaluation_result.strategy,
+                    score=evaluation_result.score,
+                    success=evaluation_result.success,
                 )
 
                 # Convert to response model
@@ -481,17 +547,35 @@ class SessionRestAPI:
                 # Re-raise HTTPException to preserve status codes (404, 422, etc.)
                 raise
             except InvalidEvaluationRequestError as e:
-                logger.error(f"❌ REST API: Invalid evaluation request: {e}")
-                raise HTTPException(status_code=422, detail=str(e))
-            except Exception as e:
-                logger.error(f"❌ REST API: Error overriding evaluation: {type(e).__name__}: {e}")
-                raise HTTPException(status_code=500, detail=f"Failed to override evaluation: {str(e)}")
+                log_operation_failure(
+                    logger,
+                    "override_evaluation",
+                    e,
+                    session_id=session_id,
+                    episode_id=episode_id,
+                    status_code=422,
+                )
+                raise HTTPException(status_code=422, detail=str(e)) from e
+            except Exception as exc:
+                log_operation_failure(
+                    logger,
+                    "override_evaluation",
+                    exc,
+                    session_id=session_id,
+                    episode_id=episode_id,
+                )
+                raise HTTPException(status_code=500, detail=f"Failed to override evaluation: {exc}") from exc
 
         # Client-side scoring endpoint
         @self.app.get("/api/v1/session/{session_id}/episodes/{episode_id}/evaluation-criteria")
         async def get_evaluation_criteria_endpoint(session_id: str, episode_id: str) -> EvaluationCriteriaResponse:
             """Get evaluation criteria package for client-side evaluation."""
-            logger.info(f"🔍 REST API: Getting evaluation criteria for session {session_id}, episode {episode_id}")
+            log_operation_start(
+                logger,
+                "get_evaluation_criteria",
+                session_id=session_id,
+                episode_id=episode_id,
+            )
             try:
                 criteria = await self.session_manager.get_evaluation_criteria(session_id, episode_id)
 
@@ -501,7 +585,15 @@ class SessionRestAPI:
                 cleaned_evaluation_config = {}
                 for key, value in criteria.evaluation_config.items():
                     if callable(value):
-                        logger.debug(f"Removing non-serializable function from evaluation_config: {key}")
+                        logger.debug(
+                            "Removing non-serializable function from evaluation config",
+                            extra={
+                                "event": "evaluation_config_callable_removed",
+                                "session_id": session_id,
+                                "episode_id": episode_id,
+                                "config_key": key,
+                            },
+                        )
                     else:
                         cleaned_evaluation_config[key] = value
 
@@ -516,24 +608,56 @@ class SessionRestAPI:
                     judge_messages=criteria.judge_messages,
                 )
 
-                logger.info(f"✅ REST API: Successfully returning evaluation criteria for episode {episode_id}")
+                log_operation_success(
+                    logger,
+                    "get_evaluation_criteria",
+                    session_id=session_id,
+                    episode_id=episode_id,
+                    has_submission=bool(criteria.submission),
+                )
                 return clean_criteria
 
             except HTTPException as http_e:
-                logger.error(
-                    f"❌ REST API: HTTPException in evaluation criteria endpoint: {http_e.status_code} - {http_e.detail}"
+                log_operation_failure(
+                    logger,
+                    "get_evaluation_criteria",
+                    http_e,
+                    session_id=session_id,
+                    episode_id=episode_id,
+                    status_code=http_e.status_code,
                 )
                 raise
             except RuntimeError as e:
-                logger.error(f"❌ REST API: RuntimeError in evaluation criteria endpoint: {e}")
-                raise HTTPException(status_code=400, detail=str(e))
-            except Exception as e:
-                logger.error(f"❌ REST API: Unexpected error in evaluation criteria endpoint: {type(e).__name__}: {e}")
-                raise HTTPException(status_code=500, detail=f"Failed to get evaluation criteria: {str(e)}")
+                log_operation_failure(
+                    logger,
+                    "get_evaluation_criteria",
+                    e,
+                    session_id=session_id,
+                    episode_id=episode_id,
+                    status_code=400,
+                )
+                raise HTTPException(status_code=400, detail=str(e)) from e
+            except Exception as exc:
+                log_operation_failure(
+                    logger,
+                    "get_evaluation_criteria",
+                    exc,
+                    session_id=session_id,
+                    episode_id=episode_id,
+                )
+                raise HTTPException(status_code=500, detail=f"Failed to get evaluation criteria: {exc}") from exc
 
     async def start_server(self) -> None:
         """Start the SessionRestAPI server."""
-        logger.info(f"Starting SABER {self.session_manager.domain_name} domain REST server on {self.host}:{self.port}")
+        logger.info(
+            "Starting REST server",
+            extra={
+                "event": "rest_server_starting",
+                "domain": self.session_manager.domain_name,
+                "host": self.host,
+                "port": self.port,
+            },
+        )
 
         config = uvicorn.Config(app=self.app, host=self.host, port=self.port, log_level="info")
         server = uvicorn.Server(config)

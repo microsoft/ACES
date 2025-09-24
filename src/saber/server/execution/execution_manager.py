@@ -3,15 +3,17 @@ ExecutionManager implementation for command execution.
 
 This version provides access to CLI commands with comprehensive
 security validation capabilities.
+
+Logging category: EXECUTION.
 """
 
-import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import mcp.types as mcp_types
 
+from ...logging_config import get_execution_logger, log_operation_failure, log_operation_start, log_operation_success
 from ..base import Action, CommandResult
 
 # CleanupManager removed - using direct component cleanup
@@ -20,7 +22,7 @@ from .executors.executor_factory import ExecutorFactory
 from .sandbox.permanent_environment_manager import PermanentEnvironmentManager
 from .sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 
-logger = logging.getLogger(__name__)
+logger = get_execution_logger(__name__)
 
 
 class ExecutionManager:
@@ -47,9 +49,15 @@ class ExecutionManager:
         # Check for debug mode from environment variable
         self._debug_mode = os.getenv("SABER_DEBUG_MODE", "false").lower() in ("true", "1", "yes")
         if self._debug_mode:
-            logger.info("SABER Debug Mode ENABLED - Containers will not be cleaned up after execution")
+            logger.warning(
+                "Debug mode enabled",
+                extra={"event": "execution_debug_mode_enabled"},
+            )
         else:
-            logger.debug("SABER Debug Mode disabled - Normal cleanup behavior")
+            logger.debug(
+                "Debug mode disabled",
+                extra={"event": "execution_debug_mode_disabled"},
+            )
 
         # Load custom executors from the config directory if provided
         if config_dir:
@@ -64,8 +72,14 @@ class ExecutionManager:
         self._active_executions: Dict[str, int] = {}  # episode_id -> count of active executions
         self._max_concurrent_per_episode = 3  # Allow multiple concurrent commands per episode
 
-        logger.info("ExecutionManager initialized for concurrent execution")
-        logger.info(f"Max concurrent executions per episode: {self._max_concurrent_per_episode}")
+        logger.info(
+            "Execution manager initialized",
+            extra={
+                "event": "execution_manager_initialized",
+                "max_concurrent_per_episode": self._max_concurrent_per_episode,
+                "debug_mode": self._debug_mode,
+            },
+        )
 
     @property
     def executor_factory(self) -> ExecutorFactory:
@@ -117,7 +131,13 @@ class ExecutionManager:
                 if not os.path.exists(directory):
                     continue
 
-                logger.debug(f"Checking for custom executors in: {directory}")
+                logger.debug(
+                    "Scanning for custom executors",
+                    extra={
+                        "event": "custom_executors_scan_directory",
+                        "directory": directory,
+                    },
+                )
                 # Load custom executors from the directory
                 results = load_executors_from_directory(directory)
 
@@ -126,29 +146,79 @@ class ExecutionManager:
                     if successful_loads:
                         total_successful += len(successful_loads)
                         logger.info(
-                            f"Loaded custom executor definitions from {len(successful_loads)} files in {directory}"
+                            "Custom executors loaded",
+                            extra={
+                                "event": "custom_executors_loaded",
+                                "directory": directory,
+                                "file_count": len(successful_loads),
+                            },
                         )
                         for file_path in successful_loads:
-                            logger.debug(f"Loaded custom executors from: {file_path}")
+                            logger.debug(
+                                "Custom executor module loaded",
+                                extra={
+                                    "event": "custom_executor_loaded_file",
+                                    "file": file_path,
+                                },
+                            )
 
                     failed_loads = [
                         (file, result) for file, result in results.items() if result != "loaded_successfully"
                     ]
                     if failed_loads:
                         total_failed += len(failed_loads)
-                        logger.warning(f"Failed to load {len(failed_loads)} custom executor files from {directory}")
+                        logger.warning(
+                            "Custom executor load failures",
+                            extra={
+                                "event": "custom_executor_load_failed",
+                                "directory": directory,
+                                "failure_count": len(failed_loads),
+                            },
+                        )
                         for file_path, error in failed_loads:
-                            logger.warning(f"Failed to load {file_path}: {error}")
+                            logger.warning(
+                                "Custom executor file failed to load",
+                                extra={
+                                    "event": "custom_executor_load_failure_detail",
+                                    "file": file_path,
+                                    "error": str(error),
+                                },
+                            )
 
             if total_successful == 0 and total_failed == 0:
-                logger.debug(f"No custom executor files found in {config_dir} or {executors_dir}")
+                logger.debug(
+                    "No custom executor files discovered",
+                    extra={
+                        "event": "custom_executors_not_found",
+                        "config_dir": config_dir,
+                        "executors_dir": executors_dir,
+                    },
+                )
             else:
-                logger.info(f"Custom executor loading complete: {total_successful} loaded, {total_failed} failed")
+                logger.info(
+                    "Custom executor loading complete",
+                    extra={
+                        "event": "custom_executor_load_complete",
+                        "successful": total_successful,
+                        "failed": total_failed,
+                    },
+                )
 
-        except ImportError:
-            logger.warning("Custom executor registry not available - custom executors will not be loaded")
-        except Exception as e:
-            logger.warning(f"Error loading custom executors from {config_dir}: {e}")
+        except ImportError as exc:
+            logger.warning(
+                "Custom executor registry not available",
+                extra={
+                    "event": "custom_executor_registry_unavailable",
+                    "error": str(exc),
+                },
+            )
+        except Exception as exc:
+            log_operation_failure(
+                logger,
+                "load_custom_executors",
+                exc,
+                config_dir=config_dir,
+            )
 
     async def step(self, action: Action, context: Optional[Dict[str, Any]] = None) -> CommandResult:
         """
@@ -174,13 +244,41 @@ class ExecutionManager:
                     f"Too many concurrent executions for episode {episode_id} "
                     f"({current_count}/{self._max_concurrent_per_episode})"
                 )
+                logger.warning(
+                    "Episode concurrency limit reached",
+                    extra={
+                        "event": "episode_concurrency_limit",
+                        "episode_id": episode_id,
+                        "current": current_count,
+                        "limit": self._max_concurrent_per_episode,
+                    },
+                )
                 return CommandResult.error_result(error=error_msg)
 
             # Increment active execution count for episode
             self._active_executions[episode_id] = current_count + 1
-            logger.debug(f"Episode {episode_id} active executions: {self._active_executions[episode_id]}")
+            logger.debug(
+                "Episode execution count incremented",
+                extra={
+                    "event": "episode_execution_count_incremented",
+                    "episode_id": episode_id,
+                    "active_executions": self._active_executions[episode_id],
+                },
+            )
         else:
-            logger.warning("No episode_id in context for step execution - proceeding without concurrency limits")
+            logger.warning(
+                "Episode ID missing for execution step",
+                extra={"event": "episode_id_missing_for_step"},
+            )
+
+        session_id = context.get("session_id") if context else None
+        log_operation_start(
+            logger,
+            "execute_action",
+            episode_id=episode_id,
+            session_id=session_id,
+            tool_name=action.tool_name,
+        )
 
         try:
             # Get executor directly from action's tool name with episode context
@@ -192,17 +290,42 @@ class ExecutionManager:
             # Validate parameters first
             validation_result = executor.validate_parameters(parameters)
             if not validation_result.valid:
+                logger.warning(
+                    "Executor parameter validation failed",
+                    extra={
+                        "event": "executor_parameter_validation_failed",
+                        "episode_id": episode_id,
+                        "tool_name": action.tool_name,
+                        "errors": validation_result.errors,
+                    },
+                )
                 return CommandResult.error_result(
                     error=f"Parameter validation failed: {', '.join(validation_result.errors)}"
                 )
 
             # Execute using the appropriate executor with callable interface
             # This is now truly async and non-blocking
-            return await executor(parameters, context or {})
+            execution_context = context or {}
+            result = await executor(parameters, execution_context)
+            log_operation_success(
+                logger,
+                "execute_action",
+                episode_id=episode_id,
+                session_id=session_id,
+                tool_name=action.tool_name,
+            )
+            return result
 
-        except Exception as e:
-            logger.error(f"Execution failed for episode {episode_id}: {e}")
-            return CommandResult.error_result(error=str(e))
+        except Exception as exc:
+            log_operation_failure(
+                logger,
+                "execute_action",
+                exc,
+                episode_id=episode_id,
+                session_id=session_id,
+                tool_name=action.tool_name,
+            )
+            return CommandResult.error_result(error=str(exc))
 
         finally:
             # Decrement active execution count for episode
@@ -210,7 +333,14 @@ class ExecutionManager:
                 self._active_executions[episode_id] -= 1
                 if self._active_executions[episode_id] <= 0:
                     del self._active_executions[episode_id]
-                logger.debug(f"Episode {episode_id} active executions: {self._active_executions.get(episode_id, 0)}")
+                logger.debug(
+                    "Episode execution count decremented",
+                    extra={
+                        "event": "episode_execution_count_decremented",
+                        "episode_id": episode_id,
+                        "active_executions": self._active_executions.get(episode_id, 0),
+                    },
+                )
 
     def get_executor(self, executor_type: str, episode_id: Optional[str] = None) -> DockerExecutor:
         """
@@ -270,7 +400,14 @@ class ExecutionManager:
         """
         # Resolve environment if specified in task
         if task.environment:
-            logger.info(f"Task specifies environment: {task.environment}")
+            logger.info(
+                "Task requires sandbox environment",
+                extra={
+                    "event": "task_environment_specified",
+                    "episode_id": episode_id,
+                    "environment": task.environment,
+                },
+            )
 
             # Ensure sandbox manager is initialized
             if self._sandbox_environment_manager is None:
@@ -289,23 +426,52 @@ class ExecutionManager:
                 # Reset executor factory so it gets recreated with the new sandbox manager
                 self._executor_factory = None
 
-                logger.info("SandboxEnvironmentManager lazily initialized for task configuration")
+                logger.info(
+                    "Sandbox environment manager initialized",
+                    extra={
+                        "event": "sandbox_manager_initialized",
+                        "episode_id": episode_id,
+                        "sandbox_config": sandbox_config,
+                    },
+                )
 
             # Create the episode environment using the SandboxManager
-            logger.info(
-                f"Creating sandbox environment for episode {episode_id}"
-                + (f" (attach to {target_episode_id})" if target_episode_id else "")
+            log_operation_start(
+                logger,
+                "create_sandbox_environment",
+                episode_id=episode_id,
+                target_episode_id=target_episode_id,
+                environment=task.environment,
             )
             try:
                 self._sandbox_environment_manager.create_episode_environment(
                     episode_id, task.environment, target_episode_id
                 )
-                logger.info(f"✅ Created sandbox environment for episode {episode_id}")
-            except Exception as e:
-                logger.error(f"❌ FAILED to create sandbox environment for episode {episode_id}: {e}")
+                log_operation_success(
+                    logger,
+                    "create_sandbox_environment",
+                    episode_id=episode_id,
+                    target_episode_id=target_episode_id,
+                    environment=task.environment,
+                )
+            except Exception as exc:
+                log_operation_failure(
+                    logger,
+                    "create_sandbox_environment",
+                    exc,
+                    episode_id=episode_id,
+                    target_episode_id=target_episode_id,
+                    environment=task.environment,
+                )
                 raise
         else:
-            logger.warning("No environment specified for this task - episode will run without sandbox environment")
+            logger.warning(
+                "Task has no sandbox environment",
+                extra={
+                    "event": "task_environment_missing",
+                    "episode_id": episode_id,
+                },
+            )
 
         # Start with task's execution config
         execution_config = task.execution_config.copy()
@@ -319,7 +485,14 @@ class ExecutionManager:
                 config_value = getattr(task, config_attr)
                 if config_value:
                     execution_config[executor_type] = config_value
-                    logger.debug(f"Added {executor_type} configuration from task")
+                    logger.debug(
+                        "Executor configuration applied",
+                        extra={
+                            "event": "executor_configuration_applied",
+                            "episode_id": episode_id,
+                            "executor_type": executor_type,
+                        },
+                    )
 
         # Create new configuration for this task
         self._configuration = execution_config
@@ -332,16 +505,27 @@ class ExecutionManager:
             episode_id=episode_id, allowed_executors=allowed_executors, episode_config=episode_config
         )
 
-        logger.info(f"ExecutionManager configured for episode {episode_id} with task-specific settings")
-        if allowed_executors:
-            logger.info(f"Episode {episode_id} restricted to executors: {allowed_executors}")
-        if session_id:
-            logger.info(f"Episode {episode_id} associated with session {session_id}")
+        logger.info(
+            "Execution manager configured for episode",
+            extra={
+                "event": "execution_manager_configured",
+                "episode_id": episode_id,
+                "allowed_executors": allowed_executors,
+                "session_id": session_id,
+            },
+        )
 
         # Log configured executor types
         configured_executors = [k for k in execution_config.keys() if k in executor_types]
         if configured_executors:
-            logger.info(f"Episode {episode_id} configured executor-specific settings for: {configured_executors}")
+            logger.info(
+                "Episode executor-specific settings applied",
+                extra={
+                    "event": "episode_executor_settings_applied",
+                    "episode_id": episode_id,
+                    "executors": configured_executors,
+                },
+            )
 
     def to_mcp_tools(self, episode_id: Optional[str] = None) -> List[mcp_types.Tool]:
         """
@@ -384,7 +568,13 @@ class ExecutionManager:
                 commands.append(command_info)
 
             except Exception as e:
-                logger.error(f"Failed to get info for executor {executor_type}: {e}")
+                log_operation_failure(
+                    logger,
+                    "list_executor_commands",
+                    e,
+                    executor_type=executor_type,
+                    episode_id=episode_id,
+                )
 
         return commands
 
@@ -423,42 +613,112 @@ class ExecutionManager:
         Returns:
             True if cleanup was successful, False otherwise
         """
-        logger.info(f"🔥 EPISODE CLEANUP: ExecutionManager.cleanup_episode() called for episode {episode_id}")
+        log_operation_start(
+            logger,
+            "cleanup_episode",
+            episode_id=episode_id,
+            has_context=bool(context),
+        )
 
         cleanup_success = True
 
         # Clean up episode environment directly through sandbox manager
         try:
             if self._sandbox_environment_manager is not None:
-                logger.info(f"🧹 Calling sandbox manager cleanup for episode {episode_id}")
+                logger.info(
+                    "Sandbox manager cleanup invoked",
+                    extra={
+                        "event": "sandbox_cleanup_invoked",
+                        "episode_id": episode_id,
+                    },
+                )
                 container_cleanup_success = self._sandbox_environment_manager.stop_episode_environment(episode_id)
                 if container_cleanup_success:
-                    logger.info(f"✅ Episode container cleanup completed for episode {episode_id}")
+                    logger.info(
+                        "Episode container cleanup completed",
+                        extra={
+                            "event": "episode_container_cleanup_completed",
+                            "episode_id": episode_id,
+                        },
+                    )
                 else:
-                    logger.error(f"❌ Episode container cleanup failed for episode {episode_id}")
+                    logger.error(
+                        "Episode container cleanup failed",
+                        extra={
+                            "event": "episode_container_cleanup_failed",
+                            "episode_id": episode_id,
+                        },
+                    )
                     cleanup_success = False
             else:
-                logger.warning(f"⚠️  No sandbox manager available for episode cleanup: {episode_id}")
-        except Exception as e:
-            logger.error(f"❌ Failed to cleanup episode containers for episode {episode_id}: {e}")
+                logger.warning(
+                    "Sandbox manager unavailable for cleanup",
+                    extra={
+                        "event": "sandbox_manager_missing_for_cleanup",
+                        "episode_id": episode_id,
+                    },
+                )
+        except Exception as exc:
+            log_operation_failure(
+                logger,
+                "cleanup_episode_containers",
+                exc,
+                episode_id=episode_id,
+            )
             cleanup_success = False
 
         # Unregister episode configuration from executor factory
         try:
             self.executor_factory.unregister_episode_configuration(episode_id)
-            logger.info(f"✅ Episode configuration unregistered from executor factory for episode {episode_id}")
-        except Exception as e:
-            logger.error(f"❌ Failed to unregister episode configuration for episode {episode_id}: {e}")
+            logger.info(
+                "Episode configuration unregistered",
+                extra={
+                    "event": "episode_configuration_unregistered",
+                    "episode_id": episode_id,
+                },
+            )
+        except Exception as exc:
+            log_operation_failure(
+                logger,
+                "unregister_episode_configuration",
+                exc,
+                episode_id=episode_id,
+            )
             cleanup_success = False
 
         # Clean up episode execution tracking
         if episode_id in self._active_executions:
             try:
                 del self._active_executions[episode_id]
-                logger.info(f"✅ Episode execution tracking cleanup completed for episode {episode_id}")
-            except Exception as e:
-                logger.error(f"❌ Failed to cleanup episode execution tracking for episode {episode_id}: {e}")
+                logger.info(
+                    "Episode execution tracking cleared",
+                    extra={
+                        "event": "episode_execution_tracking_cleared",
+                        "episode_id": episode_id,
+                    },
+                )
+            except Exception as exc:
+                log_operation_failure(
+                    logger,
+                    "cleanup_episode_execution_tracking",
+                    exc,
+                    episode_id=episode_id,
+                )
                 cleanup_success = False
+
+        if cleanup_success:
+            log_operation_success(
+                logger,
+                "cleanup_episode",
+                episode_id=episode_id,
+            )
+        else:
+            log_operation_failure(
+                logger,
+                "cleanup_episode",
+                RuntimeError("episode cleanup incomplete"),
+                episode_id=episode_id,
+            )
 
         return cleanup_success
 
@@ -472,6 +732,12 @@ class ExecutionManager:
         try:
             # Initialize sandbox manager now that we have the domain
             domain = config.get("domain", "excytin_demo")
+
+            log_operation_start(
+                logger,
+                "initialize_permanent_environment_manager",
+                domain=domain,
+            )
 
             # Calculate correct server directory (parent of config directory)
             server_dir = Path(self._config_dir).parent
@@ -489,15 +755,30 @@ class ExecutionManager:
                 # Reset executor factory so it gets recreated with the new sandbox manager
                 self._executor_factory = None
 
-                logger.info(f"SandboxEnvironmentManager initialized for domain: {domain}")
+                logger.info(
+                    "Sandbox environment manager initialized",
+                    extra={
+                        "event": "sandbox_manager_initialized",
+                        "domain": domain,
+                    },
+                )
 
             # Initialize permanent environment manager
             self._permanent_environment_manager = PermanentEnvironmentManager(config)
 
-            logger.info("ExecutionManager: Permanent environment manager initialized")
+            log_operation_success(
+                logger,
+                "initialize_permanent_environment_manager",
+                domain=domain,
+            )
 
-        except Exception as e:
-            logger.error(f"Failed to initialize permanent environment manager: {e}")
+        except Exception as exc:
+            log_operation_failure(
+                logger,
+                "initialize_permanent_environment_manager",
+                exc,
+                domain=config.get("domain"),
+            )
             raise
 
     def start_permanent_environment(self, environment_spec: Any) -> None:
@@ -528,15 +809,29 @@ class ExecutionManager:
             RuntimeError: If permanent environment shutdown fails
         """
         if not self._permanent_environment_manager:
-            logger.warning("No permanent environment manager configured")
+            logger.warning(
+                "Permanent environment manager not configured",
+                extra={"event": "permanent_environment_manager_missing"},
+            )
             return
 
+        log_operation_start(
+            logger,
+            "stop_permanent_environment",
+        )
         try:
             self._permanent_environment_manager.stop_permanent_environment()
-            logger.info("ExecutionManager: Permanent environment stopped successfully")
-        except Exception as e:
-            logger.error(f"Failed to stop permanent environment: {e}")
-            raise RuntimeError(f"Failed to stop permanent environment: {e}")
+            log_operation_success(
+                logger,
+                "stop_permanent_environment",
+            )
+        except Exception as exc:
+            log_operation_failure(
+                logger,
+                "stop_permanent_environment",
+                exc,
+            )
+            raise RuntimeError(f"Failed to stop permanent environment: {exc}") from exc
 
     def is_permanent_environment_running(self) -> bool:
         """
@@ -559,7 +854,11 @@ class ExecutionManager:
         Returns:
             Dictionary with cleanup results
         """
-        logger.info("🧹 FULL CLEANUP START: Starting cleanup of all containers (ephemeral + permanent)")
+        log_operation_start(
+            logger,
+            "cleanup_all_containers",
+            has_context=bool(context),
+        )
 
         # Clean up all ephemeral episode containers
         try:
@@ -568,11 +867,18 @@ class ExecutionManager:
                 ephemeral_episodes_cleaned = len(self._sandbox_environment_manager.get_active_episodes())
                 ephemeral_success = True
             else:
-                logger.warning("⚠️  No sandbox manager available for ephemeral cleanup")
+                logger.warning(
+                    "Sandbox manager unavailable for ephemeral cleanup",
+                    extra={"event": "sandbox_manager_missing_for_full_cleanup"},
+                )
                 ephemeral_episodes_cleaned = 0
                 ephemeral_success = True  # Not a failure if no manager exists
-        except Exception as e:
-            logger.error(f"Failed to cleanup ephemeral episodes: {e}")
+        except Exception as exc:
+            log_operation_failure(
+                logger,
+                "cleanup_ephemeral_episodes",
+                exc,
+            )
             ephemeral_episodes_cleaned = 0
             ephemeral_success = False
 
@@ -580,8 +886,12 @@ class ExecutionManager:
         permanent_success = True
         try:
             self.stop_permanent_environment()
-        except Exception as e:
-            logger.error(f"Failed to stop permanent environment: {e}")
+        except Exception as exc:
+            log_operation_failure(
+                logger,
+                "cleanup_permanent_environment",
+                exc,
+            )
             permanent_success = False
 
         result = {
@@ -592,9 +902,26 @@ class ExecutionManager:
         }
 
         logger.info(
-            f"🧹 FULL CLEANUP COMPLETE: Ephemeral episodes: {ephemeral_episodes_cleaned}, "
-            f"Permanent stopped: {permanent_success}, Overall success: {result['total_cleanup_success']}"
+            "Full cleanup completed",
+            extra={
+                "event": "full_cleanup_completed",
+                "ephemeral_episodes_cleaned": ephemeral_episodes_cleaned,
+                "permanent_environment_stopped": permanent_success,
+                "total_cleanup_success": result["total_cleanup_success"],
+            },
         )
+
+        if result["total_cleanup_success"]:
+            log_operation_success(
+                logger,
+                "cleanup_all_containers",
+            )
+        else:
+            log_operation_failure(
+                logger,
+                "cleanup_all_containers",
+                RuntimeError("full cleanup incomplete"),
+            )
 
         return result
 
@@ -609,6 +936,12 @@ class ExecutionManager:
         Returns:
             True if cleanup was successful, False otherwise
         """
+        log_operation_start(
+            logger,
+            "cleanup_session",
+            session_id=session_id,
+            has_context=bool(context),
+        )
         try:
             # Clean up session environment if it exists
             if self._sandbox_environment_manager is not None and hasattr(
@@ -623,8 +956,15 @@ class ExecutionManager:
                     env = self._sandbox_environment_manager.get_session_environment(session_id)
                     if env and hasattr(env, "stop"):
                         env.stop()
-                except Exception as e:
-                    logger.warning(f"Failed to get/stop session environment for {session_id}: {e}")
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to stop session environment",
+                        extra={
+                            "event": "session_environment_stop_failed",
+                            "session_id": session_id,
+                            "error": str(exc),
+                        },
+                    )
 
             # Clean up any active executions for this session
             session_episodes = [ep_id for ep_id in self._active_executions.keys() if ep_id.startswith(session_id)]
@@ -632,10 +972,19 @@ class ExecutionManager:
                 if episode_id in self._active_executions:
                     del self._active_executions[episode_id]
 
-            logger.info(f"Successfully cleaned up session {session_id}")
+            log_operation_success(
+                logger,
+                "cleanup_session",
+                session_id=session_id,
+            )
             return True
-        except Exception as e:
-            logger.error(f"Failed to cleanup session {session_id}: {e}")
+        except Exception as exc:
+            log_operation_failure(
+                logger,
+                "cleanup_session",
+                exc,
+                session_id=session_id,
+            )
             return False
 
     @property

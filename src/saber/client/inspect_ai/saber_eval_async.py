@@ -3,6 +3,8 @@ SABER eval_async Integration
 
 Main entrypoint for SABER execution using inspect_ai's eval_async framework.
 
+Logging category: EVALUATION.
+
 Following SABER best practices:
 - Clean separation between orchestration (SABER) and evaluation (inspect_ai)
 - Stateless orchestration service design
@@ -10,7 +12,6 @@ Following SABER best practices:
 - Fail-fast design with clear error messages
 """
 
-import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
@@ -19,10 +20,18 @@ from dotenv import load_dotenv
 from inspect_ai import eval_async
 from inspect_ai.log import EvalLog
 
+from ...logging_config import (
+    LogCategory,
+    get_saber_logger,
+    log_context,
+    log_operation_failure,
+    log_operation_start,
+    log_operation_success,
+)
 from ..evaluation_orchestrator import SABEREvaluationOrchestrator
 from ..models import SABERConfig
 
-logger = logging.getLogger(__name__)
+logger = get_saber_logger(LogCategory.EVALUATION, __name__)
 
 
 def discover_session_log_files(session_log_dir: str, session_id: str) -> list[str]:
@@ -37,7 +46,14 @@ def discover_session_log_files(session_log_dir: str, session_id: str) -> list[st
         List of absolute paths to .eval files found in the directory
     """
     if not session_log_dir or not os.path.exists(session_log_dir):
-        logger.warning(f"Session log directory does not exist: {session_log_dir}")
+        logger.warning(
+            "Session log directory missing",
+            extra={
+                "event": "session_log_directory_missing",
+                "session_log_dir": session_log_dir,
+                "session_id": session_id,
+            },
+        )
         return []
 
     try:
@@ -45,13 +61,36 @@ def discover_session_log_files(session_log_dir: str, session_id: str) -> list[st
         eval_files = list(log_dir_path.glob("*.eval"))
         eval_file_paths = [str(f.absolute()) for f in eval_files]
 
-        logger.info(f"Discovered {len(eval_file_paths)} .eval files for session {session_id}")
+        logger.info(
+            "Session eval files discovered",
+            extra={
+                "event": "session_eval_files_discovered",
+                "session_log_dir": session_log_dir,
+                "session_id": session_id,
+                "file_count": len(eval_file_paths),
+            },
+        )
         for file_path in eval_file_paths:
-            logger.debug(f"Found eval file: {file_path}")
+            logger.debug(
+                "Eval file located",
+                extra={
+                    "event": "session_eval_file_found",
+                    "session_id": session_id,
+                    "file_path": file_path,
+                },
+            )
 
         return eval_file_paths
-    except Exception as e:
-        logger.error(f"Error discovering log files in {session_log_dir}: {e}")
+    except Exception as exc:
+        logger.error(
+            "Session eval file discovery failed",
+            extra={
+                "event": "session_eval_file_discovery_failed",
+                "session_log_dir": session_log_dir,
+                "session_id": session_id,
+                "error": str(exc),
+            },
+        )
         return []
 
 
@@ -78,34 +117,75 @@ async def upload_file_with_retry(
     from pathlib import Path
 
     filename = Path(file_path).name
-    last_exception = None
+    last_exception: Exception | None = None
+
+    log_operation_start(
+        logger,
+        "log_file_upload",
+        session_id=session_id,
+        file_path=file_path,
+        max_retries=max_retries,
+        timeout=timeout,
+    )
 
     for attempt in range(max_retries + 1):  # +1 for initial attempt
         try:
             if attempt > 0:
-                # Wait with exponential backoff: 1s, 2s, 4s
                 wait_time = 2 ** (attempt - 1)
                 logger.info(
-                    f"Retrying upload of {filename} (attempt {attempt + 1}/{max_retries + 1}) after {wait_time}s..."
+                    "Retrying log file upload",
+                    extra={
+                        "event": "log_file_upload_retry",
+                        "session_id": session_id,
+                        "file_path": file_path,
+                        "filename": filename,
+                        "attempt": attempt + 1,
+                        "max_attempts": max_retries + 1,
+                        "backoff_seconds": wait_time,
+                    },
                 )
                 await asyncio.sleep(wait_time)
 
             upload_result = await session_manager.upload_evaluation_file(session_id, file_path, timeout=timeout)
 
             if attempt > 0:
-                logger.info(f"Upload succeeded on retry {attempt} for {filename}")
+                logger.info(
+                    "Log file upload succeeded after retry",
+                    extra={
+                        "event": "log_file_upload_success_after_retry",
+                        "session_id": session_id,
+                        "file_path": file_path,
+                        "filename": filename,
+                        "retry_attempt": attempt,
+                    },
+                )
 
+            log_operation_success(
+                logger,
+                "log_file_upload",
+                session_id=session_id,
+                file_path=file_path,
+                filename=filename,
+                attempts_used=attempt + 1,
+            )
             return dict(upload_result)
 
-        except FileNotFoundError:
-            # File not found errors shouldn't be retried
+        except FileNotFoundError as exc:
+            log_operation_failure(
+                logger,
+                "log_file_upload",
+                exc,
+                session_id=session_id,
+                file_path=file_path,
+                filename=filename,
+                attempt=attempt + 1,
+            )
             raise
 
-        except Exception as e:
-            last_exception = e
-            error_msg = str(e).lower()
+        except Exception as exc:
+            last_exception = exc
+            error_msg = str(exc).lower()
 
-            # Don't retry for certain permanent errors
             if any(
                 permanent_error in error_msg
                 for permanent_error in [
@@ -117,177 +197,323 @@ async def upload_file_with_retry(
                     "method not allowed",
                 ]
             ):
-                logger.warning(f"Permanent error uploading {filename}, not retrying: {e}")
+                logger.warning(
+                    "Permanent log upload error encountered",
+                    extra={
+                        "event": "log_file_upload_permanent_error",
+                        "session_id": session_id,
+                        "file_path": file_path,
+                        "filename": filename,
+                        "attempt": attempt + 1,
+                        "error": str(exc),
+                    },
+                )
+                log_operation_failure(
+                    logger,
+                    "log_file_upload",
+                    exc,
+                    session_id=session_id,
+                    file_path=file_path,
+                    filename=filename,
+                    attempt=attempt + 1,
+                    error_type="permanent",
+                )
                 raise
 
-            # Log transient error and continue to retry
             if attempt < max_retries:
-                logger.warning(f"Transient error uploading {filename} (attempt {attempt + 1}): {e}")
+                logger.warning(
+                    "Transient log upload error",
+                    extra={
+                        "event": "log_file_upload_transient_error",
+                        "session_id": session_id,
+                        "file_path": file_path,
+                        "filename": filename,
+                        "attempt": attempt + 1,
+                        "max_attempts": max_retries + 1,
+                        "error": str(exc),
+                    },
+                )
             else:
-                logger.error(f"Upload failed after {max_retries + 1} attempts for {filename}: {e}")
+                logger.error(
+                    "Log file upload exhausted retries",
+                    extra={
+                        "event": "log_file_upload_max_retries_exhausted",
+                        "session_id": session_id,
+                        "file_path": file_path,
+                        "filename": filename,
+                        "attempts": max_retries + 1,
+                        "error": str(exc),
+                    },
+                )
 
-    # All retries exhausted
-    if last_exception:
-        raise last_exception
-    else:
-        raise RuntimeError(f"Failed to upload {file_path} after {max_retries + 1} attempts")
+    final_error = last_exception or RuntimeError(f"Failed to upload {file_path} after {max_retries + 1} attempts")
+    log_operation_failure(
+        logger,
+        "log_file_upload",
+        final_error,
+        session_id=session_id,
+        file_path=file_path,
+        filename=filename,
+        attempts_used=max_retries + 1,
+    )
+    raise final_error
 
 
 async def run_saber_eval_async(config: SABERConfig) -> Union[EvalLog, None]:
     """
-    Main SABER entrypoint using inspect_ai eval_async with new orchestrator architecture.
-
-    This replaces the container-based approach and provides:
-    - Direct agent execution without container overhead
-    - Direct MCP integration with session/episode context
-    - Tool call limiting via inspect-ai capabilities
-    - Full textual UI with progress bars and real-time logs
-    - Dataset iteration over SABER tasks as inspect_ai Samples
-
-    Uses the SABEREvaluationOrchestrator as a unified interface for all operations.
+    Execute SABER evaluations through inspect_ai's eval_async pipeline.
 
     Args:
-        config: SABER configuration
+        config: Fully validated SABER configuration
 
     Returns:
-        EvalLog with evaluation results
-
-    Raises:
-        ConfigurationValidationError: If configuration is invalid
-        ServerConnectivityError: If SABER server is unreachable
-        EvaluationExecutionError: If eval_async execution fails
+        EvalLog or None depending on eval_async output format.
     """
 
-    # Load environment variables early before any Task creation
-    # This ensures Azure OpenAI and other LLM configs are available
-    # Use explicit parameters to ensure loading works in Docker containers
     load_dotenv(dotenv_path=".env", override=True, verbose=True)
 
-    logger.info("Starting SABER eval_async execution with orchestrator architecture")
+    log_operation_start(
+        logger,
+        "run_eval_async",
+        agent_count=len(config.agents),
+        requested_tasks=config.task_ids or "all",
+        log_upload_enabled=config.log_upload_enabled,
+    )
+
     server_url = config.session_config.base_url if config.session_config else "unknown"
-    logger.info(f"Server: {server_url}")
-    logger.info(f"Agent assignments: {len(config.agents)} configured")
-    logger.info(f"Tasks: {config.task_ids or 'all available'}")
+    logger.info(
+        "eval_async run initialized",
+        extra={
+            "event": "eval_async_run_initialized",
+            "server_url": server_url,
+            "agent_count": len(config.agents),
+            "requested_tasks": config.task_ids or "all",
+        },
+    )
 
-    # Initialize eval_kwargs early to prevent UnboundLocalError in exception handler
     eval_kwargs: Dict[str, Any] = {}
-
-    # Create orchestrator and keep it alive for the entire evaluation
     orchestrator = SABEREvaluationOrchestrator(config)
     await orchestrator.__aenter__()
 
+    session_id: Optional[str] = None
+    session_log_dir: Optional[str] = None
+    eval_log: Union[EvalLog, list[EvalLog], None] = None
+
     try:
-        # Get session_id for session-specific log directory
         session_id = await orchestrator.get_session_id()
-        logger.info(f"Using session ID for log organization: {session_id}")
 
-        # Discover tasks (either configured or all available)
-        logger.info("Discovering tasks")
-        available_tasks = await orchestrator.discover_tasks()
-        task_ids = [task.task_id for task in available_tasks]
-
-        # Create inspect_ai dataset from SABER tasks
-        logger.info("Creating dataset")
-        dataset = await orchestrator.create_dataset(task_ids)
-        logger.info(f"Created dataset with {len(dataset)} samples")
-
-        # Create inspect_ai Tasks with agent-grouped multi-agent support
-        logger.info("Creating inspect_ai tasks with agent-grouped architecture")
-        tasks_to_run = await orchestrator.create_multi_task_evaluation(task_ids)
-
-        # Configure eval_async parameters - no global model, agents specify their own
-        eval_kwargs = {
-            "tasks": tasks_to_run,
-            # No global model - each agent specifies its own via meta-agent routing
-            "log_level": "debug",  # Enable verbose logging to see more details
-        }
-
-        # Add optional parameters only if they're specified
-        if config.model_args:
-            eval_kwargs["model_args"] = config.model_args
-
-        # Configure session-specific log directory
-        session_log_dir = None
-        if hasattr(config, "log_dir") and config.log_dir:
-            # Create session-specific subdirectory
-            session_log_dir = str(Path(config.log_dir) / session_id)
-            eval_kwargs["log_dir"] = session_log_dir
-            logger.info(f"Using session-specific log directory: {session_log_dir}")
-
-            # Ensure the session log directory exists
-            Path(session_log_dir).mkdir(parents=True, exist_ok=True)
-        else:
-            logger.warning("No log directory configured, eval logs will not be saved")
-
-        # Use configured log level from config
-        if hasattr(config, "log_level") and config.log_level:
-            eval_kwargs["log_level"] = config.log_level.lower()
-            logger.info(f"Using configured log level: {config.log_level}")
-        else:
-            # Use default log level if not specified
-            eval_kwargs["log_level"] = "warning"  # Default to warning level
-            logger.info("Using default log level: warning")
-
-        # Configure parallel execution
-        if hasattr(config, "parallel_execution") and config.parallel_execution:
-            eval_kwargs["max_tasks"] = getattr(config, "max_parallel_tasks", 4)
-
-        # Configure sample limits
-        if hasattr(config, "max_samples") and config.max_samples:
-            eval_kwargs["max_samples"] = config.max_samples
-
-        # Execute eval_async (inspect_ai specific, stays at entrypoint level)
-        logger.info("Starting eval_async execution")
-        logger.info(f"📊 eval_async parameters: {eval_kwargs}")
-        logger.info(f"📊 Number of tasks: {len(tasks_to_run)}")
-        for i, task in enumerate(tasks_to_run):
+        with log_context(session_id=session_id):
             logger.info(
-                f"📊 Task {i}: {getattr(task, 'name', 'unknown')} with {len(getattr(task, 'dataset', []))} samples"
+                "Session context established",
+                extra={
+                    "event": "eval_async_session_context",
+                    "session_id": session_id,
+                },
             )
-            logger.info(f"📊 Task {i} solver type: {type(getattr(task, 'solver', None))}")
 
-        try:
-            eval_log = await eval_async(**eval_kwargs)
-            logger.info("eval_async execution completed successfully")
-        except Exception as e:
-            logger.error(f"❌ eval_async failed with error: {type(e).__name__}: {e}")
-            import traceback
+            available_tasks = await orchestrator.discover_tasks()
+            task_ids = [task.task_id for task in available_tasks]
+            logger.info(
+                "Tasks discovered for evaluation",
+                extra={
+                    "event": "eval_async_tasks_discovered",
+                    "task_ids": task_ids,
+                    "task_count": len(task_ids),
+                },
+            )
 
-            logger.error(f"❌ Full traceback: {traceback.format_exc()}")
-            raise
+            dataset = await orchestrator.create_dataset(task_ids)
+            logger.info(
+                "Dataset materialized",
+                extra={
+                    "event": "eval_async_dataset_created",
+                    "sample_count": len(dataset),
+                },
+            )
 
-        # Upload log files to server if enabled and session-specific log directory was used
-        if config.log_upload_enabled and session_log_dir and session_id:
+            tasks_to_run = await orchestrator.create_multi_task_evaluation(task_ids)
+            logger.info(
+                "inspect_ai tasks prepared",
+                extra={
+                    "event": "eval_async_tasks_prepared",
+                    "task_count": len(tasks_to_run),
+                },
+            )
+
+            eval_kwargs = {
+                "tasks": tasks_to_run,
+                "log_level": "debug",
+            }
+
+            if config.model_args:
+                eval_kwargs["model_args"] = config.model_args
+
+            log_dir_value = getattr(config, "log_dir", None)
+            if log_dir_value:
+                session_log_path = Path(log_dir_value) / session_id
+                eval_kwargs["log_dir"] = str(session_log_path)
+                session_log_path.mkdir(parents=True, exist_ok=True)
+                logger.info(
+                    "Session-specific log directory prepared",
+                    extra={
+                        "event": "eval_async_log_directory_prepared",
+                        "session_log_dir": str(session_log_path),
+                    },
+                )
+            else:
+                logger.warning(
+                    "No log directory configured; eval logs will not persist",
+                    extra={"event": "eval_async_log_directory_missing"},
+                )
+
+            if getattr(config, "log_level", None):
+                eval_kwargs["log_level"] = config.log_level.lower()
+                logger.info(
+                    "Using configured eval_async log level",
+                    extra={
+                        "event": "eval_async_log_level_configured",
+                        "log_level": config.log_level,
+                    },
+                )
+            else:
+                eval_kwargs["log_level"] = "warning"
+                logger.info(
+                    "Default eval_async log level applied",
+                    extra={
+                        "event": "eval_async_log_level_default",
+                        "log_level": "warning",
+                    },
+                )
+
+            if getattr(config, "parallel_execution", False):
+                eval_kwargs["max_tasks"] = getattr(config, "max_parallel_tasks", 4)
+                logger.info(
+                    "Parallel execution configured",
+                    extra={
+                        "event": "eval_async_parallel_execution_configured",
+                        "max_tasks": eval_kwargs["max_tasks"],
+                    },
+                )
+
+            if getattr(config, "max_samples", None):
+                eval_kwargs["max_samples"] = config.max_samples
+                logger.info(
+                    "Sample limit applied",
+                    extra={
+                        "event": "eval_async_sample_limit_set",
+                        "max_samples": config.max_samples,
+                    },
+                )
+
+            logger.debug(
+                "eval_async invocation parameters prepared",
+                extra={
+                    "event": "eval_async_parameters_prepared",
+                    "eval_kwargs": {k: v for k, v in eval_kwargs.items() if k != "tasks"},
+                    "task_count": len(tasks_to_run),
+                },
+            )
+
+            log_operation_start(
+                logger,
+                "eval_async_execution",
+                session_id=session_id,
+                task_count=len(tasks_to_run),
+                parameters={k: v for k, v in eval_kwargs.items() if k != "tasks"},
+            )
+
             try:
-                logger.info("Discovering and uploading eval log files...")
-                log_files = discover_session_log_files(session_log_dir, session_id)
+                eval_log = await eval_async(**eval_kwargs)
+                log_operation_success(
+                    logger,
+                    "eval_async_execution",
+                    session_id=session_id,
+                    task_count=len(tasks_to_run),
+                )
+            except Exception as exec_exc:
+                log_operation_failure(
+                    logger,
+                    "eval_async_execution",
+                    exec_exc,
+                    session_id=session_id,
+                    task_count=len(tasks_to_run),
+                )
+                import traceback
 
-                if log_files:
-                    logger.info(f"Found {len(log_files)} log files to upload")
+                logger.error(
+                    "eval_async execution failed",
+                    extra={
+                        "event": "eval_async_execution_failed",
+                        "error": str(exec_exc),
+                        "exception_type": type(exec_exc).__name__,
+                        "traceback": traceback.format_exc(),
+                    },
+                )
+                raise
 
-                    # Upload each log file with retry logic
-                    upload_results = []
-                    for log_file_path in log_files:
-                        logger.info(f"Uploading log file: {log_file_path}")
+            if config.log_upload_enabled and session_log_dir:
+                try:
+                    logger.info(
+                        "Uploading eval log files",
+                        extra={
+                            "event": "eval_async_log_upload_start",
+                            "session_log_dir": session_log_dir,
+                        },
+                    )
+                    log_files = discover_session_log_files(session_log_dir, session_id)
 
-                        try:
-                            # Get the session manager for upload
+                    if log_files:
+                        upload_results: list[dict[str, Any]] = []
+                        for log_file_path in log_files:
+                            logger.debug(
+                                "Uploading log file",
+                                extra={
+                                    "event": "eval_async_log_upload_file",
+                                    "file_path": log_file_path,
+                                },
+                            )
                             session_manager = orchestrator._session_manager
                             if session_manager:
-                                # Upload file using the REST API client method with configured retry count
-                                result = await upload_file_with_retry(
-                                    session_manager,
-                                    session_id,
-                                    log_file_path,
-                                    max_retries=config.log_upload_max_retries,
-                                    timeout=config.log_upload_timeout,
-                                )
-                                upload_results.append(
-                                    {"file_path": log_file_path, "status": "success", "result": result}
-                                )
-                                logger.info(f"Successfully uploaded: {log_file_path}")
+                                try:
+                                    result = await upload_file_with_retry(
+                                        session_manager,
+                                        session_id,
+                                        log_file_path,
+                                        max_retries=config.log_upload_max_retries,
+                                        timeout=config.log_upload_timeout,
+                                    )
+                                    upload_results.append(
+                                        {
+                                            "file_path": log_file_path,
+                                            "status": "success",
+                                            "result": result,
+                                        }
+                                    )
+                                    logger.info(
+                                        "Log file uploaded",
+                                        extra={
+                                            "event": "eval_async_log_upload_success",
+                                            "file_path": log_file_path,
+                                        },
+                                    )
+                                except Exception as upload_exc:
+                                    upload_results.append(
+                                        {
+                                            "file_path": log_file_path,
+                                            "status": "failed",
+                                            "error": str(upload_exc),
+                                            "error_type": getattr(upload_exc, "__class__", type(upload_exc)).__name__,
+                                        }
+                                    )
+                                    logger.error(
+                                        "Log file upload failed",
+                                        extra={
+                                            "event": "eval_async_log_upload_failed",
+                                            "file_path": log_file_path,
+                                            "error": str(upload_exc),
+                                        },
+                                    )
                             else:
-                                logger.warning("Session manager not available for upload")
                                 upload_results.append(
                                     {
                                         "file_path": log_file_path,
@@ -296,163 +522,183 @@ async def run_saber_eval_async(config: SABERConfig) -> Union[EvalLog, None]:
                                         "error_type": "configuration",
                                     }
                                 )
-                        except FileNotFoundError as e:
-                            logger.error(f"Eval file not found: {log_file_path}")
-                            upload_results.append(
-                                {
-                                    "file_path": log_file_path,
-                                    "status": "failed",
-                                    "error": str(e),
-                                    "error_type": "file_not_found",
-                                }
-                            )
-                        except ConnectionError as e:
-                            logger.error(f"Network error uploading {log_file_path}: {e}")
-                            upload_results.append(
-                                {
-                                    "file_path": log_file_path,
-                                    "status": "failed",
-                                    "error": str(e),
-                                    "error_type": "network",
-                                }
-                            )
-                        except Exception as upload_error:
-                            logger.error(f"Failed to upload {log_file_path}: {upload_error}")
-                            upload_results.append(
-                                {
-                                    "file_path": log_file_path,
-                                    "status": "failed",
-                                    "error": str(upload_error),
-                                    "error_type": "unknown",
-                                }
-                            )
-
-                    # Log upload summary with error type breakdown
-                    successful_uploads = [r for r in upload_results if r["status"] == "success"]
-                    failed_uploads = [r for r in upload_results if r["status"] == "failed"]
-
-                    logger.info(f"Upload summary: {len(successful_uploads)} successful, {len(failed_uploads)} failed")
-
-                    if failed_uploads:
-                        # Categorize failures for better debugging
-                        error_types: dict[str, list] = {}
-                        for failed in failed_uploads:
-                            error_type = str(failed.get("error_type", "unknown"))
-                            if error_type not in error_types:
-                                error_types[error_type] = []
-                            error_types[error_type].append(failed)
-
-                        logger.warning("Log file upload failures by type:")
-                        for error_type, failures in error_types.items():
-                            logger.warning(f"  {error_type}: {len(failures)} files")
-                            for failed in failures:
-                                logger.warning(f"    {failed['file_path']}: {failed['error']}")
-
-                        # Handle failure behavior based on configuration
-                        total_files = len(upload_results)
-                        failure_rate = len(failed_uploads) / total_files
-
-                        if config.log_upload_fail_on_error:
-                            # Strict mode - fail evaluation if any upload fails
-                            if failed_uploads:
-                                error_msg = f"Log upload failed for {len(failed_uploads)}/{total_files} files"
-                                logger.error(f"{error_msg} and log_upload_fail_on_error=True")
-                                raise RuntimeError(
-                                    f"{error_msg}. Set log_upload_fail_on_error=False to ignore upload failures."
-                                )
-                        else:
-                            # Lenient mode - warn but continue
-                            if failure_rate > 0.5:  # More than 50% failed
-                                logger.warning(f"High failure rate in log upload: {failure_rate:.1%} of files failed")
-                                logger.warning("Consider checking network connectivity and server status")
-                            else:
-                                logger.info(
-                                    f"Partial log upload success: "
-                                    f"{len(successful_uploads)}/{total_files} files uploaded"
+                                logger.error(
+                                    "Session manager not available for log upload",
+                                    extra={
+                                        "event": "eval_async_log_upload_missing_session_manager",
+                                        "file_path": log_file_path,
+                                    },
                                 )
 
-                else:
-                    logger.warning(f"No eval log files found in session directory: {session_log_dir}")
-                    logger.info("This may be normal if evaluation completed without generating log files")
+                        successful_uploads = [r for r in upload_results if r["status"] == "success"]
+                        failed_uploads = [r for r in upload_results if r["status"] == "failed"]
 
-            except Exception as e:
-                logger.error(f"Error during log file upload process: {e}")
-
-                # Handle failure behavior based on configuration
-                if config.log_upload_fail_on_error:
-                    logger.error("log_upload_fail_on_error=True, failing evaluation due to upload error")
-                    raise RuntimeError(f"Log upload process failed: {e}") from e
-                else:
-                    # Determine if this is a critical error or can be ignored
-                    if "session" in str(e).lower() and "not found" in str(e).lower():
-                        logger.error(
-                            "Session not found during upload - this indicates a serious session management issue"
+                        logger.info(
+                            "Log upload summary",
+                            extra={
+                                "event": "eval_async_log_upload_summary",
+                                "successful_count": len(successful_uploads),
+                                "failed_count": len(failed_uploads),
+                            },
                         )
-                    elif "permission" in str(e).lower() or "access" in str(e).lower():
-                        logger.error("File permission error during upload - check file system permissions")
+
+                        if failed_uploads:
+                            error_types: Dict[str, list[dict[str, Any]]] = {}
+                            for failed in failed_uploads:
+                                error_type = str(failed.get("error_type", "unknown"))
+                                error_types.setdefault(error_type, []).append(failed)
+
+                            for error_type, failures in error_types.items():
+                                logger.warning(
+                                    "Log file upload failures",
+                                    extra={
+                                        "event": "eval_async_log_upload_failure_type",
+                                        "error_type": error_type,
+                                        "failure_count": len(failures),
+                                        "files": [failure["file_path"] for failure in failures],
+                                    },
+                                )
+
+                            total_files = len(upload_results)
+                            failure_rate = len(failed_uploads) / total_files if total_files else 0
+
+                            if config.log_upload_fail_on_error and failed_uploads:
+                                error_msg = f"Log upload failed for {len(failed_uploads)}/{total_files} files"
+                                logger.error(
+                                    "Log upload strict mode failure",
+                                    extra={
+                                        "event": "eval_async_log_upload_strict_failure",
+                                        "error_message": error_msg,
+                                    },
+                                )
+                                raise RuntimeError(
+                                    f"{error_msg}. Set log_upload_fail_on_error=False to continue on failures."
+                                )
+
+                            if not config.log_upload_fail_on_error:
+                                if failure_rate > 0.5:
+                                    logger.warning(
+                                        "High log upload failure rate",
+                                        extra={
+                                            "event": "eval_async_log_upload_high_failure_rate",
+                                            "failure_rate": failure_rate,
+                                        },
+                                    )
+                                else:
+                                    logger.info(
+                                        "Partial log upload success",
+                                        extra={
+                                            "event": "eval_async_log_upload_partial_success",
+                                            "successful_count": len(successful_uploads),
+                                            "total_files": total_files,
+                                        },
+                                    )
                     else:
-                        logger.warning("Non-critical error in log upload process")
+                        logger.warning(
+                            "No eval log files found for upload",
+                            extra={
+                                "event": "eval_async_log_upload_no_files",
+                                "session_log_dir": session_log_dir,
+                            },
+                        )
 
-                    # Don't fail the entire evaluation if log upload fails
-                    logger.warning("Continuing evaluation despite log upload failure")
-        elif not config.log_upload_enabled:
-            logger.info("Log upload disabled by configuration (log_upload_enabled=False)")
-        else:
-            logger.info("Log upload skipped - no session log directory available")
+                except Exception as upload_process_exc:
+                    logger.error(
+                        "Log upload process failure",
+                        extra={
+                            "event": "eval_async_log_upload_process_failure",
+                            "error": str(upload_process_exc),
+                        },
+                    )
 
-        # Store session context for potential log file discovery
-        if session_id and eval_log:
-            # Add session metadata to eval_log for future reference
-            if isinstance(eval_log, list):
-                for log in eval_log:
-                    if hasattr(log, "eval") and hasattr(log.eval, "metadata"):
-                        log.eval.metadata = log.eval.metadata or {}
-                        log.eval.metadata["saber_session_id"] = session_id
+                    if config.log_upload_fail_on_error:
+                        logger.error(
+                            "Failing evaluation due to log upload failure",
+                            extra={"event": "eval_async_log_upload_strict_abort"},
+                        )
+                        raise RuntimeError(f"Log upload process failed: {upload_process_exc}") from upload_process_exc
+
+                    logger.warning(
+                        "Continuing evaluation despite log upload failure",
+                        extra={"event": "eval_async_log_upload_continuing"},
+                    )
+            elif not config.log_upload_enabled:
+                logger.info(
+                    "Log upload disabled by configuration",
+                    extra={"event": "eval_async_log_upload_disabled"},
+                )
+            else:
+                logger.info(
+                    "Log upload skipped due to missing session log directory",
+                    extra={"event": "eval_async_log_upload_skipped"},
+                )
+
+            if session_id and eval_log:
+                if isinstance(eval_log, list):
+                    for log_entry in eval_log:
+                        if hasattr(log_entry, "eval") and hasattr(log_entry.eval, "metadata"):
+                            log_entry.eval.metadata = log_entry.eval.metadata or {}
+                            log_entry.eval.metadata["saber_session_id"] = session_id
+                            if session_log_dir:
+                                log_entry.eval.metadata["saber_session_log_dir"] = session_log_dir
+                else:
+                    if hasattr(eval_log, "eval") and hasattr(eval_log.eval, "metadata"):
+                        eval_log.eval.metadata = eval_log.eval.metadata or {}
+                        eval_log.eval.metadata["saber_session_id"] = session_id
                         if session_log_dir:
-                            log.eval.metadata["saber_session_log_dir"] = session_log_dir
+                            eval_log.eval.metadata["saber_session_log_dir"] = session_log_dir
+
+            final_eval_log: Union[EvalLog, None] = None
+            if isinstance(eval_log, list):
+                if len(eval_log) == 1:
+                    final_eval_log = eval_log[0]
+                else:
+                    logger.warning(
+                        "eval_async returned multiple logs; returning the first entry",
+                        extra={
+                            "event": "eval_async_multiple_logs",
+                            "log_count": len(eval_log),
+                        },
+                    )
+                    final_eval_log = eval_log[0] if eval_log else None
             else:
-                if hasattr(eval_log, "eval") and hasattr(eval_log.eval, "metadata"):
-                    eval_log.eval.metadata = eval_log.eval.metadata or {}
-                    eval_log.eval.metadata["saber_session_id"] = session_id
-                    if session_log_dir:
-                        eval_log.eval.metadata["saber_session_log_dir"] = session_log_dir
+                final_eval_log = eval_log
 
-        # Handle case where eval_async returns a list of logs
-        if isinstance(eval_log, list):
-            if len(eval_log) == 1:
-                return eval_log[0]
-            else:
-                # Return the first log or combine them - this depends on your use case
-                logger.warning(f"eval_async returned {len(eval_log)} logs, returning the first one")
-                return eval_log[0] if eval_log else None
+            log_operation_success(
+                logger,
+                "run_eval_async",
+                session_id=session_id,
+                task_count=len(task_ids),
+                sample_count=len(dataset),
+            )
 
-        return eval_log
+            return final_eval_log
 
-    except Exception as e:
-        logger.error(f"eval_async execution failed: {e}")
-        # Use SABER's exception for consistency but don't import in orchestrator
+    except Exception as exc:
         from ..exceptions import EvaluationExecutionError
 
-        # Build error details with available context
+        log_operation_failure(
+            logger,
+            "run_eval_async",
+            exc,
+            session_id=session_id,
+        )
+
         error_details = {
-            "error_type": type(e).__name__,
-            "server_url": config.session_config.base_url if config.session_config else "unknown",
+            "error_type": type(exc).__name__,
+            "server_url": server_url,
             "agent_assignments": len(config.agents),
             "task_ids": config.task_ids,
         }
 
-        # Add eval_config details if available
         if eval_kwargs:
-            # Extract eval_kwargs as a separate field to avoid type issues
-            eval_config_summary = {k: str(v) for k, v in eval_kwargs.items() if k != "tasks"}
-            error_details["eval_config"] = str(eval_config_summary)
+            error_details["eval_config"] = {k: ("<tasks>" if k == "tasks" else str(v)) for k, v in eval_kwargs.items()}
 
         raise EvaluationExecutionError(
-            f"eval_async execution failed: {e}",
+            f"eval_async execution failed: {exc}",
             details=error_details,
             suggestion="Check eval_async logs for detailed error information",
-        ) from e
+        ) from exc
 
     finally:
-        # Clean up orchestrator and session AFTER eval_async completes
         await orchestrator.__aexit__(None, None, None)

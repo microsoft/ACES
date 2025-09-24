@@ -3,12 +3,20 @@ Abstract Docker executor base class for shared Docker container management.
 
 This module provides the DockerExecutor Docker container operations for all
 Docker-based command executors.
+
+Logging category: ``LogCategory.DOCKER``.
 """
 
-import logging
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
+from ....logging_config import (
+    LogCategory,
+    get_saber_logger,
+    log_operation_failure,
+    log_operation_start,
+    log_operation_success,
+)
 from ...base import CommandResult
 from ..base import ValidationResult
 from ..exceptions import SandboxExecutionError
@@ -18,7 +26,7 @@ from .base_executors import CommandExecutor
 if TYPE_CHECKING:
     from ..sandbox.compose_orchestrator import ComposeOrchestrator
 
-logger = logging.getLogger(__name__)
+logger = get_saber_logger(LogCategory.DOCKER, __name__)
 
 
 class DockerExecutor(CommandExecutor):
@@ -103,8 +111,14 @@ class DockerExecutor(CommandExecutor):
                     f"No environment found for episode {episode_id}. Environment must be created before execution."
                 )
             return environment
-        except Exception as e:
-            raise SandboxExecutionError(f"Failed to get episode environment: {e}")
+        except Exception as exc:
+            log_operation_failure(
+                logger,
+                "docker_environment_fetch",
+                exc,
+                episode_id=episode_id,
+            )
+            raise SandboxExecutionError(f"Failed to get episode environment: {exc}") from exc
 
     def ensure_container_ready(self, episode_id: str) -> bool:
         """
@@ -120,8 +134,15 @@ class DockerExecutor(CommandExecutor):
             environment = self.get_episode_environment(episode_id)
             # The sandbox manager handles container readiness internally
             return environment is not None
-        except Exception as e:
-            logger.error(f"Container readiness check failed for episode {episode_id}: {e}")
+        except Exception as exc:
+            logger.error(
+                "Container readiness check failed",
+                extra={
+                    "event": "docker_container_readiness_failed",
+                    "episode_id": episode_id,
+                    "error": str(exc),
+                },
+            )
             return False
 
     def cleanup_execution(self, episode_id: str) -> None:
@@ -131,12 +152,24 @@ class DockerExecutor(CommandExecutor):
         Args:
             episode_id: episode identifier to clean up
         """
+        log_operation_start(logger, "docker_execution_cleanup", episode_id=episode_id)
+
         try:
-            # Let sandbox manager handle the cleanup
             self._sandbox_manager.stop_episode_environment(episode_id)
-            logger.debug(f"Cleaned up execution resources for episode {episode_id}")
-        except Exception as e:
-            logger.warning(f"Error during execution cleanup for episode {episode_id}: {e}")
+        except Exception as exc:
+            log_operation_failure(
+                logger,
+                "docker_execution_cleanup",
+                exc,
+                episode_id=episode_id,
+            )
+            raise SandboxExecutionError(f"Failed to clean up execution resources for episode {episode_id}: {exc}")
+        else:
+            log_operation_success(
+                logger,
+                "docker_execution_cleanup",
+                episode_id=episode_id,
+            )
 
     def validate_docker_parameters(self, parameters: Dict[str, Any]) -> ValidationResult:
         """
@@ -188,8 +221,14 @@ class DockerExecutor(CommandExecutor):
                     docker_info[key] = sandbox_config[key]
 
             info["docker_config"] = docker_info
-        except Exception as e:
-            logger.warning(f"Could not retrieve Docker configuration: {e}")
+        except Exception as exc:
+            logger.warning(
+                "Could not retrieve Docker configuration",
+                extra={
+                    "event": "docker_config_inspection_failed",
+                    "error": str(exc),
+                },
+            )
 
         return info
 

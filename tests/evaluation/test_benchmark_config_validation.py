@@ -326,7 +326,8 @@ tasks:
             # This should NOT raise an exception now that golden_answer is optional
             tasks = loader.load_tasks_from_file(temp_path)
             assert len(tasks) == 1
-            assert tasks[0].task_id == "llm_no_golden_task"
+            assert "llm_no_golden_task" in tasks
+            assert tasks["llm_no_golden_task"].task_id == "llm_no_golden_task"
 
         finally:
             os.unlink(temp_path)

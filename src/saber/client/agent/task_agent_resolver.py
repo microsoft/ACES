@@ -7,13 +7,13 @@ Maps task IDs to agent assignments without managing agent instances.
 BREAKING CHANGE: No backwards compatibility - simplified for direct agent pattern.
 """
 
-import logging
 from typing import Any, Dict, List, Set
 
+from ...logging_config import get_agent_logger
 from ..exceptions import AgentConfigurationError
 from ..models import AgentAssignment, SABERConfig
 
-logger = logging.getLogger(__name__)
+logger = get_agent_logger(__name__)
 
 
 class TaskAgentResolver:
@@ -52,7 +52,13 @@ class TaskAgentResolver:
         self._wildcard_assignment: AgentAssignment | None = None
         self._available_task_ids: Set[str] = set()
 
-        logger.debug(f"Initialized TaskAgentResolver with {len(config.agents)} agent assignments")
+        logger.debug(
+            "Task agent resolver initialized",
+            extra={
+                "event": "task_agent_resolver_initialized",
+                "assignment_count": len(config.agents),
+            },
+        )
 
     def initialize(self, available_task_ids: List[str]) -> None:
         """
@@ -65,10 +71,20 @@ class TaskAgentResolver:
             AgentConfigurationError: If task coverage validation fails
         """
         if not available_task_ids:
+            logger.error(
+                "Task resolver initialization missing task identifiers",
+                extra={"event": "task_agent_resolver_missing_tasks"},
+            )
             raise AgentConfigurationError("No available task IDs provided for resolution")
 
         self._available_task_ids = set(available_task_ids)
-        logger.info(f"Initializing resolver for {len(available_task_ids)} available tasks")
+        logger.info(
+            "Initializing task resolver",
+            extra={
+                "event": "task_agent_resolver_initializing",
+                "available_task_count": len(available_task_ids),
+            },
+        )
 
         # Build task-to-assignment mappings
         self._build_task_mappings()
@@ -76,9 +92,22 @@ class TaskAgentResolver:
         # Validate task coverage
         self._validate_task_coverage()
 
-        logger.info(f"Task agent resolver initialized with {len(self._task_to_assignment)} explicit mappings")
+        logger.info(
+            "Task resolver initialized",
+            extra={
+                "event": "task_agent_resolver_ready",
+                "explicit_mapping_count": len(self._task_to_assignment),
+                "has_wildcard": bool(self._wildcard_assignment),
+            },
+        )
         if self._wildcard_assignment:
-            logger.info(f"Wildcard assignment available: {self._wildcard_assignment.id}")
+            logger.info(
+                "Task resolver wildcard assignment",
+                extra={
+                    "event": "task_agent_resolver_wildcard",
+                    "agent_id": self._wildcard_assignment.id,
+                },
+            )
 
     def _build_task_mappings(self) -> None:
         """Build internal mappings from agent assignments."""
@@ -89,21 +118,50 @@ class TaskAgentResolver:
             for task_pattern in assignment.tasks:
                 if task_pattern == "*":
                     if self._wildcard_assignment is not None:
+                        logger.error(
+                            "Multiple wildcard agent assignments detected",
+                            extra={
+                                "event": "task_agent_resolver_duplicate_wildcard",
+                                "existing_agent": self._wildcard_assignment.id,
+                                "conflicting_agent": assignment.id,
+                            },
+                        )
                         raise AgentConfigurationError(
-                            f"Multiple wildcard assignments found: "
-                            f"{self._wildcard_assignment.id} and {assignment.id}"
+                            f"Multiple wildcard assignments found: {self._wildcard_assignment.id} and {assignment.id}"
                         )
                     self._wildcard_assignment = assignment
-                    logger.debug(f"Found wildcard assignment: {assignment.id}")
+                    logger.debug(
+                        "Wildcard assignment registered",
+                        extra={
+                            "event": "task_agent_resolver_wildcard_registered",
+                            "agent_id": assignment.id,
+                        },
+                    )
                 else:
                     # Explicit task assignment
                     if task_pattern in self._task_to_assignment:
                         existing = self._task_to_assignment[task_pattern]
+                        logger.error(
+                            "Duplicate task assignment detected",
+                            extra={
+                                "event": "task_agent_resolver_duplicate_assignment",
+                                "task_id": task_pattern,
+                                "existing_agent": existing.id,
+                                "conflicting_agent": assignment.id,
+                            },
+                        )
                         raise AgentConfigurationError(
-                            f"Duplicate task assignment for '{task_pattern}': " f"{existing.id} and {assignment.id}"
+                            f"Duplicate task assignment for '{task_pattern}': {existing.id} and {assignment.id}"
                         )
                     self._task_to_assignment[task_pattern] = assignment
-                    logger.debug(f"Mapped task '{task_pattern}' to agent '{assignment.id}'")
+                    logger.debug(
+                        "Explicit task assignment registered",
+                        extra={
+                            "event": "task_agent_resolver_assignment_registered",
+                            "task_id": task_pattern,
+                            "agent_id": assignment.id,
+                        },
+                    )
 
     def _validate_task_coverage(self) -> None:
         """Validate that all available tasks have agent assignments."""
@@ -120,7 +178,10 @@ class TaskAgentResolver:
                 f"+ wildcard: {'Yes' if self._wildcard_assignment else 'No'}"
             )
 
-        logger.info("All available tasks have valid agent assignments")
+        logger.info(
+            "All tasks covered by agent assignments",
+            extra={"event": "task_agent_resolver_coverage_complete"},
+        )
 
     def get_assignment_for_task(self, task_id: str) -> AgentAssignment:
         """
@@ -138,19 +199,44 @@ class TaskAgentResolver:
         # First check explicit mapping
         if task_id in self._task_to_assignment:
             assignment = self._task_to_assignment[task_id]
-            logger.debug(f"Found explicit assignment for task '{task_id}': {assignment.id}")
+            logger.debug(
+                "Resolved explicit task assignment",
+                extra={
+                    "event": "task_agent_resolver_explicit_match",
+                    "task_id": task_id,
+                    "agent_id": assignment.id,
+                },
+            )
             return assignment
 
         # Fall back to wildcard if available
         if self._wildcard_assignment is not None:
-            logger.debug(f"Using wildcard assignment for task '{task_id}': {self._wildcard_assignment.id}")
+            logger.debug(
+                "Resolved wildcard task assignment",
+                extra={
+                    "event": "task_agent_resolver_wildcard_match",
+                    "task_id": task_id,
+                    "agent_id": self._wildcard_assignment.id,
+                },
+            )
             return self._wildcard_assignment
 
         # No assignment found
+        logger.error(
+            "Task assignment missing",
+            extra={
+                "event": "task_agent_resolver_task_missing",
+                "task_id": task_id,
+                "explicit_assignments": sorted(self._task_to_assignment.keys()),
+                "has_wildcard": bool(self._wildcard_assignment),
+            },
+        )
+        available_assignments = list(self._task_to_assignment.keys())
+        wildcard_status = "Yes" if self._wildcard_assignment else "No"
         raise AgentConfigurationError(
             f"No agent assignment found for task '{task_id}'. "
-            f"Available explicit assignments: {list(self._task_to_assignment.keys())}, "
-            f"Wildcard available: {'Yes' if self._wildcard_assignment else 'No'}"
+            f"Available explicit assignments: {available_assignments}, "
+            f"Wildcard available: {wildcard_status}"
         )
 
     def has_assignment_for_task(self, task_id: str) -> bool:

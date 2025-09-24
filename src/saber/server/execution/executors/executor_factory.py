@@ -1,20 +1,22 @@
-"""
-Executor factory for dynamic executor creation and management.
+"""Executor factory for dynamic executor creation and management.
+
+Logging Category: EXECUTION
 
 This module provides a factory pattern for creating and managing different types
 of command executors, supporting scaling to many executor types.
 """
 
-import logging
 from typing import Any, Dict, List, Optional
 
 import mcp.types as mcp_types
+
+from saber.logging_config import LogCategory, get_saber_logger
 
 from ..sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 from .docker_executor import DockerExecutor
 from .executor_registry import executor_registry
 
-logger = logging.getLogger(__name__)
+logger = get_saber_logger(LogCategory.EXECUTION, __name__)
 
 
 class ExecutorFactory:
@@ -48,8 +50,14 @@ class ExecutorFactory:
         # Episode-specific configurations: episode_id -> {allowed_executors, config}
         self._episode_configurations: Dict[str, Dict[str, Any]] = {}
 
-        logger.info(f"ExecutorFactory initialized with {len(self._all_available_executors)} total executor types")
-        logger.info(f"All available executors: {self._all_available_executors}")
+        logger.info(
+            "Executor factory initialized",
+            extra={
+                "event": "executor_factory_initialized",
+                "total_executor_types": len(self._all_available_executors),
+                "available_executors": self._all_available_executors,
+            },
+        )
 
     def register_episode_configuration(
         self,
@@ -70,8 +78,13 @@ class ExecutorFactory:
             invalid_executors = [ex for ex in allowed_executors if ex not in self._all_available_executors]
             if invalid_executors:
                 logger.warning(
-                    f"Invalid executor types for episode {episode_id}: {invalid_executors}. "
-                    f"Available: {self._all_available_executors}"
+                    "Invalid executor types provided for episode",
+                    extra={
+                        "event": "executor_factory_invalid_episode_executors",
+                        "episode_id": episode_id,
+                        "invalid_executors": invalid_executors,
+                        "available_executors": self._all_available_executors,
+                    },
                 )
             # Filter to only valid executors
             valid_allowed_executors = [ex for ex in allowed_executors if ex in self._all_available_executors]
@@ -86,8 +99,13 @@ class ExecutorFactory:
         }
 
         logger.info(
-            f"Registered episode {episode_id} with {len(valid_allowed_executors)} "
-            f"allowed executors: {valid_allowed_executors}"
+            "Episode executor configuration registered",
+            extra={
+                "event": "executor_factory_episode_registered",
+                "episode_id": episode_id,
+                "allowed_executor_count": len(valid_allowed_executors),
+                "allowed_executors": valid_allowed_executors,
+            },
         )
 
     def unregister_episode_configuration(self, episode_id: str) -> None:
@@ -99,7 +117,13 @@ class ExecutorFactory:
         """
         if episode_id in self._episode_configurations:
             del self._episode_configurations[episode_id]
-            logger.debug(f"Unregistered episode configuration for {episode_id}")
+            logger.debug(
+                "Episode executor configuration unregistered",
+                extra={
+                    "event": "executor_factory_episode_unregistered",
+                    "episode_id": episode_id,
+                },
+            )
 
     def get_available_executors(self, episode_id: Optional[str] = None) -> List[str]:
         """
@@ -118,7 +142,13 @@ class ExecutorFactory:
             allowed_executors: List[str] = self._episode_configurations[episode_id]["allowed_executors"]
             return allowed_executors.copy()
 
-        logger.warning(f"No configuration found for episode {episode_id}, returning all executors")
+        logger.warning(
+            "Episode configuration missing; returning all executors",
+            extra={
+                "event": "executor_factory_missing_episode_config",
+                "episode_id": episode_id,
+            },
+        )
         return self._all_available_executors.copy()
 
     def get_executor(
@@ -157,7 +187,15 @@ class ExecutorFactory:
         except KeyError:
             raise ValueError(f"Executor type '{executor_type}' not found in registry")
 
-        logger.debug(f"Creating new {executor_type} executor instance")
+        logger.debug(
+            "Creating executor instance",
+            extra={
+                "event": "executor_factory_instance_creation",
+                "executor_type": executor_type,
+                "episode_id": episode_id,
+                "force_new": force_new,
+            },
+        )
 
         # Get the executor class's default configuration
         default_config = executor_class.get_default_config()
@@ -206,12 +244,23 @@ class ExecutorFactory:
 
         # Determine which executors to include
         if episode_id is None:
-            logger.warning("No episode_id provided to get_all_mcp_tools, returning all available tools")
+            logger.warning(
+                "Episode ID missing for MCP tools request; returning all tools",
+                extra={
+                    "event": "executor_factory_mcp_tools_no_episode",
+                },
+            )
             allowed_executors = list(self._all_available_executors)
         else:
             episode_config = self._episode_configurations.get(episode_id)
             if episode_config is None:
-                logger.warning(f"No configuration found for episode {episode_id}, returning all available tools")
+                logger.warning(
+                    "Episode configuration missing for MCP tools; returning all tools",
+                    extra={
+                        "event": "executor_factory_mcp_tools_missing_episode_config",
+                        "episode_id": episode_id,
+                    },
+                )
                 allowed_executors = list(self._all_available_executors)
             else:
                 allowed_executors = episode_config.get("allowed_executors", [])
@@ -243,7 +292,15 @@ class ExecutorFactory:
                 tools.append(mcp_tool)
 
             except Exception as e:
-                logger.error(f"Failed to get MCP schema for executor {executor_type}: {e}")
+                logger.error(
+                    "Failed to build MCP tool schema",
+                    extra={
+                        "event": "executor_factory_mcp_schema_failed",
+                        "executor_type": executor_type,
+                        "episode_id": episode_id,
+                        "error": str(e),
+                    },
+                )
 
         return tools
 
@@ -252,9 +309,22 @@ class ExecutorFactory:
         for executor_type, executor in self._executor_instances.items():
             try:
                 # Cleanup is handled by the sandbox manager
-                logger.debug(f"Cleaned up {executor_type} executor")
+                logger.debug(
+                    "Executor cleanup recorded",
+                    extra={
+                        "event": "executor_factory_cleanup_recorded",
+                        "executor_type": executor_type,
+                    },
+                )
             except Exception as e:
-                logger.error(f"Error cleaning up {executor_type} executor: {e}")
+                logger.error(
+                    "Executor cleanup failed",
+                    extra={
+                        "event": "executor_factory_cleanup_failed",
+                        "executor_type": executor_type,
+                        "error": str(e),
+                    },
+                )
 
         self._executor_instances.clear()
 
@@ -272,7 +342,13 @@ class ExecutorFactory:
                 executor_class = executor_registry.get_executor_class(executor_type)
                 configurations[executor_type] = executor_class.get_default_config()
             except KeyError:
-                logger.warning(f"Executor type '{executor_type}' not found in registry")
+                logger.warning(
+                    "Executor type missing from registry during info retrieval",
+                    extra={
+                        "event": "executor_factory_missing_registry_entry",
+                        "executor_type": executor_type,
+                    },
+                )
 
         info = {
             "available_types": self.get_available_executors(),

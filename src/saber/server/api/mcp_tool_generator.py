@@ -1,17 +1,20 @@
 """
-MCP Tool Generator Utility
+MCP Tool Generator Utility.
+
+Logging Category: MCP_API
 
 This module provides utilities for dynamically generating MCP-compatible tool functions
 from executor schemas. It handles the conversion from **kwargs-based functions to
 properly typed functions that the FastMCP library can register.
 """
 
-import logging
 from typing import Any, Callable, Dict, List, Optional
+
+from saber.logging_config import LogCategory, get_saber_logger
 
 from ...models.mcp import MCPToolSchema
 
-logger = logging.getLogger(__name__)
+logger = get_saber_logger(LogCategory.MCP_API, __name__)
 
 
 class MCPToolGenerator:
@@ -24,7 +27,7 @@ class MCPToolGenerator:
 
     def __init__(self) -> None:
         """Initialize the MCP tool generator."""
-        self.logger = logging.getLogger(__name__)
+        self.logger = logger
 
     def create_executor_tool(self, executor_name: str, mcp_schema: MCPToolSchema, handler_func: Callable) -> Callable:
         """
@@ -153,14 +156,34 @@ class MCPToolGenerator:
                 dynamic_function.__doc__ = f"Execute a {executor_name} command in the SABER sandbox environment."
 
             logger.debug(
-                f"Generated MCP tool function for executor '{executor_name}' with signature: {function_signature}"
+                "MCP tool function generated",
+                extra={
+                    "event": "mcp_tool_function_generated",
+                    "executor_name": executor_name,
+                    "function_signature": function_signature,
+                    "parameter_count": len(param_names),
+                },
             )
             # Cast to Callable to satisfy mypy - dynamic_function is callable due to check above
             return dynamic_function
 
         except Exception as e:
-            logger.error(f"Failed to generate MCP tool function for executor '{executor_name}': {e}")
-            logger.error(f"Generated function body:\n{function_body}")
+            logger.error(
+                "Failed to generate MCP tool function",
+                extra={
+                    "event": "mcp_tool_function_generation_failed",
+                    "executor_name": executor_name,
+                    "error": str(e),
+                },
+            )
+            logger.debug(
+                "Generated MCP function body",
+                extra={
+                    "event": "mcp_tool_function_body_debug",
+                    "executor_name": executor_name,
+                    "function_body": function_body,
+                },
+            )
             raise RuntimeError(f"Dynamic function generation failed for executor '{executor_name}': {e}")
 
     def _json_type_to_python_type(self, json_type: str) -> str:

@@ -4,19 +4,22 @@ SABER Evaluation Utilities
 Shared utilities for parsing and processing evaluation results.
 Used by both client-side and server-side evaluation components.
 
+Log Category: EVALUATION
+
 Following SABER best practices:
 - Fail fast on invalid formats
 - No silent failures or defensive fallbacks
 - Clean separation of concerns
 """
 
-import logging
 import re
 from typing import List
 
+from saber.logging_config import LogCategory, get_saber_logger
+
 from .rest.evaluation import StepEvaluation
 
-logger = logging.getLogger(__name__)
+logger = get_saber_logger(LogCategory.EVALUATION, __name__)
 
 
 def parse_step_evaluations(judge_response: str, task_id: str) -> List[StepEvaluation]:
@@ -46,7 +49,13 @@ def parse_step_evaluations(judge_response: str, task_id: str) -> List[StepEvalua
     if not section_match:
         # Check for NO_COMPLETIONS case
         if "[NO_COMPLETIONS]" in judge_response:
-            logger.info("Judge response indicates no objectives were completed")
+            logger.info(
+                "Judge response indicates no objectives were completed",
+                extra={
+                    "event": "step_evaluations_absent",
+                    "judge_response_contains_no_completions": True,
+                },
+            )
             return []
         else:
             raise RuntimeError(
@@ -62,7 +71,10 @@ def parse_step_evaluations(judge_response: str, task_id: str) -> List[StepEvalua
 
     if not step_matches:
         # Empty section but properly formatted
-        logger.info("STEP_EVALUATIONS section found but contains no step entries")
+        logger.info(
+            "STEP_EVALUATIONS section found but contains no step entries",
+            extra={"event": "step_evaluations_empty"},
+        )
         return []
 
     step_evaluations = []
@@ -74,7 +86,14 @@ def parse_step_evaluations(judge_response: str, task_id: str) -> List[StepEvalua
 
             # Validate step number (must be >= 1)
             if step_number < 1:
-                logger.warning(f"Invalid step number {step_number} in evaluation, skipping entry for '{objective_id}'")
+                logger.warning(
+                    "Invalid step number encountered in evaluation entry",
+                    extra={
+                        "event": "step_evaluation_invalid_step_number",
+                        "step_number": step_number,
+                        "objective_id": objective_id,
+                    },
+                )
                 continue
 
             # Determine objective type
@@ -88,12 +107,26 @@ def parse_step_evaluations(judge_response: str, task_id: str) -> List[StepEvalua
             )
 
             step_evaluations.append(step_eval)
-            logger.debug(f"Parsed step evaluation: step {step_number} completed {objective_type} '{objective_id}'")
+            logger.debug(
+                "Parsed step evaluation entry",
+                extra={
+                    "event": "step_evaluation_parsed",
+                    "step_number": step_number,
+                    "objective_id": objective_id,
+                    "objective_type": objective_type,
+                },
+            )
 
         except ValueError as e:
             raise RuntimeError(f"Invalid step number in evaluation: '{step_number_str}' - {e}") from e
 
-    logger.info(f"Successfully parsed {len(step_evaluations)} step evaluations from judge response")
+    logger.info(
+        "Successfully parsed step evaluations from judge response",
+        extra={
+            "event": "step_evaluations_parsed",
+            "count": len(step_evaluations),
+        },
+    )
     return step_evaluations
 
 

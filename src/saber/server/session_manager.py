@@ -172,7 +172,14 @@ class SessionManager:
         self.shutdown_event = asyncio.Event()
 
         # Initialize server components
-        logger.info(f"Initializing SessionManager for domain '{domain_name}' with config_dir '{config_dir}'")
+        logger.info(
+            "Initializing SessionManager",
+            extra={
+                "event": "session_manager_initializing",
+                "domain": domain_name,
+                "config_dir": config_dir,
+            },
+        )
 
         self.benchmark_manager = BenchmarkManager(domain_name, config_dir)
         self.episode_manager = EpisodeManager()
@@ -200,7 +207,15 @@ class SessionManager:
         self.mcp_api = SessionMCPAPI(self, mcp_host, mcp_port)
 
         logger.info(
-            f"SessionManager initialized for domain '{domain_name}' on REST:{host}:{port}, MCP:{mcp_host}:{mcp_port}"
+            "SessionManager initialized",
+            extra={
+                "event": "session_manager_initialized",
+                "domain": domain_name,
+                "rest_host": host,
+                "rest_port": port,
+                "mcp_host": mcp_host,
+                "mcp_port": mcp_port,
+            },
         )
 
     async def start_server(self) -> None:
@@ -222,7 +237,10 @@ class SessionManager:
 
     async def shutdown(self) -> None:
         """Shutdown the SessionManager and cleanup resources."""
-        logger.info(f"Shutting down SessionManager for domain {self.domain_name}")
+        logger.info(
+            "Shutting down SessionManager",
+            extra={"event": "session_manager_shutdown_start", "domain": self.domain_name},
+        )
 
         # Signal shutdown to stop cleanup loop
         self.shutdown_event.set()
@@ -237,12 +255,26 @@ class SessionManager:
 
         # Stop permanent environment through ExecutionManager
         if self.execution_manager.is_permanent_environment_running():
-            logger.info("Stopping permanent environment...")
+            logger.info(
+                "Stopping permanent environment",
+                extra={"event": "permanent_environment_stop_requested", "domain": self.domain_name},
+            )
             try:
                 self.execution_manager.stop_permanent_environment()
-                logger.info("Permanent environment stopped successfully")
+                logger.info(
+                    "Permanent environment stopped",
+                    extra={"event": "permanent_environment_stop_completed", "domain": self.domain_name},
+                )
             except Exception as e:
-                logger.error(f"Error stopping permanent environment: {e}")
+                logger.error(
+                    "Failed to stop permanent environment",
+                    extra={
+                        "event": "permanent_environment_stop_failed",
+                        "domain": self.domain_name,
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    },
+                )
 
         # Clean up SABER episode networks before shutting down MCP server
         await self._cleanup_saber_episode_networks()
@@ -253,13 +285,24 @@ class SessionManager:
         # Cleanup all active sessions
         session_ids = list(self.active_sessions.keys())
         cleanup_logger.info(
-            f"Shutdown cleanup initiated: active_sessions_count={len(session_ids)}, session_list={session_ids}"
+            "Shutdown cleanup initiated",
+            extra={
+                "event": "shutdown_cleanup_start",
+                "active_sessions_count": len(session_ids),
+                "session_ids": session_ids,
+            },
         )
         for session_id in session_ids:
-            cleanup_logger.info(f"Terminating session {session_id} during shutdown")
+            cleanup_logger.info(
+                "Terminating session during shutdown",
+                extra={"event": "shutdown_session_termination", "session_id": session_id},
+            )
             await self.terminate_session(session_id)
 
-        logger.info("SessionManager shutdown complete")
+        logger.info(
+            "SessionManager shutdown complete",
+            extra={"event": "session_manager_shutdown_complete", "domain": self.domain_name},
+        )
 
     async def _cleanup_episode_network(self, episode_id: str) -> None:
         """Clean up Docker network for a specific episode"""
@@ -280,7 +323,10 @@ class SessionManager:
             if result.returncode == 0:
                 existing_networks = stdout.decode().strip().split("\n")
                 if network_name in existing_networks:
-                    logger.info(f"🗑️ Removing episode network: {network_name}")
+                    logger.info(
+                        "Removing episode network",
+                        extra={"event": "episode_network_removal", "network": network_name},
+                    )
 
                     # Remove any containers still connected to the network
                     inspect_result = await asyncio.create_subprocess_exec(
@@ -299,7 +345,14 @@ class SessionManager:
                         container_names = inspect_stdout.decode().strip().split()
                         for container_name in container_names:
                             if container_name:  # Skip empty strings
-                                logger.info(f"🧹 Forcing removal of container: {container_name}")
+                                logger.info(
+                                    "Force removing container attached to episode network",
+                                    extra={
+                                        "event": "episode_network_container_remove",
+                                        "network": network_name,
+                                        "container": container_name,
+                                    },
+                                )
                                 rm_result = await asyncio.create_subprocess_exec(
                                     "docker",
                                     "rm",
@@ -319,24 +372,44 @@ class SessionManager:
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE,
                     )
-                    await rm_network_result.communicate()
+                    _, rm_stderr = await rm_network_result.communicate()
 
                     if rm_network_result.returncode == 0:
-                        logger.info(f"✅ Successfully removed episode network: {network_name}")
+                        logger.info(
+                            "Episode network removed",
+                            extra={"event": "episode_network_removed", "network": network_name},
+                        )
                     else:
-                        logger.warning(f"❌ Failed to remove episode network: {network_name}")
+                        stderr_text = rm_stderr.decode().strip() if rm_stderr else ""
+                        logger.warning(
+                            "Failed to remove episode network",
+                            extra={
+                                "event": "episode_network_remove_failed",
+                                "network": network_name,
+                                "stderr": stderr_text,
+                            },
+                        )
 
         except Exception as e:
-            logger.error(f"Error cleaning up episode network {network_name}: {e}")
+            logger.error(
+                "Episode network cleanup error",
+                extra={
+                    "event": "episode_network_cleanup_error",
+                    "network": network_name,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+            )
 
     async def _cleanup_saber_episode_networks(self) -> None:
         """Clean up all SABER episode networks to prevent Docker subnet pool exhaustion."""
-        import asyncio
 
-        logger.info("🧹 Starting SABER episode network cleanup...")
+        logger.info(
+            "Starting SABER episode network cleanup",
+            extra={"event": "episode_network_bulk_cleanup_start"},
+        )
 
         try:
-            # Get all SABER episode networks
             result = await asyncio.create_subprocess_exec(
                 "docker",
                 "network",
@@ -351,22 +424,37 @@ class SessionManager:
             stdout, stderr = await result.communicate()
 
             if result.returncode != 0:
-                logger.warning(f"Failed to list SABER episode networks: {stderr.decode()}")
+                logger.warning(
+                    "Failed to list SABER episode networks",
+                    extra={
+                        "event": "episode_network_list_failed",
+                        "return_code": result.returncode,
+                        "stderr": stderr.decode().strip(),
+                    },
+                )
                 return
 
             network_names = stdout.decode().strip().split("\n")
             network_names = [name.strip() for name in network_names if name.strip()]
 
             if not network_names:
-                logger.info("🧹 No SABER episode networks found to clean up")
+                logger.info(
+                    "No SABER episode networks found for cleanup",
+                    extra={"event": "episode_network_bulk_cleanup_empty"},
+                )
                 return
 
-            logger.info(f"🧹 Found {len(network_names)} SABER episode networks to clean up")
+            logger.info(
+                "Identified SABER episode networks for cleanup",
+                extra={
+                    "event": "episode_network_bulk_cleanup_identified",
+                    "network_count": len(network_names),
+                    "networks": network_names,
+                },
+            )
 
-            # First, try to stop and remove any containers using these networks
             for network_name in network_names:
                 try:
-                    # Get containers connected to this network
                     inspect_result = await asyncio.create_subprocess_exec(
                         "docker",
                         "network",
@@ -377,14 +465,21 @@ class SessionManager:
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE,
                     )
-                    containers_stdout, _ = await inspect_result.communicate()
+                    containers_stdout, containers_stderr = await inspect_result.communicate()
 
                     if inspect_result.returncode == 0:
                         container_names = containers_stdout.decode().strip().split()
                         if container_names:
-                            logger.info(f"🧹 Removing {len(container_names)} containers from network {network_name}")
+                            logger.info(
+                                "Removing containers attached to episode network",
+                                extra={
+                                    "event": "episode_network_containers_remove",
+                                    "network": network_name,
+                                    "container_count": len(container_names),
+                                    "containers": container_names,
+                                },
+                            )
                             for container_name in container_names:
-                                # Force remove containers
                                 await asyncio.create_subprocess_exec(
                                     "docker",
                                     "rm",
@@ -393,10 +488,27 @@ class SessionManager:
                                     stdout=asyncio.subprocess.DEVNULL,
                                     stderr=asyncio.subprocess.DEVNULL,
                                 )
+                    else:
+                        logger.warning(
+                            "Failed to inspect episode network",
+                            extra={
+                                "event": "episode_network_inspect_failed",
+                                "network": network_name,
+                                "return_code": inspect_result.returncode,
+                                "stderr": containers_stderr.decode().strip(),
+                            },
+                        )
                 except Exception as e:
-                    logger.warning(f"🧹 Error cleaning containers for network {network_name}: {e}")
+                    logger.warning(
+                        "Error cleaning containers for episode network",
+                        extra={
+                            "event": "episode_network_container_cleanup_error",
+                            "network": network_name,
+                            "error": str(e),
+                            "error_type": type(e).__name__,
+                        },
+                    )
 
-            # Now remove the networks
             cleaned_count = 0
             for network_name in network_names:
                 try:
@@ -408,25 +520,57 @@ class SessionManager:
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE,
                     )
-                    rm_stdout, rm_stderr = await remove_result.communicate()
+                    _, rm_stderr = await remove_result.communicate()
 
                     if remove_result.returncode == 0:
                         cleaned_count += 1
-                        logger.debug(f"🧹 Cleaned up network: {network_name}")
+                        logger.debug(
+                            "Episode network removed during bulk cleanup",
+                            extra={
+                                "event": "episode_network_bulk_removed",
+                                "network": network_name,
+                            },
+                        )
                     else:
-                        logger.warning(f"🧹 Failed to remove network {network_name}: {rm_stderr.decode()}")
+                        logger.warning(
+                            "Failed to remove episode network during bulk cleanup",
+                            extra={
+                                "event": "episode_network_bulk_remove_failed",
+                                "network": network_name,
+                                "return_code": remove_result.returncode,
+                                "stderr": rm_stderr.decode().strip(),
+                            },
+                        )
 
                 except Exception as e:
-                    logger.warning(f"🧹 Error removing network {network_name}: {e}")
+                    logger.warning(
+                        "Error removing episode network during bulk cleanup",
+                        extra={
+                            "event": "episode_network_bulk_remove_error",
+                            "network": network_name,
+                            "error": str(e),
+                            "error_type": type(e).__name__,
+                        },
+                    )
 
             logger.info(
-                f"🧹 SABER episode network cleanup completed: {cleaned_count}/{len(network_names)} networks cleaned"
+                "Completed SABER episode network cleanup",
+                extra={
+                    "event": "episode_network_bulk_cleanup_complete",
+                    "network_count": len(network_names),
+                    "networks_removed": cleaned_count,
+                },
             )
 
         except Exception as e:
-            logger.error(f"🧹 SABER episode network cleanup failed: {e}")
-            # Don't let network cleanup failure block server shutdown
-            pass
+            logger.error(
+                "SABER episode network cleanup failed",
+                extra={
+                    "event": "episode_network_bulk_cleanup_failed",
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+            )
 
     async def create_session(self, client_id: str) -> ClientSession:
         """
@@ -454,9 +598,21 @@ class SessionManager:
         try:
             await self.evaluation_manager.log_session_start(session_id, client_id)
         except Exception as e:
-            logger.warning(f"Failed to log session start: {str(e)}")
+            logger.warning(
+                "Failed to log session start",
+                extra={
+                    "event": "session_start_logging_failed",
+                    "session_id": session_id,
+                    "client_id": client_id,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+            )
 
-        logger.info(f"Session created {session_id} for client {client_id}")
+        logger.info(
+            "Session created",
+            extra={"event": "session_created", "session_id": session_id, "client_id": client_id},
+        )
         return session
 
     async def terminate_session(self, session_id: str) -> None:
@@ -473,8 +629,13 @@ class SessionManager:
         if session.has_active_episodes():
             try:
                 logger.info(
-                    f"Ending {len(session.active_episode_ids)} active episodes during session termination "
-                    f"for session {session_id}: {session.active_episode_ids}"
+                    "Terminating active episodes during session shutdown",
+                    extra={
+                        "event": "session_active_episodes_terminating",
+                        "session_id": session_id,
+                        "active_episode_count": len(session.active_episode_ids),
+                        "active_episode_ids": list(session.active_episode_ids),
+                    },
                 )
                 # End all active episodes - each will trigger its own cleanup
                 for episode_id in session.active_episode_ids.copy():  # Copy to avoid modification during iteration
@@ -482,54 +643,137 @@ class SessionManager:
                         # Check if episode is already completed before forcing termination
                         episode = self.episode_manager.get_episode_by_id(episode_id)
                         if episode and episode.is_complete:
-                            logger.info(f"Episode {episode_id} already completed, skipping termination override")
+                            logger.info(
+                                "Episode already complete; skipping termination override",
+                                extra={
+                                    "event": "session_episode_already_complete",
+                                    "session_id": session_id,
+                                    "episode_id": episode_id,
+                                },
+                            )
                             continue
 
                         # Call episode manager directly for session termination (no submission required)
                         self.episode_manager.end_episode(episode_id, EpisodeTerminationReason.SESSION_TERMINATED, None)
-                        logger.info(f"Successfully ended episode {episode_id}")
+                        logger.info(
+                            "Episode terminated during session shutdown",
+                            extra={
+                                "event": "session_episode_terminated",
+                                "session_id": session_id,
+                                "episode_id": episode_id,
+                                "termination_reason": EpisodeTerminationReason.SESSION_TERMINATED,
+                            },
+                        )
                     except Exception as e:
-                        logger.warning(f"Error ending episode {episode_id}: {str(e)}")
+                        logger.warning(
+                            "Failed to terminate episode during session shutdown",
+                            extra={
+                                "event": "session_episode_termination_failed",
+                                "session_id": session_id,
+                                "episode_id": episode_id,
+                                "error": str(e),
+                                "error_type": type(e).__name__,
+                            },
+                        )
 
                 # Clear remaining state
                 session.active_episode_ids.clear()
                 session.task_queue.clear()
             except Exception as e:
-                logger.warning(f"Error ending episodes during session termination: {str(e)}")
+                logger.warning(
+                    "Failed to terminate active episodes during session shutdown",
+                    extra={
+                        "event": "session_active_episode_termination_error",
+                        "session_id": session_id,
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    },
+                )
 
         # Log session end with evaluation manager (ignore failures)
         try:
             await self.evaluation_manager.log_session_end(session_id)
         except Exception as e:
-            logger.warning(f"Failed to log session end: {str(e)}")
+            logger.warning(
+                "Failed to log session end",
+                extra={
+                    "event": "session_end_logging_failed",
+                    "session_id": session_id,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+            )
 
         # Check for any orphaned episodes that might still need cleanup
         try:
             log_operation_start(logger, "Orphaned episode cleanup check", session_id)
             episodes_to_cleanup = list(session.episode_history)
-            logger.info(f"Checking for orphaned episodes: {episodes_to_cleanup}")
+            logger.info(
+                "Checking for orphaned episodes",
+                extra={
+                    "event": "orphaned_episode_cleanup_check",
+                    "session_id": session_id,
+                    "episode_ids": episodes_to_cleanup,
+                },
+            )
 
             cleanup_success = True
             for episode_id in episodes_to_cleanup:
                 try:
-                    logger.info(f"🧹 Checking orphaned cleanup for episode {episode_id}")
+                    logger.info(
+                        "Evaluating orphaned episode cleanup",
+                        extra={
+                            "event": "orphaned_episode_cleanup_attempt",
+                            "session_id": session_id,
+                            "episode_id": episode_id,
+                        },
+                    )
                     episode_cleanup = self.execution_manager.cleanup_episode(
                         episode_id,
                         {"manual_termination": True, "orphaned_check": True},
                     )
                     if not episode_cleanup:
                         cleanup_success = False
-                        logger.warning(f"Orphaned episode cleanup failed for {episode_id}")
+                        logger.warning(
+                            "Orphaned episode cleanup failed",
+                            extra={
+                                "event": "orphaned_episode_cleanup_failed",
+                                "session_id": session_id,
+                                "episode_id": episode_id,
+                            },
+                        )
                     else:
-                        logger.info(f"✅ Orphaned episode cleanup succeeded for {episode_id}")
+                        logger.info(
+                            "Orphaned episode cleanup succeeded",
+                            extra={
+                                "event": "orphaned_episode_cleanup_succeeded",
+                                "session_id": session_id,
+                                "episode_id": episode_id,
+                            },
+                        )
                 except Exception as e:
                     cleanup_success = False
-                    logger.warning(f"Orphaned episode cleanup error for {episode_id}: {e}")
+                    logger.warning(
+                        "Error during orphaned episode cleanup",
+                        extra={
+                            "event": "orphaned_episode_cleanup_error",
+                            "session_id": session_id,
+                            "episode_id": episode_id,
+                            "error": str(e),
+                            "error_type": type(e).__name__,
+                        },
+                    )
 
             if cleanup_success:
                 log_operation_success(logger, "Orphaned episode cleanup check", session_id)
             else:
-                logger.warning(f"Orphaned episode cleanup check reported failures for session {session_id}")
+                logger.warning(
+                    "Orphaned episode cleanup reported failures",
+                    extra={
+                        "event": "orphaned_episode_cleanup_partial",
+                        "session_id": session_id,
+                    },
+                )
         except Exception as e:
             log_operation_failure(logger, "Orphaned episode cleanup check", str(e), session_id)
 
@@ -537,10 +781,16 @@ class SessionManager:
         session.is_active = False
 
         # Remove session from active sessions
-        logger.info(f"Session {session_id} removed from active sessions")
+        logger.info(
+            "Session removed from active sessions",
+            extra={"event": "session_removed", "session_id": session_id},
+        )
         del self.active_sessions[session_id]
 
-        logger.info(f"Terminated session {session_id}")
+        logger.info(
+            "Session terminated",
+            extra={"event": "session_terminated", "session_id": session_id},
+        )
 
     async def start_episode(self, session_id: str, task_id: str) -> Episode:
         """
@@ -567,7 +817,16 @@ class SessionManager:
         # Handle automatic dependency resolution if task specifies depends_on_task_id
         effective_attach_to_episode_id = None
         if task.depends_on_task_id:
-            logger.info(f"Task {task_id} requires dependency on task {task.depends_on_task_id}")
+            logger.info(
+                "Task dependency detected",
+                extra={
+                    "event": "task_dependency_detected",
+                    "session_id": session_id,
+                    "episode_id": episode.episode_id,
+                    "task_id": task_id,
+                    "depends_on_task_id": task.depends_on_task_id,
+                },
+            )
 
             # Get dependency configuration from benchmark manager
             dependency_config = self.benchmark_manager.get_dependency_config()
@@ -593,8 +852,15 @@ class SessionManager:
                 # Attach the episodes at the episode manager level
                 self.episode_manager.attach_episode_to_episode(episode.episode_id, available_episode_id)
                 logger.info(
-                    f"Episode {episode.episode_id} automatically attached to {available_episode_id} "
-                    f"due to dependency on task {task.depends_on_task_id}"
+                    "Episode attached to dependency",
+                    extra={
+                        "event": "episode_dependency_attached",
+                        "session_id": session_id,
+                        "episode_id": episode.episode_id,
+                        "dependency_episode_id": available_episode_id,
+                        "task_id": task_id,
+                        "depends_on_task_id": task.depends_on_task_id,
+                    },
                 )
             else:
                 # Fail after retry period - required dependency not available
@@ -615,7 +881,17 @@ class SessionManager:
                 episode.episode_id, task, session_id=session_id, target_episode_id=effective_attach_to_episode_id
             )
         except Exception as e:
-            logger.error(f"Failed to configure execution environment for episode {episode.episode_id}: {e}")
+            logger.error(
+                "Failed to configure execution environment",
+                extra={
+                    "event": "episode_environment_configuration_failed",
+                    "session_id": session_id,
+                    "episode_id": episode.episode_id,
+                    "task_id": task_id,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+            )
             # Cleanup episode since execution environment configuration failed (including health checks)
             self.episode_manager.remove_episode_on_error(episode.episode_id, e)
 
@@ -648,7 +924,17 @@ class SessionManager:
         try:
             self.evaluation_manager.configure_for_task(task)
         except Exception as e:
-            logger.error(f"Failed to configure evaluation for task {task_id}: {e}")
+            logger.error(
+                "Failed to configure evaluation",
+                extra={
+                    "event": "episode_evaluation_configuration_failed",
+                    "session_id": session_id,
+                    "episode_id": episode.episode_id,
+                    "task_id": task_id,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+            )
             # Cleanup episode since evaluation configuration failed
             self.episode_manager.remove_episode_on_error(episode.episode_id, e)
             session.remove_active_episode(episode.episode_id)
@@ -663,9 +949,28 @@ class SessionManager:
         try:
             await self.evaluation_manager.log_episode_start(session_id, episode.episode_id, task_id)
         except Exception as e:
-            logger.warning(f"Failed to log episode start: {e}")
+            logger.warning(
+                "Failed to log episode start",
+                extra={
+                    "event": "episode_start_logging_failed",
+                    "session_id": session_id,
+                    "episode_id": episode.episode_id,
+                    "task_id": task_id,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+            )
 
-        logger.info(f"Started episode {episode.episode_id} for task {task_id} in session {session_id}")
+        logger.info(
+            "Episode started",
+            extra={
+                "event": "episode_started",
+                "session_id": session_id,
+                "episode_id": episode.episode_id,
+                "task_id": task_id,
+                "attached_episode_id": effective_attach_to_episode_id,
+            },
+        )
         return episode
 
     def get_benchmark_info(self) -> BenchmarkInfo:
@@ -748,33 +1053,99 @@ class SessionManager:
         try:
             evaluation_result = await self.evaluation_manager.evaluate_episode(completed_episode, task)
             logger.info(
-                f"Episode {episode_id} evaluated: score={evaluation_result.score}/{evaluation_result.max_score}"
+                "Episode evaluated",
+                extra={
+                    "event": "episode_evaluated",
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                    "task_id": task.task_id,
+                    "score": evaluation_result.score,
+                    "max_score": evaluation_result.max_score,
+                    "success": evaluation_result.success,
+                },
             )
         except Exception as e:
-            logger.error(f"Episode evaluation failed for {episode_id}: {e}")
+            logger.error(
+                "Episode evaluation failed",
+                extra={
+                    "event": "episode_evaluation_failed",
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                    "task_id": task.task_id,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+            )
             # Evaluation failure means episode failure - fail fast
             raise HTTPException(status_code=500, detail=f"Episode evaluation failed: {str(e)}")
 
         # Cleanup episode containers immediately when episode ends
         try:
-            logger.info(f"🧹 Starting episode cleanup for {episode_id}")
+            logger.info(
+                "Starting episode cleanup",
+                extra={
+                    "event": "episode_cleanup_start",
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                    "termination_reason": reason,
+                },
+            )
             episode_cleanup = self.execution_manager.cleanup_episode(episode_id, {"episode_end_reason": reason})
             if episode_cleanup:
-                logger.info(f"✅ Episode cleanup completed for {episode_id}")
+                logger.info(
+                    "Episode cleanup completed",
+                    extra={
+                        "event": "episode_cleanup_complete",
+                        "session_id": session_id,
+                        "episode_id": episode_id,
+                    },
+                )
             else:
-                logger.warning(f"❌ Episode cleanup failed for {episode_id}")
+                logger.warning(
+                    "Episode cleanup reported failure",
+                    extra={
+                        "event": "episode_cleanup_failed",
+                        "session_id": session_id,
+                        "episode_id": episode_id,
+                    },
+                )
 
             # Additional cleanup: ensure episode network is removed to prevent subnet pool exhaustion
             await self._cleanup_episode_network(episode_id)
         except Exception as e:
-            logger.error(f"Episode cleanup error for {episode_id}: {e}")
+            logger.error(
+                "Episode cleanup error",
+                extra={
+                    "event": "episode_cleanup_error",
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+            )
 
-        logger.info(f"Ended episode {episode_id} for session {session_id} with reason: {reason}")
+        logger.info(
+            "Episode ended",
+            extra={
+                "event": "episode_ended",
+                "session_id": session_id,
+                "episode_id": episode_id,
+                "reason": reason,
+            },
+        )
 
         # Handle cascade termination of attached episodes if requested
         if cascade_end_attached_episodes and completed_episode.attached_to_episode_id:
             attached_episode_id = completed_episode.attached_to_episode_id
-            logger.info(f"🔗 Cascade termination requested: ending attached episode {attached_episode_id}")
+            logger.info(
+                "Cascade termination requested",
+                extra={
+                    "event": "episode_cascade_termination_requested",
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                    "attached_episode_id": attached_episode_id,
+                },
+            )
 
             try:
                 # Check if the attached episode is still active
@@ -789,13 +1160,38 @@ class SessionManager:
                         submission=None,  # Attached episodes don't get submissions from dependent episodes
                         cascade_end_attached_episodes=False,  # Prevent infinite recursion
                     )
-                    logger.info(f"✅ Successfully cascade-ended attached episode {attached_episode_id}")
+                    logger.info(
+                        "Cascade-ended attached episode",
+                        extra={
+                            "event": "episode_cascade_termination_complete",
+                            "session_id": session_id,
+                            "episode_id": episode_id,
+                            "attached_episode_id": attached_episode_id,
+                            "cascade_reason": cascade_reason,
+                        },
+                    )
                 else:
                     logger.info(
-                        f"ℹ️ Attached episode {attached_episode_id} is already complete, skipping cascade termination"
+                        "Attached episode already complete; skipping cascade termination",
+                        extra={
+                            "event": "episode_cascade_skip",
+                            "session_id": session_id,
+                            "episode_id": episode_id,
+                            "attached_episode_id": attached_episode_id,
+                        },
                     )
             except Exception as e:
-                logger.error(f"❌ Failed to cascade-end attached episode {attached_episode_id}: {e}")
+                logger.error(
+                    "Failed to cascade-end attached episode",
+                    extra={
+                        "event": "episode_cascade_termination_failed",
+                        "session_id": session_id,
+                        "episode_id": episode_id,
+                        "attached_episode_id": attached_episode_id,
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    },
+                )
                 # Don't fail the main episode end operation due to cascade failures
 
         # Build response with evaluation result - success derived from evaluation (evaluation_result always present)
@@ -850,7 +1246,17 @@ class SessionManager:
                     session_id=session_id, episode_id=episode_id, action=action, result=command_result
                 )
             except Exception as e:
-                logger.warning(f"Failed to log action: {e}")
+                logger.warning(
+                    "Failed to log action telemetry",
+                    extra={
+                        "event": "episode_action_logging_failed",
+                        "session_id": session_id,
+                        "episode_id": episode_id,
+                        "tool": action.tool_name,
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    },
+                )
 
             # End episode if step indicates completion OR if EpisodeManager indicates termination
             if step_result.step.done:
@@ -864,7 +1270,17 @@ class SessionManager:
                 try:
                     await self.evaluation_manager.log_episode_end(session_id, EpisodeTerminationReason.COMPLETED)
                 except Exception as e:
-                    logger.warning(f"Failed to log episode end: {e}")
+                    logger.warning(
+                        "Failed to log episode completion",
+                        extra={
+                            "event": "episode_end_logging_failed",
+                            "session_id": session_id,
+                            "episode_id": episode_id,
+                            "termination_reason": EpisodeTerminationReason.COMPLETED,
+                            "error": str(e),
+                            "error_type": type(e).__name__,
+                        },
+                    )
             elif step_result.should_terminate:
                 termination_reason = step_result.termination_reason or EpisodeTerminationReason.TERMINATED
                 self.episode_manager.end_episode(episode_id, termination_reason)
@@ -877,31 +1293,89 @@ class SessionManager:
                 try:
                     await self.evaluation_manager.log_episode_end(session_id, termination_reason)
                 except Exception as e:
-                    logger.warning(f"Failed to log episode end: {e}")
-                logger.info(f"🏗️ Episode {episode_id} ended due to termination condition: {termination_reason}")
+                    logger.warning(
+                        "Failed to log episode termination",
+                        extra={
+                            "event": "episode_end_logging_failed",
+                            "session_id": session_id,
+                            "episode_id": episode_id,
+                            "termination_reason": termination_reason,
+                            "error": str(e),
+                            "error_type": type(e).__name__,
+                        },
+                    )
+                logger.info(
+                    "Episode ended due to termination condition",
+                    extra={
+                        "event": "episode_terminated_by_condition",
+                        "session_id": session_id,
+                        "episode_id": episode_id,
+                        "termination_reason": termination_reason,
+                    },
+                )
 
             return command_result
 
         except Exception as e:
-            logger.error(f"Command execution failed in session {session_id}, episode {episode_id}: {e}")
+            logger.error(
+                "Command execution failed",
+                extra={
+                    "event": "episode_command_execution_failed",
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                    "tool": action.tool_name,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+            )
 
             # Remove episode tracking and trigger immediate cleanup on any error
             try:
                 self.episode_manager.remove_episode_on_error(episode_id, e)
                 session.remove_active_episode(episode_id)
-                logger.info(f"Episode {episode_id} removed from tracking due to error")
+                logger.info(
+                    "Episode removed from tracking due to error",
+                    extra={
+                        "event": "episode_removed_after_error",
+                        "session_id": session_id,
+                        "episode_id": episode_id,
+                    },
+                )
 
                 # Trigger immediate container cleanup through ExecutionManager
                 cleanup_success = self.execution_manager.cleanup_session(
                     session_id, {"error": str(e), "error_type": type(e).__name__}
                 )
                 if cleanup_success:
-                    logger.info("Error-triggered container cleanup completed successfully")
+                    logger.info(
+                        "Error-triggered container cleanup completed",
+                        extra={
+                            "event": "session_error_cleanup_complete",
+                            "session_id": session_id,
+                            "episode_id": episode_id,
+                        },
+                    )
                 else:
-                    logger.warning("Error-triggered container cleanup reported failure")
+                    logger.warning(
+                        "Error-triggered container cleanup reported failure",
+                        extra={
+                            "event": "session_error_cleanup_failed",
+                            "session_id": session_id,
+                            "episode_id": episode_id,
+                        },
+                    )
 
             except Exception as cleanup_error:
-                logger.error(f"Failed to handle error cleanup: {cleanup_error}")
+                logger.error(
+                    "Failed to handle error cleanup",
+                    extra={
+                        "event": "session_error_cleanup_exception",
+                        "session_id": session_id,
+                        "episode_id": episode_id,
+                        "error": str(cleanup_error),
+                        "error_type": type(cleanup_error).__name__,
+                    },
+                )
 
             return CommandResult.error_result(error=str(e))
 
@@ -1048,51 +1522,135 @@ class SessionManager:
             HTTPException: If episode or task not found
             RuntimeError: If complete episode is missing submission
         """
-        logger.info(f"🔍 Getting evaluation criteria for session {session_id}, episode {episode_id}")
+        logger.info(
+            "Fetching evaluation criteria",
+            extra={
+                "event": "evaluation_criteria_requested",
+                "session_id": session_id,
+                "episode_id": episode_id,
+            },
+        )
 
         # Get episode data - no session validation needed since evaluation criteria
         # should be available for any episode (complete or incomplete) regardless of session state
         episode = self.episode_manager.get_episode_by_id(episode_id)
         if not episode:
-            logger.error(f"❌ Episode {episode_id} not found")
+            logger.error(
+                "Episode not found for evaluation criteria",
+                extra={
+                    "event": "evaluation_criteria_episode_missing",
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                },
+            )
             raise HTTPException(status_code=404, detail=f"Episode {episode_id} not found")
 
         logger.debug(
-            f"✅ Episode {episode_id} found: state={episode.state}, task_id={episode.task_id}, "
-            f"steps={len(episode.steps)}"
+            "Episode located for evaluation criteria",
+            extra={
+                "event": "evaluation_criteria_episode_found",
+                "session_id": session_id,
+                "episode_id": episode_id,
+                "episode_state": episode.state.value,
+                "task_id": episode.task_id,
+                "step_count": len(episode.steps),
+            },
         )
 
         # Check if episode has submission (for complete episodes)
         submission_value = getattr(episode, "submission", None)
         logger.debug(
-            f"📋 Episode {episode_id} submission value: {repr(submission_value)} (type: {type(submission_value)})"
+            "Episode submission value inspected",
+            extra={
+                "event": "evaluation_criteria_submission_value",
+                "session_id": session_id,
+                "episode_id": episode_id,
+                "submission_present": submission_value is not None,
+                "submission_type": type(submission_value).__name__,
+            },
         )
 
         has_submission = hasattr(episode, "submission") and episode.submission is not None and episode.submission != ""
         if episode.is_complete and not has_submission:
-            logger.error(f"❌ Complete episode {episode_id} missing submission attribute")
+            logger.error(
+                "Completed episode missing submission for evaluation",
+                extra={
+                    "event": "evaluation_criteria_missing_submission",
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                },
+            )
             raise RuntimeError(f"Complete episode {episode_id} missing required submission for evaluation")
 
         if has_submission:
             submission_preview = episode.submission[:100] if episode.submission else ""
-            logger.debug(f"✅ Episode {episode_id} has submission: {submission_preview}...")
+            logger.debug(
+                "Episode submission available",
+                extra={
+                    "event": "evaluation_criteria_submission_available",
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                    "submission_preview": submission_preview,
+                },
+            )
         else:
-            logger.debug(f"📝 Episode {episode_id} has no submission (incomplete episode)")
+            logger.debug(
+                "Episode missing submission",
+                extra={
+                    "event": "evaluation_criteria_submission_missing",
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                },
+            )
 
         # Get task information
         task = self.benchmark_manager.get_task(episode.task_id)
         if not task:
-            logger.error(f"❌ Task {episode.task_id} not found")
+            logger.error(
+                "Task not found for evaluation criteria",
+                extra={
+                    "event": "evaluation_criteria_task_missing",
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                    "task_id": episode.task_id,
+                },
+            )
             raise HTTPException(status_code=404, detail=f"Task {episode.task_id} not found")
 
-        logger.debug(f"✅ Task {episode.task_id} found: {task.title}")
+        logger.debug(
+            "Task located for evaluation criteria",
+            extra={
+                "event": "evaluation_criteria_task_found",
+                "session_id": session_id,
+                "episode_id": episode_id,
+                "task_id": task.task_id,
+                "task_title": task.title,
+            },
+        )
 
         # Ensure task has evaluation configuration
         if not task.evaluation_config:
-            logger.error(f"❌ Task {task.task_id} missing evaluation configuration")
+            logger.error(
+                "Task missing evaluation configuration",
+                extra={
+                    "event": "evaluation_criteria_missing_config",
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                    "task_id": task.task_id,
+                },
+            )
             raise RuntimeError(f"Task {task.task_id} missing evaluation configuration")
 
-        logger.debug(f"✅ Task evaluation config: strategy={task.evaluation_config.get('strategy')}")
+        logger.debug(
+            "Task evaluation configuration inspected",
+            extra={
+                "event": "evaluation_criteria_config_inspected",
+                "session_id": session_id,
+                "episode_id": episode_id,
+                "task_id": task.task_id,
+                "strategy": task.evaluation_config.get("strategy"),
+            },
+        )
 
         # Build task context with subtasks for step-level evaluation
         subtasks_data = [
@@ -1119,7 +1677,15 @@ class SessionManager:
         # Add judge messages for LLM evaluation if needed and submission is available
         if task.evaluation_config.get("strategy") == "llm_judge" and has_submission:
             try:
-                logger.debug(f"Rendering judge prompts for episode {episode_id} with task {task.task_id}")
+                logger.debug(
+                    "Rendering judge prompts",
+                    extra={
+                        "event": "evaluation_criteria_rendering_judge_prompts",
+                        "session_id": session_id,
+                        "episode_id": episode_id,
+                        "task_id": task.task_id,
+                    },
+                )
                 # Use PromptGenerator to render judge prompts
                 judge_payload = self.benchmark_manager.prompt_generator.render_judge_prompt_for_episode(task, episode)
 
@@ -1146,27 +1712,59 @@ class SessionManager:
                 )
 
                 logger.debug(
-                    f"✅ Successfully rendered judge messages for episode {episode_id} using GRADE format templates"
+                    "Rendered judge messages",
+                    extra={
+                        "event": "evaluation_criteria_judge_render_success",
+                        "session_id": session_id,
+                        "episode_id": episode_id,
+                        "task_id": task.task_id,
+                        "model": judge_payload.model,
+                    },
                 )
 
             except Exception as e:
-                logger.error(f"❌ Failed to render judge messages for episode {episode_id}: {type(e).__name__}: {e}")
                 logger.error(
-                    f"Task details: task_id={task.task_id}, eval_strategy={task.evaluation_config.get('strategy')}"
-                )
-                logger.error(
-                    f"Episode details: episode_id={episode_id}, state={episode.state}, steps={len(episode.steps)}"
+                    "Failed to render judge messages",
+                    extra={
+                        "event": "evaluation_criteria_judge_render_failed",
+                        "session_id": session_id,
+                        "episode_id": episode_id,
+                        "task_id": task.task_id,
+                        "strategy": task.evaluation_config.get("strategy"),
+                        "episode_state": episode.state.value,
+                        "step_count": len(episode.steps),
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    },
                 )
                 if hasattr(e, "__traceback__"):
                     import traceback
 
-                    logger.error(f"Stack trace: {traceback.format_exc()}")
+                    logger.error(
+                        "Judge message rendering stack trace",
+                        extra={
+                            "event": "evaluation_criteria_judge_render_trace",
+                            "session_id": session_id,
+                            "episode_id": episode_id,
+                            "task_id": task.task_id,
+                            "traceback": traceback.format_exc(),
+                        },
+                    )
                 # Fall back to None - client will need to handle this case
                 judge_messages = None
 
         # Build and return evaluation criteria response
         final_submission = episode.submission if has_submission else None
-        logger.debug(f"📤 Final submission for response: {repr(final_submission)} (type: {type(final_submission)})")
+        logger.debug(
+            "Final submission prepared for response",
+            extra={
+                "event": "evaluation_criteria_submission_prepared",
+                "session_id": session_id,
+                "episode_id": episode_id,
+                "submission_present": final_submission is not None,
+                "submission_type": type(final_submission).__name__ if final_submission is not None else "NoneType",
+            },
+        )
 
         evaluation_criteria = EvaluationCriteriaResponse(
             session_id=session_id,
@@ -1178,7 +1776,15 @@ class SessionManager:
             judge_messages=judge_messages,
         )
 
-        logger.info(f"Retrieved evaluation criteria for episode {episode_id} in session {session_id}")
+        logger.info(
+            "Evaluation criteria retrieved",
+            extra={
+                "event": "evaluation_criteria_retrieved",
+                "session_id": session_id,
+                "episode_id": episode_id,
+                "task_id": task.task_id,
+            },
+        )
         return evaluation_criteria
 
     async def save_evaluation_file(self, session_id: str, file: UploadFile) -> int:
@@ -1195,7 +1801,14 @@ class SessionManager:
         Raises:
             HTTPException: If session doesn't exist (404) or file save fails (500)
         """
-        logger.info(f"🔄 Saving evaluation file {file.filename} for session {session_id}")
+        logger.info(
+            "Saving evaluation file",
+            extra={
+                "event": "evaluation_file_save_start",
+                "session_id": session_id,
+                "filename": file.filename,
+            },
+        )
 
         # Validate session exists (raises HTTPException if not found)
         self._get_session(session_id)
@@ -1224,11 +1837,29 @@ class SessionManager:
             with open(file_path, "wb") as f:
                 f.write(file_content)
 
-            logger.info(f"✅ Successfully saved evaluation file {file.filename} ({file_size} bytes) to {file_path}")
+            logger.info(
+                "Evaluation file saved",
+                extra={
+                    "event": "evaluation_file_save_complete",
+                    "session_id": session_id,
+                    "filename": file.filename,
+                    "file_size_bytes": file_size,
+                    "path": str(file_path),
+                },
+            )
             return file_size
 
         except Exception as e:
-            logger.error(f"❌ Failed to save evaluation file {file.filename} for session {session_id}: {e}")
+            logger.error(
+                "Failed to save evaluation file",
+                extra={
+                    "event": "evaluation_file_save_failed",
+                    "session_id": session_id,
+                    "filename": file.filename,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+            )
             raise RuntimeError(f"Failed to save evaluation file: {str(e)}") from e
 
     async def override_episode_evaluation(
@@ -1252,21 +1883,50 @@ class SessionManager:
             HTTPException: If session or episode not found
             InvalidEvaluationRequestError: If evaluation data is invalid
         """
-        logger.info(f"🔄 Overriding evaluation for session {session_id}, episode {episode_id}")
+        logger.info(
+            "Overriding evaluation",
+            extra={
+                "event": "evaluation_override_requested",
+                "session_id": session_id,
+                "episode_id": episode_id,
+                "strategy": override_request.strategy,
+            },
+        )
 
         # Validate session exists
         session = self._get_session(session_id)
         if not session:
-            logger.error(f"❌ Session {session_id} not found")
+            logger.error(
+                "Session not found for evaluation override",
+                extra={
+                    "event": "evaluation_override_session_missing",
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                },
+            )
             raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
 
         # Validate episode exists
         episode = self.episode_manager.get_episode_by_id(episode_id)
         if not episode:
-            logger.error(f"❌ Episode {episode_id} not found")
+            logger.error(
+                "Episode not found for evaluation override",
+                extra={
+                    "event": "evaluation_override_episode_missing",
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                },
+            )
             raise HTTPException(status_code=404, detail=f"Episode {episode_id} not found")
 
-        logger.debug(f"✅ Session {session_id} and episode {episode_id} validated")
+        logger.debug(
+            "Session and episode validated for evaluation override",
+            extra={
+                "event": "evaluation_override_context_valid",
+                "session_id": session_id,
+                "episode_id": episode_id,
+            },
+        )
 
         # Convert evaluation_data dict to EpisodeEvaluationData object
         from .evaluation.models import EpisodeEvaluationData
@@ -1274,7 +1934,16 @@ class SessionManager:
         try:
             episode_eval_data = EpisodeEvaluationData(**override_request.evaluation_data)
         except Exception as e:
-            logger.error(f"❌ Failed to parse evaluation data: {e}")
+            logger.error(
+                "Failed to parse override evaluation data",
+                extra={
+                    "event": "evaluation_override_parse_failed",
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+            )
             raise HTTPException(status_code=422, detail=f"Invalid evaluation data: {e}")
 
         # Delegate to evaluation manager for override
@@ -1290,7 +1959,18 @@ class SessionManager:
             details=override_request.details,
         )
 
-        logger.info(f"✅ Successfully overridden evaluation for episode {episode_id} in session {session_id}")
+        logger.info(
+            "Evaluation override applied",
+            extra={
+                "event": "evaluation_override_applied",
+                "session_id": session_id,
+                "episode_id": episode_id,
+                "strategy": override_request.strategy,
+                "score": override_request.score,
+                "max_score": override_request.max_score,
+                "success": override_request.success,
+            },
+        )
         return evaluation_result
 
     def get_episode_by_id(self, episode_id: str) -> Optional[Episode]:
@@ -1330,8 +2010,12 @@ class SessionManager:
     async def _session_cleanup_loop(self) -> None:
         """Periodic cleanup of inactive sessions."""
         logger.info(
-            f"Starting session cleanup loop - timeout: {self.session_timeout_minutes}min, "
-            f"check interval: {self.cleanup_interval_minutes}min"
+            "Starting session cleanup loop",
+            extra={
+                "event": "session_cleanup_loop_start",
+                "session_timeout_minutes": self.session_timeout_minutes,
+                "cleanup_interval_minutes": self.cleanup_interval_minutes,
+            },
         )
 
         while not self.shutdown_event.is_set():
@@ -1348,7 +2032,14 @@ class SessionManager:
                     continue
 
             except Exception as e:
-                logger.error(f"Error in session cleanup loop: {e}")
+                logger.error(
+                    "Session cleanup loop error",
+                    extra={
+                        "event": "session_cleanup_loop_error",
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    },
+                )
                 # Wait a bit before retrying to avoid tight error loops
                 await asyncio.sleep(30)
 
@@ -1363,18 +2054,45 @@ class SessionManager:
 
             if time_since_activity > timeout_threshold:
                 logger.info(
-                    f"Session {session_id} timed out after " f"{time_since_activity.total_seconds():.1f}s of inactivity"
+                    "Session timed out due to inactivity",
+                    extra={
+                        "event": "session_timeout_detected",
+                        "session_id": session_id,
+                        "inactivity_seconds": round(time_since_activity.total_seconds(), 1),
+                        "timeout_threshold_minutes": self.session_timeout_minutes,
+                    },
                 )
                 sessions_to_cleanup.append(session_id)
 
         # Cleanup identified sessions
         for session_id in sessions_to_cleanup:
             try:
-                cleanup_logger.info(f"Cleaning up inactive session {session_id} due to timeout")
+                cleanup_logger.info(
+                    "Cleaning up inactive session due to timeout",
+                    extra={
+                        "event": "inactive_session_cleanup",
+                        "session_id": session_id,
+                        "timeout_minutes": self.session_timeout_minutes,
+                    },
+                )
                 await self.terminate_session(session_id)
-                logger.info(f"Cleaned up inactive session {session_id}")
+                logger.info(
+                    "Inactive session cleanup complete",
+                    extra={
+                        "event": "session_cleanup_complete",
+                        "session_id": session_id,
+                    },
+                )
             except Exception as e:
-                logger.error(f"Error cleaning up session {session_id}: {e}")
+                logger.error(
+                    "Error cleaning up inactive session",
+                    extra={
+                        "event": "session_cleanup_error",
+                        "session_id": session_id,
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    },
+                )
 
     def get_session_stats(self) -> Dict[str, Any]:
         """Get statistics about active sessions."""
@@ -1409,11 +2127,20 @@ class SessionManager:
         """Start permanent environment if configured through ExecutionManager lifecycle management."""
         permanent_env_name = self.benchmark_manager.config_loader.get_permanent_environment()
         if not permanent_env_name:
-            logger.info("No permanent environment configured")
+            logger.info(
+                "No permanent environment configured",
+                extra={"event": "permanent_environment_not_configured"},
+            )
             return
 
         try:
-            logger.info(f"🏗️ Starting permanent environment: {permanent_env_name}")
+            logger.info(
+                "Starting permanent environment",
+                extra={
+                    "event": "permanent_environment_start",
+                    "environment": permanent_env_name,
+                },
+            )
 
             # Build path to permanent environment compose file
             from pathlib import Path
@@ -1433,8 +2160,24 @@ class SessionManager:
                 permanent_compose_path
             )
 
-            logger.info(f"🏗️ Permanent environment '{permanent_env_name}' started successfully")
+            logger.info(
+                "Permanent environment started",
+                extra={
+                    "event": "permanent_environment_started",
+                    "environment": permanent_env_name,
+                    "compose_path": str(permanent_compose_path),
+                },
+            )
 
         except Exception as e:
-            logger.error(f"Failed to start permanent environment '{permanent_env_name}': {e}")
+            logger.error(
+                "Failed to start permanent environment",
+                extra={
+                    "event": "permanent_environment_start_failed",
+                    "environment": permanent_env_name,
+                    "compose_path": str(permanent_compose_path),
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+            )
             raise

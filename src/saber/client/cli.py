@@ -6,12 +6,16 @@ Command-line interface for SABER client operations including inspect-ai log anal
 """
 
 import json
+import logging
 import os
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Optional
 
 import click
+
+from ..logging_config import LogCategory, LoggingConfig, get_saber_logger, init_logging
 
 
 @click.group()  # type: ignore[misc]
@@ -689,6 +693,23 @@ def dump_full(log: Any, max_samples: int, pretty: bool) -> None:
             click.echo(f"   Config: {dict(log.plan.config)}")
 
 
+def _initialize_client_logging(*, verbose: bool, enable_file: bool, log_dir_override: Optional[Path]) -> LoggingConfig:
+    """Initialize SABER logging for the client CLI and return the active configuration."""
+
+    base_config = LoggingConfig.from_env()
+    target_level = logging.DEBUG if verbose else base_config.level
+    config = replace(base_config, level=target_level)
+
+    effective_enable_file = enable_file and base_config.enable_file
+    config = replace(config, enable_file=effective_enable_file)
+
+    if log_dir_override:
+        resolved_dir = log_dir_override.expanduser().resolve()
+        config = replace(config, log_dir=resolved_dir)
+
+    return init_logging(config, force=True)
+
+
 @cli.command("run")  # type: ignore[misc]
 @click.option(  # type: ignore[misc]
     "--config",
@@ -705,70 +726,22 @@ def run_command(config: Optional[Path], verbose: bool, no_log_file: bool) -> Non
     that specifies the agent, server endpoints, and evaluation parameters.
     """
     import asyncio
-    import logging
-    from datetime import datetime
 
     from .config_loader import SABERConfigLoader
     from .models import SABERConfig
 
-    def setup_client_logging(
-        verbose: bool = False, log_to_file: bool = True, log_dir: Optional[Path] = None
-    ) -> logging.Logger:
-        """Setup client logging with timestamped directory."""
-        if log_to_file:
-            # Create timestamped log directory
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-            if log_dir:
-                log_base_dir = Path(log_dir)
-            else:
-                log_base_dir = Path("logs")
-
-            # Create timestamped directory
-            timestamped_dir = log_base_dir / f"saber_client_{timestamp}"
-            timestamped_dir.mkdir(parents=True, exist_ok=True)
-
-            # Setup file logging
-            log_file = timestamped_dir / "saber_client.log"
-
-            # Configure root logger - this will catch ALL loggers including inspect_ai
-            root_logger = logging.getLogger()
-            root_logger.setLevel(logging.DEBUG if verbose else logging.INFO)
-            root_logger.handlers.clear()
-
-            # File handler - captures everything
-            file_handler = logging.FileHandler(log_file)
-            file_handler.setLevel(logging.DEBUG)
-            file_formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-            file_handler.setFormatter(file_formatter)
-            root_logger.addHandler(file_handler)
-
-            # Console handler - show important messages
-            console_handler = logging.StreamHandler()
-            console_handler.setLevel(logging.WARNING if not verbose else logging.INFO)
-            console_formatter = logging.Formatter("%(levelname)s - %(message)s")
-            console_handler.setFormatter(console_formatter)
-            root_logger.addHandler(console_handler)
-
-            click.echo(f"📝 Full logs will be written to: {log_file}")
-        else:
-            # Console only logging
-            root_logger = logging.getLogger()
-            root_logger.setLevel(logging.DEBUG if verbose else logging.INFO)
-            root_logger.handlers.clear()
-
-            console_handler = logging.StreamHandler()
-            console_handler.setLevel(logging.INFO if verbose else logging.WARNING)
-            console_formatter = logging.Formatter("%(levelname)s - %(message)s")
-            console_handler.setFormatter(console_formatter)
-            root_logger.addHandler(console_handler)
-
-        return logging.getLogger("saber.client")
-
-    # Setup logging FIRST - before any other operations
-    logger = setup_client_logging(
-        verbose=verbose, log_to_file=not no_log_file, log_dir=None  # Will be set from config if available
+    active_logging_config = _initialize_client_logging(
+        verbose=verbose,
+        enable_file=not no_log_file,
+        log_dir_override=None,
     )
+    logger = get_saber_logger(LogCategory.HARNESS, __name__)
+
+    if active_logging_config.enable_file:
+        log_file_path = active_logging_config.log_dir / active_logging_config.file_name
+        click.echo(f"📝 Logs will be written to: {log_file_path}")
+    else:
+        click.echo("📝 File logging disabled; console output only.")
 
     if config:
         # Use explicitly provided config path
@@ -789,31 +762,59 @@ def run_command(config: Optional[Path], verbose: bool, no_log_file: bool) -> Non
     try:
         saber_config: SABERConfig = SABERConfigLoader.load_from_file(config_file_path)
 
-        # Update logging with config's log directory if specified
         if saber_config.log_dir and not no_log_file:
-            logger.info(f"Updating log directory to: {saber_config.log_dir}")
-            # Re-setup logging with config's log directory
-            logger = setup_client_logging(verbose=verbose, log_to_file=True, log_dir=Path(saber_config.log_dir))
+            override_path = Path(saber_config.log_dir)
+            logger.info(
+                "Applying log directory override from configuration",
+                extra={"log_dir": str(override_path)},
+            )
+            active_logging_config = _initialize_client_logging(
+                verbose=verbose,
+                enable_file=True,
+                log_dir_override=override_path,
+            )
+            logger = get_saber_logger(LogCategory.HARNESS, __name__)
+            log_file_path = active_logging_config.log_dir / active_logging_config.file_name
+            click.echo(f"📝 Logs will be written to: {log_file_path}")
 
-        # Validate agents configuration (new format)
         if not saber_config.agents:
-            logger.error("No agents found in configuration")
+            logger.error(
+                "No agents configured in SABER configuration",
+                extra={"config_path": str(config_file_path)},
+            )
             click.echo("❌ No agents found in configuration", err=True)
             sys.exit(1)
 
-        logger.info(f"Loaded configuration from: {config_file_path}")
-        logger.info(f"Agent assignments: {len(saber_config.agents)} configured")
+        logger.info(
+            "Loaded SABER configuration",
+            extra={"config_path": str(config_file_path)},
+        )
+        logger.info(
+            "Agent assignments loaded",
+            extra={"assignment_count": len(saber_config.agents)},
+        )
         for assignment in saber_config.agents:
-            logger.info(f"  - Agent '{assignment.id}' handles tasks: {assignment.tasks}")
+            logger.info(
+                "Agent assignment configured",
+                extra={"agent_id": assignment.id, "tasks": assignment.tasks},
+            )
         if saber_config.session_config:
-            logger.info(f"SABER REST URL: {saber_config.session_config.base_url}")
-            logger.info(f"SABER MCP URL: {saber_config.session_config.mcp_server_url}")
+            logger.info(
+                "Session endpoints resolved",
+                extra={
+                    "rest_url": saber_config.session_config.base_url,
+                    "mcp_url": saber_config.session_config.mcp_server_url,
+                },
+            )
         else:
-            logger.info("No session config available")
+            logger.info("Session configuration not provided")
 
-    except Exception as e:
-        logger.error(f"Error loading config file: {e}")
-        click.echo(f"❌ Error loading config file: {e}", err=True)
+    except Exception as exc:
+        logger.exception(
+            "Failed to load SABER configuration",
+            extra={"config_path": str(config_file_path), "error": str(exc)},
+        )
+        click.echo(f"❌ Error loading config file: {exc}", err=True)
         sys.exit(1)
 
     logger.info("Starting SABER eval_async execution")
@@ -848,17 +849,13 @@ def run_command(config: Optional[Path], verbose: bool, no_log_file: bool) -> Non
         task_display().run_task_app(run_task_app)
         logger.info("inspect_ai task display completed")
     except asyncio.CancelledError:
-        # Normal cleanup - inspect-ai cancels tasks during shutdown
-        # This is expected behavior, don't show as error
-        logger.info("Task cancelled during shutdown (normal)")
-        pass
+        logger.info("Task cancelled during shutdown", extra={"cause": "inspect_ai_shutdown"})
     except KeyboardInterrupt:
-        # User interrupted - clean exit
-        logger.info("User interrupted execution")
+        logger.info("User interrupted execution", extra={"event": "keyboard_interrupt"})
         sys.exit(0)
-    except Exception as e:
-        logger.error(f"Unexpected error during execution: {e}", exc_info=True)
-        click.echo(f"❌ Unexpected error: {e}", err=True)
+    except Exception as exc:
+        logger.exception("Unexpected error during execution", extra={"error": str(exc)})
+        click.echo(f"❌ Unexpected error: {exc}", err=True)
         raise  # Re-raise for debugging
 
 

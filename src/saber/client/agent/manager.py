@@ -4,19 +4,19 @@ SABER Agent Manager - Direct Agent Creation
 Manager that creates agents directly during task creation.
 """
 
-import logging
 from types import TracebackType
 from typing import Dict, List, Optional, Set
 
 from inspect_ai import Task
 from inspect_ai.dataset import Sample
 
+from ...logging_config import get_agent_logger
 from ..client_session import ClientSessionManager
 from ..exceptions import AgentInitializationError
 from ..models import SABERConfig
 from .task_agent_resolver import TaskAgentResolver
 
-logger = logging.getLogger(__name__)
+logger = get_agent_logger(__name__)
 
 
 class AgentManager:
@@ -58,7 +58,13 @@ class AgentManager:
         self._available_task_ids: Optional[Set[str]] = None
         self._initialized = False
 
-        logger.debug("Initialized AgentManager with direct agent creation support")
+        logger.debug(
+            "Agent manager initialized",
+            extra={
+                "event": "agent_manager_initialized",
+                "has_task_ids": bool(config.task_ids),
+            },
+        )
 
     async def __aenter__(self, available_task_ids: Optional[List[str]] = None) -> "AgentManager":
         """
@@ -75,21 +81,40 @@ class AgentManager:
             AgentInitializationError: If initialization fails
         """
         if self._initialized:
-            logger.debug("AgentManager already initialized")
+            logger.debug(
+                "Agent manager already initialized",
+                extra={"event": "agent_manager_init_skipped"},
+            )
             return self
 
-        logger.info("Initializing SABER agent manager with direct agent creation")
+        logger.info(
+            "Initializing agent manager",
+            extra={"event": "agent_manager_initializing"},
+        )
 
         try:
             # Store available task IDs for agent resolution
             if available_task_ids is not None:
                 self._available_task_ids = set(available_task_ids)
-                logger.info(f"Using provided available task IDs: {available_task_ids}")
+                logger.info(
+                    "Using provided task identifiers",
+                    extra={
+                        "event": "agent_manager_tasks_provided",
+                        "task_count": len(self._available_task_ids),
+                        "tasks": sorted(self._available_task_ids),
+                    },
+                )
             else:
                 # Fallback: Get available task IDs from configuration
                 task_ids_from_config = self.config.task_ids or []
                 if not task_ids_from_config:
-                    logger.warning("No task_ids specified in configuration - extracting from agent assignments")
+                    logger.warning(
+                        "Missing explicit task identifiers; extracting from assignments",
+                        extra={
+                            "event": "agent_manager_tasks_missing",
+                            "assignment_count": len(self.config.agents),
+                        },
+                    )
                     # Extract task IDs from agents if not specified in config
                     task_set = set()
                     for assignment in self.config.agents:
@@ -110,13 +135,25 @@ class AgentManager:
             # Initialize the resolver with available task IDs
             self.resolver.initialize(list(self._available_task_ids))
 
-            logger.info(f"Agent manager ready to handle {len(self._available_task_ids)} tasks")
+            logger.info(
+                "Agent manager ready",
+                extra={
+                    "event": "agent_manager_ready",
+                    "task_count": len(self._available_task_ids),
+                },
+            )
             self._initialized = True
             return self
 
-        except Exception as e:
-            logger.error(f"Failed to initialize agent manager: {e}")
-            raise AgentInitializationError(f"Agent manager initialization failed: {e}") from e
+        except Exception as exc:
+            logger.error(
+                "Agent manager initialization failed",
+                extra={
+                    "event": "agent_manager_init_failed",
+                    "error": str(exc),
+                },
+            )
+            raise AgentInitializationError(f"Agent manager initialization failed: {exc}") from exc
 
     async def __aexit__(
         self, exc_type: Optional[type], exc_val: Optional[BaseException], exc_tb: Optional[TracebackType]
@@ -125,16 +162,28 @@ class AgentManager:
         Exit async context manager and cleanup agent manager resources.
         """
         if not self._initialized:
-            logger.debug("No agent manager resources to cleanup")
+            logger.debug(
+                "Agent manager cleanup skipped",
+                extra={"event": "agent_manager_cleanup_skipped"},
+            )
             return
 
-        logger.info("Cleaning up agent manager")
+        logger.info(
+            "Cleaning up agent manager",
+            extra={"event": "agent_manager_cleanup"},
+        )
 
         try:
             # Reset stored state
             self._available_task_ids = None
-        except Exception as e:
-            logger.error(f"Error during agent manager cleanup: {e}")
+        except Exception as exc:
+            logger.error(
+                "Agent manager cleanup error",
+                extra={
+                    "event": "agent_manager_cleanup_failed",
+                    "error": str(exc),
+                },
+            )
             # Don't raise - cleanup failures shouldn't break the main flow
         finally:
             self._initialized = False
@@ -161,7 +210,13 @@ class AgentManager:
         if not self._initialized or self._available_task_ids is None:
             raise RuntimeError("Agent manager not initialized - use as async context manager")
 
-        logger.info(f"Creating {len(agent_datasets)} agent-specific tasks with direct agent creation")
+        logger.info(
+            "Creating agent-specific tasks",
+            extra={
+                "event": "agent_manager_create_tasks",
+                "task_count": len(agent_datasets),
+            },
+        )
 
         tasks = []
         for agent_composite_key, dataset in agent_datasets.items():
@@ -169,7 +224,13 @@ class AgentManager:
             task = await self.create_agent_task(agent_composite_key, dataset)
             tasks.append(task)
 
-        logger.info(f"Created {len(tasks)} agent-specific tasks with direct agents")
+        logger.info(
+            "Agent-specific tasks created",
+            extra={
+                "event": "agent_manager_tasks_created",
+                "task_count": len(tasks),
+            },
+        )
         return tasks
 
     async def create_agent_task(self, agent_composite_key: str, dataset: List[Sample]) -> Task:
@@ -190,7 +251,14 @@ class AgentManager:
         if not self._initialized or self._available_task_ids is None:
             raise RuntimeError("Agent manager not initialized - use as async context manager")
 
-        logger.debug(f"Creating inspect_ai Task for agent group: {agent_composite_key}")
+        logger.debug(
+            "Creating inspect_ai task",
+            extra={
+                "event": "agent_manager_task_create",
+                "agent_composite_key": agent_composite_key,
+                "sample_count": len(dataset),
+            },
+        )
 
         try:
             # Validate dataset
@@ -201,15 +269,24 @@ class AgentManager:
             first_sample = dataset[0]
             task_id = first_sample.metadata.get("task_id")
             if not task_id:
+                available_keys = list(first_sample.metadata.keys())
                 raise AgentInitializationError(
-                    f"No task_id in sample metadata for agent group: {agent_composite_key}. "
-                    f"Available metadata keys: {list(first_sample.metadata.keys())}"
+                    "No task_id in sample metadata for agent group: "
+                    f"{agent_composite_key}. Available metadata keys: {available_keys}"
                 )
 
             # 3. Resolve agent assignment using class resolver
             assignment = self.resolver.get_assignment_for_task(task_id)
 
-            logger.info(f"Resolved agent '{assignment.id}' for task '{task_id}' in group '{agent_composite_key}'")
+            logger.info(
+                "Resolved agent assignment",
+                extra={
+                    "event": "agent_manager_assignment_resolved",
+                    "agent_id": assignment.id,
+                    "task_id": task_id,
+                    "agent_composite_key": agent_composite_key,
+                },
+            )
 
             # Create agent instance using SABERAgentFactory
             from ..inspect_ai.saber_scorer import saber_scorer
@@ -223,7 +300,14 @@ class AgentManager:
                 **assignment.kwargs,  # Pass agent-specific kwargs
             )
 
-            logger.info(f"Created agent instance '{assignment.id}' for group '{agent_composite_key}'")
+            logger.info(
+                "Agent instance created",
+                extra={
+                    "event": "agent_manager_agent_created",
+                    "agent_id": assignment.id,
+                    "agent_composite_key": agent_composite_key,
+                },
+            )
 
             # Extract task_ids from all samples to track which tasks are included
             task_ids = set()
@@ -250,13 +334,27 @@ class AgentManager:
             )
 
             logger.info(
-                f"Created agent task for '{assignment.id}' with {len(dataset)} samples from tasks: {list(task_ids)}"
+                "Agent task created",
+                extra={
+                    "event": "agent_manager_task_created",
+                    "agent_id": assignment.id,
+                    "agent_composite_key": agent_composite_key,
+                    "sample_count": len(dataset),
+                    "included_task_ids": sorted(task_ids),
+                },
             )
             return task
 
-        except Exception as e:
-            logger.error(f"Failed to create agent task for {agent_composite_key}: {e}")
-            raise AgentInitializationError(f"Agent task creation failed for {agent_composite_key}: {e}") from e
+        except Exception as exc:
+            logger.error(
+                "Agent task creation failed",
+                extra={
+                    "event": "agent_manager_task_failed",
+                    "agent_composite_key": agent_composite_key,
+                    "error": str(exc),
+                },
+            )
+            raise AgentInitializationError(f"Agent task creation failed for {agent_composite_key}: {exc}") from exc
 
     @property
     def is_initialized(self) -> bool:

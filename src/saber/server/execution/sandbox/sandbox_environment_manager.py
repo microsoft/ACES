@@ -1,5 +1,6 @@
-"""
-Sandbox environment manager for Docker execution environments.
+"""Sandbox environment manager for Docker execution environments.
+
+Logging Category: DOCKER
 
 This module manages Docker sandbox environments using static compose files,
 providing lifecycle management for episode-specific environments.
@@ -9,12 +10,13 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from ....logging_config import get_execution_logger
+from saber.logging_config import LogCategory, get_saber_logger
+
 from ..exceptions import SandboxExecutionError
 from .compose_orchestrator import ComposeOrchestrator
 from .environment_config import ComposeEnvironmentConfig
 
-logger = get_execution_logger(__name__)
+logger = get_saber_logger(LogCategory.DOCKER, __name__)
 
 
 class SandboxEnvironmentManager:
@@ -74,10 +76,14 @@ class SandboxEnvironmentManager:
         }
 
         logger.info(
-            f"Initialized SandboxEnvironmentManager for domain '{self.domain}' "
-            f"with environments path: {self.environments_base_path}"
+            "Sandbox environment manager initialized",
+            extra={
+                "event": "sandbox_env_manager_initialized",
+                "domain": self.domain,
+                "environments_path": str(self.environments_base_path),
+                "logs_directory": str(logs_dir),
+            },
         )
-        logger.info(f"Container logging enabled - logs directory: {logs_dir}")
         self._is_ready = True
 
     def is_ready(self) -> bool:
@@ -159,6 +165,17 @@ class SandboxEnvironmentManager:
             # Get compose file path for this environment
             compose_file_path = self._get_compose_file_path(sandbox_environment)
 
+            logger.info(
+                "Sandbox environment creation requested",
+                extra={
+                    "event": "sandbox_env_creation_requested",
+                    "episode_id": episode_id,
+                    "sandbox_environment": sandbox_environment,
+                    "compose_file": str(compose_file_path),
+                    "target_episode_id": target_episode_id,
+                },
+            )
+
             # Create new orchestrator for this episode with logging configuration
             orchestrator = ComposeOrchestrator(logging_config=self.logging_config)
 
@@ -178,11 +195,29 @@ class SandboxEnvironmentManager:
             self.active_orchestrators[episode_id] = orchestrator
             self.episode_compose_files[episode_id] = compose_file_path
 
-            logger.info(f"Created sandbox environment for episode {episode_id} using {sandbox_environment}")
+            logger.info(
+                "Sandbox environment created",
+                extra={
+                    "event": "sandbox_env_created",
+                    "episode_id": episode_id,
+                    "sandbox_environment": sandbox_environment,
+                    "compose_file": str(compose_file_path),
+                    "target_episode_id": target_episode_id,
+                },
+            )
             return True
 
         except Exception as e:
-            logger.error(f"Failed to create sandbox environment for episode {episode_id}: {e}")
+            logger.error(
+                "Sandbox environment creation failed",
+                extra={
+                    "event": "sandbox_env_creation_failed",
+                    "episode_id": episode_id,
+                    "sandbox_environment": sandbox_environment,
+                    "target_episode_id": target_episode_id,
+                    "error": str(e),
+                },
+            )
             raise SandboxExecutionError(f"Failed to create sandbox environment for episode {episode_id}: {e}")
 
     def get_episode_environment(self, episode_id: str) -> Optional[ComposeOrchestrator]:
@@ -211,7 +246,13 @@ class SandboxEnvironmentManager:
             SandboxExecutionError: If episode environment cannot be stopped
         """
         if episode_id not in self.active_orchestrators:
-            logger.warning(f"No active environment found for episode {episode_id}")
+            logger.warning(
+                "Sandbox environment stop skipped",
+                extra={
+                    "event": "sandbox_env_stop_skipped",
+                    "episode_id": episode_id,
+                },
+            )
             return False
 
         try:
@@ -224,11 +265,24 @@ class SandboxEnvironmentManager:
             del self.active_orchestrators[episode_id]
             del self.episode_compose_files[episode_id]
 
-            logger.info(f"Stopped sandbox environment for episode {episode_id}")
+            logger.info(
+                "Sandbox environment stopped",
+                extra={
+                    "event": "sandbox_env_stopped",
+                    "episode_id": episode_id,
+                },
+            )
             return True
 
         except Exception as e:
-            logger.error(f"Failed to stop sandbox environment for episode {episode_id}: {e}")
+            logger.error(
+                "Sandbox environment stop failed",
+                extra={
+                    "event": "sandbox_env_stop_failed",
+                    "episode_id": episode_id,
+                    "error": str(e),
+                },
+            )
             raise SandboxExecutionError(f"Failed to stop sandbox environment for episode {episode_id}: {e}")
 
     def cleanup_all_episodes(self) -> None:
@@ -242,9 +296,22 @@ class SandboxEnvironmentManager:
             try:
                 self.stop_episode_environment(episode_id)
             except Exception as e:
-                logger.error(f"Failed to cleanup episode {episode_id}: {e}")
+                logger.error(
+                    "Sandbox environment cleanup failed",
+                    extra={
+                        "event": "sandbox_env_cleanup_failed",
+                        "episode_id": episode_id,
+                        "error": str(e),
+                    },
+                )
 
-        logger.info("Cleaned up all sandbox environments")
+        logger.info(
+            "Sandbox environments cleanup completed",
+            extra={
+                "event": "sandbox_env_cleanup_completed",
+                "cleaned_episode_ids": episode_ids,
+            },
+        )
 
     def get_active_episodes(self) -> list[str]:
         """

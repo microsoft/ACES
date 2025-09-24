@@ -5,6 +5,8 @@ Converts SABER tasks from the server into inspect_ai Sample format for
 eval_async integration. This maintains SABER's task structure while
 providing clean inspect_ai dataset integration.
 
+Logging category: HARNESS.
+
 Key Principles:
 - Sample input = task description (NOT agent prompt - that's set when creating the agent)
 - Episode attempts = multiple samples (one per attempt for fresh starts)
@@ -18,14 +20,20 @@ Following SABER's philosophy:
 - No silent data loss during conversion
 """
 
-import logging
 from typing import List
 
 from inspect_ai.dataset import Sample
 
+from ...logging_config import (
+    LogCategory,
+    get_saber_logger,
+    log_operation_failure,
+    log_operation_start,
+    log_operation_success,
+)
 from ...models import TaskInfo
 
-logger = logging.getLogger(__name__)
+logger = get_saber_logger(LogCategory.HARNESS, __name__)
 
 
 async def create_saber_dataset(tasks_data: List[TaskInfo]) -> List[Sample]:
@@ -50,9 +58,15 @@ async def create_saber_dataset(tasks_data: List[TaskInfo]) -> List[Sample]:
     """
 
     if not tasks_data:
-        raise ValueError("tasks_data cannot be empty")
+        error = ValueError("tasks_data cannot be empty")
+        log_operation_failure(logger, "inspect_dataset_conversion", error)
+        raise error
 
-    logger.info(f"Converting {len(tasks_data)} SABER tasks to inspect_ai samples")
+    log_operation_start(
+        logger,
+        "inspect_dataset_conversion",
+        task_count=len(tasks_data),
+    )
 
     # Convert each SABER task to one or more inspect_ai Samples
     samples = []
@@ -64,20 +78,60 @@ async def create_saber_dataset(tasks_data: List[TaskInfo]) -> List[Sample]:
             for attempt in range(1, task_info.episode_attempts + 1):
                 sample = _convert_saber_task_to_sample(task_info, attempt)
                 samples.append(sample)
-                logger.debug(f"Converted task {task_info.task_id} attempt {attempt}")
+                logger.debug(
+                    "Task attempt converted",
+                    extra={
+                        "event": "inspect_task_attempt_converted",
+                        "task_id": task_info.task_id,
+                        "attempt": attempt,
+                    },
+                )
 
-        except Exception as e:
-            conversion_errors.append(f"Task {task_info.task_id}: {e}")
-            logger.warning(f"Failed to convert task {task_info.task_id}: {e}")
+        except Exception as exc:
+            conversion_errors.append(f"Task {task_info.task_id}: {exc}")
+            logger.error(
+                "Task conversion failed",
+                extra={
+                    "event": "inspect_task_conversion_failed",
+                    "task_id": task_info.task_id,
+                    "error": str(exc),
+                },
+            )
 
     # Fail fast if any conversions failed
     if conversion_errors:
-        error_summary = f"Failed to convert {len(conversion_errors)} tasks: {conversion_errors[:3]}"
-        if len(conversion_errors) > 3:
-            error_summary += f" (and {len(conversion_errors) - 3} more)"
-        raise RuntimeError(error_summary)
+        preview_failures = conversion_errors[:3]
+        additional_failures = max(len(conversion_errors) - 3, 0)
+        failure_message = (
+            "Failed to convert {count} SABER tasks: {preview}".format(
+                count=len(conversion_errors),
+                preview=preview_failures,
+            )
+            if additional_failures == 0
+            else "Failed to convert {count} SABER tasks: {preview} (and {extra} more)".format(
+                count=len(conversion_errors),
+                preview=preview_failures,
+                extra=additional_failures,
+            )
+        )
+        conversion_error = RuntimeError(failure_message)
+        log_operation_failure(
+            logger,
+            "inspect_dataset_conversion",
+            conversion_error,
+            event="inspect_dataset_conversion_failed",
+            failed_task_count=len(conversion_errors),
+            sample_failures=preview_failures,
+            additional_failures=additional_failures,
+        )
+        raise conversion_error
 
-    logger.info(f"Successfully converted {len(samples)} SABER task attempts to inspect_ai samples")
+    log_operation_success(
+        logger,
+        "inspect_dataset_conversion",
+        task_count=len(tasks_data),
+        sample_count=len(samples),
+    )
     return samples
 
 
@@ -121,7 +175,15 @@ def _convert_saber_task_to_sample(task_info: TaskInfo, attempt: int = 1) -> Samp
         "tool_call_limit": task_info.max_steps,
     }
 
-    logger.info(f"Task metadata for task {task_info.task_id}: {task_metadata}")
+    logger.debug(
+        "Task metadata prepared",
+        extra={
+            "event": "inspect_task_metadata_prepared",
+            "task_id": task_info.task_id,
+            "attempt": attempt,
+            "total_attempts": task_info.episode_attempts,
+        },
+    )
 
     # Create unique sample ID for each attempt
     sample_id = f"{task_info.task_id}_attempt_{attempt}"

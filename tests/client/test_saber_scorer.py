@@ -305,7 +305,7 @@ No objectives were completed in this submission.
         mock_criteria.judge_messages = None
         submission = "Test submission"
 
-        with pytest.raises(RuntimeError, match="LLM evaluation requires judge_messages"):
+        with pytest.raises(RuntimeError, match=r"requires judge_messages"):
             await _evaluate_llm(submission, mock_criteria, mock_task_state)
 
     @pytest.mark.asyncio
