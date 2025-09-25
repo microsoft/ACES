@@ -154,7 +154,10 @@ saber_tools = mcp_server_http(
 
 ## Migration from Legacy Architecture
 
-### Removed Components
+### Infrastructure Modernization
+- ❌ **Git submodule dependency** (replaced with MSEC ADO repository pip installation)
+- ❌ **UV-based Docker containers** (replaced with standardized pip installation)
+- ❌ **Execution container** (removed - functionality integrated into sandbox containers)
 - ❌ **Container-based execution** (replaced with native inspect_ai agent execution)
 - ❌ **SABERHarness** (replaced with `run_saber_eval_async`)
 - ❌ **Sidecar management** (replaced with inspect_ai's native MCP integration)
@@ -162,7 +165,10 @@ saber_tools = mcp_server_http(
 - ❌ **Container logging infrastructure** (replaced with inspect_ai logging)
 - ❌ **Manual MCP client management** (handled natively by inspect_ai)
 
-### New Components  
+### Modern Components  
+- ✅ **Standardized pip installation** from MSEC ADO repository (production-ready)
+- ✅ **Docker containers with pip-based builds** (no UV dependency in containers)
+- ✅ **Fail-fast dependency management** (immediate error on authentication failure)
 - ✅ **inspect_ai integration** via `run_saber_eval_async`
 - ✅ **Native MCP integration** via inspect_ai's `mcp_server_http`
 - ✅ **Type-safe Pydantic models** with fail-fast validation

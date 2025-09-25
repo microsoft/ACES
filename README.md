@@ -93,24 +93,24 @@ For detailed architecture documentation, see [docs/README.md](docs/README.md).
    source $HOME/.local/bin/env  # Add uv to PATH
    ```
 
-3. **Install dependencies (choose your pathway):**
+3. **Install dependencies (standardized pip installation):**
 
-   **Pathway 1: Local Development with External Directory (Default & Recommended)**
+   **Standard Installation (Default & Recommended for Production)**
    ```bash
-   # Initialize git submodule (usually already done)
-   git submodule update --init --recursive
-   
-   # Install with local inspect_ai (default configuration)
+   # Install SABER with inspect_ai from MSEC ADO repository (default configuration)
    uv sync --all-extras
    ```
 
-   **Pathway 2: ADO Repository Installation**  
+   **Alternative: Local Development with Git Submodule**  
    ```bash
-   # Edit pyproject.toml to use ADO repository:
-   # Uncomment: inspect-ai = { git = "https://MSECAIModels@dev.azure.com/..." }
-   # Comment: inspect-ai = { path = "./external/inspect_ai" }
+   # Edit pyproject.toml to use local development:
+   # Comment out: inspect-ai = { git = "https://MSECAIModels@dev.azure.com/..." }
+   # Uncomment:   inspect-ai = { path = "./external/inspect_ai" }
    
-   # Install with ADO repository source
+   # Initialize git submodule for local development
+   git submodule update --init --recursive
+   
+   # Install with local inspect_ai source
    uv sync --all-extras
    ```
 
@@ -128,6 +128,9 @@ For detailed architecture documentation, see [docs/README.md](docs/README.md).
 ### Server Documentation  
 - **[Server Architecture](docs/server/)**: SessionManager, REST API, and MCP API implementation
 - **[Benchmark Management](src/saber/server/benchmarks/)**: YAML-driven task and benchmark configuration
+
+### Development Documentation
+- **[Git Submodule Development](docs/GIT_SUBMODULE_DEVELOPMENT.md)**: How to use git submodules for local inspect_ai development
 - **[Command Registry](src/saber/server/execution/)**: Secure Docker sandbox execution framework
 
 ### System Documentation
@@ -167,15 +170,10 @@ uv run pre-commit run --all-files
 **Switching Between Installation Pathways:**
 
 ```bash
-# To switch to ADO repository (inspect_ai from MSEC ADO):
-# 1. Edit pyproject.toml [tool.uv.sources] section:
-#    Uncomment:   inspect-ai = { git = "https://MSECAIModels@dev.azure.com/..." }
-#    Comment out: inspect-ai = { path = "./external/inspect_ai" }
+# Standard installation uses MSEC ADO repository (default)
+# No additional configuration needed
 
-# 2. Reinstall with ADO source
-uv sync --all-extras
-
-# To switch back to local development (default):
+# To switch to local development with git submodule (alternative):
 # 1. Initialize submodule if not already done
 git submodule update --init --recursive
 
@@ -184,6 +182,14 @@ git submodule update --init --recursive
 #    Uncomment:   inspect-ai = { path = "./external/inspect_ai" }
 
 # 3. Reinstall with local source
+uv sync --all-extras
+
+# To switch back to standard ADO installation:
+# 1. Edit pyproject.toml [tool.uv.sources] section:
+#    Uncomment:   inspect-ai = { git = "https://MSECAIModels@dev.azure.com/..." }
+#    Comment out: inspect-ai = { path = "./external/inspect_ai" }
+
+# 2. Reinstall with ADO source
 uv sync --all-extras
 ```
 

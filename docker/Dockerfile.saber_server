@@ -27,10 +27,9 @@ RUN mkdir -p /app/config /app/data /app/logs
 
 # Set standard environment variables
 ENV PYTHONPATH=/app/src
-ENV SABER_LOG_LEVEL=DEBUG
 
 # Expose standard SABER ports
 EXPOSE 8000 8001
 
 # Default command - can be overridden by domain-specific Dockerfiles
-CMD ["python", "-m", "saber.server", "--start", "--verbose"]
+CMD ["python", "-m", "saber.server", "--start"]

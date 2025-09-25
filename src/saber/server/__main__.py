@@ -13,9 +13,11 @@ import logging
 import os
 import signal
 import sys
+from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
-from ..logging_config import LogCategory, get_saber_logger, init_logging
+from ..logging_config import LogCategory, LoggingConfig, get_saber_logger, init_logging
 from .session_manager import SessionManager
 
 logger = get_saber_logger(LogCategory.CONFIG, __name__)
@@ -240,18 +242,79 @@ async def start_server(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def setup_server_logging(domain_name: str, config_dir: str, verbose: bool = False) -> LoggingConfig:
+    """Configure logging for the SABER server with timestamped log files in server-logs directory."""
+
+    # Generate timestamped filename: saber-server-YYYY-MM-DD_HH-MM-SS.log
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    server_log_filename = f"saber-server-{timestamp}.log"
+
+    # Determine server logs directory
+    # If config_dir is absolute (like /app/config), use parent/logs/server-logs
+    # If config_dir is relative (like ./domains/excytin_demo/server/config), use relative path
+    config_path = Path(config_dir).resolve()
+
+    if str(config_path).startswith("/app/config"):
+        # Container environment: /app/config -> /app/logs/server-logs
+        server_logs_dir = Path("/app/logs/server-logs")
+    else:
+        # Local development: find server directory and use logs/server-logs
+        server_dir = config_path.parent  # config -> server
+        server_logs_dir = server_dir / "logs" / "server-logs"
+
+    # Create the server-logs directory if it doesn't exist
+    server_logs_dir.mkdir(parents=True, exist_ok=True)
+
+    # Build logging configuration
+    base_config = LoggingConfig.from_env()
+    server_config = LoggingConfig(
+        level=logging.DEBUG if verbose else base_config.level,
+        console=base_config.console,
+        structured=base_config.structured,
+        enable_file=True,  # Always enable file logging for server
+        log_dir=server_logs_dir,
+        file_name=server_log_filename,
+        max_bytes=base_config.max_bytes,
+        backup_count=base_config.backup_count,
+    )
+
+    return init_logging(server_config, force=True)
+
+
 def main() -> None:
     """Main CLI entry point."""
+    # Initialize basic logging first for early messages
     init_logging()
+
     parser = setup_cli()
     args = parser.parse_args()
 
-    # Configure logging level
-    if args.verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
-
     if not args.start:
         parser.error("Please specify --start to start the server")
+
+    # Find configuration directory early to set up proper logging
+    try:
+        config_dir = find_config_directory(args.domain, args.config_dir)
+    except FileNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Setup server-specific logging with timestamped files
+    logging_config = setup_server_logging(args.domain, config_dir, args.verbose)
+
+    # Recreate logger after reconfiguring logging
+    global logger
+    logger = get_saber_logger(LogCategory.CONFIG, __name__)
+
+    logger.info(
+        "SABER server logging initialized",
+        extra={
+            "event": "server_logging_initialized",
+            "domain": args.domain,
+            "log_file": str(logging_config.log_dir / logging_config.file_name),
+            "config_dir": config_dir,
+        },
+    )
 
     # Run the server
     try:

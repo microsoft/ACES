@@ -10,6 +10,7 @@ import logging
 import os
 import sys
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -693,19 +694,35 @@ def dump_full(log: Any, max_samples: int, pretty: bool) -> None:
             click.echo(f"   Config: {dict(log.plan.config)}")
 
 
-def _initialize_client_logging(*, verbose: bool, enable_file: bool, log_dir_override: Optional[Path]) -> LoggingConfig:
-    """Initialize SABER logging for the client CLI and return the active configuration."""
+def setup_client_logging(*, verbose: bool, enable_file: bool, log_dir_override: Optional[Path] = None) -> LoggingConfig:
+    """Setup SABER client logging with timestamped log files."""
 
+    # Create timestamped filename similar to server
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamped_filename = f"saber_client_{timestamp}.log"
+
+    # Get base configuration
     base_config = LoggingConfig.from_env()
     target_level = logging.DEBUG if verbose else base_config.level
-    config = replace(base_config, level=target_level)
 
-    effective_enable_file = enable_file and base_config.enable_file
-    config = replace(config, enable_file=effective_enable_file)
-
+    # Set up log directory
     if log_dir_override:
-        resolved_dir = log_dir_override.expanduser().resolve()
-        config = replace(config, log_dir=resolved_dir)
+        log_directory = log_dir_override.expanduser().resolve()
+    else:
+        log_directory = base_config.log_dir
+
+    # Create client-logs subdirectory similar to server-logs
+    client_logs_dir = log_directory / "client-logs"
+    client_logs_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create configuration with timestamped filename and custom directory
+    config = replace(
+        base_config,
+        level=target_level,
+        enable_file=enable_file and base_config.enable_file,
+        log_dir=client_logs_dir,
+        file_name=timestamped_filename,
+    )
 
     return init_logging(config, force=True)
 
@@ -730,7 +747,7 @@ def run_command(config: Optional[Path], verbose: bool, no_log_file: bool) -> Non
     from .config_loader import SABERConfigLoader
     from .models import SABERConfig
 
-    active_logging_config = _initialize_client_logging(
+    active_logging_config = setup_client_logging(
         verbose=verbose,
         enable_file=not no_log_file,
         log_dir_override=None,
@@ -768,7 +785,7 @@ def run_command(config: Optional[Path], verbose: bool, no_log_file: bool) -> Non
                 "Applying log directory override from configuration",
                 extra={"log_dir": str(override_path)},
             )
-            active_logging_config = _initialize_client_logging(
+            active_logging_config = setup_client_logging(
                 verbose=verbose,
                 enable_file=True,
                 log_dir_override=override_path,

@@ -6,4 +6,4 @@ FROM saber/server:latest
 COPY server/data /app/data
 
 # Set domain-specific command
-CMD ["python", "-m", "saber.server", "--start", "--domain", "excytin_demo", "--verbose"]
+CMD ["python", "-m", "saber.server", "--start", "--domain", "excytin_demo"]

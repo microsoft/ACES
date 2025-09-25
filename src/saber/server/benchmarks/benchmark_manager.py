@@ -309,7 +309,7 @@ class BenchmarkManager:
                             "task_id": task_id,
                             "prompt_type": prompt_type,
                             "template_file": template_file,
-                        }
+                        },
                     )
 
                 # Validate that we can build context for this task (ensures required config is present)
@@ -411,3 +411,22 @@ class BenchmarkManager:
             - max_retry_interval: Maximum retry interval
         """
         return self.config_loader.get_dependency_config()
+
+    def get_task_prompt(self, task_id: str, prompt_type: str = "instruction") -> str:
+        """
+        Get a specific rendered prompt for a task (backwards compatibility method).
+
+        Args:
+            task_id: ID of the task
+            prompt_type: Type of prompt to get ("instruction", "assistant", or "submit")
+
+        Returns:
+            Rendered prompt string
+
+        Raises:
+            TaskNotFoundException: If task is not found
+            PromptGenerationError: If prompt rendering fails
+        """
+        task = self.get_task(task_id)
+        rendered_prompts = self.prompt_generator.render_agent_prompts_for_task(task)
+        return rendered_prompts[prompt_type]

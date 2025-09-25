@@ -3,8 +3,8 @@
 
 # Server configuration (nested structure)
 server:
-  rest_url: "http://saber-excytin-server:8000"
-  mcp_url: "http://saber-excytin-server:8001"
+  rest_url: "http://localhost:8000"
+  mcp_url: "http://localhost:8001"
   client_id: "saber-client"
 
 # Task configuration
@@ -19,7 +19,7 @@ agents:
 
 # Execution configuration
 log_level: "INFO"
-log_dir: "./logs"
+log_dir: "domains/excytin_demo/client/logs"
 ui_enabled: true
 
 # Log upload configuration
