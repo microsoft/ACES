@@ -253,12 +253,13 @@ class TestSessionManagerAPI:
         episode_id = "test_episode_456"
 
         # Mock the episode manager to return a completed episode
+        from saber.server.base import EpisodeState
         mock_episode = MagicMock()
         mock_episode.episode_id = episode_id
         mock_episode.submission = "test submission"
         mock_episode.is_complete = True
         mock_episode.task_id = "test_task"
-        mock_episode.state = "completed"
+        mock_episode.state = EpisodeState.COMPLETED  # Use proper enum
         mock_episode.steps = []
         manager.episode_manager.get_episode_by_id = MagicMock(return_value=mock_episode)
 
@@ -269,6 +270,7 @@ class TestSessionManagerAPI:
         mock_task.description = "Test Description"
         mock_task.domain = "test"
         mock_task.evaluation_config = {"strategy": "llm_judge", "model": "gpt-4"}
+        mock_task.subtasks = []  # Required for task_context construction
         manager.benchmark_manager.get_task = MagicMock(return_value=mock_task)
 
         # Mock the prompt generator to return judge prompts
@@ -319,12 +321,13 @@ class TestSessionManagerAPI:
         episode_id = "test_episode_456"
 
         # Mock the episode manager to return a completed episode
+        from saber.server.base import EpisodeState
         mock_episode = MagicMock()
         mock_episode.episode_id = episode_id
         mock_episode.submission = "test submission"
         mock_episode.is_complete = True
         mock_episode.task_id = "test_task"
-        mock_episode.state = "completed"
+        mock_episode.state = EpisodeState.COMPLETED  # Use proper enum
         mock_episode.steps = []
         manager.episode_manager.get_episode_by_id = MagicMock(return_value=mock_episode)
 
@@ -335,6 +338,7 @@ class TestSessionManagerAPI:
         mock_task.description = "Test Description"
         mock_task.domain = "test"
         mock_task.evaluation_config = {"strategy": "llm_judge", "model": "gpt-4"}
+        mock_task.subtasks = []  # Required for task_context construction
         manager.benchmark_manager.get_task = MagicMock(return_value=mock_task)
 
         # Mock the prompt generator to raise an error
@@ -359,12 +363,13 @@ class TestSessionManagerAPI:
         episode_id = "test_episode_456"
 
         # Mock the episode manager to return a completed episode
+        from saber.server.base import EpisodeState
         mock_episode = MagicMock()
         mock_episode.episode_id = episode_id
         mock_episode.submission = "test submission"
         mock_episode.is_complete = True
         mock_episode.task_id = "test_task"
-        mock_episode.state = "completed"
+        mock_episode.state = EpisodeState.COMPLETED  # Use proper enum
         mock_episode.steps = []
         manager.episode_manager.get_episode_by_id = MagicMock(return_value=mock_episode)
 
@@ -375,6 +380,7 @@ class TestSessionManagerAPI:
         mock_task.description = "Test Description"
         mock_task.domain = "test"
         mock_task.evaluation_config = {"strategy": "llm_judge", "model": "gpt-4"}
+        mock_task.subtasks = []  # Required for task_context construction
         manager.benchmark_manager.get_task = MagicMock(return_value=mock_task)
 
         # Mock the prompt generator to raise AttributeError (like the bug we fixed)

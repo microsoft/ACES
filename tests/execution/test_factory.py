@@ -221,14 +221,14 @@ class TestExecutorFactory:
             assert len(tools) == 2
 
             # Check CLI tool
-            cli_tool = next(tool for tool in tools if "bash" in tool["name"])
-            assert cli_tool["description"] == "Execute shell commands"
-            assert "command" in cli_tool["inputSchema"]["properties"]
+            cli_tool = next(tool for tool in tools if "bash" in tool.name)
+            assert cli_tool.description == "Execute shell commands"
+            assert "command" in cli_tool.inputSchema["properties"]
 
             # Check Python tool
-            python_tool = next(tool for tool in tools if "python" in tool["name"])
-            assert python_tool["description"] == "Execute Python scripts"
-            assert "code" in python_tool["inputSchema"]["properties"]
+            python_tool = next(tool for tool in tools if "python" in tool.name)
+            assert python_tool.description == "Execute Python scripts"
+            assert "code" in python_tool.inputSchema["properties"]
 
     def test_get_all_mcp_tools_with_error(self, executor_factory):
         """Test getting MCP tools when one executor fails."""
@@ -249,7 +249,7 @@ class TestExecutorFactory:
 
             # Should return tools for successful executors only
             assert len(tools) >= 1
-            assert any("bash" in tool["name"] for tool in tools)
+            assert any("bash" in tool.name for tool in tools)
 
     def test_cleanup_all_executors(self, executor_factory):
         """Test cleanup of all executor instances."""
@@ -424,19 +424,19 @@ class TestExecutorFactory:
             # Test MCP tools for secure episode (CLI only)
             secure_tools = executor_factory.get_all_mcp_tools(episode_id="secure-episode-1")
             assert len(secure_tools) == 1
-            assert "secure_cli" in secure_tools[0]["name"]
+            assert "secure_cli" in secure_tools[0].name
 
             # Test MCP tools for dev episode (CLI + Python)
             dev_tools = executor_factory.get_all_mcp_tools(episode_id="dev-episode-1")
             assert len(dev_tools) == 2
-            tool_names = [tool["name"] for tool in dev_tools]
+            tool_names = [tool.name for tool in dev_tools]
             assert any("secure_cli" in name for name in tool_names)
             assert any("dev_python" in name for name in tool_names)
 
             # Test MCP tools for Python-only episode
             python_tools = executor_factory.get_all_mcp_tools(episode_id="python-only-episode")
             assert len(python_tools) == 1
-            assert "dev_python" in python_tools[0]["name"]
+            assert "dev_python" in python_tools[0].name
 
         # Test concurrent episode executor access patterns
         episodes_to_test = ["secure-episode-1", "dev-episode-1", "python-only-episode"]

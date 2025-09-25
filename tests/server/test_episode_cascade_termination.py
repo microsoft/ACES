@@ -38,7 +38,11 @@ class TestCascadeTermination:
             domain="test_domain",
             title="Independent Task",
             description="A task with no dependencies",
-            prompt_template_file="test.md",
+            prompts={
+                "instruction": "test_instruction.md",
+                "assistant": "test_assistant.md",
+                "submit": "test_submit.md"
+            },
             initial_context={"test": "context"},
             depends_on_task_id=None,
             episode_config={"max_steps": 10}
@@ -49,7 +53,11 @@ class TestCascadeTermination:
             domain="test_domain",
             title="Dependent Task",
             description="A task that depends on independent_task",
-            prompt_template_file="test.md",
+            prompts={
+                "instruction": "test_instruction.md",
+                "assistant": "test_assistant.md",
+                "submit": "test_submit.md"
+            },
             initial_context={"test": "context"},
             depends_on_task_id="independent_task",
             episode_config={"max_steps": 10}

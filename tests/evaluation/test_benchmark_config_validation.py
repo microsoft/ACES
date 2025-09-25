@@ -5,9 +5,50 @@ Unit tests for evaluation configuration validation in BenchmarkConfigLoader.
 import os
 import tempfile
 import pytest
+import yaml
 
 from saber.server.benchmarks.benchmark_config_loader import BenchmarkConfigLoader
 from saber.server.benchmarks.exceptions import InvalidTaskDefinitionException
+
+
+DEFAULT_PROMPTS = {
+    "instruction": "instructions/default.md",
+    "assistant": "assistants/default.md",
+    "submit": "submits/default.md",
+}
+
+
+def _normalize_yaml_with_prompts(raw_yaml: str, prompts: dict[str, str] | None = None) -> str:
+  """Upgrade legacy benchmark YAML to include required prompt mappings."""
+
+  data = yaml.safe_load(raw_yaml)
+  if not isinstance(data, dict):
+    return raw_yaml
+
+  prompts = prompts or DEFAULT_PROMPTS
+
+  # Ensure global defaults exist and have prompts
+  global_defaults = data.setdefault("global_defaults", {})
+  global_defaults.setdefault("prompts", prompts.copy())
+
+  # Ensure each task has explicit prompts mapping
+  for task in data.get("tasks", []):
+    if not isinstance(task, dict):
+      continue
+    template = task.pop("prompt_template_file", None)
+    if template:
+      task.setdefault(
+        "prompts",
+        {
+          "instruction": template,
+          "assistant": template,
+          "submit": template,
+        },
+      )
+    else:
+      task.setdefault("prompts", prompts.copy())
+
+  return yaml.safe_dump(data, sort_keys=False)
 
 
 class TestBenchmarkConfigLoaderEvaluation:
@@ -16,7 +57,7 @@ class TestBenchmarkConfigLoaderEvaluation:
     def test_valid_static_evaluation_config(self):
         """Test loading task with valid static evaluation configuration."""
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
-            f.write("""
+            f.write(_normalize_yaml_with_prompts("""
 domain: "test_domain"
 
 benchmark_config:
@@ -26,7 +67,10 @@ tasks:
   - task_id: "static_eval_task"
     title: "Static Evaluation Task"
     description: "Task with static evaluation"
-    prompt_template_file: "test_template.j2"
+    prompts:
+      instruction: "test_task_prompt.md"
+      assistant: "test_task_prompt.md"
+      submit: "test_task_prompt.md"
     execution_config:
       timeout: 300
       allowed_executors:
@@ -41,7 +85,7 @@ tasks:
       scoring:
         max_score: 1.0
     subtasks: []
-""")
+"""))
             temp_path = f.name
 
         try:
@@ -61,7 +105,7 @@ tasks:
     def test_valid_llm_evaluation_config(self):
         """Test loading task with valid LLM evaluation configuration."""
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
-            f.write("""
+            f.write(_normalize_yaml_with_prompts("""
 domain: "test_domain"
 
 benchmark_config:
@@ -88,7 +132,7 @@ tasks:
       scoring:
         max_score: 100.0
     subtasks: []
-""")
+"""))
             temp_path = f.name
 
         try:
@@ -107,7 +151,7 @@ tasks:
     def test_missing_evaluation_config(self):
         """Test that missing evaluation_config causes validation failure."""
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
-            f.write("""
+            f.write(_normalize_yaml_with_prompts("""
 domain: "test_domain"
 
 benchmark_config:
@@ -125,7 +169,7 @@ tasks:
     episode_config:
       max_steps: 10
     subtasks: []
-""")
+"""))
             temp_path = f.name
 
         try:
@@ -140,7 +184,7 @@ tasks:
     def test_invalid_evaluation_strategy(self):
         """Test that invalid evaluation strategy causes validation failure."""
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
-            f.write("""
+            f.write(_normalize_yaml_with_prompts("""
 domain: "test_domain"
 
 benchmark_config:
@@ -163,7 +207,7 @@ tasks:
       scoring:
         max_score: 1.0
     subtasks: []
-""")
+"""))
             temp_path = f.name
 
         try:
@@ -178,7 +222,7 @@ tasks:
     def test_missing_criteria_section(self):
         """Test that missing criteria section causes validation failure."""
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
-            f.write("""
+            f.write(_normalize_yaml_with_prompts("""
 domain: "test_domain"
 
 benchmark_config:
@@ -200,7 +244,7 @@ tasks:
       scoring:
         max_score: 1.0
     subtasks: []
-""")
+"""))
             temp_path = f.name
 
         try:
@@ -215,7 +259,7 @@ tasks:
     def test_invalid_max_score(self):
         """Test that invalid max_score causes validation failure."""
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
-            f.write("""
+            f.write(_normalize_yaml_with_prompts("""
 domain: "test_domain"
 
 benchmark_config:
@@ -239,7 +283,7 @@ tasks:
       scoring:
         max_score: -1.0
     subtasks: []
-""")
+"""))
             temp_path = f.name
 
         try:
@@ -254,7 +298,7 @@ tasks:
     def test_static_missing_expected_answers(self):
         """Test that static strategy without expected_answers fails validation."""
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
-            f.write("""
+            f.write(_normalize_yaml_with_prompts("""
 domain: "test_domain"
 
 benchmark_config:
@@ -277,7 +321,7 @@ tasks:
       scoring:
         max_score: 1.0
     subtasks: []
-""")
+"""))
             temp_path = f.name
 
         try:
@@ -292,7 +336,7 @@ tasks:
     def test_llm_optional_golden_answer(self):
         """Test that LLM strategy works with or without golden_answer."""
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
-            f.write("""
+            f.write(_normalize_yaml_with_prompts("""
 domain: "test_domain"
 
 benchmark_config:
@@ -318,7 +362,7 @@ tasks:
       scoring:
         max_score: 1.0
     subtasks: []
-""")
+"""))
             temp_path = f.name
 
         try:
@@ -335,7 +379,7 @@ tasks:
     def test_llm_missing_model(self):
         """Test that LLM strategy without model fails validation."""
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
-            f.write("""
+            f.write(_normalize_yaml_with_prompts("""
 domain: "test_domain"
 
 benchmark_config:
@@ -359,7 +403,7 @@ tasks:
       scoring:
         max_score: 1.0
     subtasks: []
-""")
+"""))
             temp_path = f.name
 
         try:

@@ -35,7 +35,7 @@ class TestTask:
             domain="test_domain",
             title="Test Task",
             description="A test task",
-            prompt_template_file="test_task_prompt.md",
+            prompts={"instruction": "test_task_prompt.md", "assistant": "test_task_prompt.md", "submit": "test_task_prompt.md"},
             subtasks=[subtask1, subtask2],
         )
 

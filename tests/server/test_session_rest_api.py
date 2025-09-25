@@ -144,6 +144,7 @@ class TestSessionRestAPI:
         # Mock task with proper initial_context
         mock_task = MagicMock()
         mock_task.initial_context = {"initial_data": "test"}
+        mock_task.depends_on_task_id = None  # No dependencies
         manager.benchmark_manager.get_task.return_value = mock_task
 
         # Mock episode
@@ -153,13 +154,15 @@ class TestSessionRestAPI:
         mock_episode.max_steps = 10
         mock_episode.metadata = {"test": "data"}
         mock_episode.state = EpisodeState.ACTIVE
+        mock_episode.attached_to_episode_id = None  # No attachment
 
         # Create session first
         create_response = client.post("/api/v1/session?client_id=test_client")
         session_id = create_response.json()["session_id"]
 
-        # Mock the start_episode method
-        with patch.object(manager, 'start_episode', return_value=mock_episode):
+        # Mock the start_episode method (async)
+        from unittest.mock import AsyncMock
+        with patch.object(manager, 'start_episode', new_callable=AsyncMock, return_value=mock_episode):
             # Start individual episode
             response = client.post(f"/api/v1/session/{session_id}/episodes?task_id=task_456")
 
@@ -185,7 +188,10 @@ class TestSessionRestAPI:
                 description="First test task",
                 episode_attempts=2,
                 subtask_count=3,
-                max_steps=100
+                max_steps=100,
+                instruction_prompt="Test instruction prompt 1",
+                assistant_prompt="Test assistant prompt 1",
+                submit_prompt="Test submit prompt 1"
             ),
             TaskInfo(
                 task_id="task_2",
@@ -193,7 +199,10 @@ class TestSessionRestAPI:
                 description="Second test task",
                 episode_attempts=1,
                 subtask_count=2,
-                max_steps=50
+                max_steps=50,
+                instruction_prompt="Test instruction prompt 2",
+                assistant_prompt="Test assistant prompt 2",
+                submit_prompt="Test submit prompt 2"
             )
         ]
 
@@ -207,7 +216,7 @@ class TestSessionRestAPI:
         # Mock the get_benchmark_info method
         with patch.object(manager, 'get_benchmark_info', return_value=mock_benchmark_info):
             # Call get benchmark endpoint
-            response = client.get("/api/v1/benchmark")
+            response = client.get("/api/v1/tasks")
 
             assert response.status_code == 200
             data = response.json()

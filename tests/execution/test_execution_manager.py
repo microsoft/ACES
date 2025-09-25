@@ -192,12 +192,14 @@ class TestExecutionManager:
 
     def test_to_mcp_tools(self, registry):
         """Test MCP tools conversion."""
-        # Mock the executor factory to return predefined tools
+        import mcp.types as mcp_types
+
+        # Mock the executor factory to return proper mcp.types.Tool objects
         mock_tools = [
-            {
-                "name": "cli_docker_cli",
-                "description": "Execute validated shell commands in Docker containers",
-                "inputSchema": {
+            mcp_types.Tool(
+                name="cli_docker_cli",
+                description="Execute validated shell commands in Docker containers",
+                inputSchema={
                     "type": "object",
                     "properties": {
                         "arguments": {"type": "string", "description": "Command to execute"},
@@ -205,11 +207,11 @@ class TestExecutionManager:
                     },
                     "required": ["arguments"],
                 },
-            },
-            {
-                "name": "python_python_script",
-                "description": "Execute Python scripts in Docker containers",
-                "inputSchema": {
+            ),
+            mcp_types.Tool(
+                name="python_python_script",
+                description="Execute Python scripts in Docker containers",
+                inputSchema={
                     "type": "object",
                     "properties": {
                         "arguments": {"type": "string", "description": "Python code to execute"},
@@ -217,7 +219,7 @@ class TestExecutionManager:
                     },
                     "required": ["arguments"],
                 },
-            },
+            ),
         ]
 
         with patch.object(registry._executor_factory, "get_all_mcp_tools", return_value=mock_tools):
@@ -226,15 +228,15 @@ class TestExecutionManager:
         assert len(mcp_tools) == 2
 
         # Check CLI tool
-        cli_tool = next(tool for tool in mcp_tools if tool["name"] == "cli_docker_cli")
-        assert cli_tool["description"] == "Execute validated shell commands in Docker containers"
-        assert "inputSchema" in cli_tool
-        assert "arguments" in cli_tool["inputSchema"]["properties"]
+        cli_tool = next(tool for tool in mcp_tools if tool.name == "cli_docker_cli")
+        assert cli_tool.description == "Execute validated shell commands in Docker containers"
+        assert cli_tool.inputSchema is not None
+        assert "arguments" in cli_tool.inputSchema["properties"]
 
         # Check Python tool
-        python_tool = next(tool for tool in mcp_tools if tool["name"] == "python_python_script")
-        assert python_tool["description"] == "Execute Python scripts in Docker containers"
-        assert "arguments" in python_tool["inputSchema"]["properties"]
+        python_tool = next(tool for tool in mcp_tools if tool.name == "python_python_script")
+        assert python_tool.description == "Execute Python scripts in Docker containers"
+        assert "arguments" in python_tool.inputSchema["properties"]
 
     def test_to_mcp_tools_with_cli_config(self, sample_config, temp_config_dir):
         """Test MCP tools conversion with CLI configuration."""

@@ -110,6 +110,7 @@ class TestSessionManagerIntegration:
         mock_task = MagicMock()
         mock_task.initial_context = {"test": "data"}
         mock_task.episode_config = {"max_steps": 20}  # Add episode_config to prevent early termination
+        mock_task.depends_on_task_id = None  # No dependencies
         manager.benchmark_manager.get_task.return_value = mock_task
         manager.episode_manager.start_episode.return_value = mock_episode
         # Also mock get_current_episode for execute_action calls
@@ -446,6 +447,7 @@ class TestSessionManagerErrorHandling:
             mock_task.task_id = task_id
             mock_task.execution_config = {"timeout": timeout}
             mock_task.initial_context = {}
+            mock_task.depends_on_task_id = None  # No dependencies
             manager.benchmark_manager.get_task = MagicMock(return_value=mock_task)
 
         # Start multiple episodes concurrently
@@ -547,6 +549,7 @@ class TestSessionManagerErrorHandling:
                 mock_task.task_id = task_id
                 mock_task.execution_config = {"timeout": 60 + len(task_name) * 10}  # Varying timeouts
                 mock_task.initial_context = {}
+                mock_task.depends_on_task_id = None  # No dependencies
                 manager.benchmark_manager.get_task = MagicMock(return_value=mock_task)
 
                 # Mock episode creation
@@ -637,6 +640,7 @@ class TestSessionManagerErrorHandling:
         urgent_mock_task.task_id = urgent_task_id
         urgent_mock_task.execution_config = {"timeout": 600}  # High priority, longer timeout
         urgent_mock_task.initial_context = {}
+        urgent_mock_task.depends_on_task_id = None  # No dependencies
         manager.benchmark_manager.get_task = MagicMock(return_value=urgent_mock_task)
 
         urgent_episode_id = "ep_forensics_team_urgent_malware_analysis"

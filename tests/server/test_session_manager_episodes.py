@@ -110,7 +110,12 @@ class TestSessionManagerEpisodes:
         # Mock task with proper initial_context
         mock_task = MagicMock()
         mock_task.initial_context = {"initial_data": "test"}
+        mock_task.depends_on_task_id = None  # No dependencies
         manager.benchmark_manager.get_task.return_value = mock_task
+
+        # Mock prompt generator to return expected prompts
+        mock_prompts = {"instruction": "test_prompt", "assistant": "test_assistant", "submit": "test_submit"}
+        manager.benchmark_manager.prompt_generator.render_agent_prompts_for_task.return_value = mock_prompts
 
         # Mock episode manager to return episode
         manager.episode_manager.start_episode.return_value = mock_episode
@@ -126,7 +131,7 @@ class TestSessionManagerEpisodes:
 
         # Verify episode manager was called
         manager.episode_manager.start_episode.assert_called_once_with(
-            session_id=session_id, task_id=task_id, initial_context={"initial_data": "test"}
+            session_id=session_id, task_id=task_id, initial_context={"initial_data": "test"}, task=mock_task
         )
 
         # Verify evaluation manager was called

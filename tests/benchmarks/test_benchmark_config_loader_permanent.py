@@ -59,7 +59,7 @@ class TestBenchmarkConfigLoaderPermanentSupport:
                     "task_id": "test_task_with_permanent",
                     "title": "Test Task with Permanent Environment",
                     "description": "Task that uses permanent environment",
-                    "prompt_template_file": "test_task_with_permanent_prompt.md",
+                    "prompts": {"instruction": "test_task_with_permanent_prompt.md", "assistant": "test_task_with_permanent_prompt.md", "submit": "test_task_with_permanent_prompt.md"},
                     "sandbox_environment": "test_sandbox",
                     "permanent_environment": "default",  # Reference to the global permanent environment
                     "execution_config": {
@@ -97,10 +97,15 @@ class TestBenchmarkConfigLoaderPermanentSupport:
                     ]
                 },
                 {
+                                    "prompts": {
+                                        "instruction": "test_task_prompt.md",
+                                        "assistant": "test_task_prompt.md",
+                                        "submit": "test_task_prompt.md"
+                                    },
                     "task_id": "test_task_no_permanent",
                     "title": "Test Task without Permanent Environment",
                     "description": "Task that doesn't use permanent environment",
-                    "prompt_template_file": "test_task_no_permanent_prompt.md",
+                    "prompts": {"instruction": "test_task_no_permanent_prompt.md", "assistant": "test_task_no_permanent_prompt.md", "submit": "test_task_no_permanent_prompt.md"},
                     "sandbox_environment": "test_sandbox",
                     "execution_config": {
                         "allowed_executors": ["bash", "python"]
@@ -202,10 +207,15 @@ class TestBenchmarkConfigLoaderPermanentSupport:
         """Test task validation with permanent environment fields."""
         # Create task with both sandbox and permanent environments
         enhanced_task = {
+                                    "prompts": {
+                                        "instruction": "test_task_prompt.md",
+                                        "assistant": "test_task_prompt.md",
+                                        "submit": "test_task_prompt.md"
+                                    },
             "task_id": "enhanced_task",
             "title": "Enhanced Task",
             "description": "Task with both environment types",
-            "prompt_template_file": "enhanced_task_prompt.md",
+            "prompts": {"instruction": "enhanced_task_prompt.md", "assistant": "enhanced_task_prompt.md", "submit": "enhanced_task_prompt.md"},
             "sandbox_environment": "test_sandbox",
             "permanent_environment": "default",
             "execution_config": {
@@ -267,10 +277,15 @@ class TestBenchmarkConfigLoaderPermanentSupport:
         """Test task that only specifies permanent environment."""
         # Create task with only permanent environment
         permanent_only_task = {
+                            "prompts": {
+                                "instruction": "test_task_prompt.md",
+                                "assistant": "test_task_prompt.md",
+                                "submit": "test_task_prompt.md"
+                            },
             "task_id": "permanent_only_task",
             "title": "Permanent Only Task",
             "description": "Task with only permanent environment",
-            "prompt_template_file": "permanent_only_task_prompt.md",
+            "prompts": {"instruction": "permanent_only_task_prompt.md", "assistant": "permanent_only_task_prompt.md", "submit": "permanent_only_task_prompt.md"},
             "permanent_environment": "default",
             "execution_config": {
                 "allowed_executors": ["bash", "python"]

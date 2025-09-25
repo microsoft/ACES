@@ -180,15 +180,15 @@ class TestToolsIntegration:
 
         assert len(mcp_tools) >= 2  # At least CLI and Python executors
 
-        # Find CLI and Python tools - they should be dictionaries now
-        cli_tool = next(tool for tool in mcp_tools if "bash" in tool["name"])
-        python_tool = next(tool for tool in mcp_tools if "python" in tool["name"])
+        # Find CLI and Python tools - they should be Tool objects now
+        cli_tool = next(tool for tool in mcp_tools if "bash" in tool.name)
+        python_tool = next(tool for tool in mcp_tools if "python" in tool.name)
 
         # Verify MCP format compliance for CLI tool
-        assert "description" in cli_tool
-        assert "inputSchema" in cli_tool
+        assert cli_tool.description is not None
+        assert cli_tool.inputSchema is not None
 
-        cli_schema = cli_tool["inputSchema"]
+        cli_schema = cli_tool.inputSchema
         # Handle both dict and MCPInputSchema object formats
         if hasattr(cli_schema, 'type'):
             # It's an MCPInputSchema object
@@ -206,10 +206,10 @@ class TestToolsIntegration:
             assert "command" in cli_schema["required"]
 
         # Verify MCP format compliance for Python tool
-        assert "description" in python_tool
-        assert "inputSchema" in python_tool
+        assert python_tool.description is not None
+        assert python_tool.inputSchema is not None
 
-        python_schema = python_tool["inputSchema"]
+        python_schema = python_tool.inputSchema
         # Handle both dict and MCPInputSchema object formats
         if hasattr(python_schema, 'type'):
             # It's an MCPInputSchema object

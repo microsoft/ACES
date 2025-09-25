@@ -131,6 +131,11 @@ class MockMultiEpisodeServer:
             ],
             "episode_context": {
                 "episode_id": episode_id,
+                        "prompts": {
+                            "instruction": "test_task_prompt.md",
+                            "assistant": "test_task_prompt.md",
+                            "submit": "test_task_prompt.md"
+                        },
                 "task_id": episode["task_id"],
                 "session_id": episode["session_id"]
             }
@@ -296,7 +301,6 @@ class MockMultiEpisodeAgent:
                     episode_id = line.split('"episode_id":')[1].strip().strip('",')
                 if '"task_id":' in line:
                     task_id = line.split('"task_id":')[1].strip().strip('",')
-
         return {"episode_id": episode_id, "task_id": task_id}
 
     async def _call_mock_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:

@@ -375,9 +375,10 @@ class TestConfigurationValidation:
 
 
 class TestEnvironmentStateValidation:
-    """Test fail-fast behavior for invalid environment states."""
+    """Test fail-fast behavior for environment state and lifecycle."""
 
-    def test_duplicate_episode_creation(self):
+    @patch('saber.server.execution.sandbox.sandbox_environment_manager.ComposeOrchestrator')
+    def test_duplicate_episode_creation(self, mock_orchestrator_class):
         """Test that creating duplicate episodes fails immediately."""
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yml', delete=False) as f:
             f.write("""
@@ -408,6 +409,10 @@ services:
                 config = {
                     "domain": "test"
                 }
+
+                # Mock the orchestrator to prevent actual Docker operations
+                mock_orchestrator = Mock()
+                mock_orchestrator_class.return_value = mock_orchestrator
 
                 manager = SandboxEnvironmentManager(config)
 

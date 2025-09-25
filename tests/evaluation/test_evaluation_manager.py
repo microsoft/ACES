@@ -35,7 +35,7 @@ class TestEvaluationManager:
             domain="test_domain",
             title="Test Task",
             description="A test task",
-            prompt_template_file="test_template.j2",
+            prompts={"instruction": "test_template.j2", "assistant": "test_template.j2", "submit": "test_template.j2"},
             evaluation_config={
                 "strategy": "static",
                 "criteria": {"expected_answers": ["flag{correct}"]},
@@ -51,7 +51,7 @@ class TestEvaluationManager:
             domain="test_domain",
             title="No Eval Task",
             description="Task without evaluation",
-            prompt_template_file="test_template.j2"
+            prompts={"instruction": "test_template.j2", "assistant": "test_template.j2", "submit": "test_template.j2"}
         )
 
     @pytest.fixture
@@ -97,7 +97,7 @@ class TestEvaluationManager:
             domain="test_domain",
             title="Invalid Task",
             description="Task with invalid strategy",
-            prompt_template_file="test_template.j2",
+            prompts={"instruction": "test_template.j2", "assistant": "test_template.j2", "submit": "test_template.j2"},
             evaluation_config={
                 "strategy": "invalid_strategy",
                 "criteria": {},
@@ -115,7 +115,7 @@ class TestEvaluationManager:
             domain="test_domain",
             title="Invalid Static Task",
             description="Task with invalid static config",
-            prompt_template_file="test_template.j2",
+            prompts={"instruction": "test_template.j2", "assistant": "test_template.j2", "submit": "test_template.j2"},
             evaluation_config={
                 "strategy": "static",
                 "criteria": {},  # Missing expected_answers
@@ -133,7 +133,7 @@ class TestEvaluationManager:
             domain="test_domain",
             title="Invalid Score Task",
             description="Task with invalid max_score",
-            prompt_template_file="test_template.j2",
+            prompts={"instruction": "test_template.j2", "assistant": "test_template.j2", "submit": "test_template.j2"},
             evaluation_config={
                 "strategy": "static",
                 "criteria": {"expected_answers": ["answer"]},

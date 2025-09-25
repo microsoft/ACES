@@ -81,6 +81,10 @@ class TestMultiDomainTemplateValidation:
 domain: "test_domain"
 
 global_defaults:
+  prompts:
+    instruction: "missing_template.md"
+    assistant: "missing_template.md"
+    submit: "missing_template.md"
   execution_config:
     allowed_executors: ["bash"]
     timeout: 30
@@ -100,7 +104,6 @@ tasks:
   - task_id: "test_task"
     title: "Test Task"
     description: "Test description"
-    prompt_template_file: "missing_template.md"
     evaluation_config:
       strategy: "static"
       criteria:
@@ -112,6 +115,9 @@ tasks:
             # Create prompts directory but no template file
             prompts_dir = temp_config / "prompts"
             prompts_dir.mkdir()
+
+            # NOTE: The missing_template.md file is intentionally not created
+            # to test template validation failure
 
             # This should fail fast during initialization
             with pytest.raises(TemplateValidationError) as exc_info:

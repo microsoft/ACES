@@ -36,8 +36,16 @@ global_defaults:
     timeout: 30
   episode_config:
     max_steps: 5
+  prompts:
+    instruction: "test_instruction.md"
+    assistant: "test_assistant.md"
+    submit: "test_submit.md"
   benchmark_config:
     episode_attempts: 3
+  prompts:
+    instruction: "test_instruction.md"
+    assistant: "test_assistant.md"
+    submit: "test_submit.md"
 
 benchmark_config:
   episode_attempts: 3
@@ -93,8 +101,16 @@ global_defaults:
     timeout: 30
   episode_config:
     max_steps: 6
+  prompts:
+    instruction: "test_instruction.md"
+    assistant: "test_assistant.md"
+    submit: "test_submit.md"
   benchmark_config:
     episode_attempts: 2
+  prompts:
+    instruction: "test_instruction.md"
+    assistant: "test_assistant.md"
+    submit: "test_submit.md"
 
 benchmark_config:
   episode_attempts: 2
@@ -223,6 +239,12 @@ tasks:
         yaml_content = """
 domain: test_domain
 
+global_defaults:
+  prompts:
+    instruction: "test_instruction.md"
+    assistant: "test_assistant.md"
+    submit: "test_submit.md"
+
 benchmark_config:
   episode_attempts: 4
 
@@ -291,17 +313,22 @@ tasks:
         yaml_content = """
 domain: test_domain
 
-benchmark_config:
-  episode_attempts: 1
-
 global_defaults:
   execution_config:
     allowed_executors: ["bash"]
     timeout: 45  # Required default timeout now enforced
+  prompts:
+    instruction: "test_instruction.md"
+    assistant: "test_assistant.md"
+    submit: "test_submit.md"
   benchmark_config:
     episode_attempts: 1
   episode_config:
     max_steps: 15  # Provide required episode max_steps default
+  prompts:
+    instruction: "test_instruction.md"
+    assistant: "test_assistant.md"
+    submit: "test_submit.md"
 
 tasks:
   - task_id: default_timeout_task
@@ -356,17 +383,21 @@ class TestBenchmarkConfigLoaderBenchmarkConfig:
         yaml_content = """
 domain: test_domain
 
-benchmark_config:
-  episode_attempts: 5
-  max_duration_minutes: 30
-  parallel_tasks: false
-
 global_defaults:
+  prompts:
+    instruction: "test_instruction.md"
+    assistant: "test_assistant.md"
+    submit: "test_submit.md"
   execution_config:
     timeout: 30
     allowed_executors: ["bash"]
   episode_config:
     max_steps: 40
+
+benchmark_config:
+  episode_attempts: 5
+  max_duration_minutes: 30
+  parallel_tasks: false
 
 tasks:
   - task_id: test_task
@@ -411,15 +442,19 @@ tasks:
         yaml_content = """
 domain: test_domain
 
-benchmark_config:
-  episode_attempts: 3
-
 global_defaults:
+  prompts:
+    instruction: "test_instruction.md"
+    assistant: "test_assistant.md"
+    submit: "test_submit.md"
   execution_config:
     timeout: 50
     allowed_executors: ["bash"]
   episode_config:
     max_steps: 60
+
+benchmark_config:
+  episode_attempts: 3
 
 tasks:
   - task_id: task_default
@@ -508,6 +543,12 @@ tasks:
         """Test that missing episode_attempts fails."""
         yaml_content = """
 domain: test_domain
+
+global_defaults:
+  prompts:
+    instruction: "test_instruction.md"
+    assistant: "test_assistant.md"
+    submit: "test_submit.md"
 
 benchmark_config:
   other_setting: true
@@ -599,15 +640,19 @@ tasks:
         yaml_content = """
 domain: test_domain
 
-benchmark_config:
-  episode_attempts: 3
-
 global_defaults:
+  prompts:
+    instruction: "test_instruction.md"
+    assistant: "test_assistant.md"
+    submit: "test_submit.md"
   execution_config:
     timeout: 40
     allowed_executors: ["bash"]
   episode_config:
     max_steps: 30
+
+benchmark_config:
+  episode_attempts: 3
 
 tasks:
   - task_id: test_task
@@ -655,6 +700,10 @@ global_defaults:
     timeout: 60
   episode_config:
     max_steps: 100
+  prompts:
+    instruction: "test_instruction.md"
+    assistant: "test_assistant.md"
+    submit: "test_submit.md"
   benchmark_config:
     episode_attempts: 3
 
@@ -738,6 +787,12 @@ tasks:
         yaml_content = """
 domain: test_domain
 
+global_defaults:
+  prompts:
+    instruction: "test_instruction.md"
+    assistant: "test_assistant.md"
+    submit: "test_submit.md"
+
 benchmark_config:
   episode_attempts: 3
 
@@ -768,9 +823,16 @@ tasks:
             loader = BenchmarkConfigLoader("test_domain")
             tasks = loader.load_tasks_from_file(temp_path)
 
-            # Test that empty global defaults work
+            # Test that global defaults contain prompts
             global_defaults = loader.get_global_defaults()
-            assert global_defaults == {}
+            expected_defaults = {
+                "prompts": {
+                    "instruction": "test_instruction.md",
+                    "assistant": "test_assistant.md",
+                    "submit": "test_submit.md"
+                }
+            }
+            assert global_defaults == expected_defaults
 
             # Test task loads correctly without global defaults
             task = tasks["test_task"]
@@ -825,6 +887,10 @@ tasks:
 domain: test_domain
 
 global_defaults:
+  prompts:
+    instruction: "test_instruction.md"
+    assistant: "test_assistant.md"
+    submit: "test_submit.md"
   benchmark_config:
     episode_attempts: 3
   execution_config:
@@ -888,6 +954,10 @@ global_defaults:
     timeout: 30
   episode_config:
     max_steps: 5
+  prompts:
+    instruction: "test_instruction.md"
+    assistant: "test_assistant.md"
+    submit: "test_submit.md"
   benchmark_config:
     episode_attempts: 3
 
@@ -958,6 +1028,10 @@ global_defaults:
     timeout: 30
   episode_config:
     max_steps: 5
+  prompts:
+    instruction: "test_instruction.md"
+    assistant: "test_assistant.md"
+    submit: "test_submit.md"
   benchmark_config:
     episode_attempts: 3
 
@@ -1063,6 +1137,10 @@ global_defaults:
     timeout: 30
   episode_config:
     max_steps: 5
+  prompts:
+    instruction: "test_instruction.md"
+    assistant: "test_assistant.md"
+    submit: "test_submit.md"
   benchmark_config:
     episode_attempts: 2
 
@@ -1192,6 +1270,10 @@ global_defaults:
     timeout: 30
   episode_config:
     max_steps: 5
+  prompts:
+    instruction: "test_instruction.md"
+    assistant: "test_assistant.md"
+    submit: "test_submit.md"
   benchmark_config:
     episode_attempts: 3
 
@@ -1230,6 +1312,10 @@ global_defaults:
   episode_config:
     max_steps: 10
     step_timeout: 300
+  prompts:
+    instruction: "test_instruction.md"
+    assistant: "test_assistant.md"
+    submit: "test_submit.md"
   benchmark_config:
     episode_attempts: 5
     timeout_strategy: "fail_fast"
@@ -1300,6 +1386,10 @@ global_defaults:
     retries: 3
   episode_config:
     max_steps: 5
+  prompts:
+    instruction: "test_instruction.md"
+    assistant: "test_assistant.md"
+    submit: "test_submit.md"
   benchmark_config:
     episode_attempts: 2
 
@@ -1365,6 +1455,10 @@ tasks:
 domain: test_domain
 
 global_defaults:
+  prompts:
+    instruction: "test_instruction.md"
+    assistant: "test_assistant.md"
+    submit: "test_submit.md"
   execution_config:
     allowed_executors: ["bash"]
     timeout: 30
@@ -1489,6 +1583,10 @@ global_defaults:
     timeout: 30
   episode_config:
     max_steps: 20
+  prompts:
+    instruction: "test_instruction.md"
+    assistant: "test_assistant.md"
+    submit: "test_submit.md"
   benchmark_config:
     episode_attempts: 3
 
@@ -1597,6 +1695,10 @@ global_defaults:
     timeout: 30
   episode_config:
     max_steps: 20
+  prompts:
+    instruction: "test_instruction.md"
+    assistant: "test_assistant.md"
+    submit: "test_submit.md"
   benchmark_config:
     episode_attempts: 3
 
@@ -1697,6 +1799,10 @@ global_defaults:
     timeout: 30
   episode_config:
     max_steps: 20
+  prompts:
+    instruction: "test_instruction.md"
+    assistant: "test_assistant.md"
+    submit: "test_submit.md"
   benchmark_config:
     episode_attempts: 3
 
@@ -1776,6 +1882,10 @@ global_defaults:
     timeout: 30
   episode_config:
     max_steps: 20
+  prompts:
+    instruction: "test_instruction.md"
+    assistant: "test_assistant.md"
+    submit: "test_submit.md"
   benchmark_config:
     episode_attempts: 3
 
@@ -1838,6 +1948,10 @@ global_defaults:
   execution_config:
     allowed_executors: ["bash"]
     timeout: 30
+  prompts:
+    instruction: "test_instruction.md"
+    assistant: "test_assistant.md"
+    submit: "test_submit.md"
   benchmark_config:
     episode_attempts: 3
 
@@ -1919,6 +2033,10 @@ global_defaults:
     max_steps: 20
     step_timeout: 600
     allow_interrupt: true
+  prompts:
+    instruction: "test_instruction.md"
+    assistant: "test_assistant.md"
+    submit: "test_submit.md"
   benchmark_config:
     episode_attempts: 3
     timeout_strategy: "graceful"
@@ -2181,6 +2299,10 @@ tasks:
 domain: precedence_test
 
 global_defaults:
+  prompts:
+    instruction: "test_instruction.md"
+    assistant: "test_assistant.md"
+    submit: "test_submit.md"
   execution_config:
     allowed_executors: ["bash"]
     timeout: 60
@@ -2258,6 +2380,10 @@ global_defaults:
     timeout: 30
   episode_config:
     max_steps: 10
+  prompts:
+    instruction: "test_instruction.md"
+    assistant: "test_assistant.md"
+    submit: "test_submit.md"
   benchmark_config:
     episode_attempts: 2
 

@@ -136,7 +136,11 @@ Task: {{ task_title }}
             domain="test_domain",
             title="Test Task",
             description="Test task description",
-            prompt_template_file="basic_prompt.md",
+            prompts={
+                "instruction": "basic_prompt.md",
+                "assistant": "basic_prompt.md",
+                "submit": "basic_prompt.md"
+            },
             subtasks=[subtask],
             execution_config={"timeout": 30},
             episode_config={"max_steps": 5},
@@ -169,14 +173,22 @@ Task: {{ task_title }}
     def test_render_prompt_for_task_success(self, temp_prompts_dir, sample_task):
         """Test successful prompt rendering."""
         generator = PromptGenerator(str(temp_prompts_dir))
-        rendered = generator.render_agent_prompt_for_task(sample_task)
+        rendered = generator.render_agent_prompts_for_task(sample_task)
 
-        assert "You are an agent for test_domain" in rendered
-        assert "TASK: Test Task" in rendered
-        assert "TIMEOUT: 30 seconds" in rendered
-        assert "MAX STEPS: 5" in rendered
-        assert "Test Subtask: Test subtask description" in rendered
-        assert "EXECUTORS: bash, python" in rendered
+        # Method now returns a dictionary with instruction, assistant, submit prompts
+        assert isinstance(rendered, dict)
+        assert "instruction" in rendered
+        assert "assistant" in rendered
+        assert "submit" in rendered
+
+        # Check content in instruction prompt (the main one)
+        instruction_prompt = rendered["instruction"]
+        assert "You are an agent for test_domain" in instruction_prompt
+        assert "TASK: Test Task" in instruction_prompt
+        assert "TIMEOUT: 30 seconds" in instruction_prompt
+        assert "MAX STEPS: 5" in instruction_prompt
+        assert "Test Subtask: Test subtask description" in instruction_prompt
+        assert "EXECUTORS: bash, python" in instruction_prompt
 
     def test_render_prompt_with_includes(self, temp_prompts_dir):
         """Test prompt rendering with template includes."""
@@ -185,17 +197,23 @@ Task: {{ task_title }}
             domain="test_domain",
             title="Include Test",
             description="Test with includes",
-            prompt_template_file="with_include.md",
+            prompts={
+                "instruction": "with_include.md",
+                "assistant": "with_include.md",
+                "submit": "with_include.md"
+            },
             execution_config={"timeout": 10},
             episode_config={"max_steps": 3},
             allowed_executors=["bash"],
         )
 
         generator = PromptGenerator(str(temp_prompts_dir))
-        rendered = generator.render_agent_prompt_for_task(task)
+        rendered = generator.render_agent_prompts_for_task(task)
 
-        assert "Task: Include Test" in rendered
-        assert "COMMON GUIDELINES: Follow security protocols" in rendered
+        # Check the instruction prompt (all prompts use the same template in this test)
+        instruction_prompt = rendered["instruction"]
+        assert "Task: Include Test" in instruction_prompt
+        assert "COMMON GUIDELINES: Follow security protocols" in instruction_prompt
 
     def test_render_prompt_missing_template_file(self, temp_prompts_dir):
         """Test prompt rendering fails with missing template file."""
@@ -204,7 +222,11 @@ Task: {{ task_title }}
             domain="test_domain",
             title="Missing Test",
             description="Test missing template",
-            prompt_template_file="nonexistent.md",
+            prompts={
+                "instruction": "nonexistent.md",
+                "assistant": "nonexistent.md",
+                "submit": "nonexistent.md"
+            },
             execution_config={"timeout": 10},
             episode_config={"max_steps": 3},
             allowed_executors=["bash"],
@@ -213,31 +235,31 @@ Task: {{ task_title }}
         generator = PromptGenerator(str(temp_prompts_dir))
 
         with pytest.raises(TemplateValidationError) as exc_info:
-            generator.render_agent_prompt_for_task(task)
+            generator.render_agent_prompts_for_task(task)
 
         # Updated assertion to reflect new error message formatting (lowercase start)
         assert "template file not found" in str(exc_info.value)
         assert "nonexistent.md" in str(exc_info.value)
 
     def test_render_prompt_missing_template_file_field(self, temp_prompts_dir):
-        """Test prompt rendering fails when task has no template file specified."""
-        task = Task(
-            task_id="no_template",
-            domain="test_domain",
-            title="No Template",
-            description="Test no template",
-            prompt_template_file="",  # Empty string
-            execution_config={"timeout": 10},
-            episode_config={"max_steps": 3},
-            allowed_executors=["bash"],
-        )
+        """Test task creation fails when prompts are empty (fail fast validation)."""
+        with pytest.raises(ValueError) as exc_info:
+            task = Task(
+                task_id="no_template",
+                domain="test_domain",
+                title="No Template",
+                description="Test no template",
+                prompts={
+                    "instruction": "",  # Empty string
+                    "assistant": "",
+                    "submit": ""
+                },
+                execution_config={"timeout": 10},
+                episode_config={"max_steps": 3},
+                allowed_executors=["bash"],
+            )
 
-        generator = PromptGenerator(str(temp_prompts_dir))
-
-        with pytest.raises(PromptGenerationError) as exc_info:
-            generator.render_agent_prompt_for_task(task)
-
-        assert "missing required prompt_template_file" in str(exc_info.value)
+        assert "prompt type 'instruction' must be a non-empty string" in str(exc_info.value)
 
     def test_render_prompt_template_syntax_error(self, temp_prompts_dir):
         """Test prompt rendering fails with template syntax error."""
@@ -246,7 +268,11 @@ Task: {{ task_title }}
             domain="test_domain",
             title="Syntax Error Test",
             description="Test syntax error",
-            prompt_template_file="syntax_error.md",
+            prompts={
+                "instruction": "syntax_error.md",
+                "assistant": "syntax_error.md",
+                "submit": "syntax_error.md"
+            },
             execution_config={"timeout": 10},
             episode_config={"max_steps": 3},
             allowed_executors=["bash"],
@@ -255,9 +281,9 @@ Task: {{ task_title }}
         generator = PromptGenerator(str(temp_prompts_dir))
 
         with pytest.raises(PromptGenerationError) as exc_info:
-            generator.render_agent_prompt_for_task(task)
+            generator.render_agent_prompts_for_task(task)
 
-        assert "Template rendering failed" in str(exc_info.value)
+        assert "template rendering failed" in str(exc_info.value)
 
     def test_validate_template_success(self, temp_prompts_dir):
         """Test successful template validation."""
@@ -292,14 +318,14 @@ Task: {{ task_title }}
                 domain="test",
                 title="Task 1",
                 description="Description 1",
-                prompt_template_file="basic_prompt.md"
+                prompts={"instruction": "basic_prompt.md", "assistant": "basic_prompt.md", "submit": "basic_prompt.md"}
             ),
             Task(
                 task_id="task2",
                 domain="test",
                 title="Task 2",
                 description="Description 2",
-                prompt_template_file="with_include.md"
+                prompts={"instruction": "with_include.md", "assistant": "with_include.md", "submit": "with_include.md"}
             )
         ]
 
@@ -308,33 +334,28 @@ Task: {{ task_title }}
         generator.validate_all_task_templates(tasks)
 
     def test_validate_all_task_templates_missing_field(self, temp_prompts_dir):
-        """Test validation fails when task missing template file field."""
-        tasks = [
-            Task(
-                task_id="good_task",
-                domain="test",
-                title="Good Task",
-                description="Good description",
-                prompt_template_file="basic_prompt.md"
-            ),
-            Task(
+        """Test validation fails when task creation fails due to empty prompts (fail fast)."""
+        good_task = Task(
+            task_id="good_task",
+            domain="test",
+            title="Good Task",
+            description="Good description",
+            prompts={"instruction": "basic_prompt.md", "assistant": "basic_prompt.md", "submit": "basic_prompt.md"}
+        )
+
+        # Test that creating a task with empty prompts fails fast
+        with pytest.raises(ValueError) as exc_info:
+            bad_task = Task(
                 task_id="bad_task",
                 domain="test",
                 title="Bad Task",
                 description="Bad description",
-                prompt_template_file=""  # Missing template
+                prompts={"instruction": "", "assistant": "", "submit": ""}  # Empty prompts
             )
-        ]
-
-        generator = PromptGenerator(str(temp_prompts_dir))
-
-        with pytest.raises(TemplateValidationError) as exc_info:
-            generator.validate_all_task_templates(tasks)
 
         error_msg = str(exc_info.value)
-        assert "Template validation failed" in error_msg
         assert "bad_task" in error_msg
-        assert "missing prompt_template_file" in error_msg
+        assert "prompt type 'instruction' must be a non-empty string" in error_msg
 
     def test_validate_all_task_templates_missing_files(self, temp_prompts_dir):
         """Test validation fails when template files don't exist."""
@@ -344,7 +365,7 @@ Task: {{ task_title }}
                 domain="test",
                 title="Missing Task",
                 description="Missing description",
-                prompt_template_file="missing.md"
+                prompts={"instruction": "missing.md", "assistant": "missing.md", "submit": "missing.md"}
             )
         ]
 
@@ -380,7 +401,7 @@ Task: {{ task_title }}
             domain="minimal_domain",
             title="Minimal Task",
             description="Minimal description",
-            prompt_template_file="basic.md"
+            prompts={"instruction": "basic.md", "assistant": "basic.md", "submit": "basic.md"}
         )
 
         generator = PromptGenerator("/tmp")
@@ -421,7 +442,7 @@ class TestJudgePromptContext:
             domain="cybersecurity",
             title="Security Incident Analysis",
             description="Analyze this security incident",
-            prompt_template_file="agent_template.md",
+            prompts={"instruction": "agent_template.md", "assistant": "agent_template.md", "submit": "agent_template.md"},
             evaluation_config={
                 "strategy": "llm_judge",
                 "criteria": {
@@ -668,7 +689,7 @@ Model: {{ model }}
             domain="cybersecurity",
             title="IP Address Detection",
             description="What is the malicious IP address?",
-            prompt_template_file="agent_template.md",
+            prompts={"instruction": "agent_template.md", "assistant": "agent_template.md", "submit": "agent_template.md"},
             evaluation_config={
                 "strategy": "llm_judge",
                 "criteria": {
@@ -721,7 +742,7 @@ Model: {{ model }}
             domain="test",
             title="Test Task",
             description="Test description",
-            prompt_template_file="agent_template.md",
+            prompts={"instruction": "agent_template.md", "assistant": "agent_template.md", "submit": "agent_template.md"},
             evaluation_config={
                 "strategy": "llm_judge",
                 "criteria": {
@@ -756,7 +777,7 @@ Model: {{ model }}
             domain="test",
             title="Static Task",
             description="Test description",
-            prompt_template_file="agent_template.md",
+            prompts={"instruction": "agent_template.md", "assistant": "agent_template.md", "submit": "agent_template.md"},
             evaluation_config={
                 "strategy": "static",  # Not llm_judge
                 "criteria": {"expected_answers": ["answer1"]}
@@ -780,7 +801,7 @@ Model: {{ model }}
             domain="test",
             title="No Config Task",
             description="Test description",
-            prompt_template_file="agent_template.md"
+            prompts={"instruction": "agent_template.md", "assistant": "agent_template.md", "submit": "agent_template.md"}
             # No evaluation_config
         )
 
@@ -1008,7 +1029,7 @@ Submission: {{ submission }}
             domain="cybersecurity",
             title="Integration Task",
             description="Test integration",
-            prompt_template_file="integration_agent.md",
+            prompts={"instruction": "integration_agent.md", "assistant": "integration_agent.md", "submit": "integration_agent.md"},
             execution_config={"timeout": 30},
             episode_config={"max_steps": 5},
             allowed_executors=["cli"],
@@ -1042,7 +1063,7 @@ Submission: {{ submission }}
             domain="test",
             title="Missing System Task",
             description="Test missing system",
-            prompt_template_file="integration_agent.md",
+            prompts={"instruction": "integration_agent.md", "assistant": "integration_agent.md", "submit": "integration_agent.md"},
             execution_config={"timeout": 30},
             episode_config={"max_steps": 5},
             allowed_executors=["cli"],
@@ -1074,7 +1095,7 @@ Submission: {{ submission }}
             domain="test",
             title="Missing User Task",
             description="Test missing user",
-            prompt_template_file="integration_agent.md",
+            prompts={"instruction": "integration_agent.md", "assistant": "integration_agent.md", "submit": "integration_agent.md"},
             execution_config={"timeout": 30},
             episode_config={"max_steps": 5},
             allowed_executors=["cli"],
@@ -1235,7 +1256,7 @@ Evaluate whether the agent's submission demonstrates successful completion of th
             domain="web_application_security",
             title="SQL Injection Vulnerability Assessment",
             description="Identify and exploit SQL injection vulnerability in the target application",
-            prompt_template_file=templates["agent_template"],
+            prompts={"instruction": templates["agent_template"], "assistant": templates["agent_template"], "submit": templates["agent_template"]},
             subtasks=[subtask],
             execution_config={"timeout": 300},
             episode_config={"max_steps": 10},
@@ -1255,14 +1276,15 @@ Evaluate whether the agent's submission demonstrates successful completion of th
         generator = PromptGenerator(str(prompts_dir))
 
         # Test agent prompt generation
-        agent_prompt = generator.render_agent_prompt_for_task(task)
-        assert "SQL Injection Vulnerability Assessment" in agent_prompt
-        assert "web_application_security" in agent_prompt
-        assert "300 seconds" in agent_prompt
-        assert "10" in agent_prompt
-        assert "sqli_lab_1" in agent_prompt
-        assert "cli, python, curl" in agent_prompt
-        assert "Reconnaissance Phase" in agent_prompt
+        agent_prompts = generator.render_agent_prompts_for_task(task)
+        instruction_prompt = agent_prompts["instruction"]
+        assert "SQL Injection Vulnerability Assessment" in instruction_prompt
+        assert "web_application_security" in instruction_prompt
+        assert "300 seconds" in instruction_prompt
+        assert "10" in instruction_prompt
+        assert "sqli_lab_1" in instruction_prompt
+        assert "cli, python, curl" in instruction_prompt
+        assert "Reconnaissance Phase" in instruction_prompt
 
         # Test judge prompt generation
         submission = "I found SQL injection using: ' UNION SELECT password FROM users WHERE username='admin'--"

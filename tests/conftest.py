@@ -190,6 +190,12 @@ def temp_config_dir_helper():
         tasks_dir = config_dir / "tasks"
         tasks_dir.mkdir()
 
+        default_prompts = {
+            "instruction": "instructions/default.md",
+            "assistant": "assistants/default.md",
+            "submit": "submits/default.md",
+        }
+
         # Create global.yaml with domain and benchmark_config
         global_config = {
             "domain": yaml_data.get("domain"),
@@ -197,6 +203,9 @@ def temp_config_dir_helper():
             "global_defaults": yaml_data.get("global_defaults", {}),
             "executors": yaml_data.get("executors", [])
         }
+
+        global_defaults = global_config.setdefault("global_defaults", {})
+        global_defaults.setdefault("prompts", default_prompts.copy())
 
         # Add allowed_executors from top-level to executors if exists
         if "allowed_executors" in yaml_data:
@@ -214,7 +223,21 @@ def temp_config_dir_helper():
             # For each task, create a separate file or group them
             for i, task in enumerate(yaml_data["tasks"]):
                 task_file = tasks_dir / f"task_{i+1}.yaml"
-                task_data = {"tasks": [task]}
+                task_copy = dict(task)
+                template = task_copy.pop("prompt_template_file", None)
+                if template:
+                    task_copy.setdefault(
+                        "prompts",
+                        {
+                            "instruction": template,
+                            "assistant": template,
+                            "submit": template,
+                        },
+                    )
+                else:
+                    task_copy.setdefault("prompts", default_prompts.copy())
+
+                task_data = {"tasks": [task_copy]}
                 task_file.write_text(yaml.dump(task_data, default_flow_style=False))
         else:
             # If no tasks, create an empty task file to satisfy the loader
@@ -241,6 +264,9 @@ def temp_config_dir_helper():
 
         # Create multi-prompt template files
         multi_prompt_templates = [
+            ("instructions/default.md", "# Default Instruction\n\nThis is the default instruction template for testing."),
+            ("assistants/default.md", "# Default Assistant\n\nThis is the default assistant template for testing."),
+            ("submits/default.md", "# Default Submit\n\nThis is the default submit template for testing."),
             ("instructions/security_analysis_instruction.md", "# Security Analysis Instruction\n\nYou are a security analyst. Your task is to..."),
             ("assistants/security_analysis_assistant.md", "# Security Analysis Assistant\n\nAs an assistant, help the agent by..."),
             ("submits/security_analysis_submit.md", "# Security Analysis Submit\n\nWhen submitting findings, ensure you..."),

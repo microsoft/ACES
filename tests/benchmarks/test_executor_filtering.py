@@ -38,7 +38,7 @@ class TestExecutorFiltering:
                     "task_id": "test_task",
                     "title": "Test Task",
                     "description": "Test description",
-                    "prompt_template_file": "test_task_prompt.md",
+                    "prompts": {"instruction": "test_task_prompt.md", "assistant": "test_task_prompt.md", "submit": "test_task_prompt.md"},
                     "execution_config": {
                         "allowed_executors": ["bash", "python"]
                     },
@@ -82,10 +82,15 @@ class TestExecutorFiltering:
             },
             "tasks": [
                 {
+                                    "prompts": {
+                                        "instruction": "test_task_prompt.md",
+                                        "assistant": "test_task_prompt.md",
+                                        "submit": "test_task_prompt.md"
+                                    },
                     "task_id": "test_task",
                     "title": "Test Task",
                     "description": "Test description",
-                    "prompt_template_file": "test_task_prompt.md",
+                    "prompts": {"instruction": "test_task_prompt.md", "assistant": "test_task_prompt.md", "submit": "test_task_prompt.md"},
                     "evaluation_config": {
                         "strategy": "static",
                         "criteria": {
@@ -161,10 +166,15 @@ class TestExecutorFiltering:
             "executors": "not_a_list",  # Should be a list
             "tasks": [
                 {
+                                    "prompts": {
+                                        "instruction": "test_task_prompt.md",
+                                        "assistant": "test_task_prompt.md",
+                                        "submit": "test_task_prompt.md"
+                                    },
                     "task_id": "test_task",
                     "title": "Test Task",
                     "description": "Test description",
-                    "prompt_template_file": "test_task_prompt.md",
+                    "prompts": {"instruction": "test_task_prompt.md", "assistant": "test_task_prompt.md", "submit": "test_task_prompt.md"},
                     "subtasks": [
                         {
                             "subtask_id": "test_subtask",
@@ -207,10 +217,15 @@ class TestExecutorFiltering:
             "executors": [],  # Empty list
             "tasks": [
                 {
+                                    "prompts": {
+                                        "instruction": "test_task_prompt.md",
+                                        "assistant": "test_task_prompt.md",
+                                        "submit": "test_task_prompt.md"
+                                    },
                     "task_id": "test_task",
                     "title": "Test Task",
                     "description": "Test description",
-                    "prompt_template_file": "test_task_prompt.md",
+                    "prompts": {"instruction": "test_task_prompt.md", "assistant": "test_task_prompt.md", "submit": "test_task_prompt.md"},
                     "execution_config": {
                         "allowed_executors": []  # Empty list should trigger validation error
                     },

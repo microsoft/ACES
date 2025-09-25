@@ -14,6 +14,7 @@ from saber.server.benchmarks.exceptions import (
     SubTaskNotFoundException,
     TaskNotFoundException,
 )
+from saber.server.benchmarks.prompt_generator import TemplateValidationError
 from saber.server.benchmarks.subtask import SubTask
 from saber.server.benchmarks.task import Task
 from saber.server.benchmarks.benchmark_config_loader import BenchmarkConfigLoader
@@ -43,7 +44,7 @@ class TestBenchmarkManagerCore:
     def test_load_tasks_from_directory_delegates_to_config_loader(self, mock_load, temp_config_dir):
         """Test that loading delegates to BenchmarkConfigLoader."""
         mock_task = Mock(spec=Task)
-        mock_task.prompt_template_file = "test_prompt.md"
+        mock_task.prompts={"instruction": "test_prompt.md", "assistant": "test_prompt.md", "submit": "test_prompt.md"}
         mock_task.task_id = "test_task"
         mock_task.evaluation_config = None  # No LLM judge config
         mock_tasks = {"test_task": mock_task}
@@ -888,6 +889,13 @@ domain: "incomplete_domain"
 benchmark_config:
   episode_attempts: 1
 
+global_defaults:
+  execution_config:
+    timeout: 300
+    allowed_executors: ["bash_executor"]
+  episode_config:
+    max_steps: 50
+
 executors:
   - bash_executor
 
@@ -898,15 +906,21 @@ tasks:
     prompts:
       instruction: "instructions/test_instruction.md"
       # Missing assistant and submit prompts
+    evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers: ["test"]
+      scoring:
+        max_score: 1.0
     subtasks: []
 """
 
         temp_config_dir = temp_config_dir_helper(tmp_path, incomplete_yaml)
 
-        # Should fail fast during BenchmarkManager initialization
-        with pytest.raises(InvalidTaskDefinitionException) as exc_info:
+        # Should fail fast during BenchmarkManager initialization (template validation)
+        with pytest.raises(TemplateValidationError) as exc_info:
             BenchmarkManager("incomplete_domain", temp_config_dir)
 
-        # Verify the error message indicates which prompt is missing
+        # Verify the error message indicates template validation failure
         error_message = str(exc_info.value)
-        assert "missing 'assistant' prompt" in error_message
+        assert "Template validation failed" in error_message

@@ -27,7 +27,7 @@ class TestStaticEvaluator:
             domain="test_domain",
             title="Test Task",
             description="A test task",
-            prompt_template_file="test_template.j2",
+            prompts={"instruction": "test_template.j2", "assistant": "test_template.j2", "submit": "test_template.j2"},
             allowed_executors=["test_executor"],
             evaluation_config={
                 "strategy": "static",
