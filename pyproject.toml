@@ -85,9 +85,16 @@ Issues = "https://github.com/saber-team/saber/issues"
 saber-server = "saber.server.cli:main"
 saber-client = "saber.client.cli:main"
 saber-mcp-service = "saber.mcp_service.__main__:cli"
+saber-domain = "saber.domain.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/saber"]
+include = [
+    "src/saber/domain/package_resources/**/*.yml",
+    "src/saber/domain/package_resources/**/*.yaml",
+    "src/saber/domain/package_resources/**/*.json",
+    "src/saber/domain/package_resources/**/*.example",
+]
 
 [tool.hatch.metadata]
 allow-direct-references = true
@@ -113,6 +120,7 @@ include = [
     "docs/",
     "tests/",
     "data/",
+    "src/saber/domain/package_resources/**",
 ]
 
 [tool.black]

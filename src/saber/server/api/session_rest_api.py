@@ -328,8 +328,9 @@ class SessionRestAPI:
 
         @self.app.get("/api/v1/health", response_model=HealthResponse)
         async def health_check() -> HealthResponse:
-            """Health check endpoint."""
-            return HealthResponse(status="healthy", domain=self.session_manager.domain_name)
+            """Enhanced health check endpoint with manifest metadata."""
+            health_data = self.session_manager.get_health_metadata()
+            return HealthResponse(**health_data)
 
         # Evaluation endpoints
         @self.app.get("/api/v1/session/{session_id}/evaluations/{episode_id}", response_model=EvaluationResponse)

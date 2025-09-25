@@ -145,6 +145,8 @@ class SessionManager:
         mcp_port: int = 3001,
         session_timeout_minutes: int = 30,
         cleanup_interval_minutes: int = 5,
+        manifest: Optional[Dict[str, Any]] = None,
+        manifest_path: Optional[str] = None,
     ):
         """
         Initialize the SessionManager.
@@ -158,6 +160,8 @@ class SessionManager:
             mcp_port: MCP server port
             session_timeout_minutes: Minutes of inactivity before a session times out
             cleanup_interval_minutes: Minutes between cleanup checks
+            manifest: Domain manifest dictionary (optional)
+            manifest_path: Path to domain manifest file (optional)
         """
         self.domain_name = domain_name
         self.config_dir = config_dir
@@ -170,6 +174,10 @@ class SessionManager:
         self.active_sessions: Dict[str, ClientSession] = {}
         self.cleanup_task: Optional[asyncio.Task[None]] = None
         self.shutdown_event = asyncio.Event()
+
+        # Manifest information for health endpoints
+        self.manifest = manifest or {}
+        self.manifest_path = manifest_path
 
         # Initialize server components
         logger.info(
@@ -215,8 +223,72 @@ class SessionManager:
                 "rest_port": port,
                 "mcp_host": mcp_host,
                 "mcp_port": mcp_port,
+                "manifest_available": bool(self.manifest),
             },
         )
+
+    def get_health_metadata(self) -> Dict[str, Any]:
+        """Get health metadata including manifest information."""
+        import hashlib
+        import os
+        from pathlib import Path
+
+        metadata: Dict[str, Any] = {
+            "status": "healthy",
+            "domain": self.domain_name,
+        }
+
+        # Add manifest information if available
+        if self.manifest:
+            domain_info = self.manifest.get("domain", {})
+            manifest_data: Dict[str, Any] = {
+                "capabilities": self.manifest.get("capabilities", []),
+            }
+
+            # Add optional string fields only if they exist
+            domain_slug = domain_info.get("slug")
+            if domain_slug is not None:
+                manifest_data["domain_slug"] = str(domain_slug)
+
+            schema_version = self.manifest.get("schemaVersion")
+            if schema_version is not None:
+                manifest_data["schema_version"] = str(schema_version)
+
+            if self.manifest_path is not None:
+                manifest_data["manifest_path"] = str(self.manifest_path)
+
+            metadata.update(manifest_data)
+
+        # Calculate config directory checksum for drift detection
+        try:
+            config_path = Path(self.config_dir)
+            if config_path.exists():
+                # Simple checksum based on modification times of key files
+                checksum_data = []
+                for file_path in config_path.rglob("*.yaml"):
+                    if file_path.is_file():
+                        stat = file_path.stat()
+                        checksum_data.append(f"{file_path.name}:{stat.st_mtime}:{stat.st_size}")
+
+                if checksum_data:
+                    config_checksum = hashlib.md5(":".join(sorted(checksum_data)).encode()).hexdigest()
+                    metadata["config_checksum"] = config_checksum
+        except Exception as e:
+            logger.warning(
+                "Failed to calculate config checksum", extra={"event": "config_checksum_failed", "error": str(e)}
+            )
+
+        # Add build metadata if available from environment
+        build_metadata: Dict[str, str] = {}
+        for env_var in ["GIT_SHA", "BUILD_TIMESTAMP", "IMAGE_TAG"]:
+            value = os.getenv(env_var)
+            if value:
+                build_metadata[env_var.lower()] = value
+
+        if build_metadata:
+            metadata["build_metadata"] = build_metadata
+
+        return metadata
 
     async def start_server(self) -> None:
         """Start both REST and MCP servers concurrently with session cleanup."""
@@ -1827,7 +1899,10 @@ class SessionManager:
             session_dir.mkdir(parents=True, exist_ok=True)
 
             # Save file to session directory
-            file_path = session_dir / file.filename
+            filename = file.filename
+            if filename is None:
+                raise ValueError("File must have a filename")
+            file_path = session_dir / filename
 
             # Read file content
             file_content = await file.read()

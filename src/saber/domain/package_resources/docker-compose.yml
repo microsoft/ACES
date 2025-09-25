@@ -1,0 +1,45 @@
+services:
+  server:
+    image: ${SERVER_IMAGE:?SERVER_IMAGE environment variable must be set}
+    container_name: ${DOMAIN}-saber-server
+    hostname: ${DOMAIN}-server
+    environment:
+      SABER_DOMAIN: ${DOMAIN}
+      SABER_CONFIG_DIR: /app/config
+      SABER_DOMAINS_ROOT: /app/domains
+      SABER_HOST: 0.0.0.0
+      SABER_PORT: ${REST_PORT:-8000}
+      SABER_MCP_PORT: ${MCP_PORT:-8001}
+      SABER_LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "${REST_PORT:-8000}:${REST_PORT:-8000}"
+      - "${MCP_PORT:-8001}:${MCP_PORT:-8001}"
+    volumes:
+      # Domain-specific mounts
+      - ${DOMAINS_ROOT:?DOMAINS_ROOT must be set}/${DOMAIN}/server/config:/app/config:ro
+      - ${DOMAINS_ROOT}/${DOMAIN}/server/logs:/app/logs:rw
+      - ${DOMAINS_ROOT}/${DOMAIN}/server/data:/app/data:rw
+      # Cross-domain visibility
+      - ${DOMAINS_ROOT}:/app/domains:ro
+      # Docker socket for sandbox management (always included)
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - domain-network
+    security_opt:
+      - no-new-privileges:false
+    user: root
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${REST_PORT:-8000}/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  domain-network:
+    name: ${DOMAIN}-saber-network
+
+volumes:
+  server-data:
+    name: ${DOMAIN}-saber-server-data

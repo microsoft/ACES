@@ -143,6 +143,12 @@ class HealthResponse(BaseModel):
 
     status: str = Field(description="Health status")
     domain: str = Field(description="Domain name")
+    domain_slug: Optional[str] = Field(default=None, description="Domain slug from manifest")
+    schema_version: Optional[str] = Field(default=None, description="Manifest schema version")
+    capabilities: Optional[Dict[str, Any]] = Field(default=None, description="Domain capabilities from manifest")
+    config_checksum: Optional[str] = Field(default=None, description="Configuration directory checksum")
+    manifest_path: Optional[str] = Field(default=None, description="Path to domain manifest")
+    build_metadata: Optional[Dict[str, Any]] = Field(default=None, description="Build metadata")
 
 
 class SessionSummary(BaseModel):
