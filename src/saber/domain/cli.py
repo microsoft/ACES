@@ -565,6 +565,16 @@ async def _ensure_server_running(
 
     # Handle build flag regardless of server status
     if build:
+        # Stop the server first since we're rebuilding critical images
+        status = orchestrator.get_domain_status(domain)
+        if status.get("running", False):
+            if dry_run:
+                click.echo(f"🛑 Would stop {domain} server for rebuild")
+            else:
+                click.echo(f"🛑 Stopping {domain} server for rebuild...")
+                orchestrator.stop_domain(domain, dry_run=False)
+                click.echo("✓ Server stopped")
+
         if dry_run:
             click.echo(f"🔨 Would rebuild {domain} images")
         else:

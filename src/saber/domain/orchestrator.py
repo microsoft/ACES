@@ -292,9 +292,24 @@ class DockerRunner:
         if not images_config:
             raise DockerError("No images configuration found in manifest")
 
-        # Ensure base images exist first
+        # Ensure base images exist first (always rebuilds)
         print("🔍 Checking base image dependencies...")
         self.ensure_base_images(dry_run)
+
+        # Remove existing domain images for rebuild
+        print("🔄 Removing existing domain images for rebuild...")
+        for image_name, image_config in images_config.items():
+            if isinstance(image_config, dict):
+                image_tag = image_config.get("tag")
+                if image_tag and self._docker_image_exists(image_tag):
+                    if not dry_run:
+                        try:
+                            subprocess.run(["docker", "rmi", image_tag], check=False, capture_output=True)
+                            print(f"  Removed {image_tag}")
+                        except Exception:
+                            pass
+                    else:
+                        print(f"  Would remove {image_tag}")
 
         # Build all images defined in manifest
         built_count = 0
@@ -353,7 +368,7 @@ class DockerRunner:
             print(f"✓ Successfully built {built_count} images for domain '{domain}'")
 
     def ensure_base_images(self, dry_run: bool = False) -> None:
-        """Ensure base images exist, build if missing.
+        """Remove and rebuild all base images.
 
         Args:
             dry_run: If True, show commands without executing
@@ -362,21 +377,24 @@ class DockerRunner:
             DockerError: If base image build fails
         """
         base_images_config = self._load_base_images_config()
-        missing_images = []
 
-        # Check which base images are missing
+        print("🔄 Removing existing base images for rebuild...")
+        # Remove all existing base images
         for image_name, image_config in base_images_config["images"].items():
             image_tag = image_config["tag"]
-            if not self._docker_image_exists(image_tag):
-                missing_images.append((image_name, image_config))
+            if self._docker_image_exists(image_tag):
+                if not dry_run:
+                    try:
+                        subprocess.run(["docker", "rmi", image_tag], check=False, capture_output=True)
+                        print(f"  Removed {image_tag}")
+                    except Exception:
+                        pass  # Image might be in use, will fail later if needed
+                else:
+                    print(f"  Would remove {image_tag}")
 
-        if not missing_images:
-            print("✓ All base images are available")
-            return
+        print(f"🔨 Building {len(base_images_config['images'])} base images...")
 
-        print(f"🔨 Building {len(missing_images)} missing base images...")
-
-        for image_name, image_config in missing_images:
+        for image_name, image_config in base_images_config["images"].items():
             dockerfile = image_config["dockerfile"]
             image_tag = image_config["tag"]
             labels = image_config.get("labels", {})
@@ -391,50 +409,42 @@ class DockerRunner:
     def _build_base_image_from_package(
         self, image_name: str, image_tag: str, package_path: str, labels: Dict[str, str], dry_run: bool
     ) -> None:
-        """Build base image from packaged Dockerfile with repo root context."""
-        import tempfile
+        """Build base image from packaged Dockerfile using stdin (no temporary files).
 
+        This approach pipes the Dockerfile content directly to docker build via stdin,
+        avoiding the need to create temporary files in the repo root.
+        """
         try:
             # Use repo root as build context to access external/saber
             repo_root = self.domains_root.parent
 
-            # Create temporary Dockerfile in repo root
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".dockerfile", dir=repo_root, delete=False
-            ) as temp_dockerfile:
-                # Copy Dockerfile content from package resources
-                dockerfile_resource = files(saber.domain.package_resources) / package_path
+            # Read Dockerfile content from package resources
+            dockerfile_resource = files(saber.domain.package_resources) / package_path
+            dockerfile_content = dockerfile_resource.read_text()
 
-                with dockerfile_resource.open("r") as src:
-                    temp_dockerfile.write(src.read())
+            # Prepare build command with Dockerfile from stdin (-f -)
+            cmd = ["docker", "build", "-f", "-", "-t", image_tag]
 
-                temp_dockerfile_path = Path(temp_dockerfile.name)
+            # Add labels
+            for key, value in labels.items():
+                cmd.extend(["--label", f"{key}={value}"])
 
-            try:
-                # Prepare build command with repo root as context
-                cmd = ["docker", "build", "-f", str(temp_dockerfile_path), "-t", image_tag, str(repo_root)]
+            # Add build context (repo root)
+            cmd.append(str(repo_root))
 
-                # Add labels
-                for key, value in labels.items():
-                    cmd.extend(["--label", f"{key}={value}"])
+            if dry_run:
+                print(f"Would build base image {image_name}: {' '.join(cmd)}")
+                print(f"Dockerfile content from: {package_path}")
+                return
 
-                if dry_run:
-                    print(f"Would build base image {image_name}: {' '.join(cmd)}")
-                    return
-
-                print(f"Building base image: {image_tag}")
-                subprocess.run(cmd, check=True, cwd=repo_root)
-                print(f"✓ Successfully built {image_tag}")
-
-            finally:
-                # Clean up temporary Dockerfile
-                if temp_dockerfile_path.exists():
-                    temp_dockerfile_path.unlink()
+            print(f"Building base image: {image_tag}")
+            subprocess.run(cmd, input=dockerfile_content, text=True, check=True, cwd=repo_root)
+            print(f"✓ Successfully built {image_tag}")
 
         except subprocess.CalledProcessError as e:
             raise DockerError(f"Failed to build base image {image_tag}: {e}")
         except Exception as e:
-            raise DockerError(f"Failed to prepare base image build context: {e}")
+            raise DockerError(f"Failed to prepare base image build: {e}")
 
     def _load_base_images_config(self) -> Dict[str, Any]:
         """Load base images configuration."""

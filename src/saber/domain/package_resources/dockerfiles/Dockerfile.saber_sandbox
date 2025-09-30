@@ -35,5 +35,6 @@ WORKDIR /workspace
 ENV PYTHONPATH=/workspace
 ENV PATH="/root/.local/bin:$PATH"
 
-# Default command
-CMD ["/bin/bash"]
+# Keep container alive for docker exec commands
+# Using tail -f /dev/null as a lightweight process that never exits
+CMD ["tail", "-f", "/dev/null"]
