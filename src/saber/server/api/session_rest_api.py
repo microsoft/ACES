@@ -328,8 +328,21 @@ class SessionRestAPI:
 
         @self.app.get("/api/v1/health", response_model=HealthResponse)
         async def health_check() -> HealthResponse:
-            """Enhanced health check endpoint with manifest metadata."""
+            """Enhanced health check endpoint with manifest metadata and dependency validation."""
             health_data = self.session_manager.get_health_metadata()
+
+            # Return 503 Service Unavailable if server or dependencies are unhealthy
+            if health_data.get("status") != "healthy":
+                from fastapi import HTTPException
+
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "message": "Server unhealthy - permanent environment dependencies failed",
+                        "health_data": health_data,
+                    },
+                )
+
             return HealthResponse(**health_data)
 
         # Evaluation endpoints

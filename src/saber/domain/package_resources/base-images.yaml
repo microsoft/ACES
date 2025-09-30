@@ -1,0 +1,21 @@
+# SABER Base Images Configuration
+# Defines all base images that domains can extend from
+
+schemaVersion: "1.0.0"
+
+images:
+  server:
+    tag: "saber/server:latest"
+    dockerfile: "package://dockerfiles/Dockerfile.saber_server"
+    context: "."  # Build from temp directory with saber package
+    labels:
+      saber.component: "base-server"
+      saber.type: "base-image"
+
+  sandbox:
+    tag: "saber/sandbox:latest"
+    dockerfile: "package://dockerfiles/Dockerfile.saber_sandbox"
+    context: "."  # Build from temp directory with saber package
+    labels:
+      saber.component: "base-sandbox"
+      saber.type: "base-image"

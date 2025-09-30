@@ -13,7 +13,7 @@ Following SABER's philosophy:
 """
 
 from pathlib import Path
-from typing import Any, Dict, Union
+from typing import Any, Dict, Optional, Union
 
 import yaml
 
@@ -33,12 +33,13 @@ class SABERConfigLoader:
     """Simple configuration loader for SABER YAML configs."""
 
     @staticmethod
-    def load_from_file(config_path: Union[str, Path]) -> SABERConfig:
+    def load_from_file(config_path: Union[str, Path], domain: Optional[str] = None) -> SABERConfig:
         """
         Load SABER configuration from YAML file.
 
         Args:
             config_path: Path to YAML configuration file
+            domain: Optional domain name for logging organization
 
         Returns:
             SABERConfig instance
@@ -80,7 +81,7 @@ class SABERConfigLoader:
                 raise ValueError(f"Configuration must be a YAML dictionary, got: {type(config_data)}")
 
             stage = "convert_to_model"
-            saber_config = SABERConfigLoader._convert_yaml_to_saber_config(config_data, config_path)
+            saber_config = SABERConfigLoader._convert_yaml_to_saber_config(config_data, config_path, domain=domain)
 
         except yaml.YAMLError as exc:
             log_operation_failure(
@@ -128,7 +129,107 @@ class SABERConfigLoader:
         return saber_config
 
     @staticmethod
-    def _convert_yaml_to_saber_config(config_data: Dict[str, Any], config_path: Path) -> SABERConfig:
+    def load_config_inputs(config_path: Union[str, Path]) -> Dict[str, Any]:
+        """
+        Load and validate config structure without requiring server URLs.
+
+        This method allows loading configs with server.mode: auto or missing server URLs,
+        returning raw configuration inputs that can be hydrated with runtime values.
+
+        Args:
+            config_path: Path to YAML configuration file
+
+        Returns:
+            Dictionary containing validated config inputs
+
+        Raises:
+            FileNotFoundError: If config file doesn't exist
+            ValueError: If configuration structure is invalid
+            yaml.YAMLError: If YAML parsing fails
+        """
+        # Convert string to Path if necessary
+        if isinstance(config_path, str):
+            config_path = Path(config_path)
+
+        operation = "load_saber_config_inputs"
+        operation_context = {"config_path": str(config_path)}
+        log_operation_start(logger, operation, **operation_context)
+
+        if not config_path.exists():
+            log_operation_failure(
+                logger,
+                operation,
+                "configuration_file_missing",
+                **operation_context,
+            )
+            raise FileNotFoundError(f"Configuration file not found: {config_path}")
+
+        stage = "open_file"
+        try:
+            with open(config_path, "r", encoding="utf-8") as file_handle:
+                stage = "parse_yaml"
+                config_data = yaml.safe_load(file_handle)
+
+            stage = "validate_structure"
+            if not config_data:
+                raise ValueError("Configuration file is empty")
+
+            if not isinstance(config_data, dict):
+                raise ValueError(f"Configuration must be a YAML dictionary, got: {type(config_data)}")
+
+            # Validate basic structure without requiring server URLs
+            stage = "validate_agents"
+            agent_assignments_config = config_data.get("agents")
+            if not agent_assignments_config or not isinstance(agent_assignments_config, list):
+                raise ValueError("Configuration must specify 'agents' as a list")
+
+            # Extract and validate task configuration
+            stage = "validate_tasks"
+            task_config = config_data.get("tasks", {})
+            if not isinstance(task_config, dict):
+                raise ValueError("'tasks' section must be a dictionary")
+
+            # Server validation is relaxed - allow auto mode or missing URLs
+            stage = "validate_server"
+            server_config = config_data.get("server")
+            if server_config and not isinstance(server_config, dict):
+                raise ValueError("'server' section must be a dictionary")
+
+        except yaml.YAMLError as exc:
+            log_operation_failure(
+                logger,
+                operation,
+                exc,
+                stage=stage,
+                error_type="YAMLError",
+                **operation_context,
+            )
+            raise ValueError(f"Failed to parse YAML configuration: {exc}") from exc
+        except Exception as exc:
+            log_operation_failure(
+                logger,
+                operation,
+                exc,
+                stage=stage,
+                error_type=exc.__class__.__name__,
+                **operation_context,
+            )
+            raise
+
+        log_operation_success(
+            logger,
+            operation,
+            agent_count=len(agent_assignments_config),
+            has_server_config=bool(server_config),
+            **operation_context,
+        )
+
+        return config_data
+
+    @staticmethod
+    def _convert_yaml_to_saber_config(
+        config_data: Dict[str, Any], config_path: Path, domain: Optional[str] = None
+    ) -> SABERConfig:
         """
         Convert YAML configuration dictionary to SABERConfig.
 
@@ -197,18 +298,29 @@ class SABERConfigLoader:
         if not isinstance(model_args, dict):
             raise ValueError("'model_args' must be a dictionary")
 
-        # Extract server configuration (required, nested format only)
+        # Extract server configuration (optional for auto mode hydration)
         server_config = config_data.get("server")
         if not server_config or not isinstance(server_config, dict):
-            raise ValueError("Configuration must specify 'server' section with rest_url and mcp_url")
+            raise ValueError("Configuration must specify 'server' section")
 
+        # Server URLs are optional when mode=auto (will be hydrated at runtime)
+        server_mode = server_config.get("mode")
         rest_url = server_config.get("rest_url")
-        if not rest_url:
-            raise ValueError("Configuration must specify 'server.rest_url'")
-
         mcp_url = server_config.get("mcp_url")
-        if not mcp_url:
-            raise ValueError("Configuration must specify 'server.mcp_url'")
+
+        # Validate URLs are present unless in auto mode
+        if server_mode != "auto":
+            if not rest_url:
+                raise ValueError("Configuration must specify 'server.rest_url' (or use server.mode: auto)")
+            if not mcp_url:
+                raise ValueError("Configuration must specify 'server.mcp_url' (or use server.mode: auto)")
+
+        # If in auto mode but URLs aren't provided yet, they must be hydrated before use
+        if server_mode == "auto" and (not rest_url or not mcp_url):
+            # This is expected - URLs will be injected by the caller
+            # We'll create the config without session_config and let it be set later
+            rest_url = None
+            mcp_url = None
 
         client_id = server_config.get("client_id", "saber-client")
 
@@ -271,16 +383,19 @@ class SABERConfigLoader:
             raise ValueError("'log_upload.fail_on_error' must be a boolean")
 
         # Create SABERConfig using the new agents format
+        # For auto mode without URLs, pass None and session_config will be None
+
         saber_config = SABERConfig.create(
             model=model or "per-agent",  # Default fallback when all agents have models
             model_args=model_args,
-            rest_url=rest_url,
-            mcp_url=mcp_url,
+            rest_url=rest_url,  # May be None in auto mode
+            mcp_url=mcp_url,  # May be None in auto mode
             client_id=client_id,
             task_ids=task_ids,
             agents=assignments,
             log_level=log_level,
             log_dir=log_dir,
+            domain=domain,
             ui_enabled=ui_enabled,
             container_timeout=container_timeout,
             max_samples=max_samples,

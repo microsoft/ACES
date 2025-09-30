@@ -363,6 +363,27 @@ class SABEREvaluationOrchestrator:
             )
 
             if configured_task_ids:
+                # Check for wildcard - expand to all available tasks
+                if configured_task_ids == ["*"]:
+                    logger.info(
+                        "Wildcard task selection - discovering all available tasks",
+                        extra={
+                            "event": "task_discovery_wildcard",
+                            "configured_task_ids": configured_task_ids,
+                        },
+                    )
+                    all_tasks_data = await self._session_manager.get_available_tasks()
+                    log_operation_success(
+                        logger,
+                        "task_discovery",
+                        session_id=session_id,
+                        requested_task_count=1,  # "*" wildcard
+                        resolved_task_count=len(all_tasks_data),
+                        **operation_details,
+                    )
+                    return all_tasks_data
+
+                # Handle specific task IDs
                 logger.info(
                     "Using configured task IDs",
                     extra={

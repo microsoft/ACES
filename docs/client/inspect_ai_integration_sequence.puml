@@ -9,10 +9,9 @@ participant "SABEREvaluationOrchestrator" as Orchestrator
 participant "ClientSessionManager" as SessionMgr
 participant "AgentManager" as AgentMgr
 participant "DatasetManager" as DatasetMgr
-participant "SABERRestClient" as RestClient
 participant "SessionManager" as Server
-participant "SABERReactAgent" as Agent
-participant "SABERMCPClient" as MCPClient
+participant "InspectAIAgent" as Agent
+participant "MCP (via mcp_server_http)" as MCP
 participant "ExecutionManager" as ExecMgr
 
 User -> CLI: python -m saber.client --agent my_agent.py
@@ -31,40 +30,68 @@ Orchestrator -> Orchestrator: _validate_config()
 Orchestrator -> SessionMgr: ClientSessionManager(config)
 activate SessionMgr
 SessionMgr -> SessionMgr: __aenter__()
-SessionMgr -> RestClient: SABERRestClient(config)
-activate RestClient
 
-SessionMgr -> RestClient: create_session()
-RestClient -> Server: POST /session
+SessionMgr -> Server: POST /api/v1/session
 activate Server
 Server -> Server: create_session(client_id)
-Server --> RestClient: {session_id, created_at}
-RestClient --> SessionMgr: session_id
-deactivate RestClient
+Server --> SessionMgr: SessionCreateResponse
+note right of SessionMgr
+  SessionCreateResponse:
+  - session_id
+  - created_at
+  - client_id
+end note
+
+note over Orchestrator, DatasetMgr: **Task Discovery**
+Orchestrator -> SessionMgr: discover_tasks()
+SessionMgr -> Server: GET /api/v1/benchmark
+Server --> SessionMgr: BenchmarkInfo
+SessionMgr --> Orchestrator: List[TaskInfo]
 
 Orchestrator -> AgentMgr: AgentManager(config, session_mgr)
 activate AgentMgr
-AgentMgr -> AgentMgr: __aenter__()
-AgentMgr -> AgentMgr: _initialize_agent()
+AgentMgr -> AgentMgr: __aenter__(available_task_ids)
+note right of AgentMgr
+  Stores available task IDs
+  for agent resolution
+end note
 
-Orchestrator -> DatasetMgr: DatasetManager(config, session_mgr)
+Orchestrator -> DatasetMgr: DatasetManager(session_mgr, config)
 activate DatasetMgr
 DatasetMgr -> DatasetMgr: __aenter__()
-DatasetMgr -> SessionMgr: get_benchmark_info()
-SessionMgr -> RestClient: get_benchmark()
-RestClient -> Server: GET /benchmark
-Server --> RestClient: BenchmarkInfo
-RestClient --> SessionMgr: BenchmarkInfo
-SessionMgr --> DatasetMgr: BenchmarkInfo
+note right of DatasetMgr
+  DatasetManager uses
+  session_manager for
+  all HTTP communication
+end note
 
 == Dataset and Task Creation ==
 
 DatasetMgr -> DatasetMgr: create_dataset()
 DatasetMgr -> DatasetMgr: _create_task_samples()
+note right of DatasetMgr
+  Samples include metadata:
+  - task_id
+  - instruction_prompt
+  - assistant_prompt
+  - submit_prompt
+end note
 
-AgentMgr -> AgentMgr: create_tasks()
-AgentMgr -> Agent: saber_react(session_manager=session_mgr)
+AgentMgr -> AgentMgr: create_tasks(samples)
+AgentMgr -> AgentMgr: create_saber_inspect_agent()
+note right of AgentMgr
+  Uses InspectAIImplementationRegistry
+  to get agent implementation (e.g., 'react')
+  and wraps with SABER infrastructure
+end note
+AgentMgr -> Agent: @agent decorator
 activate Agent
+note right of Agent
+  Agent created with:
+  - AgentPrompt (3 prompts)
+  - MCP tools via mcp_server_http()
+  - Session/episode context
+end note
 
 == Inspect AI Evaluation Execution ==
 
@@ -74,60 +101,78 @@ note over Orchestrator: **Uses inspect_ai.eval_async()**
 Orchestrator -> "inspect_ai": eval_async(tasks, model, **kwargs)
 
 loop for each task/episode
-    "inspect_ai" -> Agent: saber_enhanced_agent(state, tools)
-    Agent -> Agent: _initialize_saber_context()
-    Agent -> SessionMgr: create_episode(task_id)
-    SessionMgr -> RestClient: start_episode(task_id)
-    RestClient -> Server: POST /session/{session_id}/start-episode
+    "inspect_ai" -> Agent: execute(state, tools)
+    note right of Agent
+      Agent retrieves from sample metadata:
+      - task_id
+      - instruction_prompt
+      - assistant_prompt
+      - submit_prompt
+    end note
+
+    Agent -> SessionMgr: create_episode(session_id, task_id)
+    SessionMgr -> Server: POST /api/v1/session/{session_id}/episodes?task_id={task_id}
     Server -> Server: start_episode(session_id, task_id)
-    Server --> RestClient: EpisodeCreateResponse
-    RestClient --> SessionMgr: EpisodeCreateResponse
-    SessionMgr --> Agent: episode_context
+    Server --> SessionMgr: EpisodeCreateResponse
+    note right of SessionMgr
+      EpisodeCreateResponse:
+      - episode_id
+      - task_id
+      - attached_to_episode_id (if dependency)
+      - created_at
+    end note
 
-    Agent -> SessionMgr: get_policy_response()
-    SessionMgr -> RestClient: get_policy_info()
-    RestClient -> Server: GET /session/{session_id}/policy
-    Server --> RestClient: PolicyResponse
-    RestClient --> SessionMgr: PolicyResponse
-    SessionMgr --> Agent: enhanced_prompt
+    Agent -> Agent: mcp_server_http(url, headers)
+    activate MCP
+    note right of Agent
+      MCP headers include:
+      - session_id
+      - episode_id
+      - task_id
+      - orchestration_env: INSPECT
+    end note
 
-    Agent -> SessionMgr: ensure_episode_mcp_client()
-    SessionMgr -> MCPClient: SABERMCPClient(session_id, episode_id)
-    activate MCPClient
+    Agent -> Agent: Create AgentPrompt(instructions, assistant_prompt, submit_prompt)
 
     loop agent reasoning and tool execution
-        Agent -> MCPClient: list_tools()
-        MCPClient -> Server: POST /mcp/list_tools
-        Server -> ExecMgr: to_mcp_tools()
+        Agent -> MCP: list_tools() [via inspect_ai]
+        MCP -> Server: POST /api/v1/mcp/list_tools
+        Server -> ExecMgr: get_available_tools(episode_id)
         activate ExecMgr
-        ExecMgr --> Server: List[mcp.types.Tool]
-        Server --> MCPClient: tools_response
-        MCPClient --> Agent: available_tools
+        ExecMgr --> Server: List[ExecutorMetadata]
+        Server -> Server: to_mcp_tools()
+        Server --> MCP: mcp.ListToolsResult
+        MCP --> Agent: available_tools
 
-        Agent -> Agent: reasoning_step()
+        Agent -> Agent: reasoning_step() [by base agent]
+        note right of Agent
+          Base agent implementation
+          (e.g., react) handles
+          reasoning loop
+        end note
 
         opt tool execution needed
-            Agent -> MCPClient: call_tool(name, arguments)
-            MCPClient -> Server: POST /mcp/call_tool
-            Server -> Server: execute_action(session_id, action)
-            Server -> ExecMgr: step(action, context)
-            ExecMgr -> ExecMgr: execute_in_sandbox()
+            Agent -> MCP: call_tool(name, arguments) [via inspect_ai]
+            MCP -> Server: POST /api/v1/mcp/call_tool
+            Server -> Server: extract session_id/episode_id from headers
+            Server -> ExecMgr: execute_action(episode_id, action)
+            ExecMgr -> ExecMgr: execute_in_sandbox(episode_id)
             ExecMgr --> Server: CommandResult
-            Server --> MCPClient: mcp_result
-            MCPClient --> Agent: tool_result
+            Server -> Server: to_mcp_result()
+            Server --> MCP: mcp.CallToolResult
+            MCP --> Agent: tool_result
         end
 
-        opt episode termination check
-            Agent -> SessionMgr: check_episode_termination()
-            SessionMgr -> RestClient: get_task_info()
-            RestClient -> Server: GET /session/{session_id}/current-task
-            Server --> RestClient: termination_status
-            RestClient --> SessionMgr: should_terminate
+        opt episode termination or submission
+            note over Agent, Server
+              Agent may call submit_eval tool
+              which triggers episode completion
+            end note
         end
     end
 
     deactivate ExecMgr
-    deactivate MCPClient
+    deactivate MCP
 
     Agent --> "inspect_ai": final_agent_state
 end
@@ -143,10 +188,16 @@ Orchestrator -> DatasetMgr: __aexit__()
 deactivate DatasetMgr
 Orchestrator -> SessionMgr: __aexit__()
 SessionMgr -> SessionMgr: cleanup_session()
-SessionMgr -> RestClient: terminate_session()
-RestClient -> Server: DELETE /session/{session_id}
+SessionMgr -> Server: DELETE /api/v1/session/{session_id}
 Server -> Server: terminate_session(session_id)
 Server -> Server: cleanup_session_resources()
+note right of Server
+  Cleanup includes:
+  - All active episodes
+  - Docker sandboxes
+  - Episode orchestrators
+  - Temporary resources
+end note
 deactivate Server
 deactivate SessionMgr
 
@@ -160,21 +211,24 @@ CLI --> User: Evaluation Complete
 note right of Server
 **SABER Server Features**
 - Multi-episode session support
-- Docker sandbox execution
-- MCP tool discovery and execution
-- Automatic session cleanup
-- Policy-driven prompting
-- Real-time episode termination
+- Episode dependency tracking
+- Episode-scoped Docker sandboxes
+- MCP protocol implementation
+- Automatic resource cleanup
+- Three-prompt system (instruction/assistant/submit)
+- Production evaluation with multiple strategies
 end note
 
 note left of Orchestrator
-**Key Improvements**
+**Key Architecture**
 - Async context managers ensure cleanup
 - Fail-fast validation prevents silent failures
-- inspect_ai integration for standard evaluation
-- Per-episode MCP clients for isolation
-- Structured error handling throughout
-- No backwards compatibility (clean design)
+- inspect_ai native integration (no custom wrappers)
+- MCP via inspect_ai's mcp_server_http()
+- Multi-prompt system from sample metadata
+- Episode-based execution with dependencies
+- Factory pattern for agent creation
+- Clean separation of concerns
 end note
 
 note over "inspect_ai"
@@ -182,8 +236,11 @@ note over "inspect_ai"
 - Standard evaluation framework
 - Built-in logging and metrics
 - Agent state management
+- Native MCP support via mcp_server_http()
+- AgentPrompt with 3-prompt structure
 - Tool execution framework
 - Parallel evaluation support
+- Store API for context passing
 end note
 
 @enduml

@@ -43,17 +43,10 @@ def resolve_compose_file(explicit_path: Path | None = None) -> Iterator[Path]:
         # Package resource not available, try development fallback
         pass
 
-    # Development fallback - only for editable installs
-    dev_compose = _find_development_compose()
-    if dev_compose and dev_compose.exists():
-        yield dev_compose
-        return
-
     # Fail fast - no silent failures
     raise ResourceNotFoundError(
         "docker-compose.yml",
-        "Not found in package resources or development environment. "
-        "Ensure SABER is properly installed or provide --compose-file explicitly.",
+        "Not found in package resources. " "Ensure SABER is properly installed or provide --compose-file explicitly.",
     )
 
 
@@ -121,34 +114,6 @@ def get_env_example_content() -> str:
         "env.example",
         "Not found in package resources or development environment. " "Ensure SABER is properly installed.",
     )
-
-
-def _find_development_compose() -> Path | None:
-    """Find docker-compose.yml in development environment.
-
-    Only searches in well-known development locations to avoid
-    silent configuration issues.
-    """
-    # Look for the compose file relative to this module's location
-    # This works for editable installs where the source tree is available
-    current_file = Path(__file__)
-
-    # Navigate from external/saber/src/saber/domain/resources.py
-    # to docker/docker-compose.yml
-    repo_root = current_file.parents[5]  # Go up to oss_saber root
-    compose_path = repo_root / "docker" / "docker-compose.yml"
-
-    if compose_path.exists():
-        return compose_path
-
-    # Also check if we're in the wrong location and try to find it
-    # by looking for a parent directory containing docker/docker-compose.yml
-    for parent in current_file.parents:
-        candidate = parent / "docker" / "docker-compose.yml"
-        if candidate.exists():
-            return candidate
-
-    return None
 
 
 def _find_development_schema(schema_name: str) -> Path | None:

@@ -2,22 +2,6 @@
 
 A modern distributed system for benchmarking agentic workflows in cybersecurity domains using **inspect_ai integration** with **Model Context Protocol (MCP)** for industry-standard agent evaluation.
 
-## Features
-
-### Modern Agent Integration
-- **🔥 inspect_ai Native**: Direct Python API integration for seamless agent evaluation
-- **📊 MCP Protocol**: Industry-standard Model Context Protocol for tool communication  
-- **⚡ Fail-Fast Design**: Immediate error detection with clear, actionable messages
-- **🎯 Type Safety**: Strict Pydantic models throughout with compile-time validation
-- **🔄 Async Lifecycle**: Context manager patterns for guaranteed resource cleanup
-
-### Security Domain Benchmarking
-- **🎯 Multi-Step Workflows**: Complex security tasks (penetration testing, malware analysis, threat hunting)
-- **📈 Session Management**: Stateful execution with episode-based progress tracking
-- **🔐 Secure Execution**: Docker sandbox with security-first command validation
-- **📋 YAML Configuration**: Declarative benchmark and task definitions
-- **📊 Comprehensive Evaluation**: Action tracking and trajectory analysis
-
 ## Architecture Overview
 
 SABER implements a **modern dual-protocol architecture** optimized for security agent benchmarking:

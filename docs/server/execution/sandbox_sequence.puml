@@ -1,22 +1,20 @@
 @startuml Sandbox Environment Setup Sequence
 
 !theme plain
-title SABER Docker Sandbox Environment Setup - Actual Implementation
+title SABER Docker Sandbox Environment Setup - Current Implementation
 
 actor Agent
 participant "SessionManager" as SM
 participant "BenchmarkManager" as BM
 participant "EpisodeManager" as EM_EP
 participant "ExecutionManager" as EM
-participant "EnvironmentLoader" as EL
 participant "SandboxEnvironmentManager" as SBMGR
-participant "PermanentEnvironmentManager" as PMGR
-participant "DockerSandboxEnvironment" as DSE
+participant "ComposeOrchestrator" as CO
 participant "Docker Compose" as DC
 
-== Episode Initialization (Actual Flow) ==
+== Episode Initialization (Current Flow) ==
 
-Agent -> SM: POST /session/{id}/start-episode?task_id=dvwa_sql_injection
+Agent -> SM: POST /api/v1/session/{session_id}/episodes?task_id=dvwa_sql_injection
 activate SM
 
 SM -> BM: get_task(task_id)
@@ -25,186 +23,195 @@ activate BM
 BM --> SM: Task (with environment, execution_config, episode_config)
 deactivate BM
 
-SM -> EM_EP: start_episode(session_id, task_id, initial_context)
+SM -> EM_EP: start_episode(session_id, task_id, initial_context, task)
 activate EM_EP
 
 EM_EP -> EM_EP: create Episode object (state=ACTIVE)
+EM_EP -> EM_EP: handle dependency resolution if needed
 EM_EP --> SM: Episode
 deactivate EM_EP
 
 == Task Configuration and Environment Setup ==
 
-SM -> EM: configure_for_task(session_id, task)
+SM -> EM: configure_for_task(episode_id, task, session_id, target_episode_id)
 activate EM
 
 note over EM
 ExecutionManager configures from task object:
-- Resolves task.environment via EnvironmentLoader
-- Creates/updates SandboxEnvironmentManager
+- Initializes SandboxEnvironmentManager if needed
+- Creates episode-specific environment immediately
 - Configures ExecutorFactory with task config
-- No complex permanent environment coordination
+- Handles network attachment for dependent episodes
 end note
 
-EM -> EL: resolve_environment(task.environment)
-activate EL
+EM -> SBMGR: create_episode_environment(episode_id, task.environment, target_episode_id)
+activate SBMGR
 
-note over EL
-EnvironmentLoader handles:
-- Template reference (string → SandboxEnvironmentSpec)
-- Granular config (dict → SandboxEnvironmentSpec)
-- Hybrid template + additions
-- Network configuration
-end note
+SBMGR -> CO: new ComposeOrchestrator(logging_config)
+activate CO
 
-EL --> EM: SandboxEnvironmentSpec
-deactivate EL
+CO -> CO: resolve compose file path from task.environment
+CO -> DC: docker-compose up -d with episode-specific config
+activate DC
 
-EM -> EM: update _sandbox_manager with resolved environment
-EM -> EM: update _configuration with task.execution_config
+DC -> DC: Start execution container + target services
+DC -> DC: Wait for all health checks
+DC --> CO: All services healthy
+deactivate DC
+
+CO --> SBMGR: Environment ready
+deactivate CO
+
+SBMGR --> EM: Episode environment created
+deactivate SBMGR
+
+EM -> EM: reset executor factory for new sandbox manager
 EM --> SM: configuration_complete
 deactivate EM
 
 == Additional Component Configuration ==
 
-SM -> SM: policy_manager.configure_for_task(session_id, task)
-SM -> SM: episode_manager.configure_for_task(session_id, task)
-SM -> SM: update session (current_episode_id, current_task_id)
+SM -> SM: policy_manager.set_episode_policy(episode_id, policy_document)
+SM -> SM: session.add_active_episode(episode_id)
+SM -> SM: store episode configuration and metadata
 
-SM --> Agent: {episode_id, task_id, session_id, message}
+SM --> Agent: EpisodeCreateResponse{episode_id, task_id, session_id, state, episode_context}
 deactivate SM
 
-== Command Execution with Lazy Environment Creation ==
+== Command Execution with Episode Context ==
 
-Agent -> SM: MCP tool call: cli(command="nmap dvwa_webapp")
+Agent -> SM: MCP tool call: cli(command="nmap dvwa_webapp") with headers
+note right of Agent
+Headers include:
+- X-SABER-Session-ID: {session_id}
+- X-SABER-Episode-ID: {episode_id}
+- X-SABER-Orchestration-Env: {orchestration_env}
+end note
 activate SM
 
-SM -> EM: execute_action(session_id, action)
+SM -> SM: validate episode is active in session
+SM -> EM: step(action, context) with episode context
 activate EM
 
-EM -> SBMGR: get_session_environment(session_id)
+EM -> EM: get_executor(action.tool_name, episode_id)
+EM -> EM: validate_parameters(action.parameters)
+EM -> SBMGR: get_episode_environment(episode_id)
 activate SBMGR
 
-alt Environment not yet created
-    SBMGR -> SBMGR: create_session_environment(session_id, environment_spec)
-    SBMGR -> DSE: new DockerSandboxEnvironment(session_id, environment_spec)
-    activate DSE
+note over SBMGR
+Environment was created during episode initialization,
+so it already exists and is ready for command execution
+end note
 
-    note over DSE
-    Environment creation happens on first command:
-    - Generate Docker Compose configuration
-    - Start all required services (execution + targets)
-    - Wait for health checks
-    - Set up networking
-    end note
-
-    DSE -> DC: docker-compose up -d
-    activate DC
-
-    DC -> DC: Start execution container + target services
-    DC -> DC: Wait for all health checks
-    DC --> DSE: All services healthy
-    deactivate DC
-
-    DSE -> DSE: verify_environment_health()
-    DSE --> SBMGR: DockerSandboxEnvironment ready
-    deactivate DSE
-else Environment already exists
-    SBMGR --> SBMGR: return existing environment
-end
-
-SBMGR --> EM: DockerSandboxEnvironment
+SBMGR --> EM: ComposeOrchestrator for episode
 deactivate SBMGR
 
-EM -> DSE: execute_command(["nmap", "dvwa_webapp"])
-activate DSE
+EM -> CO: execute command in episode-specific containers
+activate CO
 
-note over DSE
-Command executes in execution container
-with network access to target services
+note over CO
+Command executes in episode-specific execution container
+with access to episode-specific target services
 via Docker Compose internal networking
 end note
 
-DSE -> DSE: run_in_execution_container()
-DSE --> EM: CommandResult(success=True, data="Host dvwa_webapp is up...")
-deactivate DSE
+CO -> CO: run command via docker exec
+CO --> EM: CommandResult(success=True, data="Host dvwa_webapp is up...")
+deactivate CO
 
 EM --> SM: CommandResult
 deactivate EM
 
+SM -> EM_EP: step(episode_id, action, command_result)
+activate EM_EP
+EM_EP -> EM_EP: create and add step to episode
+EM_EP --> SM: StepResult(step, should_terminate=False)
+deactivate EM_EP
+
 SM --> Agent: MCP result with nmap output
 deactivate SM
 
-== Optional: Permanent Environment Integration ==
+== Episode Cleanup ==
 
-note over PMGR
-Permanent Environment Manager is optional:
-- Initialized separately via initialize_permanent_environment_manager()
-- Provides persistent services across episodes
-- Sandbox environments can connect to permanent networks
-- Not required for basic sandbox functionality
-end note
-
-== Environment Cleanup ==
-
-Agent -> SM: DELETE /session/{id}
+Agent -> SM: DELETE /api/v1/session/{session_id}/episodes/{episode_id}
 activate SM
 
-SM -> EM: cleanup_session(session_id)
+SM -> EM_EP: end_episode(episode_id, reason, result)
+activate EM_EP
+EM_EP -> EM_EP: update episode state and completion info
+EM_EP --> SM: Episode completed
+deactivate EM_EP
+
+SM -> EM: cleanup episode environment
 activate EM
 
-EM -> SBMGR: cleanup_session(session_id)
+EM -> SBMGR: cleanup_episode(episode_id)
 activate SBMGR
 
-SBMGR -> DSE: stop()
-activate DSE
+SBMGR -> CO: stop_environment()
+activate CO
 
-DSE -> DC: docker-compose down --volumes
+CO -> DC: docker-compose down --volumes
 activate DC
 
-DC -> DC: Stop and remove all containers, networks, volumes
-DC --> DSE: Environment cleaned up
+DC -> DC: Stop and remove episode containers, networks, volumes
+DC --> CO: Episode environment cleaned up
 deactivate DC
 
-DSE --> SBMGR: Cleanup complete
-deactivate DSE
+CO --> SBMGR: Episode cleanup complete
+deactivate CO
 
-SBMGR --> EM: Session cleaned up
+SBMGR --> EM: Episode environment removed
 deactivate SBMGR
 
-EM --> SM: Cleanup complete
+EM --> SM: Episode cleanup complete
+deactivate EM
+
+== Session Cleanup ==
+
+Agent -> SM: DELETE /api/v1/session/{session_id}
+activate SM
+
+SM -> EM: cleanup_session_environments(session_id)
+activate EM
+EM -> SBMGR: cleanup all remaining episode environments
+EM --> SM: All environments cleaned
 deactivate EM
 
 SM --> Agent: 200 OK - Session terminated
 deactivate SM
 
 note over Agent, DC
-**Actual Sandbox Environment Implementation**
+**Current Sandbox Environment Implementation**
 
 **Key Architecture Principles:**
-- Lazy environment creation: Sandbox created on first command execution
-- Simple task-based configuration via task.environment
+- Eager environment creation: Sandbox created during episode initialization
+- Episode-based environment isolation with unique container naming
 - Docker Compose orchestration for all environments (single or multi-container)
-- Optional permanent environment integration
-- Session-scoped environment lifecycle
+- Episode dependency resolution with network attachment capability
+- Episode-scoped environment lifecycle with proper cleanup
 
-**Environment Resolution:**
-- task.environment can be string template reference or dict config
-- EnvironmentLoader resolves to SandboxEnvironmentSpec
-- SandboxEnvironmentManager creates DockerSandboxEnvironment
-- Docker Compose handles all container orchestration
+**Environment Management:**
+- task.environment specifies static compose file template name
+- SandboxEnvironmentManager creates ComposeOrchestrator per episode
+- ComposeOrchestrator handles Docker Compose operations directly
+- Episode-specific environment variables for container naming
+- Optional network attachment for dependent episodes
 
 **Execution Flow:**
-1. Episode starts with task configuration
-2. ExecutionManager configures from task object
-3. Environment creation deferred until first command
-4. Commands execute in dedicated execution container
-5. Target services available via Docker Compose networking
-6. Complete cleanup on session termination
+1. Episode creation triggers immediate environment setup
+2. ExecutionManager configures for episode with dependency resolution
+3. ComposeOrchestrator starts episode-specific containers
+4. MCP commands execute with episode context via headers
+5. Commands run in episode-specific execution containers
+6. Episode cleanup removes all episode-specific resources
 
-**No Complex Orchestration:**
-- No benchmark session management
-- No complex permanent/ephemeral coordination during episode start
-- Simple REST endpoint: POST /session/{id}/start-episode
+**Current Implementation Details:**
+- REST API: POST /api/v1/session/{session_id}/episodes
+- MCP headers required: session_id, episode_id, orchestration_env
+- Episode-based concurrency limits (max 3 concurrent per episode)
+- Fail-fast parameter validation and error handling
+- Complete environment isolation per episode
 - Client-side benchmark orchestration
 end note
 

@@ -19,8 +19,8 @@ services:
       - ${DOMAINS_ROOT:?DOMAINS_ROOT must be set}/${DOMAIN}/server/config:/app/config:ro
       - ${DOMAINS_ROOT}/${DOMAIN}/server/logs:/app/logs:rw
       - ${DOMAINS_ROOT}/${DOMAIN}/server/data:/app/data:rw
-      # Cross-domain visibility
-      - ${DOMAINS_ROOT}:/app/domains:ro
+      # Cross-domain visibility with writable logs
+      - ${DOMAINS_ROOT}:/app/domains:rw
       # Docker socket for sandbox management (always included)
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
@@ -30,7 +30,7 @@ services:
     user: root
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${REST_PORT:-8000}/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:${REST_PORT:-8000}/api/v1/health"]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -46,103 +46,12 @@
       "required": ["server"],
       "properties": {
         "server": {
-          "type": "object",
-          "required": ["tag", "dockerfile"],
-          "properties": {
-            "tag": {
-              "type": "string",
-              "description": "Docker image tag for the server"
-            },
-            "dockerfile": {
-              "type": "string",
-              "description": "Path to server Dockerfile relative to domain root"
-            },
-            "buildArgs": {
-              "type": "object",
-              "patternProperties": {
-                "^[A-Z_][A-Z0-9_]*$": {
-                  "type": "string"
-                }
-              },
-              "description": "Build arguments for server image"
-            },
-            "labels": {
-              "type": "object",
-              "patternProperties": {
-                "^[a-z0-9._-]+$": {
-                  "type": "string"
-                }
-              },
-              "description": "Docker labels for server image"
-            }
-          },
-          "additionalProperties": false
-        },
-        "client": {
-          "type": "object",
-          "required": ["tag", "dockerfile"],
-          "properties": {
-            "tag": {
-              "type": "string",
-              "description": "Docker image tag for the client"
-            },
-            "dockerfile": {
-              "type": "string",
-              "description": "Path to client Dockerfile relative to domain root"
-            },
-            "buildArgs": {
-              "type": "object",
-              "patternProperties": {
-                "^[A-Z_][A-Z0-9_]*$": {
-                  "type": "string"
-                }
-              },
-              "description": "Build arguments for client image"
-            },
-            "labels": {
-              "type": "object",
-              "patternProperties": {
-                "^[a-z0-9._-]+$": {
-                  "type": "string"
-                }
-              },
-              "description": "Docker labels for client image"
-            }
-          },
-          "additionalProperties": false
-        },
-        "sandbox": {
-          "type": "object",
-          "required": ["tag", "dockerfile"],
-          "properties": {
-            "tag": {
-              "type": "string",
-              "description": "Docker image tag for the sandbox"
-            },
-            "dockerfile": {
-              "type": "string",
-              "description": "Path to sandbox Dockerfile relative to domain root"
-            },
-            "buildArgs": {
-              "type": "object",
-              "patternProperties": {
-                "^[A-Z_][A-Z0-9_]*$": {
-                  "type": "string"
-                }
-              },
-              "description": "Build arguments for sandbox image"
-            },
-            "labels": {
-              "type": "object",
-              "patternProperties": {
-                "^[a-z0-9._-]+$": {
-                  "type": "string"
-                }
-              },
-              "description": "Docker labels for sandbox image"
-            }
-          },
-          "additionalProperties": false
+          "$ref": "#/definitions/imageConfig"
+        }
+      },
+      "patternProperties": {
+        "^[a-z0-9_]+$": {
+          "$ref": "#/definitions/imageConfig"
         }
       },
       "additionalProperties": false
@@ -413,6 +322,45 @@
             "type": "string"
           },
           "description": "Tags for categorizing this domain"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "definitions": {
+    "imageConfig": {
+      "type": "object",
+      "required": ["tag", "dockerfile"],
+      "properties": {
+        "tag": {
+          "type": "string",
+          "description": "Docker image tag"
+        },
+        "dockerfile": {
+          "type": "string",
+          "description": "Path to Dockerfile relative to domain root"
+        },
+        "context": {
+          "type": "string",
+          "description": "Build context path relative to domain root (defaults to '.')"
+        },
+        "buildArgs": {
+          "type": "object",
+          "patternProperties": {
+            "^[A-Z_][A-Z0-9_]*$": {
+              "type": "string"
+            }
+          },
+          "description": "Build arguments for image"
+        },
+        "labels": {
+          "type": "object",
+          "patternProperties": {
+            "^[a-z0-9._-]+$": {
+              "type": "string"
+            }
+          },
+          "description": "Docker labels for image"
         }
       },
       "additionalProperties": false

@@ -1,145 +1,155 @@
 @startuml MCP Integration Workflow
 
 !theme plain
-title SABER MCP Integration - Header-Based Session Mapping (MCP Compliant)
+title SABER MCP Integration - Current Implementation (Inspect AI + FastMCP)
 
 actor Agent
-participant "SABERMCPClient" as MCPClient
-participant "MCPClient\n(Raw)" as RawMCP
-participant "SABERRestClient" as RESTClient
+participant "Inspect AI\n(mcp_server_http)" as InspectMCP
 participant "SessionRestAPI\n(REST)" as REST
-participant "SessionMCPAPI\n(MCP Component)" as MCP
+participant "SessionMCPAPI\n(FastMCP)" as MCP
 participant "SessionManager" as SM
 participant "ExecutionManager" as EM_EXEC
 participant "EpisodeManager" as EM_EP
 participant "MCPToolGenerator" as ToolGen
 
 == Session Initialization (REST First) ==
-Agent -> RESTClient: create_session(client_id)
-RESTClient -> REST: POST /session
+Agent -> REST: POST /api/v1/session?client_id=client_id
 REST -> SM: create_session(client_id)
 SM -> REST: ClientSession
-REST -> RESTClient: session_id
-RESTClient -> Agent: session_id
+REST -> Agent: session_id
 
-== MCP Connection with Session Headers ==
-Agent -> MCPClient: connect()
-note right: MCPClient initialized with:\n- session_id from REST\n- task_id (optional)\n- client_id
-MCPClient -> RawMCP: connect(sse_url, headers)
-note right: Headers: X-SABER-Session-ID, X-SABER-Task-ID, X-SABER-Client-ID
-RawMCP -> MCP: SSE connection with headers
-MCP -> MCP: _get_session_from_headers()
-note right: Extracts session_id from headers\nNo session creation - maps to existing session
-MCP -> RawMCP: connection established
-RawMCP -> MCPClient: connected
+== Episode Creation (REST) ==
+Agent -> REST: POST /api/v1/episode/{session_id}?task_id=task_id
+REST -> SM: create_episode(session_id, task_id)
+SM -> EM_EP: start_episode(session_id, task_id, task)
+EM_EP -> SM: Episode
+SM -> REST: EpisodeCreateResponse
+REST -> Agent: episode_id
+
+== MCP Connection via Inspect AI ==
+Agent -> InspectMCP: mcp_server_http(url, headers)
+note right: Inspect AI creates MCP connection with headers:\n- X-SABER-Session-ID: session_id\n- X-SABER-Episode-ID: episode_id\n- X-SABER-Task-ID: task_id\n- X-SABER-Orchestration-Env: INSPECT
+InspectMCP -> MCP: HTTP connection with headers
+MCP -> MCP: _get_headers()
+note right: Parses headers using get_http_headers():\n- Validates orchestration_env (MANDATORY)\n- Extracts session context from headers\n- No session creation via MCP
+MCP -> InspectMCP: connection established
 
 == Tool Discovery (Dynamic Registration) ==
-Agent -> MCPClient: list_tools()
-MCPClient -> RawMCP: list_tools()
-RawMCP -> MCP: handle_list_tools()
+Agent -> InspectMCP: list_tools()
+InspectMCP -> MCP: handle_list_tools()
+MCP -> MCP: _get_headers()
+note right: Extract orchestration_env and episode context
 MCP -> SM: get_execution_manager()
-SM -> EM_EXEC: to_mcp_tools()
+SM -> EM_EXEC: to_mcp_tools(episode_id)
 EM_EXEC -> ToolGen: get_available_executors()
 ToolGen -> EM_EXEC: dynamic_tool_schemas[]
-note right of EM_EXEC: Returns clean tool schemas:\n- python(code)\n- cli(command)\n- end_episode(submission)
-EM_EXEC -> MCP: executor_tools + hardcoded_tools
-MCP -> RawMCP: mcp_tools[]
-RawMCP -> MCPClient: available_tools[]
-MCPClient -> Agent: tools_list[]
+note right of EM_EXEC: Returns clean tool schemas:\n- python(code: str)\n- cli(command: str)\n- end_episode(submission?: str) [STANDALONE only]
+EM_EXEC -> MCP: executor_tools + conditional_hardcoded_tools
+MCP -> InspectMCP: mcp.types.Tool[]
+InspectMCP -> Agent: available_tools[]
 
 == Command Execution (Header-Based Session Context) ==
-Agent -> MCPClient: python(code="print('hello')")
-MCPClient -> MCPClient: check_episode_terminated()
-note right: HARD TERMINATION:\nBlocks all calls if episode ended
-MCPClient -> RawMCP: call_tool("python", {code: "print('hello')"})
-RawMCP -> MCP: handle_call_tool("python", args)
-MCP -> MCP: _get_session_from_headers()
-note right: Session context retrieved\nfrom HTTP headers,\nnot tool parameters
+Agent -> InspectMCP: python(code="print('hello')")
+InspectMCP -> MCP: handle_call_tool("python", args)
+MCP -> MCP: _get_headers()
+note right: Session context retrieved from HTTP headers:\n- session_id, episode_id from headers\n- orchestration_env validation\n- No session_id in tool parameters
 MCP -> MCP: _convert_to_action(tool_name, args)
-MCP -> SM: execute_action(session_id, action)
-SM -> EM_EXEC: step(action, context)
+MCP -> SM: execute_action(session_id, episode_id, action)
+SM -> EM_EXEC: step(action, headers)
 EM_EXEC -> SM: CommandResult
 SM -> EM_EP: step(session_id, action, result)
 EM_EP -> SM: step_result
 SM -> MCP: CommandResult
 MCP -> MCP: _convert_to_mcp_result(CommandResult)
-MCP -> RawMCP: mcp_result
-RawMCP -> MCPClient: tool_response
-MCPClient -> MCPClient: _monitor_response(response)
-note right: Monitors for episode termination\nsignals and updates internal state
-MCPClient -> Agent: command_result
+MCP -> InspectMCP: mcp.types.CallToolResult
+InspectMCP -> Agent: command_result
 
-== Episode End (Clean Tool + Monitoring) ==
-Agent -> MCPClient: end_episode(submission="flag{found}")
-MCPClient -> RawMCP: call_tool("end_episode", {submission: "flag{found}"})
-RawMCP -> MCP: _handle_end_episode_call(args)
-MCP -> MCP: _get_session_from_headers()
-MCP -> SM: execute_action(session_id, result_action)
-note right: Records submission first
-MCP -> SM: end_episode(session_id, "agent_completed", result)
-SM -> EM_EP: end_current_episode()
-EM_EP -> SM: episode_ended
-SM -> MCP: CommandResult(success)
-MCP -> RawMCP: success_result
-RawMCP -> MCPClient: episode_ended_response
-MCPClient -> MCPClient: _episode_terminated = True
-MCPClient -> Agent: episode_completed
+== Episode End (Multiple Modes) ==
+
+alt STANDALONE Orchestration
+    Agent -> InspectMCP: end_episode(submission="flag{found}")
+    InspectMCP -> MCP: _handle_end_episode_call(args)
+    MCP -> MCP: _get_headers()
+    MCP -> SM: execute_action(session_id, episode_id, result_action)
+    note right: Records submission first
+    MCP -> SM: end_episode(session_id, episode_id, "agent_completed", EvalSubmission)
+    SM -> EM_EP: end_episode()
+    EM_EP -> SM: episode_ended
+    SM -> MCP: success
+    MCP -> InspectMCP: submission_text
+    InspectMCP -> Agent: episode_completed
+else INSPECT Orchestration
+    note right of Agent: Episode end handled by inspect_ai framework:\n- Agent execution completes naturally\n- EvalSubmission created from ModelOutput\n- Episode ended via REST API
+    Agent -> REST: end_episode via agent completion
+    REST -> SM: end_episode(session_id, episode_id, "agent_completed", EvalSubmission)
+    SM -> EM_EP: end_episode()
+    EM_EP -> SM: episode_ended
+    SM -> REST: success
+end
 
 == Session Cleanup ==
-Agent -> MCPClient: disconnect()
-MCPClient -> RawMCP: disconnect()
-RawMCP -> MCP: connection_closed
-Agent -> RESTClient: terminate_session() (optional)
-RESTClient -> REST: DELETE /session/{id}
+Agent -> InspectMCP: disconnect()
+InspectMCP -> MCP: connection_closed
+Agent -> REST: DELETE /api/v1/session/{session_id} (optional)
 REST -> SM: terminate_session(session_id)
 SM -> SM: cleanup_session_resources()
 
 note right of MCP
-**MCP Compliance Achieved**
-✅ Clean tool schemas (no session_id)
-✅ Header-based session mapping
-✅ Pure functional parameters
-✅ Standard MCP client compatibility
-✅ SSE transport with headers
+**Current MCP Implementation - FastMCP Server**
+✅ Clean tool schemas (no session_id in parameters)
+✅ Header-based session mapping via get_http_headers()
+✅ Pure functional tool interfaces
+✅ Native inspect_ai mcp_server_http() compatibility
+✅ HTTP transport with mandatory header validation
 
-**Actual Tool Examples:**
+**Tool Schema Examples:**
 - python(code: str)
 - cli(command: str)
-- end_episode(submission?: str)
+- end_episode(submission?: str) [STANDALONE mode only]
 
-**Key Implementation Details:**
-- Uses fastmcp.server.dependencies.get_http_headers()
+**Key Implementation Features:**
+- FastMCP server with HTTP transport (/mcp endpoint)
+- Mandatory X-SABER-Orchestration-Env header validation
 - Dynamic tool registration via MCPToolGenerator
-- Episode termination monitoring in SABERMCPClient
+- Conditional hardcoded tools based on orchestration mode
+- Direct inspect_ai integration without wrapper clients
 end note
 
 note right of REST
-**SessionRestAPI Responsibilities**
+**SessionRestAPI Responsibilities - Current Implementation**
 - Session lifecycle management (create/terminate)
-- Episode management (start/end)
-- Task configuration and policies
-- Benchmark information access
-- Health checks and status
-- Event streaming (SSE)
+- Episode management (create/end)
+- Task configuration and policy retrieval
+- Benchmark information and task listings
+- Health checks with manifest metadata
+- Evaluation operations (criteria, file upload, override)
+- No SSE - replaced with direct HTTP endpoints
 end note
 
 note right of SM
-**Dual Protocol Architecture**
-- REST API for session/episode management
-- MCP API for clean tool execution
-- Header-based session context mapping
-- Separate client types: SABERRestClient + SABERMCPClient
-- No automatic session creation via MCP
-- Resource cleanup on session termination
+**Dual Protocol Architecture - Current Implementation**
+- REST API (FastAPI) for session/episode management and evaluation
+- MCP API (FastMCP) for clean tool execution only
+- Header-based session context mapping with orchestration environment validation
+- Single ClientSessionManager using REST + native inspect_ai MCP integration
+- No automatic session creation via MCP - sessions must exist before MCP use
+- Multi-episode session support with cascade termination
+- Comprehensive resource cleanup and health monitoring
 end note
 
-note right of MCPClient
-**SABERMCPClient Features**
-- Wraps raw MCPClient for enhanced functionality
-- Episode termination monitoring (_episode_terminated)
-- Hard termination: blocks calls after episode ends
-- Optional monitoring callbacks for harness integration
-- Session context passed via HTTP headers only
+note right of InspectMCP
+**Inspect AI MCP Integration - Current Implementation**
+- Native mcp_server_http() integration - no SABER wrapper needed
+- Session context passed automatically via HTTP headers
+- Tool execution handled directly by inspect_ai framework
+- Episode lifecycle managed by inspect_ai agent execution
+- Clean separation: inspect_ai handles MCP protocol, SABER provides tools
+- Fail-fast header validation ensures proper session mapping
+
+**Orchestration Modes:**
+- **INSPECT**: Full inspect_ai integration, episode end via agent completion
+- **STANDALONE**: Direct tool usage, end_episode tool available
+- Header validation ensures consistent behavior across modes
 end note
 
 @enduml

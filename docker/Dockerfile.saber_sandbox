@@ -20,12 +20,5 @@ WORKDIR /workspace
 ENV PYTHONPATH=/workspace
 ENV PYTHONUNBUFFERED=1
 
-# Create non-root user for security
-RUN groupadd --gid 1000 saber && \
-    useradd --uid 1000 --gid saber --shell /bin/bash --create-home saber && \
-    chown saber:saber /workspace
-
-USER saber
-
 # Keep container running
 CMD ["tail", "-f", "/dev/null"]

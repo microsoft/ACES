@@ -1,9 +1,8 @@
-@startuml SABER MCP Architecture
+@startuml SABER MCP Architecture - Current Implementation
 
 !theme plain
-!include <archimate/Archimate>
 allowmixing
-title SABER - Model Context Protocol (MCP) Architecture
+title SABER - Model Context Protocol (MCP) Architecture - Current Implementation
 
 skinparam class {
     BackgroundColor lightblue
@@ -18,7 +17,7 @@ skinparam component {
     FontSize 10
 }
 
-package "SABER Client - MCP Architecture" {
+package "SABER Client - Current MCP Architecture" {
 
     package "inspect_ai Integration" {
         class run_saber_eval_async {
@@ -29,65 +28,69 @@ package "SABER Client - MCP Architecture" {
             +run(tasks, model): EvalLog
         }
 
-        component "inspect_ai Framework"
+        class "inspect_ai Framework" as inspect_ai_fw {
+            +mcp_server_http()
+            +native_tool_discovery
+            +header_based_context
+        }
+
+        class saber_agent {
+            +uses mcp_server_http()
+            +dynamic policy fetching
+            +session/episode context management
+            --
+            +create_agent_for_task(): Agent
+        }
     }
 
-    package "MCP Communication" {
+    package "Session Management" {
         class ClientSessionManager {
-            +REST_API_for_session_management
-            +MCP_API_for_tool_execution
-            +episode_scoped_mcp_client_pooling
+            +REST_API_only_for_session_management
+            +NO_custom_MCP_client_management
             --
             +create_session(): str
             +create_episode(session_id, task_id)
-            +ensure_episode_mcp_client(episode_id)
-            +cleanup_episode_mcp_client(episode_id)
-        }
-
-        class MCPClient {
-            +config: MCPConfig
-            +session_context: SessionContext
-            +client_session: ClientSession
-            --
-            +list_tools(): List[MCPTool]
-            +call_tool(request): MCPToolCallResponse
+            +get_policy_response(): PolicyResponse
+            +terminate_session(): bool
         }
 
         class SABERRestClient {
             +get_benchmark_info(): BenchmarkInfo
-            +get_dataset_tasks(task_ids): List[TaskInfo]
-            +post_evaluation_result()
+            +create_session(): SessionCreateResponse
+            +create_episode(): EpisodeCreateResponse
+            +get_policy_info(): PolicyResponse
+            +health_check(): Dict[str, Any]
         }
     }
 
     package "Configuration Models" {
         class SABERConfig {
-            +model: str
-            +session_config: SessionManagerConfig
-            +agent_config: AgentConfig
-            +task_ids: List[str]
-            +agent_id: str
+            +agent_assignments: List[AgentAssignment]
+            +server_url: str
+            +mcp_server_url: str
+            +task_ids: Optional[List[str]]
+            +log_level: str
+            +max_steps: int
             --
-            +create(): factory_method_with_validation
+            +validate(): void
+            +to_session_config(): SessionManagerConfig
         }
 
         class SessionManagerConfig {
             +base_url: str
-            +mcp_url: str
+            +mcp_server_url: str
             +client_id: str
-            +timeouts_and_retry_config
+            +rest_timeout: float
             --
-            +from_urls(rest_url, mcp_url)
-            +to_mcp_config(): MCPConfig
+            +from_urls(rest_url, mcp_url): SessionManagerConfig
         }
 
-        class MCPConfig {
-            +base_url: str
-            +timeout: float
-            +retry_attempts: int
-            +client_id: str
+        class AgentAssignment {
+            +agent_id: str
+            +task_ids: Optional[List[str]]
+            +agent_kwargs: Dict[str, Any]
             --
-            +get_sse_url(): str
+            +applies_to_task(task_id): bool
         }
     }
 }
@@ -95,82 +98,116 @@ package "SABER Client - MCP Architecture" {
 cloud "SABER Server" {
     package "Server MCP API" {
         class SessionMCPAPI {
-            +tool_discovery_and_execution
-            +session_context_management
-            +command_delegation_to_executors
+            +FastMCP_server_implementation
+            +header_based_session_context
+            +dynamic_tool_registration
+            +episode_specific_executors
+            --
+            +_get_headers(): RequestHeaders
+            +list_tools(): MCPToolListResponse
+            +call_tool(): MCPToolCallResponse
+            +_register_dynamic_tools(): void
         }
 
         class ExecutionManager {
             +executor_factory: ExecutorFactory
-            +sandbox_manager: SandboxManager
+            +sandbox_environment_manager: SandboxEnvironmentManager
+            +episode_based_execution
             --
-            +execute_command_in_sandbox
-            +container_lifecycle_management
-            +security_validation
+            +step(action, context): CommandResult
+            +get_executor(type, episode_id): DockerExecutor
+            +configure_for_task(): void
+        }
+
+        class RequestHeaders {
+            +session_id: Optional[str]
+            +episode_id: Optional[str]
+            +orchestration_env: OrchestrationEnvironment
+            --
+            +has_session_context: bool
+            +has_episode_context: bool
         }
     }
 
     package "Server REST API" {
         class SessionRestAPI {
-            +POST_session_create_session
-            +POST_episodes_create_episode
-            +GET_benchmark_get_tasks
+            +POST /api/v1/session
+            +POST /api/v1/session/{id}/episodes
+            +GET /api/v1/tasks
+            +GET /api/v1/session/{id}/episodes/{ep}/policy
+            +GET /api/v1/session/{id}/episodes/{ep}/task
+            +DELETE /api/v1/session/{id}/episodes/{ep}
         }
     }
 }
 
 package "MCP Protocol Flow" {
     rectangle "Agent Code" as agent
-    rectangle "MCP Protocol" as mcp_protocol
+    rectangle "inspect_ai mcp_server_http" as mcp_http
     rectangle "Server Tools" as server_tools
+    rectangle "Episode Context" as episode_context
 }
 
 ' Relationships
 run_saber_eval_async --> ClientSessionManager : orchestrates
 run_saber_eval_async --> SABERConfig : validates
-ClientSessionManager --> MCPClient : pools connections
-ClientSessionManager --> SABERRestClient : delegates REST
-MCPClient --> SessionMCPAPI : MCP protocol
+ClientSessionManager --> SABERRestClient : delegates REST only
+saber_agent --> mcp_http : uses inspect_ai native MCP
 SABERRestClient --> SessionRestAPI : HTTP requests
-SABERConfig --> SessionManagerConfig : contains
-SessionManagerConfig --> MCPConfig : converts to
+SABERConfig *-- AgentAssignment : contains
+SABERConfig --> SessionManagerConfig : converts to
 
 ' MCP Protocol Flow
-agent --> mcp_protocol : standard MCP calls
-mcp_protocol --> SessionMCPAPI : tool requests
-SessionMCPAPI --> server_tools : executes
-SessionMCPAPI --> ExecutionManager : delegates to
+agent --> mcp_http : inspect_ai native MCP calls
+mcp_http --> SessionMCPAPI : HTTP with headers
+SessionMCPAPI --> RequestHeaders : extracts context
+SessionMCPAPI --> ExecutionManager : delegates with episode_id
+ExecutionManager --> server_tools : episode-specific execution
+episode_context --> mcp_http : context headers
 
 ' inspect_ai Integration
-run_saber_eval_async ..> "inspect_ai Framework" : compatible interface
+run_saber_eval_async ..> inspect_ai_fw : compatible interface
+saber_agent ..> inspect_ai_fw : native integration
 
 note top of run_saber_eval_async
-Modern SABER Architecture
-- inspect_ai native integration
-- Standard MCP protocol compliance
+Current SABER MCP Architecture
+- inspect_ai native MCP integration via mcp_server_http()
+- No custom MCP client implementation needed
+- Header-based session/episode context
+- Episode-specific tool execution
 - Fail-fast configuration validation
-- Type-safe Pydantic models
-- No backwards compatibility
-- Clean separation of concerns
+- Multi-agent support via AgentAssignment
 end note
 
-note bottom of mcp_protocol
-MCP Benefits
-- Industry standard protocol
-- Agent portability
-- Tool discoverability
-- Session management
-- Error handling
-- Security validation
+
+
+note bottom of mcp_http
+Inspect AI Native MCP Integration
+- Uses mcp_server_http() function
+- Automatic tool discovery from server
+- Session context via HTTP headers
+- No custom MCP client management
+- Standard MCP protocol compliance
+- Seamless agent integration
 end note
 
 note right of SessionMCPAPI
-Server-Side MCP
-- FastMCP implementation
-- Tool schema generation
-- Session context handling
-- Docker sandbox execution
-- Security validation
+Server-Side MCP Implementation
+- FastMCP framework
+- Header-based context extraction
+- Dynamic tool registration per episode
+- Episode-specific executor access
+- Concurrent execution limits per episode
+- Fail-fast parameter validation
+end note
+
+note left of RequestHeaders
+MCP Context Headers
+- X-SABER-Session-ID: session identifier
+- X-SABER-Episode-ID: episode identifier
+- X-SABER-Orchestration-Env: environment type
+- Required for all MCP tool calls
+- Validated on each request
 end note
 
 @enduml

@@ -139,6 +139,9 @@ class SABERConfig:
     # Multi-agent configuration (required - new format only)
     agents: List[AgentAssignment] = field(default_factory=list)
 
+    # Domain configuration (optional - for logging organization)
+    domain: Optional[str] = field(default=None)
+
     # Container configuration
     container_timeout: int = 300
 
@@ -171,6 +174,7 @@ class SABERConfig:
         task_ids: Optional[List[str]] = None,
         log_level: str = "INFO",
         log_dir: Optional[str] = None,
+        domain: Optional[str] = None,
         ui_enabled: bool = True,
         container_timeout: int = 300,
         max_samples: Optional[int] = None,
@@ -195,6 +199,7 @@ class SABERConfig:
             task_ids: List of task IDs to execute
             log_level: Logging level
             log_dir: Log directory path
+            domain: Domain name for logging organization
             ui_enabled: Enable UI
             container_timeout: Container timeout in seconds
             max_samples: Maximum samples to process
@@ -221,6 +226,7 @@ class SABERConfig:
             session_config=session_config,
             task_ids=task_ids,
             agents=agents,
+            domain=domain,
             container_timeout=container_timeout,
             ui_enabled=ui_enabled,
             log_level=log_level,

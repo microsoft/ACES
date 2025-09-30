@@ -1,7 +1,7 @@
 @startuml Command Execution Architecture
 
 !theme plain
-title SABER Docker Sandbox Command Execution Framework - Actual Implementation
+title SABER Docker Sandbox Command Execution Framework - Episode-Based Static Compose Files
 
 skinparam class {
     BackgroundColor lightblue
@@ -23,23 +23,23 @@ package "Execution Management" {
     class ExecutionManager {
         +_config_dir: str
         +_configuration: Dict[str, Any]
-        +_executor_factory: ExecutorFactory
-        +_sandbox_manager: SandboxEnvironmentManager
+        +_executor_factory: Optional[ExecutorFactory]
+        +_sandbox_manager: Optional[SandboxEnvironmentManager]
         +_permanent_environment_manager: Optional[PermanentEnvironmentManager]
-        +_environment_loader: Optional[EnvironmentLoader]
-        +_cleanup_manager: ContainerCleanupManager
         +_active_executions: Dict[str, int]
-        +_max_concurrent_per_session: int
+        +_max_concurrent_per_episode: int
+        +_debug_mode: bool
         --
         +step(action: Action, context?: Dict): CommandResult
-        +configure_for_task(session_id: str, task: Task): void
+        +configure_for_task(episode_id: str, task: Task, session_id?: str, target_episode_id?: str): void
         +initialize_permanent_environment(permanent_manager: PermanentEnvironmentManager): void
-        +cleanup_session(session_id: str): void
-        +cleanup_all_sessions(): void
+        +cleanup_episode(episode_id: str, context?: Dict): bool
         +is_sandbox_ready(): bool
-        +to_mcp_tools(): List[Dict[str, Any]]
-        +get_executor(executor_type: str): DockerExecutor
-        +get_available_executors(): List[str]
+        +to_mcp_tools(episode_id?: str): List[Dict[str, Any]]
+        +get_executor(executor_type: str, episode_id?: str): DockerExecutor
+        +get_available_executors(episode_id?: str): List[str]
+        +get_execution_stats(): Dict[str, Any]
+        +list_commands(episode_id?: str): List[Dict[str, Any]]
         +_load_custom_executors(config_dir: str): void
     }
 
@@ -47,10 +47,13 @@ package "Execution Management" {
         +_sandbox_manager: SandboxEnvironmentManager
         +_configuration: Dict[str, Any]
         +_executor_instances: Dict[str, DockerExecutor]
-        +_allowed_executors: List[str]
+        +_all_available_executors: List[str]
+        +_episode_configurations: Dict[str, Dict[str, Any]]
         --
-        +get_available_executors(): List[str]
-        +get_executor(executor_type: str, force_new?: bool): DockerExecutor
+        +register_episode_configuration(episode_id: str, allowed_executors?: List[str], episode_config?: Dict): void
+        +unregister_episode_configuration(episode_id: str): void
+        +get_available_executors(episode_id?: str): List[str]
+        +get_executor(executor_type: str, episode_id?: str, force_new?: bool): DockerExecutor
         +create_executor(executor_type: str): DockerExecutor
         +update_configuration(config: Dict): void
         +clear_instances(): void
@@ -81,6 +84,7 @@ package "Execution Management" {
         +validate_parameters(parameters: Dict): ValidationResult
         +to_mcp_schema(): Dict[str, Any]
         +get_executor_type(): str
+        +__call__(parameters: Dict, context: Dict): CommandResult
     }
 
     class DockerExecutor {
@@ -88,12 +92,12 @@ package "Execution Management" {
         --
         {abstract} +execute(parameters: Dict, context: Dict): CommandResult
         +setup_parameters(config: Dict[str, Any]): void
-        +get_session_environment(session_id: str): DockerSandboxEnvironment
-        +ensure_container_ready(session_id: str): void
-        +cleanup_execution(session_id: str): void
-        +get_container_logs(session_id: str): str
+        +get_episode_environment(episode_id: str): ComposeOrchestrator
+        +ensure_container_ready(episode_id: str): bool
+        +cleanup_execution(episode_id: str): void
+        +get_container_logs(episode_id: str): str
         +create_with_config(sandbox_manager, config?, additional_params?, **kwargs): DockerExecutor
-        +_validate_docker_environment(session_id: str): ValidationResult
+        +_validate_docker_environment(episode_id: str): ValidationResult
     }
 }
 
@@ -138,23 +142,6 @@ package "Standard Executors (standard_registry/)" {
         +get_database_info(): Dict[str, Any]
         +to_mcp_schema(): Dict[str, Any]
         +create_with_config(sandbox_manager, config?, additional_params?, **kwargs): SQLExecutor
-    }
-
-    class EnvironmentLoader {
-        +environments_file_path: Path
-        +_permanent_manager: Optional[PermanentEnvironmentManager]
-        +_templates_cache: Optional[Dict[str, Any]]
-        --
-        +resolve_sandbox_environment(task_env_config: Any): SandboxEnvironmentSpec
-        +resolve_permanent_environment(env_name: str): PermanentEnvironmentSpec
-        +load_template(template_name: str): SandboxEnvironmentSpec
-        +build_from_granular(config: Dict[str, Any]): SandboxEnvironmentSpec
-        +_merge_template_with_additions(config: Dict[str, Any]): SandboxEnvironmentSpec
-        +_resolve_networks(network_names: List[str], templates: Dict): List[NetworkSpec]
-        +_resolve_container_config(container_name: str, templates: Dict): Dict[str, Any]
-        +_resolve_service_config(service_config: Dict, templates: Dict): ServiceSpec
-        +_allocate_unique_subnet(): str
-        +_load_templates(): Dict[str, Any]
     }
 
     class SecurityValidator {
@@ -232,15 +219,22 @@ package "Docker Sandbox" <<stereototype S>> {
 
     class SandboxEnvironmentManager {
         +sandbox_config: Dict[str, Any]
-        +active_sessions: Dict[str, DockerSandboxEnvironment]
+        +active_orchestrators: Dict[str, ComposeOrchestrator]
+        +episode_compose_files: Dict[str, Path]
+        +domain: str
+        +environments_base_path: Path
+        +logging_config: Dict[str, Any]
+        +_is_ready: bool
         --
-        +create_session_environment(): DockerSandboxEnvironment
-        +get_session_environment(): Optional[DockerSandboxEnvironment]
-        +cleanup_session(): void
-        +cleanup_all_sessions(): void
-        +list_active_sessions(): List[str]
-        +get_session_count(): int
+        +is_ready(): bool
+        +wait_for_ready(timeout: int): bool
+        +create_episode_environment(episode_id: str, sandbox_environment: str, target_episode_id?: str): bool
+        +get_episode_environment(episode_id: str): Optional[ComposeOrchestrator]
+        +stop_episode_environment(episode_id: str): bool
+        +list_active_episodes(): List[str]
+        +get_episode_count(): int
         +get_sandbox_config(): Dict[str, Any]
+        +_get_compose_file_path(sandbox_environment: str): Path
     }
 
     class PermanentEnvironmentManager {
@@ -251,52 +245,54 @@ package "Docker Sandbox" <<stereototype S>> {
         +start_permanent_services(env_spec: PermanentEnvironmentSpec): void
         +stop_permanent_services(): void
         +get_service_endpoints(service_name: str): ServiceEndpoints
-        +connect_sandbox_to_permanent(sandbox_env: DockerSandboxEnvironment): void
+        +connect_sandbox_to_permanent(sandbox_env: ComposeOrchestrator, episode_id: str): void
         +is_service_healthy(service_name: str): bool
         +list_permanent_services(): List[str]
         +get_permanent_network_info(): Dict[str, Any]
     }
 
-    class DockerSandboxEnvironment {
-        +session_id: str
-        +environment_spec: SandboxEnvironmentSpec
-        +compose_project: ComposeProject
-        +docker_client: DockerClient
-        +compose_client: ComposeClient
-        +active_services: Dict[str, Container]
-        +connected_networks: List[str]
+    class ComposeOrchestrator {
+        +execution_service_name: Optional[str]
+        +episode_id: Optional[str]
+        +compose_file_path: Optional[Path]
+        +compose_data: Optional[dict]
+        +_docker_client: Any
+        +config_type: str
+        +container_logger: Optional[ContainerLoggingManager]
+        +health_checker: ComposeHealthChecker
+        +project_name: str
         --
-        +start(): void
-        +stop(): void
-        +execute_command(): CommandResult
-        +copy_to_container(): void
-        +copy_from_container(): void
-        +get_execution_container(): Container
-        +get_service_container(service_name: str): Optional[Container]
-        +connect_to_networks(networks: List[str]): void
-        +list_active_services(): List[str]
-        +is_healthy(): bool
+        +start_environment(compose_file_path: str, config: ComposeEnvironmentConfig): subprocess.CompletedProcess
+        +stop_environment(): subprocess.CompletedProcess
+        +execute_command(command: str, working_dir?: str, timeout?: float, env_vars?: Dict): CommandResult
+        +copy_to_container(source: str, dest: str): bool
+        +copy_from_container(source: str, dest: str): bool
+        +get_execution_service_name(): str
+        +list_services(): List[str]
         +is_service_healthy(service_name: str): bool
-        +get_service_info(): Dict[str, Any]
-        +get_service_logs(service_name: str): str
-        +_generate_compose_config(): Dict[str, Any]
-        +_track_service_containers(): void
+        +get_service_info(service_name: str): Dict[str, Any]
+        +get_service_logs(service_name?: str, tail?: int): str
+        +_identify_execution_service(compose_path: Path): str
+        +_inject_episode_network(compose_file: str, config: ComposeEnvironmentConfig, env_vars: Dict): str
+        +_log_resolved_compose_config(compose_file: str, env_vars: Dict): void
     }
 
-    class SandboxEnvironmentSpec {
-        +execution_config: Dict[str, Any]
-        +target_services: List[ServiceSpec]
-        +networks: List[NetworkSpec]
-        +template_name: Optional[str]
-        +overrides: Dict[str, Any]
+    class ComposeEnvironmentConfig {
+        +episode_id: str
+        +config_type: str
+        +target_episode_id: Optional[str]
+        +sandbox_environment: Optional[str]
         --
-        +get_execution_service(): str
-        +get_all_services(): List[str]
-        +get_service_count(): int
-        +to_compose_dict(): Dict[str, Any]
-        +from_template_reference(template_name: str): SandboxEnvironmentSpec
-        +from_granular_config(config: Dict): SandboxEnvironmentSpec
-        +apply_overrides(overrides: Dict): void
+        +get_project_name(): str
+        +to_env_dict(): Dict[str, str]
+        +from_sandbox_config(episode_id: str, sandbox_environment: str, target_episode_id?: str): ComposeEnvironmentConfig
+        +from_permanent_config(permanent_environment: str): ComposeEnvironmentConfig
+    }
+
+    class ComposeHealthChecker {
+        +check_service_health(container: Container): bool
+        +wait_for_healthy(containers: List[Container], timeout: int): bool
+        +get_service_status(container: Container): str
     }
 
     class PermanentEnvironmentSpec {
@@ -318,18 +314,6 @@ package "Docker Sandbox" <<stereototype S>> {
         +volumes: List[str]
         +health_check: Optional[HealthCheck]
         +restart_policy: str
-        --
-        +to_compose_service(): Dict[str, Any]
-    }
-
-    class ServiceSpec {
-        +name: str
-        +image: str
-        +ports: List[str]
-        +environment: Dict[str, str]
-        +volumes: List[str]
-        +depends_on: List[str]
-        +health_check: Optional[HealthCheck]
         --
         +to_compose_service(): Dict[str, Any]
     }
@@ -361,9 +345,7 @@ DockerExecutor <|-- SQLExecutor
 
 ' Execution Manager composition relationships
 ExecutionManager *-- ExecutorFactory
-ExecutionManager *-- EnvironmentLoader
 ExecutionManager *-- SandboxEnvironmentManager
-ExecutionManager *-- ContainerCleanupManager
 ExecutionManager ..> PermanentEnvironmentManager : optional
 
 ' Factory and Registry relationships
@@ -373,17 +355,15 @@ ExecutorRegistry o-- PythonExecutor : registers
 ExecutorRegistry o-- SQLExecutor : registers
 
 ' Sandbox relationships
-SandboxEnvironmentManager *-- DockerSandboxEnvironment
+SandboxEnvironmentManager *-- ComposeOrchestrator
 PermanentEnvironmentManager *-- PermanentServiceSpec
-DockerSandboxEnvironment *-- SandboxEnvironmentSpec
-SandboxEnvironmentSpec *-- ServiceSpec
-SandboxEnvironmentSpec *-- NetworkSpec
+ComposeOrchestrator *-- ComposeHealthChecker
+ComposeOrchestrator ..> ComposeEnvironmentConfig : uses
 PermanentEnvironmentSpec *-- PermanentServiceSpec
 PermanentEnvironmentSpec *-- NetworkSpec
-ServiceSpec *-- HealthCheck
 PermanentServiceSpec *-- HealthCheck
 DockerExecutor *-- SandboxEnvironmentManager
-DockerSandboxEnvironment ..> CommandResult
+ComposeOrchestrator ..> CommandResult
 
 ' Executor-specific relationships
 BashExecutor *-- SecurityValidator
@@ -398,17 +378,19 @@ CommandExecutor ..> CommandResult
 CommandExecutor ..> ValidationResult
 
 note top of ExecutionManager
-**Docker Compose Execution Manager - Actual Implementation**
+**Episode-Based Docker Compose Execution Manager**
 Central hub with registry-based executor discovery:
+- Episode-scoped execution tracking (not session-scoped)
 - Optional permanent environment manager (initialized separately)
-- Concurrent execution tracking per session (max_concurrent_per_session = 3)
+- Concurrent execution tracking per episode (max_concurrent_per_episode = 3)
 - Custom executor loading from config directory
 - Registry-based executor discovery and instantiation
-- Task-based configuration with environment resolution
-- Container cleanup manager for unified resource management
-- Session-scoped container lifecycle management
+- Task-based configuration with static compose file resolution
+- Episode-scoped container lifecycle management
 - MCP tools integration with dynamic schema generation
 - Async execution pattern with context passing
+- Direct component cleanup (no CleanupManager)
+- Debug mode support via SABER_DEBUG_MODE env variable
 end note
 
 note top of ExecutorRegistry
@@ -420,79 +402,81 @@ Self-registering executor pattern:
 - Validation of executor classes during registration
 - Source tracking for debugging and conflict resolution
 - Thread-safe registration process
+- Single global registry instance (executor_registry)
 end note
 
-note right of SandboxEnvironmentSpec
-**Task Environment Specification - Unchanged**
-Declarative configuration for complete task execution environment:
-- Execution container configuration (CLI tools, security settings)
-- Target service specifications (vulnerable web apps, databases, etc.)
-- Network topology and isolation requirements
-- Docker Compose orchestration for all environments
-- Health check definitions for reliable service startup
-- Service dependency declarations for proper startup ordering
+note right of ComposeEnvironmentConfig
+**Episode Environment Configuration**
+Declarative configuration for episode-specific environments:
+- Episode-scoped compose project naming
+- Static compose file reference (e.g., "excytin_sandbox")
+- Optional target episode for network attachment
+- Environment variable substitution for compose files
+- Automatic network injection for episode dependencies
+- Configuration type tracking (sandbox vs permanent)
 end note
 
 note bottom of SandboxEnvironmentManager
-**Docker Compose Sandbox Environment Manager - Unchanged**
-Manages ephemeral sandbox environments using Docker Compose orchestration:
-- Creates DockerSandboxEnvironment instances from SandboxEnvironmentSpec
-- Session-scoped lifecycle management for isolated execution environments
-- Docker Compose orchestration for all sandbox environments
-- Session lifecycle management with proper cleanup
+**Static Compose File Sandbox Manager**
+Manages ephemeral sandbox environments using static compose files:
+- Episode-scoped lifecycle management (not session-scoped)
+- Static compose file resolution from environments/sandbox directory
+- Episode-specific project naming for Docker Compose
+- ComposeOrchestrator instances per episode
 - Health monitoring across all sandbox services
-- Resource tracking and limits enforcement
-- Network isolation and security boundaries
+- Episode environment creation with optional network attachment
+- Lazy validation of environments directory
 end note
 
 note bottom of PermanentEnvironmentManager
-**Permanent Environment Manager - Unchanged**
+**Permanent Environment Manager**
 Manages server-scoped persistent services that remain active across episodes:
 - Creates and manages long-lived Docker services on server startup
 - Provides permanent network bridge for cross-episode service sharing
 - Service health monitoring and automatic recovery
 - Service endpoint discovery for connecting sandbox environments
+- Network attachment for episode orchestrators
 - Graceful shutdown coordination with server lifecycle
 - Persistent storage and configuration management
 end note
 
-note left of EnvironmentLoader
-**Environment Configuration Resolver - Enhanced**
-Flexible environment specification resolution with permanent environment integration:
-- Sandbox environment template reference resolution (string → SandboxEnvironmentSpec)
-- Permanent environment reference resolution (string → PermanentEnvironmentSpec)
-- Granular configuration building (dict → SandboxEnvironmentSpec)
-- Hybrid template + additions approach
-- Multi-network configuration support including permanent networks
-- Dynamic subnet allocation for network isolation
-- YAML template caching and validation
-- Multi-container orchestration support
-- Docker Compose configuration generation
-end note
-
-note top of DockerSandboxEnvironment
-**Docker Compose Environment - Unchanged**
-Unified Docker Compose orchestration for all sandbox environments:
-- Always uses Docker Compose workflow (1 to many containers)
-- Tracks all service containers (execution + target services)
-- Execution service for agent command execution
-- Target services for task-specific environments
+note top of ComposeOrchestrator
+**Static Compose File Orchestrator**
+Unified Docker Compose orchestration using static compose files:
+- Always uses Docker Compose CLI workflow
+- Static compose file with environment variable substitution
+- Episode-specific project naming for isolation
+- Automatic network injection for episode dependencies
+- Execution service identification via labels
 - Per-service health monitoring and log access
-- Service discovery and network isolation
-- Health checks and dependency management
-- Unified interface regardless of service count
+- Command execution in designated execution service
+- Container lifecycle logging via ContainerLoggingManager
+- Health checks via ComposeHealthChecker
 end note
 
 note top of CommandExecutor
-**Base Command Execution Framework - Updated**
+**Base Command Execution Framework**
 Async execution with registry integration:
 - Async execute method with parameters and context
+- Callable interface via __call__ for intuitive usage
 - Config-based parameter management during initialization
 - Abstract setup_parameters method for executor-specific configuration
 - Default configuration provider for standardized config handling
 - Parameter validation and MCP schema generation
 - create_with_config factory method for standardized instantiation
 - Timeout configuration from config dictionary
+end note
+
+note top of ExecutorFactory
+**Episode-Aware Executor Factory**
+Dynamic executor creation with episode-specific configuration:
+- Episode-specific allowed executor lists
+- Registry-based executor class lookup
+- Episode configuration registration/unregistration
+- Executor instance caching and reuse
+- Configuration management per episode
+- Validates executor availability per episode
+- Falls back to all executors if episode not configured
 end note
 
 note right of BashExecutor

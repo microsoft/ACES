@@ -16,7 +16,6 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
-from dotenv import load_dotenv
 from inspect_ai import eval_async
 from inspect_ai.log import EvalLog
 
@@ -270,8 +269,6 @@ async def run_saber_eval_async(config: SABERConfig) -> Union[EvalLog, None]:
         EvalLog or None depending on eval_async output format.
     """
 
-    load_dotenv(dotenv_path=".env", override=True, verbose=True)
-
     log_operation_start(
         logger,
         "run_eval_async",
@@ -348,16 +345,49 @@ async def run_saber_eval_async(config: SABERConfig) -> Union[EvalLog, None]:
             if config.model_args:
                 eval_kwargs["model_args"] = config.model_args
 
-            log_dir_value = getattr(config, "log_dir", None)
+            log_dir_value = config.log_dir
+            logger.info(
+                "Log directory configuration check",
+                extra={
+                    "event": "eval_async_log_dir_check",
+                    "log_dir_value": log_dir_value,
+                    "config_log_dir": config.log_dir,
+                    "domain": getattr(config, "domain", None),
+                    "config_domain": config.domain,
+                    "session_id": session_id,
+                },
+            )
             if log_dir_value:
-                session_log_path = Path(log_dir_value) / session_id
+                base_log_path = Path(log_dir_value)
+
+                # Use domain-aware directory structure if domain is specified
+                if config.domain:
+                    # For inspect-ai .eval files, we want them in logs/{domain}/{session_id}/
+                    # not in logs/{domain}/client-logs/{domain}/{session_id}/
+                    # So we use the domain logs root, not the client-logs subdirectory
+                    domain_log_root = Path("logs") / config.domain
+                    session_log_path = domain_log_root / session_id
+                    logger.info(
+                        "Domain-aware log directory configured",
+                        extra={
+                            "event": "eval_async_domain_log_directory",
+                            "domain": config.domain,
+                            "eval_log_path": str(session_log_path),
+                        },
+                    )
+                else:
+                    # logs/{session_id}/ (legacy behavior)
+                    session_log_path = base_log_path / session_id
+
                 eval_kwargs["log_dir"] = str(session_log_path)
+                session_log_dir = str(session_log_path)  # Set for log upload discovery
                 session_log_path.mkdir(parents=True, exist_ok=True)
                 logger.info(
                     "Session-specific log directory prepared",
                     extra={
                         "event": "eval_async_log_directory_prepared",
                         "session_log_dir": str(session_log_path),
+                        "domain": config.domain,
                     },
                 )
             else:
@@ -402,6 +432,27 @@ async def run_saber_eval_async(config: SABERConfig) -> Union[EvalLog, None]:
                     extra={
                         "event": "eval_async_sample_limit_set",
                         "max_samples": config.max_samples,
+                    },
+                )
+
+            # Configure display mode based on ui_enabled setting
+            ui_enabled = getattr(config, "ui_enabled", True)
+            if ui_enabled:
+                eval_kwargs["display"] = "full"  # Enable full TUI display
+                logger.info(
+                    "Full TUI display enabled",
+                    extra={
+                        "event": "eval_async_ui_enabled",
+                        "display_mode": "full",
+                    },
+                )
+            else:
+                eval_kwargs["display"] = "rich"  # Use rich console output without TUI
+                logger.info(
+                    "Rich console display enabled",
+                    extra={
+                        "event": "eval_async_ui_disabled",
+                        "display_mode": "rich",
                     },
                 )
 
@@ -450,6 +501,11 @@ async def run_saber_eval_async(config: SABERConfig) -> Union[EvalLog, None]:
                     },
                 )
                 raise
+
+            # Post-evaluation: Move .eval files to domain-specific directory if domain is configured
+            # Note: _move_eval_files_to_domain_directory not implemented yet
+            # if config.domain and log_dir_value:
+            #     _move_eval_files_to_domain_directory(config, session_id, logger)
 
             if config.log_upload_enabled and session_log_dir:
                 try:

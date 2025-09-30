@@ -15,8 +15,6 @@ import signal
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
-from pathlib import Path
 from typing import Any, Dict, Optional
 
 import yaml
@@ -83,62 +81,12 @@ Examples:
 
     return parser
 
-def find_config_directory(domain_name: str, config_dir_override: Optional[str] = None) -> str:
-    """Find configuration directory for the domain."""
-
-    if config_dir_override:
-        config_dir = config_dir_override
-    else:
-        # Try environment variable first
-        config_dir_env = os.getenv("SABER_CONFIG_DIR")
-
-        if config_dir_env:
-            config_dir = config_dir_env
-        else:
-            # Try common locations
-            possible_paths = [
-                f"./config/{domain_name}",
-                f"./configs/{domain_name}",
-                f"./examples/{domain_name}/server/config",
-                "./config",
-                "./configs",
-            ]
-
-            for path in possible_paths:
-                if os.path.exists(path):
-                    config_dir = path
-                    break
-
-    if not config_dir:
-        raise FileNotFoundError(
-            f"Configuration directory not found for domain '{domain_name}'. "
-            f"Please specify --config-dir or set SABER_CONFIG_DIR environment variable."
-        )
-
-    if not os.path.exists(config_dir):
-        raise FileNotFoundError(f"Configuration directory does not exist: {config_dir}")
-
-    return config_dir
-
-def validate_config_files(config_dir: str) -> tuple[str, str]:
-    """Validate that required config files exist."""
-
-    tasks_config_dir = os.path.join(config_dir, "tasks")
-    environments_config_dir = os.path.join(config_dir, "environments")
-
-    if not os.path.exists(tasks_config_dir):
-        raise FileNotFoundError(f"Tasks configuration directory not found: {tasks_config_dir}")
-
-    if not os.path.exists(environments_config_dir):
-        raise FileNotFoundError(f"Environments configuration directory not found: {environments_config_dir}")
-
-    return tasks_config_dir, environments_config_dir
-
 
 class ServerConfigError(Exception):
     """Exception raised for server configuration errors."""
 
     pass
+
 
 def resolve_domains_root(domains_root_arg: Optional[str]) -> Path:
     """Resolve domains root directory with fail-fast validation."""
@@ -451,7 +399,7 @@ def setup_server_logging(domain_name: str, config_dir: str, verbose: bool = Fals
     base_config = LoggingConfig.from_env()
     server_config = LoggingConfig(
         level=logging.DEBUG if verbose else base_config.level,
-        console=base_config.console,
+        console=False,  # Disable console logging - file only
         structured=base_config.structured,
         enable_file=True,  # Always enable file logging for server
         log_dir=server_logs_dir,
@@ -476,8 +424,18 @@ def main() -> None:
 
     # Find configuration directory early to set up proper logging
     try:
-        config_dir = find_config_directory(args.domain, args.config_dir)
-    except FileNotFoundError as e:
+        domains_root = resolve_domains_root(args.domains_root)
+        # Simple early path resolution for logging setup
+        domain_path = domains_root / args.domain
+        config_dir = str(domain_path / "server" / "config")
+
+        # Basic validation that domain and config exist
+        if not domain_path.exists():
+            raise ServerConfigError(f"Domain directory does not exist: {domain_path}")
+        if not Path(config_dir).exists():
+            raise ServerConfigError(f"Configuration directory does not exist: {config_dir}")
+
+    except ServerConfigError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 

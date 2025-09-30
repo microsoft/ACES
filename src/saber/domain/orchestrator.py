@@ -13,10 +13,13 @@ import socket
 import subprocess
 import tempfile
 import time
+from importlib.resources import files
 from pathlib import Path
 from typing import Any, Dict, List
 
 import yaml
+
+import saber.domain.package_resources
 
 from .exceptions import DockerError, DomainNotFoundError, DomainValidationError
 from .resources import resolve_schema_file
@@ -143,6 +146,7 @@ class EnvironmentValidator:
         mcp_port: int = 8001,
         log_level: str = "INFO",
         skip_image_check: bool = False,
+        skip_port_check: bool = False,
     ) -> Dict[str, str]:
         """Generate and validate environment variables for server-only architecture.
 
@@ -153,6 +157,7 @@ class EnvironmentValidator:
             mcp_port: MCP protocol port
             log_level: Logging level
             skip_image_check: Skip Docker image existence check
+            skip_port_check: Skip port availability check (for status checks)
 
         Returns:
             Dict of environment variables for docker-compose
@@ -162,14 +167,18 @@ class EnvironmentValidator:
         """
         errors = []
 
-        # Validate ports are available
-        for port_name, port_num in [("REST", rest_port), ("MCP", mcp_port)]:
-            if not self._is_port_available(port_num):
-                errors.append(f"Port {port_num} ({port_name}) is already in use")
+        # Validate ports are available (unless skipping for status checks)
+        if not skip_port_check:
+            for port_name, port_num in [("REST", rest_port), ("MCP", mcp_port)]:
+                if not self._is_port_available(port_num):
+                    errors.append(f"Port {port_num} ({port_name}) is already in use")
 
-        # Validate server image exists (unless building)
+        # Validate all domain images exist (unless building)
         if not skip_image_check:
-            self._validate_server_image(manifest, errors)
+            # First validate base images
+            self._validate_base_images(errors, self.domains_root.parent / "external" / "saber")
+            # Then validate domain images
+            self._validate_all_images(manifest, errors)
 
         if errors:
             raise DomainValidationError(domain, errors)
@@ -184,16 +193,47 @@ class EnvironmentValidator:
             "LOG_LEVEL": log_level,
         }
 
-    def _validate_server_image(self, manifest: Dict[str, Any], errors: List[str]) -> None:
-        """Validate server Docker image exists."""
-        server_config = manifest.get("images", {}).get("server")
+    def _validate_all_images(self, manifest: Dict[str, Any], errors: List[str]) -> None:
+        """Validate all domain images exist."""
+        images_config = manifest.get("images", {})
+        if not images_config:
+            errors.append("No images configuration found in manifest")
+            return
+
+        # Validate server image (required)
+        server_config = images_config.get("server")
         if not server_config:
             errors.append("No server image configuration found in manifest")
             return
 
-        image_tag = server_config["tag"]
-        if not self._docker_image_exists(image_tag):
-            errors.append(f"Server Docker image '{image_tag}' not found. " f"Use --build to create it.")
+        # Validate all images defined in the manifest
+        for image_name, image_config in images_config.items():
+            if not isinstance(image_config, dict):
+                errors.append(f"Image '{image_name}' configuration must be a dictionary")
+                continue
+
+            image_tag = image_config.get("tag")
+            if not image_tag:
+                errors.append(f"Image '{image_name}' missing required 'tag' field")
+                continue
+
+            if not self._docker_image_exists(image_tag):
+                errors.append(f"Docker image '{image_tag}' not found. Use --build to create it.")
+
+    def _validate_base_images(self, errors: List[str], saber_root: Path) -> None:
+        """Validate base images exist."""
+        try:
+            # Load base images config directly
+            base_images_file = saber_root / "src" / "saber" / "domain" / "package_resources" / "base-images.yaml"
+            with open(base_images_file, "r") as f:
+                base_images_config = yaml.safe_load(f)
+
+            for image_name, image_config in base_images_config["images"].items():
+                image_tag = image_config["tag"]
+                if not self._docker_image_exists(image_tag):
+                    errors.append(f"Base image '{image_tag}' not found. Use --build to create it.")
+        except Exception as e:
+            errors.append(f"Failed to validate base images: {e}")
 
     def _is_port_available(self, port: int) -> bool:
         """Check if a port is available."""
@@ -217,16 +257,25 @@ class EnvironmentValidator:
 class DockerRunner:
     """Service for executing Docker operations."""
 
-    def __init__(self, compose_file: Path):
+    def __init__(self, compose_file: Path, domains_root: Path):
         self.compose_file = compose_file.resolve()
+        self.domains_root = domains_root
         if not self.compose_file.exists():
             raise DockerError(f"Compose file not found: {self.compose_file}", command=None)
 
         # Validate Docker is available
         self._validate_docker()
 
+    def _docker_image_exists(self, image_tag: str) -> bool:
+        """Check if Docker image exists locally."""
+        try:
+            result = subprocess.run(["docker", "image", "inspect", image_tag], capture_output=True, check=False)
+            return result.returncode == 0
+        except Exception:
+            return False
+
     def build_images(self, domain: str, manifest: Dict[str, Any], domains_root: Path, dry_run: bool = False) -> None:
-        """Build server Docker image for domain.
+        """Build all Docker images defined in domain manifest.
 
         Args:
             domain: Domain name
@@ -238,41 +287,164 @@ class DockerRunner:
             DockerError: If build fails
         """
         domain_path = domains_root / domain
+        images_config = manifest.get("images", {})
 
-        # Only build server image
-        server_config = manifest.get("images", {}).get("server")
-        if not server_config:
-            raise DockerError("No server image configuration found in manifest")
+        if not images_config:
+            raise DockerError("No images configuration found in manifest")
 
-        dockerfile_path = domain_path / server_config["dockerfile"]
-        image_tag = server_config["tag"]
-        build_args = server_config.get("buildArgs", {})
-        labels = server_config.get("labels", {})
+        # Ensure base images exist first
+        print("🔍 Checking base image dependencies...")
+        self.ensure_base_images(dry_run)
 
-        # Prepare build command
-        cmd = ["docker", "build", "-f", str(dockerfile_path), "-t", image_tag, str(domain_path)]
+        # Build all images defined in manifest
+        built_count = 0
+        for image_name, image_config in images_config.items():
+            if not isinstance(image_config, dict):
+                raise DockerError(f"Image '{image_name}' configuration must be a dictionary")
 
-        # Add build args
-        for key, value in build_args.items():
-            cmd.extend(["--build-arg", f"{key}={value}"])
+            dockerfile = image_config.get("dockerfile")
+            if not dockerfile:
+                raise DockerError(f"Image '{image_name}' missing required 'dockerfile' field")
 
-        # Add labels
-        for key, value in labels.items():
-            cmd.extend(["--label", f"{key}={value}"])
+            image_tag = image_config.get("tag")
+            if not image_tag:
+                raise DockerError(f"Image '{image_name}' missing required 'tag' field")
 
-        # Add git metadata if available
-        self._add_git_metadata(cmd, domain_path)
+            dockerfile_path = domain_path / dockerfile
+            if not dockerfile_path.exists():
+                raise DockerError(f"Dockerfile not found: {dockerfile_path}")
 
-        if dry_run:
-            print(f"Would build server: {' '.join(cmd)}")
+            # Get build context (defaults to domain root)
+            context = image_config.get("context", ".")
+            context_path = domain_path / context
+            if not context_path.exists():
+                raise DockerError(f"Build context not found: {context_path}")
+
+            build_args = image_config.get("buildArgs", {})
+            labels = image_config.get("labels", {})
+
+            # Prepare build command
+            cmd = ["docker", "build", "-f", str(dockerfile_path), "-t", image_tag, str(context_path)]
+
+            # Add build args
+            for key, value in build_args.items():
+                cmd.extend(["--build-arg", f"{key}={value}"])
+
+            # Add labels
+            for key, value in labels.items():
+                cmd.extend(["--label", f"{key}={value}"])
+
+            # Add git metadata if available
+            self._add_git_metadata(cmd, domain_path)
+
+            if dry_run:
+                print(f"Would build {image_name}: {' '.join(cmd)}")
+                continue
+
+            print(f"Building {image_name} image: {image_tag}")
+            try:
+                subprocess.run(cmd, check=True, cwd=domain_path)
+                print(f"✓ Successfully built {image_tag}")
+                built_count += 1
+            except subprocess.CalledProcessError as e:
+                raise DockerError(f"Failed to build {image_name} image {image_tag}: {e}")
+
+        if not dry_run:
+            print(f"✓ Successfully built {built_count} images for domain '{domain}'")
+
+    def ensure_base_images(self, dry_run: bool = False) -> None:
+        """Ensure base images exist, build if missing.
+
+        Args:
+            dry_run: If True, show commands without executing
+
+        Raises:
+            DockerError: If base image build fails
+        """
+        base_images_config = self._load_base_images_config()
+        missing_images = []
+
+        # Check which base images are missing
+        for image_name, image_config in base_images_config["images"].items():
+            image_tag = image_config["tag"]
+            if not self._docker_image_exists(image_tag):
+                missing_images.append((image_name, image_config))
+
+        if not missing_images:
+            print("✓ All base images are available")
             return
 
-        print(f"Building server image: {image_tag}")
+        print(f"🔨 Building {len(missing_images)} missing base images...")
+
+        for image_name, image_config in missing_images:
+            dockerfile = image_config["dockerfile"]
+            image_tag = image_config["tag"]
+            labels = image_config.get("labels", {})
+
+            # Handle package:// scheme for packaged Dockerfiles
+            if dockerfile.startswith("package://"):
+                package_path = dockerfile[len("package://") :]
+                self._build_base_image_from_package(image_name, image_tag, package_path, labels, dry_run)
+            else:
+                raise DockerError(f"Unsupported dockerfile path format: {dockerfile}")
+
+    def _build_base_image_from_package(
+        self, image_name: str, image_tag: str, package_path: str, labels: Dict[str, str], dry_run: bool
+    ) -> None:
+        """Build base image from packaged Dockerfile with repo root context."""
+        import tempfile
+
         try:
-            subprocess.run(cmd, check=True, cwd=domain_path)
-            print(f"✓ Successfully built {image_tag}")
+            # Use repo root as build context to access external/saber
+            repo_root = self.domains_root.parent
+
+            # Create temporary Dockerfile in repo root
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".dockerfile", dir=repo_root, delete=False
+            ) as temp_dockerfile:
+                # Copy Dockerfile content from package resources
+                dockerfile_resource = files(saber.domain.package_resources) / package_path
+
+                with dockerfile_resource.open("r") as src:
+                    temp_dockerfile.write(src.read())
+
+                temp_dockerfile_path = Path(temp_dockerfile.name)
+
+            try:
+                # Prepare build command with repo root as context
+                cmd = ["docker", "build", "-f", str(temp_dockerfile_path), "-t", image_tag, str(repo_root)]
+
+                # Add labels
+                for key, value in labels.items():
+                    cmd.extend(["--label", f"{key}={value}"])
+
+                if dry_run:
+                    print(f"Would build base image {image_name}: {' '.join(cmd)}")
+                    return
+
+                print(f"Building base image: {image_tag}")
+                subprocess.run(cmd, check=True, cwd=repo_root)
+                print(f"✓ Successfully built {image_tag}")
+
+            finally:
+                # Clean up temporary Dockerfile
+                if temp_dockerfile_path.exists():
+                    temp_dockerfile_path.unlink()
+
         except subprocess.CalledProcessError as e:
-            raise DockerError(f"Failed to build server image {image_tag}: {e}")
+            raise DockerError(f"Failed to build base image {image_tag}: {e}")
+        except Exception as e:
+            raise DockerError(f"Failed to prepare base image build context: {e}")
+
+    def _load_base_images_config(self) -> Dict[str, Any]:
+        """Load base images configuration."""
+        try:
+            base_images_file = files(saber.domain.package_resources) / "base-images.yaml"
+            with base_images_file.open("r") as f:
+                config: Dict[str, Any] = yaml.safe_load(f)
+                return config
+        except Exception as e:
+            raise DockerError(f"Failed to load base images configuration: {e}")
 
     def start_services(self, domain: str, env_vars: Dict[str, str], dry_run: bool = False) -> None:
         """Start domain services using docker-compose.
@@ -384,25 +556,6 @@ class DockerRunner:
             except Exception:
                 pass
 
-    def get_status(self, domain: str) -> Dict[str, Any]:
-        """Get status of domain services.
-
-        Args:
-            domain: Domain name
-
-        Returns:
-            Dict containing service status information
-        """
-        cmd = ["docker", "compose", "-f", str(self.compose_file), "--project-name", domain, "ps", "--format", "json"]
-
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            return {"running": True, "services": json.loads(result.stdout)}
-        except subprocess.CalledProcessError:
-            return {"running": False, "services": []}
-        except json.JSONDecodeError:
-            return {"running": False, "services": [], "error": "Failed to parse status"}
-
     def _validate_docker(self) -> None:
         """Validate Docker and Docker Compose are available."""
         for cmd in [["docker", "--version"], ["docker", "compose", "version"]]:
@@ -453,7 +606,7 @@ class DomainOrchestrator:
     def __init__(self, domains_root: Path, compose_file: Path):
         self.manifest_loader = ManifestLoader(domains_root)
         self.environment_validator = EnvironmentValidator(domains_root)
-        self.docker_runner = DockerRunner(compose_file)
+        self.docker_runner = DockerRunner(compose_file, domains_root)
 
     def list_domains(self) -> List[str]:
         """List all available domains."""
@@ -505,13 +658,86 @@ class DomainOrchestrator:
         self.docker_runner.build_images(domain, manifest, self.manifest_loader.domains_root, dry_run)
 
     def get_domain_status(self, domain: str) -> Dict[str, Any]:
-        """Get domain status."""
-        # Validate domain exists
-        manifest = self.manifest_loader.load_manifest(domain)
+        """Get domain status with full health information."""
+        # Load manifest to get environment variables for proper compose context
+        try:
+            manifest = self.manifest_loader.load_manifest(domain)
+        except Exception as e:
+            return {"running": False, "services": [], "error": f"Domain manifest unavailable: {e}"}
 
-        # Get status
-        status = self.docker_runner.get_status(domain)
-        status["domain"] = domain
-        status["manifest"] = manifest
+        # Generate environment variables (reuse the same logic as start_domain)
+        try:
+            env_vars = self.environment_validator.generate_environment(
+                domain, manifest, 8000, 8001, "INFO", skip_image_check=True, skip_port_check=True
+            )
+        except Exception as e:
+            return {"running": False, "services": [], "error": f"Environment generation failed: {e}"}
 
-        return status
+        # Use docker compose ps with proper environment context for authoritative status
+        cmd = [
+            "docker",
+            "compose",
+            "-f",
+            str(self.docker_runner.compose_file),
+            "--project-name",
+            domain,
+            "ps",
+            "--format",
+            "json",
+        ]
+
+        try:
+            # Create environment with necessary variables
+            compose_env = os.environ.copy()
+            compose_env.update(env_vars)
+
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True, env=compose_env)
+            if result.stdout.strip():
+                # Parse JSON output - docker compose ps --format json returns one JSON object per line
+                services = []
+                for line in result.stdout.strip().split("\n"):
+                    if line.strip():
+                        service_info = json.loads(line)
+                        services.append(service_info)
+
+                # Check if any services are running (State == "running")
+                running = any(service.get("State") == "running" for service in services)
+
+                # Extract health information from the first service
+                health_status = "unknown"
+                if services:
+                    # Check health from Status field (e.g., "Up 8 minutes (unhealthy)")
+                    status_text = services[0].get("Status", "")
+                    if "unhealthy" in status_text.lower():
+                        health_status = "unhealthy"
+                    elif "healthy" in status_text.lower():
+                        health_status = "healthy"
+                    elif "up" in status_text.lower() and running:
+                        health_status = "healthy"  # Default to healthy if running and no explicit health info
+
+                return {
+                    "running": running,
+                    "services": services,
+                    "health_status": health_status,
+                    "domain": domain,
+                    "manifest": manifest,
+                }
+            else:
+                return {"running": False, "services": [], "health_status": "stopped", "domain": domain}
+
+        except subprocess.CalledProcessError as e:
+            return {
+                "running": False,
+                "services": [],
+                "error": f"Docker compose ps failed: {e}",
+                "health_status": "error",
+                "domain": domain,
+            }
+        except json.JSONDecodeError as e:
+            return {
+                "running": False,
+                "services": [],
+                "error": f"Failed to parse status: {e}",
+                "health_status": "error",
+                "domain": domain,
+            }

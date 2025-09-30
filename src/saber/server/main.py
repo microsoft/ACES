@@ -82,7 +82,7 @@ def _setup_server_logging(domain_name: str, config_dir: Path) -> LoggingConfig:
     base_config = LoggingConfig.from_env()
     server_config = LoggingConfig(
         level=base_config.level,
-        console=base_config.console,
+        console=False,  # Disable console logging - file only
         structured=base_config.structured,
         enable_file=True,  # Always enable file logging for server
         log_dir=server_logs_dir,

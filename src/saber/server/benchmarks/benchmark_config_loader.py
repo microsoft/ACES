@@ -888,10 +888,10 @@ class BenchmarkConfigLoader:
             logger.debug(
                 "Task prompts resolved",
                 extra={
-                    "event": "benchmark_task_prompts_resolved", 
+                    "event": "benchmark_task_prompts_resolved",
                     "task_id": task_id,
                     "resolved_prompts": final_prompts,
-                }
+                },
             )
 
             sandbox_environment = task_data.get("environment") or task_data.get("sandbox_environment")

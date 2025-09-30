@@ -288,7 +288,78 @@ class SessionManager:
         if build_metadata:
             metadata["build_metadata"] = build_metadata
 
+        # Check permanent environment health if configured
+        perm_env_health = self._check_permanent_environment_health()
+        if not perm_env_health["healthy"]:
+            metadata["status"] = "unhealthy"
+            metadata["permanent_environment_error"] = perm_env_health["error"]
+
+        metadata["permanent_environment"] = perm_env_health
+
         return metadata
+
+    def _check_permanent_environment_health(self) -> Dict[str, Any]:
+        """Check permanent environment health using ComposeHealthChecker.
+
+        Returns:
+            Dict with health status and details
+        """
+        # Check if permanent environment is configured
+        permanent_env_name = self.benchmark_manager.config_loader.get_permanent_environment()
+        if not permanent_env_name:
+            return {"healthy": True, "status": "not_configured", "message": "No permanent environment configured"}
+
+        # Check if permanent environment manager exists and is running
+        if not self.execution_manager._permanent_environment_manager:
+            return {
+                "healthy": False,
+                "status": "manager_not_initialized",
+                "error": "Permanent environment manager not initialized",
+            }
+
+        if not self.execution_manager._permanent_environment_manager.is_running():
+            return {"healthy": False, "status": "not_running", "error": "Permanent environment not running"}
+
+        # Get the compose file path for health checking
+        from pathlib import Path
+
+        permanent_compose_path = (
+            Path(self.config_dir) / "environments" / "permanent" / f"{permanent_env_name}.compose.yml"
+        )
+
+        if not permanent_compose_path.exists():
+            return {
+                "healthy": False,
+                "status": "compose_file_missing",
+                "error": f"Permanent environment compose file not found: {permanent_compose_path}",
+            }
+
+        # Use ComposeHealthChecker to validate service health
+        try:
+            from saber.server.execution.sandbox.compose_health_checker import ComposeHealthChecker
+
+            health_checker = ComposeHealthChecker()
+            project_name = self.execution_manager._permanent_environment_manager.compose_project_name
+
+            health_summary = health_checker.get_service_health_summary(str(permanent_compose_path), project_name)
+
+            return {
+                "healthy": health_summary["overall_healthy"],
+                "status": "checked",
+                "environment_name": permanent_env_name,
+                "project_name": project_name,
+                "healthy_services": health_summary["healthy_count"],
+                "total_services": health_summary["total_count"],
+                "services": health_summary["services"],
+                "error": health_summary.get("error"),
+            }
+
+        except Exception as e:
+            return {
+                "healthy": False,
+                "status": "health_check_failed",
+                "error": f"Failed to check permanent environment health: {str(e)}",
+            }
 
     async def start_server(self) -> None:
         """Start both REST and MCP servers concurrently with session cleanup."""

@@ -1,0 +1,43 @@
+# Generic SABER Server Base Image
+# This file provides a common base for all SABER domain servers
+FROM python:3.11-slim
+
+# Install system dependencies for Docker-in-Docker and networking
+RUN apt-get update && apt-get install -y \
+    curl \
+    wget \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Docker CLI (for Docker-in-Docker execution)
+RUN curl -fsSL https://get.docker.com | sh
+
+# Install common Python packages for SABER servers
+RUN pip install --no-cache-dir \
+    fastapi>=0.104.0 \
+    uvicorn>=0.24.0 \
+    pydantic>=2.5.0 \
+    docker>=6.1.0 \
+    pyyaml>=6.0.0 \
+    click>=8.1.0 \
+    rich>=13.7.0 \
+    httpx>=0.25.0
+
+# Install SABER server package from local source
+COPY external/saber /tmp/saber
+RUN cd /tmp/saber && \
+    pip install -e . && \
+    python -c "import saber; print('SABER installation verified')"
+
+# Set working directory
+WORKDIR /app
+
+# Set environment variables
+ENV PYTHONPATH=/app
+ENV SABER_LOG_LEVEL=INFO
+
+# Expose default ports
+EXPOSE 8000 8001
+
+# Default command (to be overridden by domain images)
+CMD ["/bin/bash"]
