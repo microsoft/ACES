@@ -109,6 +109,9 @@ def list(ctx: click.Context, verbose: bool) -> None:
 @click.option("--rest-port", type=int, default=8000, help="REST API port")  # type: ignore[misc]
 @click.option("--mcp-port", type=int, default=8001, help="MCP port")  # type: ignore[misc]
 @click.option("--log-level", default="INFO", help="Logging level")  # type: ignore[misc]
+@click.option(
+    "--verbose", "-v", is_flag=True, help="Enable verbose logging (sets log level to DEBUG)"
+)  # type: ignore[misc]
 @click.option("--dry-run", is_flag=True, help="Show what would be done without executing")  # type: ignore[misc]
 @click.option("--profiles", hidden=True, help="DEPRECATED: Profiles are no longer supported")  # type: ignore[misc]
 @click.pass_context  # type: ignore[misc]
@@ -119,6 +122,7 @@ def start(
     rest_port: int,
     mcp_port: int,
     log_level: str,
+    verbose: bool,
     dry_run: bool,
     profiles: str | None,
 ) -> None:
@@ -143,9 +147,17 @@ def start(
     try:
         orchestrator = _create_orchestrator(ctx.obj.get("domains_root"))
 
+        # Override log level if verbose flag is set
+        effective_log_level = "DEBUG" if verbose else log_level
+
         # Start domain with server-only orchestration
         orchestrator.start_domain(
-            domain=domain, rest_port=rest_port, mcp_port=mcp_port, log_level=log_level, build=build, dry_run=dry_run
+            domain=domain,
+            rest_port=rest_port,
+            mcp_port=mcp_port,
+            log_level=effective_log_level,
+            build=build,
+            dry_run=dry_run,
         )
 
         if not dry_run:
@@ -336,6 +348,9 @@ def _display_domain_status(domain: str, status_info: Dict[str, Any]) -> None:
 @click.option("--mcp-port", type=int, default=8001, help="MCP port")  # type: ignore[misc]
 @click.option("--build", is_flag=True, help="Build images before starting")  # type: ignore[misc]
 @click.option("--log-level", default="INFO", help="Logging level")  # type: ignore[misc]
+@click.option(
+    "--verbose", "-v", is_flag=True, help="Enable verbose logging (sets log level to DEBUG)"
+)  # type: ignore[misc]
 @click.option("--dry-run", is_flag=True, help="Show what would be done without executing")  # type: ignore[misc]
 @click.pass_context  # type: ignore[misc]
 def test(
@@ -347,6 +362,7 @@ def test(
     mcp_port: int,
     build: bool,
     log_level: str,
+    verbose: bool,
     dry_run: bool,
 ) -> None:
     """Run SABER evaluation tests against domain server.
@@ -362,6 +378,9 @@ def test(
     try:
         orchestrator = _create_orchestrator(ctx.obj.get("domains_root"))
 
+        # Override log level if verbose flag is set
+        effective_log_level = "DEBUG" if verbose else log_level
+
         # Run the test command implementation
         import asyncio
 
@@ -374,7 +393,7 @@ def test(
                 rest_port=rest_port,
                 mcp_port=mcp_port,
                 build=build,
-                log_level=log_level,
+                log_level=effective_log_level,
                 dry_run=dry_run,
             )
         )
