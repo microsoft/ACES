@@ -131,18 +131,28 @@ def parse_step_evaluations(judge_response: str, task_id: str) -> List[StepEvalua
 
 
 def calculate_step_evaluation_score(
-    step_evaluations: List[StepEvaluation], task_id: str, max_score: float = 1.0
+    step_evaluations: List[StepEvaluation],
+    task_id: str,
+    max_score: float = 1.0,
+    subtasks_with_scores: dict[str, float] | None = None,
 ) -> tuple[float, bool, int | None, List[str]]:
     """
-    Calculate score and metadata from step evaluations.
+    Calculate score and metadata from step evaluations using aggregation scoring.
 
     Args:
         step_evaluations: List of parsed step evaluations
         task_id: Main task ID to check for completion
-        max_score: Maximum possible score
+        max_score: Maximum possible score for the main task (0 if task score shouldn't count)
+        subtasks_with_scores: Dict mapping subtask_id to max_score (empty dict if no scored subtasks)
 
     Returns:
         Tuple of (score, is_correct, task_completed_at_step, subtasks_completed)
+
+    Scoring Logic (Aggregation Mode):
+        Score = (main task score if completed) + (sum of completed subtask scores)
+        - Task not completed but max_score > 0: task score not added
+        - Task completed with max_score = 0: no task score added (subtasks only)
+        - Any subtask not in subtasks_with_scores or with score 0: contributes 0 to score
     """
     # Determine if main task was completed
     task_completed_at_step = None
@@ -155,15 +165,51 @@ def calculate_step_evaluation_score(
         elif step_eval.objective_type == "subtask":
             subtasks_completed.append(step_eval.objective_id)
 
-    # Calculate score: full score if main task completed, 0 otherwise
+    # Determine if task was completed
     is_correct = task_completed_at_step is not None
-    score_value = max_score if is_correct else 0.0
+
+    # Aggregation scoring: sum all completed objectives that have scores
+    score_value = 0.0
+
+    # Add task score if completed (and max_score > 0)
+    if is_correct and max_score > 0:
+        score_value += max_score
+        logger.debug(
+            "Added task score to total",
+            extra={
+                "event": "task_score_added",
+                "task_id": task_id,
+                "task_score": max_score,
+                "running_total": score_value,
+            },
+        )
+
+    # Add each completed subtask's score (if it has one)
+    if subtasks_with_scores:
+        for subtask_id in subtasks_completed:
+            if subtask_id in subtasks_with_scores:
+                subtask_score = subtasks_with_scores[subtask_id]
+                if subtask_score > 0:
+                    score_value += subtask_score
+                    logger.debug(
+                        "Added subtask score to total",
+                        extra={
+                            "event": "subtask_score_added",
+                            "subtask_id": subtask_id,
+                            "subtask_score": subtask_score,
+                            "running_total": score_value,
+                        },
+                    )
 
     return score_value, is_correct, task_completed_at_step, subtasks_completed
 
 
 def build_step_evaluation_explanation(
-    is_correct: bool, task_completed_at_step: int | None, subtasks_completed: List[str]
+    is_correct: bool,
+    task_completed_at_step: int | None,
+    subtasks_completed: List[str],
+    score_value: float | None = None,
+    max_possible_score: float | None = None,
 ) -> str:
     """
     Build human-readable explanation for step evaluation results.
@@ -172,6 +218,8 @@ def build_step_evaluation_explanation(
         is_correct: Whether main task was completed
         task_completed_at_step: Step number where task was completed (if any)
         subtasks_completed: List of completed subtask IDs
+        score_value: Optional actual score achieved (for aggregation mode)
+        max_possible_score: Optional maximum possible score (for aggregation mode)
 
     Returns:
         Human-readable explanation string
@@ -184,5 +232,9 @@ def build_step_evaluation_explanation(
         explanation = "Step evaluation: Main task not completed"
         if subtasks_completed:
             explanation += f", but completed subtasks: {', '.join(subtasks_completed)}"
+
+    # Add score information if provided (aggregation mode)
+    if score_value is not None and max_possible_score is not None:
+        explanation += f" (Score: {score_value}/{max_possible_score})"
 
     return explanation

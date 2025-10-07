@@ -388,21 +388,29 @@ class PromptGenerator:
         Render judge prompt for LLM evaluation using specified template file.
 
         Args:
-            template_file: Judge template filename (relative to prompts_dir/judge/)
+            template_file: Judge template path (must start with "judge/", e.g., "judge/system_prompt.md")
             context: JudgePromptContext with evaluation data
 
         Returns:
             Rendered judge prompt string ready for LLM evaluator
 
         Raises:
-            PromptGenerationError: If template rendering fails
+            PromptGenerationError: If template rendering fails or path doesn't start with "judge/"
             TemplateValidationError: If template file is missing or invalid
         """
         if not template_file:
             raise PromptGenerationError(f"Judge template file required for task '{context.task_id}'")
 
-        # Construct full template path within judge subdirectory
-        judge_template_path = f"judge/{template_file}"
+        # Validate that template path explicitly starts with "judge/"
+        if not template_file.startswith("judge/"):
+            raise PromptGenerationError(
+                f"Judge template path must start with 'judge/' prefix. "
+                f"Got: '{template_file}' for task '{context.task_id}'. "
+                f"Update your YAML configuration to use 'judge/{template_file}' instead."
+            )
+
+        # Use the explicit path provided (no automatic prepending)
+        judge_template_path = template_file
         self._assert_safe_template_name(judge_template_path)
 
         try:
@@ -512,19 +520,26 @@ class PromptGenerator:
         Validate judge template syntax and file existence.
 
         Args:
-            template_file: Judge template filename (relative to judge/ subdirectory)
+            template_file: Judge template path (must start with "judge/", e.g., "judge/system_prompt.md")
 
         Returns:
             True if template is valid
 
         Raises:
-            TemplateValidationError: If template is invalid or missing
+            TemplateValidationError: If template is invalid or missing or doesn't start with "judge/"
         """
         if not template_file:
             raise TemplateValidationError("Judge template filename cannot be empty")
 
-        # Construct full template path within judge subdirectory
-        judge_template_path = f"judge/{template_file}"
+        # Validate that template path starts with "judge/" prefix
+        if not template_file.startswith("judge/"):
+            raise TemplateValidationError(
+                f"Judge template path must start with 'judge/' prefix. Got: '{template_file}'. "
+                f"Update your YAML configuration to use 'judge/{template_file}' instead."
+            )
+
+        # Use the explicit path provided (no automatic prepending)
+        judge_template_path = template_file
         self._assert_safe_template_name(judge_template_path)
 
         try:

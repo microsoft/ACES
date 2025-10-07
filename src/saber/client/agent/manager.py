@@ -322,7 +322,7 @@ class AgentManager:
                 solver=agent_instance,  # Direct agent, not meta-agent
                 scorer=saber_scorer(),
                 display_name=assignment.id,
-                name=f"SABER Agent: {assignment.id} ({len(task_ids)} tasks)",
+                name=f"{assignment.id}",
                 metadata={
                     "saber_agent_id": assignment.id,
                     "saber_agent_name": assignment.id,

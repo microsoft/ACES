@@ -1802,6 +1802,7 @@ class SessionManager:
                 "title": subtask.title,
                 "description": subtask.description,
                 "objective": subtask.objective,
+                "max_score": subtask.max_score,  # Include optional max_score for aggregation
             }
             for subtask in task.subtasks
         ]

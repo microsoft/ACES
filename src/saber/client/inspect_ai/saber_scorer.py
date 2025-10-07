@@ -385,15 +385,49 @@ async def _evaluate_llm(submission: str, criteria: EvaluationCriteriaResponse, s
         except RuntimeError as parse_error:
             raise RuntimeError(f"Step evaluation parsing failed: {parse_error}") from parse_error
 
-        # Calculate score and metadata using shared utility
+        # Build subtask score mapping (always use aggregation mode)
+        subtasks_with_scores = {}
+        if criteria.task_context.subtasks:
+            logger.info(f"Building subtasks_with_scores from {len(criteria.task_context.subtasks)} subtasks")
+            for subtask in criteria.task_context.subtasks:
+                subtask_id = subtask.get("subtask_id")
+                subtask_max_score = subtask.get("max_score", 0.0)
+                if subtask_id and subtask_max_score is not None and subtask_max_score > 0:
+                    subtasks_with_scores[subtask_id] = float(subtask_max_score)
+                    logger.debug(
+                        "Subtask score registered",
+                        extra={
+                            "event": "subtask_score_registered",
+                            "subtask_id": subtask_id,
+                            "max_score": subtask_max_score,
+                        },
+                    )
+
+            logger.info(f"Subtask scores: {len(subtasks_with_scores)} subtasks with scores defined")
+
+        # Calculate score using aggregation mode
         score_value, is_correct, task_completed_at_step, subtasks_completed = calculate_step_evaluation_score(
-            step_evaluations, criteria.task_id, max_score
+            step_evaluations, criteria.task_id, max_score, subtasks_with_scores if subtasks_with_scores else None
+        )
+        logger.info(
+            "Score calculated",
+            extra={
+                "event": "score_calculated",
+                "score_value": score_value,
+                "is_correct": is_correct,
+                "task_completed_at_step": task_completed_at_step,
+                "subtasks_completed": subtasks_completed,
+            },
         )
 
-        # Build explanation using shared utility
-        explanation = (
-            f"Client-side {build_step_evaluation_explanation(is_correct, task_completed_at_step, subtasks_completed)}"
+        # Calculate max possible score (always aggregation)
+        max_possible_score = max_score + sum(subtasks_with_scores.values()) if subtasks_with_scores else max_score
+
+        # Build explanation using shared utility (always show max possible score)
+        step_explanation = build_step_evaluation_explanation(
+            is_correct, task_completed_at_step, subtasks_completed, score_value, max_possible_score
         )
+        explanation = f"Client-side {step_explanation}"
 
         return Score(
             value=score_value,
@@ -413,6 +447,9 @@ async def _evaluate_llm(submission: str, criteria: EvaluationCriteriaResponse, s
                 "session_id": criteria.session_id,
                 "episode_id": criteria.episode_id,
                 "task_id": criteria.task_id,
+                "scoring_mode": "aggregation",
+                "max_possible_score": max_possible_score,
+                "subtasks_with_scores": subtasks_with_scores,
             },
         )
 

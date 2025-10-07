@@ -12,7 +12,9 @@ This module creates SABER-aware agents that wrap inspect_ai implementations
 with SABER infrastructure (MCP tools, session management, episode handling).
 """
 
-from typing import Any, Dict, List
+import asyncio
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator, Dict, List
 
 from inspect_ai.agent import Agent, AgentState, agent
 from inspect_ai.agent._types import AgentPrompt
@@ -34,6 +36,105 @@ from ..models import SABERConfig
 from .agent_implementations import InspectAIImplementationNotFoundError, InspectAIImplementationRegistry
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
+
+
+@asynccontextmanager
+async def mcp_client_lifecycle(url: str, headers: Dict[str, str], name: str = "MCP Tools") -> AsyncIterator[Tool]:
+    """
+    Async context manager for MCP client lifecycle management.
+
+    This wrapper ensures the MCP client from mcp_server_http() is properly cleaned up
+    in the same async task context where it was created, preventing anyio cancel scope errors.
+
+    The issue: mcp_server_http() creates an async HTTP client internally that uses anyio.create_task_group().
+    When cleanup happens in a different asyncio task (e.g., during eval_async shutdown), anyio raises:
+    "RuntimeError: Attempted to exit cancel scope in a different task than it was entered in"
+
+    This wrapper forces cleanup to happen in the correct task context by:
+    1. Creating the MCP client within the async context
+    2. Yielding it for use
+    3. Ensuring cleanup happens in the same task via __aexit__
+
+    Args:
+        url: MCP server URL
+        headers: HTTP headers for session/episode context
+        name: Display name for the MCP server
+
+    Yields:
+        Tool object from mcp_server_http()
+    """
+    mcp_tool = None
+    try:
+        # Create MCP client
+        mcp_tool = mcp_server_http(name=name, url=url, headers=headers)
+        logger.debug(
+            "MCP client created",
+            extra={
+                "event": "mcp_client_created",
+                "url": url,
+                "name": name,
+            },
+        )
+        yield mcp_tool
+
+    finally:
+        # Explicit cleanup in same async task context
+        if mcp_tool is not None:
+            try:
+                # Try various cleanup strategies
+                if hasattr(mcp_tool, "__aexit__"):
+                    # If it's an async context manager
+                    await mcp_tool.__aexit__(None, None, None)
+                elif hasattr(mcp_tool, "cleanup"):
+                    cleanup_method = getattr(mcp_tool, "cleanup")
+                    if asyncio.iscoroutinefunction(cleanup_method):
+                        await cleanup_method()
+                    else:
+                        cleanup_method()
+                elif hasattr(mcp_tool, "close"):
+                    close_method = getattr(mcp_tool, "close")
+                    if asyncio.iscoroutinefunction(close_method):
+                        await close_method()
+                    else:
+                        close_method()
+
+                # Force garbage collection to trigger async generator cleanup NOW
+                # while we're still in the correct async task context
+                import gc
+
+                del mcp_tool
+                gc.collect()
+
+                logger.debug(
+                    "MCP client cleanup completed",
+                    extra={"event": "mcp_client_cleanup_completed"},
+                )
+
+            except Exception as cleanup_exc:
+                # Log but don't raise - cleanup errors shouldn't mask actual errors
+                logger.warning(
+                    "MCP client cleanup error (non-fatal)",
+                    extra={
+                        "event": "mcp_client_cleanup_error",
+                        "error": str(cleanup_exc),
+                        "error_type": type(cleanup_exc).__name__,
+                    },
+                )
+
+
+def clean_dict(payload: Any) -> Any:
+    """Remove None/False values to prevent server-side type coercion issues."""
+
+    if isinstance(payload, dict):
+        cleaned: Dict[str, Any] = {}
+        for key, value in payload.items():
+            if value is None or value is False:
+                continue
+            cleaned[key] = clean_dict(value)
+        return cleaned
+    if isinstance(payload, list):
+        return [clean_dict(item) for item in payload if item is not None and item is not False]
+    return payload
 
 
 @register_saber_agent(
@@ -206,221 +307,214 @@ async def create_saber_inspect_agent(
                         HTTPHeaders.ORCHESTRATION_ENV: OrchestrationEnvironment.INSPECT,
                     }
 
-                    saber_server = mcp_server_http(
-                        name="SABER Security Tools",
+                    # Use async context manager for MCP client lifecycle management
+                    # This ensures cleanup happens in the same async task context,
+                    # preventing anyio cancel scope errors during shutdown
+                    async with mcp_client_lifecycle(
                         url=f"{config.session_config.mcp_server_url}/mcp",
                         headers=mcp_headers,
-                    )
+                        name="SABER Security Tools",
+                    ) as saber_server:
+                        all_tools = list(tools) + [saber_server]
 
-                    all_tools = list(tools) + [saber_server]
+                        # Create the actual agent with SABER tools using multi-prompt structure
+                        agent_kwargs = {
+                            "name": f"SABER {agent_id.title()} Agent",
+                            "prompt": AgentPrompt(
+                                instructions=instruction_prompt,
+                                handoff_prompt=None,
+                                assistant_prompt=assistant_prompt,
+                                submit_prompt=submit_prompt,
+                            ),
+                            "tools": all_tools,
+                            **kwargs,
+                        }
 
-                    # Create the actual agent with SABER tools using multi-prompt structure
-                    agent_kwargs = {
-                        "name": f"SABER {agent_id.title()} Agent",
-                        "prompt": AgentPrompt(
-                            instructions=instruction_prompt,
-                            handoff_prompt=None,
-                            assistant_prompt=assistant_prompt,
-                            submit_prompt=submit_prompt,
-                        ),
-                        "tools": all_tools,
-                        **kwargs,
-                    }
-
-                    log_operation_start(
-                        logger,
-                        "agent_execution",
-                        agent_id=agent_id,
-                        implementation=implementation_name,
-                        session_id=session_id,
-                        task_id=task_id,
-                        episode_id=episode_response.episode_id,
-                    )
-
-                    actual_agent = agent_implementation(**agent_kwargs)
-                    try:
-                        result: AgentState = await actual_agent(state)
-                        output: ModelOutput = result.output
-
-                        processed_model = getattr(output, "model", "unknown") or "unknown"
-                        processed_choices = getattr(output, "choices", []) or []
-                        processed_submission = output.completion if output.completion else "No submission provided"
-                        processed_tokens = output.usage.model_dump() if output.usage else {}
-                        processed_time = getattr(output, "time", 0.0) or 0.0
-
-                        def clean_dict(payload: Any) -> Any:
-                            """Remove None/False values to prevent server-side type coercion issues."""
-
-                            if isinstance(payload, dict):
-                                cleaned: Dict[str, Any] = {}
-                                for key, value in payload.items():
-                                    if value is None or value is False:
-                                        continue
-                                    cleaned[key] = clean_dict(value)
-                                return cleaned
-                            if isinstance(payload, list):
-                                return [clean_dict(item) for item in payload if item is not None and item is not False]
-                            return payload
-
-                        cleaned_tokens: Dict[str, Any] = clean_dict(processed_tokens)
-
-                        processed_choices_for_eval: List[Dict[str, Any]] = []
-                        for choice in processed_choices:
-                            if hasattr(choice, "dict"):
-                                choice_dict = choice.dict()
-                                cleaned_choice_dict = clean_dict(choice_dict)
-                                processed_choices_for_eval.append(cleaned_choice_dict)
-                            else:
-                                processed_choices_for_eval.append(choice)
-
-                        eval_submission = EvalSubmission(
-                            episode_id=episode_response.episode_id,
+                        log_operation_start(
+                            logger,
+                            "agent_execution",
+                            agent_id=agent_id,
+                            implementation=implementation_name,
+                            session_id=session_id,
                             task_id=task_id,
-                            model=processed_model,
-                            choices=processed_choices_for_eval,
-                            submission=processed_submission,
-                            tokens=cleaned_tokens,
-                            time=processed_time,
+                            episode_id=episode_response.episode_id,
                         )
 
+                        actual_agent = agent_implementation(**agent_kwargs)
+
+                        # Execute agent - MCP client cleanup will happen automatically
+                        # when we exit the async with block above
                         try:
-                            json_result = eval_submission.model_dump_json()
-                            logger.debug(
-                                "EvalSubmission serialized to JSON",
+                            result: AgentState = await actual_agent(state)
+                            output: ModelOutput = result.output
+
+                            processed_model = getattr(output, "model", "unknown") or "unknown"
+                            processed_choices = getattr(output, "choices", []) or []
+                            processed_submission = output.completion if output.completion else "No submission provided"
+                            processed_tokens = output.usage.model_dump() if output.usage else {}
+                            processed_time = getattr(output, "time", 0.0) or 0.0
+
+                            cleaned_tokens: Dict[str, Any] = clean_dict(processed_tokens)
+
+                            processed_choices_for_eval: List[Dict[str, Any]] = []
+                            for choice in processed_choices:
+                                if hasattr(choice, "dict"):
+                                    choice_dict = choice.dict()
+                                    cleaned_choice_dict = clean_dict(choice_dict)
+                                    processed_choices_for_eval.append(cleaned_choice_dict)
+                                else:
+                                    processed_choices_for_eval.append(choice)
+
+                            eval_submission = EvalSubmission(
+                                episode_id=episode_response.episode_id,
+                                task_id=task_id,
+                                model=processed_model,
+                                choices=processed_choices_for_eval,
+                                submission=processed_submission,
+                                tokens=cleaned_tokens,
+                                time=processed_time,
+                            )
+
+                            try:
+                                json_result = eval_submission.model_dump_json()
+                                logger.debug(
+                                    "EvalSubmission serialized to JSON",
+                                    extra={
+                                        "event": "eval_submission_serialized",
+                                        "payload_bytes": len(json_result),
+                                    },
+                                )
+                            except Exception as json_error:
+                                logger.error(
+                                    "EvalSubmission serialization failed",
+                                    extra={
+                                        "event": "eval_submission_serialization_failed",
+                                        "error": str(json_error),
+                                        "episode_id": episode_response.episode_id,
+                                    },
+                                )
+                                logger.debug(
+                                    "EvalSubmission payload snapshot",
+                                    extra={
+                                        "event": "eval_submission_serialization_payload",
+                                        "payload": eval_submission.model_dump(),
+                                    },
+                                )
+                                raise
+
+                            cascade_end = episode_response.attached_to_episode_id is not None
+                            if cascade_end:
+                                logger.info(
+                                    "Episode completion will cascade-end parent episode",
+                                    extra={
+                                        "event": "episode_cascade_completion",
+                                        "episode_id": episode_response.episode_id,
+                                        "parent_episode_id": episode_response.attached_to_episode_id,
+                                    },
+                                )
+
+                            logger.info(
+                                "Ending episode with evaluation submission",
                                 extra={
-                                    "event": "eval_submission_serialized",
-                                    "payload_bytes": len(json_result),
+                                    "event": "end_episode_invocation",
+                                    "episode_id": episode_response.episode_id,
+                                    "cascade_end": cascade_end,
                                 },
                             )
-                        except Exception as json_error:
-                            logger.error(
-                                "EvalSubmission serialization failed",
+                            await session_manager.end_episode(
+                                episode_response.session_id,
+                                episode_response.episode_id,
+                                reason="completed",
+                                result=eval_submission,
+                                cascade_end_attached_episodes=cascade_end,
+                            )
+                            logger.info(
+                                "Episode ended successfully",
                                 extra={
-                                    "event": "eval_submission_serialization_failed",
-                                    "error": str(json_error),
+                                    "event": "episode_completed",
+                                    "episode_id": episode_response.episode_id,
+                                    "cascade_end": cascade_end,
+                                },
+                            )
+
+                            log_operation_success(
+                                logger,
+                                "agent_execution",
+                                agent_id=agent_id,
+                                implementation=implementation_name,
+                                episode_id=episode_response.episode_id,
+                                task_id=task_id,
+                            )
+                            return result
+
+                        except Exception as exc:
+                            log_operation_failure(
+                                logger,
+                                "agent_execution",
+                                exc,
+                                agent_id=agent_id,
+                                implementation=implementation_name,
+                                episode_id=episode_response.episode_id,
+                                task_id=task_id,
+                            )
+
+                            logger.error(
+                                "Agent execution failed",
+                                extra={
+                                    "event": "agent_execution_failed",
+                                    "error": str(exc),
+                                    "exception_type": type(exc).__name__,
                                     "episode_id": episode_response.episode_id,
                                 },
                             )
-                            logger.debug(
-                                "EvalSubmission payload snapshot",
+
+                            error_submission = EvalSubmission(
+                                episode_id=episode_response.episode_id,
+                                task_id=task_id,
+                                model="unknown",
+                                choices=[],
+                                submission=f"Episode failed: {str(exc)}",
+                                tokens={},
+                                time=0.0,
+                            )
+
+                            cascade_end = episode_response.attached_to_episode_id is not None
+                            if cascade_end:
+                                logger.info(
+                                    "Episode failure will cascade-end parent episode",
+                                    extra={
+                                        "event": "episode_cascade_failure",
+                                        "episode_id": episode_response.episode_id,
+                                        "parent_episode_id": episode_response.attached_to_episode_id,
+                                    },
+                                )
+
+                            logger.info(
+                                "Ending episode after failure",
                                 extra={
-                                    "event": "eval_submission_serialization_payload",
-                                    "payload": eval_submission.model_dump(),
+                                    "event": "end_episode_after_failure",
+                                    "episode_id": episode_response.episode_id,
+                                    "cascade_end": cascade_end,
+                                },
+                            )
+                            await session_manager.end_episode(
+                                episode_response.session_id,
+                                episode_response.episode_id,
+                                reason="error",
+                                result=error_submission,
+                                cascade_end_attached_episodes=cascade_end,
+                            )
+                            logger.error(
+                                "Episode ended with failure",
+                                extra={
+                                    "event": "episode_failed",
+                                    "episode_id": episode_response.episode_id,
+                                    "cascade_end": cascade_end,
                                 },
                             )
                             raise
 
-                        cascade_end = episode_response.attached_to_episode_id is not None
-                        if cascade_end:
-                            logger.info(
-                                "Episode completion will cascade-end parent episode",
-                                extra={
-                                    "event": "episode_cascade_completion",
-                                    "episode_id": episode_response.episode_id,
-                                    "parent_episode_id": episode_response.attached_to_episode_id,
-                                },
-                            )
-
-                        logger.info(
-                            "Ending episode with evaluation submission",
-                            extra={
-                                "event": "end_episode_invocation",
-                                "episode_id": episode_response.episode_id,
-                                "cascade_end": cascade_end,
-                            },
-                        )
-                        await session_manager.end_episode(
-                            episode_response.session_id,
-                            episode_response.episode_id,
-                            reason="completed",
-                            result=eval_submission,
-                            cascade_end_attached_episodes=cascade_end,
-                        )
-                        logger.info(
-                            "Episode ended successfully",
-                            extra={
-                                "event": "episode_completed",
-                                "episode_id": episode_response.episode_id,
-                                "cascade_end": cascade_end,
-                            },
-                        )
-
-                        log_operation_success(
-                            logger,
-                            "agent_execution",
-                            agent_id=agent_id,
-                            implementation=implementation_name,
-                            episode_id=episode_response.episode_id,
-                            task_id=task_id,
-                        )
-                        return result
-
-                    except Exception as exc:
-                        log_operation_failure(
-                            logger,
-                            "agent_execution",
-                            exc,
-                            agent_id=agent_id,
-                            implementation=implementation_name,
-                            episode_id=episode_response.episode_id,
-                            task_id=task_id,
-                        )
-
-                        logger.error(
-                            "Agent execution failed",
-                            extra={
-                                "event": "agent_execution_failed",
-                                "error": str(exc),
-                                "exception_type": type(exc).__name__,
-                                "episode_id": episode_response.episode_id,
-                            },
-                        )
-
-                        error_submission = EvalSubmission(
-                            episode_id=episode_response.episode_id,
-                            task_id=task_id,
-                            model="unknown",
-                            choices=[],
-                            submission=f"Episode failed: {str(exc)}",
-                            tokens={},
-                            time=0.0,
-                        )
-
-                        cascade_end = episode_response.attached_to_episode_id is not None
-                        if cascade_end:
-                            logger.info(
-                                "Episode failure will cascade-end parent episode",
-                                extra={
-                                    "event": "episode_cascade_failure",
-                                    "episode_id": episode_response.episode_id,
-                                    "parent_episode_id": episode_response.attached_to_episode_id,
-                                },
-                            )
-
-                        logger.info(
-                            "Ending episode after failure",
-                            extra={
-                                "event": "end_episode_after_failure",
-                                "episode_id": episode_response.episode_id,
-                                "cascade_end": cascade_end,
-                            },
-                        )
-                        await session_manager.end_episode(
-                            episode_response.session_id,
-                            episode_response.episode_id,
-                            reason="error",
-                            result=error_submission,
-                            cascade_end_attached_episodes=cascade_end,
-                        )
-                        logger.error(
-                            "Episode ended with failure",
-                            extra={
-                                "event": "episode_failed",
-                                "episode_id": episode_response.episode_id,
-                                "cascade_end": cascade_end,
-                            },
-                        )
-                        raise
+                    # MCP client cleanup happens automatically when exiting async with block
 
         return execute
 

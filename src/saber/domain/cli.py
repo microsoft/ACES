@@ -68,10 +68,10 @@ def cli(ctx: click.Context, domains_root: Path | None, verbose: bool) -> None:
     ctx.obj["verbose"] = verbose
 
 
-@cli.command()  # type: ignore[misc]
+@cli.command(name="list")  # type: ignore[misc]
 @click.option("--verbose", "-v", is_flag=True, help="Show detailed domain information")  # type: ignore[misc]
 @click.pass_context  # type: ignore[misc]
-def list(ctx: click.Context, verbose: bool) -> None:
+def list_domains(ctx: click.Context, verbose: bool) -> None:
     """List available domains."""
     try:
         orchestrator = _create_orchestrator(ctx.obj.get("domains_root"))

@@ -21,8 +21,8 @@ services:
       - ${DOMAINS_ROOT}/${DOMAIN}/server/data:/app/data:rw
       # Cross-domain visibility with writable logs
       - ${DOMAINS_ROOT}:/app/domains:rw
-      # SABER source code for live development (TODO: remove when git submodule is removed)
-      - ${DOMAINS_ROOT:?DOMAINS_ROOT must be set}/../external/saber/src:/app/src:rw
+      # SABER source code for live development - mount to where editable install points
+      - ${DOMAINS_ROOT:?DOMAINS_ROOT must be set}/../external/saber/src:/tmp/saber/src:rw
       # Docker socket for sandbox management (always included)
       - /var/run/docker.sock:/var/run/docker.sock:ro
       # Azure CLI credentials for git authentication (if they exist on host)

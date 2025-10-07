@@ -1096,6 +1096,7 @@ class BenchmarkConfigLoader:
             description=subtask_data["description"],
             objective=subtask_data["objective"],
             hint=subtask_data.get("hint"),
+            max_score=subtask_data.get("max_score", 0.0),
         )
 
     def _validate_evaluation_config(self, eval_config: Dict[str, Any], task_id: str) -> None:
