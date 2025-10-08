@@ -16,7 +16,7 @@ from inspect_ai.model._chat_message import ChatMessageAssistant, ChatMessageSyst
 from inspect_ai.model._call_tools import ExecuteToolsResult
 
 from saber.client.inspect_ai.context_injection import (
-    _context,
+    _get_context,
     saber_execute_tools,
     saber_tool_params,
 )
@@ -36,13 +36,13 @@ async def test_end_to_end_context_injection():
     # Track what the MCP tool receives
     received_params = {}
 
-    # Create a mock SABER MCP tool
-    async def mock_saber_run_command(**kwargs):
+    # Create a mock SABER MCP tool using a registered name
+    async def mock_bash(**kwargs):
         received_params.update(kwargs)
         return "command executed"
 
-    mock_saber_run_command.__name__ = "saber_run_command"
-    mock_saber_run_command.__module__ = "mcp.tools"
+    mock_bash.__name__ = "bash"
+    mock_bash._saber_context_injection = False
 
     # Mock tool_params to intercept parameter injection
     def mock_tool_params(input_dict, func):
@@ -66,7 +66,7 @@ async def test_end_to_end_context_injection():
     # Patch and run
     with patch('saber.client.inspect_ai.context_injection.original_execute_tools', side_effect=mock_execute_tools):
         with patch('saber.client.inspect_ai.context_injection.original_tool_params', return_value={"command": "ls"}):
-            result = await saber_execute_tools(messages, [mock_saber_run_command], None)
+            result = await saber_execute_tools(messages, [mock_bash], None)
 
     # Verify context was injected
     assert "__saber_assistant_message__" in received_params
@@ -75,8 +75,9 @@ async def test_end_to_end_context_injection():
     assert received_params["command"] == "ls"
 
     # Verify context was cleared after execution
-    assert _context.assistant_message is None
-    assert _context.reasoning is None
+    context = _get_context()
+    assert context.assistant_message is None
+    assert context.reasoning is None
 
 
 if __name__ == "__main__":

@@ -462,6 +462,19 @@ class SessionMCPAPI:
         Returns:
             MCPToolCallResponse with execution result
         """
+        # DEBUG: Log incoming MCP call
+        logger.info(
+            f"🔍 SERVER: MCP tool call received: {name}",
+            extra={
+                "event": "mcp_tool_call_received",
+                "tool_name": name,
+                "argument_keys": list(arguments.keys()),
+                "has_saber_assistant": "__saber_assistant_message__" in arguments,
+                "has_saber_reasoning": "__saber_reasoning__" in arguments,
+                "full_arguments": arguments,
+            },
+        )
+
         # Get parsed headers first
         headers = await self._get_headers()
         if not headers.has_session_context:
@@ -637,9 +650,34 @@ class SessionMCPAPI:
         Returns:
             Action object for execution with context extracted
         """
+        # DEBUG: Log incoming arguments
+        logger.info(
+            f"🔍 SERVER: _convert_to_action called for {tool_name}",
+            extra={
+                "event": "convert_to_action_called",
+                "tool_name": tool_name,
+                "argument_keys": list(arguments.keys()),
+                "has_saber_assistant": "__saber_assistant_message__" in arguments,
+                "has_saber_reasoning": "__saber_reasoning__" in arguments,
+            },
+        )
+
         # Extract context if present (injected by context injection)
         assistant_message = arguments.get("__saber_assistant_message__")
         reasoning = arguments.get("__saber_reasoning__")
+
+        # DEBUG: Log extraction results
+        logger.info(
+            f"🔍 SERVER: Extracted context - assistant_msg={len(assistant_message) if assistant_message else 0} chars, "
+            f"reasoning={len(reasoning) if reasoning else 0} chars",
+            extra={
+                "event": "context_extracted",
+                "has_assistant_message": assistant_message is not None,
+                "has_reasoning": reasoning is not None,
+                "assistant_preview": assistant_message[:100] if assistant_message else None,
+                "reasoning_preview": reasoning[:100] if reasoning else None,
+            },
+        )
 
         # Filter out session_id and saber context parameters from arguments
         filtered_arguments = {
@@ -653,8 +691,8 @@ class SessionMCPAPI:
         )
 
         if assistant_message or reasoning:
-            logger.debug(
-                "Action created with context",
+            logger.info(
+                f"✅ SERVER: Action created WITH context for {tool_name}",
                 extra={
                     "event": "action_with_context",
                     "tool_name": tool_name,
@@ -662,6 +700,8 @@ class SessionMCPAPI:
                     "has_reasoning": reasoning is not None,
                 },
             )
+        else:
+            logger.warning(f"⚠️ SERVER: Action created WITHOUT context for {tool_name}")
 
         return action
 

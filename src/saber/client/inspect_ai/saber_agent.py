@@ -35,12 +35,16 @@ from ..client_session import ClientSessionManager
 from ..models import SABERConfig
 from .agent_implementations import InspectAIImplementationNotFoundError, InspectAIImplementationRegistry
 
-# Import and apply context injection monkey-patch
+# Import context injection - patches applied at import time for backward compatibility
+# TODO: Migrate to scoped patching using saber_context_injection_patch() context manager
 from .context_injection import saber_execute_tools, saber_tool_params
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
 
 # Monkey-patch execute_tools AND tool_params for context injection
+# Note: This is applied at import time for backward compatibility.
+# For better test isolation and explicit scope control, use the
+# saber_context_injection_patch() context manager instead.
 import inspect_ai.agent._react
 import inspect_ai.model._call_tools
 
