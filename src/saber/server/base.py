@@ -95,6 +95,12 @@ class Action(BaseModel):
 
     tool_name: str = Field(..., description="Name of the tool being executed")
     parameters: Dict[str, Any] = Field(default_factory=dict, description="Parameters passed to the tool")
+    reasoning: Optional[str] = Field(
+        None, description="Agent's reasoning before taking this action (from reasoning models)"
+    )
+    assistant_message: Optional[str] = Field(
+        None, description="Agent's full message before taking this action (planning/explanation)"
+    )
     timestamp: datetime = Field(default_factory=datetime.utcnow, description="When the action was initiated")
 
     class Config:

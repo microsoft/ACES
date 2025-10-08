@@ -13,6 +13,9 @@ from . import saber_agent  # This triggers SABER agent registration decorators
 # Low-level inspect_ai implementation registry (internal use only)
 from .agent_implementations import InspectAIImplementationRegistry, register_inspect_ai_implementation
 
+# Context injection exports (monkey-patching happens automatically on import)
+from .context_injection import saber_execute_tools
+
 # Dataset and evaluation exports
 from .saber_dataset import create_saber_dataset
 
@@ -32,6 +35,8 @@ __all__ = [
     "run_saber_eval_async",
     # Dataset and evaluation
     "create_saber_dataset",
+    # Context injection (automatic via monkey-patch)
+    "saber_execute_tools",
     # Scorer
     "saber_scorer",
 ]

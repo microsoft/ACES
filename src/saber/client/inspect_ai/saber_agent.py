@@ -35,7 +35,20 @@ from ..client_session import ClientSessionManager
 from ..models import SABERConfig
 from .agent_implementations import InspectAIImplementationNotFoundError, InspectAIImplementationRegistry
 
+# Import and apply context injection monkey-patch
+from .context_injection import saber_execute_tools, saber_tool_params
+
 logger = get_saber_logger(LogCategory.AGENT, __name__)
+
+# Monkey-patch execute_tools AND tool_params for context injection
+import inspect_ai.agent._react
+import inspect_ai.model._call_tools
+
+inspect_ai.agent._react.execute_tools = saber_execute_tools
+inspect_ai.model._call_tools.execute_tools = saber_execute_tools
+inspect_ai.model._call_tools.tool_params = saber_tool_params
+
+logger.info("🔧 Monkey-patched execute_tools + tool_params with SABER context injection")
 
 
 @asynccontextmanager
@@ -315,6 +328,7 @@ async def create_saber_inspect_agent(
                         headers=mcp_headers,
                         name="SABER Security Tools",
                     ) as saber_server:
+                        # Context injection happens automatically via monkey-patched execute_tools
                         all_tools = list(tools) + [saber_server]
 
                         # Create the actual agent with SABER tools using multi-prompt structure

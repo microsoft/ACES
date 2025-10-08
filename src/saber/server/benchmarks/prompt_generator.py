@@ -137,6 +137,10 @@ class JudgePromptContext:
                         "action": {
                             "tool_name": step.action.tool_name,
                             "parameters": step.action.parameters,
+                            # Include agent message for judge evaluation
+                            "assistant_message": step.action.assistant_message,
+                            # Include agent reasoning for judge evaluation
+                            "reasoning": step.action.reasoning,
                         },
                         "response": step.response,
                         "done": step.done,

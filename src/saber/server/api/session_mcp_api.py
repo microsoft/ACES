@@ -263,7 +263,11 @@ class SessionMCPAPI:
 
         # Register end_episode tool using @decorator syntax
         @self.mcp_server.tool  # type: ignore[misc]
-        async def end_episode(submission: str = "") -> str:
+        async def end_episode(
+            submission: str = "",
+            __saber_assistant_message__: str | None = None,
+            __saber_reasoning__: str | None = None,
+        ) -> str:
             """End the current episode and optionally record a discovered flag/target/objective."""
             try:
                 # Get parsed headers
@@ -319,6 +323,24 @@ class SessionMCPAPI:
             executor_instance = self.session_manager.execution_manager.get_executor(executor_name, episode_id=None)
             input_schema = executor_instance.to_mcp_schema()
             metadata = getattr(executor_instance, "_executor_metadata", {})
+
+            # Add SABER context parameters to the schema
+            # These are optional parameters that the client can inject with assistant messages and reasoning
+            from saber.models.mcp import MCPPropertySchema
+
+            # Create new properties dict with existing properties plus our context parameters
+            updated_properties = dict(input_schema.properties or {})
+            updated_properties["__saber_assistant_message__"] = MCPPropertySchema(
+                type="string",
+                description="Optional: Agent's assistant message for context",
+            )
+            updated_properties["__saber_reasoning__"] = MCPPropertySchema(
+                type="string",
+                description="Optional: Agent's reasoning content for context",
+            )
+
+            # Create a new schema with updated properties
+            input_schema = input_schema.model_copy(update={"properties": updated_properties})
 
             # Build the typed MCP tool schema
             mcp_tool_schema = MCPToolSchema(
@@ -546,7 +568,10 @@ class SessionMCPAPI:
 
                 # Create an action to record the episode result
                 result_action = Action(
-                    tool_name="episode_result", parameters={"submission": result, "episode_end": True}
+                    tool_name="episode_result",
+                    parameters={"submission": result, "episode_end": True},
+                    reasoning=None,
+                    assistant_message=None,
                 )
 
                 # Execute the action to record it
@@ -601,16 +626,44 @@ class SessionMCPAPI:
         """
         Convert MCP tool call to Action object.
 
+        Extracts both assistant message and reasoning from special parameters and stores them
+        separately in the Action fields. These parameters are stripped from the tool
+        parameters to keep execution clean.
+
         Args:
             tool_name: Name of the tool being called
-            arguments: Tool arguments (clean, no session_id)
+            arguments: Tool arguments (may include __saber_assistant_message__ and __saber_reasoning__)
 
         Returns:
-            Action object for execution
+            Action object for execution with context extracted
         """
-        # Filter out session_id from arguments for the Action parameters
-        filtered_arguments = {k: v for k, v in arguments.items() if k != "session_id"}
-        return Action(tool_name=tool_name, parameters=filtered_arguments)
+        # Extract context if present (injected by context injection)
+        assistant_message = arguments.get("__saber_assistant_message__")
+        reasoning = arguments.get("__saber_reasoning__")
+
+        # Filter out session_id and saber context parameters from arguments
+        filtered_arguments = {
+            k: v
+            for k, v in arguments.items()
+            if k not in ("session_id", "__saber_assistant_message__", "__saber_reasoning__")
+        }
+
+        action = Action(
+            tool_name=tool_name, parameters=filtered_arguments, assistant_message=assistant_message, reasoning=reasoning
+        )
+
+        if assistant_message or reasoning:
+            logger.debug(
+                "Action created with context",
+                extra={
+                    "event": "action_with_context",
+                    "tool_name": tool_name,
+                    "has_assistant_message": assistant_message is not None,
+                    "has_reasoning": reasoning is not None,
+                },
+            )
+
+        return action
 
     def _convert_to_mcp_result(self, command_result: CommandResult) -> MCPToolCallResponse:
         """

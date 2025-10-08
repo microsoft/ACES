@@ -71,10 +71,11 @@ class MCPToolGenerator:
                     # Default to None for optional parameters without explicit default
                     params.append(f"{param_name}: Optional[{param_type}] = None")
 
-        # No Context parameter needed - we'll use get_context() inside the function
+        # Context parameters are now included in the schema properties, so no need to add them separately
+        all_params = params
 
         # Generate the function code
-        function_signature = f"async def {executor_name}({', '.join(params)}) -> str:"
+        function_signature = f"async def {executor_name}({', '.join(all_params)}) -> str:"
 
         # Build parameter dictionary construction
         param_dict_items = []

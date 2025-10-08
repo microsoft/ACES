@@ -573,7 +573,10 @@ class EpisodeManager:
 
             # Create an action representing the agent's submission
             submission_action = Action(
-                tool_name="submission", parameters={"result": result, "submission": result, "episode_completed": True}
+                tool_name="submission",
+                parameters={"result": result, "submission": result, "episode_completed": True},
+                reasoning=None,
+                assistant_message=None,
             )
 
             # Create a successful command result for the submission
