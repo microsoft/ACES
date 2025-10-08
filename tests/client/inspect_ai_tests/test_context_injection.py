@@ -34,6 +34,7 @@ from saber.client.inspect_ai.context_injection import (
     get_context_injection_metrics,
     is_saber_mcp_tool,
     reset_context_injection_metrics,
+    reset_tool_discovery,
     saber_context_injection_patch,
     saber_tool,
     saber_tool_params,
@@ -148,22 +149,32 @@ def test_extract_reasoning_no_reasoning():
 
 
 def test_is_saber_mcp_tool_by_name():
-    """Test detection by tool name in registered tools."""
-    # bash is in the default SABER_MCP_TOOLS set
+    """Test detection by manually registered tool name."""
     async def bash(**kwargs):
         pass
 
+    # Manually register the tool for testing
+    configure_context_injection(tools={"bash"})
+
     assert is_saber_mcp_tool(bash) is True
+
+    # Clean up
+    configure_context_injection(tools=set())
 
 
 def test_is_saber_mcp_tool_by_registration():
-    """Test detection by explicit registration."""
-    # python is in the default SABER_MCP_TOOLS set
+    """Test detection by explicit manual registration."""
     tool = Mock()
     tool.__name__ = "python"
     tool._saber_context_injection = False
 
+    # Manually register for testing
+    configure_context_injection(tools={"python"})
+
     assert is_saber_mcp_tool(tool) is True
+
+    # Clean up
+    configure_context_injection(tools=set())
 
 
 def test_is_saber_mcp_tool_builtin():
@@ -222,7 +233,8 @@ async def test_saber_tool_params_injects_into_saber_tool():
     context = _get_context()
     context.clear_context()
 
-    # Create a SABER tool using registered name
+    # Create a SABER tool and mark it explicitly
+    @saber_tool
     async def bash(command: str, **kwargs: Any) -> str:
         return "result"
 
@@ -390,6 +402,7 @@ async def test_integration_context_flows_to_tool_params():
         ChatMessageAssistant(content="I'll run a command")
     ]
 
+    @saber_tool
     async def bash(command: str, **kwargs: Any) -> str:
         return f"Executed: {command}"
 
@@ -421,7 +434,8 @@ async def test_integration_reasoning_extraction_and_injection(reasoning_messages
     context = _get_context()
     context.clear_context()
 
-    # Use a registered tool name
+    # Mark the tool explicitly
+    @saber_tool
     async def python(param: str, **kwargs: Any) -> str:
         return "result"
 
@@ -611,6 +625,9 @@ def test_configure_context_injection_tools():
     from saber.client.inspect_ai.context_injection import _config
     original_tools = _config.registered_tools.copy()
 
+    # Reset tool discovery to ensure clean state
+    reset_tool_discovery()
+
     configure_context_injection(tools={"custom_tool"})
 
     tool = Mock(spec=['__name__'])  # Limit Mock to only have __name__
@@ -625,6 +642,7 @@ def test_configure_context_injection_tools():
 
     # Reset to original
     configure_context_injection(tools=original_tools)
+    reset_tool_discovery()
 
 
 

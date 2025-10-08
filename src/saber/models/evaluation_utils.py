@@ -84,8 +84,8 @@ def parse_step_evaluations(judge_response: str, task_id: str) -> List[StepEvalua
             step_number = int(step_number_str)
             objective_id = objective_id.strip()
 
-            # Validate step number (must be >= 1)
-            if step_number < 1:
+            # Validate step number (must be >= 0, steps are 0-indexed)
+            if step_number < 0:
                 logger.warning(
                     "Invalid step number encountered in evaluation entry",
                     extra={
@@ -156,14 +156,21 @@ def calculate_step_evaluation_score(
     """
     # Determine if main task was completed
     task_completed_at_step = None
-    subtasks_completed = []
+    subtasks_completed_set = set()  # Use set to prevent duplicate subtask scoring
+    subtasks_completed_order = []  # Track first occurrence order for consistent output
 
     for step_eval in step_evaluations:
         if step_eval.objective_type == "task" and step_eval.objective_id == task_id:
             if task_completed_at_step is None:  # Only use first occurrence
                 task_completed_at_step = step_eval.step_number
         elif step_eval.objective_type == "subtask":
-            subtasks_completed.append(step_eval.objective_id)
+            # Only add if not already seen (maintains first-occurrence order)
+            if step_eval.objective_id not in subtasks_completed_set:
+                subtasks_completed_set.add(step_eval.objective_id)
+                subtasks_completed_order.append(step_eval.objective_id)
+
+    # Use ordered list for backwards compatibility with return type
+    subtasks_completed = subtasks_completed_order
 
     # Determine if task was completed
     is_correct = task_completed_at_step is not None

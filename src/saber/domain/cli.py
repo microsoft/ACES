@@ -351,6 +351,7 @@ def _display_domain_status(domain: str, status_info: Dict[str, Any]) -> None:
 @click.option(
     "--verbose", "-v", is_flag=True, help="Enable verbose logging (sets log level to DEBUG)"
 )  # type: ignore[misc]
+@click.option("--no-ui", is_flag=True, help="Disable TUI and use rich console output instead")  # type: ignore[misc]
 @click.option("--dry-run", is_flag=True, help="Show what would be done without executing")  # type: ignore[misc]
 @click.pass_context  # type: ignore[misc]
 def test(
@@ -363,6 +364,7 @@ def test(
     build: bool,
     log_level: str,
     verbose: bool,
+    no_ui: bool,
     dry_run: bool,
 ) -> None:
     """Run SABER evaluation tests against domain server.
@@ -372,6 +374,7 @@ def test(
 
     Examples:
         saber-domain test cybench
+        saber-domain test cybench --no-ui
         saber-domain test cybench --saber-yaml custom.yaml
         saber-domain test cybench --stop-after --build
     """
@@ -394,6 +397,7 @@ def test(
                 mcp_port=mcp_port,
                 build=build,
                 log_level=effective_log_level,
+                no_ui=no_ui,
                 dry_run=dry_run,
             )
         )
@@ -441,6 +445,7 @@ async def _test_command_impl(
     mcp_port: int,
     build: bool,
     log_level: str,
+    no_ui: bool,
     dry_run: bool,
 ) -> None:
     """Implementation of the test command."""
@@ -508,7 +513,10 @@ async def _test_command_impl(
         env_file_path = repo_root / ".env"
 
         try:
-            click.echo("🎯 Starting SABER client with TUI...")
+            if no_ui:
+                click.echo("🎯 Starting SABER client with rich console output...")
+            else:
+                click.echo("🎯 Starting SABER client with TUI...")
 
             # Build command arguments for subprocess call
             cmd_args = [
@@ -529,6 +537,10 @@ async def _test_command_impl(
                 "--domain",
                 domain,  # Pass domain for organized logging
             ]
+
+            # Add no-ui flag if requested
+            if no_ui:
+                cmd_args.append("--no-ui")
 
             # Add env file if it exists
             if env_file_path.exists():

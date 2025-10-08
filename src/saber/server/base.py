@@ -6,6 +6,7 @@ They should be used by both client and server implementations to ensure
 consistent data structures.
 """
 
+import copy
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -205,3 +206,25 @@ class Episode(BaseModel):
             if attached_episode and attached_episode.task_id == task_id:
                 return True
         return False
+
+    def with_step_range(self, start_index: int, end_index: int) -> "Episode":
+        """
+        Return a shallow copy of this episode with a subset of steps.
+
+        Uses Python's copy.copy() for efficiency - all attributes reference
+        the same objects except steps which is sliced.
+
+        Args:
+            start_index: Starting index (inclusive, 0-based)
+            end_index: Ending index (exclusive, like Python slicing)
+
+        Returns:
+            Episode instance with filtered steps
+
+        Example:
+            # Get episode with only steps 0-19
+            chunk_view = episode.with_step_range(0, 20)
+        """
+        view = copy.copy(self)  # Shallow copy
+        view.steps = self.steps[start_index:end_index]
+        return view

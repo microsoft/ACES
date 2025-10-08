@@ -6,7 +6,7 @@ Follows fail-fast principles with no backwards compatibility.
 """
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -76,7 +76,9 @@ class JudgeMessages(BaseModel):
     """Pre-rendered judge messages for LLM evaluation."""
 
     system_message: str = Field(description="Fully rendered system prompt")
-    user_message: str = Field(description="Fully rendered user prompt")
+    user_message: Union[str, List[str]] = Field(
+        description="Fully rendered user prompt(s) - can be single string or list for chunked evaluation"
+    )
     model: str = Field(description="Model to use for evaluation")
 
 
@@ -106,7 +108,7 @@ class EvaluationCriteriaResponse(BaseModel):
 class StepEvaluation(BaseModel):
     """Step-level evaluation result mapping step to completed objective."""
 
-    step_number: int = Field(..., ge=1, description="Episode step number")
+    step_number: int = Field(..., ge=0, description="Episode step number (0-indexed)")
     objective_id: str = Field(..., description="Subtask ID or task ID that was completed")
     objective_type: str = Field(..., description="Type: 'subtask' or 'task'")
     completed: bool = Field(

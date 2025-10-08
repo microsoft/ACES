@@ -348,125 +348,187 @@ async def _evaluate_llm(submission: str, criteria: EvaluationCriteriaResponse, s
     judge_messages = criteria.judge_messages
     max_score = criteria.evaluation_config.get("scoring", {}).get("max_score", 1.0)
 
+    # Normalize user_message to list (handles both str and List[str])
+    user_messages = (
+        judge_messages.user_message if isinstance(judge_messages.user_message, list) else [judge_messages.user_message]
+    )
+
+    logger.info(
+        "Starting LLM evaluation",
+        extra={
+            "event": "llm_evaluation_start",
+            "total_user_messages": len(user_messages),
+            "is_chunked": len(user_messages) > 1,
+            "task_id": criteria.task_id,
+            "episode_id": criteria.episode_id,
+        },
+    )
+
     # Following inspect_ai patterns (similar to AIR-Bench example):
     # 1. Clear the existing messages and start fresh for judge evaluation
     # 2. Add system message first (if provided)
-    # 3. Add user message for judge evaluation
+    # 3. Add user message(s) for judge evaluation - may be multiple for chunked evaluation
     # 4. Use inspect_ai's natural message flow
 
-    # Clear existing messages for clean judge evaluation context
-    state.messages.clear()
+    # Collect step evaluations from all user messages
+    all_step_evaluations = []
+    judge_model = get_model(judge_messages.model)
 
-    # Add system message first (inspect_ai pattern)
-    if judge_messages.system_message:
-        state.messages.append(ChatMessageSystem(content=judge_messages.system_message))
+    for msg_idx, user_msg in enumerate(user_messages):
+        logger.debug(
+            f"Evaluating message {msg_idx + 1}/{len(user_messages)}",
+            extra={
+                "event": "llm_evaluation_message_start",
+                "message_index": msg_idx,
+                "total_messages": len(user_messages),
+            },
+        )
 
-    # Add user message for judge evaluation (following inspect_ai message patterns)
-    state.messages.append(ChatMessageUser(content=judge_messages.user_message))
+        # Clear messages for fresh evaluation context
+        state.messages.clear()
 
-    try:
-        # Get the judge model for evaluation
-        judge_model = get_model(judge_messages.model)
+        # Add system message (same for all chunks)
+        if judge_messages.system_message:
+            state.messages.append(ChatMessageSystem(content=judge_messages.system_message))
 
-        # Generate judge response using inspect_ai's proper model pattern
-        response = await judge_model.generate(state.messages)
+        # Add this specific user message
+        state.messages.append(ChatMessageUser(content=user_msg))
 
-        # Update state with the judge response
-        state.output = response
-
-        if not state.output or not state.output.completion:
-            raise RuntimeError("Judge model returned empty response")
-
-        judge_response = state.output.completion
-
-        # Parse step evaluations from judge response
         try:
-            step_evaluations = parse_step_evaluations(judge_response, criteria.task_id)
-        except RuntimeError as parse_error:
-            raise RuntimeError(f"Step evaluation parsing failed: {parse_error}") from parse_error
+            # Generate judge response using inspect_ai's proper model pattern
+            response = await judge_model.generate(state.messages)
 
-        # Build subtask score mapping (always use aggregation mode)
-        subtasks_with_scores = {}
-        if criteria.task_context.subtasks:
-            logger.info(f"Building subtasks_with_scores from {len(criteria.task_context.subtasks)} subtasks")
-            for subtask in criteria.task_context.subtasks:
-                subtask_id = subtask.get("subtask_id")
-                subtask_max_score = subtask.get("max_score", 0.0)
-                if subtask_id and subtask_max_score is not None and subtask_max_score > 0:
-                    subtasks_with_scores[subtask_id] = float(subtask_max_score)
-                    logger.debug(
-                        "Subtask score registered",
-                        extra={
-                            "event": "subtask_score_registered",
-                            "subtask_id": subtask_id,
-                            "max_score": subtask_max_score,
-                        },
-                    )
+            # Update state with the judge response
+            state.output = response
 
-            logger.info(f"Subtask scores: {len(subtasks_with_scores)} subtasks with scores defined")
+            if not state.output or not state.output.completion:
+                logger.warning(
+                    f"Empty response for message {msg_idx + 1}/{len(user_messages)}",
+                    extra={
+                        "event": "llm_evaluation_empty_response",
+                        "message_index": msg_idx,
+                    },
+                )
+                continue
 
-        # Calculate score using aggregation mode
-        score_value, is_correct, task_completed_at_step, subtasks_completed = calculate_step_evaluation_score(
-            step_evaluations, criteria.task_id, max_score, subtasks_with_scores if subtasks_with_scores else None
-        )
-        logger.info(
-            "Score calculated",
-            extra={
-                "event": "score_calculated",
-                "score_value": score_value,
-                "is_correct": is_correct,
-                "task_completed_at_step": task_completed_at_step,
-                "subtasks_completed": subtasks_completed,
-            },
-        )
+            judge_response = state.output.completion
 
-        # Calculate max possible score (always aggregation)
-        max_possible_score = max_score + sum(subtasks_with_scores.values()) if subtasks_with_scores else max_score
+            # Parse step evaluations from this response
+            try:
+                step_evals = parse_step_evaluations(judge_response, criteria.task_id)
+                all_step_evaluations.extend(step_evals)
 
-        # Build explanation using shared utility (always show max possible score)
-        step_explanation = build_step_evaluation_explanation(
-            is_correct, task_completed_at_step, subtasks_completed, score_value, max_possible_score
-        )
-        explanation = f"Client-side {step_explanation}"
+                logger.debug(
+                    f"Parsed {len(step_evals)} step evaluations from message {msg_idx + 1}",
+                    extra={
+                        "event": "llm_evaluation_message_parsed",
+                        "message_index": msg_idx,
+                        "step_evaluations_count": len(step_evals),
+                    },
+                )
 
-        return Score(
-            value=score_value,
-            answer=submission,
-            explanation=explanation,
-            metadata={
-                "strategy": "llm_judge_step_evaluation",
-                "scorer_type": "saber_client_side",
-                "model": judge_messages.model,
-                "is_correct": is_correct,
-                "client_score": score_value,
-                "step_evaluations": [step_eval.model_dump() for step_eval in step_evaluations],
-                "task_completed_at_step": task_completed_at_step,
-                "subtasks_completed": subtasks_completed,
-                "total_steps_evaluated": len(step_evaluations),
-                "judge_response": judge_response,
-                "session_id": criteria.session_id,
-                "episode_id": criteria.episode_id,
-                "task_id": criteria.task_id,
-                "scoring_mode": "aggregation",
-                "max_possible_score": max_possible_score,
-                "subtasks_with_scores": subtasks_with_scores,
-            },
-        )
+            except RuntimeError as parse_error:
+                logger.error(
+                    f"Failed to parse message {msg_idx + 1}/{len(user_messages)}: {parse_error}",
+                    extra={
+                        "event": "llm_evaluation_parse_error",
+                        "message_index": msg_idx,
+                        "error": str(parse_error),
+                    },
+                )
+                # Continue with other messages - don't fail entire evaluation
 
-    except Exception as exc:
-        logger.error(
-            "LLM evaluation failed",
-            extra={
-                "event": "llm_evaluation_failed",
-                "error": str(exc),
-                "session_id": criteria.session_id,
-                "episode_id": criteria.episode_id,
-                "task_id": criteria.task_id,
-                "strategy": criteria.evaluation_config.get("strategy", "unknown"),
-                "judge_model": judge_messages.model if judge_messages else None,
-            },
-        )
-        raise RuntimeError(f"LLM evaluation error: {exc}") from exc
+        except Exception as e:
+            logger.error(
+                f"LLM call failed for message {msg_idx + 1}/{len(user_messages)}: {e}",
+                extra={
+                    "event": "llm_evaluation_call_error",
+                    "message_index": msg_idx,
+                    "error": str(e),
+                },
+            )
+            # Continue with other messages
+
+    logger.info(
+        "Completed LLM evaluation of all messages",
+        extra={
+            "event": "llm_evaluation_complete",
+            "total_messages_evaluated": len(user_messages),
+            "total_step_evaluations": len(all_step_evaluations),
+        },
+    )
+
+    # Use all_step_evaluations for scoring
+    step_evaluations = all_step_evaluations
+
+    # Build subtask score mapping (always use aggregation mode)
+    subtasks_with_scores = {}
+    if criteria.task_context.subtasks:
+        logger.info(f"Building subtasks_with_scores from {len(criteria.task_context.subtasks)} subtasks")
+        for subtask in criteria.task_context.subtasks:
+            subtask_id = subtask.get("subtask_id")
+            subtask_max_score = subtask.get("max_score", 0.0)
+            if subtask_id and subtask_max_score is not None and subtask_max_score > 0:
+                subtasks_with_scores[subtask_id] = float(subtask_max_score)
+                logger.debug(
+                    "Subtask score registered",
+                    extra={
+                        "event": "subtask_score_registered",
+                        "subtask_id": subtask_id,
+                        "max_score": subtask_max_score,
+                    },
+                )
+
+        logger.info(f"Subtask scores: {len(subtasks_with_scores)} subtasks with scores defined")
+
+    # Calculate score using aggregation mode
+    score_value, is_correct, task_completed_at_step, subtasks_completed = calculate_step_evaluation_score(
+        step_evaluations, criteria.task_id, max_score, subtasks_with_scores if subtasks_with_scores else None
+    )
+    logger.info(
+        "Score calculated",
+        extra={
+            "event": "score_calculated",
+            "score_value": score_value,
+            "is_correct": is_correct,
+            "task_completed_at_step": task_completed_at_step,
+            "subtasks_completed": subtasks_completed,
+        },
+    )
+
+    # Calculate max possible score (always aggregation)
+    max_possible_score = max_score + sum(subtasks_with_scores.values()) if subtasks_with_scores else max_score
+
+    # Build explanation using shared utility (always show max possible score)
+    step_explanation = build_step_evaluation_explanation(
+        is_correct, task_completed_at_step, subtasks_completed, score_value, max_possible_score
+    )
+    explanation = f"Client-side {step_explanation}"
+
+    return Score(
+        value=score_value,
+        answer=submission,
+        explanation=explanation,
+        metadata={
+            "strategy": "llm_judge_step_evaluation",
+            "scorer_type": "saber_client_side",
+            "model": judge_messages.model,
+            "is_correct": is_correct,
+            "client_score": score_value,
+            "step_evaluations": [step_eval.model_dump() for step_eval in step_evaluations],
+            "task_completed_at_step": task_completed_at_step,
+            "subtasks_completed": subtasks_completed,
+            "total_steps_evaluated": len(step_evaluations),
+            "total_user_messages": len(user_messages),  # NEW: Track chunking
+            "messages_evaluated": len(user_messages),  # NEW: Track success
+            "session_id": criteria.session_id,
+            "episode_id": criteria.episode_id,
+            "task_id": criteria.task_id,
+            "scoring_mode": "aggregation",
+            "max_possible_score": max_possible_score,
+            "subtasks_with_scores": subtasks_with_scores,
+        },
+    )
 
 
 def _build_override_request(

@@ -68,16 +68,23 @@ def run_saber_evaluation(config: SABERConfig, verbose: bool = False) -> Optional
         logger.info("eval_async task app completed")
 
     try:
-        logger.info("Starting inspect_ai task display")
+        # Check if UI is enabled - if not, run directly without task_display wrapper
+        if not config.ui_enabled:
+            logger.info("Running eval_async directly (UI disabled)")
+            # Run directly without the task_display wrapper
+            asyncio.run(run_task_app())
+            logger.info("eval_async completed (UI disabled)")
+        else:
+            logger.info("Starting inspect_ai task display")
 
-        # Import inspect_ai display module only when needed
-        from inspect_ai._display.core.active import display as task_display
+            # Import inspect_ai display module only when needed
+            from inspect_ai._display.core.active import display as task_display
 
-        # Run the task app through inspect_ai's display system
-        # This ensures proper TUI integration with rich progress bars, etc.
-        task_display().run_task_app(run_task_app)
+            # Run the task app through inspect_ai's display system
+            # This ensures proper TUI integration with rich progress bars, etc.
+            task_display().run_task_app(run_task_app)
 
-        logger.info("inspect_ai task display completed")
+            logger.info("inspect_ai task display completed")
 
     except asyncio.CancelledError:
         logger.info("Task cancelled during shutdown", extra={"cause": "inspect_ai_shutdown"})

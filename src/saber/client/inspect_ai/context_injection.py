@@ -51,16 +51,7 @@ TRUNCATION_MARKER: Final[str] = "\n...[truncated due to size limit]"
 
 # Explicit tool registration
 SABER_MCP_TOOLS: set[str] = {
-    "bash",
-    "python",
-    "run_command",
     "end_episode",
-    "read_file",
-    "write_file",
-    "list_directory",
-    "create_directory",
-    "move_file",
-    "delete_file",
 }
 
 
@@ -404,20 +395,6 @@ def saber_tool_params(input: dict[str, Any], func: Callable[..., Any]) -> dict[s
 
     func_name = getattr(func, "__name__", "unknown")
 
-    # DEBUG: Log tool_params call
-    logger.info(
-        f"🔍 saber_tool_params called for tool: {func_name}",
-        extra={
-            "event": "tool_params_called",
-            "func_name": func_name,
-            "has_context": context.has_context(),
-            "config_enabled": _config.enabled,
-            "is_saber_tool": is_saber_mcp_tool(func),
-            "assistant_message_length": len(context.assistant_message) if context.assistant_message else 0,
-            "reasoning_length": len(context.reasoning) if context.reasoning else 0,
-        },
-    )
-
     # Check if we should inject
     if not _config.enabled:
         logger.warning(f"🔍 Context injection DISABLED globally for {func_name}")
@@ -552,34 +529,9 @@ def is_saber_mcp_tool(func: Callable[..., Any]) -> bool:
     func_name = getattr(func, "__name__", "")
     func_module = getattr(func, "__module__", "")
 
-    # DEBUG: Log detection attempt
-    logger.debug(
-        f"🔍 Checking if {func_name} is a SABER MCP tool",
-        extra={
-            "event": "tool_detection",
-            "func_name": func_name,
-            "func_type": str(type(func)),
-            "has_server_config": hasattr(func, "_server_config"),
-            "has_saber_injection_mark": getattr(func, "_saber_context_injection", False),
-            "in_registered_tools": func_name in _config.registered_tools,
-            "func_module": func_module,
-        },
-    )
-
     # Check explicit registration
     if func_name in _config.registered_tools:
         logger.debug(f"🔍 {func_name} found in registered tools")
-        return True
-
-    # Check for explicit marking on function
-    if getattr(func, "_saber_context_injection", False):
-        logger.debug(f"🔍 {func_name} has _saber_context_injection mark")
-        return True
-
-    # Check for _server_config attribute (SABER-specific MCP tools from mcp_server_http)
-    # This attribute is added by inspect_ai's MCP tool wrapping
-    if hasattr(func, "_server_config"):
-        logger.debug(f"🔍 {func_name} has _server_config attribute - treating as SABER MCP tool")
         return True
 
     # Check if tool is from inspect_ai.tool._mcp module (MCP tools)
@@ -618,48 +570,15 @@ async def saber_execute_tools(
     # Get context for current async execution
     context = _get_context()
 
-    # DEBUG: Log execute_tools call
-    logger.info(
-        f"🔍 saber_execute_tools called with {len(messages)} messages",
-        extra={
-            "event": "execute_tools_called",
-            "num_messages": len(messages),
-            "has_assistant_message": bool(messages and isinstance(messages[-1], ChatMessageAssistant)),
-        },
-    )
-
     try:
         # Capture assistant context if available
         if messages and isinstance(messages[-1], ChatMessageAssistant):
             try:
                 assistant_message = messages[-1]
 
-                # DEBUG: Log message inspection
-                logger.info(
-                    "🔍 Inspecting assistant message for context",
-                    extra={
-                        "event": "inspecting_message",
-                        "content_type": type(assistant_message.content).__name__,
-                        "has_reasoning_attr": hasattr(assistant_message, "reasoning"),
-                    },
-                )
-
                 # Extract content and reasoning
                 assistant_content = extract_assistant_content(assistant_message)
                 reasoning_content = extract_reasoning_content(assistant_message)
-
-                # DEBUG: Log extraction results
-                logger.info(
-                    f"🔍 Extraction results: assistant={len(assistant_content) if assistant_content else 0} chars, "
-                    f"reasoning={len(reasoning_content) if reasoning_content else 0} chars",
-                    extra={
-                        "event": "extraction_results",
-                        "has_assistant_content": assistant_content is not None,
-                        "has_reasoning": reasoning_content is not None,
-                        "assistant_preview": assistant_content[:100] if assistant_content else None,
-                        "reasoning_preview": reasoning_content[:100] if reasoning_content else None,
-                    },
-                )
 
                 # Store for tool_params to use
                 if assistant_content or reasoning_content:
@@ -677,7 +596,7 @@ async def saber_execute_tools(
                         },
                     )
                 else:
-                    logger.warning("⚠️ No assistant content or reasoning extracted to store")
+                    logger.debug("⚠️ No assistant content or reasoning extracted to store")
 
             except Exception as e:
                 _metrics.record_capture_attempt(success=False)

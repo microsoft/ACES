@@ -326,6 +326,7 @@ class PromptGenerator:
     def render_judge_prompt_for_episode(self, task: Task, episode: Episode) -> "JudgePromptPayload":
         """
         Render judge prompts for a specific task using episode-based template rendering.
+        Handles both single and chunked modes.
 
         Args:
             task: Task object containing judge system and user template configuration
@@ -338,6 +339,24 @@ class PromptGenerator:
             PromptGenerationError: If template rendering fails
             TemplateValidationError: If template files are missing or invalid
             EvaluationConfigError: If task not configured for LLM judge evaluation
+        """
+        # Check if chunking is enabled
+        eval_config = task.evaluation_config
+        steps_per_message = eval_config.get("criteria", {}).get("steps_per_message") if eval_config else None
+
+        if steps_per_message and len(episode.steps) > steps_per_message:
+            # Chunked mode: multiple user messages
+            return self._render_judge_prompt_chunked(task, episode, steps_per_message)
+        else:
+            # Legacy mode: single user message
+            return self._render_judge_prompt_single(task, episode)
+
+    def _render_judge_prompt_single(self, task: Task, episode: Episode) -> "JudgePromptPayload":
+        """
+        Single-message mode (current implementation).
+
+        This is the existing logic from render_judge_prompt_for_episode()
+        extracted into a separate method.
         """
         # Validate episode completeness first - fail fast on incomplete episodes
         if not episode.is_complete:
@@ -384,6 +403,118 @@ class PromptGenerator:
 
         # Build OpenAI messages format - templates control everything
         messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
+
+        return JudgePromptPayload(messages=messages, model=model, task_id=task.task_id, episode_id=episode.episode_id)
+
+    def _render_judge_prompt_chunked(
+        self, task: Task, episode: Episode, steps_per_message: int
+    ) -> "JudgePromptPayload":
+        """
+        Chunked-message mode: generate multiple user messages.
+
+        Process:
+        1. Render system template once with full episode context
+        2. Chunk episode steps into groups of steps_per_message
+        3. For each chunk:
+           - Create episode view with chunk's steps using episode.with_step_range()
+           - Render user template with episode view
+        4. Return payload with system message + list of user messages
+        """
+        # Validate episode is complete
+        if not episode.is_complete:
+            from ..evaluation.exceptions import EvaluationConfigError
+
+            raise EvaluationConfigError(
+                f"Cannot generate judge prompt for incomplete episode '{episode.episode_id}'. "
+                f"Episode state: {episode.state.value}"
+            )
+
+        # Validate task uses llm_judge strategy
+        eval_config = task.evaluation_config
+        if not eval_config or eval_config.get("strategy") != "llm_judge":
+            from ..evaluation.exceptions import EvaluationConfigError
+
+            raise EvaluationConfigError(f"Task '{task.task_id}' is not configured for LLM judge evaluation")
+
+        # Get template names and model
+        judge_system_template = eval_config["criteria"]["judge_system_template"]
+        judge_user_template = eval_config["criteria"]["judge_user_template"]
+        model = eval_config["criteria"]["model"]
+        golden_answer = eval_config["criteria"].get("golden_answer")
+
+        # Build context and render system prompt once
+        system_context = JudgePromptContext(
+            question=task.description,
+            golden_answer=golden_answer,
+            episode=episode,  # Full episode for system message
+            task=task,
+            evaluation_config=eval_config["criteria"],
+            model=model,
+            domain=task.domain,
+            task_id=task.task_id,
+        )
+        system_prompt = self.render_judge_prompt(judge_system_template, system_context)
+
+        # Chunk steps and render user messages
+        total_steps = len(episode.steps)
+        user_messages: List[str] = []
+
+        logger.debug(
+            "Rendering chunked judge prompts",
+            extra={
+                "event": "judge_prompt_chunked_start",
+                "task_id": task.task_id,
+                "episode_id": episode.episode_id,
+                "total_steps": total_steps,
+                "steps_per_message": steps_per_message,
+                "expected_chunks": (total_steps + steps_per_message - 1) // steps_per_message,
+            },
+        )
+
+        for chunk_start in range(0, total_steps, steps_per_message):
+            chunk_end = min(chunk_start + steps_per_message, total_steps)
+
+            # Create episode view with only this chunk's steps
+            episode_view = episode.with_step_range(chunk_start, chunk_end)
+
+            logger.debug(
+                f"Rendering chunk {len(user_messages) + 1}",
+                extra={
+                    "event": "judge_prompt_chunk_render",
+                    "chunk_index": len(user_messages),
+                    "step_range": (chunk_start, chunk_end),
+                    "steps_in_chunk": chunk_end - chunk_start,
+                },
+            )
+
+            # Render user template with chunked episode view
+            user_context = JudgePromptContext(
+                question=task.description,
+                golden_answer=golden_answer,
+                episode=episode_view,  # Episode view with subset of steps
+                task=task,
+                evaluation_config=eval_config["criteria"],
+                model=model,
+                domain=task.domain,
+                task_id=task.task_id,
+            )
+            user_prompt = self.render_judge_prompt(judge_user_template, user_context)
+            user_messages.append(user_prompt)
+
+        logger.info(
+            "Chunked judge prompts rendered",
+            extra={
+                "event": "judge_prompt_chunked_complete",
+                "task_id": task.task_id,
+                "episode_id": episode.episode_id,
+                "total_chunks": len(user_messages),
+            },
+        )
+
+        # Build messages list (for compatibility with existing code)
+        messages = [{"role": "system", "content": system_prompt}]
+        for user_msg in user_messages:
+            messages.append({"role": "user", "content": user_msg})
 
         return JudgePromptPayload(messages=messages, model=model, task_id=task.task_id, episode_id=episode.episode_id)
 

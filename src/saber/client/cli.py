@@ -1053,6 +1053,7 @@ def setup_client_logging(
 )
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging")  # type: ignore[misc]
 @click.option("--no-log-file", is_flag=True, help="Disable file logging (console only)")  # type: ignore[misc]
+@click.option("--no-ui", is_flag=True, help="Disable TUI and use rich console output instead")  # type: ignore[misc]
 @click.option(
     "--validate-config", is_flag=True, help="Validate configuration against domain manifest before running"
 )  # type: ignore[misc]
@@ -1069,6 +1070,7 @@ def run_command(
     domains_root: Optional[Path],
     verbose: bool,
     no_log_file: bool,
+    no_ui: bool,
     validate_config: bool,
     rest_url: Optional[str],
     mcp_url: Optional[str],
@@ -1179,7 +1181,7 @@ def run_command(
                 log_level="INFO",
                 log_dir=default_log_dir,
                 domain=domain,  # Pass domain for logging organization
-                ui_enabled=True,
+                ui_enabled=not no_ui,  # Invert no_ui flag
             )
 
             click.echo("🔧 Using direct configuration parameters")

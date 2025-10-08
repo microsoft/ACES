@@ -1835,24 +1835,29 @@ class SessionManager:
 
                 # Extract system and user prompts from messages array
                 system_prompt = None
-                user_prompt = None
+                user_prompts = []  # CHANGED: List instead of single string
 
                 for message in judge_payload.messages:
                     if message["role"] == "system":
                         system_prompt = message["content"]
                     elif message["role"] == "user":
-                        user_prompt = message["content"]
+                        user_prompts.append(message["content"])  # CHANGED: Collect all user messages
 
                 # Validate that we have both system and user prompts
-                if system_prompt is None or user_prompt is None:
+                if system_prompt is None or not user_prompts:
                     raise ValueError(
                         f"Missing required prompts: system_prompt={'present' if system_prompt else 'missing'}, "
-                        f"user_prompt={'present' if user_prompt else 'missing'}"
+                        f"user_prompts={'present' if user_prompts else 'missing'} (count: {len(user_prompts)})"
                     )
+
+                # Build JudgeMessages - normalize to single string or list
+                user_message = user_prompts if len(user_prompts) > 1 else user_prompts[0]
 
                 # Build JudgeMessages object
                 judge_messages = JudgeMessages(
-                    system_message=system_prompt, user_message=user_prompt, model=judge_payload.model
+                    system_message=system_prompt,
+                    user_message=user_message,  # Can be str or List[str]
+                    model=judge_payload.model,
                 )
 
                 logger.debug(
