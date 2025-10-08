@@ -585,7 +585,9 @@ class BenchmarkConfigLoader:
         Merge shared configuration into task data with proper precedence.
 
         Task-specific configuration takes precedence over shared configuration.
-        Shared config is applied to initial_context and any other compatible fields.
+        Shared config is dynamically merged for all compatible fields.
+
+        Requires explicit opt-in via 'inherit_shared: true' in task_data to use shared config.
 
         Args:
             task_data: Original task configuration
@@ -593,42 +595,86 @@ class BenchmarkConfigLoader:
 
         Returns:
             Merged task configuration
+
+        Raises:
+            InvalidTaskDefinitionException: If shared config exists but inherit_shared is not true
         """
         if not shared_config:
             return task_data
 
+        # Check if task explicitly opts into shared config inheritance
+        inherit_shared = task_data.get("inherit_shared", False)
+        task_id = task_data.get("task_id", "unknown")
+
+        # If shared config exists but task doesn't explicitly inherit, skip merging
+        if not inherit_shared:
+            if shared_config:
+                logger.debug(
+                    "Task not inheriting from shared config (inherit_shared not set)",
+                    extra={
+                        "event": "benchmark_shared_config_not_inherited",
+                        "task_id": task_id,
+                        "available_shared_fields": list(shared_config.keys()),
+                    },
+                )
+            return task_data
+
+        # Task explicitly inherits from shared config
+        logger.debug(
+            "Task inheriting from shared configuration",
+            extra={
+                "event": "benchmark_shared_config_inheritance_enabled",
+                "task_id": task_id,
+                "shared_fields": list(shared_config.keys()),
+            },
+        )
+
         # Create a deep copy to avoid modifying original data
         merged_data = task_data.copy()
 
-        # Merge initial_context if both exist
-        if "initial_context" in shared_config and "initial_context" in merged_data:
-            # Task-specific initial_context takes precedence, but we deep merge with shared
-            shared_initial_context = shared_config["initial_context"]
-            task_initial_context = merged_data["initial_context"]
+        # Dynamically merge all fields from shared config
+        for field_name, shared_field_value in shared_config.items():
+            if field_name in merged_data:
+                # Both shared and task-specific values exist - deep merge if both are dicts
+                task_field_value = merged_data[field_name]
 
-            # Deep merge: shared first, then task-specific (task overrides shared)
-            merged_data["initial_context"] = deep_merge_dicts(shared_initial_context, task_initial_context)
-            logger.debug(
-                "Merged shared initial context",
-                extra={
-                    "event": "benchmark_initial_context_merged",
-                    "task_id": task_data.get("task_id", "unknown"),
-                },
-            )
-
-        elif "initial_context" in shared_config:
-            # No task-specific initial_context, use shared
-            merged_data["initial_context"] = shared_config["initial_context"].copy()
-            logger.debug(
-                "Applied shared initial context",
-                extra={
-                    "event": "benchmark_initial_context_applied",
-                    "task_id": task_data.get("task_id", "unknown"),
-                },
-            )
-
-        # Could extend this to merge other configuration sections as needed
-        # For now, we focus on initial_context as that's where database_connection lives
+                if isinstance(shared_field_value, dict) and isinstance(task_field_value, dict):
+                    # Deep merge: shared first, then task-specific (task overrides shared)
+                    merged_data[field_name] = deep_merge_dicts(shared_field_value, task_field_value)
+                    logger.debug(
+                        f"Merged shared {field_name}",
+                        extra={
+                            "event": f"benchmark_{field_name}_merged",
+                            "task_id": task_id,
+                            "shared_keys": list(shared_field_value.keys()),
+                            "task_keys": list(task_field_value.keys()),
+                            "merged_keys": list(merged_data[field_name].keys()),
+                        },
+                    )
+                else:
+                    # Task-specific value takes precedence for non-dict values
+                    logger.debug(
+                        f"Task-specific {field_name} takes precedence",
+                        extra={
+                            "event": f"benchmark_{field_name}_override",
+                            "task_id": task_id,
+                        },
+                    )
+            else:
+                # No task-specific value, use shared entirely
+                merged_data[field_name] = (
+                    shared_field_value.copy() if isinstance(shared_field_value, dict) else shared_field_value
+                )
+                logger.debug(
+                    f"Applied shared {field_name}",
+                    extra={
+                        "event": f"benchmark_{field_name}_applied",
+                        "task_id": task_id,
+                        "shared_keys": (
+                            list(shared_field_value.keys()) if isinstance(shared_field_value, dict) else None
+                        ),
+                    },
+                )
 
         return merged_data
 
