@@ -58,7 +58,7 @@ def mock_task_llm_judge():
     # Legacy attributes for backward compatibility
     task.llm_judge = Mock()
     task.llm_judge.model = "gpt-4"
-    task.llm_judge.judge_template = "cybersecurity_incident_user.md"
+    task.llm_judge.judge_template = "judge/cybersecurity_incident_user.md"
     task.llm_judge.system_prompt = "You are an expert cybersecurity evaluator..."
     task.llm_judge.custom_criteria = []
     return task

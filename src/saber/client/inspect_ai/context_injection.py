@@ -401,11 +401,11 @@ def saber_tool_params(input: dict[str, Any], func: Callable[..., Any]) -> dict[s
         return params
 
     if not context.has_context():
-        logger.info(f"🔍 No context available to inject for {func_name}")
+        logger.debug(f"🔍 No context available to inject for {func_name}")
         return params
 
     if not is_saber_mcp_tool(func):
-        logger.info(f"🔍 Tool {func_name} is NOT a SABER MCP tool, skipping injection")
+        logger.debug(f"🔍 Tool {func_name} is NOT a SABER MCP tool, skipping injection")
         return params
 
     try:
@@ -428,7 +428,7 @@ def saber_tool_params(input: dict[str, Any], func: Callable[..., Any]) -> dict[s
 
         if injected_any:
             _metrics.record_injection_attempt(success=True)
-            logger.info(
+            logger.debug(
                 f"✅ Context successfully injected into {func_name}",
                 extra={
                     "event": "context_injection",
@@ -585,7 +585,7 @@ async def saber_execute_tools(
                     context.set_context(assistant_content, reasoning_content)
                     _metrics.record_capture_attempt(success=True)
 
-                    logger.info(
+                    logger.debug(
                         "✅ Context captured and stored successfully",
                         extra={
                             "event": "context_captured",
@@ -615,5 +615,5 @@ async def saber_execute_tools(
 
     finally:
         # ALWAYS clear context in finally block
-        logger.info("🔍 Clearing context in finally block")
+        logger.debug("🔍 Clearing context in finally block")
         context.clear_context()
