@@ -8,13 +8,18 @@
 
 services:
   excytin-sandbox:
-    image: saber/excytin-sandbox:latest
+    image: saber/excytin/sandbox:latest
     container_name: excytin-sandbox-${EPISODE_ID:-default}
     working_dir: /workspace
     environment:
       - PYTHONPATH=/workspace
       - PYTHONUNBUFFERED=1
       - EPISODE_ID=${EPISODE_ID:-default}
+      - MYSQL_HOST=saber-excytin-incident-5
+      - MYSQL_PORT=3306
+      - MYSQL_USER=root
+      - MYSQL_PASSWORD=admin
+      - MYSQL_DATABASE=env_monitor_db
     networks:
       - excytin-database
       - saber-episode-network

@@ -5,7 +5,7 @@
 services:
   # Incident database for storing security incidents and analysis results
   incident-5-db:
-    image: saber/excytin-incident-5:latest
+    image: saber/excytin/incident-5:latest
     container_name: saber-excytin-incident-5
     ports:
       - "3306:3306"
@@ -17,6 +17,12 @@ services:
     networks:
       - excytin-database
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/healthcheck.sh"]
+      interval: 20s
+      timeout: 30s
+      retries: 5
+      start_period: 120s
     deploy:
       resources:
         limits:

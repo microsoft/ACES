@@ -25,6 +25,8 @@ services:
       - ${DOMAINS_ROOT:?DOMAINS_ROOT must be set}/../external/saber/src:/app/src:rw
       # Docker socket for sandbox management (always included)
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Azure CLI credentials for git authentication (if they exist on host)
+      - ${HOME}/.azure:/root/.azure:rw
     networks:
       - domain-network
     security_opt:

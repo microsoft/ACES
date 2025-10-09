@@ -9,6 +9,9 @@ RUN apt-get update && apt-get install -y \
     git \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Azure CLI
+RUN apt-get update && apt-get install -y azure-cli && rm -rf /var/lib/apt/lists/*
+
 # Install Docker CLI (for Docker-in-Docker execution)
 RUN curl -fsSL https://get.docker.com | sh
 
@@ -24,13 +27,19 @@ RUN pip install --no-cache-dir \
     httpx>=0.25.0
 
 # Install SABER server package from local source
-COPY external/saber /tmp/saber
+# SABER_SRC_PATH can be "." (standalone saber repo) or "external/saber" (oss_saber repo)
+ARG SABER_SRC_PATH=external/saber
+COPY ${SABER_SRC_PATH} /tmp/saber
 RUN cd /tmp/saber && \
     pip install -e . && \
     python -c "import saber; print('SABER installation verified')"
 
 # Set working directory
 WORKDIR /app
+
+# Copy .env file if it exists (optional - for API keys and credentials)
+# The .dockerignore should NOT ignore .env for this to work
+COPY .env /app/.env
 
 # Set environment variables
 ENV PYTHONPATH=/app

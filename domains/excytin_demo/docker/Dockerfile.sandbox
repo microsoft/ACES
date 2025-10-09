@@ -16,9 +16,6 @@ RUN pip install --no-cache-dir \
     pymysql \
     sqlalchemy
 
-# Switch back to non-root user
-USER saber
-
 # Domain-specific environment variables
 ENV MYSQL_HOST=saber-excytin-incident-5
 ENV MYSQL_PORT=3306

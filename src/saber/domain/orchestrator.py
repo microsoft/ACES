@@ -176,7 +176,7 @@ class EnvironmentValidator:
         # Validate all domain images exist (unless building)
         if not skip_image_check:
             # First validate base images
-            self._validate_base_images(errors, self.domains_root.parent / "external" / "saber")
+            self._validate_base_images(errors)
             # Then validate domain images
             self._validate_all_images(manifest, errors)
 
@@ -220,12 +220,12 @@ class EnvironmentValidator:
             if not self._docker_image_exists(image_tag):
                 errors.append(f"Docker image '{image_tag}' not found. Use --build to create it.")
 
-    def _validate_base_images(self, errors: List[str], saber_root: Path) -> None:
+    def _validate_base_images(self, errors: List[str]) -> None:
         """Validate base images exist."""
         try:
-            # Load base images config directly
-            base_images_file = saber_root / "src" / "saber" / "domain" / "package_resources" / "base-images.yaml"
-            with open(base_images_file, "r") as f:
+            # Load base images config from package resources
+            base_images_file = files(saber.domain.package_resources) / "base-images.yaml"
+            with base_images_file.open("r") as f:
                 base_images_config = yaml.safe_load(f)
 
             for image_name, image_config in base_images_config["images"].items():
@@ -418,12 +418,20 @@ class DockerRunner:
             # Use repo root as build context to access external/saber
             repo_root = self.domains_root.parent
 
+            # Detect if we're in a standalone saber repo or oss_saber repo
+            # In standalone saber repo: copy the whole repo (.)
+            # In oss_saber repo: copy external/saber subdirectory
+            saber_src_path = "." if (repo_root / "src" / "saber").exists() else "external/saber"
+
             # Read Dockerfile content from package resources
             dockerfile_resource = files(saber.domain.package_resources) / package_path
             dockerfile_content = dockerfile_resource.read_text()
 
             # Prepare build command with Dockerfile from stdin (-f -)
             cmd = ["docker", "build", "-f", "-", "-t", image_tag]
+
+            # Pass SABER_SRC_PATH as build arg
+            cmd.extend(["--build-arg", f"SABER_SRC_PATH={saber_src_path}"])
 
             # Add labels
             for key, value in labels.items():
@@ -435,9 +443,10 @@ class DockerRunner:
             if dry_run:
                 print(f"Would build base image {image_name}: {' '.join(cmd)}")
                 print(f"Dockerfile content from: {package_path}")
+                print(f"Using SABER source path: {saber_src_path}")
                 return
 
-            print(f"Building base image: {image_tag}")
+            print(f"Building base image: {image_tag} (SABER_SRC_PATH={saber_src_path})")
             subprocess.run(cmd, input=dockerfile_content, text=True, check=True, cwd=repo_root)
             print(f"✓ Successfully built {image_tag}")
 

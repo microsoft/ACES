@@ -1,25 +1,24 @@
-# SABER Configuration - Excytin Demo
-# Updated for unified eval_async architecture with proper nested configuration
+# SABER Configuration - Excytin Domain
+# Auto-hydrated configuration for saber-domain test command
 
-# Server configuration (nested structure)
+# Server configuration (auto mode - URLs injected at runtime)
 server:
-  rest_url: "http://localhost:8000"
-  mcp_url: "http://localhost:8001"
+  mode: auto  # URLs will be hydrated by saber-domain test command
   client_id: "saber-client"
 
 # Task configuration
 tasks:
-  task_ids: ["incident_5_task_1", ] # "incident_5_task_2", "incident_5_task_3", "incident_5_task_4", "incident_5_task_5"]
+  task_ids: ["incident_5_task_1"]
 
 # Agent configuration
 agents:
   - id: "inspect_react"
     model: "openai/azure/gpt-4.1"
-    tasks: ["*"]  # Wildcard assignment for all tasks
+    tasks: ["incident_5_task_1"]  # Specific task assignment
 
 # Execution configuration
 log_level: "INFO"
-log_dir: "domains/excytin_demo/client/logs"
+log_dir: "logs/client-logs"
 ui_enabled: true
 
 # Log upload configuration
@@ -33,5 +32,5 @@ log_upload:
 max_samples: null  # null means no limit
 max_subprocesses: 1  # parallel execution
 parallel_execution: true
-max_parallel_tasks: 1  # Single task for demo
+max_parallel_tasks: 2  # Reasonable default for excytin
 container_timeout: 300
