@@ -21,12 +21,17 @@ services:
       - ${DOMAINS_ROOT}/${DOMAIN}/server/data:/app/data:rw
       # Cross-domain visibility with writable logs
       - ${DOMAINS_ROOT}:/app/domains:rw
-      # SABER source code for live development - mount to where editable install points
-      - ${DOMAINS_ROOT:?DOMAINS_ROOT must be set}/../external/saber/src:/tmp/saber/src:rw
+      # SABER source code for live development - mount entire saber package for editable install
+      # SABER_SRC can be customized in .env for different repo structures:
+      # - standalone saber repo: SABER_SRC=${DOMAINS_ROOT}/..
+      # - oss_saber repo: SABER_SRC=${DOMAINS_ROOT}/../../external/saber
+      - ${SABER_SRC:?SABER_SRC must be set}:/tmp/saber:rw
       # Docker socket for sandbox management (always included)
       - /var/run/docker.sock:/var/run/docker.sock:ro
       # Azure CLI credentials for git authentication (if they exist on host)
       - ${HOME}/.azure:/root/.azure:rw
+      # Environment file with API keys and credentials (mounted from repo root)
+      - ${ENV_FILE:?ENV_FILE must be set}:/app/.env:ro
     networks:
       - domain-network
     security_opt:

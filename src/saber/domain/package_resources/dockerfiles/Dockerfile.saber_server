@@ -37,9 +37,6 @@ RUN cd /tmp/saber && \
 # Set working directory
 WORKDIR /app
 
-# Copy .env file if it exists (optional - for API keys and credentials)
-# The .dockerignore should NOT ignore .env for this to work
-COPY .env /app/.env
 
 # Set environment variables
 ENV PYTHONPATH=/app

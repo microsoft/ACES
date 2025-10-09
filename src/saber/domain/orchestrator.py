@@ -25,6 +25,63 @@ from .exceptions import DockerError, DomainNotFoundError, DomainValidationError
 from .resources import resolve_schema_file
 
 
+def detect_repo_structure(domains_root: Path) -> tuple[Path, Path]:
+    """Detect repository structure and return appropriate paths.
+
+    This utility walks up from domains_root to find the saber source code
+    (src/saber/) and .env file, working with any repository structure.
+
+    Args:
+        domains_root: Path to the domains directory
+
+    Returns:
+        Tuple of (saber_src_path, env_file_path)
+
+    Raises:
+        DomainValidationError: If saber source cannot be found
+    """
+    current = domains_root
+    saber_src = None
+    env_file = None
+
+    # Search up to 5 levels up
+    for _ in range(5):
+        current = current.parent
+
+        # Look for saber source directory
+        if saber_src is None:
+            # Check if current directory has src/saber
+            if (current / "src" / "saber").exists():
+                saber_src = current
+            # Check if there's an external/saber with src/saber
+            elif (current / "external" / "saber" / "src" / "saber").exists():
+                saber_src = current / "external" / "saber"
+
+        # Look for .env file
+        if env_file is None and (current / ".env").exists():
+            env_file = current / ".env"
+
+        # If we found both, we're done
+        if saber_src and env_file:
+            return saber_src, env_file
+
+    # If we didn't find saber source, raise error
+    if saber_src is None:
+        raise DomainValidationError(
+            domain="repo-structure",
+            validation_errors=[
+                f"Could not find saber source (src/saber/) walking up from: {domains_root}",
+                "Searched up to 5 directory levels",
+            ],
+        )
+
+    # If we found saber but no .env, use saber directory as fallback
+    if env_file is None:
+        env_file = saber_src / ".env"
+
+    return saber_src, env_file
+
+
 class ManifestLoader:
     """Service for loading and validating domain manifests."""
 
@@ -183,6 +240,9 @@ class EnvironmentValidator:
         if errors:
             raise DomainValidationError(domain, errors)
 
+        # Detect repository structure for SABER source code mounting
+        saber_src_path, env_file_path = self._detect_repo_structure()
+
         # Generate environment variables (server-only)
         return {
             "DOMAIN": domain,
@@ -191,7 +251,20 @@ class EnvironmentValidator:
             "REST_PORT": str(rest_port),
             "MCP_PORT": str(mcp_port),
             "LOG_LEVEL": log_level,
+            "SABER_SRC": str(saber_src_path),
+            "ENV_FILE": str(env_file_path),
         }
+
+    def _detect_repo_structure(self) -> tuple[Path, Path]:
+        """Detect repository structure and return appropriate paths.
+
+        Returns:
+            Tuple of (saber_src_path, env_file_path)
+
+        Raises:
+            DomainValidationError: If structure cannot be determined
+        """
+        return detect_repo_structure(self.domains_root)
 
     def _validate_all_images(self, manifest: Dict[str, Any], errors: List[str]) -> None:
         """Validate all domain images exist."""
@@ -273,6 +346,17 @@ class DockerRunner:
             return result.returncode == 0
         except Exception:
             return False
+
+    def _detect_repo_structure_for_stop(self, domains_root: Path) -> tuple[Path, Path]:
+        """Detect repository structure for stop operations.
+
+        Args:
+            domains_root: Path to domains directory
+
+        Returns:
+            Tuple of (saber_src_path, env_file_path)
+        """
+        return detect_repo_structure(domains_root)
 
     def build_images(self, domain: str, manifest: Dict[str, Any], domains_root: Path, dry_run: bool = False) -> None:
         """Build all Docker images defined in domain manifest.
@@ -534,6 +618,9 @@ class DockerRunner:
             print(f"Would stop domain {domain}")
             return
 
+        # Detect repository structure for required paths
+        saber_src_path, env_file_path = self._detect_repo_structure_for_stop(domains_root)
+
         # Create minimal environment file for compose down
         minimal_env = {
             "DOMAIN": domain,
@@ -542,6 +629,8 @@ class DockerRunner:
             "REST_PORT": "8000",  # Not needed for 'down' but required by compose file
             "MCP_PORT": "8001",  # Not needed for 'down' but required by compose file
             "LOG_LEVEL": "INFO",  # Not needed for 'down' but required by compose file
+            "SABER_SRC": str(saber_src_path),  # Required by compose file volume mounts
+            "ENV_FILE": str(env_file_path),  # Required by compose file volume mounts
         }
 
         # Create temporary env file
