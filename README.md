@@ -42,7 +42,7 @@ Command-line interface for domain lifecycle management:
 ## Quick Start
 
 ### Prerequisites
-- Python 3.10+
+- Python 3.11-3.12 (managed by uv via `.python-version`)
 - Docker
 - Git
 

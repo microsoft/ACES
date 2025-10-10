@@ -5,7 +5,7 @@
 services:
   # Incident database for storing security incidents and analysis results
   incident-5-db:
-    image: saber/excytin/incident-5:latest
+    image: saber/excytin_demo/incident-5:latest
     container_name: saber-excytin-incident-5
     ports:
       - "3306:3306"

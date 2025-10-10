@@ -8,7 +8,7 @@
 
 services:
   excytin-sandbox:
-    image: saber/excytin/sandbox:latest
+    image: saber/excytin_demo/sandbox:latest
     container_name: excytin-sandbox-${EPISODE_ID:-default}
     working_dir: /workspace
     environment:

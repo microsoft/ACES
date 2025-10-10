@@ -75,9 +75,46 @@ def detect_repo_structure(domains_root: Path) -> tuple[Path, Path]:
             ],
         )
 
-    # If we found saber but no .env, use saber directory as fallback
+    # If we found saber but no .env, raise a clear error
     if env_file is None:
-        env_file = saber_src / ".env"
+        error_lines = [
+            "❌ Required .env file not found!",
+            "",
+            f"Searched from {domains_root} up to {saber_src}",
+            "",
+            "To fix this issue:",
+        ]
+
+        # Check if .env.template exists
+        if (saber_src / ".env.template").exists():
+            error_lines.extend(
+                [
+                    f"  1. Copy the template: cp {saber_src}/.env.template {saber_src}/.env",
+                    f"  2. Edit {saber_src}/.env with your API keys and configuration",
+                ]
+            )
+        else:
+            error_lines.extend(
+                [
+                    f"  1. Create {saber_src}/.env with your configuration",
+                    "  2. Add required API keys (OpenAI, Anthropic, etc.)",
+                ]
+            )
+
+        error_lines.extend(
+            [
+                "",
+                "The .env file is required for:",
+                "  - API keys (OpenAI, Anthropic, etc.)",
+                "  - Azure credentials",
+                "  - Other sensitive configuration",
+            ]
+        )
+
+        raise DomainValidationError(
+            domain="configuration",
+            validation_errors=error_lines,
+        )
 
     return saber_src, env_file
 
