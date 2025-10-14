@@ -1,9 +1,9 @@
 """
 Evaluator implementations for evaluation system.
+
+DEPRECATED: Server-side evaluation has been moved to client-side.
+This package is kept for backward compatibility but should not be used.
 """
 
-from .base import BaseEvaluator
-from .llm_evaluator import LLMEvaluator
-from .static_evaluator import StaticEvaluator
-
-__all__ = ["BaseEvaluator", "StaticEvaluator", "LLMEvaluator"]
+# All evaluators have been removed - evaluation now happens client-side
+__all__: list[str] = []

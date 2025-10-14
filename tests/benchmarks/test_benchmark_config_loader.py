@@ -61,13 +61,14 @@ tasks:
         - "test_executor"
     episode_config:
       max_steps: 10
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers:
           - "test_answer"
       scoring:
         max_score: 1.0
+
     subtasks: []
 """
 
@@ -126,7 +127,7 @@ tasks:
         - "test_executor"
     episode_config:
       max_steps: 10
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers:
@@ -259,13 +260,14 @@ tasks:
       timeout: 180
     episode_config:
       max_steps: 25
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers:
           - "test_answer"
       scoring:
         max_score: 1.0
+
     subtasks:
       - subtask_id: test_subtask
         title: Test Subtask
@@ -340,13 +342,14 @@ tasks:
       allowed_executors: ["bash"]  # Inherit timeout only
     episode_config:
       max_steps: 15
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers:
           - "test_answer"
       scoring:
         max_score: 1.0
+
     subtasks:
       - subtask_id: test_subtask
         title: Test Subtask
@@ -408,13 +411,14 @@ tasks:
       allowed_executors: ["bash"]  # Explicit allowed executors (timeout via global)
     episode_config:
       max_steps: 40
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers:
           - "test_answer"
       scoring:
         max_score: 1.0
+
     subtasks: []
 """
 
@@ -465,13 +469,14 @@ tasks:
       allowed_executors: ["bash"]  # Inherit timeout 50
     episode_config:
       max_steps: 60  # Inherit via global defaults (explicit for clarity)
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers:
           - "test_answer"
       scoring:
         max_score: 1.0
+
     subtasks: []
   - task_id: task_override
     title: Task with Override
@@ -484,13 +489,14 @@ tasks:
       allowed_executors: ["bash"]
     episode_config:
       max_steps: 80  # Override
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers:
           - "test_answer"
       scoring:
         max_score: 1.0
+
     subtasks: []
 """
 
@@ -665,13 +671,14 @@ tasks:
       allowed_executors: ["bash"]
     episode_config:
       max_steps: 30
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers:
           - "test_answer"
       scoring:
         max_score: 1.0
+
     subtasks: []
 """
 
@@ -720,13 +727,14 @@ tasks:
       timeout: 60
     episode_config:
       max_steps: 100
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers:
           - "test_answer"
       scoring:
         max_score: 1.0
+
     subtasks: []
 
   - task_id: test_task_with_overrides
@@ -738,7 +746,7 @@ tasks:
       allowed_executors: ["bash", "python"]
     episode_config:
       max_steps: 50  # Override global default
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers:
@@ -806,12 +814,13 @@ tasks:
       allowed_executors: ["bash"]
     episode_config:
       max_steps: 55
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers: ["test_answer"]
       scoring:
         max_score: 1.0
+
     subtasks: []
 """
 
@@ -908,12 +917,13 @@ tasks:
       allowed_executors: ["bash"]
     episode_config:
       max_steps: 45
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers: ["test_answer"]
       scoring:
         max_score: 1.0
+
     subtasks: []
 """
 
@@ -979,13 +989,14 @@ tasks:
       timeout: 60
     episode_config:
       max_steps: 10
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers:
           - "test_answer"
       scoring:
         max_score: 1.0
+
     subtasks: []
 """
             with open(task_file, "w") as f:
@@ -1066,32 +1077,36 @@ tasks:
     title: Incident 1 Task 1
     description: A task with shared config
     prompt_template_file: test_template.md
+    inherit_shared: true
     execution_config:
       timeout: 120
     episode_config:
       max_steps: 8
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers:
           - "shared_answer"
       scoring:
         max_score: 1.0
+
     subtasks: []
   - task_id: incident_1_task_2
     title: Incident 1 Task 2
     description: Another task with shared config
     prompt_template_file: test_template.md
+    inherit_shared: true
     initial_context:
       database_connection:
         host: "override-db.example.com"  # This should override shared
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers:
           - "override_answer"
       scoring:
         max_score: 1.0
+
     subtasks: []
 """
             with open(task_file, "w") as f:
@@ -1158,23 +1173,25 @@ tasks:
     title: Batch 1 Task 1
     description: First task in batch 1
     prompt_template_file: test_template.md
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers: ["answer1"]
       scoring:
         max_score: 1.0
+
     subtasks: []
   - task_id: batch_1_task_2
     title: Batch 1 Task 2
     description: Second task in batch 1
     prompt_template_file: test_template.md
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers: ["answer2"]
       scoring:
         max_score: 1.0
+
     subtasks: []
 """
             with open(task_file1, "w") as f:
@@ -1188,12 +1205,13 @@ tasks:
     title: Batch 2 Task 1
     description: First task in batch 2
     prompt_template_file: test_template.md
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers: ["answer3"]
       scoring:
         max_score: 1.0
+
     subtasks: []
 """
             with open(task_file2, "w") as f:
@@ -1229,12 +1247,13 @@ tasks:
     title: Orphan Task
     description: A task without global config
     prompt_template_file: test_template.md
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers: ["answer"]
       scoring:
         max_score: 1.0
+
     subtasks: []
 """
             with open(task_file, "w") as f:
@@ -1335,12 +1354,13 @@ tasks:
     title: Minimal Task
     description: Task with minimal config relying on global defaults
     prompt_template_file: test_template.md
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers: ["inherited"]
       scoring:
         max_score: 1.0
+
     subtasks: []
 """
             with open(task_file, "w") as f:
@@ -1361,8 +1381,8 @@ tasks:
             assert task.episode_config["step_timeout"] == 300
 
             # Verify evaluation config is as specified (no global inheritance for eval config)
-            assert task.evaluation_config["strategy"] == "static"
-            assert task.evaluation_config["criteria"]["expected_answers"] == ["inherited"]
+            assert task.submission_evaluation_config["strategy"] == "static"
+            assert task.submission_evaluation_config["criteria"]["expected_answers"] == ["inherited"]
 
             # Verify benchmark config inheritance
             assert task.benchmark_config["episode_attempts"] == 5
@@ -1414,12 +1434,13 @@ tasks:
     episode_config:
       max_steps: 15  # Override global
       custom_setting: "task_specific"  # New setting
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers: ["override"]
       scoring:
         max_score: 1.0
+
     subtasks: []
 """
             with open(task_file, "w") as f:
@@ -1489,12 +1510,13 @@ tasks:
       security:
         network_access: true  # Override just this nested value
         # sandboxed and file_system should be inherited from global
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers: ["deep_merge"]
       scoring:
         max_score: 1.0
+
     subtasks: []
 """
             with open(task_file, "w") as f:
@@ -1545,12 +1567,13 @@ tasks:
     title: Test Task
     description: A test task
     prompt_template_file: test_template.md
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers: ["test"]
       scoring:
         max_score: 1.0
+
     subtasks: []
 """
             with open(task_file, "w") as f:
@@ -1625,23 +1648,27 @@ tasks:
     title: Shared Task 1
     description: Task that inherits shared config
     prompt_template_file: test_template.md
-    evaluation_config:
+    inherit_shared: true
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers: ["shared_1"]
       scoring:
         max_score: 1.0
+
     subtasks: []
   - task_id: shared_task_2
     title: Shared Task 2
     description: Another task with shared config
     prompt_template_file: test_template.md
-    evaluation_config:
+    inherit_shared: true
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers: ["shared_2"]
       scoring:
         max_score: 1.0
+
     subtasks: []
 """
             with open(task_file, "w") as f:
@@ -1733,6 +1760,7 @@ tasks:
     title: Override Task
     description: Task that overrides shared config
     prompt_template_file: test_template.md
+    inherit_shared: true
     initial_context:
       database_connection:
         host: "override-db.example.com"  # Override shared
@@ -1743,12 +1771,13 @@ tasks:
         # version and rate_limit should be inherited
       custom_config:
         task_specific: "value"  # New config not in shared
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers: ["override"]
       scoring:
         max_score: 1.0
+
     subtasks: []
 """
             with open(task_file, "w") as f:
@@ -1835,12 +1864,14 @@ tasks:
     title: Nested Task
     description: Task in nested directory with shared config
     prompt_template_file: test_template.md
-    evaluation_config:
+    inherit_shared: true
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers: ["nested"]
       scoring:
         max_score: 1.0
+
     subtasks: []
 """
             with open(task_file, "w") as f:
@@ -1906,12 +1937,13 @@ tasks:
     initial_context:
       custom_config:
         task_only: "value"
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers: ["no_shared"]
       scoring:
         max_score: 1.0
+
     subtasks: []
 """
             with open(task_file, "w") as f:
@@ -1981,12 +2013,13 @@ tasks:
     title: Bad Shared Task
     description: Task with malformed shared.yaml
     prompt_template_file: test_template.md
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers: ["bad_shared"]
       scoring:
         max_score: 1.0
+
     subtasks: []
 """
             with open(task_file, "w") as f:
@@ -2114,7 +2147,7 @@ tasks:
       timeout: 300  # Override global for this complex task
     episode_config:
       max_steps: 25  # Override global
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         attack_vector_identified: true
@@ -2132,7 +2165,7 @@ tasks:
         title: "Analyze Database Access Logs"
         description: "Review database access logs for suspicious activity"
         objective: "Identify and document any suspicious database query patterns"
-        evaluation_config:
+        submission_evaluation_config:
           strategy: "static"
           criteria:
             suspicious_queries_found: true
@@ -2143,7 +2176,7 @@ tasks:
         title: "Identify Compromised User Accounts"
         description: "Determine which user accounts were compromised"
         objective: "Create a list of compromised user accounts and their access patterns"
-        evaluation_config:
+        submission_evaluation_config:
           strategy: "static"
           criteria:
             compromised_accounts_listed: true
@@ -2170,7 +2203,7 @@ tasks:
       security:
         sandboxed: true  # Extra security for malware analysis
         network_access: false  # Override global - no network for malware
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         malware_family_identified: true
@@ -2188,7 +2221,7 @@ tasks:
         title: "Static Malware Analysis"
         description: "Perform static analysis on malware samples"
         objective: "Extract file hashes and strings from malware samples"
-        evaluation_config:
+        submission_evaluation_config:
           strategy: "static"
           criteria:
             file_hashes_computed: true
@@ -2208,7 +2241,7 @@ tasks:
     title: Standalone Vulnerability Scan
     description: General vulnerability assessment
     prompt_template_file: vuln_scan.md
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         vulnerabilities_found: true
@@ -2248,11 +2281,11 @@ tasks:
             # Verify global overrides
             assert incident_1_task.execution_config["timeout"] == 300  # Task override
             assert incident_1_task.episode_config["max_steps"] == 25  # Task override
-            assert incident_1_task.evaluation_config["scoring"]["max_score"] == 15.0  # Task override
+            assert incident_1_task.submission_evaluation_config["scoring"]["max_score"] == 15.0  # Task override
 
             # Verify evaluation config structure
-            assert incident_1_task.evaluation_config["strategy"] == "static"
-            assert "expected_answers" in incident_1_task.evaluation_config["criteria"]
+            assert incident_1_task.submission_evaluation_config["strategy"] == "static"
+            assert "expected_answers" in incident_1_task.submission_evaluation_config["criteria"]
 
             # Verify benchmark config
             assert incident_1_task.benchmark_config["episode_attempts"] == 3
@@ -2282,8 +2315,8 @@ tasks:
             assert standalone_task.benchmark_config["episode_attempts"] == 3
 
             # Verify evaluation config is present
-            assert "strategy" in standalone_task.evaluation_config
-            assert standalone_task.evaluation_config["strategy"] == "static"
+            assert "strategy" in standalone_task.submission_evaluation_config
+            assert standalone_task.submission_evaluation_config["strategy"] == "static"
 
     def test_complex_precedence_order(self):
         """Test complex configuration precedence: task > shared > global."""
@@ -2340,13 +2373,14 @@ tasks:
     execution_config:
       priority: "high"  # Override shared (which overrode global)
       # timeout and retries should come from shared/global
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         precedence_test: true
         expected_answers: ["precedence_test_passed"]
       scoring:
         max_score: 1.0
+
     subtasks: []
 """
             with open(task_file, "w") as f:
@@ -2423,13 +2457,14 @@ shared_config:
     title: Incident {incident_num} Batch {batch_num} Task {task_num}
     description: Auto-generated task for scale testing
     prompt_template_file: test_template.md
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         scale_test: true
         expected_answers: ["scale_test_passed"]
       scoring:
         max_score: 1.0
+
     subtasks: []
 """
 
@@ -2457,5 +2492,5 @@ shared_config:
             assert task.benchmark_config["episode_attempts"] == 2
 
             # Verify evaluation config is properly configured
-            assert task.evaluation_config["strategy"] == "static"
-            assert "expected_answers" in task.evaluation_config["criteria"]
+            assert task.submission_evaluation_config["strategy"] == "static"
+            assert "expected_answers" in task.submission_evaluation_config["criteria"]

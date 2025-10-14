@@ -36,7 +36,7 @@ class TestEvaluationManager:
             title="Test Task",
             description="A test task",
             prompts={"instruction": "test_template.j2", "assistant": "test_template.j2", "submit": "test_template.j2"},
-            evaluation_config={
+            submission_evaluation_config={
                 "strategy": "static",
                 "criteria": {"expected_answers": ["flag{correct}"]},
                 "scoring": {"max_score": 1.0}
@@ -86,8 +86,8 @@ class TestEvaluationManager:
         assert config.criteria["expected_answers"] == ["flag{correct}"]
 
     def test_configure_for_task_missing_config(self, evaluation_manager, task_without_eval):
-        """Test configuration failure when task lacks evaluation_config."""
-        with pytest.raises(EvaluationConfigError, match="missing required evaluation_config"):
+        """Test configuration failure when task lacks submission_evaluation_config."""
+        with pytest.raises(EvaluationConfigError, match="missing.*submission_evaluation_config"):
             evaluation_manager.configure_for_task(task_without_eval)
 
     def test_configure_for_task_invalid_strategy(self, evaluation_manager):
@@ -98,7 +98,7 @@ class TestEvaluationManager:
             title="Invalid Task",
             description="Task with invalid strategy",
             prompts={"instruction": "test_template.j2", "assistant": "test_template.j2", "submit": "test_template.j2"},
-            evaluation_config={
+            submission_evaluation_config={
                 "strategy": "invalid_strategy",
                 "criteria": {},
                 "scoring": {"max_score": 1.0}
@@ -116,7 +116,7 @@ class TestEvaluationManager:
             title="Invalid Static Task",
             description="Task with invalid static config",
             prompts={"instruction": "test_template.j2", "assistant": "test_template.j2", "submit": "test_template.j2"},
-            evaluation_config={
+            submission_evaluation_config={
                 "strategy": "static",
                 "criteria": {},  # Missing expected_answers
                 "scoring": {"max_score": 1.0}
@@ -134,7 +134,7 @@ class TestEvaluationManager:
             title="Invalid Score Task",
             description="Task with invalid max_score",
             prompts={"instruction": "test_template.j2", "assistant": "test_template.j2", "submit": "test_template.j2"},
-            evaluation_config={
+            submission_evaluation_config={
                 "strategy": "static",
                 "criteria": {"expected_answers": ["answer"]},
                 "scoring": {"max_score": -1.0}  # Invalid negative score
@@ -144,56 +144,9 @@ class TestEvaluationManager:
         with pytest.raises(EvaluationConfigError, match="max_score must be a positive number"):
             evaluation_manager.configure_for_task(task)
 
-    @pytest.mark.asyncio
-    async def test_evaluate_episode_success(self, evaluation_manager, task_with_static_eval, completed_episode):
-        """Test successful episode evaluation."""
-        # Configure task first
-        evaluation_manager.configure_for_task(task_with_static_eval)
 
-        # Mock the evaluator
-        mock_result = EvaluationResult(
-            episode_id="episode_123",
-            task_id="test_task",
-            strategy=EVAL_STRATEGY_STATIC,
-            raw_score=1.0,
-            max_score=1.0,
-            score=1.0,
-            success=True,
-            submission="flag{correct}",
-            step_count=5
-        )
-        evaluation_manager.evaluators[EVAL_STRATEGY_STATIC].evaluate = AsyncMock(return_value=mock_result)
 
-        result = await evaluation_manager.evaluate_episode(completed_episode, task_with_static_eval)
 
-        assert result.episode_id == "episode_123"
-        assert result.success is True
-        assert result.score == 1.0
-
-    @pytest.mark.asyncio
-    async def test_evaluate_episode_incomplete(self, evaluation_manager, task_with_static_eval, incomplete_episode):
-        """Test evaluation failure with incomplete episode."""
-        evaluation_manager.configure_for_task(task_with_static_eval)
-
-        with pytest.raises(IncompleteEpisodeError, match="Cannot evaluate incomplete episode"):
-            await evaluation_manager.evaluate_episode(incomplete_episode, task_with_static_eval)
-
-    @pytest.mark.asyncio
-    async def test_evaluate_episode_not_configured(self, evaluation_manager, task_with_static_eval, completed_episode):
-        """Test evaluation failure when task not configured."""
-        # Don't configure the task
-
-        with pytest.raises(EvaluationConfigError, match="not configured for evaluation"):
-            await evaluation_manager.evaluate_episode(completed_episode, task_with_static_eval)
-
-    @pytest.mark.asyncio
-    async def test_evaluate_episode_missing_submission(self, evaluation_manager, task_with_static_eval, completed_episode):
-        """Test evaluation failure when submission is missing."""
-        evaluation_manager.configure_for_task(task_with_static_eval)
-        completed_episode.submission = None  # Remove submission
-
-        with pytest.raises(MissingSubmissionError, match="missing required submission"):
-            await evaluation_manager.evaluate_episode(completed_episode, task_with_static_eval)
 
     @pytest.mark.asyncio
     async def test_legacy_logging_methods(self, evaluation_manager):

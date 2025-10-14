@@ -117,16 +117,15 @@ class TestStepEvaluation:
         assert error["loc"] == ("step_number",)
 
     def test_step_evaluation_zero_step_number(self):
-        """Test validation error for zero step number."""
-        with pytest.raises(ValidationError) as exc_info:
-            StepEvaluation(
-                step_number=0,  # Invalid: must be >= 1
-                objective_id="test",
-                objective_type="subtask"
-            )
-
-        error = exc_info.value.errors()[0]
-        assert error["type"] == "greater_than_equal"
+        """Test that zero step number is valid (0-indexed)."""
+        # Should not raise - step_number is 0-indexed
+        step_eval = StepEvaluation(
+            step_number=0,  # Valid: 0-indexed
+            objective_id="test",
+            objective_type="subtask"
+        )
+        assert step_eval.step_number == 0
+        assert step_eval.objective_id == "test"
 
     def test_step_evaluation_empty_objective_id(self):
         """Test that empty objective ID is allowed."""

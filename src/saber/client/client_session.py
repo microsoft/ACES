@@ -19,7 +19,16 @@ from ..models import (  # Use shared api models directly
     SessionCreateResponse,
     TaskInfo,
 )
-from ..models.rest.evaluation import EvaluationCriteriaResponse, EvaluationOverrideRequest, EvaluationResultResponse
+from ..models.rest.evaluation import (
+    EpisodeStepsResponse,
+    EpisodeSubmissionResponse,
+    EvaluationCriteriaResponse,
+    EvaluationOverrideRequest,
+    EvaluationResultResponse,
+    EvaluationResultSubmission,
+    StepEvaluationCriteriaResponse,
+    SubmissionEvaluationCriteriaResponse,
+)
 from .models import SessionManagerConfig
 
 logger = get_session_manager_logger(__name__)
@@ -847,6 +856,203 @@ class ClientSessionManager:
                         },
                     )
                     raise Exception(f"Failed to upload evaluation file {filename}: {response.status} - {error_text}")
+
+    # ============================================================================
+    # NEW CLIENT-SIDE EVALUATION METHODS (Breaking Change Migration)
+    # ============================================================================
+
+    async def get_episode_submission(self, session_id: str, episode_id: str) -> EpisodeSubmissionResponse:
+        """
+        Get episode submission data for client-side evaluation.
+
+        Args:
+            session_id: Session ID
+            episode_id: Episode ID
+
+        Returns:
+            EpisodeSubmissionResponse with submission data
+
+        Raises:
+            Exception: If request fails
+        """
+        logger.debug(
+            "Fetching episode submission",
+            extra={"event": "get_episode_submission", "session_id": session_id, "episode_id": episode_id},
+        )
+
+        url = f"{self.base_url}/api/v1/session/{session_id}/episodes/{episode_id}/submission"
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return EpisodeSubmissionResponse(**data)
+                else:
+                    error_text = await response.text()
+                    raise Exception(f"Failed to get episode submission: {response.status} - {error_text}")
+
+    async def get_episode_steps(self, session_id: str, episode_id: str) -> EpisodeStepsResponse:
+        """
+        Get episode step history for client-side evaluation.
+
+        Args:
+            session_id: Session ID
+            episode_id: Episode ID
+
+        Returns:
+            EpisodeStepsResponse with step data
+
+        Raises:
+            Exception: If request fails
+        """
+        logger.debug(
+            "Fetching episode steps",
+            extra={"event": "get_episode_steps", "session_id": session_id, "episode_id": episode_id},
+        )
+
+        url = f"{self.base_url}/api/v1/session/{session_id}/episodes/{episode_id}/steps"
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return EpisodeStepsResponse(**data)
+                else:
+                    error_text = await response.text()
+                    raise Exception(f"Failed to get episode steps: {response.status} - {error_text}")
+
+    async def get_submission_evaluation_criteria(
+        self, session_id: str, episode_id: str
+    ) -> SubmissionEvaluationCriteriaResponse:
+        """
+        Get submission evaluation criteria (template paths only, no rendering).
+
+        Args:
+            session_id: Session ID
+            episode_id: Episode ID
+
+        Returns:
+            SubmissionEvaluationCriteriaResponse with template paths
+
+        Raises:
+            Exception: If request fails
+        """
+        logger.debug(
+            "Fetching submission evaluation criteria",
+            extra={"event": "get_submission_evaluation_criteria", "session_id": session_id, "episode_id": episode_id},
+        )
+
+        url = f"{self.base_url}/api/v1/session/{session_id}/episodes/{episode_id}/submission-evaluation-criteria"
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return SubmissionEvaluationCriteriaResponse(**data)
+                else:
+                    error_text = await response.text()
+                    raise Exception(f"Failed to get submission evaluation criteria: {response.status} - {error_text}")
+
+    async def get_step_evaluation_criteria(
+        self, session_id: str, episode_id: str
+    ) -> Optional[StepEvaluationCriteriaResponse]:
+        """
+        Get step evaluation criteria (template paths only, no rendering).
+        Returns None if step evaluation is not configured for the task.
+
+        Args:
+            session_id: Session ID
+            episode_id: Episode ID
+
+        Returns:
+            StepEvaluationCriteriaResponse with template paths, or None if not configured
+
+        Raises:
+            Exception: If request fails (except 404 which returns None)
+        """
+        logger.debug(
+            "Fetching step evaluation criteria",
+            extra={"event": "get_step_evaluation_criteria", "session_id": session_id, "episode_id": episode_id},
+        )
+
+        url = f"{self.base_url}/api/v1/session/{session_id}/episodes/{episode_id}/step-evaluation-criteria"
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return StepEvaluationCriteriaResponse(**data)
+                elif response.status == 404:
+                    # Step evaluation is optional
+                    return None
+                else:
+                    error_text = await response.text()
+                    raise Exception(f"Failed to get step evaluation criteria: {response.status} - {error_text}")
+
+    async def get_template_content(self, template_path: str) -> str:
+        """
+        Get raw template content by path.
+
+        Args:
+            template_path: Relative template path (e.g., 'judge/submission/system.md')
+
+        Returns:
+            Raw template content string
+
+        Raises:
+            Exception: If request fails
+        """
+        logger.debug(
+            "Fetching template content",
+            extra={"event": "get_template_content", "template_path": template_path},
+        )
+
+        url = f"{self.base_url}/api/v1/templates/{template_path}"
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    content = data["content"]
+                    assert isinstance(content, str), "Template content must be a string"
+                    return content
+                else:
+                    error_text = await response.text()
+                    raise Exception(f"Failed to get template content: {response.status} - {error_text}")
+
+    async def submit_evaluation_result(
+        self, session_id: str, episode_id: str, evaluation_data: EvaluationResultSubmission
+    ) -> EvaluationResultResponse:
+        """
+        Submit client-side evaluation result.
+
+        Args:
+            session_id: Session ID
+            episode_id: Episode ID
+            evaluation_data: Evaluation result data
+
+        Returns:
+            EvaluationResultResponse
+
+        Raises:
+            Exception: If request fails
+        """
+        logger.info(
+            "Submitting evaluation result",
+            extra={"event": "submit_evaluation_result", "session_id": session_id, "episode_id": episode_id},
+        )
+
+        url = f"{self.base_url}/api/v1/session/{session_id}/episodes/{episode_id}/evaluation"
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=evaluation_data.model_dump()) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    response_obj = data.get("evaluation_result", data)
+                    return EvaluationResultResponse(**response_obj)
+                else:
+                    error_text = await response.text()
+                    raise Exception(f"Failed to submit evaluation result: {response.status} - {error_text}")
 
     async def cleanup(self) -> None:
         """Cleanup session manager resources."""

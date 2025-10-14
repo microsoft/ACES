@@ -23,12 +23,6 @@ from ..logging_config import (
     log_session_end,
 )
 from ..models import BenchmarkInfo, EpisodeEndResponse, EvalSubmission
-from ..models.rest.evaluation import (
-    EvaluationCriteriaResponse,
-    EvaluationOverrideRequest,
-    JudgeMessages,
-    TaskEvaluationContext,
-)
 from .api.session_mcp_api import SessionMCPAPI
 from .api.session_rest_api import SessionRestAPI
 from .base import Action, CommandResult, Episode
@@ -37,7 +31,6 @@ from .benchmarks.task import Task
 from .episodes.constants import EpisodeTerminationReason
 from .episodes.episode_manager import EpisodeManager
 from .evaluation.evaluation_manager import EvaluationManager
-from .evaluation.models import EvaluationResult
 from .evaluation.session_evaluation_service import SessionEvaluationService
 
 # CleanupReason removed - using direct component cleanup
@@ -1192,35 +1185,20 @@ class SessionManager:
         submission_text = submission.submission if submission else None
         completed_episode = self.episode_manager.end_episode(episode_id, reason, submission_text)
 
-        # Evaluate episode using the new evaluation system
-        try:
-            evaluation_result = await self.evaluation_manager.evaluate_episode(completed_episode, task)
-            logger.info(
-                "Episode evaluated",
-                extra={
-                    "event": "episode_evaluated",
-                    "session_id": session_id,
-                    "episode_id": episode_id,
-                    "task_id": task.task_id,
-                    "score": evaluation_result.score,
-                    "max_score": evaluation_result.max_score,
-                    "success": evaluation_result.success,
-                },
-            )
-        except Exception as e:
-            logger.error(
-                "Episode evaluation failed",
-                extra={
-                    "event": "episode_evaluation_failed",
-                    "session_id": session_id,
-                    "episode_id": episode_id,
-                    "task_id": task.task_id,
-                    "error": str(e),
-                    "error_type": type(e).__name__,
-                },
-            )
-            # Evaluation failure means episode failure - fail fast
-            raise HTTPException(status_code=500, detail=f"Episode evaluation failed: {str(e)}")
+        # CLIENT-SIDE EVALUATION: Server does not evaluate episodes
+        # Evaluation will be submitted separately by the client via:
+        # POST /api/v1/session/{session_id}/episodes/{episode_id}/evaluation
+
+        logger.info(
+            "Episode ended (evaluation pending client submission)",
+            extra={
+                "event": "episode_ended_pending_evaluation",
+                "session_id": session_id,
+                "episode_id": episode_id,
+                "task_id": task.task_id,
+                "reason": reason,
+            },
+        )
 
         # Cleanup episode containers immediately when episode ends
         try:
@@ -1337,15 +1315,18 @@ class SessionManager:
                 )
                 # Don't fail the main episode end operation due to cascade failures
 
-        # Build response with evaluation result - success derived from evaluation (evaluation_result always present)
+        # Build response - success based on completion reason (client will submit evaluation separately)
+        # Success is True only for explicit success/completion reasons
+        success = reason in ["completed", "agent_completed", "success"]
+
         return EpisodeEndResponse(
             episode_ended=True,
             episode_id=episode_id,
-            success=evaluation_result.success,
+            success=success,
             reason=reason,
             previous_task_id=episode.task_id,
             active_episodes_remaining=len(session.active_episode_ids),
-            evaluation_result=evaluation_result.dict(),
+            evaluation_result=None,  # Client-side evaluation - will be submitted separately
         )
 
     async def execute_action(self, session_id: str, episode_id: str, action: Action) -> CommandResult:
@@ -1646,295 +1627,15 @@ class SessionManager:
         """
         return self.evaluation_service
 
-    async def get_evaluation_criteria(self, session_id: str, episode_id: str) -> EvaluationCriteriaResponse:
-        """
-        Get complete evaluation criteria package for client-side evaluation.
-
-        This method returns evaluation criteria for both complete and incomplete episodes.
-        For incomplete episodes, the submission will be None and judge messages will
-        not be rendered (since they require a submission).
-
-        Args:
-            session_id: ID of the client session (for context only)
-            episode_id: ID of the specific episode
-
-        Returns:
-            EvaluationCriteriaResponse containing evaluation criteria package
-
-        Raises:
-            HTTPException: If episode or task not found
-            RuntimeError: If complete episode is missing submission
-        """
-        logger.info(
-            "Fetching evaluation criteria",
-            extra={
-                "event": "evaluation_criteria_requested",
-                "session_id": session_id,
-                "episode_id": episode_id,
-            },
-        )
-
-        # Get episode data - no session validation needed since evaluation criteria
-        # should be available for any episode (complete or incomplete) regardless of session state
-        episode = self.episode_manager.get_episode_by_id(episode_id)
-        if not episode:
-            logger.error(
-                "Episode not found for evaluation criteria",
-                extra={
-                    "event": "evaluation_criteria_episode_missing",
-                    "session_id": session_id,
-                    "episode_id": episode_id,
-                },
-            )
-            raise HTTPException(status_code=404, detail=f"Episode {episode_id} not found")
-
-        logger.debug(
-            "Episode located for evaluation criteria",
-            extra={
-                "event": "evaluation_criteria_episode_found",
-                "session_id": session_id,
-                "episode_id": episode_id,
-                "episode_state": episode.state.value,
-                "task_id": episode.task_id,
-                "step_count": len(episode.steps),
-            },
-        )
-
-        # Check if episode has submission (for complete episodes)
-        submission_value = getattr(episode, "submission", None)
-        logger.debug(
-            "Episode submission value inspected",
-            extra={
-                "event": "evaluation_criteria_submission_value",
-                "session_id": session_id,
-                "episode_id": episode_id,
-                "submission_present": submission_value is not None,
-                "submission_type": type(submission_value).__name__,
-            },
-        )
-
-        has_submission = hasattr(episode, "submission") and episode.submission is not None and episode.submission != ""
-        if episode.is_complete and not has_submission:
-            logger.error(
-                "Completed episode missing submission for evaluation",
-                extra={
-                    "event": "evaluation_criteria_missing_submission",
-                    "session_id": session_id,
-                    "episode_id": episode_id,
-                },
-            )
-            raise RuntimeError(f"Complete episode {episode_id} missing required submission for evaluation")
-
-        if has_submission:
-            submission_preview = episode.submission[:100] if episode.submission else ""
-            logger.debug(
-                "Episode submission available",
-                extra={
-                    "event": "evaluation_criteria_submission_available",
-                    "session_id": session_id,
-                    "episode_id": episode_id,
-                    "submission_preview": submission_preview,
-                },
-            )
-        else:
-            logger.debug(
-                "Episode missing submission",
-                extra={
-                    "event": "evaluation_criteria_submission_missing",
-                    "session_id": session_id,
-                    "episode_id": episode_id,
-                },
-            )
-
-        # Get task information
-        task = self.benchmark_manager.get_task(episode.task_id)
-        if not task:
-            logger.error(
-                "Task not found for evaluation criteria",
-                extra={
-                    "event": "evaluation_criteria_task_missing",
-                    "session_id": session_id,
-                    "episode_id": episode_id,
-                    "task_id": episode.task_id,
-                },
-            )
-            raise HTTPException(status_code=404, detail=f"Task {episode.task_id} not found")
-
-        logger.debug(
-            "Task located for evaluation criteria",
-            extra={
-                "event": "evaluation_criteria_task_found",
-                "session_id": session_id,
-                "episode_id": episode_id,
-                "task_id": task.task_id,
-                "task_title": task.title,
-            },
-        )
-
-        # Ensure task has evaluation configuration
-        if not task.evaluation_config:
-            logger.error(
-                "Task missing evaluation configuration",
-                extra={
-                    "event": "evaluation_criteria_missing_config",
-                    "session_id": session_id,
-                    "episode_id": episode_id,
-                    "task_id": task.task_id,
-                },
-            )
-            raise RuntimeError(f"Task {task.task_id} missing evaluation configuration")
-
-        logger.debug(
-            "Task evaluation configuration inspected",
-            extra={
-                "event": "evaluation_criteria_config_inspected",
-                "session_id": session_id,
-                "episode_id": episode_id,
-                "task_id": task.task_id,
-                "strategy": task.evaluation_config.get("strategy"),
-            },
-        )
-
-        # Build task context with subtasks for step-level evaluation
-        subtasks_data = [
-            {
-                "subtask_id": subtask.subtask_id,
-                "title": subtask.title,
-                "description": subtask.description,
-                "objective": subtask.objective,
-                "max_score": subtask.max_score,  # Include optional max_score for aggregation
-            }
-            for subtask in task.subtasks
-        ]
-
-        task_context = TaskEvaluationContext(
-            task_id=task.task_id,
-            title=task.title,
-            description=task.description,
-            domain=task.domain,
-            subtasks=subtasks_data,
-        )
-
-        # Initialize judge messages as None
-        judge_messages = None
-
-        # Add judge messages for LLM evaluation if needed and submission is available
-        if task.evaluation_config.get("strategy") == "llm_judge" and has_submission:
-            try:
-                logger.debug(
-                    "Rendering judge prompts",
-                    extra={
-                        "event": "evaluation_criteria_rendering_judge_prompts",
-                        "session_id": session_id,
-                        "episode_id": episode_id,
-                        "task_id": task.task_id,
-                    },
-                )
-                # Use PromptGenerator to render judge prompts
-                judge_payload = self.benchmark_manager.prompt_generator.render_judge_prompt_for_episode(task, episode)
-
-                # Extract system and user prompts from messages array
-                system_prompt = None
-                user_prompts = []  # CHANGED: List instead of single string
-
-                for message in judge_payload.messages:
-                    if message["role"] == "system":
-                        system_prompt = message["content"]
-                    elif message["role"] == "user":
-                        user_prompts.append(message["content"])  # CHANGED: Collect all user messages
-
-                # Validate that we have both system and user prompts
-                if system_prompt is None or not user_prompts:
-                    raise ValueError(
-                        f"Missing required prompts: system_prompt={'present' if system_prompt else 'missing'}, "
-                        f"user_prompts={'present' if user_prompts else 'missing'} (count: {len(user_prompts)})"
-                    )
-
-                # Build JudgeMessages - normalize to single string or list
-                user_message = user_prompts if len(user_prompts) > 1 else user_prompts[0]
-
-                # Build JudgeMessages object
-                judge_messages = JudgeMessages(
-                    system_message=system_prompt,
-                    user_message=user_message,  # Can be str or List[str]
-                    model=judge_payload.model,
-                )
-
-                logger.debug(
-                    "Rendered judge messages",
-                    extra={
-                        "event": "evaluation_criteria_judge_render_success",
-                        "session_id": session_id,
-                        "episode_id": episode_id,
-                        "task_id": task.task_id,
-                        "model": judge_payload.model,
-                    },
-                )
-
-            except Exception as e:
-                logger.error(
-                    "Failed to render judge messages",
-                    extra={
-                        "event": "evaluation_criteria_judge_render_failed",
-                        "session_id": session_id,
-                        "episode_id": episode_id,
-                        "task_id": task.task_id,
-                        "strategy": task.evaluation_config.get("strategy"),
-                        "episode_state": episode.state.value,
-                        "step_count": len(episode.steps),
-                        "error": str(e),
-                        "error_type": type(e).__name__,
-                    },
-                )
-                if hasattr(e, "__traceback__"):
-                    import traceback
-
-                    logger.error(
-                        "Judge message rendering stack trace",
-                        extra={
-                            "event": "evaluation_criteria_judge_render_trace",
-                            "session_id": session_id,
-                            "episode_id": episode_id,
-                            "task_id": task.task_id,
-                            "traceback": traceback.format_exc(),
-                        },
-                    )
-                # Fall back to None - client will need to handle this case
-                judge_messages = None
-
-        # Build and return evaluation criteria response
-        final_submission = episode.submission if has_submission else None
-        logger.debug(
-            "Final submission prepared for response",
-            extra={
-                "event": "evaluation_criteria_submission_prepared",
-                "session_id": session_id,
-                "episode_id": episode_id,
-                "submission_present": final_submission is not None,
-                "submission_type": type(final_submission).__name__ if final_submission is not None else "NoneType",
-            },
-        )
-
-        evaluation_criteria = EvaluationCriteriaResponse(
-            session_id=session_id,
-            episode_id=episode_id,
-            task_id=task.task_id,
-            submission=final_submission,
-            task_context=task_context,
-            evaluation_config=task.evaluation_config,
-            judge_messages=judge_messages,
-        )
-
-        logger.info(
-            "Evaluation criteria retrieved",
-            extra={
-                "event": "evaluation_criteria_retrieved",
-                "session_id": session_id,
-                "episode_id": episode_id,
-                "task_id": task.task_id,
-            },
-        )
-        return evaluation_criteria
+    # ============================================================================
+    # CLIENT-SIDE EVALUATION: get_evaluation_criteria() REMOVED
+    # Replaced by separate endpoints:
+    # - get_episode_submission() - for submission data
+    # - get_episode_steps() - for step history
+    # - get_submission_evaluation_criteria() - for submission eval config
+    # - get_step_evaluation_criteria() - for step eval config
+    # Templates are now served as raw files, not rendered server-side
+    # ============================================================================
 
     async def save_evaluation_file(self, session_id: str, file: UploadFile) -> int:
         """
@@ -2014,116 +1715,11 @@ class SessionManager:
             )
             raise RuntimeError(f"Failed to save evaluation file: {str(e)}") from e
 
-    async def override_episode_evaluation(
-        self,
-        session_id: str,
-        episode_id: str,
-        override_request: EvaluationOverrideRequest,
-    ) -> EvaluationResult:
-        """
-        Override evaluation result for an episode with external evaluation data.
-
-        Args:
-            session_id: ID of the client session
-            episode_id: ID of the episode to override evaluation for
-            override_request: Typed override request containing all evaluation data
-
-        Returns:
-            EvaluationResult: The overridden evaluation result
-
-        Raises:
-            HTTPException: If session or episode not found
-            InvalidEvaluationRequestError: If evaluation data is invalid
-        """
-        logger.info(
-            "Overriding evaluation",
-            extra={
-                "event": "evaluation_override_requested",
-                "session_id": session_id,
-                "episode_id": episode_id,
-                "strategy": override_request.strategy,
-            },
-        )
-
-        # Validate session exists
-        session = self._get_session(session_id)
-        if not session:
-            logger.error(
-                "Session not found for evaluation override",
-                extra={
-                    "event": "evaluation_override_session_missing",
-                    "session_id": session_id,
-                    "episode_id": episode_id,
-                },
-            )
-            raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
-
-        # Validate episode exists
-        episode = self.episode_manager.get_episode_by_id(episode_id)
-        if not episode:
-            logger.error(
-                "Episode not found for evaluation override",
-                extra={
-                    "event": "evaluation_override_episode_missing",
-                    "session_id": session_id,
-                    "episode_id": episode_id,
-                },
-            )
-            raise HTTPException(status_code=404, detail=f"Episode {episode_id} not found")
-
-        logger.debug(
-            "Session and episode validated for evaluation override",
-            extra={
-                "event": "evaluation_override_context_valid",
-                "session_id": session_id,
-                "episode_id": episode_id,
-            },
-        )
-
-        # Convert evaluation_data dict to EpisodeEvaluationData object
-        from .evaluation.models import EpisodeEvaluationData
-
-        try:
-            episode_eval_data = EpisodeEvaluationData(**override_request.evaluation_data)
-        except Exception as e:
-            logger.error(
-                "Failed to parse override evaluation data",
-                extra={
-                    "event": "evaluation_override_parse_failed",
-                    "session_id": session_id,
-                    "episode_id": episode_id,
-                    "error": str(e),
-                    "error_type": type(e).__name__,
-                },
-            )
-            raise HTTPException(status_code=422, detail=f"Invalid evaluation data: {e}")
-
-        # Delegate to evaluation manager for override
-        evaluation_result = await self.evaluation_manager.override_evaluation_result(
-            session_id=session_id,
-            episode_id=episode_id,
-            evaluation_data=episode_eval_data,
-            strategy=override_request.strategy,
-            raw_score=override_request.raw_score,
-            max_score=override_request.max_score,
-            score=override_request.score,
-            success=override_request.success,
-            details=override_request.details,
-        )
-
-        logger.info(
-            "Evaluation override applied",
-            extra={
-                "event": "evaluation_override_applied",
-                "session_id": session_id,
-                "episode_id": episode_id,
-                "strategy": override_request.strategy,
-                "score": override_request.score,
-                "max_score": override_request.max_score,
-                "success": override_request.success,
-            },
-        )
-        return evaluation_result
+    # ============================================================================
+    # CLIENT-SIDE EVALUATION: override_episode_evaluation() REMOVED
+    # Evaluation results are now submitted via POST /api/v1/session/{session_id}/episodes/{episode_id}/evaluation
+    # Server stores results without validation or override logic
+    # ============================================================================
 
     def get_episode_by_id(self, episode_id: str) -> Optional[Episode]:
         """

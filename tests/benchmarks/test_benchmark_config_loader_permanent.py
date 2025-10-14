@@ -65,13 +65,13 @@ class TestBenchmarkConfigLoaderPermanentSupport:
                     "execution_config": {
                         "allowed_executors": ["bash", "python"]
                     },
-                    "evaluation_config": {
+                    "submission_evaluation_config": {
                         "strategy": "static",
                         "criteria": {
-                "expected_answers": ["task_completion"]
-            },
+                            "expected_answers": ["task_completion"]
+                        },
                         "scoring": {
-                            "points": 100
+                            "max_score": 1.0
                         }
                     },
                     "subtasks": [
@@ -97,11 +97,6 @@ class TestBenchmarkConfigLoaderPermanentSupport:
                     ]
                 },
                 {
-                                    "prompts": {
-                                        "instruction": "test_task_prompt.md",
-                                        "assistant": "test_task_prompt.md",
-                                        "submit": "test_task_prompt.md"
-                                    },
                     "task_id": "test_task_no_permanent",
                     "title": "Test Task without Permanent Environment",
                     "description": "Task that doesn't use permanent environment",
@@ -110,13 +105,13 @@ class TestBenchmarkConfigLoaderPermanentSupport:
                     "execution_config": {
                         "allowed_executors": ["bash", "python"]
                     },
-                    "evaluation_config": {
+                    "submission_evaluation_config": {
                         "strategy": "static",
                         "criteria": {
-                "expected_answers": ["task_completion"]
-            },
+                            "expected_answers": ["task_completion"]
+                        },
                         "scoring": {
-                            "points": 100
+                            "max_score": 1.0
                         }
                     },
                     "subtasks": [
@@ -207,11 +202,6 @@ class TestBenchmarkConfigLoaderPermanentSupport:
         """Test task validation with permanent environment fields."""
         # Create task with both sandbox and permanent environments
         enhanced_task = {
-                                    "prompts": {
-                                        "instruction": "test_task_prompt.md",
-                                        "assistant": "test_task_prompt.md",
-                                        "submit": "test_task_prompt.md"
-                                    },
             "task_id": "enhanced_task",
             "title": "Enhanced Task",
             "description": "Task with both environment types",
@@ -221,13 +211,13 @@ class TestBenchmarkConfigLoaderPermanentSupport:
             "execution_config": {
                 "allowed_executors": ["bash", "python"]
             },
-            "evaluation_config": {
+            "submission_evaluation_config": {
                 "strategy": "static",
                 "criteria": {
                     "expected_answers": ["task_completion"]
                 },
                 "scoring": {
-                    "points": 100
+                    "max_score": 1.0
                 }
             },
             "subtasks": [
@@ -277,11 +267,6 @@ class TestBenchmarkConfigLoaderPermanentSupport:
         """Test task that only specifies permanent environment."""
         # Create task with only permanent environment
         permanent_only_task = {
-                            "prompts": {
-                                "instruction": "test_task_prompt.md",
-                                "assistant": "test_task_prompt.md",
-                                "submit": "test_task_prompt.md"
-                            },
             "task_id": "permanent_only_task",
             "title": "Permanent Only Task",
             "description": "Task with only permanent environment",
@@ -290,13 +275,13 @@ class TestBenchmarkConfigLoaderPermanentSupport:
             "execution_config": {
                 "allowed_executors": ["bash", "python"]
             },
-            "evaluation_config": {
+            "submission_evaluation_config": {
                 "strategy": "static",
                 "criteria": {
                     "expected_answers": ["task_completion"]
                 },
                 "scoring": {
-                    "points": 100
+                    "max_score": 1.0
                 }
             },
             "subtasks": [

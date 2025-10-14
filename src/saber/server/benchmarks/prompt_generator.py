@@ -3,9 +3,8 @@
 Logging Category: TASK_MANAGER
 
 Responsibilities:
-    * Load and render Jinja2 templates for both agent prompts and judge prompts
+    * Load and render Jinja2 templates for agent prompts
     * Agent prompts: Task-specific prompts for AI agents during episode execution
-    * Judge prompts: LLM evaluation prompts for scoring agent submissions
     * Fail fast on: missing template, unsafe template name, missing include/extends
       dependency, undefined variable, or missing required task configuration.
     * Enforce SABER principles: no silent fallbacks, explicit configuration, clear errors.
@@ -29,7 +28,6 @@ from jinja2.sandbox import SandboxedEnvironment
 
 from saber.logging_config import LogCategory, get_saber_logger
 
-from ..base import Episode
 from .task import Task
 
 logger = get_saber_logger(LogCategory.TASK_MANAGER, __name__)
@@ -47,23 +45,10 @@ class PromptContextError(PromptGenerationError):
     """Raised when required task configuration for prompt context is missing."""
 
 
-@dataclass
-class JudgePromptPayload:
-    """Complete LLM prompt payload for judge evaluation."""
-
-    messages: List[Dict[str, str]]  # OpenAI messages format: [{"role": "system", "content": "..."}, ...]
-    model: str  # LLM model to use
-    task_id: str  # Task identifier for logging
-    episode_id: str  # Episode identifier for logging
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for OpenAI API call."""
-        return {
-            "messages": self.messages,
-            "model": self.model,
-            "temperature": 0.0,
-            "max_tokens": 500,
-        }
+# ============================================================================
+# CLIENT-SIDE EVALUATION: Judge classes REMOVED
+# JudgePromptPayload and JudgePromptContext deleted - templates served as paths now
+# ============================================================================
 
 
 @dataclass
@@ -102,121 +87,28 @@ class PromptContext:
         return result
 
 
-@dataclass
-@dataclass
-class JudgePromptContext:
-    """Data container for judge template rendering context."""
-
-    question: str
-    golden_answer: Optional[str]  # Make optional for defensive tasks
-    episode: Episode  # Full episode object instead of just submission
-    task: Task
-    evaluation_config: Dict[str, Any]
-    model: str
-    domain: str
-    task_id: str
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for Jinja2 template rendering."""
-        return {
-            "question": self.question,
-            "golden_answer": self.golden_answer,
-            "submission": self.episode.submission,  # Extract submission from episode
-            "episode": {
-                "episode_id": self.episode.episode_id,
-                "start_time": self.episode.start_time,
-                "end_time": self.episode.end_time,
-                "duration": self.episode.duration,
-                "state": self.episode.state.value,  # Convert enum to string
-                "completion_reason": self.episode.completion_reason,
-                "submission": self.episode.submission,
-                "steps": [
-                    {
-                        "step_number": step.step_number,
-                        "timestamp": step.timestamp,
-                        "action": {
-                            "tool_name": step.action.tool_name,
-                            "parameters": step.action.parameters,
-                            # Include agent message for judge evaluation
-                            "assistant_message": step.action.assistant_message,
-                            # Include agent reasoning for judge evaluation
-                            "reasoning": step.action.reasoning,
-                        },
-                        "response": step.response,
-                        "done": step.done,
-                    }
-                    for step in self.episode.steps
-                ],
-                "metadata": self.episode.metadata,
-                "context": self.episode.context,
-                "max_steps": self.episode.max_steps,
-                # Helper methods for template convenience
-                "get_last_n_steps": lambda n: (
-                    self.episode.steps[-n:] if len(self.episode.steps) >= n else self.episode.steps
-                ),
-                "get_first_n_steps": lambda n: self.episode.steps[:n],
-                "get_failed_steps": lambda: [
-                    step for step in self.episode.steps if step.response.get("exit_code", 0) != 0
-                ],
-                "get_commands_summary": lambda max_length=500: self._get_commands_summary(max_length),
-                "get_step_count": lambda: len(self.episode.steps),
-            },
-            "episode_id": self.episode.episode_id,  # Backward compatibility
-            "model": self.model,
-            "domain": self.domain,
-            "task_id": self.task_id,
-            "task": {
-                "task_id": self.task.task_id,
-                "title": self.task.title,
-                "description": self.task.description,
-                "domain": self.task.domain,
-                "subtasks": (
-                    [
-                        {
-                            "subtask_id": subtask.subtask_id,
-                            "title": subtask.title,
-                            "description": subtask.description,
-                            "objective": subtask.objective,
-                            **({"hint": subtask.hint} if hasattr(subtask, "hint") and subtask.hint else {}),
-                        }
-                        for subtask in self.task.subtasks
-                    ]
-                    if hasattr(self.task, "subtasks") and self.task.subtasks
-                    else []
-                ),
-            },
-            "evaluation_config": self.evaluation_config,
-        }
-
-    def _get_commands_summary(self, max_length: int) -> str:
-        """Generate a truncated summary of all commands executed."""
-        commands = []
-        for step in self.episode.steps:
-            if step.action.parameters.get("arguments"):
-                cmd = step.action.parameters["arguments"]
-                commands.append(f"Step {step.step_number}: {cmd}")
-
-        summary = "\n".join(commands)
-        if len(summary) > max_length:
-            # Truncate and add ellipsis
-            summary = summary[: max_length - 3] + "..."
-
-        return summary
+# ============================================================================
+# CLIENT-SIDE EVALUATION: JudgePromptContext REMOVED
+# Judge templates are now served as paths and rendered client-side
+# ============================================================================
 
 
 class PromptGenerator:
     """
-    Handles loading and rendering of both agent and judge prompt templates for tasks.
+    Handles loading and rendering of agent prompt templates for tasks.
 
-    Agent Templates:
-    - Located in prompts_dir/ (e.g., agent_template.md)
+    CLIENT-SIDE EVALUATION MIGRATION:
+    - Agent Templates: Located in prompts_dir/ (e.g., agent_template.md)
     - Used for generating task prompts for AI agents during episode execution
-    - Context includes task details, execution config, environment info
+    - Judge Templates: Now served as raw files via REST API, rendered client-side
 
-    Judge Templates:
-    - Located in prompts_dir/judge/ subdirectory (e.g., default_judge.md)
-    - Used for generating LLM evaluation prompts for scoring agent submissions
-    - Context includes question, golden answer, submission, evaluation config
+    Removed:
+    - JudgePromptPayload class
+    - JudgePromptContext class
+    - render_judge_prompt_for_episode()
+    - _render_judge_prompt_single()
+    - _render_judge_prompt_chunked()
+    - render_judge_prompt()
 
     Validates all templates at startup and fails fast on missing or invalid templates.
     Uses Jinja2 templating engine with FileSystemLoader for template management.
@@ -229,7 +121,7 @@ class PromptGenerator:
         Args:
             prompts_dir: Directory containing Jinja2 template files
                         - Agent templates: directly in prompts_dir/
-                        - Judge templates: in prompts_dir/judge/ subdirectory
+                        - Judge templates: in prompts_dir/judge/ (served as raw files now)
 
         Raises:
             TemplateValidationError: If prompts directory doesn't exist
@@ -323,269 +215,6 @@ class PromptGenerator:
                 f"Unexpected error rendering {prompt_type} prompt for task '{task.task_id}': {e}"
             ) from e
 
-    def render_judge_prompt_for_episode(self, task: Task, episode: Episode) -> "JudgePromptPayload":
-        """
-        Render judge prompts for a specific task using episode-based template rendering.
-        Handles both single and chunked modes.
-
-        Args:
-            task: Task object containing judge system and user template configuration
-            episode: Complete episode object containing execution history and submission
-
-        Returns:
-            JudgePromptPayload with complete messages array ready for LLM API
-
-        Raises:
-            PromptGenerationError: If template rendering fails
-            TemplateValidationError: If template files are missing or invalid
-            EvaluationConfigError: If task not configured for LLM judge evaluation
-        """
-        # Check if chunking is enabled
-        eval_config = task.evaluation_config
-        steps_per_message = eval_config.get("criteria", {}).get("steps_per_message") if eval_config else None
-
-        if steps_per_message and len(episode.steps) > steps_per_message:
-            # Chunked mode: multiple user messages
-            return self._render_judge_prompt_chunked(task, episode, steps_per_message)
-        else:
-            # Legacy mode: single user message
-            return self._render_judge_prompt_single(task, episode)
-
-    def _render_judge_prompt_single(self, task: Task, episode: Episode) -> "JudgePromptPayload":
-        """
-        Single-message mode (current implementation).
-
-        This is the existing logic from render_judge_prompt_for_episode()
-        extracted into a separate method.
-        """
-        # Validate episode completeness first - fail fast on incomplete episodes
-        if not episode.is_complete:
-            from ..evaluation.exceptions import EvaluationConfigError
-
-            raise EvaluationConfigError(
-                f"Cannot generate judge prompt for incomplete episode '{episode.episode_id}'. "
-                f"Episode state: {episode.state.value}. Episodes must be COMPLETED or FAILED before evaluation."
-            )
-
-        # Validate that task uses llm_judge strategy
-        eval_config = task.evaluation_config
-        if not eval_config or eval_config.get("strategy") != "llm_judge":
-            from ..evaluation.exceptions import EvaluationConfigError
-
-            raise EvaluationConfigError(
-                f"Task '{task.task_id}' is not configured for LLM judge evaluation. "
-                f"Current strategy: {eval_config.get('strategy') if eval_config else 'None'}"
-            )
-
-        # Get judge template filenames and model from task configuration
-        judge_system_template = eval_config["criteria"]["judge_system_template"]
-        judge_user_template = eval_config["criteria"]["judge_user_template"]
-        model = eval_config["criteria"]["model"]
-
-        # Extract golden_answer if present (optional for defensive tasks)
-        golden_answer = eval_config["criteria"].get("golden_answer")
-
-        # Build judge prompt context with episode data
-        context = JudgePromptContext(
-            question=task.description,
-            golden_answer=golden_answer,  # Now optional
-            episode=episode,  # Pass full episode object
-            task=task,
-            evaluation_config=eval_config["criteria"],
-            model=model,
-            domain=task.domain,
-            task_id=task.task_id,
-        )
-
-        # Render both system and user prompts from templates
-        system_prompt = self.render_judge_prompt(judge_system_template, context)
-        user_prompt = self.render_judge_prompt(judge_user_template, context)
-
-        # Build OpenAI messages format - templates control everything
-        messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-
-        return JudgePromptPayload(messages=messages, model=model, task_id=task.task_id, episode_id=episode.episode_id)
-
-    def _render_judge_prompt_chunked(
-        self, task: Task, episode: Episode, steps_per_message: int
-    ) -> "JudgePromptPayload":
-        """
-        Chunked-message mode: generate multiple user messages.
-
-        Process:
-        1. Render system template once with full episode context
-        2. Chunk episode steps into groups of steps_per_message
-        3. For each chunk:
-           - Create episode view with chunk's steps using episode.with_step_range()
-           - Render user template with episode view
-        4. Return payload with system message + list of user messages
-        """
-        # Validate episode is complete
-        if not episode.is_complete:
-            from ..evaluation.exceptions import EvaluationConfigError
-
-            raise EvaluationConfigError(
-                f"Cannot generate judge prompt for incomplete episode '{episode.episode_id}'. "
-                f"Episode state: {episode.state.value}"
-            )
-
-        # Validate task uses llm_judge strategy
-        eval_config = task.evaluation_config
-        if not eval_config or eval_config.get("strategy") != "llm_judge":
-            from ..evaluation.exceptions import EvaluationConfigError
-
-            raise EvaluationConfigError(f"Task '{task.task_id}' is not configured for LLM judge evaluation")
-
-        # Get template names and model
-        judge_system_template = eval_config["criteria"]["judge_system_template"]
-        judge_user_template = eval_config["criteria"]["judge_user_template"]
-        model = eval_config["criteria"]["model"]
-        golden_answer = eval_config["criteria"].get("golden_answer")
-
-        # Build context and render system prompt once
-        system_context = JudgePromptContext(
-            question=task.description,
-            golden_answer=golden_answer,
-            episode=episode,  # Full episode for system message
-            task=task,
-            evaluation_config=eval_config["criteria"],
-            model=model,
-            domain=task.domain,
-            task_id=task.task_id,
-        )
-        system_prompt = self.render_judge_prompt(judge_system_template, system_context)
-
-        # Chunk steps and render user messages
-        total_steps = len(episode.steps)
-        user_messages: List[str] = []
-
-        logger.debug(
-            "Rendering chunked judge prompts",
-            extra={
-                "event": "judge_prompt_chunked_start",
-                "task_id": task.task_id,
-                "episode_id": episode.episode_id,
-                "total_steps": total_steps,
-                "steps_per_message": steps_per_message,
-                "expected_chunks": (total_steps + steps_per_message - 1) // steps_per_message,
-            },
-        )
-
-        for chunk_start in range(0, total_steps, steps_per_message):
-            chunk_end = min(chunk_start + steps_per_message, total_steps)
-
-            # Create episode view with only this chunk's steps
-            episode_view = episode.with_step_range(chunk_start, chunk_end)
-
-            logger.debug(
-                f"Rendering chunk {len(user_messages) + 1}",
-                extra={
-                    "event": "judge_prompt_chunk_render",
-                    "chunk_index": len(user_messages),
-                    "step_range": (chunk_start, chunk_end),
-                    "steps_in_chunk": chunk_end - chunk_start,
-                },
-            )
-
-            # Render user template with chunked episode view
-            user_context = JudgePromptContext(
-                question=task.description,
-                golden_answer=golden_answer,
-                episode=episode_view,  # Episode view with subset of steps
-                task=task,
-                evaluation_config=eval_config["criteria"],
-                model=model,
-                domain=task.domain,
-                task_id=task.task_id,
-            )
-            user_prompt = self.render_judge_prompt(judge_user_template, user_context)
-            user_messages.append(user_prompt)
-
-        logger.info(
-            "Chunked judge prompts rendered",
-            extra={
-                "event": "judge_prompt_chunked_complete",
-                "task_id": task.task_id,
-                "episode_id": episode.episode_id,
-                "total_chunks": len(user_messages),
-            },
-        )
-
-        # Build messages list (for compatibility with existing code)
-        messages = [{"role": "system", "content": system_prompt}]
-        for user_msg in user_messages:
-            messages.append({"role": "user", "content": user_msg})
-
-        return JudgePromptPayload(messages=messages, model=model, task_id=task.task_id, episode_id=episode.episode_id)
-
-    def render_judge_prompt(self, template_file: str, context: JudgePromptContext) -> str:
-        """
-        Render judge prompt for LLM evaluation using specified template file.
-
-        Args:
-            template_file: Judge template path (must start with "judge/", e.g., "judge/system_prompt.md")
-            context: JudgePromptContext with evaluation data
-
-        Returns:
-            Rendered judge prompt string ready for LLM evaluator
-
-        Raises:
-            PromptGenerationError: If template rendering fails or path doesn't start with "judge/"
-            TemplateValidationError: If template file is missing or invalid
-        """
-        if not template_file:
-            raise PromptGenerationError(f"Judge template file required for task '{context.task_id}'")
-
-        # Validate that template path explicitly starts with "judge/"
-        if not template_file.startswith("judge/"):
-            raise PromptGenerationError(
-                f"Judge template path must start with 'judge/' prefix. "
-                f"Got: '{template_file}' for task '{context.task_id}'. "
-                f"Update your YAML configuration to use 'judge/{template_file}' instead."
-            )
-
-        # Use the explicit path provided (no automatic prepending)
-        judge_template_path = template_file
-        self._assert_safe_template_name(judge_template_path)
-
-        try:
-            # Load template - fail fast if not found
-            template = self.jinja_env.get_template(judge_template_path)
-
-            # Render template with judge context
-            rendered_prompt = str(template.render(context.to_dict()))
-
-            logger.debug(
-                "Judge prompt rendered",
-                extra={
-                    "event": "judge_prompt_rendered",
-                    "task_id": context.task_id,
-                    "template_file": judge_template_path,
-                    "prompt_length": len(rendered_prompt),
-                },
-            )
-            return rendered_prompt
-
-        except TemplateNotFound as e:
-            # Could be root template or an included template
-            missing_name = getattr(e, "name", judge_template_path)
-            location = "included template" if missing_name != judge_template_path else "judge template file"
-            raise TemplateValidationError(
-                f"{location} not found for task '{context.task_id}': {missing_name}. "
-                f"Expected under {self.prompts_dir}/judge/"
-            ) from e
-
-        except TemplateError as e:
-            raise PromptGenerationError(
-                f"Judge template rendering failed for task '{context.task_id}' "
-                f"using template '{judge_template_path}': {e}"
-            ) from e
-
-        except Exception as e:
-            raise PromptGenerationError(
-                f"Unexpected error rendering judge prompt for task '{context.task_id}': {e}"
-            ) from e
-
     def validate_template(self, template_file: str) -> bool:
         """
         Validate agent template syntax and file existence.
@@ -649,90 +278,6 @@ class PromptGenerator:
 
         except TemplateError as e:
             raise TemplateValidationError(f"Template syntax error in {template_file}: {e}") from e
-
-    def validate_judge_template(self, template_file: str) -> bool:
-        """
-        Validate judge template syntax and file existence.
-
-        Args:
-            template_file: Judge template path (must start with "judge/", e.g., "judge/system_prompt.md")
-
-        Returns:
-            True if template is valid
-
-        Raises:
-            TemplateValidationError: If template is invalid or missing or doesn't start with "judge/"
-        """
-        if not template_file:
-            raise TemplateValidationError("Judge template filename cannot be empty")
-
-        # Validate that template path starts with "judge/" prefix
-        if not template_file.startswith("judge/"):
-            raise TemplateValidationError(
-                f"Judge template path must start with 'judge/' prefix. Got: '{template_file}'. "
-                f"Update your YAML configuration to use 'judge/{template_file}' instead."
-            )
-
-        # Use the explicit path provided (no automatic prepending)
-        judge_template_path = template_file
-        self._assert_safe_template_name(judge_template_path)
-
-        try:
-            loader = self.jinja_env.loader
-            if loader is None:
-                raise TemplateValidationError("No loader configured for template environment")
-
-            # Check if judge directory exists
-            judge_dir = self.prompts_dir / "judge"
-            if not judge_dir.exists():
-                raise TemplateValidationError(f"Judge templates directory does not exist: {judge_dir}")
-
-            # Validate template dependencies recursively (same as agent templates)
-            visited: Set[str] = set()
-            missing: List[str] = []
-
-            def _collect(name: str) -> Tuple[str, str]:
-                self._assert_safe_template_name(name)
-                source, _, _ = loader.get_source(self.jinja_env, name)
-                return name, source
-
-            def _walk(name: str) -> None:
-                if name in visited:
-                    return
-                visited.add(name)
-                try:
-                    _, src = _collect(name)
-                except TemplateNotFound:
-                    missing.append(name)
-                    return
-                deps = self._extract_template_dependencies(src)
-                for dep in deps:
-                    _walk(dep)
-
-            _walk(judge_template_path)
-            if missing:
-                raise TemplateValidationError(
-                    f"Judge template '{template_file}' has missing dependencies (recursive): {missing}"
-                )
-
-            # Compile root template to validate syntax
-            self.jinja_env.get_template(judge_template_path)
-            dependency_count = max(len(visited) - 1, 0)
-            logger.debug(
-                "Judge template validated",
-                extra={
-                    "event": "judge_template_validated",
-                    "template_file": template_file,
-                    "dependency_count": dependency_count,
-                },
-            )
-            return True
-
-        except TemplateNotFound as e:
-            raise TemplateValidationError(f"Judge template file not found: {template_file}") from e
-
-        except TemplateError as e:
-            raise TemplateValidationError(f"Judge template syntax error in {template_file}: {e}") from e
 
     def validate_all_task_templates(self, tasks: List[Task]) -> None:
         """

@@ -46,7 +46,7 @@ class TestBenchmarkManagerCore:
         mock_task = Mock(spec=Task)
         mock_task.prompts={"instruction": "test_prompt.md", "assistant": "test_prompt.md", "submit": "test_prompt.md"}
         mock_task.task_id = "test_task"
-        mock_task.evaluation_config = None  # No LLM judge config
+        mock_task.submission_evaluation_config = None  # No LLM judge config
         mock_tasks = {"test_task": mock_task}
         mock_load.return_value = mock_tasks
 
@@ -182,13 +182,14 @@ tasks:
       allowed_executors:
         - bash_executor
         - python_executor
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers:
           - "task_completion"
       scoring:
-        points: 100
+        max_score: 1.0
+
     subtasks:
       - subtask_id: "subtask1"
         title: "SubTask 1"
@@ -202,13 +203,14 @@ tasks:
       allowed_executors:
         - bash_executor
         - python_executor
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers:
           - "task_completion"
       scoring:
-        points: 100
+        max_score: 1.0
+
     subtasks: []
 """
         config_dir = temp_config_dir_helper(tmp_path, yaml_content)
@@ -308,13 +310,14 @@ tasks:
       allowed_executors:
         - bash_executor
         - python_executor
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers:
           - "task_completion"
       scoring:
-        points: 100
+        max_score: 1.0
+
     subtasks: []
 """
         config_dir = temp_config_dir_helper(tmp_path, yaml_content)
@@ -355,13 +358,14 @@ tasks:
       allowed_executors:
         - bash_executor
         - python_executor
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers:
           - "task_completion"
       scoring:
-        points: 100
+        max_score: 1.0
+
     subtasks: []
   - task_id: "task2"
     title: "Task 2"
@@ -370,13 +374,14 @@ tasks:
       allowed_executors:
         - bash_executor
         - python_executor
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers:
           - "task_completion"
       scoring:
-        points: 100
+        max_score: 1.0
+
     subtasks: []
 """
         config_dir = temp_config_dir_helper(tmp_path, yaml_content)
@@ -441,13 +446,14 @@ tasks:
       allowed_executors:
         - bash_executor
         - python_executor
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers:
           - "task_completion"
       scoring:
-        points: 100
+        max_score: 1.0
+
     subtasks: []
   - task_id: "task_override"
     title: "Task with Override"
@@ -457,13 +463,13 @@ tasks:
       allowed_executors:
         - bash_executor
         - python_executor
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers:
           - "task_completion"
       scoring:
-        points: 100
+        max_score: 1.0
     benchmark_config:
       episode_attempts: 10
     subtasks: []
@@ -510,13 +516,13 @@ tasks:
       allowed_executors:
         - bash_executor
         - python_executor
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers:
           - "task_completion"
       scoring:
-        points: 100
+        max_score: 1.0
     benchmark_config:
       episode_attempts: 15
     subtasks: []
@@ -559,10 +565,14 @@ tasks:
 
 
 class TestBenchmarkManagerJudgeRenderer:
-    """Test cases for BenchmarkManager judge prompt renderer functionality."""
+    """Test cases for BenchmarkManager judge prompt renderer functionality.
+
+    CLIENT-SIDE EVALUATION: Judge rendering is now done client-side.
+    These tests verify that the renderer injection is no longer performed.
+    """
 
     def test_create_renderer_success(self, tmp_path, temp_config_dir_helper):
-        """Test successful creation of judge prompt renderer for LLM judge task."""
+        """Test that LLM judge tasks load correctly (no renderer injection in client-side eval)."""
         # Create a basic config with LLM judge task
         yaml_content = """
 domain: "test"
@@ -588,46 +598,27 @@ tasks:
     execution_config:
       allowed_executors:
         - bash_executor
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "llm_judge"
       criteria:
         model: "gpt-4"
         golden_answer: "Expected answer for test task"
-        judge_system_template: "system.md"
-        judge_user_template: "user.md"
+        judge_system_template: "judge/system.md"
+        judge_user_template: "judge/user.md"
 """
 
         config_dir = temp_config_dir_helper(tmp_path, yaml_content)
         manager = BenchmarkManager("test", config_dir)
 
-        # Get the task with injected renderer
+        # Get the task - should load successfully
         task = manager.get_task("test_llm_task")
-        assert task.evaluation_config["strategy"] == "llm_judge"
-        assert "judge_prompt_renderer" in task.evaluation_config
+        assert task.submission_evaluation_config["strategy"] == "llm_judge"
 
-        # Test the renderer function
-        renderer = task.evaluation_config["judge_prompt_renderer"]
-        assert callable(renderer)
-
-        # Mock episode
-        mock_episode = Mock()
-        mock_episode.episode_id = "test_episode"
-        mock_episode.submission = "test submission"
-
-        # Mock the prompt generator to return expected payload
-        mock_payload = Mock()
-        mock_payload.messages = [{"role": "system", "content": "Test"}]
-        mock_payload.model = "gpt-4"
-
-        with patch.object(manager.prompt_generator, 'render_judge_prompt_for_episode', return_value=mock_payload) as mock_render:
-            result = renderer(mock_episode)
-
-            # Verify the correct method was called
-            mock_render.assert_called_once_with(task, mock_episode)
-            assert result == mock_payload
+        # CLIENT-SIDE EVALUATION: judge_prompt_renderer should NOT be injected
+        assert "judge_prompt_renderer" not in task.submission_evaluation_config
 
     def test_create_renderer_calls_correct_method(self, tmp_path, temp_config_dir_helper):
-        """Test that renderer calls render_judge_prompt_for_episode (regression test)."""
+        """Test that render_judge_prompt_for_episode is deprecated (client-side eval)."""
         # Create a basic config with LLM judge task
         yaml_content = """
 domain: "test"
@@ -653,36 +644,29 @@ tasks:
     execution_config:
       allowed_executors:
         - bash_executor
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "llm_judge"
       criteria:
         model: "gpt-4"
         golden_answer: "Expected answer for test task"
-        judge_system_template: "system.md"
-        judge_user_template: "user.md"
+        judge_system_template: "judge/system.md"
+        judge_user_template: "judge/user.md"
 """
 
         config_dir = temp_config_dir_helper(tmp_path, yaml_content)
         manager = BenchmarkManager("test", config_dir)
 
-        # Get the task with injected renderer
+        # Verify that calling deprecated method raises NotImplementedError
         task = manager.get_task("test_llm_task")
-        renderer = task.evaluation_config["judge_prompt_renderer"]
-
-        # Mock episode
         mock_episode = Mock()
 
-        # This test specifically ensures we're calling the correct method name
-        with patch.object(manager.prompt_generator, 'render_judge_prompt_for_episode') as mock_correct_method:
-            mock_correct_method.return_value = Mock()
+        with pytest.raises(NotImplementedError) as exc_info:
+            manager.render_judge_prompt_for_episode("test_llm_task", mock_episode)
 
-            renderer(mock_episode)
-
-            # Should call the correct method
-            mock_correct_method.assert_called_once()
+        assert "client-side" in str(exc_info.value).lower()
 
     def test_create_renderer_handles_attribute_error(self, tmp_path, temp_config_dir_helper):
-        """Test renderer gracefully handles AttributeError (regression test for bug we fixed)."""
+        """Test that LLM judge tasks don't have renderer injected (client-side eval)."""
         # Create a basic config with LLM judge task
         yaml_content = """
 domain: "test"
@@ -708,34 +692,21 @@ tasks:
     execution_config:
       allowed_executors:
         - bash_executor
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "llm_judge"
       criteria:
         model: "gpt-4"
         golden_answer: "Expected answer for test task"
-        judge_system_template: "system.md"
-        judge_user_template: "user.md"
+        judge_system_template: "judge/system.md"
+        judge_user_template: "judge/user.md"
 """
 
         config_dir = temp_config_dir_helper(tmp_path, yaml_content)
         manager = BenchmarkManager("test", config_dir)
 
-        # Get the task with injected renderer
+        # Verify no renderer is injected
         task = manager.get_task("test_llm_task")
-        renderer = task.evaluation_config["judge_prompt_renderer"]
-
-        # Mock episode
-        mock_episode = Mock()
-
-        # Simulate the AttributeError that would occur with wrong method name
-        with patch.object(manager.prompt_generator, 'render_judge_prompt_for_episode',
-                         side_effect=AttributeError("'PromptGenerator' object has no attribute 'render_judge_prompt_for_task'")):
-
-            with pytest.raises(AttributeError) as exc_info:
-                renderer(mock_episode)
-
-            # Verify we get the specific error we were seeing
-            assert "render_judge_prompt_for_task" in str(exc_info.value)
+        assert "judge_prompt_renderer" not in task.submission_evaluation_config
 
     def test_no_renderer_for_static_evaluation(self, tmp_path, temp_config_dir_helper):
         """Test that static evaluation tasks don't get judge prompt renderer."""
@@ -764,10 +735,12 @@ tasks:
     execution_config:
       allowed_executors:
         - bash_executor
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers: ["answer1"]
+      scoring:
+        max_score: 1.0
 """
 
         config_dir = temp_config_dir_helper(tmp_path, yaml_content)
@@ -775,8 +748,8 @@ tasks:
 
         # Get the task - should not have renderer injected
         task = manager.get_task("test_static_task")
-        assert task.evaluation_config["strategy"] == "static"
-        assert "judge_prompt_renderer" not in task.evaluation_config
+        assert task.submission_evaluation_config["strategy"] == "static"
+        assert "judge_prompt_renderer" not in task.submission_evaluation_config
 
 
 class TestBenchmarkManagerMultiPrompt:
@@ -906,12 +879,13 @@ tasks:
     prompts:
       instruction: "instructions/test_instruction.md"
       # Missing assistant and submit prompts
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers: ["test"]
       scoring:
         max_score: 1.0
+
     subtasks: []
 """
 

@@ -179,3 +179,90 @@ class EvaluationFileUploadResponse(BaseModel):
     upload_timestamp: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc), description="Upload timestamp"
     )
+
+
+# ============================================================================
+# NEW CLIENT-SIDE EVALUATION MODELS (Breaking Change Migration)
+# ============================================================================
+
+
+class EpisodeStepData(BaseModel):
+    """Single episode step data for client-side evaluation."""
+
+    step_number: int = Field(..., ge=0, description="Step number (0-indexed)")
+    tool_name: str = Field(description="Name of the tool executed")
+    tool_input: Dict[str, Any] = Field(description="Input parameters to the tool")
+    tool_output: str = Field(description="Tool execution output")
+    timestamp: datetime = Field(description="When the step was executed")
+    assistant_message: Optional[str] = Field(None, description="Assistant message before tool call")
+    reasoning: Optional[str] = Field(None, description="Assistant reasoning (if available)")
+
+
+class EpisodeSubmissionResponse(BaseModel):
+    """Episode submission data - client fetches this to evaluate."""
+
+    session_id: str = Field(description="Session identifier")
+    episode_id: str = Field(description="Episode identifier")
+    task_id: str = Field(description="Task identifier")
+    submission: str = Field(description="Agent's final submission content")
+    model: Optional[str] = Field(None, description="Model used for the episode")
+    tokens: Dict[str, int] = Field(default_factory=dict, description="Token usage statistics")
+    execution_time: Optional[float] = Field(None, description="Episode execution time in seconds")
+
+
+class EpisodeStepsResponse(BaseModel):
+    """Episode step history - client fetches this for step-level evaluation."""
+
+    session_id: str = Field(description="Session identifier")
+    episode_id: str = Field(description="Episode identifier")
+    task_id: str = Field(description="Task identifier")
+    steps: List[EpisodeStepData] = Field(description="List of episode steps")
+    total_steps: int = Field(description="Total number of steps")
+
+
+class SubmissionEvaluationCriteriaResponse(BaseModel):
+    """Submission evaluation criteria - contains everything needed for client-side evaluation."""
+
+    session_id: str = Field(description="Session identifier")
+    episode_id: str = Field(description="Episode identifier")
+    task_id: str = Field(description="Task identifier")
+    strategy: str = Field(description="Evaluation strategy: 'static' or 'llm_judge'")
+    criteria: Dict[str, Any] = Field(
+        description="Criteria dict with template CONTENT, golden_answer, model - everything needed for evaluation"
+    )
+    scoring: Dict[str, float] = Field(description="Scoring configuration (e.g., max_score)")
+    task_context: TaskEvaluationContext = Field(description="Task context for evaluation")
+
+
+class StepEvaluationCriteriaResponse(BaseModel):
+    """Step evaluation criteria - contains everything needed for client-side evaluation."""
+
+    session_id: str = Field(description="Session identifier")
+    episode_id: str = Field(description="Episode identifier")
+    task_id: str = Field(description="Task identifier")
+    strategy: str = Field(description="Evaluation strategy: 'llm_judge'")
+    criteria: Dict[str, Any] = Field(
+        description="Criteria dict with template CONTENT, model, steps_per_message - everything needed for evaluation"
+    )
+    subtasks: List[Dict[str, Any]] = Field(description="Subtask definitions with max_score")
+    task_context: TaskEvaluationContext = Field(description="Task context for evaluation")
+
+
+class TemplateContentResponse(BaseModel):
+    """Raw template content - client fetches and renders templates."""
+
+    template_path: str = Field(description="Relative template path (e.g., 'judge/submission/system.md')")
+    content: str = Field(description="Raw Jinja2 template content (unrendered)")
+
+
+class EvaluationResultSubmission(BaseModel):
+    """Client submits evaluation result after performing client-side evaluation."""
+
+    strategy: str = Field(description="Evaluation strategy used")
+    raw_score: float = Field(..., ge=0.0, description="Raw evaluation score")
+    max_score: float = Field(..., gt=0.0, description="Maximum possible score")
+    score: float = Field(..., ge=0.0, description="Final score")
+    success: bool = Field(description="Whether evaluation was successful")
+    details: Dict[str, Any] = Field(
+        default_factory=dict, description="Evaluation details (submission_score, step_score, etc.)"
+    )

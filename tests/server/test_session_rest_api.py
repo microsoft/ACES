@@ -22,9 +22,17 @@ class TestSessionRestAPI:
     def session_manager_app(self):
         """Create SessionManager with test client."""
         mock_task_manager = MagicMock()
+        # Mock config_loader to return None for permanent environment (not configured)
+        mock_config_loader = MagicMock()
+        mock_config_loader.get_permanent_environment = MagicMock(return_value=None)
+        mock_task_manager.config_loader = mock_config_loader
+
         mock_execution_manager = MagicMock()
         mock_execution_manager.step = AsyncMock()
         mock_execution_manager.initialize_permanent_environment_manager = MagicMock()
+        # Mock permanent environment manager as None (not configured)
+        mock_execution_manager._permanent_environment_manager = None
+
         mock_policy_manager = MagicMock()
         mock_policy_doc = PolicyDocument(prompt="Test domain policy prompt")
         mock_policy_manager.get_policy = MagicMock(return_value=mock_policy_doc)
@@ -337,157 +345,8 @@ class TestSessionRestAPI:
 
             assert response.status_code == 404, f"Endpoint {method} {endpoint} should return 404"
 
-    def test_override_evaluation_endpoint_success(self, session_manager_app):
-        """Test successful evaluation override endpoint."""
-        manager, client = session_manager_app
 
-        # Create a session first
-        response = client.post("/api/v1/session?client_id=test_client")
-        assert response.status_code == 200
-        session_id = response.json()["session_id"]
 
-        # Mock the override method on the session manager
-        from saber.server.evaluation.models import EvaluationResult
-        from datetime import datetime, timezone
-
-        mock_result = EvaluationResult(
-            episode_id="test_episode",
-            task_id="test_task",
-            strategy="static",
-            raw_score=1.0,
-            max_score=1.0,
-            score=1.0,
-            success=True,
-            timestamp=datetime.now(timezone.utc),
-            details={"override": True},
-            submission="flag{override}",
-            executed_commands=["cat flag.txt"],
-            completion_reason="success",
-            step_count=1,
-            model="gpt-4",
-            choices=[{"message": {"content": "Found the flag"}}],
-            tokens={"total": 100, "prompt": 20, "completion": 80},
-            execution_time=30.5
-        )
-
-        manager.override_episode_evaluation = AsyncMock(return_value=mock_result)
-
-        # Test data
-        override_data = {
-            "evaluation_data": {
-                "episode_id": "test_episode",
-                "task_id": "test_task",
-                "submission": "flag{override}",
-                "executed_commands": ["cat flag.txt"],
-                "completion_reason": "success",
-                "step_count": 1,
-                "model": "gpt-4",
-                "choices": [{"message": {"content": "Found the flag"}}],
-                "tokens": {"total": 100, "prompt": 20, "completion": 80},
-                "execution_time": 30.5
-            },
-            "strategy": "static",
-            "raw_score": 1.0,
-            "max_score": 1.0,
-            "score": 1.0,
-            "success": True,
-            "details": {"override": True}
-        }
-
-        # Make the request
-        response = client.put(
-            f"/api/v1/session/{session_id}/evaluations/test_episode/override",
-            json=override_data
-        )
-
-        # Verify response
-        if response.status_code != 200:
-            print(f"Response status: {response.status_code}")
-            print(f"Response content: {response.json()}")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["message"] == "Evaluation successfully overridden"
-        assert data["session_id"] == session_id
-        assert data["episode_id"] == "test_episode"
-        assert data["evaluation_result"]["episode_id"] == "test_episode"
-        assert data["evaluation_result"]["task_id"] == "test_task"
-        assert data["evaluation_result"]["strategy"] == "static"
-        assert data["evaluation_result"]["score"] == 1.0
-        assert data["evaluation_result"]["success"] is True
-
-        # Verify the manager method was called
-        manager.override_episode_evaluation.assert_called_once()
-        call_args = manager.override_episode_evaluation.call_args
-
-        # Check the arguments passed to the method
-        assert call_args.kwargs["session_id"] == session_id
-        assert call_args.kwargs["episode_id"] == "test_episode"
-
-        # Check that the override_request has the correct data
-        override_request = call_args.kwargs["override_request"]
-        assert override_request.evaluation_data == override_data["evaluation_data"]
-        assert override_request.strategy == "static"
-        assert override_request.raw_score == 1.0
-        assert override_request.max_score == 1.0
-        assert override_request.score == 1.0
-        assert override_request.success is True
-        assert override_request.details == {"override": True}
-
-    def test_override_evaluation_endpoint_invalid_session(self, session_manager_app):
-        """Test evaluation override with invalid session."""
-        manager, client = session_manager_app
-
-        override_data = {
-            "evaluation_data": {
-                "episode_id": "test_episode",
-                "task_id": "test_task",
-                "submission": "flag{override}"
-            },
-            "strategy": "static",
-            "raw_score": 1.0,
-            "max_score": 1.0,
-            "score": 1.0,
-            "success": True
-        }
-
-        # Make request with invalid session
-        response = client.put(
-            "/api/v1/session/invalid_session/evaluations/test_episode/override",
-            json=override_data
-        )
-
-        # Should return 404
-        assert response.status_code == 404
-
-    def test_override_evaluation_endpoint_missing_data(self, session_manager_app):
-        """Test evaluation override with missing data."""
-        manager, client = session_manager_app
-
-        # Create a session first
-        response = client.post("/api/v1/session?client_id=test_client")
-        assert response.status_code == 200
-        session_id = response.json()["session_id"]
-
-        # Test with missing evaluation_data
-        incomplete_data = {
-            "strategy": "static",
-            "scores": {
-                "raw_score": 1.0,
-                "max_score": 1.0,
-                "score": 1.0,
-                "success": True
-            },
-            "success": True
-        }
-
-        # Make request with incomplete data
-        response = client.put(
-            f"/api/v1/session/{session_id}/evaluations/test_episode/override",
-            json=incomplete_data
-        )
-
-        # Should return 422 (validation error)
-        assert response.status_code == 422
 
     def test_upload_evaluation_file_success(self, session_manager_app):
         """Test successful evaluation file upload."""

@@ -77,13 +77,14 @@ tasks:
         - "test_executor"
     episode_config:
       max_steps: 10
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers:
           - "flag{correct_answer}"
       scoring:
         max_score: 1.0
+
     subtasks: []
 """))
             temp_path = f.name
@@ -94,10 +95,10 @@ tasks:
 
             assert "static_eval_task" in tasks
             task = tasks["static_eval_task"]
-            assert task.evaluation_config is not None
-            assert task.evaluation_config["strategy"] == "static"
-            assert task.evaluation_config["criteria"]["expected_answers"] == ["flag{correct_answer}"]
-            assert task.evaluation_config["scoring"]["max_score"] == 1.0
+            assert task.submission_evaluation_config is not None
+            assert task.submission_evaluation_config["strategy"] == "static"
+            assert task.submission_evaluation_config["criteria"]["expected_answers"] == ["flag{correct_answer}"]
+            assert task.submission_evaluation_config["scoring"]["max_score"] == 1.0
 
         finally:
             os.unlink(temp_path)
@@ -122,7 +123,7 @@ tasks:
         - "test_executor"
     episode_config:
       max_steps: 10
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "llm_judge"
       criteria:
         golden_answer: "The malware is a banking trojan"
@@ -141,9 +142,9 @@ tasks:
 
             assert "llm_eval_task" in tasks
             task = tasks["llm_eval_task"]
-            assert task.evaluation_config["strategy"] == "llm_judge"
-            assert task.evaluation_config["criteria"]["golden_answer"] == "The malware is a banking trojan"
-            assert task.evaluation_config["criteria"]["model"] == "gpt-4"
+            assert task.submission_evaluation_config["strategy"] == "llm_judge"
+            assert task.submission_evaluation_config["criteria"]["golden_answer"] == "The malware is a banking trojan"
+            assert task.submission_evaluation_config["criteria"]["model"] == "gpt-4"
 
         finally:
             os.unlink(temp_path)
@@ -175,7 +176,7 @@ tasks:
         try:
             loader = BenchmarkConfigLoader("test_domain")
 
-            with pytest.raises(InvalidTaskDefinitionException, match="missing required evaluation_config"):
+            with pytest.raises(InvalidTaskDefinitionException, match="missing required submission_evaluation_config"):
                 loader.load_tasks_from_file(temp_path)
 
         finally:
@@ -201,11 +202,12 @@ tasks:
         - "test_executor"
     episode_config:
       max_steps: 10
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "invalid_strategy"
       criteria: {}
       scoring:
         max_score: 1.0
+
     subtasks: []
 """))
             temp_path = f.name
@@ -213,7 +215,7 @@ tasks:
         try:
             loader = BenchmarkConfigLoader("test_domain")
 
-            with pytest.raises(InvalidTaskDefinitionException, match="Invalid or missing evaluation strategy"):
+            with pytest.raises(InvalidTaskDefinitionException, match="Invalid submission evaluation strategy"):
                 loader.load_tasks_from_file(temp_path)
 
         finally:
@@ -239,10 +241,11 @@ tasks:
         - "test_executor"
     episode_config:
       max_steps: 10
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       scoring:
         max_score: 1.0
+
     subtasks: []
 """))
             temp_path = f.name
@@ -250,7 +253,7 @@ tasks:
         try:
             loader = BenchmarkConfigLoader("test_domain")
 
-            with pytest.raises(InvalidTaskDefinitionException, match="Missing or invalid criteria section"):
+            with pytest.raises(InvalidTaskDefinitionException, match="Missing or invalid criteria in submission_evaluation_config"):
                 loader.load_tasks_from_file(temp_path)
 
         finally:
@@ -276,7 +279,7 @@ tasks:
         - "test_executor"
     episode_config:
       max_steps: 10
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers: ["answer"]
@@ -315,11 +318,12 @@ tasks:
         - "test_executor"
     episode_config:
       max_steps: 10
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria: {}
       scoring:
         max_score: 1.0
+
     subtasks: []
 """))
             temp_path = f.name
@@ -353,7 +357,7 @@ tasks:
         - "test_executor"
     episode_config:
       max_steps: 10
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "llm_judge"
       criteria:
         model: "gpt-4"
@@ -361,6 +365,7 @@ tasks:
         judge_user_template: "user_template.md"
       scoring:
         max_score: 1.0
+
     subtasks: []
 """))
             temp_path = f.name
@@ -396,12 +401,13 @@ tasks:
         - "test_executor"
     episode_config:
       max_steps: 10
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "llm_judge"
       criteria:
         golden_answer: "The correct answer"
       scoring:
         max_score: 1.0
+
     subtasks: []
 """))
             temp_path = f.name

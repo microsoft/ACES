@@ -102,13 +102,13 @@ tasks:
       allowed_executors:
         - bash_executor
         - python_executor
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers:
           - "task_completion"
       scoring:
-        points: 100
+        max_score: 1.0
     initial_context:
       sample_path: "/data/samples/unknown_sample.exe"
       analysis_timeout: 300
@@ -560,13 +560,13 @@ tasks:
       allowed_executors:
         - bash_executor
         - python_executor
-    evaluation_config:
+    submission_evaluation_config:
       strategy: "static"
       criteria:
         expected_answers:
           - "vulnerability_found"
       scoring:
-        points: 100
+        max_score: 1.0
     initial_context:
       target_url: "http://example.com"
       scan_timeout: 300

@@ -34,7 +34,6 @@ from saber.client.inspect_ai.context_injection import (
     get_context_injection_metrics,
     is_saber_mcp_tool,
     reset_context_injection_metrics,
-    reset_tool_discovery,
     saber_context_injection_patch,
     saber_tool,
     saber_tool_params,
@@ -625,8 +624,8 @@ def test_configure_context_injection_tools():
     from saber.client.inspect_ai.context_injection import _config
     original_tools = _config.registered_tools.copy()
 
-    # Reset tool discovery to ensure clean state
-    reset_tool_discovery()
+    # Clear tool discovery cache
+    # reset_tool_discovery() - REMOVED: function no longer exists
 
     configure_context_injection(tools={"custom_tool"})
 
@@ -642,7 +641,6 @@ def test_configure_context_injection_tools():
 
     # Reset to original
     configure_context_injection(tools=original_tools)
-    reset_tool_discovery()
 
 
 

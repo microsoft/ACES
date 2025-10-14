@@ -42,7 +42,7 @@ class TestExecutorFiltering:
                     "execution_config": {
                         "allowed_executors": ["bash", "python"]
                     },
-                    "evaluation_config": {
+                    "submission_evaluation_config": {
                         "strategy": "static",
                         "criteria": {
                 "expected_answers": ["task_completion"]
@@ -91,7 +91,7 @@ class TestExecutorFiltering:
                     "title": "Test Task",
                     "description": "Test description",
                     "prompts": {"instruction": "test_task_prompt.md", "assistant": "test_task_prompt.md", "submit": "test_task_prompt.md"},
-                    "evaluation_config": {
+                    "submission_evaluation_config": {
                         "strategy": "static",
                         "criteria": {
                 "expected_answers": ["task_completion"]
@@ -229,7 +229,7 @@ class TestExecutorFiltering:
                     "execution_config": {
                         "allowed_executors": []  # Empty list should trigger validation error
                     },
-                    "evaluation_config": {
+                    "submission_evaluation_config": {
                         "strategy": "static",
                         "criteria": {
                 "expected_answers": ["task_completion"]

@@ -185,18 +185,20 @@ class SessionStatsResponse(BaseModel):
 class EpisodeEndResponse(BaseModel):
     """Response model for episode termination.
 
-    Phase 1 guarantee: evaluation_result is ALWAYS present (never None)
-    and contains the serialized EvaluationResult (dict form) produced
-    during fail-fast evaluation. This is a breaking change vs legacy.
+    CLIENT-SIDE EVALUATION: evaluation_result is now optional and will be None
+    when the episode ends. Clients should submit evaluation results separately
+    via POST /api/v1/session/{session_id}/episodes/{episode_id}/evaluation.
     """
 
     episode_ended: bool = Field(description="Whether the episode has ended")
     episode_id: str = Field(description="ID of the episode that ended")
-    success: bool = Field(description="Whether the episode completed successfully")
+    success: bool = Field(description="Whether the episode completed successfully (based on termination reason)")
     reason: str = Field(description="Reason for episode termination")
     previous_task_id: Optional[str] = Field(None, description="Task ID of the completed episode")
     active_episodes_remaining: int = Field(description="Number of active episodes remaining in session")
-    evaluation_result: Dict[str, Any] = Field(description="Episode evaluation result (non-null)")
+    evaluation_result: Optional[Dict[str, Any]] = Field(
+        None, description="Episode evaluation result (None for client-side evaluation)"
+    )
 
 
 # Legacy compatibility - keeping SessionInfo for backward compatibility

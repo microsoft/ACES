@@ -8,6 +8,7 @@ Logging category: REST_API.
 """
 
 # Forward declaration to avoid circular imports
+from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 import uvicorn
@@ -27,13 +28,18 @@ from ...models import (
     SessionTerminateResponse,
 )
 from ...models.rest.evaluation import (
-    EvaluationCriteriaResponse,
+    EpisodeStepData,
+    EpisodeStepsResponse,
+    EpisodeSubmissionResponse,
     EvaluationFileUploadResponse,
     EvaluationListResponse,
-    EvaluationOverrideRequest,
-    EvaluationOverrideResponse,
     EvaluationResponse,
+    EvaluationResultSubmission,
     EvaluationSummaryResponse,
+    StepEvaluationCriteriaResponse,
+    SubmissionEvaluationCriteriaResponse,
+    TaskEvaluationContext,
+    TemplateContentResponse,
 )
 from ..evaluation.exceptions import EvaluationNotFoundError, InvalidEvaluationRequestError, SessionEvaluationError
 
@@ -502,164 +508,325 @@ class SessionRestAPI:
                 )
                 raise HTTPException(status_code=500, detail=f"Failed to upload evaluation file: {exc}") from exc
 
-        # Evaluation override endpoint
-        @self.app.put(
-            "/api/v1/session/{session_id}/evaluations/{episode_id}/override", response_model=EvaluationOverrideResponse
-        )
-        async def override_evaluation_endpoint(
-            session_id: str, episode_id: str, request: EvaluationOverrideRequest
-        ) -> EvaluationOverrideResponse:
-            """Override evaluation result with external evaluation data."""
-            log_operation_start(
-                logger,
-                "override_evaluation",
-                session_id=session_id,
-                episode_id=episode_id,
-            )
+        # ============================================================================
+        # CLIENT-SIDE EVALUATION: OLD ENDPOINTS REMOVED
+        # - DELETE: GET /api/v1/session/{session_id}/episodes/{episode_id}/evaluation-criteria
+        #   Replaced by separate endpoints for submission/steps/criteria
+        # - DELETE: PUT /api/v1/session/{session_id}/evaluations/{episode_id}/override
+        #   Replaced by POST /api/v1/session/{session_id}/episodes/{episode_id}/evaluation
+        # ============================================================================
 
+        # ============================================================================
+        # NEW CLIENT-SIDE EVALUATION ENDPOINTS (Breaking Change Migration)
+        # ============================================================================
+
+        @self.app.get("/api/v1/session/{session_id}/episodes/{episode_id}/submission")
+        async def get_episode_submission_endpoint(session_id: str, episode_id: str) -> EpisodeSubmissionResponse:
+            """Get episode submission data for client-side evaluation."""
+            log_operation_start(logger, "get_episode_submission", session_id=session_id, episode_id=episode_id)
             try:
-                # Call session manager to override evaluation
-                evaluation_result = await self.session_manager.override_episode_evaluation(
+                episode = self.session_manager.get_episode_by_id(episode_id)
+                if not episode:
+                    raise HTTPException(status_code=404, detail="Episode not found")
+
+                return EpisodeSubmissionResponse(
                     session_id=session_id,
                     episode_id=episode_id,
-                    override_request=request,
+                    task_id=episode.task_id,
+                    submission=episode.submission or "",
+                    model=episode.eval_submission.model if episode.eval_submission else None,
+                    tokens=episode.eval_submission.tokens if episode.eval_submission else {},
+                    execution_time=episode.eval_submission.time if episode.eval_submission else None,
                 )
-
-                log_operation_success(
-                    logger,
-                    "override_evaluation",
-                    session_id=session_id,
-                    episode_id=episode_id,
-                    strategy=evaluation_result.strategy,
-                    score=evaluation_result.score,
-                    success=evaluation_result.success,
-                )
-
-                # Convert to response model
-                from ...models.rest.evaluation import EvaluationResultResponse
-
-                evaluation_response = EvaluationResultResponse(
-                    episode_id=evaluation_result.episode_id,
-                    task_id=evaluation_result.task_id,
-                    strategy=evaluation_result.strategy,
-                    raw_score=evaluation_result.raw_score,
-                    max_score=evaluation_result.max_score,
-                    score=evaluation_result.score,
-                    success=evaluation_result.success,
-                    timestamp=evaluation_result.timestamp,
-                    details=evaluation_result.details,
-                )
-
-                return EvaluationOverrideResponse(
-                    message="Evaluation successfully overridden",
-                    evaluation_result=evaluation_response,
-                    session_id=session_id,
-                    episode_id=episode_id,
-                )
-
             except HTTPException:
-                # Re-raise HTTPException to preserve status codes (404, 422, etc.)
                 raise
-            except InvalidEvaluationRequestError as e:
-                log_operation_failure(
-                    logger,
-                    "override_evaluation",
-                    e,
-                    session_id=session_id,
-                    episode_id=episode_id,
-                    status_code=422,
-                )
-                raise HTTPException(status_code=422, detail=str(e)) from e
             except Exception as exc:
                 log_operation_failure(
-                    logger,
-                    "override_evaluation",
-                    exc,
+                    logger, "get_episode_submission", exc, session_id=session_id, episode_id=episode_id
+                )
+                raise HTTPException(status_code=500, detail=f"Failed to get episode submission: {exc}") from exc
+
+        @self.app.get("/api/v1/session/{session_id}/episodes/{episode_id}/steps")
+        async def get_episode_steps_endpoint(session_id: str, episode_id: str) -> EpisodeStepsResponse:
+            """Get episode step history for client-side evaluation."""
+            log_operation_start(logger, "get_episode_steps", session_id=session_id, episode_id=episode_id)
+            try:
+                episode = self.session_manager.get_episode_by_id(episode_id)
+                if not episode:
+                    raise HTTPException(status_code=404, detail="Episode not found")
+
+                steps_data = [
+                    EpisodeStepData(
+                        step_number=step.step_number,
+                        tool_name=step.action.tool_name,
+                        tool_input=step.action.parameters,
+                        tool_output=str(step.response),  # Convert response dict to string
+                        timestamp=step.timestamp,
+                        assistant_message=step.action.assistant_message,
+                        reasoning=step.action.reasoning,
+                    )
+                    for step in episode.steps
+                ]
+
+                return EpisodeStepsResponse(
                     session_id=session_id,
                     episode_id=episode_id,
+                    task_id=episode.task_id,
+                    steps=steps_data,
+                    total_steps=len(steps_data),
                 )
-                raise HTTPException(status_code=500, detail=f"Failed to override evaluation: {exc}") from exc
+            except HTTPException:
+                raise
+            except Exception as exc:
+                log_operation_failure(logger, "get_episode_steps", exc, session_id=session_id, episode_id=episode_id)
+                raise HTTPException(status_code=500, detail=f"Failed to get episode steps: {exc}") from exc
 
-        # Client-side scoring endpoint
-        @self.app.get("/api/v1/session/{session_id}/episodes/{episode_id}/evaluation-criteria")
-        async def get_evaluation_criteria_endpoint(session_id: str, episode_id: str) -> EvaluationCriteriaResponse:
-            """Get evaluation criteria package for client-side evaluation."""
+        @self.app.get("/api/v1/session/{session_id}/episodes/{episode_id}/submission-evaluation-criteria")
+        async def get_submission_evaluation_criteria_endpoint(
+            session_id: str, episode_id: str
+        ) -> SubmissionEvaluationCriteriaResponse:
+            """Get submission evaluation criteria (template paths only, no rendering)."""
             log_operation_start(
-                logger,
-                "get_evaluation_criteria",
-                session_id=session_id,
-                episode_id=episode_id,
+                logger, "get_submission_evaluation_criteria", session_id=session_id, episode_id=episode_id
             )
             try:
-                criteria = await self.session_manager.get_evaluation_criteria(session_id, episode_id)
+                episode = self.session_manager.get_episode_by_id(episode_id)
+                if not episode:
+                    raise HTTPException(status_code=404, detail="Episode not found")
 
-                # Clean evaluation_config to remove non-serializable functions
-                from ...models.rest.evaluation import EvaluationCriteriaResponse
+                task = self.session_manager.benchmark_manager.get_task(episode.task_id)
+                if not task:
+                    raise HTTPException(status_code=404, detail="Task not found")
 
-                cleaned_evaluation_config = {}
-                for key, value in criteria.evaluation_config.items():
-                    if callable(value):
-                        logger.debug(
-                            "Removing non-serializable function from evaluation config",
-                            extra={
-                                "event": "evaluation_config_callable_removed",
-                                "session_id": session_id,
-                                "episode_id": episode_id,
-                                "config_key": key,
-                            },
-                        )
-                    else:
-                        cleaned_evaluation_config[key] = value
+                if not task.submission_evaluation_config:
+                    raise HTTPException(status_code=400, detail="Task has no submission evaluation config")
 
-                # Create a clean criteria object for serialization
-                clean_criteria = EvaluationCriteriaResponse(
-                    session_id=criteria.session_id,
-                    episode_id=criteria.episode_id,
-                    task_id=criteria.task_id,
-                    submission=criteria.submission,
-                    task_context=criteria.task_context,
-                    evaluation_config=cleaned_evaluation_config,
-                    judge_messages=criteria.judge_messages,
+                task_context = TaskEvaluationContext(
+                    task_id=task.task_id,
+                    title=task.title,
+                    description=task.description,
+                    domain=task.domain,
+                    subtasks=[],  # Not needed for submission evaluation
                 )
 
-                log_operation_success(
-                    logger,
-                    "get_evaluation_criteria",
+                # Build criteria with template content (not paths)
+                raw_criteria = task.submission_evaluation_config.get("criteria", {})
+                criteria_with_content = raw_criteria.copy()
+
+                # If LLM strategy, fetch template content
+                if task.submission_evaluation_config.get("strategy") == "llm_judge":
+                    system_template_path = raw_criteria.get("judge_system_template")
+                    user_template_path = raw_criteria.get("judge_user_template")
+
+                    if system_template_path and user_template_path:
+                        try:
+                            system_content = self.session_manager.benchmark_manager.get_template_content(
+                                system_template_path
+                            )
+                            user_content = self.session_manager.benchmark_manager.get_template_content(
+                                user_template_path
+                            )
+
+                            criteria_with_content["judge_system_template"] = system_content
+                            criteria_with_content["judge_user_template"] = user_content
+                        except Exception as e:
+                            logger.warning(
+                                f"Failed to load templates for submission evaluation: {e}",
+                                extra={"system_path": system_template_path, "user_path": user_template_path},
+                            )
+
+                return SubmissionEvaluationCriteriaResponse(
                     session_id=session_id,
                     episode_id=episode_id,
-                    has_submission=bool(criteria.submission),
+                    task_id=task.task_id,
+                    strategy=task.submission_evaluation_config.get("strategy", "llm_judge"),
+                    criteria=criteria_with_content,
+                    scoring=task.submission_evaluation_config.get("scoring", {}),
+                    task_context=task_context,
                 )
-                return clean_criteria
-
-            except HTTPException as http_e:
-                log_operation_failure(
-                    logger,
-                    "get_evaluation_criteria",
-                    http_e,
-                    session_id=session_id,
-                    episode_id=episode_id,
-                    status_code=http_e.status_code,
-                )
+            except HTTPException:
                 raise
-            except RuntimeError as e:
-                log_operation_failure(
-                    logger,
-                    "get_evaluation_criteria",
-                    e,
-                    session_id=session_id,
-                    episode_id=episode_id,
-                    status_code=400,
-                )
-                raise HTTPException(status_code=400, detail=str(e)) from e
             except Exception as exc:
                 log_operation_failure(
-                    logger,
-                    "get_evaluation_criteria",
-                    exc,
+                    logger, "get_submission_evaluation_criteria", exc, session_id=session_id, episode_id=episode_id
+                )
+                raise HTTPException(
+                    status_code=500, detail=f"Failed to get submission evaluation criteria: {exc}"
+                ) from exc
+
+        @self.app.get("/api/v1/session/{session_id}/episodes/{episode_id}/step-evaluation-criteria")
+        async def get_step_evaluation_criteria_endpoint(
+            session_id: str, episode_id: str
+        ) -> StepEvaluationCriteriaResponse:
+            """Get step evaluation criteria (template paths only, no rendering)."""
+            log_operation_start(logger, "get_step_evaluation_criteria", session_id=session_id, episode_id=episode_id)
+            try:
+                episode = self.session_manager.get_episode_by_id(episode_id)
+                if not episode:
+                    raise HTTPException(status_code=404, detail="Episode not found")
+
+                task = self.session_manager.benchmark_manager.get_task(episode.task_id)
+                if not task:
+                    raise HTTPException(status_code=404, detail="Task not found")
+
+                if not task.step_evaluation_config:
+                    # Step evaluation is optional
+                    raise HTTPException(status_code=404, detail="Task has no step evaluation config")
+
+                # Build subtasks data with max_score
+                subtasks_data = [
+                    {
+                        "subtask_id": st.subtask_id,
+                        "title": st.title,
+                        "description": st.description,
+                        "objective": st.objective,
+                        "max_score": st.max_score,  # Direct field from SubTask
+                    }
+                    for st in task.subtasks
+                ]
+
+                task_context = TaskEvaluationContext(
+                    task_id=task.task_id,
+                    title=task.title,
+                    description=task.description,
+                    domain=task.domain,
+                    subtasks=subtasks_data,
+                )
+
+                # Build criteria with template content (not paths)
+                raw_criteria = task.step_evaluation_config.get("criteria", {})
+                criteria_with_content = raw_criteria.copy()
+
+                # If LLM strategy, fetch template content
+                if task.step_evaluation_config.get("strategy") == "llm_judge":
+                    system_template_path = raw_criteria.get("judge_system_template")
+                    user_template_path = raw_criteria.get("judge_user_template")
+
+                    if system_template_path and user_template_path:
+                        try:
+                            system_content = self.session_manager.benchmark_manager.get_template_content(
+                                system_template_path
+                            )
+                            user_content = self.session_manager.benchmark_manager.get_template_content(
+                                user_template_path
+                            )
+
+                            criteria_with_content["judge_system_template"] = system_content
+                            criteria_with_content["judge_user_template"] = user_content
+                        except Exception as e:
+                            logger.warning(
+                                f"Failed to load templates for step evaluation: {e}",
+                                extra={"system_path": system_template_path, "user_path": user_template_path},
+                            )
+
+                return StepEvaluationCriteriaResponse(
                     session_id=session_id,
                     episode_id=episode_id,
+                    task_id=task.task_id,
+                    strategy=task.step_evaluation_config.get("strategy", "llm_judge"),
+                    criteria=criteria_with_content,
+                    subtasks=subtasks_data,
+                    task_context=task_context,
                 )
-                raise HTTPException(status_code=500, detail=f"Failed to get evaluation criteria: {exc}") from exc
+            except HTTPException:
+                raise
+            except Exception as exc:
+                log_operation_failure(
+                    logger, "get_step_evaluation_criteria", exc, session_id=session_id, episode_id=episode_id
+                )
+                raise HTTPException(status_code=500, detail=f"Failed to get step evaluation criteria: {exc}") from exc
+
+        @self.app.get("/api/v1/templates/{template_path:path}")
+        async def get_template_content_endpoint(template_path: str) -> TemplateContentResponse:
+            """Get raw template content by path."""
+            log_operation_start(logger, "get_template_content", template_path=template_path)
+            try:
+                # Security: validate path
+                if ".." in template_path or template_path.startswith("/"):
+                    raise HTTPException(status_code=400, detail="Invalid template path")
+
+                # Construct full path
+                prompts_dir = Path(self.session_manager.config_dir) / "prompts"
+                full_path = prompts_dir / template_path
+
+                if not full_path.exists():
+                    raise HTTPException(status_code=404, detail=f"Template not found: {template_path}")
+
+                if not full_path.is_file():
+                    raise HTTPException(status_code=400, detail="Path is not a file")
+
+                # Read template content
+                content = full_path.read_text()
+
+                return TemplateContentResponse(template_path=template_path, content=content)
+            except HTTPException:
+                raise
+            except Exception as exc:
+                log_operation_failure(logger, "get_template_content", exc, template_path=template_path)
+                raise HTTPException(status_code=500, detail=f"Failed to get template content: {exc}") from exc
+
+        @self.app.post("/api/v1/session/{session_id}/episodes/{episode_id}/evaluation")
+        async def submit_evaluation_endpoint(
+            session_id: str, episode_id: str, request: EvaluationResultSubmission
+        ) -> EvaluationResponse:
+            """Submit client-side evaluation result."""
+            log_operation_start(logger, "submit_evaluation", session_id=session_id, episode_id=episode_id)
+            try:
+                from datetime import datetime, timezone
+
+                from ...models.rest.evaluation import EvaluationResultResponse
+                from ..evaluation.models import EvaluationResult
+
+                # Get episode to extract required fields
+                episode = self.session_manager.get_episode_by_id(episode_id)
+                if not episode:
+                    raise HTTPException(status_code=404, detail="Episode not found")
+
+                # Build EvaluationResult from submission
+                result = EvaluationResult(
+                    episode_id=episode_id,
+                    task_id=request.details.get("task_id", episode.task_id),
+                    strategy=request.strategy,
+                    raw_score=request.raw_score,
+                    max_score=request.max_score,
+                    score=request.score,
+                    success=request.success,
+                    timestamp=datetime.now(timezone.utc),
+                    details=request.details,
+                    # Required fields from episode
+                    submission=episode.submission if hasattr(episode, "submission") and episode.submission else "",
+                    step_count=len(episode.steps),
+                    # Optional fields from episode
+                    executed_commands=getattr(episode, "executed_commands", []),
+                    completion_reason=getattr(episode, "completion_reason", None),
+                    model=getattr(episode, "model", None),
+                    choices=getattr(episode, "choices", []),
+                    tokens=getattr(episode, "tokens", {}),
+                    execution_time=getattr(episode, "execution_time", None),
+                )
+
+                # Store evaluation
+                await self.session_manager.evaluation_manager.store.save(result, session_id=session_id)
+
+                # Build response
+                evaluation_response = EvaluationResultResponse(
+                    episode_id=result.episode_id,
+                    task_id=result.task_id,
+                    strategy=result.strategy,
+                    raw_score=result.raw_score,
+                    max_score=result.max_score,
+                    score=result.score,
+                    success=result.success,
+                    timestamp=result.timestamp,
+                    details=result.details,
+                )
+
+                return EvaluationResponse(evaluation_result=evaluation_response, session_id=session_id)
+            except HTTPException:
+                raise
+            except Exception as exc:
+                log_operation_failure(logger, "submit_evaluation", exc, session_id=session_id, episode_id=episode_id)
+                raise HTTPException(status_code=500, detail=f"Failed to submit evaluation: {exc}") from exc
 
     async def start_server(self) -> None:
         """Start the SessionRestAPI server."""

@@ -4,7 +4,7 @@ Logging category: TASK_MANAGER.
 """
 
 from pathlib import Path
-from typing import Any, Callable, Dict, List
+from typing import Any, Dict, List
 
 from ...logging_config import (
     LogCategory,
@@ -104,28 +104,12 @@ class BenchmarkManager:
         """
         Inject judge prompt renderer functions into task evaluation configs.
 
-        For tasks using llm_judge strategy, adds a judge_prompt_renderer function
-        that can be called by the EvaluationManager without cross-manager dependencies.
+        CLIENT-SIDE EVALUATION: This method is now a no-op.
+        Judge prompt rendering is done client-side using the Inspect AI saber_scorer.
+        Judge templates are served as raw files via REST API endpoints.
         """
-        for task in self.tasks.values():
-            eval_config = task.evaluation_config
-            if eval_config and eval_config.get("strategy") == "llm_judge":
-                # Create a closure that captures the task and prompt generator
-                def create_renderer(task_ref: Task) -> Callable[[Episode], Any]:
-                    def judge_prompt_renderer(episode: Episode) -> Any:
-                        return self.prompt_generator.render_judge_prompt_for_episode(task_ref, episode)
-
-                    return judge_prompt_renderer
-
-                # Inject the renderer function into the evaluation config
-                eval_config["judge_prompt_renderer"] = create_renderer(task)
-                logger.debug(
-                    "Injected judge prompt renderer",
-                    extra={
-                        "event": "benchmark_judge_prompt_renderer_injected",
-                        "task_id": task.task_id,
-                    },
-                )
+        # No-op: Judge rendering moved to client-side
+        pass
 
     def get_benchmark_info(self) -> BenchmarkInfo:
         """
@@ -315,24 +299,34 @@ class BenchmarkManager:
                 # Validate that we can build context for this task (ensures required config is present)
                 self.prompt_generator.validate_task_context(task)
 
-                eval_config = task.evaluation_config
-                if eval_config and eval_config.get("strategy") == "llm_judge":
-                    criteria = eval_config.get("criteria", {})
-                    judge_system_template = criteria.get("judge_system_template")
-                    judge_user_template = criteria.get("judge_user_template")
+                # Check both submission and step evaluation configs for llm_judge validation
+                eval_configs = []
+                if hasattr(task, "submission_evaluation_config") and task.submission_evaluation_config:
+                    eval_configs.append(("submission", task.submission_evaluation_config))
+                if hasattr(task, "step_evaluation_config") and task.step_evaluation_config:
+                    eval_configs.append(("step", task.step_evaluation_config))
 
-                    self.prompt_generator.validate_judge_template(judge_system_template)
-                    self.prompt_generator.validate_judge_template(judge_user_template)
+                for eval_type, eval_config in eval_configs:
+                    if eval_config and eval_config.get("strategy") == "llm_judge":
+                        criteria = eval_config.get("criteria", {})
+                        judge_system_template = criteria.get("judge_system_template")
+                        judge_user_template = criteria.get("judge_user_template")
 
-                    logger.debug(
-                        "Judge templates validated",
-                        extra={
-                            "event": "benchmark_judge_templates_valid",
-                            "task_id": task_id,
-                            "judge_system_template": judge_system_template,
-                            "judge_user_template": judge_user_template,
-                        },
-                    )
+                        if judge_system_template:
+                            self.prompt_generator.validate_template(judge_system_template)
+                        if judge_user_template:
+                            self.prompt_generator.validate_template(judge_user_template)
+
+                        logger.debug(
+                            "Judge templates validated",
+                            extra={
+                                "event": "benchmark_judge_templates_valid",
+                                "task_id": task_id,
+                                "evaluation_type": eval_type,
+                                "judge_system_template": judge_system_template,
+                                "judge_user_template": judge_user_template,
+                            },
+                        )
 
                 logger.debug(
                     "Task template validation passed",
@@ -385,20 +379,21 @@ class BenchmarkManager:
         """
         Generate judge prompt for a specific task using episode-based template rendering.
 
+        CLIENT-SIDE EVALUATION: This method is deprecated and raises an error.
+        Judge prompt rendering is now done client-side using the Inspect AI saber_scorer.
+        Judge templates are served as raw files via REST API endpoints.
+
         Args:
             task_id: ID of the task to generate judge prompt for
             episode: Complete episode object containing execution history and submission
 
-        Returns:
-            JudgePromptPayload with complete messages array ready for LLM API
-
         Raises:
-            TaskNotFoundException: If task is not found
-            PromptGenerationError: If prompt generation fails
-            EvaluationConfigError: If task not configured for LLM judge evaluation
+            NotImplementedError: This method is no longer supported
         """
-        task = self.get_task(task_id)
-        return self.prompt_generator.render_judge_prompt_for_episode(task, episode)
+        raise NotImplementedError(
+            "Server-side judge prompt rendering has been removed. "
+            "Judge prompts are now rendered client-side using the Inspect AI saber_scorer."
+        )
 
     def get_dependency_config(self) -> Dict[str, float]:
         """
@@ -430,3 +425,28 @@ class BenchmarkManager:
         task = self.get_task(task_id)
         rendered_prompts = self.prompt_generator.render_agent_prompts_for_task(task)
         return rendered_prompts[prompt_type]
+
+    def get_template_content(self, template_path: str) -> str:
+        """
+        Get raw template content by path for client-side evaluation.
+
+        Args:
+            template_path: Relative template path (e.g., 'judge/submission/system.md')
+
+        Returns:
+            Raw template content string
+
+        Raises:
+            FileNotFoundError: If template file doesn't exist
+            TemplateError: If template cannot be read
+        """
+        template_file_path = self.config_dir / "prompts" / template_path
+
+        if not template_file_path.exists():
+            raise FileNotFoundError(f"Template not found: {template_path}")
+
+        try:
+            with open(template_file_path, "r", encoding="utf-8") as f:
+                return f.read()
+        except Exception as e:
+            raise TemplateValidationError(f"Failed to read template {template_path}: {e}") from e

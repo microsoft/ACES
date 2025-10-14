@@ -3,7 +3,11 @@ Enhanced EvaluationManager implementation for SABER domain server.
 
 Logging Category: EVALUATION
 
-This implementation provides fail-fast evaluation capabilities with no backwards compatibility.
+CLIENT-SIDE EVALUATION MIGRATION: Server is now dumb storage only.
+- Removed: evaluate_episode() - evaluation happens on client
+- Removed: Evaluator instantiation - no server-side evaluation logic
+- Kept: Store operations for saving/loading evaluation results
+- Kept: Configuration validation for task setup
 """
 
 from pathlib import Path
@@ -11,18 +15,9 @@ from typing import Any, Dict, List, Optional, Union
 
 from saber.logging_config import LogCategory, get_saber_logger
 
-from ..base import Episode
 from ..benchmarks.task import Task
-from .constants import EVAL_STRATEGY_LLM_JUDGE, EVAL_STRATEGY_STATIC, SUPPORTED_STRATEGIES
-from .evaluators import BaseEvaluator, LLMEvaluator, StaticEvaluator
-from .exceptions import (
-    EvaluationConfigError,
-    EvaluatorNotFoundError,
-    IncompleteEpisodeError,
-    InvalidEvaluationRequestError,
-    InvalidEvaluationStrategyError,
-    MissingSubmissionError,
-)
+from .constants import EVAL_STRATEGY_STATIC, SUPPORTED_STRATEGIES
+from .exceptions import EvaluationConfigError, InvalidEvaluationRequestError, InvalidEvaluationStrategyError
 from .models import EpisodeEvaluationData, EvaluationConfig, EvaluationResult
 from .store import EvaluationStore, JsonFileEvaluationStore
 
@@ -31,9 +26,13 @@ logger = get_saber_logger(LogCategory.EVALUATION, __name__)
 
 class EvaluationManager:
     """
-    Enhanced EvaluationManager for evaluating agent performance.
+    EvaluationManager for storing and validating evaluation results.
 
-    Follows fail-fast principles with no backwards compatibility or fallbacks.
+    CLIENT-SIDE EVALUATION: This class no longer performs evaluation.
+    It only:
+    - Validates task configuration
+    - Stores evaluation results from clients
+    - Retrieves evaluation results
     """
 
     def __init__(
@@ -42,15 +41,13 @@ class EvaluationManager:
         store: Optional[Union[EvaluationStore, str, Path]] = None,
     ) -> None:
         """
-        Initialize the EvaluationManager with evaluators.
+        Initialize the EvaluationManager.
 
         Args:
-            config_dir: Optional configuration directory for evaluators
+            config_dir: Optional configuration directory (legacy, not used for client-side eval)
+            store: Optional evaluation store or path
         """
-        self.evaluators: Dict[str, BaseEvaluator] = {
-            EVAL_STRATEGY_STATIC: StaticEvaluator(),
-            EVAL_STRATEGY_LLM_JUDGE: LLMEvaluator(config_dir=config_dir),
-        }
+        # Remove evaluator instantiation - evaluation happens client-side now
         self.evaluation_configs: Dict[str, EvaluationConfig] = {}
         self.config_dir = config_dir
 
@@ -68,12 +65,12 @@ class EvaluationManager:
             )
 
         logger.info(
-            "Evaluation manager initialized",
+            "Evaluation manager initialized (client-side evaluation mode)",
             extra={
                 "event": "evaluation_manager_initialized",
-                "evaluators": sorted(self.evaluators.keys()),
                 "config_dir": config_dir,
                 "store_type": type(self.store).__name__,
+                "mode": "client_side_evaluation",
             },
         )
 
@@ -85,28 +82,26 @@ class EvaluationManager:
             task: Task to configure evaluation for
 
         Raises:
-            EvaluationConfigError: If task lacks evaluation_config or config is invalid
+            EvaluationConfigError: If task lacks submission_evaluation_config or config is invalid
             InvalidEvaluationStrategyError: If strategy is not supported
         """
-        if not hasattr(task, "evaluation_config") or not task.evaluation_config:
+        # NEW FORMAT: Check for submission_evaluation_config
+        if not hasattr(task, "submission_evaluation_config") or not task.submission_evaluation_config:
             raise EvaluationConfigError(
-                f"Task {task.task_id} missing required evaluation_config. "
-                "All tasks MUST have evaluation configuration."
+                f"Task {task.task_id} missing required submission_evaluation_config. "
+                "All tasks MUST have submission evaluation configuration."
             )
 
         try:
-            config = EvaluationConfig.from_dict(task.evaluation_config)
+            config = EvaluationConfig.from_dict(task.submission_evaluation_config)
         except Exception as e:
-            raise EvaluationConfigError(f"Invalid evaluation_config for task {task.task_id}: {e}") from e
+            raise EvaluationConfigError(f"Invalid submission_evaluation_config for task {task.task_id}: {e}") from e
 
         if config.strategy not in SUPPORTED_STRATEGIES:
             raise InvalidEvaluationStrategyError(
                 f"Unsupported evaluation strategy '{config.strategy}' for task {task.task_id}. "
                 f"Supported strategies: {SUPPORTED_STRATEGIES}"
             )
-
-        if config.strategy not in self.evaluators:
-            raise EvaluatorNotFoundError(f"No evaluator available for strategy: {config.strategy}")
 
         # Validate strategy-specific configuration
         self._validate_strategy_config(config, task.task_id)
@@ -146,122 +141,10 @@ class EvaluationManager:
         if not isinstance(max_score, (int, float)) or max_score <= 0:
             raise EvaluationConfigError(f"Task {task_id}: max_score must be a positive number, got: {max_score}")
 
-    async def evaluate_episode(self, episode: Episode, task: Task) -> EvaluationResult:
-        """
-        Evaluate a completed episode. Fails fast on any issues.
-
-        Args:
-            episode: Completed episode to evaluate
-            task: Task that was being executed
-
-        Returns:
-            EvaluationResult with evaluation outcome
-
-        Raises:
-            IncompleteEpisodeError: If episode is not complete
-            EvaluationConfigError: If task not configured for evaluation
-            MissingSubmissionError: If episode lacks required submission
-        """
-        # Fail fast validation
-        if not episode.is_complete:
-            raise IncompleteEpisodeError(f"Cannot evaluate incomplete episode {episode.episode_id}")
-
-        if task.task_id not in self.evaluation_configs:
-            raise EvaluationConfigError(f"Task {task.task_id} not configured for evaluation")
-
-        if not hasattr(episode, "submission") or not episode.submission:
-            raise MissingSubmissionError(f"Episode {episode.episode_id} missing required submission for evaluation")
-
-        config = self.evaluation_configs[task.task_id]
-        evaluator = self.evaluators[config.strategy]
-
-        # Create strongly typed evaluation data directly
-        episode_data = EpisodeEvaluationData(
-            episode_id=episode.episode_id,
-            task_id=episode.task_id,
-            submission=episode.submission,
-            executed_commands=episode.get_executed_commands(),
-            completion_reason=episode.completion_reason,
-            step_count=len(episode.steps),
-            # Add rich EvalSubmission data if available
-            model=(
-                episode.eval_submission.model
-                if hasattr(episode, "eval_submission") and episode.eval_submission
-                else None
-            ),
-            choices=(
-                episode.eval_submission.choices
-                if hasattr(episode, "eval_submission") and episode.eval_submission
-                else []
-            ),
-            tokens=(
-                episode.eval_submission.tokens
-                if hasattr(episode, "eval_submission") and episode.eval_submission
-                else {}
-            ),
-            execution_time=(
-                episode.eval_submission.time
-                if hasattr(episode, "eval_submission") and episode.eval_submission
-                else None
-            ),
-        )
-
-        # Log enhanced evaluation data if available
-        if hasattr(episode, "eval_submission") and episode.eval_submission:
-            eval_submission = episode.eval_submission
-            logger.debug(
-                "Episode evaluation submission metadata",
-                extra={
-                    "event": "episode_evaluation_submission_metadata",
-                    "episode_id": episode.episode_id,
-                    "task_id": episode.task_id,
-                    "model": eval_submission.model,
-                    "total_tokens": eval_submission.tokens.get("total_tokens", 0),
-                    "evaluation_time": eval_submission.time,
-                },
-            )
-
-        logger.info(
-            "Episode evaluation started",
-            extra={
-                "event": "episode_evaluation_started",
-                "episode_id": episode.episode_id,
-                "task_id": task.task_id,
-                "strategy": config.strategy,
-                "step_count": len(episode.steps),
-            },
-        )
-
-        # Pass episode object to LLM evaluator for enhanced judge prompt context
-        if config.strategy == EVAL_STRATEGY_LLM_JUDGE:
-            result = await evaluator.evaluate(episode_data, config, task, episode)
-        else:
-            result = await evaluator.evaluate(episode_data, config, task, episode)
-        # Persist result (fail fast on any write issues)
-        if config.strategy == EVAL_STRATEGY_LLM_JUDGE:
-            golden_answer = config.criteria.get("golden_answer")
-        else:
-            golden_answer = None
-        try:
-            await self.store.save(result, session_id=episode.session_id, golden_answer=golden_answer)
-        except Exception:
-            # Re-raise to enforce atomic contract (no silent persistence failures)
-            raise
-        logger.info(
-            "Episode evaluation completed",
-            extra={
-                "event": "episode_evaluation_complete",
-                "episode_id": episode.episode_id,
-                "task_id": task.task_id,
-                "strategy": config.strategy,
-                "score": result.score,
-                "max_score": result.max_score,
-                "raw_score": result.raw_score,
-                "success": result.success,
-            },
-        )
-
-        return result
+    # ============================================================================
+    # CLIENT-SIDE EVALUATION: evaluate_episode() REMOVED
+    # Evaluation now happens on the client. Server only stores results.
+    # ============================================================================
 
     async def override_evaluation_result(
         self,

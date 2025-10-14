@@ -546,8 +546,8 @@ def is_saber_mcp_tool(func: Callable[..., Any]) -> bool:
         logger.debug(f"🔍 {func_name} found in registered tools")
         return True
 
-    # Check for @saber_tool decorator
-    if getattr(func, "_saber_context_injection", False):
+    # Check @saber_tool decorator
+    if hasattr(func, "_saber_context_injection") and func._saber_context_injection:
         logger.debug(f"🔍 {func_name} has @saber_tool decorator")
         return True
 

@@ -1038,15 +1038,23 @@ class BenchmarkConfigLoader:
                 )
                 raise InvalidTaskDefinitionException(message)
 
-            evaluation_config = task_data.get("evaluation_config")
-            if not evaluation_config:
-                failure_context = {"missing_field": "evaluation_config"}
+            # NEW FORMAT ONLY: Load submission_evaluation_config and step_evaluation_config
+            # NO backward compatibility with old evaluation_config
+            submission_evaluation_config = task_data.get("submission_evaluation_config")
+            step_evaluation_config = task_data.get("step_evaluation_config")
+
+            if not submission_evaluation_config:
                 raise InvalidTaskDefinitionException(
-                    f"Task '{task_id}' missing required evaluation_config section. "
-                    "All tasks MUST have evaluation configuration."
+                    f"Task '{task_id}' missing required submission_evaluation_config section. "
+                    "All tasks MUST have submission evaluation configuration."
                 )
 
-            self._validate_evaluation_config(evaluation_config, task_id)
+            # Validate submission config
+            self._validate_submission_evaluation_config(submission_evaluation_config, task_id)
+
+            # step_evaluation_config is optional
+            if step_evaluation_config:
+                self._validate_step_evaluation_config(step_evaluation_config, task_id)
 
             subtasks_data = task_data.get("subtasks", [])
             subtasks = []
@@ -1094,7 +1102,8 @@ class BenchmarkConfigLoader:
                 execution_config=execution_config,
                 episode_config=episode_config,
                 benchmark_config=merged_benchmark_config,
-                evaluation_config=evaluation_config,
+                submission_evaluation_config=submission_evaluation_config,
+                step_evaluation_config=step_evaluation_config,
                 depends_on_task_id=task_data.get("depends_on_task_id"),
             )
 
@@ -1123,6 +1132,9 @@ class BenchmarkConfigLoader:
         """
         Parse a single subtask from YAML data.
 
+        NEW FORMAT ONLY: Supports scoring: { max_score: X } structure.
+        NO backward compatibility with old direct max_score field.
+
         Args:
             subtask_data: Dictionary containing subtask definition
             task_id: ID of the parent task
@@ -1135,6 +1147,18 @@ class BenchmarkConfigLoader:
             if field not in subtask_data:
                 raise InvalidTaskDefinitionException(f"Missing required subtask field: {field}")
 
+        # NEW FORMAT: Extract max_score from scoring dict
+        max_score = 0.0
+        if "scoring" in subtask_data:
+            scoring = subtask_data["scoring"]
+            if isinstance(scoring, dict):
+                max_score = scoring.get("max_score", 0.0)
+            else:
+                raise InvalidTaskDefinitionException(
+                    f"Subtask '{subtask_data['subtask_id']}' has invalid scoring format. "
+                    f"Expected dict with 'max_score' key, got: {type(scoring).__name__}"
+                )
+
         return SubTask(
             subtask_id=subtask_data["subtask_id"],
             task_id=task_id,
@@ -1142,15 +1166,15 @@ class BenchmarkConfigLoader:
             description=subtask_data["description"],
             objective=subtask_data["objective"],
             hint=subtask_data.get("hint"),
-            max_score=subtask_data.get("max_score", 0.0),
+            max_score=max_score,
         )
 
-    def _validate_evaluation_config(self, eval_config: Dict[str, Any], task_id: str) -> None:
+    def _validate_submission_evaluation_config(self, eval_config: Dict[str, Any], task_id: str) -> None:
         """
-        Validate evaluation configuration for a task. Fails fast on invalid config.
+        Validate submission_evaluation_config. NEW FORMAT ONLY.
 
         Args:
-            eval_config: Evaluation configuration dictionary
+            eval_config: Submission evaluation configuration dictionary
             task_id: Task ID for error reporting
 
         Raises:
@@ -1160,7 +1184,7 @@ class BenchmarkConfigLoader:
         strategy = eval_config.get("strategy")
         if strategy not in ("static", "llm_judge"):
             raise InvalidTaskDefinitionException(
-                f"Task '{task_id}': Invalid or missing evaluation strategy. "
+                f"Task '{task_id}': Invalid submission evaluation strategy. "
                 f"Must be 'static' or 'llm_judge', got: {strategy}"
             )
 
@@ -1168,13 +1192,15 @@ class BenchmarkConfigLoader:
         criteria = eval_config.get("criteria")
         if not isinstance(criteria, dict):
             raise InvalidTaskDefinitionException(
-                f"Task '{task_id}': Missing or invalid criteria section in evaluation_config"
+                f"Task '{task_id}': Missing or invalid criteria in submission_evaluation_config"
             )
 
         # Validate scoring section
         scoring = eval_config.get("scoring", {})
         if not isinstance(scoring, dict):
-            raise InvalidTaskDefinitionException(f"Task '{task_id}': scoring must be a dictionary if provided")
+            raise InvalidTaskDefinitionException(
+                f"Task '{task_id}': scoring must be a dictionary in submission_evaluation_config"
+            )
 
         max_score = scoring.get("max_score", 1.0)
         if not isinstance(max_score, (int, float)) or max_score <= 0:
@@ -1187,41 +1213,119 @@ class BenchmarkConfigLoader:
             expected_answers = criteria.get("expected_answers")
             if not expected_answers or not isinstance(expected_answers, list):
                 raise InvalidTaskDefinitionException(
-                    f"Task '{task_id}': static strategy requires 'expected_answers' as a list in criteria"
+                    f"Task '{task_id}': static strategy requires 'expected_answers' as a list"
                 )
 
         elif strategy == "llm_judge":
-            # golden_answer is optional for llm_judge strategy
-            golden_answer = criteria.get("golden_answer")
-            if golden_answer is not None and not isinstance(golden_answer, str):
-                raise InvalidTaskDefinitionException(
-                    f"Task '{task_id}': llm_judge strategy golden_answer must be a string if provided, "
-                    f"got: {type(golden_answer)}"
-                )
-
             model = criteria.get("model")
             if not model or not isinstance(model, str):
                 raise InvalidTaskDefinitionException(
-                    f"Task '{task_id}': llm_judge strategy requires 'model' as a string in criteria"
+                    f"Task '{task_id}': llm_judge strategy requires 'model' as a string"
                 )
 
-            # BREAKING CHANGE: Require separate system and user templates
+            # Template paths (NOT rendered content) - must be explicitly defined
             judge_system_template = criteria.get("judge_system_template")
             if not judge_system_template or not isinstance(judge_system_template, str):
                 raise InvalidTaskDefinitionException(
-                    f"Task '{task_id}': llm_judge strategy requires 'judge_system_template' as a string in criteria"
+                    f"Task '{task_id}': llm_judge requires 'judge_system_template' path"
                 )
+            self._validate_template_path(judge_system_template, "judge_system_template", task_id)
+
+            judge_user_template = criteria.get("judge_user_template")
+            if not judge_user_template or not isinstance(judge_user_template, str):
+                raise InvalidTaskDefinitionException(f"Task '{task_id}': llm_judge requires 'judge_user_template' path")
+            self._validate_template_path(judge_user_template, "judge_user_template", task_id)
+
+    def _validate_step_evaluation_config(self, eval_config: Dict[str, Any], task_id: str) -> None:
+        """
+        Validate step_evaluation_config. NEW FORMAT ONLY.
+
+        Args:
+            eval_config: Step evaluation configuration dictionary
+            task_id: Task ID for error reporting
+
+        Raises:
+            InvalidTaskDefinitionException: If configuration is invalid
+        """
+        # Validate strategy
+        strategy = eval_config.get("strategy")
+        if strategy not in ("static", "llm_judge"):
+            raise InvalidTaskDefinitionException(
+                f"Task '{task_id}': Invalid step evaluation strategy. "
+                f"Must be 'static' or 'llm_judge', got: {strategy}"
+            )
+
+        # Validate criteria section
+        criteria = eval_config.get("criteria")
+        if not isinstance(criteria, dict):
+            raise InvalidTaskDefinitionException(
+                f"Task '{task_id}': Missing or invalid criteria in step_evaluation_config"
+            )
+
+        # Only llm_judge makes sense for step evaluation
+        if strategy == "llm_judge":
+            model = criteria.get("model")
+            if not model or not isinstance(model, str):
+                raise InvalidTaskDefinitionException(f"Task '{task_id}': step evaluation llm_judge requires 'model'")
+
+            # Template paths
+            judge_system_template = criteria.get("judge_system_template")
+            if not judge_system_template or not isinstance(judge_system_template, str):
+                raise InvalidTaskDefinitionException(
+                    f"Task '{task_id}': step evaluation requires 'judge_system_template' path"
+                )
+            self._validate_template_path(judge_system_template, "judge_system_template", task_id)
 
             judge_user_template = criteria.get("judge_user_template")
             if not judge_user_template or not isinstance(judge_user_template, str):
                 raise InvalidTaskDefinitionException(
-                    f"Task '{task_id}': llm_judge strategy requires 'judge_user_template' as a string in criteria"
+                    f"Task '{task_id}': step evaluation requires 'judge_user_template' path"
+                )
+            self._validate_template_path(judge_user_template, "judge_user_template", task_id)
+
+            # steps_per_message is optional
+            steps_per_message = criteria.get("steps_per_message", 10)
+            if not isinstance(steps_per_message, int) or steps_per_message < 1:
+                raise InvalidTaskDefinitionException(
+                    f"Task '{task_id}': steps_per_message must be a positive integer, got: {steps_per_message}"
                 )
 
-            # Check for deprecated single template field
-            old_template = criteria.get("judge_prompt_template")
-            if old_template:
-                raise InvalidTaskDefinitionException(
-                    f"Task '{task_id}': 'judge_prompt_template' is deprecated. "
-                    f"Use 'judge_system_template' and 'judge_user_template' instead"
-                )
+    def _validate_template_path(self, template_path: str, field_name: str, task_id: str) -> None:
+        """
+        Validate that a template path is properly formatted.
+
+        Template paths must:
+        - End with .md extension
+        - Not contain backslashes (use forward slashes only)
+        - Not be empty or just whitespace
+        - Not contain '..' path traversal
+
+        Args:
+            template_path: The template path to validate
+            field_name: Name of the field being validated (for error messages)
+            task_id: Task ID for error reporting
+
+        Raises:
+            InvalidTaskDefinitionException: If path is invalid
+        """
+        # Check for empty or whitespace
+        if not template_path or not template_path.strip():
+            raise InvalidTaskDefinitionException(f"Task '{task_id}': {field_name} cannot be empty or whitespace")
+
+        # Check for backslashes (enforce forward slashes)
+        if "\\" in template_path:
+            raise InvalidTaskDefinitionException(
+                f"Task '{task_id}': {field_name} must use forward slashes, not backslashes: {template_path}"
+            )
+
+        # Check for path traversal
+        if ".." in template_path:
+            raise InvalidTaskDefinitionException(
+                f"Task '{task_id}': {field_name} cannot contain '..' path traversal: {template_path}"
+            )
+
+        # Check for .md extension
+        if not template_path.endswith(".md"):
+            raise InvalidTaskDefinitionException(
+                f"Task '{task_id}': {field_name} must end with .md extension: {template_path}"
+            )
