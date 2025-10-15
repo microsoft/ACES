@@ -335,6 +335,10 @@ async def _score_submission_static(
     expected_answers = criteria.criteria.get("expected_answers", [])
     max_score = criteria.scoring.get("max_score", 1.0)
 
+    # Normalize expected_answers to always be a list (handle string or list input)
+    if isinstance(expected_answers, str):
+        expected_answers = [expected_answers]
+
     submission_lower = submission_data.submission.lower()
     for expected in expected_answers:
         if expected.lower() in submission_lower:
@@ -572,17 +576,28 @@ async def _score_steps(
             extra={"chunk": chunk_idx, "evaluations": len(chunk_evals), "event": "parse_step_chunk"},
         )
 
-    # Calculate score from subtasks
+    # Calculate score from subtasks - deduplicate by objective_id to count each checkpoint only once
     subtasks_with_scores = {st["subtask_id"]: st.get("max_score", 0.0) for st in criteria.subtasks}
 
-    total_score = 0.0
+    # Collect unique objective_ids that were completed
+    completed_objectives = set()
     for step_eval in all_step_evaluations:
         if step_eval.objective_id in subtasks_with_scores:
-            total_score += subtasks_with_scores[step_eval.objective_id]
+            completed_objectives.add(step_eval.objective_id)
+
+    # Sum scores for unique objectives only
+    total_score = 0.0
+    for objective_id in completed_objectives:
+        total_score += subtasks_with_scores[objective_id]
 
     logger.info(
         "Step evaluation complete",
-        extra={"total_score": total_score, "evaluations": len(all_step_evaluations), "event": "step_eval_complete"},
+        extra={
+            "total_score": total_score,
+            "evaluations": len(all_step_evaluations),
+            "unique_objectives": len(completed_objectives),
+            "event": "step_eval_complete",
+        },
     )
 
     return total_score, all_step_evaluations
