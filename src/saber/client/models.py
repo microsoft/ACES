@@ -162,6 +162,11 @@ class SABERConfig:
     parallel_execution: bool = True
     max_parallel_tasks: int = 4
 
+    # Endpoint configuration for model inference
+    endpoint_timeout: Optional[int] = None  # Model API request timeout in seconds
+    endpoint_max_retries: Optional[int] = None  # Maximum retry attempts for model API
+    endpoint_max_connections: Optional[int] = None  # Maximum concurrent connections to model API
+
     @classmethod
     def create(
         cls,
@@ -185,6 +190,9 @@ class SABERConfig:
         log_upload_max_retries: int = 3,
         log_upload_timeout: float = 30.0,
         log_upload_fail_on_error: bool = False,
+        endpoint_timeout: Optional[int] = None,
+        endpoint_max_retries: Optional[int] = None,
+        endpoint_max_connections: Optional[int] = None,
     ) -> "SABERConfig":
         """
         Factory method to create SABERConfig with multi-agent assignments.
@@ -217,8 +225,10 @@ class SABERConfig:
         Raises:
             ValueError: If configuration is invalid
         """
-        # Create session config
-        session_config = SessionManagerConfig.from_urls(rest_url=rest_url, mcp_url=mcp_url, client_id=client_id)
+        # Create session config only if URLs are provided (not in auto mode)
+        session_config = None
+        if rest_url and mcp_url:
+            session_config = SessionManagerConfig.from_urls(rest_url=rest_url, mcp_url=mcp_url, client_id=client_id)
 
         return cls(
             model=model,
@@ -239,6 +249,9 @@ class SABERConfig:
             log_upload_max_retries=log_upload_max_retries,
             log_upload_timeout=log_upload_timeout,
             log_upload_fail_on_error=log_upload_fail_on_error,
+            endpoint_timeout=endpoint_timeout,
+            endpoint_max_retries=endpoint_max_retries,
+            endpoint_max_connections=endpoint_max_connections,
         )
 
     def __post_init__(self) -> None:
@@ -246,8 +259,8 @@ class SABERConfig:
         if not self.model:
             raise ValueError("model specification is required")
 
-        if not self.session_config:
-            raise ValueError("session_config is required")
+        # Allow None session_config for auto mode - will be hydrated later
+        # Validation will happen at runtime when trying to use the config
 
         # Validate agent configuration - new format required
         if not self.agents:

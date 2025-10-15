@@ -1127,7 +1127,9 @@ def run_command(
         sys.exit(1)
 
     # Check if we should use direct parameters or config file
-    use_direct_params = any([rest_url, mcp_url, model, agent_id, task_ids])
+    # Direct mode requires agent_id or model to be set (in addition to URLs)
+    # This allows URL overrides when using --config without triggering direct mode
+    use_direct_params = any([agent_id, model]) and any([rest_url, mcp_url])
 
     try:
         if use_direct_params:
@@ -1182,6 +1184,9 @@ def run_command(
                 log_dir=default_log_dir,
                 domain=domain,  # Pass domain for logging organization
                 ui_enabled=not no_ui,  # Invert no_ui flag
+                endpoint_timeout=None,  # Use defaults from inspect_ai
+                endpoint_max_retries=None,  # Use defaults from inspect_ai
+                endpoint_max_connections=None,  # Use defaults from inspect_ai
             )
 
             click.echo("🔧 Using direct configuration parameters")
@@ -1207,9 +1212,42 @@ def run_command(
                     sys.exit(1)
 
             try:
+                # Load config - supports auto mode without URLs
                 loaded_config: SABERConfig = SABERConfigLoader.load_from_file(config_file_path, domain=domain)
                 saber_config = loaded_config
                 click.echo(f"📋 Using configuration file: {config_file_path}")
+
+                # Support URL overrides for auto mode or runtime hydration
+                # This allows saber-domain test to inject runtime URLs
+                if rest_url or mcp_url:
+                    if not saber_config.session_config:
+                        # Config is in auto mode - create session config with provided URLs
+                        if not rest_url or not mcp_url:
+                            click.echo(
+                                "❌ Both --rest-url and --mcp-url are required when hydrating auto mode config",
+                                err=True,
+                            )
+                            sys.exit(1)
+
+                        from .models import SessionManagerConfig
+
+                        saber_config.session_config = SessionManagerConfig.from_urls(
+                            rest_url=rest_url,
+                            mcp_url=mcp_url,
+                            client_id=(
+                                saber_config.session_config.client_id if saber_config.session_config else "saber-client"
+                            ),
+                        )
+                        click.echo(f"🔗 Hydrated config with runtime URLs (REST: {rest_url}, MCP: {mcp_url})")
+                    else:
+                        # Config already has URLs - allow override
+                        if rest_url:
+                            saber_config.session_config.base_url = rest_url
+                            click.echo(f"🔗 Overriding REST URL: {rest_url}")
+                        if mcp_url:
+                            saber_config.session_config.mcp_server_url = mcp_url
+                            click.echo(f"🔗 Overriding MCP URL: {mcp_url}")
+
             except Exception as e:
                 click.echo(f"❌ Failed to load configuration file: {e}", err=True)
                 sys.exit(1)

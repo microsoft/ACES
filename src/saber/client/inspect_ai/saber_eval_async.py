@@ -345,6 +345,49 @@ async def run_saber_eval_async(config: SABERConfig) -> Union[EvalLog, None]:
             if config.model_args:
                 eval_kwargs["model_args"] = config.model_args
 
+            # Debug: Log endpoint configuration values
+            logger.info(
+                "Endpoint configuration debug",
+                extra={
+                    "event": "eval_async_endpoint_config_debug",
+                    "endpoint_timeout": getattr(config, "endpoint_timeout", "ATTR_NOT_FOUND"),
+                    "endpoint_max_retries": getattr(config, "endpoint_max_retries", "ATTR_NOT_FOUND"),
+                    "endpoint_max_connections": getattr(config, "endpoint_max_connections", "ATTR_NOT_FOUND"),
+                    "config_type": type(config).__name__,
+                },
+            )
+
+            # Configure endpoint settings for model API requests
+            if config.endpoint_timeout is not None:
+                eval_kwargs["timeout"] = config.endpoint_timeout
+                logger.info(
+                    "Model API timeout configured",
+                    extra={
+                        "event": "eval_async_endpoint_timeout_configured",
+                        "timeout": config.endpoint_timeout,
+                    },
+                )
+
+            if config.endpoint_max_retries is not None:
+                eval_kwargs["max_retries"] = config.endpoint_max_retries
+                logger.info(
+                    "Model API max retries configured",
+                    extra={
+                        "event": "eval_async_endpoint_max_retries_configured",
+                        "max_retries": config.endpoint_max_retries,
+                    },
+                )
+
+            if config.endpoint_max_connections is not None:
+                eval_kwargs["max_connections"] = config.endpoint_max_connections
+                logger.info(
+                    "Model API max connections configured",
+                    extra={
+                        "event": "eval_async_endpoint_max_connections_configured",
+                        "max_connections": config.endpoint_max_connections,
+                    },
+                )
+
             log_dir_value = config.log_dir
             logger.info(
                 "Log directory configuration check",

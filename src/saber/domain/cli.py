@@ -495,18 +495,11 @@ async def _test_command_impl(
         click.echo(f"   • MCP: http://localhost:{mcp_port}")
         click.echo(f"   • Agents: {len(saber_config.agents)}")
         click.echo(f"   • Tasks: {saber_config.task_ids or 'all available'}")
+        click.echo(f"   • Config: {config_path}")
 
-        # Extract parameters from SABERConfig for CLI call
-        rest_url = saber_config.session_config.base_url
-        mcp_url = saber_config.session_config.mcp_server_url
-        model = saber_config.model
-
-        # Use the first agent for CLI parameters
-        if saber_config.agents:
-            agent_id = saber_config.agents[0].id
-            task_ids = ",".join(saber_config.agents[0].tasks)
-        else:
-            raise DomainError("No agents configured in SABER config")
+        # Extract runtime URLs for CLI override
+        rest_url = f"http://localhost:{rest_port}"
+        mcp_url = f"http://localhost:{mcp_port}"
 
         # Find the repo root .env file path
         repo_root = orchestrator.manifest_loader.domains_root.parent
@@ -519,21 +512,20 @@ async def _test_command_impl(
                 click.echo("🎯 Starting SABER client with TUI...")
 
             # Build command arguments for subprocess call
+            # CRITICAL: Pass the config file path AND runtime URLs as overrides
+            # This ensures ALL configuration (including endpoint settings) is preserved
+            # while allowing runtime URL injection for auto mode
             cmd_args = [
                 sys.executable,
                 "-m",
                 "saber.client",
                 "run",
+                "--config",
+                str(config_path),
                 "--rest-url",
                 rest_url,
                 "--mcp-url",
                 mcp_url,
-                "--model",
-                model,
-                "--agent-id",
-                agent_id,
-                "--task-ids",
-                task_ids,
                 "--domain",
                 domain,  # Pass domain for organized logging
             ]

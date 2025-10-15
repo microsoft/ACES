@@ -382,6 +382,29 @@ class SABERConfigLoader:
         if not isinstance(log_upload_fail_on_error, bool):
             raise ValueError("'log_upload.fail_on_error' must be a boolean")
 
+        # Extract endpoint configuration for model API requests
+        endpoint_config = config_data.get("endpoint_configuration", {})
+        if not isinstance(endpoint_config, dict):
+            raise ValueError("'endpoint_configuration' section must be a dictionary")
+
+        endpoint_timeout = endpoint_config.get("timeout")
+        endpoint_max_retries = endpoint_config.get("max_retries")
+        endpoint_max_connections = endpoint_config.get("max_connections")
+
+        # Validate endpoint configuration
+        if endpoint_timeout is not None and (not isinstance(endpoint_timeout, (int, float)) or endpoint_timeout <= 0):
+            raise ValueError("'endpoint_configuration.timeout' must be a positive number or null")
+        if endpoint_max_retries is not None and (not isinstance(endpoint_max_retries, int) or endpoint_max_retries < 0):
+            raise ValueError("'endpoint_configuration.max_retries' must be a non-negative integer or null")
+        if endpoint_max_connections is not None and (
+            not isinstance(endpoint_max_connections, int) or endpoint_max_connections <= 0
+        ):
+            raise ValueError("'endpoint_configuration.max_connections' must be a positive integer or null")
+
+        # Convert timeout to int if it's a float (for type safety)
+        if endpoint_timeout is not None and isinstance(endpoint_timeout, float):
+            endpoint_timeout = int(endpoint_timeout)
+
         # Create SABERConfig using the new agents format
         # For auto mode without URLs, pass None and session_config will be None
 
@@ -406,6 +429,9 @@ class SABERConfigLoader:
             log_upload_max_retries=log_upload_max_retries,
             log_upload_timeout=log_upload_timeout,
             log_upload_fail_on_error=log_upload_fail_on_error,
+            endpoint_timeout=endpoint_timeout,
+            endpoint_max_retries=endpoint_max_retries,
+            endpoint_max_connections=endpoint_max_connections,
         )
 
         return saber_config
