@@ -120,65 +120,74 @@ class ClientSessionManager:
             task_id: Task ID for the episode
 
         Returns:
-            EpisodeCreateResponse object from server
+            EpisodeCreateResponse with episode details
 
         Raises:
             Exception: If episode creation fails
         """
-        logger.info(
-            "Creating episode",
-            extra={
-                "event": "episode_create_requested",
-                "session_id": session_id,
-                "task_id": task_id,
-            },
-        )
-
         url = f"{self.base_url}/api/v1/session/{session_id}/episodes"
         params = {"task_id": task_id}
 
-        async with aiohttp.ClientSession() as session:
-            timeout = aiohttp.ClientTimeout(total=self.timeout)
-            async with session.post(url, params=params, timeout=timeout) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    episode_response = EpisodeCreateResponse(**data)
+        try:
+            async with aiohttp.ClientSession() as session:
+                logger.info(
+                    "Creating episode",
+                    extra={
+                        "event": "episode_create_request",
+                        "session_id": session_id,
+                        "task_id": task_id,
+                    },
+                )
 
-                    logger.info(
-                        "Episode created",
-                        extra={
+                timeout = aiohttp.ClientTimeout(total=self.timeout)
+                async with session.post(url, params=params, timeout=timeout) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        episode_response = EpisodeCreateResponse(**data)
+
+                        log_msg = "Episode created"
+                        log_data = {
                             "event": "episode_created",
                             "session_id": session_id,
-                            "episode_id": episode_response.episode_id,
                             "task_id": task_id,
-                            "attached_to_episode_id": episode_response.attached_to_episode_id,
-                        },
-                    )
+                            "episode_id": episode_response.episode_id,
+                        }
 
-                    if episode_response.attached_to_episode_id:
-                        logger.info(
-                            "Episode attached to dependency",
+                        if episode_response.attached_to_episode_id:
+                            log_msg = "Episode attached to dependency"
+                            log_data["attached_to_episode_id"] = episode_response.attached_to_episode_id
+
+                        logger.info(log_msg, extra=log_data)
+
+                        return episode_response
+                    else:
+                        error_text = await response.text()
+                        logger.error(
+                            "Episode creation failed",
                             extra={
-                                "event": "episode_dependency_attached",
-                                "episode_id": episode_response.episode_id,
-                                "attached_to_episode_id": episode_response.attached_to_episode_id,
+                                "event": "episode_create_failed",
+                                "session_id": session_id,
+                                "task_id": task_id,
+                                "status_code": response.status,
+                                "error": error_text,
                             },
                         )
-
-                    return episode_response
-                else:
-                    error_text = await response.text()
-                    logger.error(
-                        "Episode creation failed",
-                        extra={
-                            "event": "episode_create_failed",
-                            "session_id": session_id,
-                            "task_id": task_id,
-                            "status_code": response.status,
-                            "response_text": error_text,
-                        },
-                    )
-                    raise Exception(f"Failed to create episode: {response.status} - {error_text}")
+                        raise Exception(f"Failed to create episode: {response.status} - {error_text}")
+        except asyncio.TimeoutError:
+            logger.error(
+                "Episode creation timed out - likely waiting for episode creation lock",
+                extra={
+                    "event": "episode_create_timeout",
+                    "session_id": session_id,
+                    "task_id": task_id,
+                    "timeout_seconds": self.timeout,
+                },
+            )
+            raise Exception(
+                f"Episode creation timed out after {self.timeout}s. "
+                f"This typically occurs when multiple samples are waiting for the global episode creation lock. "
+                f"The server serializes episode creation to prevent Docker daemon overload."
+            )
 
     async def get_policy_response(self, session_id: str, episode_id: str) -> Optional[PolicyResponse]:
         """

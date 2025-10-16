@@ -168,6 +168,11 @@ class SessionManager:
         self.cleanup_task: Optional[asyncio.Task[None]] = None
         self.shutdown_event = asyncio.Event()
 
+        # Global lock for episode creation to prevent Docker resource exhaustion
+        # This serializes episode creation across ALL sessions to protect the Docker daemon
+        # from being overwhelmed by concurrent Docker Compose environment creation
+        self._episode_creation_lock = asyncio.Lock()
+
         # Manifest information for health endpoints
         self.manifest = manifest or {}
         self.manifest_path = manifest_path
@@ -932,6 +937,10 @@ class SessionManager:
         """
         Initialize episode for a task with automatic dependency resolution.
 
+        This method uses a GLOBAL lock to serialize episode creation across all sessions,
+        preventing concurrent Docker Compose environment creation that can overwhelm the
+        Docker daemon. This ensures server robustness regardless of client behavior.
+
         Args:
             session_id: ID of the client session
             task_id: ID of the task to start
@@ -942,109 +951,139 @@ class SessionManager:
         session = self._get_session(session_id)
         session.update_activity()
 
-        # Get the task object to access its configuration
-        task = self.benchmark_manager.get_task(task_id)
-
-        # Start episode through episode manager (pass task for dependency tracking)
-        episode = self.episode_manager.start_episode(
-            session_id=session_id, task_id=task_id, initial_context=task.initial_context.copy(), task=task
-        )
-
-        # Handle automatic dependency resolution if task specifies depends_on_task_id
-        effective_attach_to_episode_id = None
-        if task.depends_on_task_id:
+        # Acquire GLOBAL lock to serialize episode creation across ALL sessions
+        # This prevents concurrent Docker Compose operations from overwhelming Docker
+        async with self._episode_creation_lock:
             logger.info(
-                "Task dependency detected",
+                "🔒 Episode creation lock acquired (global serialization active)",
                 extra={
-                    "event": "task_dependency_detected",
+                    "event": "episode_creation_lock_acquired",
                     "session_id": session_id,
-                    "episode_id": episode.episode_id,
                     "task_id": task_id,
-                    "depends_on_task_id": task.depends_on_task_id,
+                    "lock_scope": "global",
                 },
             )
 
-            # Get dependency configuration from benchmark manager
-            dependency_config = self.benchmark_manager.get_dependency_config()
+            # Get the task object to access its configuration
+            task = self.benchmark_manager.get_task(task_id)
 
-            # Find available episode with the required task_id (with retry logic)
-            try:
-                available_episode_id = await self.episode_manager.find_available_episode_for_dependency_with_retry(
-                    session_id=session_id,
-                    target_task_id=task.depends_on_task_id,
-                    dependent_task_id=task_id,
-                    max_wait_seconds=dependency_config["wait_seconds"],
-                    retry_interval=dependency_config["retry_interval"],
-                    max_retry_interval=dependency_config["max_retry_interval"],
-                )
-            except ValueError as e:
-                # Circular dependency or other validation error
-                dependency_error = ValueError(f"Dependency validation failed: {e}")
-                self.episode_manager.remove_episode_on_error(episode.episode_id, dependency_error)
-                raise ValueError(f"Cannot create episode for task {task_id}: {e}")
+            # Start episode through episode manager (pass task for dependency tracking)
+            episode = self.episode_manager.start_episode(
+                session_id=session_id, task_id=task_id, initial_context=task.initial_context.copy(), task=task
+            )
 
-            if available_episode_id:
-                effective_attach_to_episode_id = available_episode_id
-                # Attach the episodes at the episode manager level
-                self.episode_manager.attach_episode_to_episode(episode.episode_id, available_episode_id)
+            # Handle automatic dependency resolution if task specifies depends_on_task_id
+            effective_attach_to_episode_id = None
+            if task.depends_on_task_id:
                 logger.info(
-                    "Episode attached to dependency",
+                    "Task dependency detected",
                     extra={
-                        "event": "episode_dependency_attached",
+                        "event": "task_dependency_detected",
                         "session_id": session_id,
                         "episode_id": episode.episode_id,
-                        "dependency_episode_id": available_episode_id,
                         "task_id": task_id,
                         "depends_on_task_id": task.depends_on_task_id,
                     },
                 )
-            else:
-                # Fail after retry period - required dependency not available
-                dependency_error = ValueError(
-                    f"No available episodes with required dependency task_id {task.depends_on_task_id} "
-                    f"(waited {dependency_config['wait_seconds']}s)"
-                )
-                self.episode_manager.remove_episode_on_error(episode.episode_id, dependency_error)
-                raise ValueError(
-                    f"Cannot create episode for task {task_id}: no available episodes with required dependency "
-                    f"task_id {task.depends_on_task_id} after waiting {dependency_config['wait_seconds']}s"
-                )
 
-        # Configure execution manager with task object, episode ID, and attachment (automatic only)
-        # This includes Docker Compose environment creation and health checks
-        try:
-            self.execution_manager.configure_for_task(
-                episode.episode_id, task, session_id=session_id, target_episode_id=effective_attach_to_episode_id
-            )
-        except Exception as e:
-            logger.error(
-                "Failed to configure execution environment",
+                # Get dependency configuration from benchmark manager
+                dependency_config = self.benchmark_manager.get_dependency_config()
+
+                # Find available episode with the required task_id (with retry logic)
+                try:
+                    available_episode_id = await self.episode_manager.find_available_episode_for_dependency_with_retry(
+                        session_id=session_id,
+                        target_task_id=task.depends_on_task_id,
+                        dependent_task_id=task_id,
+                        max_wait_seconds=dependency_config["wait_seconds"],
+                        retry_interval=dependency_config["retry_interval"],
+                        max_retry_interval=dependency_config["max_retry_interval"],
+                    )
+                except ValueError as e:
+                    # Circular dependency or other validation error
+                    dependency_error = ValueError(f"Dependency validation failed: {e}")
+                    self.episode_manager.remove_episode_on_error(episode.episode_id, dependency_error)
+                    raise ValueError(f"Cannot create episode for task {task_id}: {e}")
+
+                if available_episode_id:
+                    effective_attach_to_episode_id = available_episode_id
+                    # Attach the episodes at the episode manager level
+                    self.episode_manager.attach_episode_to_episode(episode.episode_id, available_episode_id)
+                    logger.info(
+                        "Episode attached to dependency",
+                        extra={
+                            "event": "episode_dependency_attached",
+                            "session_id": session_id,
+                            "episode_id": episode.episode_id,
+                            "dependency_episode_id": available_episode_id,
+                            "task_id": task_id,
+                            "depends_on_task_id": task.depends_on_task_id,
+                        },
+                    )
+                else:
+                    # Fail after retry period - required dependency not available
+                    dependency_error = ValueError(
+                        f"No available episodes with required dependency task_id {task.depends_on_task_id} "
+                        f"(waited {dependency_config['wait_seconds']}s)"
+                    )
+                    self.episode_manager.remove_episode_on_error(episode.episode_id, dependency_error)
+                    raise ValueError(
+                        f"Cannot create episode for task {task_id}: no available episodes with required dependency "
+                        f"task_id {task.depends_on_task_id} after waiting {dependency_config['wait_seconds']}s"
+                    )
+
+            # Configure execution manager with task object, episode ID, and attachment (automatic only)
+            # This includes Docker Compose environment creation and health checks
+            # Run in thread pool since this is blocking I/O that can take ~7 seconds
+            try:
+                await asyncio.to_thread(
+                    self.execution_manager.configure_for_task,
+                    episode.episode_id,
+                    task,
+                    session_id=session_id,
+                    target_episode_id=effective_attach_to_episode_id,
+                )
+            except Exception as e:
+                logger.error(
+                    "Failed to configure execution environment",
+                    extra={
+                        "event": "episode_environment_configuration_failed",
+                        "session_id": session_id,
+                        "episode_id": episode.episode_id,
+                        "task_id": task_id,
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    },
+                )
+                # Cleanup episode since execution environment configuration failed (including health checks)
+                self.episode_manager.remove_episode_on_error(episode.episode_id, e)
+
+                # Create specific error message for health check failures vs other failures
+                if "ComposeHealthCheckError" in str(type(e)) or "health" in str(e).lower():
+                    error_detail = (
+                        f"Episode creation failed due to Docker environment health check failure for task {task_id}. "
+                        f"All containers must be healthy before episode creation can proceed. "
+                        f"Details: {str(e)}"
+                    )
+                else:
+                    error_detail = (
+                        f"Failed to create execution environment for task {task_id}. "
+                        f"This may be due to Docker Compose health check failures or other environment issues: {str(e)}"
+                    )
+
+                raise HTTPException(status_code=500, detail=error_detail)
+
+            logger.info(
+                "🔓 Episode creation lock released (Docker environment ready)",
                 extra={
-                    "event": "episode_environment_configuration_failed",
+                    "event": "episode_creation_lock_released",
                     "session_id": session_id,
                     "episode_id": episode.episode_id,
                     "task_id": task_id,
-                    "error": str(e),
-                    "error_type": type(e).__name__,
+                    "lock_scope": "global",
                 },
             )
-            # Cleanup episode since execution environment configuration failed (including health checks)
-            self.episode_manager.remove_episode_on_error(episode.episode_id, e)
-
-            # Create specific error message for health check failures vs other failures
-            if "ComposeHealthCheckError" in str(type(e)) or "health" in str(e).lower():
-                error_detail = (
-                    f"Episode creation failed due to Docker environment health check failure for task {task_id}. "
-                    f"All containers must be healthy before episode creation can proceed. "
-                    f"Details: {str(e)}"
-                )
-            else:
-                error_detail = (
-                    f"Failed to create execution environment for task {task_id}. "
-                    f"This may be due to Docker Compose health check failures or other environment issues: {str(e)}"
-                )
-
-            raise HTTPException(status_code=500, detail=error_detail)
+        # Lock released - Docker environment is ready, remaining operations can run in parallel
 
         # Generate & store all three prompts (fail-fast if misconfigured)
         rendered_prompts = self.benchmark_manager.prompt_generator.render_agent_prompts_for_task(task)

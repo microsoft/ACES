@@ -16,9 +16,9 @@ class SessionManagerConfig(BaseModel):
     """Simplified configuration for ClientSessionManager REST API layer."""
 
     # REST API configuration
-    base_url: str = Field(description="SABER server REST API base URL")
+    base_url: str = Field(..., description="Base URL for SABER server REST API")
     client_id: str = Field(default="saber_client", description="Client identifier for session creation")
-    rest_timeout: float = Field(default=30.0, description="REST API request timeout in seconds")
+    rest_timeout: float = Field(default=300.0, description="REST API request timeout in seconds")
 
     # MCP server URL for agent tasks (used by inspect_ai native integration)
     mcp_server_url: str = Field(description="SABER MCP server URL for agent tools")
