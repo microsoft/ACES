@@ -262,8 +262,8 @@ class SABEREvaluationOrchestrator:
             errors.append("at least one agent assignment is required")
 
         # Validate numeric configurations
-        if hasattr(self.config, "max_parallel_tasks") and self.config.max_parallel_tasks <= 0:
-            errors.append(f"max_parallel_tasks must be positive, got: {self.config.max_parallel_tasks}")
+        if hasattr(self.config, "max_parallel_samples") and self.config.max_parallel_samples <= 0:
+            errors.append(f"max_parallel_samples must be positive, got: {self.config.max_parallel_samples}")
 
         if errors:
             logger.error(

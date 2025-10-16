@@ -157,10 +157,9 @@ class SABERConfig:
     log_upload_fail_on_error: bool = False
 
     # eval_async specific configuration
-    max_samples: Optional[int] = None
     max_subprocesses: int = 1
     parallel_execution: bool = True
-    max_parallel_tasks: int = 4
+    max_parallel_samples: int = 4
 
     # Endpoint configuration for model inference
     endpoint_timeout: Optional[int] = None  # Model API request timeout in seconds
@@ -182,10 +181,9 @@ class SABERConfig:
         domain: Optional[str] = None,
         ui_enabled: bool = True,
         container_timeout: int = 300,
-        max_samples: Optional[int] = None,
         max_subprocesses: int = 1,
         parallel_execution: bool = True,
-        max_parallel_tasks: int = 4,
+        max_parallel_samples: int = 4,
         log_upload_enabled: bool = True,
         log_upload_max_retries: int = 3,
         log_upload_timeout: float = 30.0,
@@ -210,10 +208,9 @@ class SABERConfig:
             domain: Domain name for logging organization
             ui_enabled: Enable UI
             container_timeout: Container timeout in seconds
-            max_samples: Maximum samples to process
             max_subprocesses: Maximum subprocess count
             parallel_execution: Enable parallel execution
-            max_parallel_tasks: Maximum parallel tasks
+            max_parallel_samples: Maximum parallel sample executions
             log_upload_enabled: Enable automatic log file upload to server
             log_upload_max_retries: Maximum retry attempts for log upload
             log_upload_timeout: Timeout for log upload requests in seconds
@@ -241,10 +238,9 @@ class SABERConfig:
             ui_enabled=ui_enabled,
             log_level=log_level,
             log_dir=log_dir,
-            max_samples=max_samples,
             max_subprocesses=max_subprocesses,
             parallel_execution=parallel_execution,
-            max_parallel_tasks=max_parallel_tasks,
+            max_parallel_samples=max_parallel_samples,
             log_upload_enabled=log_upload_enabled,
             log_upload_max_retries=log_upload_max_retries,
             log_upload_timeout=log_upload_timeout,
@@ -276,9 +272,9 @@ class SABERConfig:
         if self.container_timeout <= 0:
             raise ValueError(f"container_timeout must be positive, got: {self.container_timeout}")
 
-        # Validate max_parallel_tasks
-        if self.max_parallel_tasks <= 0:
-            raise ValueError(f"max_parallel_tasks must be positive, got: {self.max_parallel_tasks}")
+        # Validate max_parallel_samples
+        if self.max_parallel_samples <= 0:
+            raise ValueError(f"max_parallel_samples must be positive, got: {self.max_parallel_samples}")
 
         # Validate max_subprocesses
         if self.max_subprocesses <= 0:

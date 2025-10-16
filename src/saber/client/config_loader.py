@@ -357,10 +357,9 @@ class SABERConfigLoader:
         container_timeout = config_data.get("container_timeout", execution_config.get("container_timeout", 300))
 
         # Extract eval_async configuration
-        max_samples = config_data.get("max_samples")
         max_subprocesses = config_data.get("max_subprocesses", 1)
         parallel_execution = config_data.get("parallel_execution", True)
-        max_parallel_tasks = config_data.get("max_parallel_tasks", 4)
+        max_parallel_samples = config_data.get("max_parallel_samples", 4)
 
         # Extract log upload configuration
         log_upload_config = config_data.get("log_upload", {})
@@ -421,10 +420,9 @@ class SABERConfigLoader:
             domain=domain,
             ui_enabled=ui_enabled,
             container_timeout=container_timeout,
-            max_samples=max_samples,
             max_subprocesses=max_subprocesses,
             parallel_execution=parallel_execution,
-            max_parallel_tasks=max_parallel_tasks,
+            max_parallel_samples=max_parallel_samples,
             log_upload_enabled=log_upload_enabled,
             log_upload_max_retries=log_upload_max_retries,
             log_upload_timeout=log_upload_timeout,

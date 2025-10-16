@@ -368,6 +368,18 @@ def reset_context_injection_metrics() -> None:
     _metrics = ContextInjectionMetrics()
 
 
+def reset_tool_discovery() -> None:
+    """
+    Reset tool discovery state (useful for testing).
+
+    Currently a no-op as tool discovery doesn't use caching.
+    This function exists for test compatibility and future extensibility.
+    """
+    # No state to reset in current implementation
+    # Tool discovery is stateless and checks _config.registered_tools directly
+    pass
+
+
 # ============================================================================
 # Patched tool_params Function
 # ============================================================================
@@ -532,6 +544,11 @@ def is_saber_mcp_tool(func: Callable[..., Any]) -> bool:
     # Check explicit registration
     if func_name in _config.registered_tools:
         logger.debug(f"🔍 {func_name} found in registered tools")
+        return True
+
+    # Check for @saber_tool decorator
+    if getattr(func, "_saber_context_injection", False):
+        logger.debug(f"🔍 {func_name} has @saber_tool decorator")
         return True
 
     # Check if tool is from inspect_ai.tool._mcp module (MCP tools)

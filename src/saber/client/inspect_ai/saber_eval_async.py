@@ -459,22 +459,12 @@ async def run_saber_eval_async(config: SABERConfig) -> Union[EvalLog, None]:
                 )
 
             if getattr(config, "parallel_execution", False):
-                eval_kwargs["max_tasks"] = getattr(config, "max_parallel_tasks", 4)
+                eval_kwargs["max_samples"] = getattr(config, "max_parallel_samples", 4)
                 logger.info(
                     "Parallel execution configured",
                     extra={
                         "event": "eval_async_parallel_execution_configured",
-                        "max_tasks": eval_kwargs["max_tasks"],
-                    },
-                )
-
-            if getattr(config, "max_samples", None):
-                eval_kwargs["max_samples"] = config.max_samples
-                logger.info(
-                    "Sample limit applied",
-                    extra={
-                        "event": "eval_async_sample_limit_set",
-                        "max_samples": config.max_samples,
+                        "max_samples": eval_kwargs["max_samples"],
                     },
                 )
 
