@@ -429,14 +429,14 @@ def saber_tool_params(input: dict[str, Any], func: Callable[..., Any]) -> dict[s
             if sanitized:
                 params["__saber_assistant_message__"] = sanitized
                 injected_any = True
-                logger.info(f"🔍 Injected assistant_message ({len(sanitized)} chars) into {func_name}")
+                logger.debug(f"🔍 Injected assistant_message ({len(sanitized)} chars) into {func_name}")
 
         if _config.inject_reasoning and context.reasoning:
             sanitized = _sanitize_and_truncate(context.reasoning, _config.max_context_size)
             if sanitized:
                 params["__saber_reasoning__"] = sanitized
                 injected_any = True
-                logger.info(f"🔍 Injected reasoning ({len(sanitized)} chars) into {func_name}")
+                logger.debug(f"🔍 Injected reasoning ({len(sanitized)} chars) into {func_name}")
 
         if injected_any:
             _metrics.record_injection_attempt(success=True)

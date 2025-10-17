@@ -129,7 +129,7 @@ async def mcp_client_lifecycle(url: str, headers: Dict[str, str], name: str = "M
 
             except Exception as cleanup_exc:
                 # Log but don't raise - cleanup errors shouldn't mask actual errors
-                logger.warning(
+                logger.debug(
                     "MCP client cleanup error (non-fatal)",
                     extra={
                         "event": "mcp_client_cleanup_error",
