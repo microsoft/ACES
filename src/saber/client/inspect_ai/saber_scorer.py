@@ -111,20 +111,19 @@ class TemplateStringLoader(BaseLoader):
 
 
 # ============================================================================
-# Metric
+# Metrics
 # ============================================================================
 
 
 @metric  # type: ignore[misc]
-def saber_client_metric(to_float: ValueToFloat = value_to_float()) -> Metric:
+def saber_score(to_float: ValueToFloat = value_to_float()) -> Metric:
     """
-    Metric for SABER client-side evaluation score.
+    Overall SABER evaluation score (submission + subtasks).
 
-    Args:
-        to_float: Function for mapping Value to float for computing metrics
+    Computes the average total score across all samples.
 
     Returns:
-        Client evaluation metric function
+        Metric function that computes average total score
     """
 
     def metric_fn(scores: List[SampleScore]) -> float:
@@ -136,12 +135,228 @@ def saber_client_metric(to_float: ValueToFloat = value_to_float()) -> Metric:
     return metric_fn
 
 
+@metric  # type: ignore[misc]
+def submission_score() -> Metric:
+    """
+    Average submission score across all samples.
+
+    This represents how well agents answered the main task question.
+
+    Returns:
+        Metric function that computes average submission score
+    """
+
+    def metric_fn(scores: List[SampleScore]) -> float:
+        submission_scores = []
+        for sample_score in scores:
+            if sample_score.score.metadata:
+                submission_score_value = sample_score.score.metadata.get("submission_score", 0.0)
+                submission_scores.append(float(submission_score_value))
+
+        return sum(submission_scores) / len(submission_scores) if submission_scores else 0.0
+
+    return metric_fn
+
+
+@metric  # type: ignore[misc]
+def subtask_score() -> Metric:
+    """
+    Average subtask score across all samples.
+
+    This represents how well agents completed intermediate checkpoints.
+
+    Returns:
+        Metric function that computes average subtask score
+    """
+
+    def metric_fn(scores: List[SampleScore]) -> float:
+        subtask_scores = []
+        for sample_score in scores:
+            if sample_score.score.metadata:
+                # Check both old name (step_score) and new name (subtask_score)
+                subtask_score_value = sample_score.score.metadata.get(
+                    "subtask_score", sample_score.score.metadata.get("step_score", 0.0)
+                )
+                subtask_scores.append(float(subtask_score_value))
+
+        return sum(subtask_scores) / len(subtask_scores) if subtask_scores else 0.0
+
+    return metric_fn
+
+
+@metric  # type: ignore[misc]
+def per_task_submission_scores() -> Metric:
+    """
+    Per-task submission score metrics.
+
+    Creates a metric for each task showing the average submission score
+    for samples of that task. Metric names: <task_id>_submission_score
+
+    Returns:
+        Metric function that computes per-task submission scores
+    """
+
+    def metric_fn(scores: List[SampleScore]) -> Dict[str, float]:
+        # Track submission scores by task_id
+        task_submission_scores: Dict[str, List[float]] = {}
+
+        for sample_score in scores:
+            if not sample_score.score.metadata:
+                continue
+
+            # Get task_id from sample metadata
+            sample_metadata = sample_score.sample_metadata or {}
+            task_id = sample_metadata.get("task_id")
+            if not task_id:
+                continue
+
+            # Get submission score
+            submission_score_value = sample_score.score.metadata.get("submission_score", 0.0)
+
+            # Track by task_id
+            if task_id not in task_submission_scores:
+                task_submission_scores[task_id] = []
+            task_submission_scores[task_id].append(float(submission_score_value))
+
+        # Calculate averages per task
+        results = {}
+        for task_id, score_list in task_submission_scores.items():
+            avg_score = sum(score_list) / len(score_list) if score_list else 0.0
+            sanitized_task = task_id.replace("-", "_").replace(" ", "_")
+            metric_key = f"{sanitized_task}_submission_score"
+            results[metric_key] = avg_score
+
+        return results
+
+    return metric_fn
+
+
+@metric  # type: ignore[misc]
+def per_task_subtask_scores() -> Metric:
+    """
+    Per-task subtask score metrics.
+
+    Creates a metric for each task showing the average subtask score
+    for samples of that task. Metric names: <task_id>_subtask_score
+
+    Returns:
+        Metric function that computes per-task subtask scores
+    """
+
+    def metric_fn(scores: List[SampleScore]) -> Dict[str, float]:
+        # Track subtask scores by task_id
+        task_subtask_scores: Dict[str, List[float]] = {}
+
+        for sample_score in scores:
+            if not sample_score.score.metadata:
+                continue
+
+            # Get task_id from sample metadata
+            sample_metadata = sample_score.sample_metadata or {}
+            task_id = sample_metadata.get("task_id")
+            if not task_id:
+                continue
+
+            # Get subtask score
+            subtask_score_value = sample_score.score.metadata.get(
+                "subtask_score", sample_score.score.metadata.get("step_score", 0.0)
+            )
+
+            # Track by task_id
+            if task_id not in task_subtask_scores:
+                task_subtask_scores[task_id] = []
+            task_subtask_scores[task_id].append(float(subtask_score_value))
+
+        # Calculate averages per task
+        results = {}
+        for task_id, score_list in task_subtask_scores.items():
+            avg_score = sum(score_list) / len(score_list) if score_list else 0.0
+            sanitized_task = task_id.replace("-", "_").replace(" ", "_")
+            metric_key = f"{sanitized_task}_subtask_score"
+            results[metric_key] = avg_score
+
+        return results
+
+    return metric_fn
+
+
+@metric  # type: ignore[misc]
+def subtask_score_metrics() -> Metric:
+    """
+    Per-subtask average score metrics.
+
+    Creates a metric for each task+subtask combination showing the average
+    score earned. Metric names: <task_id>_<subtask_id>_score
+
+    Returns:
+        Metric function that computes per-subtask average scores
+    """
+
+    def metric_fn(scores: List[SampleScore]) -> Dict[str, float]:
+        # Track subtask scores by task_id + subtask_id
+        subtask_scores: Dict[str, List[float]] = {}
+
+        for sample_score in scores:
+            if not sample_score.score.metadata:
+                continue
+
+            # Get task_id from sample metadata
+            sample_metadata = sample_score.sample_metadata or {}
+            task_id = sample_metadata.get("task_id")
+            if not task_id:
+                continue
+
+            # Get the subtask_scores dict from metadata (added in scorer)
+            sample_subtask_scores = sample_score.score.metadata.get("subtask_scores", {})
+
+            # Add each subtask's score to our tracking with task_id prefix
+            for subtask_id, score_value in sample_subtask_scores.items():
+                # Create composite key: task_id:subtask_id
+                composite_key = f"{task_id}:{subtask_id}"
+
+                if composite_key not in subtask_scores:
+                    subtask_scores[composite_key] = []
+                subtask_scores[composite_key].append(float(score_value))
+
+        # Calculate average scores
+        results = {}
+        for composite_key, score_list in subtask_scores.items():
+            # Split composite key back into task_id and subtask_id
+            if ":" in composite_key:
+                task_id, subtask_id = composite_key.split(":", 1)
+            else:
+                # Fallback for malformed keys
+                task_id = "unknown"
+                subtask_id = composite_key
+
+            avg_score = sum(score_list) / len(score_list) if score_list else 0.0
+
+            # Create metric key: <task_id>_<subtask_id>_score
+            sanitized_task = task_id.replace("-", "_").replace(" ", "_")
+            sanitized_subtask = subtask_id.replace("-", "_").replace(" ", "_")
+            metric_key = f"{sanitized_task}_{sanitized_subtask}_score"
+            results[metric_key] = avg_score
+
+        return results
+
+    return metric_fn
+
+
 # ============================================================================
 # Main Scorer
 # ============================================================================
 
 
-@scorer(metrics=[saber_client_metric()])  # type: ignore[misc]
+@scorer(  # type: ignore[misc]
+    metrics=[
+        saber_score(),  # Total score (submission + subtasks)
+        submission_score(),  # Average submission score across all samples
+        subtask_score(),  # Average subtask score across all samples
+        per_task_submission_scores(),  # Per-task submission scores
+        per_task_subtask_scores(),  # Per-task subtask scores
+        subtask_score_metrics(),  # Per-subtask scores (<task_id>_<subtask_id>_score)
+    ]
+)
 def saber_scorer() -> Scorer:
     """
     Client-side evaluation scorer (BREAKING CHANGE).
@@ -215,10 +430,28 @@ def saber_scorer() -> Scorer:
             # Step 6: Score steps (if configured)
             step_score = 0.0
             step_evaluations: List[StepEvaluation] = []
+            subtask_scores: Dict[str, float] = {}  # Track individual subtask scores
+
             if step_criteria:
                 step_score, step_evaluations = await _score_steps(
                     steps_data, step_criteria, submission_criteria.task_context, session_manager, state
                 )
+
+                # Calculate individual subtask scores for metrics
+                subtasks_with_scores = {st["subtask_id"]: st.get("max_score", 0.0) for st in step_criteria.subtasks}
+
+                # Collect unique objective_ids that were completed
+                completed_objectives = set()
+                for step_eval in step_evaluations:
+                    if step_eval.objective_id in subtasks_with_scores:
+                        completed_objectives.add(step_eval.objective_id)
+
+                # Build subtask_scores dict with individual scores
+                for subtask_id, max_score in subtasks_with_scores.items():
+                    if subtask_id in completed_objectives:
+                        subtask_scores[subtask_id] = max_score
+                    else:
+                        subtask_scores[subtask_id] = 0.0
 
             # Calculate totals
             total_score = submission_score + step_score
@@ -258,17 +491,38 @@ def saber_scorer() -> Scorer:
 
             # Step 8: Return score for inspect_ai
             max_sub_score = submission_criteria.scoring.get("max_score", 1.0)
+            task_id = submission_criteria.task_id
+
+            # Ensure task_id is in state.metadata so it appears in sample_metadata
+            if state.metadata is None:
+                state.metadata = {}
+            state.metadata["task_id"] = task_id
+
+            # Build metadata with flattened subtask scores for easy viewing
+            metadata = {
+                "submission_score": submission_score,
+                "subtask_score": step_score,  # Renamed from step_score for clarity
+                "max_possible": max_possible,
+                "step_evaluations": [se.model_dump() for se in step_evaluations],
+                "subtask_scores": subtask_scores,  # Keep nested for programmatic access
+                "task_id": task_id,  # Add task_id to score metadata as well
+                "scorer_version": "2.0",
+            }
+
+            # Add individual subtask scores as top-level metadata fields
+            # Format: <task_id>_<subtask_id>_score
+            for subtask_id, subtask_score_value in subtask_scores.items():
+                # Sanitize IDs for metric names
+                sanitized_task = task_id.replace("-", "_").replace(" ", "_")
+                sanitized_subtask = subtask_id.replace("-", "_").replace(" ", "_")
+                metric_key = f"{sanitized_task}_{sanitized_subtask}_score"
+                metadata[metric_key] = subtask_score_value
+
             return Score(
                 value=total_score,
                 answer=submission_data.submission,
-                explanation=f"Client eval: submission={submission_score}/{max_sub_score}, steps={step_score}",
-                metadata={
-                    "submission_score": submission_score,
-                    "step_score": step_score,
-                    "max_possible": max_possible,
-                    "step_evaluations": [se.model_dump() for se in step_evaluations],
-                    "scorer_version": "2.0",
-                },
+                explanation=f"Client eval: submission={submission_score}/{max_sub_score}, subtasks={step_score}",
+                metadata=metadata,
             )
 
         except Exception as exc:
