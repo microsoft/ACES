@@ -94,7 +94,7 @@ uv run saber-domain start excytin_demo
 uv run saber-domain test excytin_demo
 
 # With additional options:
-uv run saber-domain test excytin_demo --build --stop-after
+uv run saber-domain test excytin_demo --rebuild-all --stop-after
 ```
 
 **4. Stop the domain:**
@@ -169,7 +169,7 @@ max_parallel_tasks: 2
 
 3. **Test the new task**:
    ```bash
-   uv run saber-domain test excytin_demo --build
+   uv run saber-domain test excytin_demo --rebuild-all
    ```
 
 ### Adding Custom Tools

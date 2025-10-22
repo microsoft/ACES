@@ -35,8 +35,8 @@ saber-domain list
 # Start a domain (server + client) - everything configured automatically!
 saber-domain start cybench
 
-# Start with custom ports and build images
-saber-domain start cybench --build --rest-port 9000 --mcp-port 9001
+# Start with custom ports and rebuild images
+saber-domain start cybench --rebuild --rest-port 9000 --mcp-port 9001
 
 # Start with privileged access (if domain requires it)
 saber-domain start cybench --profiles server,client,docker-socket
@@ -79,8 +79,8 @@ saber-domain --domains-root /path/to/domains list
 # Basic start (server + client with auto-generated environment)
 saber-domain start DOMAIN
 
-# Build images first, then start
-saber-domain start DOMAIN --build
+# Rebuild all images first, then start
+saber-domain start DOMAIN --rebuild
 
 # Custom ports (with automatic conflict detection)
 saber-domain start DOMAIN --rest-port 9000 --mcp-port 9001
@@ -92,11 +92,11 @@ saber-domain start DOMAIN --profiles server,client,docker-socket
 saber-domain start DOMAIN --log-level DEBUG
 
 # Dry run to see what would be done
-saber-domain start DOMAIN --dry-run --build
+saber-domain start DOMAIN --dry-run --rebuild
 
 # Full example with all options
 saber-domain start cybench \
-  --build \
+  --rebuild \
   --profiles server,client,docker-socket \
   --rest-port 9000 \
   --mcp-port 9001 \
@@ -116,7 +116,7 @@ COMPOSE_PROFILES=server,client,docker-socket
 LOG_LEVEL=DEBUG
 
 # New approach - just run:
-saber-domain start cybench --build --profiles server,client,docker-socket --rest-port 9000 --mcp-port 9001 --log-level DEBUG
+saber-domain start cybench --rebuild --profiles server,client,docker-socket --rest-port 9000 --mcp-port 9001 --log-level DEBUG
 ```
 
 ### `stop` - Stop Domain Services

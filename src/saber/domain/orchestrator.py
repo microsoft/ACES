@@ -395,14 +395,24 @@ class DockerRunner:
         """
         return detect_repo_structure(domains_root)
 
-    def build_images(self, domain: str, manifest: Dict[str, Any], domains_root: Path, dry_run: bool = False) -> None:
-        """Build all Docker images defined in domain manifest.
+    def build_images(
+        self,
+        domain: str,
+        manifest: Dict[str, Any],
+        domains_root: Path,
+        dry_run: bool = False,
+        image_filter: str | None = None,
+        rebuild_mode: bool = True,
+    ) -> None:
+        """Build Docker images defined in domain manifest.
 
         Args:
             domain: Domain name
             manifest: Domain manifest
             domains_root: Path to domains directory
             dry_run: If True, show commands without executing
+            image_filter: Optional prefix to filter which images to build (e.g., 'server', 'cookie', 'sandbox')
+            rebuild_mode: If True, remove and rebuild images. If False, only build missing images.
 
         Raises:
             DockerError: If build fails
@@ -413,28 +423,46 @@ class DockerRunner:
         if not images_config:
             raise DockerError("No images configuration found in manifest")
 
-        # Ensure base images exist first (always rebuilds)
-        print("🔍 Checking base image dependencies...")
-        self.ensure_base_images(dry_run)
+        # Filter images if requested
+        if image_filter:
+            images_to_build = {name: config for name, config in images_config.items() if name.startswith(image_filter)}
+            if not images_to_build:
+                raise DockerError(
+                    f"No images found matching filter '{image_filter}'. "
+                    f"Available images: {', '.join(images_config.keys())}"
+                )
+            print(f"🔍 Filtered images by prefix '{image_filter}': {', '.join(images_to_build.keys())}")
+        else:
+            images_to_build = images_config
 
-        # Remove existing domain images for rebuild
-        print("🔄 Removing existing domain images for rebuild...")
-        for image_name, image_config in images_config.items():
-            if isinstance(image_config, dict):
-                image_tag = image_config.get("tag")
-                if image_tag and self._docker_image_exists(image_tag):
-                    if not dry_run:
-                        try:
-                            subprocess.run(["docker", "rmi", image_tag], check=False, capture_output=True)
-                            print(f"  Removed {image_tag}")
-                        except Exception:
-                            pass
-                    else:
-                        print(f"  Would remove {image_tag}")
+        # Ensure base images exist first (only when rebuild_mode or filter matches base images)
+        needs_base_rebuild = (rebuild_mode and image_filter is None) or any(
+            name in ["server", "sandbox"] for name in images_to_build.keys()
+        )
+        if needs_base_rebuild and rebuild_mode:
+            print("🔍 Checking base image dependencies...")
+            self.ensure_base_images(dry_run)
 
-        # Build all images defined in manifest
+        # Remove existing domain images for rebuild (only in rebuild mode)
+        if rebuild_mode:
+            print("🔄 Removing existing domain images for rebuild...")
+            for image_name, image_config in images_to_build.items():
+                if isinstance(image_config, dict):
+                    image_tag = image_config.get("tag")
+                    if image_tag and self._docker_image_exists(image_tag):
+                        if not dry_run:
+                            try:
+                                subprocess.run(["docker", "rmi", image_tag], check=False, capture_output=True)
+                                print(f"  Removed {image_tag}")
+                            except Exception:
+                                pass
+                        else:
+                            print(f"  Would remove {image_tag}")
+
+        # Build filtered images (in build mode, skip images that already exist)
         built_count = 0
-        for image_name, image_config in images_config.items():
+        skipped_count = 0
+        for image_name, image_config in images_to_build.items():
             if not isinstance(image_config, dict):
                 raise DockerError(f"Image '{image_name}' configuration must be a dictionary")
 
@@ -445,6 +473,15 @@ class DockerRunner:
             image_tag = image_config.get("tag")
             if not image_tag:
                 raise DockerError(f"Image '{image_name}' missing required 'tag' field")
+
+            # In build mode (not rebuild), skip if image already exists
+            if not rebuild_mode and self._docker_image_exists(image_tag):
+                if not dry_run:
+                    print(f"⏭️  Skipping {image_name} - image already exists: {image_tag}")
+                else:
+                    print(f"⏭️  Would skip {image_name} - image already exists: {image_tag}")
+                skipped_count += 1
+                continue
 
             dockerfile_path = domain_path / dockerfile
             if not dockerfile_path.exists():
@@ -475,6 +512,7 @@ class DockerRunner:
 
             if dry_run:
                 print(f"Would build {image_name}: {' '.join(cmd)}")
+                built_count += 1
                 continue
 
             print(f"Building {image_name} image: {image_tag}")
@@ -486,7 +524,13 @@ class DockerRunner:
                 raise DockerError(f"Failed to build {image_name} image {image_tag}: {e}")
 
         if not dry_run:
-            print(f"✓ Successfully built {built_count} images for domain '{domain}'")
+            if skipped_count > 0:
+                print(
+                    f"✓ Successfully built {built_count} images, "
+                    f"skipped {skipped_count} existing images for domain '{domain}'"
+                )
+            else:
+                print(f"✓ Successfully built {built_count} images for domain '{domain}'")
 
     def ensure_base_images(self, dry_run: bool = False) -> None:
         """Remove and rebuild all base images.
@@ -767,20 +811,45 @@ class DomainOrchestrator:
         rest_port: int = 8000,
         mcp_port: int = 8001,
         log_level: str = "INFO",
-        build: bool = False,
+        build: str | None = None,
+        rebuild: str | None = None,
         dry_run: bool = False,
     ) -> None:
         """Start a domain server with full validation and setup."""
         # Load and validate manifest
         manifest = self.manifest_loader.load_manifest(domain)
 
-        # Build server image if requested
-        if build:
-            self.docker_runner.build_images(domain, manifest, self.manifest_loader.domains_root, dry_run)
+        # Rebuild server image if requested
+        if rebuild is not None:
+            image_filter = rebuild if rebuild else None
+            self.docker_runner.build_images(
+                domain,
+                manifest,
+                self.manifest_loader.domains_root,
+                dry_run,
+                image_filter=image_filter,
+                rebuild_mode=True,
+            )
+        # Build missing images if requested
+        elif build is not None:
+            image_filter = build if build else None
+            self.docker_runner.build_images(
+                domain,
+                manifest,
+                self.manifest_loader.domains_root,
+                dry_run,
+                image_filter=image_filter,
+                rebuild_mode=False,
+            )
 
         # Generate and validate environment (server-only)
         env_vars = self.environment_validator.generate_environment(
-            domain, manifest, rest_port, mcp_port, log_level, skip_image_check=build
+            domain,
+            manifest,
+            rest_port,
+            mcp_port,
+            log_level,
+            skip_image_check=(rebuild is not None or build is not None),
         )
 
         # Start server
@@ -794,13 +863,29 @@ class DomainOrchestrator:
         # Stop services
         self.docker_runner.stop_services(domain, self.manifest_loader.domains_root, dry_run)
 
-    def build_domain(self, domain: str, dry_run: bool = False) -> None:
-        """Build domain images."""
+    def build_domain(
+        self, domain: str, image_filter: str | None = None, dry_run: bool = False, rebuild_mode: bool = True
+    ) -> None:
+        """Build domain images.
+
+        Args:
+            domain: Domain name
+            image_filter: Optional prefix filter for image names (e.g., 'server', 'cookie', 'sandbox')
+            dry_run: Show commands without executing
+            rebuild_mode: If True, remove and rebuild. If False, only build missing images.
+        """
         # Load and validate manifest
         manifest = self.manifest_loader.load_manifest(domain)
 
         # Build images
-        self.docker_runner.build_images(domain, manifest, self.manifest_loader.domains_root, dry_run)
+        self.docker_runner.build_images(
+            domain,
+            manifest,
+            self.manifest_loader.domains_root,
+            dry_run,
+            image_filter=image_filter,
+            rebuild_mode=rebuild_mode,
+        )
 
     def get_domain_status(self, domain: str) -> Dict[str, Any]:
         """Get domain status with full health information."""

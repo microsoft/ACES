@@ -105,7 +105,12 @@ def list_domains(ctx: click.Context, verbose: bool) -> None:
 
 @cli.command()  # type: ignore[misc]
 @click.argument("domain")  # type: ignore[misc]
-@click.option("--build", is_flag=True, help="Build images before starting")  # type: ignore[misc]
+@click.option("--build", is_flag=True, help="Build missing images before starting")  # type: ignore[misc]
+@click.option("--rebuild-all", is_flag=True, help="Remove and rebuild all images before starting")  # type: ignore[misc]
+@click.option(
+    "--rebuild",
+    help="Remove and rebuild images with names starting with this prefix before starting (e.g., 'server', 'cookie')",
+)  # type: ignore[misc]
 @click.option("--rest-port", type=int, default=8000, help="REST API port")  # type: ignore[misc]
 @click.option("--mcp-port", type=int, default=8001, help="MCP port")  # type: ignore[misc]
 @click.option("--log-level", default="INFO", help="Logging level")  # type: ignore[misc]
@@ -119,6 +124,8 @@ def start(
     ctx: click.Context,
     domain: str,
     build: bool,
+    rebuild_all: bool,
+    rebuild: str | None,
     rest_port: int,
     mcp_port: int,
     log_level: str,
@@ -134,8 +141,16 @@ def start(
     The CLI automatically:
     - Validates domain configuration
     - Generates Docker Compose environment variables
-    - Builds server image if --build specified
+    - Builds missing images if --build specified
+    - Rebuilds images if --rebuild-all or --rebuild specified
     - Starts server with full sandbox management capabilities
+
+    Examples:
+        saber-domain start romulus
+        saber-domain start romulus --build             # Build only missing images
+        saber-domain start romulus --rebuild-all       # Rebuild all images
+        saber-domain start romulus --rebuild server    # Only rebuild server image
+        saber-domain start romulus --rebuild cookie    # Only rebuild cookie_* images
     """
     # FAIL FAST: Reject deprecated --profiles option
     if profiles is not None:
@@ -144,11 +159,25 @@ def start(
         click.echo(f"Use: saber-domain start {domain}", err=True)
         ctx.exit(1)
 
+    # FAIL FAST: Reject conflicting build options
+    build_options_count = sum([build, rebuild_all, bool(rebuild)])
+    if build_options_count > 1:
+        click.echo("Error: Cannot specify multiple build options together.", err=True)
+        click.echo("Use one of:", err=True)
+        click.echo("  --build: Only builds missing images", err=True)
+        click.echo("  --rebuild-all: Removes and rebuilds all images", err=True)
+        click.echo("  --rebuild <prefix>: Removes and rebuilds specific images", err=True)
+        ctx.exit(1)
+
     try:
         orchestrator = _create_orchestrator(ctx.obj.get("domains_root"))
 
         # Override log level if verbose flag is set
         effective_log_level = "DEBUG" if verbose else log_level
+
+        # Convert new options to old format for orchestrator
+        build_param = "" if build else None
+        rebuild_param = "" if rebuild_all else rebuild
 
         # Start domain with server-only orchestration
         orchestrator.start_domain(
@@ -156,7 +185,8 @@ def start(
             rest_port=rest_port,
             mcp_port=mcp_port,
             log_level=effective_log_level,
-            build=build,
+            build=build_param,
+            rebuild=rebuild_param,
             dry_run=dry_run,
         )
 
@@ -190,19 +220,51 @@ def stop(ctx: click.Context, domain: str, dry_run: bool) -> None:
 
 @cli.command()  # type: ignore[misc]
 @click.argument("domain")  # type: ignore[misc]
+@click.option("--rebuild-all", is_flag=True, help="Remove and rebuild all images")  # type: ignore[misc]
+@click.option(
+    "--rebuild", help="Remove and rebuild images with names starting with this prefix (e.g., 'server', 'cookie')"
+)  # type: ignore[misc]
 @click.option("--dry-run", is_flag=True, help="Show what would be done without executing")  # type: ignore[misc]
 @click.pass_context  # type: ignore[misc]
-def build(ctx: click.Context, domain: str, dry_run: bool) -> None:
+def build(ctx: click.Context, domain: str, rebuild_all: bool, rebuild: str | None, dry_run: bool) -> None:
     """Build domain images.
 
-    Builds all Docker images defined in the domain manifest.
+    By default, builds only missing Docker images (incremental build).
+    Use --rebuild-all or --rebuild to force removal and rebuild of images.
+
+    Examples:
+        saber-domain build romulus                    # Build missing images only
+        saber-domain build romulus --rebuild-all     # Remove and rebuild all images
+        saber-domain build romulus --rebuild server  # Remove and rebuild only server image
+        saber-domain build romulus --rebuild cookie  # Remove and rebuild only cookie images
     """
     try:
-        orchestrator = _create_orchestrator(ctx.obj.get("domains_root"))
-        orchestrator.build_domain(domain, dry_run)
+        # Validate mutual exclusion
+        if rebuild_all and rebuild:
+            click.echo("Error: Cannot specify both --rebuild-all and --rebuild options together.", err=True)
+            click.echo(
+                "Use --rebuild-all to rebuild all images, or --rebuild <prefix> to rebuild specific images.", err=True
+            )
+            ctx.exit(1)
 
-        if not dry_run:
-            click.echo(f"✓ Domain {domain} images built successfully!")
+        orchestrator = _create_orchestrator(ctx.obj.get("domains_root"))
+
+        if rebuild_all or rebuild:
+            # Rebuild mode - remove and rebuild images
+            image_filter = rebuild if rebuild else None
+            orchestrator.build_domain(domain, image_filter=image_filter, dry_run=dry_run, rebuild_mode=True)
+
+            if not dry_run:
+                if rebuild:
+                    click.echo(f"✓ Domain {domain} images (rebuilt: {rebuild}) completed successfully!")
+                else:
+                    click.echo(f"✓ Domain {domain} images rebuilt successfully!")
+        else:
+            # Build mode - only build missing images
+            orchestrator.build_domain(domain, image_filter=None, dry_run=dry_run, rebuild_mode=False)
+
+            if not dry_run:
+                click.echo(f"✓ Domain {domain} missing images built successfully!")
 
     except DomainError as e:
         click.echo(f"Error: {e}", err=True)
@@ -346,7 +408,12 @@ def _display_domain_status(domain: str, status_info: Dict[str, Any]) -> None:
 @click.option("--stop-after", is_flag=True, help="Stop server after test completion")  # type: ignore[misc]
 @click.option("--rest-port", type=int, default=8000, help="REST API port")  # type: ignore[misc]
 @click.option("--mcp-port", type=int, default=8001, help="MCP port")  # type: ignore[misc]
-@click.option("--build", is_flag=True, help="Build images before starting")  # type: ignore[misc]
+@click.option("--build", is_flag=True, help="Build missing images before starting")  # type: ignore[misc]
+@click.option("--rebuild-all", is_flag=True, help="Remove and rebuild all images before starting")  # type: ignore[misc]
+@click.option(
+    "--rebuild",
+    help="Remove and rebuild images with names starting with this prefix before starting (e.g., 'server', 'cookie')",
+)  # type: ignore[misc]
 @click.option("--log-level", default="INFO", help="Logging level")  # type: ignore[misc]
 @click.option(
     "--verbose", "-v", is_flag=True, help="Enable verbose logging (sets log level to DEBUG)"
@@ -362,6 +429,8 @@ def test(
     rest_port: int,
     mcp_port: int,
     build: bool,
+    rebuild_all: bool,
+    rebuild: str | None,
     log_level: str,
     verbose: bool,
     no_ui: bool,
@@ -376,13 +445,29 @@ def test(
         saber-domain test cybench
         saber-domain test cybench --no-ui
         saber-domain test cybench --saber-yaml custom.yaml
-        saber-domain test cybench --stop-after --build
+        saber-domain test cybench --build                       # Build missing images
+        saber-domain test cybench --stop-after --rebuild-all    # Rebuild all images
+        saber-domain test cybench --rebuild server              # Only rebuild server
+        saber-domain test romulus --rebuild cookie              # Only rebuild cookie_* images
     """
+    # FAIL FAST: Validate mutually exclusive build options
+    build_options_count = sum([build, rebuild_all, bool(rebuild)])
+    if build_options_count > 1:
+        click.echo("Error: Build options are mutually exclusive:", err=True)
+        click.echo("  --build: Only builds missing images", err=True)
+        click.echo("  --rebuild-all: Rebuilds all images", err=True)
+        click.echo("  --rebuild <prefix>: Rebuilds images matching prefix", err=True)
+        ctx.exit(1)
+
     try:
         orchestrator = _create_orchestrator(ctx.obj.get("domains_root"))
 
         # Override log level if verbose flag is set
         effective_log_level = "DEBUG" if verbose else log_level
+
+        # Convert build options to orchestrator parameters
+        build_param = "" if build else None
+        rebuild_param = "" if rebuild_all else rebuild
 
         # Run the test command implementation
         import asyncio
@@ -395,7 +480,8 @@ def test(
                 stop_after=stop_after,
                 rest_port=rest_port,
                 mcp_port=mcp_port,
-                build=build,
+                build=build_param,
+                rebuild=rebuild_param,
                 log_level=effective_log_level,
                 no_ui=no_ui,
                 dry_run=dry_run,
@@ -443,7 +529,8 @@ async def _test_command_impl(
     stop_after: bool,
     rest_port: int,
     mcp_port: int,
-    build: bool,
+    build: str | None,
+    rebuild: str | None,
     log_level: str,
     no_ui: bool,
     dry_run: bool,
@@ -481,7 +568,7 @@ async def _test_command_impl(
     # Phase 2: Server management
     click.echo("🔍 Checking server status...")
     we_started_server = await _ensure_server_running(
-        orchestrator, domain, rest_port, mcp_port, build, log_level, dry_run
+        orchestrator, domain, rest_port, mcp_port, build, rebuild, log_level, dry_run
     )
 
     try:
@@ -580,14 +667,15 @@ async def _ensure_server_running(
     domain: str,
     rest_port: int,
     mcp_port: int,
-    build: bool,
+    build: str | None,
+    rebuild: str | None,
     log_level: str,
     dry_run: bool,
 ) -> bool:
     """Ensure server is running, return True if we started it."""
 
-    # Handle build flag regardless of server status
-    if build:
+    # Handle rebuild flag regardless of server status
+    if rebuild is not None:
         # Stop the server first since we're rebuilding critical images
         status = orchestrator.get_domain_status(domain)
         if status.get("running", False):
@@ -599,11 +687,34 @@ async def _ensure_server_running(
                 click.echo("✓ Server stopped")
 
         if dry_run:
-            click.echo(f"🔨 Would rebuild {domain} images")
+            rebuild_msg = f"🔨 Would rebuild {domain} images"
+            if rebuild:  # If not empty string
+                rebuild_msg += f" (filter: {rebuild})"
+            click.echo(rebuild_msg)
         else:
-            click.echo(f"🔨 Rebuilding {domain} images...")
-            orchestrator.build_domain(domain, dry_run=False)
+            rebuild_msg = f"🔨 Rebuilding {domain} images"
+            if rebuild:  # If not empty string
+                rebuild_msg += f" (filter: {rebuild})"
+            click.echo(rebuild_msg + "...")
+            orchestrator.build_domain(
+                domain, image_filter=rebuild if rebuild else None, dry_run=False, rebuild_mode=True
+            )
             click.echo("✓ Images rebuilt successfully")
+
+    # Handle build flag (only build missing images)
+    elif build is not None:
+        if dry_run:
+            build_msg = f"🔨 Would build missing {domain} images"
+            if build:  # If not empty string
+                build_msg += f" (filter: {build})"
+            click.echo(build_msg)
+        else:
+            build_msg = f"🔨 Building missing {domain} images"
+            if build:  # If not empty string
+                build_msg += f" (filter: {build})"
+            click.echo(build_msg + "...")
+            orchestrator.build_domain(domain, image_filter=build if build else None, dry_run=False, rebuild_mode=False)
+            click.echo("✓ Images built successfully")
 
     status = orchestrator.get_domain_status(domain)
 
@@ -622,8 +733,8 @@ async def _ensure_server_running(
 
     click.echo(f"🚀 Starting {domain} server...")
     orchestrator.start_domain(
-        domain, rest_port, mcp_port, log_level, build=False, dry_run=False
-    )  # build=False since we already built above
+        domain, rest_port, mcp_port, log_level, rebuild=None, dry_run=False
+    )  # rebuild=None since we already built above
 
     # Wait for server readiness
     await _wait_for_server_ready(rest_port, mcp_port)

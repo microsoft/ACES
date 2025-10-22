@@ -96,6 +96,19 @@ uv run saber-domain --help
 uv run saber-domain list
 ```
 
+**Build domain images:**
+```bash
+# Build only missing images (incremental build):
+uv run saber-domain build cybench
+
+# Rebuild all images (removes and rebuilds everything):
+uv run saber-domain build cybench --rebuild-all
+
+# Rebuild specific images by prefix:
+uv run saber-domain build cybench --rebuild server    # Only rebuild server image
+uv run saber-domain build cybench --rebuild cookie    # Only rebuild cookie_* images
+```
+
 **Start a domain server:**
 ```bash
 uv run saber-domain start cybench --build
@@ -103,13 +116,32 @@ uv run saber-domain start cybench --build
 # Server endpoints:
 #   REST API: http://localhost:8000
 #   MCP Server: http://localhost:8001
+
+# Build missing images before starting:
+uv run saber-domain start cybench --build
+
+# Rebuild all images before starting:
+uv run saber-domain start cybench --rebuild-all
+
+# Rebuild specific images before starting:
+uv run saber-domain start cybench --rebuild server    # Only rebuild server
+uv run saber-domain start cybench --rebuild cookie    # Only rebuild cookie_* images
 ```
 
 **Run evaluation tests:**
 ```bash
 uv run saber-domain test cybench
 # Automatically starts server if needed, runs evaluation, keeps server running
-# Several flags here to help, including: --build, --stop-after, --dry-run
+# Several flags here to help, including: --build, --rebuild-all, --rebuild, --stop-after, --dry-run
+
+# With --build (builds only missing images):
+uv run saber-domain test cybench --build --stop-after
+
+# With --rebuild-all (removes and rebuilds all images):
+uv run saber-domain test cybench --rebuild-all --stop-after
+
+# With --rebuild for specific images:
+uv run saber-domain test cybench --rebuild server --stop-after
 ```
 
 **Stop domain:**
