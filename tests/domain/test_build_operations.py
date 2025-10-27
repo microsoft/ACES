@@ -49,10 +49,6 @@ images:
     tag: "saber/test_domain/cookie/target_1:latest"
     dockerfile: "docker/targets/cookie_1/Dockerfile"
     context: "docker/targets/cookie_1"
-  log4shell_0_target:
-    tag: "saber/test_domain/log4shell/target_0:latest"
-    dockerfile: "docker/targets/log4shell_0/Dockerfile"
-    context: "docker/targets/log4shell_0"
 """)
 
     # Create Dockerfiles
@@ -60,7 +56,7 @@ images:
     (test_domain / "docker" / "Dockerfile.sandbox").write_text("FROM ubuntu:22.04\n")
 
     # Create target directories and Dockerfiles
-    for target in ["cookie_0", "cookie_1", "log4shell_0"]:
+    for target in ["cookie_0", "cookie_1"]:
         target_dir = test_domain / "docker" / "targets" / target
         target_dir.mkdir(parents=True)
         (target_dir / "Dockerfile").write_text(f"FROM nginx:latest\n# {target}\n")
@@ -103,11 +99,6 @@ def mock_manifest():
                 "tag": "saber/test_domain/cookie/target_1:latest",
                 "dockerfile": "docker/targets/cookie_1/Dockerfile",
                 "context": "docker/targets/cookie_1"
-            },
-            "log4shell_0_target": {
-                "tag": "saber/test_domain/log4shell/target_0:latest",
-                "dockerfile": "docker/targets/log4shell_0/Dockerfile",
-                "context": "docker/targets/log4shell_0"
             }
         }
     }
@@ -180,10 +171,10 @@ class TestDockerRunnerBuildImages:
         rmi_calls = [c for c in mock_subprocess.call_args_list if 'docker' in str(c) and 'rmi' in str(c)]
         assert len(rmi_calls) == 0
 
-        # Should only build missing images (3: sandbox, cookie_1, log4shell_0)
+        # Should only build missing images (3: sandbox, cookie_1)
         build_calls = [c for c in mock_subprocess.call_args_list if 'docker' in str(c) and 'build' in str(c)]
-        # Actually builds 4 images because cookie_0 doesn't exist (side_effect only returns True for "cookie_0" in tag)
-        assert len(build_calls) == 4
+        # Actually builds 3 images because cookie_0 doesn't exist (side_effect only returns True for "cookie_0" in tag)
+        assert len(build_calls) == 3
 
     @patch('saber.domain.orchestrator.subprocess.run')
     @patch('saber.domain.orchestrator.DockerRunner._docker_image_exists')
@@ -476,15 +467,6 @@ class TestImageFiltering:
         assert "cookie_0_target" in filtered
         assert "cookie_1_target" in filtered
         assert "server" not in filtered
-        assert "log4shell_0_target" not in filtered
-
-    def test_filter_log4shell_images(self, mock_manifest):
-        """Test filtering log4shell-prefixed images."""
-        images = mock_manifest["images"]
-        filtered = {name: config for name, config in images.items() if name.startswith("log4shell")}
-
-        assert len(filtered) == 1
-        assert "log4shell_0_target" in filtered
 
     def test_filter_server_image(self, mock_manifest):
         """Test filtering server image."""

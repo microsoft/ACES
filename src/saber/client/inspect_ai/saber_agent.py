@@ -259,35 +259,52 @@ async def create_saber_inspect_agent(
             from inspect_ai.solver._task_state import sample_state
             from inspect_ai.util import store
 
-            task_store = store()
-            task_store.set("saber_session_manager", session_manager)
+            # Wrap initialization in try/except to provide clear error messages
+            try:
+                task_store = store()
+                task_store.set("saber_session_manager", session_manager)
 
-            session_id = session_manager.get_current_session_id()
-            if session_id is None:
-                raise ValueError("Session ID not available from session manager")
-            task_store.set("saber_session_id", session_id)
+                session_id = session_manager.get_current_session_id()
+                if session_id is None:
+                    raise ValueError("Session ID not available from session manager")
+                task_store.set("saber_session_id", session_id)
 
-            current_state = sample_state()
-            if current_state is None:
-                raise ValueError("Current task state is not available")
+                current_state = sample_state()
+                if current_state is None:
+                    raise ValueError("Current task state is not available")
 
-            task_id = current_state.metadata.get("task_id")
-            if task_id is None:
-                raise ValueError("Task ID not found in sample metadata")
-            task_store.set("saber_task_id", task_id)
+                task_id = current_state.metadata.get("task_id")
+                if task_id is None:
+                    raise ValueError("Task ID not found in sample metadata")
+                task_store.set("saber_task_id", task_id)
 
-            # Get all three prompts from sample metadata
-            instruction_prompt = current_state.metadata.get("instruction_prompt")
-            assistant_prompt = current_state.metadata.get("assistant_prompt")
-            submit_prompt = current_state.metadata.get("submit_prompt")
+                # Get all three prompts from sample metadata
+                instruction_prompt = current_state.metadata.get("instruction_prompt")
+                assistant_prompt = current_state.metadata.get("assistant_prompt")
+                submit_prompt = current_state.metadata.get("submit_prompt")
 
-            # Fail fast if any prompts are missing
-            if instruction_prompt is None:
-                raise ValueError("Instruction prompt not found in sample metadata")
-            if assistant_prompt is None:
-                raise ValueError("Assistant prompt not found in sample metadata")
-            if submit_prompt is None:
-                raise ValueError("Submit prompt not found in sample metadata")
+                # Fail fast if any prompts are missing
+                if instruction_prompt is None:
+                    raise ValueError("Instruction prompt not found in sample metadata")
+                if assistant_prompt is None:
+                    raise ValueError("Assistant prompt not found in sample metadata")
+                if submit_prompt is None:
+                    raise ValueError("Submit prompt not found in sample metadata")
+
+            except Exception as init_error:
+                logger.error(
+                    "Agent initialization failed before episode creation",
+                    extra={
+                        "event": "agent_initialization_failed",
+                        "error": str(init_error),
+                        "exception_type": type(init_error).__name__,
+                        "phase": "pre_episode_setup",
+                    },
+                )
+                raise ValueError(
+                    f"Agent failed during initialization (before episode creation): {init_error}. "
+                    "This means the agent could not set up properly to begin work."
+                ) from init_error
 
             with log_context(session_id=session_id, agent_id=agent_id, task_id=task_id):
                 logger.debug(
@@ -300,9 +317,26 @@ async def create_saber_inspect_agent(
                     },
                 )
 
-                episode_response = await session_manager.create_episode(session_id, task_id)
-                task_store.set("saber_current_episode", episode_response)
-                task_store.set("saber_attached_to_episode_id", episode_response.attached_to_episode_id)
+                # Create episode - wrap in try/except to provide better error context
+                try:
+                    episode_response = await session_manager.create_episode(session_id, task_id)
+                    task_store.set("saber_current_episode", episode_response)
+                    task_store.set("saber_attached_to_episode_id", episode_response.attached_to_episode_id)
+                except Exception as episode_error:
+                    logger.error(
+                        "Failed to create episode for agent execution",
+                        extra={
+                            "event": "agent_episode_creation_failed",
+                            "error": str(episode_error),
+                            "exception_type": type(episode_error).__name__,
+                            "session_id": session_id,
+                            "task_id": task_id,
+                        },
+                    )
+                    raise ValueError(
+                        f"Episode creation failed for task {task_id}: {episode_error}. "
+                        "This will prevent any tool calls from working."
+                    ) from episode_error
 
                 with log_context(episode_id=episode_response.episode_id):
                     logger.info(
@@ -466,6 +500,79 @@ async def create_saber_inspect_agent(
                             return result
 
                         except Exception as exc:
+                            # Check if this is a tool call limit error - treat it as completion, not failure
+                            is_tool_call_limit = (
+                                "tool call limit" in str(exc).lower()
+                                or "exhausted available tool calls" in str(exc).lower()
+                                or "LimitExceededError" in type(exc).__name__
+                            )
+
+                            if is_tool_call_limit:
+                                # Tool call limit is a normal completion condition, not an error
+                                logger.info(
+                                    "Agent reached tool call limit - ending episode normally",
+                                    extra={
+                                        "event": "agent_tool_call_limit_reached",
+                                        "error": str(exc),
+                                        "exception_type": type(exc).__name__,
+                                        "episode_id": episode_response.episode_id,
+                                    },
+                                )
+
+                                # Create submission indicating limit reached
+                                limit_submission = EvalSubmission(
+                                    episode_id=episode_response.episode_id,
+                                    task_id=task_id,
+                                    model="unknown",
+                                    choices=[],
+                                    submission="Agent reached tool call limit",
+                                    tokens={},
+                                    time=0.0,
+                                )
+
+                                cascade_end = episode_response.attached_to_episode_id is not None
+
+                                logger.info(
+                                    "Ending episode after reaching tool call limit",
+                                    extra={
+                                        "event": "end_episode_tool_limit",
+                                        "episode_id": episode_response.episode_id,
+                                        "cascade_end": cascade_end,
+                                    },
+                                )
+
+                                # End episode with "completed" reason, not "error"
+                                await session_manager.end_episode(
+                                    episode_response.session_id,
+                                    episode_response.episode_id,
+                                    reason="completed",
+                                    result=limit_submission,
+                                    cascade_end_attached_episodes=cascade_end,
+                                )
+
+                                logger.info(
+                                    "Episode ended after tool call limit",
+                                    extra={
+                                        "event": "episode_completed_tool_limit",
+                                        "episode_id": episode_response.episode_id,
+                                        "cascade_end": cascade_end,
+                                    },
+                                )
+
+                                log_operation_success(
+                                    logger,
+                                    "agent_execution",
+                                    agent_id=agent_id,
+                                    implementation=implementation_name,
+                                    episode_id=episode_response.episode_id,
+                                    task_id=task_id,
+                                    completion_reason="tool_call_limit",
+                                )
+
+                                # Return the current state instead of raising
+                                return state
+
+                            # For actual errors (not tool call limits), proceed with error handling
                             log_operation_failure(
                                 logger,
                                 "agent_execution",

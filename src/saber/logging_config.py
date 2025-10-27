@@ -396,7 +396,13 @@ def log_operation_failure(
         extra["session_id"] = session_id
     if kwargs:
         extra.update(kwargs)
-    logger.error("Operation failed", extra=extra)
+
+    # Check if this is a tool call limit error and use friendlier messaging
+    error_str = str(error)
+    if "tool call limit" in error_str.lower() or "LimitExceededError" in str(type(error).__name__):
+        logger.info("Agent reached tool call limit", extra=extra)
+    else:
+        logger.error("Operation failed", extra=extra)
 
 
 def log_timeout(

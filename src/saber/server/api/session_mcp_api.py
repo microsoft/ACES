@@ -273,10 +273,32 @@ class SessionMCPAPI:
                 # Get parsed headers
                 headers = await self._get_headers()
                 if not headers.has_session_context:
-                    return json.dumps({"success": False, "error": "No SABER session mapped to MCP request"})
-                if not headers.has_episode_context:
+                    logger.warning(
+                        "end_episode called without session context",
+                        extra={"event": "end_episode_no_session"},
+                    )
                     return json.dumps(
-                        {"success": False, "error": "No SABER episode ID in headers - episode context required"}
+                        {
+                            "success": False,
+                            "error": "No session context available. Agent may have failed during initialization.",
+                        }
+                    )
+                if not headers.has_episode_context:
+                    logger.warning(
+                        "end_episode called without episode context",
+                        extra={
+                            "event": "end_episode_no_episode",
+                            "session_id": headers.session_id,
+                        },
+                    )
+                    return json.dumps(
+                        {
+                            "success": False,
+                            "error": (
+                                "No episode context available. The episode may have failed to be created, "
+                                "or the sample failed early."
+                            ),
+                        }
                     )
 
                 # At this point, session_id and episode_id are guaranteed to be non-None
@@ -478,14 +500,46 @@ class SessionMCPAPI:
         # Get parsed headers first
         headers = await self._get_headers()
         if not headers.has_session_context:
+            logger.warning(
+                "Tool call attempted without session context",
+                extra={
+                    "event": "mcp_tool_call_no_session",
+                    "tool_name": name,
+                },
+            )
             return MCPToolCallResponse(
-                content=[{"type": "text", "text": "Error: No SABER session mapped to MCP request"}], isError=True
+                content=[
+                    {
+                        "type": "text",
+                        "text": (
+                            "Error: No SABER session available. This typically indicates "
+                            "the agent failed to initialize properly."
+                        ),
+                    }
+                ],
+                isError=True,
             )
 
         # Episode ID is required for multi-episode architecture
         if not headers.has_episode_context:
+            logger.warning(
+                "Tool call attempted without episode context",
+                extra={
+                    "event": "mcp_tool_call_no_episode",
+                    "tool_name": name,
+                    "session_id": headers.session_id,
+                },
+            )
             return MCPToolCallResponse(
-                content=[{"type": "text", "text": "Error: No SABER episode ID in headers - episode context required"}],
+                content=[
+                    {
+                        "type": "text",
+                        "text": (
+                            "Error: No episode context available. This usually means the sample failed "
+                            "before the episode could be created, or the agent failed during initialization."
+                        ),
+                    }
+                ],
                 isError=True,
             )
 
@@ -496,8 +550,26 @@ class SessionMCPAPI:
         # Get episode for validation
         episode = self.session_manager.get_episode_by_id(headers.episode_id)
         if not episode:
+            logger.warning(
+                "Tool call attempted with non-existent episode",
+                extra={
+                    "event": "mcp_tool_call_episode_not_found",
+                    "tool_name": name,
+                    "session_id": headers.session_id,
+                    "episode_id": headers.episode_id,
+                },
+            )
             return MCPToolCallResponse(
-                content=[{"type": "text", "text": f"Error: Episode {headers.episode_id} not found"}], isError=True
+                content=[
+                    {
+                        "type": "text",
+                        "text": (
+                            f"Error: Episode {headers.episode_id} not found. "
+                            "The episode may have been terminated or cleaned up."
+                        ),
+                    }
+                ],
+                isError=True,
             )
 
         try:
@@ -509,6 +581,17 @@ class SessionMCPAPI:
             return self._convert_to_mcp_result(command_result)
 
         except Exception as exc:
+            # Provide more helpful error context based on exception type
+            error_context = ""
+            if "timeout" in str(exc).lower():
+                error_context = " (timeout occurred)"
+            elif "permission" in str(exc).lower() or "denied" in str(exc).lower():
+                error_context = " (permission denied)"
+            elif "connection" in str(exc).lower():
+                error_context = " (connection error)"
+            elif "not found" in str(exc).lower():
+                error_context = " (resource not found)"
+
             log_operation_failure(
                 logger,
                 "call_mcp_tool",
@@ -516,9 +599,10 @@ class SessionMCPAPI:
                 tool_name=name,
                 session_id=headers.session_id,
                 episode_id=headers.episode_id,
+                error_context=error_context,
             )
             return MCPToolCallResponse(
-                content=[{"type": "text", "text": f"Error: Tool execution failed: {exc}"}], isError=True
+                content=[{"type": "text", "text": f"Error: Tool execution failed{error_context}: {exc}"}], isError=True
             )
 
     async def _handle_end_episode_call(
@@ -545,13 +629,38 @@ class SessionMCPAPI:
         """
         try:
             if not session_id:
+                logger.warning(
+                    "_handle_end_episode_call called without session_id",
+                    extra={"event": "handle_end_episode_no_session"},
+                )
                 return MCPToolCallResponse(
-                    content=[{"type": "text", "text": "Error: No SABER session mapped to MCP request"}], isError=True
+                    content=[
+                        {
+                            "type": "text",
+                            "text": "Error: No session context available. Agent initialization may have failed.",
+                        }
+                    ],
+                    isError=True,
                 )
 
             if not episode_id:
+                logger.warning(
+                    "_handle_end_episode_call called without episode_id",
+                    extra={
+                        "event": "handle_end_episode_no_episode",
+                        "session_id": session_id,
+                    },
+                )
                 return MCPToolCallResponse(
-                    content=[{"type": "text", "text": "Error: No SABER episode ID - episode context required"}],
+                    content=[
+                        {
+                            "type": "text",
+                            "text": (
+                                "Error: No episode context available. The sample likely failed "
+                                "before the episode could be created."
+                            ),
+                        }
+                    ],
                     isError=True,
                 )
 
