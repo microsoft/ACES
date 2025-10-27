@@ -33,6 +33,7 @@ class Task:
         submission_evaluation_config: Optional[Dict[str, Any]] = None,
         step_evaluation_config: Optional[Dict[str, Any]] = None,
         depends_on_task_id: Optional[str] = None,
+        initial_files: Optional[Dict[str, str]] = None,
     ):
         """
         Initialize a task.
@@ -57,6 +58,9 @@ class Task:
             submission_evaluation_config: Submission-level evaluation config (strategy, criteria, scoring)
             step_evaluation_config: Step-level evaluation config (strategy, criteria, subtasks)
             depends_on_task_id: Task ID that episodes of this task should connect to when created
+            initial_files: Dictionary mapping destination paths in container to source paths
+                relative to server/data directory. Example:
+                {"/root/pom.xml": "sandbox_files/challenge/pom.xml"}
         """
         # Validate prompts dictionary - fail fast
         if not isinstance(prompts, dict):
@@ -85,6 +89,7 @@ class Task:
         self.submission_evaluation_config = submission_evaluation_config or {}
         self.step_evaluation_config = step_evaluation_config or {}
         self.depends_on_task_id = depends_on_task_id
+        self.initial_files = initial_files or {}
 
         # Create lookup map for efficient subtask access
         self._subtask_map = {st.subtask_id: st for st in self.subtasks}
@@ -190,6 +195,7 @@ class Task:
             "submission_evaluation_config": self.submission_evaluation_config,
             "step_evaluation_config": self.step_evaluation_config,
             "depends_on_task_id": self.depends_on_task_id,
+            "initial_files": self.initial_files,
             "subtask_count": len(self.subtasks),
             "episode_attempts": self.get_episode_attempts(),
         }

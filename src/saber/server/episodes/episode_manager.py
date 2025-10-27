@@ -41,6 +41,7 @@ class EpisodeManager:
         self.session_episodes: Dict[str, List[str]] = {}  # session_id -> [episode_ids]
         self.completed_episodes: Dict[str, Episode] = {}  # episode_id -> completed Episode (for history)
         self.episode_configs: Dict[str, Dict[str, Any]] = {}  # episode_id -> episode config from task
+        self.file_copier: Optional[Any] = None  # SandboxFileCopier instance
 
     def get_episode_by_id(self, episode_id: str) -> Optional[Episode]:
         """Get episode by episode ID from active or completed episodes."""
@@ -80,6 +81,104 @@ class EpisodeManager:
         if episode:
             self.completed_episodes[episode_id] = episode
         return episode
+
+    def initialize_file_copier(self, server_base_dir: Any) -> None:
+        """
+        Initialize the file copier for copying files to episode containers.
+
+        Args:
+            server_base_dir: Path to server base directory (parent of config/, docker/, data/, logs/)
+        """
+        from pathlib import Path as FilePath
+
+        from saber.server.execution.sandbox.file_copier import SandboxFileCopier
+
+        self.file_copier = SandboxFileCopier(base_dir=FilePath(server_base_dir))
+        logger.info(
+            "File copier initialized for episode manager",
+            extra={
+                "event": "episode_file_copier_initialized",
+                "server_base_dir": str(server_base_dir),
+            },
+        )
+
+    async def copy_initial_files(
+        self,
+        episode_id: str,
+        task: Any,
+        container_prefix: str = "default",
+    ) -> None:
+        """
+        Copy initial files specified in task configuration to episode container.
+
+        Args:
+            episode_id: The episode ID
+            task: Task object with initial_files configuration
+            container_prefix: Container name prefix (default: "default")
+
+        Raises:
+            RuntimeError: If file copier is not configured
+            Exception: If file copy operation fails
+        """
+        if not task.initial_files:
+            logger.debug(
+                "No initial files to copy for task",
+                extra={
+                    "event": "episode_initial_files_skip",
+                    "episode_id": episode_id,
+                    "task_id": task.task_id,
+                },
+            )
+            return
+
+        if not self.file_copier:
+            error_msg = "File copier not configured but task requires file provisioning"
+            logger.error(
+                error_msg,
+                extra={
+                    "event": "episode_file_copy_no_copier",
+                    "episode_id": episode_id,
+                    "task_id": task.task_id,
+                },
+            )
+            raise RuntimeError(error_msg)
+
+        logger.info(
+            "Copying initial files to episode container",
+            extra={
+                "event": "episode_initial_files_copy_start",
+                "episode_id": episode_id,
+                "task_id": task.task_id,
+                "file_count": len(task.initial_files),
+            },
+        )
+
+        try:
+            await self.file_copier.copy_files_to_episode(
+                episode_id=episode_id,
+                file_mappings=task.initial_files,
+                container_prefix=container_prefix,
+            )
+            logger.info(
+                "Initial files copied successfully",
+                extra={
+                    "event": "episode_initial_files_copy_success",
+                    "episode_id": episode_id,
+                    "task_id": task.task_id,
+                },
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to copy initial files",
+                extra={
+                    "event": "episode_initial_files_copy_failed",
+                    "episode_id": episode_id,
+                    "task_id": task.task_id,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+            )
+            raise
 
     def find_available_episode_for_dependency(
         self, session_id: str, target_task_id: str, dependent_task_id: str
@@ -278,13 +377,20 @@ class EpisodeManager:
             },
         )
 
-    def configure_for_task(self, episode_id: str, task: Any) -> None:
+    async def configure_for_task(self, episode_id: str, task: Any) -> None:
         """
         Configure EpisodeManager for a specific task/episode.
+
+        This method also handles copying initial files to the episode container
+        if the task specifies them.
 
         Args:
             episode_id: Episode identifier
             task: Task object containing episode configuration
+
+        Raises:
+            ValueError: If required configuration is missing
+            RuntimeError: If file provisioning fails
         """
         # Extract episode configuration from task
         episode_config = {}
@@ -332,6 +438,11 @@ class EpisodeManager:
                 "episode_timeout_minutes": episode_config.get("episode_timeout_minutes"),
             },
         )
+
+        # Copy initial files to episode container if specified in task
+        # This happens automatically after configuration
+        if task and hasattr(task, "initial_files") and task.initial_files:
+            await self.copy_initial_files(episode_id, task)
 
     def should_terminate_episode(self, episode_id: str) -> tuple[bool, str]:
         """

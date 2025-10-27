@@ -102,11 +102,13 @@ docker/
 ├── Dockerfile.saber_execution     # Base execution image
 └── README.md                      # This file
 
-domains/my_domain/docker/
-├── build-images.sh                # Domain build script
-├── Dockerfile.server              # Extends saber/server
-├── Dockerfile.client              # Extends saber/client
-└── Dockerfile.sandbox             # Extends saber/sandbox
+domains/my_domain/
+└── server/
+    ├── config/                    # Task configs, prompts, etc.
+    └── docker/                    # Domain Docker files
+        ├── Dockerfile.server      # Extends saber/server
+        ├── Dockerfile.client      # Extends saber/client
+        └── Dockerfile.sandbox     # Extends saber/sandbox
 ```
 
 ## Benefits

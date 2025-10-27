@@ -65,6 +65,7 @@ class PromptContext:
     subtasks: List[Dict[str, Any]]
     allowed_executors: List[str]
     initial_context: Optional[Dict[str, Any]] = None
+    initial_files: Optional[Dict[str, str]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for Jinja2 template rendering."""
@@ -83,6 +84,10 @@ class PromptContext:
         # Add initial_context if provided
         if self.initial_context:
             result["initial_context"] = self.initial_context
+
+        # Add initial_files if provided
+        if self.initial_files:
+            result["initial_files"] = self.initial_files
 
         return result
 
@@ -388,6 +393,7 @@ class PromptGenerator:
             subtasks=subtasks_data,
             allowed_executors=allowed_executors,
             initial_context=task.initial_context,  # Include initial_context from task
+            initial_files=task.initial_files,  # Include initial_files from task
         )
 
     # -------------------- Private Helpers --------------------

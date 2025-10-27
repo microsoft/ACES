@@ -17,6 +17,7 @@ services:
     volumes:
       # Domain-specific mounts
       - ${DOMAINS_ROOT:?DOMAINS_ROOT must be set}/${DOMAIN}/server/config:/app/config:ro
+      - ${DOMAINS_ROOT}/${DOMAIN}/server/docker:/app/docker:ro
       - ${DOMAINS_ROOT}/${DOMAIN}/server/logs:/app/logs:rw
       - ${DOMAINS_ROOT}/${DOMAIN}/server/data:/app/data:rw
       # Cross-domain visibility with writable logs

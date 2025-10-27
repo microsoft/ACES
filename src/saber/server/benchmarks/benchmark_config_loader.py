@@ -1056,6 +1056,26 @@ class BenchmarkConfigLoader:
             if step_evaluation_config:
                 self._validate_step_evaluation_config(step_evaluation_config, task_id)
 
+            # Parse initial_files if present
+            initial_files = task_data.get("initial_files")
+            if initial_files is not None:
+                if not isinstance(initial_files, dict):
+                    failure_context = {"invalid_field": "initial_files", "value": initial_files}
+                    raise InvalidTaskDefinitionException(
+                        f"Task '{task_id}' initial_files must be a dictionary if provided"
+                    )
+                # Validate that all values are strings (paths)
+                for dest_path, source_path in initial_files.items():
+                    if not isinstance(dest_path, str) or not isinstance(source_path, str):
+                        failure_context = {
+                            "invalid_field": "initial_files",
+                            "dest_path": dest_path,
+                            "source_path": source_path,
+                        }
+                        raise InvalidTaskDefinitionException(
+                            f"Task '{task_id}' initial_files entries must be string -> string mappings"
+                        )
+
             subtasks_data = task_data.get("subtasks", [])
             subtasks = []
 
@@ -1105,6 +1125,7 @@ class BenchmarkConfigLoader:
                 submission_evaluation_config=submission_evaluation_config,
                 step_evaluation_config=step_evaluation_config,
                 depends_on_task_id=task_data.get("depends_on_task_id"),
+                initial_files=initial_files,
             )
 
             log_operation_success(

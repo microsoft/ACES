@@ -41,6 +41,72 @@ class TestPromptContext:
         assert context.timeout_seconds == 30
         assert len(context.subtasks) == 1
 
+    def test_prompt_context_to_dict(self):
+        """Test converting PromptContext to dictionary."""
+        context = PromptContext(
+            domain="test_domain",
+            task_id="test_task",
+            task_title="Test Task",
+            task_description="Test description",
+            timeout_seconds=60,
+            max_steps=10,
+            environment="test_env",
+            subtasks=[],
+            allowed_executors=["bash"]
+        )
+
+        context_dict = context.to_dict()
+        assert isinstance(context_dict, dict)
+        assert context_dict["domain"] == "test_domain"
+        assert context_dict["timeout_seconds"] == 60
+        assert context_dict["subtasks"] == []
+
+    def test_prompt_context_with_initial_files(self):
+        """Test PromptContext with initial_files field."""
+        initial_files = {
+            "/root/pom.xml": "/app/data/resources/pom.xml",
+            "/root/src/": "/app/data/resources/src/"
+        }
+
+        context = PromptContext(
+            domain="cybench",
+            task_id="labyrinth_linguist",
+            task_title="Labyrinth Linguist Challenge",
+            task_description="Test description",
+            timeout_seconds=60,
+            max_steps=10,
+            environment="test_env",
+            subtasks=[],
+            allowed_executors=["bash"],
+            initial_files=initial_files
+        )
+
+        assert context.initial_files == initial_files
+
+        context_dict = context.to_dict()
+        assert "initial_files" in context_dict
+        assert context_dict["initial_files"] == initial_files
+        assert context_dict["initial_files"]["/root/pom.xml"] == "/app/data/resources/pom.xml"
+
+    def test_prompt_context_without_initial_files(self):
+        """Test PromptContext without initial_files (defaults to None)."""
+        context = PromptContext(
+            domain="test_domain",
+            task_id="test_task",
+            task_title="Test Task",
+            task_description="Test description",
+            timeout_seconds=60,
+            max_steps=10,
+            environment="test_env",
+            subtasks=[],
+            allowed_executors=["bash"]
+        )
+
+        assert context.initial_files is None
+
+        context_dict = context.to_dict()
+        assert "initial_files" not in context_dict  # Should not be included when None
+
 
 class TestPromptGenerator:
     """Test PromptGenerator service for agent prompts."""

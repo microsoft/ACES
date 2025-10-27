@@ -202,6 +202,11 @@ class SessionManager:
         }
         self.execution_manager.initialize_permanent_environment_manager(permanent_config)
 
+        # Initialize file copier for sandbox file provisioning
+        # Use server base directory (parent of config/) to allow access to docker/, data/, etc.
+        server_base_dir = Path(config_dir).parent
+        self.episode_manager.initialize_file_copier(server_base_dir)
+
         self.policy_manager = PolicyManager(domain_name)
         self.evaluation_manager = EvaluationManager()
 
@@ -1093,7 +1098,7 @@ class SessionManager:
         self.policy_manager.set_episode_policy(episode.episode_id, session_id, instruction_prompt)
 
         # Configure episode manager with task object
-        self.episode_manager.configure_for_task(episode.episode_id, task)
+        await self.episode_manager.configure_for_task(episode.episode_id, task)
 
         # Configure evaluation manager for task (fail fast if invalid)
         try:

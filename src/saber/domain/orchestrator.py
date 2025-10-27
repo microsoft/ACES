@@ -202,7 +202,7 @@ class ManifestLoader:
         errors = []
 
         # Required directories (server-only architecture)
-        required_dirs = ["server/config", "docker"]
+        required_dirs = ["server/config", "server/docker"]
 
         for dir_path in required_dirs:
             full_path = domain_path / dir_path
