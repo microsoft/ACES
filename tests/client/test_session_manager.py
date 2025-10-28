@@ -23,7 +23,7 @@ class TestSessionManagerConfig:
         assert config.base_url == "http://test:8000"
         assert config.client_id == "test-client"
         assert config.mcp_server_url == "http://test:8001"
-        assert config.rest_timeout == 30.0
+        assert config.rest_timeout == 300.0
 
 
 class TestClientSessionManager:

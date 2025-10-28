@@ -195,7 +195,7 @@ class TestSessionMCPAPI:
 
         # Verify error result
         assert result.isError is True
-        assert "No SABER session mapped to MCP request" in result.content[0]["text"]
+        assert "No SABER session available" in result.content[0]["text"]
 
     @pytest.mark.asyncio
     async def test_handle_end_episode_call_success(self, mcp_api):
@@ -266,7 +266,7 @@ class TestSessionMCPAPI:
 
         # Verify error result
         assert result.isError is True
-        assert "No SABER session mapped to MCP request" in result.content[0]["text"]
+        assert "No session context available" in result.content[0]["text"]
 
     @pytest.mark.asyncio
     async def test_handle_call_tool_hardcoded_tools(self, mcp_api):

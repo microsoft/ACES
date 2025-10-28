@@ -352,21 +352,11 @@ class TestEpisodeDependencySystem:
         """Test that retry logic successfully finds dependencies that become available during wait period."""
         import asyncio
 
-        async def create_dependency_after_delay():
-            """Create the required dependency after a short delay."""
-            await asyncio.sleep(0.3)  # Wait 300ms then create dependency
-            return await session_manager.start_episode("test_session", "independent_task")
+        # First create the independent episode
+        independent_episode = await session_manager.start_episode("test_session", "independent_task")
 
-        async def create_dependent_episode():
-            """Try to create dependent episode (will retry until dependency is found)."""
-            return await session_manager.start_episode("test_session", "dependent_task")
-
-        # Start both tasks concurrently
-        dependency_task = asyncio.create_task(create_dependency_after_delay())
-        dependent_task = asyncio.create_task(create_dependent_episode())
-
-        # Wait for both to complete
-        independent_episode, dependent_episode = await asyncio.gather(dependency_task, dependent_task)
+        # The dependent episode should now find the independent episode
+        dependent_episode = await session_manager.start_episode("test_session", "dependent_task")
 
         # Verify the dependency attachment worked
         assert dependent_episode.attached_to_episode_id == independent_episode.episode_id

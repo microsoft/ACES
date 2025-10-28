@@ -66,6 +66,7 @@ class TestSessionManagerIntegration:
         mock_episode_manager.start_episode = MagicMock()
         mock_episode_manager.end_episode = MagicMock()
         mock_episode_manager.get_episode = MagicMock()
+        mock_episode_manager.configure_for_task = AsyncMock()
 
         with (
             patch("saber.server.session_manager.BenchmarkManager", return_value=mock_task_manager),
@@ -241,6 +242,7 @@ class TestSessionManagerErrorHandling:
         mock_episode_manager.start_episode = MagicMock()
         mock_episode_manager.end_episode = MagicMock()
         mock_episode_manager.get_episode = MagicMock()
+        mock_episode_manager.configure_for_task = AsyncMock()
 
         with (
             patch("saber.server.session_manager.BenchmarkManager", return_value=mock_task_manager),

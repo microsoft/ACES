@@ -131,13 +131,13 @@ class TestDockerRunnerBuildImages:
         # Should ensure base images in rebuild mode
         mock_ensure_base.assert_called_once()
 
-        # Should remove existing images (5 docker rmi calls)
+        # Should remove existing images (4 docker rmi calls)
         rmi_calls = [c for c in mock_subprocess.call_args_list if 'docker' in str(c) and 'rmi' in str(c)]
-        assert len(rmi_calls) == 5
+        assert len(rmi_calls) == 4
 
-        # Should build all 5 images (5 docker build calls)
+        # Should build all 4 images (4 docker build calls)
         build_calls = [c for c in mock_subprocess.call_args_list if 'docker' in str(c) and 'build' in str(c)]
-        assert len(build_calls) == 5
+        assert len(build_calls) == 4
 
     @patch('saber.domain.orchestrator.subprocess.run')
     @patch('saber.domain.orchestrator.DockerRunner._docker_image_exists')

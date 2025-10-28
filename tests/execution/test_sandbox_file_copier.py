@@ -74,7 +74,7 @@ class TestSandboxFileCopier:
         """Test that Docker client is lazily initialized."""
         assert file_copier._docker_client is None
 
-        with patch("docker.from_env") as mock_from_env:
+        with patch("saber.server.execution.sandbox.file_copier.docker_client.from_env") as mock_from_env:
             mock_client = MagicMock()
             mock_from_env.return_value = mock_client
 
@@ -287,7 +287,7 @@ class TestSandboxFileCopier:
 
     def test_close_docker_client(self, file_copier):
         """Test closing the Docker client connection."""
-        with patch("docker.from_env") as mock_from_env:
+        with patch("saber.server.execution.sandbox.file_copier.docker_client.from_env") as mock_from_env:
             mock_client = MagicMock()
             mock_from_env.return_value = mock_client
 

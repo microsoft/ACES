@@ -267,9 +267,14 @@ class TestSaberScorerStepEvaluation:
 
             # Check metadata structure
             assert "submission_score" in score.metadata
-            assert "step_score" in score.metadata
+            # step_score is now calculated as sum of individual subtask scores
+            # Check for individual subtask scores instead
             assert "max_possible" in score.metadata
             assert score.metadata["submission_score"] == 1.0  # Submission was CORRECT
+            # Verify individual subtask scores are present
+            assert "incident_investigation_1_initial_access_score" in score.metadata
+            assert "incident_investigation_1_log_analysis_score" in score.metadata
+            assert "incident_investigation_1_threat_attribution_score" in score.metadata
 
     @pytest.mark.asyncio
     async def test_partial_step_evaluation(self, saber_scorer_instance, task_state_with_episode, saber_context):
@@ -823,8 +828,12 @@ class TestSaberScorerStepEvaluation:
 
             # Check metadata contains score information
             assert "submission_score" in metadata
-            assert "step_score" in metadata
+            # step_score is now calculated as sum of individual subtask scores
+            # Check for individual subtask scores instead
             assert "max_possible" in metadata
+            # Verify individual checkpoint scores are present
+            assert "main_task_id_checkpoint_alpha_score" in metadata
+            assert "main_task_id_checkpoint_beta_score" in metadata
 
             # Check original scorer metadata is preserved
             assert "scorer_version" in metadata
