@@ -55,10 +55,113 @@ inspect_ai.model._call_tools.tool_params = saber_tool_params
 logger.info("🔧 Monkey-patched execute_tools + tool_params with SABER context injection")
 
 
-@asynccontextmanager
-async def mcp_client_lifecycle(url: str, headers: Dict[str, str], name: str = "MCP Tools") -> AsyncIterator[Tool]:
+async def create_mcp_client_with_retry(
+    url: str,
+    headers: Dict[str, str],
+    name: str,
+    timeout: float = 300.0,
+    sse_read_timeout: float = 300.0,
+    max_retries: int = 3,
+) -> Tool:
     """
-    Async context manager for MCP client lifecycle management.
+    Create MCP client with retry logic for transient failures.
+
+    Handles transient failures like event loop starvation by retrying with
+    exponential backoff before eventually failing.
+
+    Args:
+        url: MCP server URL
+        headers: HTTP headers for session/episode context
+        name: Display name for the MCP server
+        timeout: Timeout for HTTP operations (default: 300s)
+        sse_read_timeout: Timeout for SSE read operations (default: 300s)
+        max_retries: Maximum number of retry attempts (default: 3)
+
+    Returns:
+        Tool object from mcp_server_http()
+
+    Raises:
+        Exception: After max_retries attempts have failed
+    """
+    last_exception = None
+
+    for attempt in range(max_retries):
+        try:
+            logger.info(
+                f"Creating MCP client (attempt {attempt + 1}/{max_retries})",
+                extra={
+                    "event": "mcp_client_create_attempt",
+                    "attempt": attempt + 1,
+                    "max_retries": max_retries,
+                    "url": url,
+                    "timeout": timeout,
+                },
+            )
+
+            mcp_tool = mcp_server_http(
+                name=name,
+                url=url,
+                headers=headers,
+                timeout=timeout,
+                sse_read_timeout=sse_read_timeout,
+            )
+
+            logger.info(
+                "MCP client created successfully",
+                extra={
+                    "event": "mcp_client_created",
+                    "attempt": attempt + 1,
+                    "url": url,
+                },
+            )
+            return mcp_tool
+
+        except Exception as e:
+            last_exception = e
+            if attempt < max_retries - 1:
+                # Exponential backoff: 1s, 2s, 4s, etc.
+                wait_time = 2**attempt
+                logger.warning(
+                    f"MCP client creation failed, retrying in {wait_time}s",
+                    extra={
+                        "event": "mcp_client_create_retry",
+                        "attempt": attempt + 1,
+                        "max_retries": max_retries,
+                        "wait_time": wait_time,
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    },
+                )
+                await asyncio.sleep(wait_time)
+            else:
+                logger.error(
+                    "MCP client creation failed after all retries",
+                    extra={
+                        "event": "mcp_client_create_failed",
+                        "attempts": max_retries,
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    },
+                )
+
+    # All retries exhausted
+    raise Exception(
+        f"Failed to create MCP client after {max_retries} attempts. "
+        f"Last error: {type(last_exception).__name__}: {str(last_exception)}"
+    ) from last_exception
+
+
+@asynccontextmanager
+async def mcp_client_lifecycle(
+    url: str,
+    headers: Dict[str, str],
+    name: str = "MCP Tools",
+    timeout: float = 300.0,
+    sse_read_timeout: float = 300.0,
+    max_retries: int = 3,
+) -> AsyncIterator[Tool]:
+    """
+    Async context manager for MCP client lifecycle management with retry logic.
 
     This wrapper ensures the MCP client from mcp_server_http() is properly cleaned up
     in the same async task context where it was created, preventing anyio cancel scope errors.
@@ -68,7 +171,7 @@ async def mcp_client_lifecycle(url: str, headers: Dict[str, str], name: str = "M
     "RuntimeError: Attempted to exit cancel scope in a different task than it was entered in"
 
     This wrapper forces cleanup to happen in the correct task context by:
-    1. Creating the MCP client within the async context
+    1. Creating the MCP client within the async context with retry logic
     2. Yielding it for use
     3. Ensuring cleanup happens in the same task via __aexit__
 
@@ -76,14 +179,27 @@ async def mcp_client_lifecycle(url: str, headers: Dict[str, str], name: str = "M
         url: MCP server URL
         headers: HTTP headers for session/episode context
         name: Display name for the MCP server
+        timeout: Timeout for HTTP operations (default: 300s)
+        sse_read_timeout: Timeout for SSE read operations (default: 300s)
+        max_retries: Maximum number of retry attempts (default: 3)
 
     Yields:
         Tool object from mcp_server_http()
+
+    Raises:
+        Exception: After max_retries connection attempts have failed
     """
     mcp_tool = None
     try:
-        # Create MCP client
-        mcp_tool = mcp_server_http(name=name, url=url, headers=headers)
+        # Create MCP client with retry logic
+        mcp_tool = await create_mcp_client_with_retry(
+            url=url,
+            headers=headers,
+            name=name,
+            timeout=timeout,
+            sse_read_timeout=sse_read_timeout,
+            max_retries=max_retries,
+        )
         logger.debug(
             "MCP client created",
             extra={
@@ -365,6 +481,9 @@ async def create_saber_inspect_agent(
                         url=f"{config.session_config.mcp_server_url}/mcp",
                         headers=mcp_headers,
                         name="SABER Security Tools",
+                        timeout=config.session_config.mcp_timeout,
+                        sse_read_timeout=config.session_config.mcp_sse_read_timeout,
+                        max_retries=config.session_config.mcp_max_retries,
                     ) as saber_server:
                         # Context injection happens automatically via monkey-patched execute_tools
                         all_tools = list(tools) + [saber_server]

@@ -6,7 +6,7 @@ MCP tools are now handled natively by inspect_ai via mcp_server_http().
 """
 
 import asyncio
-from typing import List, Optional
+from typing import Any, Awaitable, Callable, List, Optional
 
 import aiohttp
 
@@ -63,15 +63,99 @@ class ClientSessionManager:
             extra={"base_url": self.base_url, "client_id": self.client_id},
         )
 
+    async def _retry_request(
+        self,
+        operation_name: str,
+        request_func: Callable[[], Awaitable[tuple[int, Any]]],
+        max_retries: Optional[int] = None,
+    ) -> tuple[int, Any]:
+        """
+        Execute HTTP request with retry logic for transient failures.
+
+        Args:
+            operation_name: Name of the operation for logging
+            request_func: Async function that returns (status_code, response_data)
+            max_retries: Maximum retry attempts (defaults to config.rest_max_retries)
+
+        Returns:
+            Tuple of (status_code, response_data)
+
+        Raises:
+            Exception: After max_retries attempts have failed
+        """
+        if max_retries is None:
+            max_retries = self.config.rest_max_retries
+
+        last_exception = None
+
+        for attempt in range(max_retries):
+            try:
+                status, data = await request_func()
+                if status == 200:
+                    return status, data
+
+                # Non-200 status, retry on server errors (5xx) or timeouts
+                if status >= 500 or status == 408:
+                    if attempt < max_retries - 1:
+                        wait_time = 2**attempt
+                        logger.warning(
+                            f"{operation_name} failed with status {status}, retrying in {wait_time}s",
+                            extra={
+                                "event": f"{operation_name}_retry",
+                                "attempt": attempt + 1,
+                                "max_retries": max_retries,
+                                "status_code": status,
+                                "wait_time": wait_time,
+                            },
+                        )
+                        await asyncio.sleep(wait_time)
+                        continue
+
+                # Client error (4xx) or final attempt, don't retry
+                return status, data
+
+            except (asyncio.TimeoutError, aiohttp.ClientError) as e:
+                last_exception = e
+                if attempt < max_retries - 1:
+                    wait_time = 2**attempt
+                    logger.warning(
+                        f"{operation_name} failed with {type(e).__name__}, retrying in {wait_time}s",
+                        extra={
+                            "event": f"{operation_name}_retry",
+                            "attempt": attempt + 1,
+                            "max_retries": max_retries,
+                            "error": str(e),
+                            "error_type": type(e).__name__,
+                            "wait_time": wait_time,
+                        },
+                    )
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(
+                        f"{operation_name} failed after all retries",
+                        extra={
+                            "event": f"{operation_name}_failed",
+                            "attempts": max_retries,
+                            "error": str(e),
+                            "error_type": type(e).__name__,
+                        },
+                    )
+
+        # All retries exhausted
+        raise Exception(
+            f"{operation_name} failed after {max_retries} attempts. "
+            f"Last error: {type(last_exception).__name__}: {str(last_exception)}"
+        ) from last_exception
+
     async def create_session(self) -> str:
         """
-        Create a new SABER session via REST API.
+        Create a new SABER session via REST API with retry logic.
 
         Returns:
             Session ID
 
         Raises:
-            Exception: If session creation fails
+            Exception: If session creation fails after retries
         """
         logger.info(
             "Creating SABER session",
@@ -81,39 +165,47 @@ class ClientSessionManager:
         url = f"{self.base_url}/api/v1/session"
         params = {"client_id": self.client_id}
 
-        async with aiohttp.ClientSession() as session:
-            timeout = aiohttp.ClientTimeout(total=self.timeout)
-            async with session.post(url, params=params, timeout=timeout) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    session_response = SessionCreateResponse(**data)
-                    self._current_session_id = session_response.session_id
+        async def _do_request() -> tuple[int, Any]:
+            async with aiohttp.ClientSession() as session:
+                timeout = aiohttp.ClientTimeout(total=self.timeout)
+                async with session.post(url, params=params, timeout=timeout) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        return response.status, data
+                    else:
+                        error_text = await response.text()
+                        return response.status, error_text
 
-                    logger.info(
-                        "SABER session created",
-                        extra={
-                            "event": "session_created",
-                            "session_id": session_response.session_id,
-                            "client_id": self.client_id,
-                        },
-                    )
-                    return session_response.session_id
-                else:
-                    error_text = await response.text()
-                    logger.error(
-                        "Session creation failed",
-                        extra={
-                            "event": "session_create_failed",
-                            "client_id": self.client_id,
-                            "status_code": response.status,
-                            "response_text": error_text,
-                        },
-                    )
-                    raise Exception(f"Failed to create session: {response.status} - {error_text}")
+        status, result = await self._retry_request("create_session", _do_request)
+
+        if status == 200:
+            session_response = SessionCreateResponse(**result)
+            self._current_session_id = session_response.session_id
+
+            logger.info(
+                "SABER session created",
+                extra={
+                    "event": "session_created",
+                    "session_id": session_response.session_id,
+                    "client_id": self.client_id,
+                },
+            )
+            return session_response.session_id
+        else:
+            logger.error(
+                "Session creation failed",
+                extra={
+                    "event": "session_create_failed",
+                    "client_id": self.client_id,
+                    "status_code": status,
+                    "response_text": result,
+                },
+            )
+            raise Exception(f"Failed to create session: {status} - {result}")
 
     async def create_episode(self, session_id: str, task_id: str) -> EpisodeCreateResponse:
         """
-        Create a new episode within a session via REST API.
+        Create a new episode within a session via REST API with retry logic.
 
         Args:
             session_id: Session ID
@@ -123,71 +215,63 @@ class ClientSessionManager:
             EpisodeCreateResponse with episode details
 
         Raises:
-            Exception: If episode creation fails
+            Exception: If episode creation fails after retries
         """
         url = f"{self.base_url}/api/v1/session/{session_id}/episodes"
         params = {"task_id": task_id}
 
-        try:
-            async with aiohttp.ClientSession() as session:
-                logger.info(
-                    "Creating episode",
-                    extra={
-                        "event": "episode_create_request",
-                        "session_id": session_id,
-                        "task_id": task_id,
-                    },
-                )
+        logger.info(
+            "Creating episode",
+            extra={
+                "event": "episode_create_request",
+                "session_id": session_id,
+                "task_id": task_id,
+            },
+        )
 
+        async def _do_request() -> tuple[int, Any]:
+            async with aiohttp.ClientSession() as session:
                 timeout = aiohttp.ClientTimeout(total=self.timeout)
                 async with session.post(url, params=params, timeout=timeout) as response:
                     if response.status == 200:
                         data = await response.json()
-                        episode_response = EpisodeCreateResponse(**data)
-
-                        log_msg = "Episode created"
-                        log_data = {
-                            "event": "episode_created",
-                            "session_id": session_id,
-                            "task_id": task_id,
-                            "episode_id": episode_response.episode_id,
-                        }
-
-                        if episode_response.attached_to_episode_id:
-                            log_msg = "Episode attached to dependency"
-                            log_data["attached_to_episode_id"] = episode_response.attached_to_episode_id
-
-                        logger.info(log_msg, extra=log_data)
-
-                        return episode_response
+                        return response.status, data
                     else:
                         error_text = await response.text()
-                        logger.error(
-                            "Episode creation failed",
-                            extra={
-                                "event": "episode_create_failed",
-                                "session_id": session_id,
-                                "task_id": task_id,
-                                "status_code": response.status,
-                                "error": error_text,
-                            },
-                        )
-                        raise Exception(f"Failed to create episode: {response.status} - {error_text}")
-        except asyncio.TimeoutError:
+                        return response.status, error_text
+
+        status, result = await self._retry_request("create_episode", _do_request)
+
+        if status == 200:
+            episode_response = EpisodeCreateResponse(**result)
+
+            log_msg = "Episode created"
+            log_data = {
+                "event": "episode_created",
+                "session_id": session_id,
+                "task_id": task_id,
+                "episode_id": episode_response.episode_id,
+            }
+
+            if episode_response.attached_to_episode_id:
+                log_msg = "Episode attached to dependency"
+                log_data["attached_to_episode_id"] = episode_response.attached_to_episode_id
+
+            logger.info(log_msg, extra=log_data)
+
+            return episode_response
+        else:
             logger.error(
-                "Episode creation timed out - likely waiting for episode creation lock",
+                "Episode creation failed",
                 extra={
-                    "event": "episode_create_timeout",
+                    "event": "episode_create_failed",
                     "session_id": session_id,
                     "task_id": task_id,
-                    "timeout_seconds": self.timeout,
+                    "status_code": status,
+                    "error": result,
                 },
             )
-            raise Exception(
-                f"Episode creation timed out after {self.timeout}s. "
-                f"This typically occurs when multiple samples are waiting for the global episode creation lock. "
-                f"The server serializes episode creation to prevent Docker daemon overload."
-            )
+            raise Exception(f"Failed to create episode: {status} - {result}")
 
     async def get_policy_response(self, session_id: str, episode_id: str) -> Optional[PolicyResponse]:
         """

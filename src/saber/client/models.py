@@ -19,6 +19,12 @@ class SessionManagerConfig(BaseModel):
     base_url: str = Field(..., description="Base URL for SABER server REST API")
     client_id: str = Field(default="saber_client", description="Client identifier for session creation")
     rest_timeout: float = Field(default=300.0, description="REST API request timeout in seconds")
+    rest_max_retries: int = Field(default=3, description="Maximum number of REST API retry attempts")
+
+    # MCP configuration
+    mcp_timeout: float = Field(default=300.0, description="MCP HTTP operations timeout in seconds")
+    mcp_sse_read_timeout: float = Field(default=300.0, description="MCP SSE read timeout in seconds")
+    mcp_max_retries: int = Field(default=3, description="Maximum number of MCP connection retry attempts")
 
     # MCP server URL for agent tasks (used by inspect_ai native integration)
     mcp_server_url: str = Field(description="SABER MCP server URL for agent tools")
