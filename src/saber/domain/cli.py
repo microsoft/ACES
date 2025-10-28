@@ -4,9 +4,10 @@ This module provides the Click-based CLI interface for domain operations
 with CLI-generated environment variables - no manual .env file editing required.
 """
 
+import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, cast
 
 import click
 
@@ -736,33 +737,400 @@ async def _ensure_server_running(
         domain, rest_port, mcp_port, log_level, rebuild=None, dry_run=False
     )  # rebuild=None since we already built above
 
-    # Wait for server readiness
-    await _wait_for_server_ready(rest_port, mcp_port)
+    # Wait for server readiness with detailed monitoring
+    await _wait_for_server_ready(rest_port, mcp_port, domain, orchestrator)
     click.echo(f"✓ Server ready at http://localhost:{rest_port}")
     return True  # We started it
 
 
-async def _wait_for_server_ready(rest_port: int, mcp_port: int, timeout: int = 30) -> None:
-    """Wait for server to be ready by checking REST health endpoint."""
+async def _wait_for_server_ready(rest_port: int, mcp_port: int, domain: str, orchestrator: DomainOrchestrator) -> None:
+    """
+    Wait for server to be ready with detailed health reporting and no timeout.
+
+    Shows periodic updates every 15 seconds with:
+    - Elapsed time
+    - Server health status
+    - Permanent environment health
+    - Error messages from logs
+
+    User can Ctrl+C to gracefully shutdown the server.
+    """
     import asyncio
+    import signal
 
     import aiohttp
 
     health_url = f"http://localhost:{rest_port}/api/v1/health"
     start_time = asyncio.get_event_loop().time()
+    last_report_time = 0
+    update_interval = 15  # Report every 15 seconds
+    shutdown_requested = False
 
-    while (asyncio.get_event_loop().time() - start_time) < timeout:
+    def signal_handler(signum: int, frame: Any) -> None:
+        """Handle Ctrl+C gracefully."""
+        nonlocal shutdown_requested
+        shutdown_requested = True
+
+    # Register signal handler
+    signal.signal(signal.SIGINT, signal_handler)
+
+    click.echo("⏳ Waiting for server to become ready...")
+    click.echo("   Press Ctrl+C to stop and shutdown the server")
+    click.echo()
+
+    try:
+        while not shutdown_requested:
+            elapsed = int(asyncio.get_event_loop().time() - start_time)
+
+            # Check if server is ready
+            server_ready = False
+            health_data = None
+            connection_error = None
+
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(health_url, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                        if response.status == 200:
+                            health_data = await response.json()
+                            server_ready = True
+                        else:
+                            connection_error = f"HTTP {response.status}"
+            except asyncio.TimeoutError:
+                connection_error = "Connection timeout"
+            except aiohttp.ClientConnectorError:
+                connection_error = "Connection refused"
+            except Exception as e:
+                connection_error = f"{type(e).__name__}: {str(e)[:50]}"
+
+            # If server is ready, we're done!
+            if server_ready:
+                click.echo(f"✓ Server ready after {elapsed}s")
+                return
+
+            # Show periodic status updates every 15 seconds
+            if elapsed - last_report_time >= update_interval:
+                last_report_time = elapsed
+                click.echo(f"📊 Status Update [{elapsed}s elapsed]")
+                click.echo(f"{'─' * 60}")
+
+                # Show connection status
+                if connection_error:
+                    click.echo(f"  🔌 Server Connection: {click.style(connection_error, fg='yellow')}")
+                else:
+                    click.echo(f"  🔌 Server Connection: {click.style('Connected', fg='green')}")
+
+                # Get and show container status
+                container_status = _get_container_status(domain)
+                if container_status:
+                    click.echo(f"  📦 Container Status: {container_status}")
+
+                # Show health endpoint data (server status and permanent environment)
+                if health_data:
+                    _show_health_details(health_data)
+                else:
+                    click.echo(f"  💛 Server Health: {click.style('not ready', fg='yellow')}")
+                    # Even if server isn't ready, try to check permanent environment directly
+                    perm_env_health = _check_permanent_environment_health_direct(domain, orchestrator)
+                    if perm_env_health:
+                        _show_permanent_environment_health(perm_env_health)
+
+                # Check for errors in server logs
+                errors = _scan_server_logs_for_errors(domain, since_seconds=update_interval + 5)
+                if errors:
+                    click.echo(f"  ❌ Errors Found in Logs ({len(errors)}):")
+                    for error in errors[:5]:  # Show max 5 errors
+                        # Truncate long error messages
+                        error_msg = error if len(error) <= 100 else error[:97] + "..."
+                        click.echo(f"     • {click.style(error_msg, fg='red')}")
+                    if len(errors) > 5:
+                        click.echo(f"     ... and {len(errors) - 5} more errors")
+                else:
+                    click.echo("  ✓ No errors in recent logs")
+
+                click.echo()
+
+            await asyncio.sleep(1)
+
+        # Shutdown was requested
+        click.echo()
+        click.echo("🛑 Shutdown requested by user")
+        click.echo("   Stopping server gracefully...")
+        orchestrator.stop_domain(domain)
+        click.echo("✓ Server stopped successfully")
+        raise DomainError("Server startup cancelled by user")
+
+    except DomainError:
+        raise
+    except Exception as e:
+        click.echo()
+        click.echo(f"❌ Unexpected error during server startup: {e}")
+        click.echo("   Attempting to stop server...")
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(health_url, timeout=aiohttp.ClientTimeout(total=5)) as response:
-                    if response.status == 200:
-                        return  # Server is ready
+            orchestrator.stop_domain(domain)
         except Exception:
-            pass  # Server not ready yet
+            pass
+        raise DomainError(f"Server startup failed: {e}")
+    finally:
+        # Restore default signal handler
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
 
-        await asyncio.sleep(1)
 
-    raise DomainError(f"Server did not become ready within {timeout} seconds")
+def _get_container_status(domain: str) -> str:
+    """Get Docker container status for the domain server."""
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "-a", "--filter", f"name={domain}-saber-server", "--format", "{{.Status}}"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            status = result.stdout.strip()
+            # Colorize status
+            if "Up" in status:
+                if "unhealthy" in status.lower():
+                    return cast(str, click.style(status, fg="yellow"))
+                elif "starting" in status.lower():
+                    return cast(str, click.style(status, fg="cyan"))
+                else:
+                    return cast(str, click.style(status, fg="green"))
+            else:
+                return cast(str, click.style(status, fg="red"))
+        return cast(str, click.style("Container not found", fg="red"))
+    except Exception as e:
+        return cast(str, click.style(f"Error: {e}", fg="red"))
+
+
+def _scan_server_logs_for_errors(domain: str, since_seconds: int = 20) -> list[str]:
+    """
+    Scan server logs for ERROR keywords.
+
+    Args:
+        domain: Domain name
+        since_seconds: Only look at logs from the last N seconds
+
+    Returns:
+        List of error messages found
+    """
+    try:
+        result = subprocess.run(
+            ["docker", "logs", "--since", f"{since_seconds}s", f"{domain}-saber-server"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+
+        if result.returncode != 0:
+            return []
+
+        # Combine stdout and stderr
+        all_logs = result.stdout + result.stderr
+
+        # Patterns to ignore (warnings, deprecations, stack traces from warnings)
+        ignore_patterns = [
+            "PydanticDeprecatedSince20",
+            "DeprecationWarning",
+            "FutureWarning",
+            "UserWarning",
+            "warnings.warn",
+            "PendingDeprecationWarning",
+            "RuntimeWarning",
+            "site-packages",  # Usually part of warning stack traces
+            ".py:",  # File references in warnings (e.g., "/path/file.py:123")
+        ]
+
+        # Find lines containing ERROR (case insensitive)
+        errors = []
+        for line in all_logs.split("\n"):
+            # Skip empty lines
+            if not line.strip():
+                continue
+
+            # Check if this is an ERROR line (not just warning)
+            if "ERROR" in line.upper():
+                # Skip if it's just a warning/deprecation or stack trace
+                if any(pattern in line for pattern in ignore_patterns):
+                    continue
+
+                # Also skip lines that look like file paths or warning context
+                if line.strip().startswith("/") or line.strip().startswith("File "):
+                    continue
+
+                # Clean up the line
+                line = line.strip()
+                if line:
+                    errors.append(line)
+
+        return errors
+    except Exception:
+        return []
+
+
+def _show_health_details(health_data: dict) -> None:
+    """Display health endpoint details."""
+    try:
+        # Show basic health info
+        domain = health_data.get("domain", "unknown")
+        status = health_data.get("status", "unknown")
+
+        if status == "healthy":
+            click.echo(f"  💚 Server Health: {click.style('healthy', fg='green')} (domain: {domain})")
+        else:
+            click.echo(f"  💛 Server Health: {click.style(status, fg='yellow')} (domain: {domain})")
+
+        # Show permanent environment health if present
+        perm_env = health_data.get("permanent_environment_health")
+        if perm_env:
+            is_healthy = perm_env.get("healthy", False)
+            if is_healthy:
+                click.echo(f"  🌍 Permanent Environment: {click.style('healthy', fg='green')}")
+            else:
+                click.echo(f"  🌍 Permanent Environment: {click.style('unhealthy', fg='yellow')}")
+
+                # Show details if available
+                details = perm_env.get("details", {})
+                if isinstance(details, dict):
+                    services = details.get("services", {})
+                    if services:
+                        click.echo("     Services:")
+                        for service_name, service_info in services.items():
+                            if isinstance(service_info, dict):
+                                svc_healthy = service_info.get("healthy", False)
+                                reason = service_info.get("reason", "unknown")
+                                if svc_healthy:
+                                    click.echo(f"       ✓ {service_name}: {reason}")
+                                else:
+                                    click.echo(f"       ✗ {service_name}: {click.style(reason, fg='yellow')}")
+
+                # Show error if present
+                error = perm_env.get("error")
+                if error:
+                    click.echo(f"     Error: {click.style(error, fg='red')}")
+    except Exception:
+        pass  # Don't fail on health detail display errors
+
+
+def _check_permanent_environment_health_direct(domain: str, orchestrator: DomainOrchestrator) -> dict | None:
+    """
+    Check permanent environment health directly via Docker.
+
+    This function queries the permanent environment containers directly without
+    needing the server to be fully ready.
+
+    Args:
+        domain: Domain name
+        orchestrator: Domain orchestrator instance
+
+    Returns:
+        Dictionary with permanent environment health info, or None if not configured
+    """
+    try:
+        # Get domain path - validate domain exists
+        orchestrator.validate_domain(domain)
+        domains_root = orchestrator.manifest_loader.domains_root
+        domain_path = domains_root / domain
+        config_dir = domain_path / "server" / "config"
+
+        # Check if there's a permanent environment configured
+        # Look for global.yaml to get permanent environment name
+        global_config_path = config_dir / "tasks" / "global.yaml"
+        if not global_config_path.exists():
+            return None
+
+        import yaml
+
+        with open(global_config_path, "r") as f:
+            global_config = yaml.safe_load(f)
+
+        permanent_env_name = global_config.get("permanent_environment")
+        if not permanent_env_name:
+            return None
+
+        # Get the compose file path
+        permanent_compose_path = config_dir / "environments" / "permanent" / f"{permanent_env_name}.compose.yml"
+        if not permanent_compose_path.exists():
+            return {
+                "healthy": False,
+                "status": "compose_file_missing",
+                "error": f"Compose file not found: {permanent_compose_path}",
+                "environment_name": permanent_env_name,
+            }
+
+        # Use ComposeHealthChecker to check service health
+        from saber.server.execution.sandbox.compose_health_checker import ComposeHealthChecker
+
+        health_checker = ComposeHealthChecker()
+        project_name = f"{domain}-permanent"
+
+        health_summary = health_checker.get_service_health_summary(str(permanent_compose_path), project_name)
+
+        return {
+            "healthy": health_summary["overall_healthy"],
+            "status": "checked",
+            "environment_name": permanent_env_name,
+            "project_name": project_name,
+            "healthy_services": health_summary["healthy_count"],
+            "total_services": health_summary["total_count"],
+            "services": health_summary["services"],
+            "error": health_summary.get("error"),
+        }
+    except Exception:
+        return None
+
+
+def _show_permanent_environment_health(perm_env_health: dict) -> None:
+    """Display permanent environment health status."""
+    try:
+        env_name = perm_env_health.get("environment_name", "unknown")
+        is_healthy = perm_env_health.get("healthy", False)
+        services = perm_env_health.get("services", {})
+
+        # Check if any services are still starting
+        has_starting_services = False
+        if services:
+            for service_info in services.values():
+                if isinstance(service_info, dict):
+                    reason = service_info.get("reason", "")
+                    if "starting" in reason.lower():
+                        has_starting_services = True
+                        break
+
+        # Determine status message
+        if is_healthy:
+            status_msg = click.style("healthy", fg="green")
+            icon = "🌍"
+        elif has_starting_services:
+            status_msg = click.style("starting", fg="cyan")
+            icon = "🌍"
+        else:
+            status_msg = click.style("unhealthy", fg="yellow")
+            icon = "🌍"
+
+        click.echo(f"  {icon} Permanent Environment ({env_name}): {status_msg}")
+
+        # Show service details
+        if services:
+            healthy_count = perm_env_health.get("healthy_services", 0)
+            total_count = perm_env_health.get("total_services", 0)
+            click.echo(f"     Services ({healthy_count}/{total_count} healthy):")
+            for service_name, service_info in services.items():
+                if isinstance(service_info, dict):
+                    svc_healthy = service_info.get("healthy", False)
+                    reason = service_info.get("reason", "unknown")
+
+                    if svc_healthy:
+                        click.echo(f"       ✓ {service_name}: {reason}")
+                    elif "starting" in reason.lower():
+                        click.echo(f"       ⏳ {service_name}: {click.style(reason, fg='cyan')}")
+                    else:
+                        click.echo(f"       ✗ {service_name}: {click.style(reason, fg='yellow')}")
+
+        # Show error if present
+        error = perm_env_health.get("error")
+        if error:
+            click.echo(f"     Error: {click.style(error, fg='red')}")
+    except Exception:
+        pass  # Don't fail on display errors
 
 
 async def _load_and_hydrate_saber_config(config_path: Path, rest_port: int, mcp_port: int) -> Any:

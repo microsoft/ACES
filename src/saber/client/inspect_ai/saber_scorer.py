@@ -164,22 +164,27 @@ def subtask_score() -> Metric:
     Average subtask score across all samples.
 
     This represents how well agents completed intermediate checkpoints.
+    Only reports when subtasks were actually scored (returns empty dict otherwise).
 
     Returns:
-        Metric function that computes average subtask score
+        Metric function that returns {"subtask_score": avg} or {}
     """
 
-    def metric_fn(scores: List[SampleScore]) -> float:
+    def metric_fn(scores: List[SampleScore]) -> Dict[str, float]:
         subtask_scores = []
         for sample_score in scores:
             if sample_score.score.metadata:
-                # Check both old name (step_score) and new name (subtask_score)
-                subtask_score_value = sample_score.score.metadata.get(
-                    "subtask_score", sample_score.score.metadata.get("step_score", 0.0)
-                )
-                subtask_scores.append(float(subtask_score_value))
+                # Only include samples that have subtask_score in metadata
+                # (i.e., tasks with step_evaluation_config configured)
+                subtask_score_value = sample_score.score.metadata.get("subtask_score")
+                if subtask_score_value is not None:
+                    subtask_scores.append(float(subtask_score_value))
 
-        return sum(subtask_scores) / len(subtask_scores) if subtask_scores else 0.0
+        # Return dict with score if we have any subtask scores, empty dict otherwise
+        if subtask_scores:
+            return {"subtask_score": sum(subtask_scores) / len(subtask_scores)}
+        else:
+            return {}
 
     return metric_fn
 
@@ -238,9 +243,10 @@ def per_task_subtask_scores() -> Metric:
 
     Creates a metric for each task showing the average subtask score
     for samples of that task. Metric names: <task_id>_subtask_score
+    Only includes tasks where subtasks were actually scored.
 
     Returns:
-        Metric function that computes per-task subtask scores
+        Metric function that computes per-task subtask scores (empty dict if no subtask scoring)
     """
 
     def metric_fn(scores: List[SampleScore]) -> Dict[str, float]:
@@ -257,17 +263,17 @@ def per_task_subtask_scores() -> Metric:
             if not task_id:
                 continue
 
-            # Get subtask score
-            subtask_score_value = sample_score.score.metadata.get(
-                "subtask_score", sample_score.score.metadata.get("step_score", 0.0)
-            )
+            # Only include samples that have subtask_score in metadata
+            subtask_score_value = sample_score.score.metadata.get("subtask_score")
+            if subtask_score_value is None:
+                continue
 
             # Track by task_id
             if task_id not in task_subtask_scores:
                 task_subtask_scores[task_id] = []
             task_subtask_scores[task_id].append(float(subtask_score_value))
 
-        # Calculate averages per task
+        # Calculate averages per task (returns empty dict if no tasks have subtask scoring)
         results = {}
         for task_id, score_list in task_subtask_scores.items():
             avg_score = sum(score_list) / len(score_list) if score_list else 0.0
@@ -287,6 +293,7 @@ def subtask_score_metrics() -> Metric:
 
     Creates a metric for each task+subtask combination showing the average
     score earned. Metric names: <task_id>_<subtask_id>_score
+    Only includes subtasks that were actually scored.
 
     Returns:
         Metric function that computes per-subtask average scores
@@ -306,8 +313,11 @@ def subtask_score_metrics() -> Metric:
             if not task_id:
                 continue
 
-            # Get the subtask_scores dict from metadata (added in scorer)
-            sample_subtask_scores = sample_score.score.metadata.get("subtask_scores", {})
+            # Get the subtask_scores dict from metadata (only exists when step_criteria configured)
+            sample_subtask_scores = sample_score.score.metadata.get("subtask_scores")
+            if sample_subtask_scores is None:
+                # Skip samples without subtask scoring
+                continue
 
             # Add each subtask's score to our tracking with task_id prefix
             for subtask_id, score_value in sample_subtask_scores.items():
@@ -351,10 +361,10 @@ def subtask_score_metrics() -> Metric:
     metrics=[
         saber_score(),  # Total score (submission + subtasks)
         submission_score(),  # Average submission score across all samples
-        subtask_score(),  # Average subtask score across all samples
+        subtask_score(),  # Average subtask score (only shown when subtasks are scored)
         per_task_submission_scores(),  # Per-task submission scores
-        per_task_subtask_scores(),  # Per-task subtask scores
-        subtask_score_metrics(),  # Per-subtask scores (<task_id>_<subtask_id>_score)
+        per_task_subtask_scores(),  # Per-task subtask scores (only shown when subtasks are scored)
+        subtask_score_metrics(),  # Per-subtask scores (<task_id>_<subtask_id>_score) - only when subtasks are scored
     ]
 )
 def saber_scorer() -> Scorer:
@@ -498,30 +508,39 @@ def saber_scorer() -> Scorer:
                 state.metadata = {}
             state.metadata["task_id"] = task_id
 
-            # Build metadata with flattened subtask scores for easy viewing
+            # Build metadata - only include subtask data if step_criteria exists
             metadata = {
                 "submission_score": submission_score,
-                "subtask_score": step_score,  # Renamed from step_score for clarity
                 "max_possible": max_possible,
-                "step_evaluations": [se.model_dump() for se in step_evaluations],
-                "subtask_scores": subtask_scores,  # Keep nested for programmatic access
-                "task_id": task_id,  # Add task_id to score metadata as well
+                "task_id": task_id,
                 "scorer_version": "2.0",
             }
 
-            # Add individual subtask scores as top-level metadata fields
-            # Format: <task_id>_<subtask_id>_score
-            for subtask_id, subtask_score_value in subtask_scores.items():
-                # Sanitize IDs for metric names
-                sanitized_task = task_id.replace("-", "_").replace(" ", "_")
-                sanitized_subtask = subtask_id.replace("-", "_").replace(" ", "_")
-                metric_key = f"{sanitized_task}_{sanitized_subtask}_score"
-                metadata[metric_key] = subtask_score_value
+            # Only add subtask-related metadata when subtasks are being scored
+            if step_criteria:
+                metadata["subtask_score"] = step_score
+                metadata["step_evaluations"] = [se.model_dump() for se in step_evaluations]
+                metadata["subtask_scores"] = subtask_scores  # Keep nested for programmatic access
+
+                # Add individual subtask scores as top-level metadata fields
+                # Format: <task_id>_<subtask_id>_score
+                for subtask_id, subtask_score_value in subtask_scores.items():
+                    # Sanitize IDs for metric names
+                    sanitized_task = task_id.replace("-", "_").replace(" ", "_")
+                    sanitized_subtask = subtask_id.replace("-", "_").replace(" ", "_")
+                    metric_key = f"{sanitized_task}_{sanitized_subtask}_score"
+                    metadata[metric_key] = subtask_score_value
+
+            # Build explanation based on whether subtasks were scored
+            if step_criteria:
+                explanation = f"Client eval: submission={submission_score}/{max_sub_score}, subtasks={step_score}"
+            else:
+                explanation = f"Client eval: submission={submission_score}/{max_sub_score}"
 
             return Score(
                 value=total_score,
                 answer=submission_data.submission,
-                explanation=f"Client eval: submission={submission_score}/{max_sub_score}, subtasks={step_score}",
+                explanation=explanation,
                 metadata=metadata,
             )
 

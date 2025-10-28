@@ -97,52 +97,84 @@ uv run saber-domain list
 ```
 
 **Build domain images:**
+
+The build system supports three mutually exclusive modes:
+
 ```bash
-# Build only missing images (incremental build):
+# 1. INCREMENTAL BUILD (default): Build only missing images
+#    - Fastest option for development
+#    - Skips images that already exist
 uv run saber-domain build cybench
 
-# Rebuild all images (removes and rebuilds everything):
+# 2. COMPLETE REBUILD: Remove and rebuild all images
+#    - Use when you need a clean slate
+#    - Removes ALL existing domain images and rebuilds from scratch
 uv run saber-domain build cybench --rebuild-all
 
-# Rebuild specific images by prefix:
-uv run saber-domain build cybench --rebuild server    # Only rebuild server image
-uv run saber-domain build cybench --rebuild cookie    # Only rebuild cookie_* images
+# 3. SELECTIVE REBUILD: Remove and rebuild specific images by prefix
+#    - Rebuild only server image
+uv run saber-domain build cybench --rebuild server
+#    - Rebuild all cookie challenge images (cookie_*)
+uv run saber-domain build cybench --rebuild cookie
+#    - Rebuild sandbox image
+uv run saber-domain build cybench --rebuild sandbox
 ```
 
+**Important**: These three options (`--build` is implicit default, `--rebuild-all`, `--rebuild <prefix>`) are mutually exclusive and cannot be combined.
+
 **Start a domain server:**
+
+The `start` command also supports all three build modes:
+
 ```bash
-uv run saber-domain start cybench --build
+# Start without building (server must already have images)
+uv run saber-domain start cybench
 # helpful --dry-run flag here will provide diagnostics for the run
 # Server endpoints:
 #   REST API: http://localhost:8000
 #   MCP Server: http://localhost:8001
 
-# Build missing images before starting:
+# Build missing images before starting (INCREMENTAL):
 uv run saber-domain start cybench --build
 
-# Rebuild all images before starting:
+# Rebuild all images before starting (COMPLETE REBUILD):
 uv run saber-domain start cybench --rebuild-all
 
-# Rebuild specific images before starting:
+# Rebuild specific images before starting (SELECTIVE REBUILD):
 uv run saber-domain start cybench --rebuild server    # Only rebuild server
 uv run saber-domain start cybench --rebuild cookie    # Only rebuild cookie_* images
 ```
 
-**Run evaluation tests:**
-```bash
-uv run saber-domain test cybench
-# Automatically starts server if needed, runs evaluation, keeps server running
-# Several flags here to help, including: --build, --rebuild-all, --rebuild, --stop-after, --dry-run
+**Note**: The `--rebuild` and `--rebuild-all` flags will stop the server first if it's running, rebuild the images, then start the server with the new images.
 
-# With --build (builds only missing images):
+**Run evaluation tests:**
+
+The `test` command automatically manages the server lifecycle and supports all build modes:
+
+```bash
+# Basic test (server kept running after completion for faster re-runs)
+uv run saber-domain test cybench
+
+# Test with INCREMENTAL BUILD (builds only missing images):
 uv run saber-domain test cybench --build --stop-after
 
-# With --rebuild-all (removes and rebuilds all images):
+# Test with COMPLETE REBUILD (removes and rebuilds all images):
 uv run saber-domain test cybench --rebuild-all --stop-after
 
-# With --rebuild for specific images:
+# Test with SELECTIVE REBUILD (rebuild specific images):
 uv run saber-domain test cybench --rebuild server --stop-after
+
+# Additional helpful flags:
+# --stop-after: Stop server after test completion (default keeps running)
+# --dry-run: Show what would happen without executing
+# --no-ui: Disable TUI and use console output instead
 ```
+
+**How it works**:
+- Automatically starts server if not running
+- Runs evaluation against the domain
+- By default, keeps server running for faster subsequent tests
+- Use `--stop-after` to clean up after completion
 
 **Stop domain:**
 ```bash

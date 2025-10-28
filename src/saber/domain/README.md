@@ -75,33 +75,48 @@ saber-domain --domains-root /path/to/domains list
 - Validates or builds Docker images as needed
 - Starts services with proper profiles and networking
 
+**Build Modes** - Three mutually exclusive options:
+- **`--build`**: Incremental build - only build missing images (fast)
+- **`--rebuild-all`**: Complete rebuild - remove and rebuild all images (clean slate)
+- **`--rebuild <prefix>`**: Selective rebuild - rebuild only images matching prefix (targeted)
+
 ```bash
-# Basic start (server + client with auto-generated environment)
+# Basic start (no building, images must exist)
 saber-domain start DOMAIN
 
-# Rebuild all images first, then start
-saber-domain start DOMAIN --rebuild
+# Start with INCREMENTAL BUILD (build missing images only)
+saber-domain start DOMAIN --build
+
+# Start with COMPLETE REBUILD (rebuild all images)
+saber-domain start DOMAIN --rebuild-all
+
+# Start with SELECTIVE REBUILD (rebuild only server image)
+saber-domain start DOMAIN --rebuild server
+
+# Start with SELECTIVE REBUILD (rebuild all cookie challenge images)
+saber-domain start DOMAIN --rebuild cookie
 
 # Custom ports (with automatic conflict detection)
 saber-domain start DOMAIN --rest-port 9000 --mcp-port 9001
-
-# Custom profiles (validated against domain manifest)
-saber-domain start DOMAIN --profiles server,client,docker-socket
 
 # Custom logging level
 saber-domain start DOMAIN --log-level DEBUG
 
 # Dry run to see what would be done
-saber-domain start DOMAIN --dry-run --rebuild
+saber-domain start DOMAIN --dry-run --rebuild-all
 
-# Full example with all options
+# Full example with rebuild and custom ports
 saber-domain start cybench \
-  --rebuild \
-  --profiles server,client,docker-socket \
+  --rebuild server \
   --rest-port 9000 \
   --mcp-port 9001 \
   --log-level DEBUG
 ```
+
+**Important Notes**:
+- Build flags are mutually exclusive - use only ONE of: `--build`, `--rebuild-all`, or `--rebuild <prefix>`
+- Rebuild operations stop the server first if it's running, rebuild images, then start the server
+- The `--rebuild <prefix>` matches image names that START with the prefix (e.g., 'cookie' matches 'cookie_xss', 'cookie_sqli')
 
 **No Manual Configuration Required!** The CLI automatically generates:
 ```bash
@@ -109,14 +124,12 @@ saber-domain start cybench \
 DOMAIN=cybench
 DOMAINS_ROOT=/path/to/domains
 SERVER_IMAGE=saber/cybench/server:latest
-CLIENT_IMAGE=saber/cybench/client:latest
 REST_PORT=9000
 MCP_PORT=9001
-COMPOSE_PROFILES=server,client,docker-socket
 LOG_LEVEL=DEBUG
 
 # New approach - just run:
-saber-domain start cybench --rebuild --profiles server,client,docker-socket --rest-port 9000 --mcp-port 9001 --log-level DEBUG
+saber-domain start cybench --rebuild server --rest-port 9000 --mcp-port 9001 --log-level DEBUG
 ```
 
 ### `stop` - Stop Domain Services
@@ -131,13 +144,62 @@ saber-domain stop DOMAIN --dry-run
 
 ### `build` - Build Domain Images
 
+**Three Build Modes** - Mutually exclusive options:
+
+1. **Incremental Build (default)** - Build only missing images
+   - Fastest option for development
+   - Skips images that already exist locally
+   - Default behavior when no flags specified
+
+2. **Complete Rebuild** - Remove and rebuild all images
+   - Use `--rebuild-all` flag
+   - Removes ALL existing domain images
+   - Rebuilds everything from scratch
+   - Ensures clean state
+
+3. **Selective Rebuild** - Remove and rebuild specific images
+   - Use `--rebuild <prefix>` flag
+   - Removes only images matching the prefix
+   - Rebuilds only those images
+   - Perfect for targeted updates
+
 ```bash
-# Build all images for a domain
+# INCREMENTAL BUILD - Build only missing images (default, fastest)
 saber-domain build DOMAIN
 
-# Dry run to see build commands
+# COMPLETE REBUILD - Rebuild all domain images (clean slate)
+saber-domain build DOMAIN --rebuild-all
+
+# SELECTIVE REBUILD - Rebuild only server image
+saber-domain build DOMAIN --rebuild server
+
+# SELECTIVE REBUILD - Rebuild all cookie challenge images (cookie_*)
+saber-domain build DOMAIN --rebuild cookie
+
+# SELECTIVE REBUILD - Rebuild sandbox image
+saber-domain build DOMAIN --rebuild sandbox
+
+# Dry run to see build commands without executing
 saber-domain build DOMAIN --dry-run
+saber-domain build DOMAIN --rebuild server --dry-run
 ```
+
+**How Image Filtering Works**:
+```bash
+# Domain has images: server, sandbox, cookie_xss, cookie_sqli, cookie_csrf
+
+--rebuild server     # Rebuilds: server only
+--rebuild sandbox    # Rebuilds: sandbox only
+--rebuild cookie     # Rebuilds: cookie_xss, cookie_sqli, cookie_csrf (all matching prefix)
+--rebuild-all        # Rebuilds: ALL images (server, sandbox, cookie_*)
+(no flags)           # Builds: Only images that don't exist locally
+```
+
+**Important Notes**:
+- The three modes (`--build` (implicit), `--rebuild-all`, `--rebuild <prefix>`) are mutually exclusive
+- Cannot use `--rebuild-all` and `--rebuild <prefix>` together
+- Prefix matching uses "starts with" logic (e.g., 'cookie' matches any image starting with 'cookie')
+- In incremental mode, you'll see "⏭️ Skipping..." messages for existing images
 
 ### `validate` - Validate Domain Configuration
 
@@ -155,6 +217,71 @@ saber-domain validate DOMAIN --verbose
 - Docker image definitions and Dockerfile existence
 - Profile definitions and requirements
 - Port configuration
+
+### `test` - Run SABER Evaluation Tests
+
+**Automated Server Lifecycle** - The CLI automatically:
+- Validates domain configuration
+- Builds or rebuilds images as specified
+- Starts server if not already running
+- Runs SABER evaluation against the domain
+- Keeps server running by default (use `--stop-after` to clean up)
+
+**Build Modes** - Same three mutually exclusive options as `build` and `start`:
+- **`--build`**: Incremental build - only build missing images before testing
+- **`--rebuild-all`**: Complete rebuild - remove and rebuild all images before testing
+- **`--rebuild <prefix>`**: Selective rebuild - rebuild specific images before testing
+
+```bash
+# Basic test (server kept running after for faster re-runs)
+saber-domain test DOMAIN
+
+# Test with INCREMENTAL BUILD (build missing images)
+saber-domain test DOMAIN --build
+
+# Test with COMPLETE REBUILD (rebuild all images)
+saber-domain test DOMAIN --rebuild-all
+
+# Test with SELECTIVE REBUILD (rebuild only server)
+saber-domain test DOMAIN --rebuild server
+
+# Test with cleanup (stop server after completion)
+saber-domain test DOMAIN --build --stop-after
+
+# Custom SABER config file
+saber-domain test DOMAIN --saber-yaml /path/to/custom/saber.yaml
+
+# Custom ports
+saber-domain test DOMAIN --rest-port 9000 --mcp-port 9001
+
+# Disable TUI, use console output
+saber-domain test DOMAIN --no-ui
+
+# Dry run to see what would happen
+saber-domain test DOMAIN --rebuild server --dry-run
+
+# Full example
+saber-domain test cybench \
+  --rebuild server \
+  --stop-after \
+  --rest-port 9000 \
+  --mcp-port 9001 \
+  --log-level DEBUG
+```
+
+**How Test Works**:
+1. **Validation Phase**: Checks domain configuration and discovers SABER config
+2. **Build Phase** (if flag specified): Builds or rebuilds images as requested
+3. **Server Phase**: Starts server if not running, waits for health checks
+4. **Evaluation Phase**: Runs SABER evaluation with live progress tracking
+5. **Cleanup Phase** (optional): Stops server if `--stop-after` specified
+
+**Important Notes**:
+- By default, server stays running after test for faster subsequent runs
+- Use `--stop-after` to clean up the server after test completion
+- If rebuilding, the server is stopped first, images rebuilt, then server restarted
+- Build flags are mutually exclusive (choose ONE: `--build`, `--rebuild-all`, or `--rebuild <prefix>`)
+- Use `--no-ui` if running in CI/CD or prefer console output over TUI
 
 ### `status` - Show Domain Status
 
