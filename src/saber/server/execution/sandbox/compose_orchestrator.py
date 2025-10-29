@@ -981,15 +981,15 @@ class ComposeOrchestrator:
             )
             raise RuntimeError(error_msg)
 
-    def cleanup_episode(self, episode_id: str) -> None:
+    def cleanup_episode(self, episode_id: str) -> bool:
         """
         Clean up all containers for a specific episode.
 
         Args:
             episode_id: Episode ID to clean up
 
-        Raises:
-            RuntimeError: If cleanup command fails
+        Returns:
+            bool: True if cleanup succeeded, False otherwise
         """
         project_name = f"saber-episode-{episode_id}"
 
@@ -1025,9 +1025,9 @@ class ComposeOrchestrator:
                         "stdout": result.stdout,
                     },
                 )
+            return True
 
         except subprocess.CalledProcessError as e:
-            error_msg = f"Failed to cleanup episode {episode_id}: {e.stderr}"
             logger.error(
                 "Episode cleanup failed",
                 extra={
@@ -1038,9 +1038,8 @@ class ComposeOrchestrator:
                     "return_code": getattr(e, "returncode", None),
                 },
             )
-            raise RuntimeError(error_msg)
+            return False
         except subprocess.TimeoutExpired:
-            error_msg = f"Timeout cleaning up episode {episode_id}"
             logger.error(
                 "Episode cleanup timed out",
                 extra={
@@ -1049,7 +1048,7 @@ class ComposeOrchestrator:
                     "project_name": project_name,
                 },
             )
-            raise RuntimeError(error_msg)
+            return False
 
     def validate_compose_file(self, compose_file_path: Path) -> None:
         """

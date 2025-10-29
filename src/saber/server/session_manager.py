@@ -547,6 +547,65 @@ class SessionManager:
                 },
             )
 
+    async def _cleanup_episode_network_with_retry(
+        self, episode_id: str, max_retries: int = 3, base_delay: float = 1.0
+    ) -> bool:
+        """
+        Clean up Docker network for a specific episode with retry logic.
+
+        Uses exponential backoff to handle transient failures (e.g., containers still shutting down).
+
+        Args:
+            episode_id: Episode ID whose network should be cleaned up
+            max_retries: Maximum number of retry attempts (default: 3)
+            base_delay: Base delay in seconds for exponential backoff (default: 1.0)
+
+        Returns:
+            bool: True if cleanup succeeded, False if all retries failed
+        """
+        for attempt in range(max_retries):
+            try:
+                await self._cleanup_episode_network(episode_id)
+                if attempt > 0:
+                    logger.info(
+                        "Episode network cleanup succeeded after retry",
+                        extra={
+                            "event": "episode_network_cleanup_retry_success",
+                            "episode_id": episode_id,
+                            "attempt": attempt + 1,
+                        },
+                    )
+                return True
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2**attempt)  # Exponential backoff: 1s, 2s, 4s
+                    logger.warning(
+                        "Episode network cleanup failed, retrying",
+                        extra={
+                            "event": "episode_network_cleanup_retry",
+                            "episode_id": episode_id,
+                            "attempt": attempt + 1,
+                            "max_retries": max_retries,
+                            "retry_delay": delay,
+                            "error": str(e),
+                            "error_type": type(e).__name__,
+                        },
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error(
+                        "Episode network cleanup failed after all retries",
+                        extra={
+                            "event": "episode_network_cleanup_retry_exhausted",
+                            "episode_id": episode_id,
+                            "attempts": max_retries,
+                            "error": str(e),
+                            "error_type": type(e).__name__,
+                        },
+                    )
+                    return False
+        return False
+
     async def _cleanup_saber_episode_networks(self) -> None:
         """Clean up all SABER episode networks to prevent Docker subnet pool exhaustion."""
 
@@ -1255,28 +1314,43 @@ class SessionManager:
                     "termination_reason": reason,
                 },
             )
-            episode_cleanup = self.execution_manager.cleanup_episode(episode_id, {"episode_end_reason": reason})
-            if episode_cleanup:
-                logger.info(
-                    "Episode cleanup completed",
+            try:
+                episode_cleanup = self.execution_manager.cleanup_episode(episode_id, {"episode_end_reason": reason})
+                if episode_cleanup:
+                    logger.info(
+                        "Episode cleanup completed",
+                        extra={
+                            "event": "episode_cleanup_complete",
+                            "session_id": session_id,
+                            "episode_id": episode_id,
+                        },
+                    )
+                else:
+                    logger.warning(
+                        "Episode cleanup reported failure",
+                        extra={
+                            "event": "episode_cleanup_failed",
+                            "session_id": session_id,
+                            "episode_id": episode_id,
+                        },
+                    )
+            except Exception as e:
+                # Don't let compose cleanup failure prevent network cleanup
+                logger.error(
+                    "Episode compose cleanup error, continuing with network cleanup",
                     extra={
-                        "event": "episode_cleanup_complete",
+                        "event": "episode_compose_cleanup_error",
                         "session_id": session_id,
                         "episode_id": episode_id,
-                    },
-                )
-            else:
-                logger.warning(
-                    "Episode cleanup reported failure",
-                    extra={
-                        "event": "episode_cleanup_failed",
-                        "session_id": session_id,
-                        "episode_id": episode_id,
+                        "error": str(e),
+                        "error_type": type(e).__name__,
                     },
                 )
 
             # Additional cleanup: ensure episode network is removed to prevent subnet pool exhaustion
-            await self._cleanup_episode_network(episode_id)
+            # This MUST run even if compose cleanup fails above
+            # Use retry logic to handle transient failures
+            await self._cleanup_episode_network_with_retry(episode_id)
         except Exception as e:
             logger.error(
                 "Episode cleanup error",

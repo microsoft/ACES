@@ -265,7 +265,10 @@ services:
         mock_run.return_value = Mock(stdout="Cleanup complete", stderr="", returncode=0)
 
         episode_id = "cleanup-test-789"
-        orchestrator.cleanup_episode(episode_id)
+        result = orchestrator.cleanup_episode(episode_id)
+
+        # Should return True on success
+        assert result is True
 
         # Verify cleanup command
         call_args = mock_run.call_args
@@ -281,16 +284,14 @@ services:
 
     @patch('subprocess.run')
     def test_cleanup_episode_failure(self, mock_run, orchestrator):
-        """Test episode cleanup handles failure."""
+        """Test episode cleanup handles failure gracefully."""
         mock_run.side_effect = subprocess.CalledProcessError(
             1, ["docker", "system"], stderr="Docker system error"
         )
 
-        with pytest.raises(RuntimeError) as excinfo:
-            orchestrator.cleanup_episode("test-episode")
-
-        assert "Failed to cleanup episode" in str(excinfo.value)
-        assert "Docker system error" in str(excinfo.value)
+        # Should return False instead of raising
+        result = orchestrator.cleanup_episode("test-episode")
+        assert result is False
 
     @patch('subprocess.run')
     def test_environment_variables_propagation(self, mock_run, orchestrator, temp_compose_file):
