@@ -435,13 +435,19 @@ class DockerRunner:
         else:
             images_to_build = images_config
 
-        # Ensure base images exist first (only when rebuild_mode or filter matches base images)
-        needs_base_rebuild = (rebuild_mode and image_filter is None) or any(
-            name in ["server", "sandbox"] for name in images_to_build.keys()
-        )
-        if needs_base_rebuild and rebuild_mode:
-            print("🔍 Checking base image dependencies...")
+        # Ensure base images exist first
+        # In rebuild mode: rebuild base images if no filter or filter matches base images
+        # In build mode: ensure base images exist (build if missing) when needed
+        needs_base_images = any(name in ["server", "sandbox"] for name in images_to_build.keys())
+
+        if rebuild_mode and (image_filter is None or needs_base_images):
+            # Rebuild mode: remove and rebuild base images
+            print("🔍 Rebuilding base image dependencies...")
             self.ensure_base_images(dry_run)
+        elif not rebuild_mode and needs_base_images:
+            # Build mode: ensure base images exist (build if missing)
+            print("🔍 Ensuring base images exist...")
+            self._ensure_base_images_exist(dry_run)
 
         # Remove existing domain images for rebuild (only in rebuild mode)
         if rebuild_mode:
@@ -560,6 +566,41 @@ class DockerRunner:
         print(f"🔨 Building {len(base_images_config['images'])} base images...")
 
         for image_name, image_config in base_images_config["images"].items():
+            dockerfile = image_config["dockerfile"]
+            image_tag = image_config["tag"]
+            labels = image_config.get("labels", {})
+
+            # Handle package:// scheme for packaged Dockerfiles
+            if dockerfile.startswith("package://"):
+                package_path = dockerfile[len("package://") :]
+                self._build_base_image_from_package(image_name, image_tag, package_path, labels, dry_run)
+            else:
+                raise DockerError(f"Unsupported dockerfile path format: {dockerfile}")
+
+    def _ensure_base_images_exist(self, dry_run: bool = False) -> None:
+        """Ensure base images exist, building only if missing (incremental).
+
+        Args:
+            dry_run: If True, show commands without executing
+
+        Raises:
+            DockerError: If base image build fails
+        """
+        base_images_config = self._load_base_images_config()
+
+        missing_images = []
+        for image_name, image_config in base_images_config["images"].items():
+            image_tag = image_config["tag"]
+            if not self._docker_image_exists(image_tag):
+                missing_images.append((image_name, image_config))
+
+        if not missing_images:
+            print("✓ All base images already exist")
+            return
+
+        print(f"🔨 Building {len(missing_images)} missing base image(s)...")
+
+        for image_name, image_config in missing_images:
             dockerfile = image_config["dockerfile"]
             image_tag = image_config["tag"]
             labels = image_config.get("labels", {})
