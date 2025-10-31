@@ -20,6 +20,7 @@ from ...models import (
     EpisodeContext,
     EpisodeCreateResponse,
     EpisodeEndResponse,
+    EpisodeStatusResponse,
     EpisodeTaskResponse,
     EvalSubmission,
     HealthResponse,
@@ -166,7 +167,7 @@ class SessionRestAPI:
 
         @self.app.post("/api/v1/session/{session_id}/episodes", response_model=EpisodeCreateResponse)
         async def create_episode_endpoint(session_id: str, task_id: str) -> EpisodeCreateResponse:
-            """Create a new episode for a specific task with automatic dependency resolution."""
+            """Create a new episode for a specific task with automatic dependency resolution (async)."""
             try:
                 log_operation_start(
                     logger,
@@ -175,8 +176,8 @@ class SessionRestAPI:
                     task_id=task_id,
                 )
 
-                # Create episode with automatic dependency resolution
-                episode = await self.session_manager.start_episode(session_id, task_id)
+                # Initiate episode creation (returns immediately with CREATING state)
+                episode = await self.session_manager.initiate_episode(session_id, task_id)
 
                 # Create episode context with limits and metadata
                 episode_context = EpisodeContext(
@@ -191,7 +192,7 @@ class SessionRestAPI:
                     task_id=task_id,
                     session_id=session_id,
                     state=episode.state.value,
-                    message="Episode created successfully"
+                    message="Episode creation initiated (poll status endpoint for readiness)"
                     + (f" (attached to {episode.attached_to_episode_id})" if episode.attached_to_episode_id else ""),
                     episode_context=episode_context,
                     attached_to_episode_id=episode.attached_to_episode_id,
@@ -226,6 +227,55 @@ class SessionRestAPI:
                     task_id=task_id,
                 )
                 raise HTTPException(status_code=500, detail=f"Failed to create episode: {exc}") from exc
+
+        @self.app.get("/api/v1/session/{session_id}/episodes/{episode_id}/status", response_model=EpisodeStatusResponse)
+        async def get_episode_status_endpoint(session_id: str, episode_id: str) -> EpisodeStatusResponse:
+            """Get episode status for readiness polling."""
+            try:
+                episode = self.session_manager.get_episode_status(episode_id)
+                if not episode:
+                    raise HTTPException(status_code=404, detail=f"Episode {episode_id} not found")
+
+                # Check if episode belongs to this session
+                if episode.session_id != session_id:
+                    raise HTTPException(
+                        status_code=403, detail=f"Episode {episode_id} does not belong to session {session_id}"
+                    )
+
+                # Create episode context if episode is ready
+                episode_context = None
+                if episode.is_ready:
+                    episode_context = EpisodeContext(
+                        session_id=session_id,
+                        task_timeout=None,
+                        max_steps=episode.max_steps,
+                        metadata=episode.metadata,
+                    )
+
+                return EpisodeStatusResponse(
+                    episode_id=episode.episode_id,
+                    task_id=episode.task_id,
+                    session_id=session_id,
+                    state=episode.state.value,
+                    is_ready=episode.is_ready,
+                    message=f"Episode {episode.state.value}",
+                    creation_error=episode.creation_error,
+                    episode_context=episode_context,
+                    attached_to_episode_id=episode.attached_to_episode_id,
+                )
+            except HTTPException:
+                raise
+            except Exception as exc:
+                logger.error(
+                    "Failed to get episode status",
+                    extra={
+                        "event": "get_episode_status_failed",
+                        "session_id": session_id,
+                        "episode_id": episode_id,
+                        "error": str(exc),
+                    },
+                )
+                raise HTTPException(status_code=500, detail=f"Failed to get episode status: {exc}") from exc
 
         @self.app.delete("/api/v1/session/{session_id}/episodes/{episode_id}", response_model=EpisodeEndResponse)
         async def end_episode_endpoint(

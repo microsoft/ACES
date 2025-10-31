@@ -339,3 +339,190 @@ services:
         call_args = mock_run.call_args
         # Note: The current implementation may not set timeout, so we just verify it was called
         assert call_args is not None
+
+
+class TestComposeOrchestratorAsync:
+    """Test ComposeOrchestrator async functionality for episode creation."""
+
+    @pytest.fixture
+    def orchestrator(self):
+        """Create a ComposeOrchestrator instance with mocked health checker."""
+        with patch('saber.server.execution.sandbox.compose_orchestrator.ComposeHealthChecker') as mock_health_checker_class:
+            # Setup mock health checker
+            mock_health_checker = MagicMock()
+            mock_health_checker_class.return_value = mock_health_checker
+
+            orchestrator = ComposeOrchestrator()
+            yield orchestrator
+
+    @pytest.fixture
+    def temp_compose_file(self):
+        """Create a temporary compose file with execution service label."""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yml', delete=False) as f:
+            f.write("""
+version: '3.8'
+services:
+  test-service:
+    image: hello-world
+    container_name: test-container
+    labels:
+      - "saber.execution.service=true"
+      - "saber.service.type=sandbox"
+""")
+            temp_path = Path(f.name)
+
+        yield temp_path
+
+        # Cleanup
+        if temp_path.exists():
+            temp_path.unlink()
+
+    @patch('subprocess.run')
+    def test_start_environment_async_success(self, mock_run, orchestrator, temp_compose_file):
+        """Test successful async environment start WITHOUT health checks."""
+        # Setup mocks
+        mock_run.return_value = Mock(stdout="Container started", stderr="", returncode=0)
+
+        # Create config for sandbox environment
+        config = ComposeEnvironmentConfig(
+            episode_id="test-episode-async-123",
+            config_type="sandbox"
+        )
+
+        # Test async start
+        result = orchestrator.start_environment_async(str(temp_compose_file), config)
+
+        # Verify subprocess was called
+        mock_run.assert_called_once()
+        call_args = mock_run.call_args
+
+        # Check command structure
+        cmd = call_args[0][0]
+        assert cmd[0] == "docker"
+        assert cmd[1] == "compose"
+        assert cmd[2] == "-f"
+        # cmd[3] is the processed compose file
+        assert str(cmd[3]).endswith('.yml')
+        assert cmd[4] == "-p"
+        assert cmd[5] == "saber-episode-test-episode-async-123"
+        assert cmd[6] == "up"
+        assert cmd[7] == "-d"
+
+        # CRITICAL: Health checker should NOT be called in async start
+        orchestrator.health_checker.wait_for_all_services_healthy.assert_not_called()
+
+        # Verify processed_compose_path is stored
+        assert hasattr(orchestrator, 'processed_compose_path')
+        assert orchestrator.processed_compose_path is not None
+        assert orchestrator.processed_compose_path.endswith('.yml')
+
+    @patch('subprocess.run')
+    def test_wait_for_healthy_uses_processed_path(self, mock_run, orchestrator, temp_compose_file):
+        """Test that wait_for_healthy uses the stored processed compose path."""
+        # Setup mocks
+        mock_run.return_value = Mock(stdout="Container started", stderr="", returncode=0)
+
+        # Create config
+        config = ComposeEnvironmentConfig(
+            episode_id="test-episode-health-456",
+            config_type="sandbox"
+        )
+
+        # Start environment async (stores processed path)
+        orchestrator.start_environment_async(str(temp_compose_file), config)
+
+        # Verify processed path was stored
+        assert hasattr(orchestrator, 'processed_compose_path')
+        stored_processed_path = orchestrator.processed_compose_path
+
+        # Reset mock to verify health check call
+        orchestrator.health_checker.wait_for_all_services_healthy.reset_mock()
+
+        # Now call wait_for_healthy
+        orchestrator.wait_for_healthy(
+            compose_file_path=stored_processed_path,
+            timeout_seconds=180,
+            check_interval=2.0
+        )
+
+        # CRITICAL: Verify health checker was called with the processed path
+        orchestrator.health_checker.wait_for_all_services_healthy.assert_called_once()
+        health_check_call_args = orchestrator.health_checker.wait_for_all_services_healthy.call_args
+
+        # Verify the compose_file_path argument matches the stored processed path
+        assert health_check_call_args[1]['compose_file_path'] == stored_processed_path
+        assert health_check_call_args[1]['project_name'] == "saber-episode-test-episode-health-456"
+        assert health_check_call_args[1]['timeout_seconds'] == 180
+        assert health_check_call_args[1]['check_interval'] == 2.0
+
+    @patch('subprocess.run')
+    def test_async_then_health_full_workflow(self, mock_run, orchestrator, temp_compose_file):
+        """Test the complete async workflow: start_async -> wait_for_healthy."""
+        # Setup mocks
+        mock_run.return_value = Mock(stdout="Container started", stderr="", returncode=0)
+
+        # Create config
+        config = ComposeEnvironmentConfig(
+            episode_id="test-episode-workflow-789",
+            config_type="sandbox"
+        )
+
+        # Step 1: Start environment async (should NOT call health checker)
+        orchestrator.start_environment_async(str(temp_compose_file), config)
+        orchestrator.health_checker.wait_for_all_services_healthy.assert_not_called()
+
+        # Verify state after async start
+        assert orchestrator.project_name == "saber-episode-test-episode-workflow-789"
+        assert orchestrator.episode_id == "test-episode-workflow-789"
+        assert hasattr(orchestrator, 'processed_compose_path')
+        processed_path = orchestrator.processed_compose_path
+
+        # Step 2: Wait for healthy (should call health checker with processed path)
+        orchestrator.wait_for_healthy(
+            compose_file_path=processed_path,
+            timeout_seconds=180
+        )
+
+        # Verify health checker was called exactly once
+        orchestrator.health_checker.wait_for_all_services_healthy.assert_called_once()
+        health_call = orchestrator.health_checker.wait_for_all_services_healthy.call_args
+        assert health_call[1]['compose_file_path'] == processed_path
+
+    @patch('subprocess.run')
+    def test_start_environment_async_stores_processed_path(self, mock_run, orchestrator, temp_compose_file):
+        """Test that start_environment_async properly stores the processed compose path."""
+        mock_run.return_value = Mock(stdout="Container started", stderr="", returncode=0)
+
+        config = ComposeEnvironmentConfig(
+            episode_id="test-processed-path-123",
+            config_type="sandbox"
+        )
+
+        # Start async
+        orchestrator.start_environment_async(str(temp_compose_file), config)
+
+        # CRITICAL: Verify processed_compose_path attribute exists and is valid
+        assert hasattr(orchestrator, 'processed_compose_path'), \
+            "orchestrator must have 'processed_compose_path' attribute after start_environment_async"
+
+        assert orchestrator.processed_compose_path is not None, \
+            "processed_compose_path must not be None"
+
+        assert isinstance(orchestrator.processed_compose_path, str), \
+            "processed_compose_path must be a string"
+
+        assert orchestrator.processed_compose_path.endswith('.yml') or orchestrator.processed_compose_path.endswith('.yaml'), \
+            "processed_compose_path must be a valid compose file path"
+
+        # Verify it's different from the original path (has network injection)
+        assert orchestrator.processed_compose_path != str(temp_compose_file), \
+            "processed_compose_path should be different from original (has network injection)"
+
+    def test_wait_for_healthy_without_async_start_fails(self, orchestrator):
+        """Test that wait_for_healthy fails if called without start_environment_async."""
+        # Try to call wait_for_healthy without starting environment first
+        with pytest.raises((AttributeError, RuntimeError)):
+            orchestrator.wait_for_healthy(
+                compose_file_path="dummy_path.yml",
+                timeout_seconds=180
+            )

@@ -129,10 +129,13 @@ class Step(BaseModel):
 class EpisodeState(Enum):
     """States for RL training episodes."""
 
-    CREATED = "created"
-    ACTIVE = "active"
+    CREATING = "creating"  # Episode requested but environment not ready
+    CREATED = "created"  # Episode created but not started
+    READY = "ready"  # Episode environment ready for execution
+    ACTIVE = "active"  # Episode actively executing
     COMPLETED = "completed"
     FAILED = "failed"
+    FAILED_CREATION = "failed_creation"  # Episode creation/initialization failed
     TIMEOUT = "timeout"
     RESET = "reset"
 
@@ -150,6 +153,7 @@ class Episode(BaseModel):
     context: Dict[str, Any] = Field(default_factory=dict, description="Episode context data")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional episode metadata")
     completion_reason: Optional[str] = Field(None, description="Reason the episode ended")
+    creation_error: Optional[str] = Field(None, description="Error message if episode creation failed")
     max_steps: int = Field(default=10, description="Maximum number of steps allowed for this episode")
     submission: Optional[str] = Field(None, description="Final submission for evaluation")
     eval_submission: Optional[EvalSubmission] = Field(None, description="Rich evaluation submission data")
@@ -169,7 +173,17 @@ class Episode(BaseModel):
     @property
     def is_complete(self) -> bool:
         """Check if the episode is complete."""
-        return self.state in [EpisodeState.COMPLETED, EpisodeState.FAILED, EpisodeState.TIMEOUT]
+        return self.state in [
+            EpisodeState.COMPLETED,
+            EpisodeState.FAILED,
+            EpisodeState.FAILED_CREATION,
+            EpisodeState.TIMEOUT,
+        ]
+
+    @property
+    def is_ready(self) -> bool:
+        """Check if the episode is ready for execution."""
+        return self.state in [EpisodeState.READY, EpisodeState.ACTIVE]
 
     @property
     def duration(self) -> Optional[float]:

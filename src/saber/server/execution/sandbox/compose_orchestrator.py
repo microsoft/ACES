@@ -266,6 +266,178 @@ class ComposeOrchestrator:
             )
             raise RuntimeError(f"Environment start timed out after {e.timeout} seconds")
 
+    def start_environment_async(
+        self, compose_file_path: str, config: ComposeEnvironmentConfig
+    ) -> subprocess.CompletedProcess:
+        """
+        Start environment without waiting for health checks.
+
+        Returns immediately after docker compose up succeeds.
+        Health checks must be performed separately via wait_for_healthy().
+
+        Note: This is deliberately synchronous; callers invoke it via
+        `await asyncio.to_thread(orchestrator.start_environment_async, ...)`
+        so the event loop stays responsive.
+
+        Args:
+            compose_file_path: Path to compose file
+            config: Environment configuration
+
+        Returns:
+            CompletedProcess from docker compose up
+
+        Raises:
+            RuntimeError: If docker compose up fails
+        """
+        # Set project name and config
+        self.project_name = config.get_project_name()
+        if not self.project_name:
+            raise RuntimeError("Project name is required but not provided by config")
+
+        self.config_type = config.config_type
+        self.episode_id = config.episode_id
+        self.compose_file_path = Path(compose_file_path)
+
+        # Prepare environment variables
+        env_vars = config.to_env_dict()
+        processed_compose_path = self._inject_episode_network(compose_file_path, config, env_vars)
+
+        # Store processed path for health checks
+        self.processed_compose_path = processed_compose_path
+
+        env = os.environ.copy()
+        env.update(env_vars)
+
+        # Log start attempt
+        if self.container_logger:
+            self.container_logger.log_container_lifecycle_event(
+                event_type="start_attempt",
+                container_info={
+                    "project_name": self.project_name,
+                    "config_type": config.config_type,
+                    "compose_file": str(compose_file_path),
+                    "episode_id": config.episode_id,
+                },
+            )
+
+        logger.info(
+            "Async compose environment start requested",
+            extra={
+                "event": "compose_environment_async_start",
+                "project_name": self.project_name,
+                "episode_id": config.episode_id,
+            },
+        )
+
+        # Log resolved compose config
+        self._log_resolved_compose_config(processed_compose_path, env_vars)
+
+        # Validate execution service exists
+        temp_execution_service = self._identify_execution_service(Path(processed_compose_path))
+
+        # Run docker compose up
+        command = ["docker", "compose", "-f", processed_compose_path, "-p", self.project_name, "up", "-d"]
+
+        try:
+            result = subprocess.run(command, env=env, capture_output=True, text=True, check=True)
+
+            # Log successful start
+            if self.container_logger:
+                self.container_logger.log_container_lifecycle_event(
+                    event_type="start_success",
+                    container_info={
+                        "project_name": self.project_name,
+                        "config_type": config.config_type,
+                        "compose_file": str(compose_file_path),
+                        "episode_id": config.episode_id,
+                    },
+                )
+                # Collect initial container logs
+                self.container_logger.log_all_project_containers(
+                    project_name=self.project_name, config_type=config.config_type
+                )
+
+            self.execution_service_name = temp_execution_service
+
+            logger.info(
+                "Compose environment started (async - health checks pending)",
+                extra={
+                    "event": "compose_environment_async_started",
+                    "project_name": self.project_name,
+                    "episode_id": config.episode_id,
+                },
+            )
+
+            return result
+
+        except subprocess.CalledProcessError as e:
+            if self.container_logger:
+                self.container_logger.log_container_lifecycle_event(
+                    event_type="start_failure",
+                    container_info={
+                        "project_name": self.project_name,
+                        "config_type": config.config_type,
+                        "compose_file": str(compose_file_path),
+                        "episode_id": config.episode_id,
+                    },
+                    additional_data={"error": str(e)},
+                )
+
+            logger.error(
+                "Compose environment async start failed",
+                extra={
+                    "event": "compose_environment_async_start_failed",
+                    "project_name": self.project_name,
+                    "episode_id": config.episode_id,
+                    "stderr": e.stderr,
+                },
+            )
+            raise RuntimeError(f"Failed to start environment: {e}")
+
+    def wait_for_healthy(self, compose_file_path: str, timeout_seconds: int = 180, check_interval: float = 2.0) -> None:
+        """
+        Wait for all services in this environment to become healthy.
+
+        Must be called after start_environment_async().
+
+        Note: Invoke via `await asyncio.to_thread(...)` to avoid blocking the event loop.
+
+        Args:
+            compose_file_path: Path to compose file (processed with env vars resolved)
+            timeout_seconds: Maximum time to wait (default 180s)
+            check_interval: Seconds between health checks (default 2s)
+
+        Raises:
+            ComposeHealthCheckError: If services don't become healthy in time
+        """
+        logger.debug(
+            "Waiting for compose environment health checks",
+            extra={
+                "event": "compose_environment_health_wait_start",
+                "project_name": self.project_name,
+                "timeout_seconds": timeout_seconds,
+            },
+        )
+
+        # Ensure project_name is set before waiting for health
+        if self.project_name is None:
+            raise RuntimeError("Project name must be set before waiting for services to become healthy")
+
+        self.health_checker.wait_for_all_services_healthy(
+            compose_file_path=compose_file_path,
+            project_name=self.project_name,
+            timeout_seconds=timeout_seconds,
+            check_interval=check_interval,
+        )
+
+        logger.info(
+            "Compose environment healthy",
+            extra={
+                "event": "compose_environment_health_ready",
+                "project_name": self.project_name,
+            },
+        )
+
     def _log_resolved_compose_config(self, compose_file_path: str, env_vars: Dict[str, str]) -> None:
         """
         Log the resolved compose configuration with variable substitution.

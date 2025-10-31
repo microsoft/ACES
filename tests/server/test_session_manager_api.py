@@ -112,7 +112,7 @@ class TestSessionManagerAPI:
         assert response.status_code == 404
 
     def test_start_episode_endpoint(self, session_manager_app):
-        """Test starting individual episodes endpoint."""
+        """Test starting individual episodes endpoint (async creation)."""
         manager, client = session_manager_app
 
         # Mock task with proper initial_context
@@ -120,11 +120,11 @@ class TestSessionManagerAPI:
         mock_task.initial_context = {"initial_data": "test"}
         manager.benchmark_manager.get_task.return_value = mock_task
 
-        # Mock episode
+        # Mock episode in CREATING state
         from saber.server.base import EpisodeState
         mock_episode = MagicMock()
         mock_episode.episode_id = "episode_123"
-        mock_episode.state = EpisodeState.ACTIVE
+        mock_episode.state = EpisodeState.CREATING  # Changed from ACTIVE to CREATING
         mock_episode.max_steps = 10
         mock_episode.metadata = {"test": "data"}
         mock_episode.attached_to_episode_id = None  # Set proper type for new dependency feature
@@ -133,8 +133,9 @@ class TestSessionManagerAPI:
         create_response = client.post("/api/v1/session?client_id=test_client")
         session_id = create_response.json()["session_id"]
 
-        # Mock the start_episode method
-        with patch.object(manager, 'start_episode', return_value=mock_episode):
+        # Mock the initiate_episode method (async pattern)
+        from unittest.mock import AsyncMock
+        with patch.object(manager, 'initiate_episode', new_callable=AsyncMock, return_value=mock_episode):
             # Start individual episode using correct endpoint
             response = client.post(f"/api/v1/session/{session_id}/episodes?task_id=task_456")
 
@@ -143,7 +144,8 @@ class TestSessionManagerAPI:
             assert data["episode_id"] == "episode_123"
             assert data["task_id"] == "task_456"
             assert data["session_id"] == session_id
-            assert data["message"] == "Episode created successfully"
+            assert data["state"] == "creating"  # Verify async state
+            assert "initiated" in data["message"].lower()  # Changed message expectation
 
     def test_get_current_task_endpoint(self, session_manager_app):
         """Test get current task endpoint."""

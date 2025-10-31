@@ -220,6 +220,143 @@ class SandboxEnvironmentManager:
             )
             raise SandboxExecutionError(f"Failed to create sandbox environment for episode {episode_id}: {e}")
 
+    def create_episode_environment_async(
+        self, episode_id: str, sandbox_environment: str, target_episode_id: Optional[str] = None
+    ) -> tuple[ComposeOrchestrator, Path]:
+        """
+        Create episode environment without waiting for health checks.
+
+        Returns immediately after containers start.
+        Caller must call wait_for_episode_healthy() separately.
+
+        Args:
+            episode_id: Episode identifier
+            sandbox_environment: Environment name
+            target_episode_id: Optional episode to attach to
+
+        Returns:
+            Tuple of (orchestrator, processed_compose_path)
+
+        Raises:
+            SandboxExecutionError: If environment creation fails
+        """
+        if not self._is_ready:
+            raise SandboxExecutionError("SandboxManager is not ready yet. Please wait for initialization to complete.")
+
+        if episode_id in self.active_orchestrators:
+            raise SandboxExecutionError(f"Environment for episode {episode_id} already exists")
+
+        try:
+            compose_file_path = self._get_compose_file_path(sandbox_environment)
+
+            logger.info(
+                "Async sandbox environment creation requested",
+                extra={
+                    "event": "sandbox_env_async_creation_requested",
+                    "episode_id": episode_id,
+                    "sandbox_environment": sandbox_environment,
+                },
+            )
+
+            orchestrator = ComposeOrchestrator(logging_config=self.logging_config)
+
+            permanent_network_prefix = f"{self.domain}_permanent_environment_"
+            config = ComposeEnvironmentConfig(
+                episode_id=episode_id,
+                permanent_network_prefix=permanent_network_prefix,
+                target_episode_id=target_episode_id,
+            )
+
+            # Start environment WITHOUT health checks
+            orchestrator.start_environment_async(str(compose_file_path), config)
+
+            # Track the orchestrator and compose file immediately
+            self.active_orchestrators[episode_id] = orchestrator
+            self.episode_compose_files[episode_id] = compose_file_path
+
+            logger.info(
+                "Async sandbox environment started (health checks pending)",
+                extra={
+                    "event": "sandbox_env_async_started",
+                    "episode_id": episode_id,
+                    "sandbox_environment": sandbox_environment,
+                },
+            )
+
+            # Return orchestrator and the compose file path that was used
+            # The compose file path with resolved variables is needed for health checks
+            return orchestrator, compose_file_path
+
+        except Exception as e:
+            logger.error(
+                "Async sandbox environment creation failed",
+                extra={
+                    "event": "sandbox_env_async_creation_failed",
+                    "episode_id": episode_id,
+                    "sandbox_environment": sandbox_environment,
+                    "error": str(e),
+                },
+            )
+            raise SandboxExecutionError(f"Failed to create async sandbox environment for episode {episode_id}: {e}")
+
+    def wait_for_episode_healthy(
+        self, episode_id: str, timeout_seconds: int = 180, check_interval: float = 2.0
+    ) -> None:
+        """
+        Wait for episode environment to become healthy.
+
+        Must be called after create_episode_environment_async().
+
+        Args:
+            episode_id: Episode identifier
+            timeout_seconds: Maximum time to wait (default 180s)
+            check_interval: Seconds between health checks (default 2s)
+
+        Raises:
+            SandboxExecutionError: If episode not found or health checks fail
+        """
+        orchestrator = self.active_orchestrators.get(episode_id)
+        if not orchestrator:
+            raise SandboxExecutionError(f"No active environment found for episode {episode_id}")
+
+        # Use the processed compose path stored in orchestrator (has env vars resolved)
+        if not hasattr(orchestrator, "processed_compose_path") or not orchestrator.processed_compose_path:
+            raise SandboxExecutionError(f"No processed compose path found for episode {episode_id}")
+
+        logger.debug(
+            "Waiting for episode environment health",
+            extra={
+                "event": "sandbox_env_health_wait_start",
+                "episode_id": episode_id,
+                "timeout_seconds": timeout_seconds,
+            },
+        )
+
+        try:
+            orchestrator.wait_for_healthy(
+                compose_file_path=orchestrator.processed_compose_path,
+                timeout_seconds=timeout_seconds,
+                check_interval=check_interval,
+            )
+
+            logger.info(
+                "Episode environment healthy",
+                extra={
+                    "event": "sandbox_env_health_ready",
+                    "episode_id": episode_id,
+                },
+            )
+        except Exception as e:
+            logger.error(
+                "Episode environment health check failed",
+                extra={
+                    "event": "sandbox_env_health_failed",
+                    "episode_id": episode_id,
+                    "error": str(e),
+                },
+            )
+            raise SandboxExecutionError(f"Episode {episode_id} environment failed health checks: {e}")
+
     def get_episode_environment(self, episode_id: str) -> Optional[ComposeOrchestrator]:
         """
         Retrieve orchestrator for the given episode.

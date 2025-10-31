@@ -1217,6 +1217,11 @@ def run_command(
                 saber_config = loaded_config
                 click.echo(f"📋 Using configuration file: {config_file_path}")
 
+                # Apply --no-ui flag override to config
+                if no_ui:
+                    saber_config.ui_enabled = False
+                    click.echo("🎯 UI disabled via --no-ui flag")
+
                 # Support URL overrides for auto mode or runtime hydration
                 # This allows saber-domain test to inject runtime URLs
                 if rest_url or mcp_url:

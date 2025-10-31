@@ -15,8 +15,7 @@ import mcp.types as mcp_types
 
 from ...logging_config import get_execution_logger, log_operation_failure, log_operation_start, log_operation_success
 from ..base import Action, CommandResult
-
-# CleanupManager removed - using direct component cleanup
+from ..benchmarks.task import Task
 from .executors.docker_executor import DockerExecutor
 from .executors.executor_factory import ExecutorFactory
 from .sandbox.permanent_environment_manager import PermanentEnvironmentManager
@@ -385,7 +384,7 @@ class ExecutionManager:
     def configure_for_task(
         self,
         episode_id: str,
-        task: Any,
+        task: Task,
         session_id: Optional[str] = None,
         target_episode_id: Optional[str] = None,
     ) -> None:
@@ -444,8 +443,15 @@ class ExecutionManager:
                 environment=task.environment,
             )
             try:
+                # Extract environment name from task.environment
+                # Can be str or dict with "base_template" key
+                environment_name = (
+                    task.environment
+                    if isinstance(task.environment, str)
+                    else task.environment.get("base_template", str(task.environment))
+                )
                 self._sandbox_environment_manager.create_episode_environment(
-                    episode_id, task.environment, target_episode_id
+                    episode_id, environment_name, target_episode_id
                 )
                 log_operation_success(
                     logger,
@@ -526,6 +532,169 @@ class ExecutionManager:
                     "executors": configured_executors,
                 },
             )
+
+    def configure_for_task_async(
+        self,
+        episode_id: str,
+        task: Task,
+        session_id: Optional[str] = None,
+        target_episode_id: Optional[str] = None,
+    ) -> None:
+        """
+        Configure ExecutionManager for a task/episode WITHOUT waiting for health checks.
+
+        Creates Docker environment but returns immediately after compose up.
+        Caller must call wait_for_episode_healthy() separately.
+
+        Args:
+            episode_id: Episode identifier
+            task: Task object with execution parameters
+            session_id: Optional session identifier
+            target_episode_id: Optional episode ID to attach network to
+        """
+        # Resolve environment if specified in task
+        if task.environment:
+            logger.info(
+                "Task requires sandbox environment (async)",
+                extra={
+                    "event": "task_environment_specified_async",
+                    "episode_id": episode_id,
+                    "environment": task.environment,
+                },
+            )
+
+            # Ensure sandbox manager is initialized
+            if self._sandbox_environment_manager is None:
+                server_dir = Path(self._config_dir).parent
+                sandbox_config = {
+                    "domain": "excytin_demo",
+                    "config_dir": self._config_dir,
+                    "logs_dir": str(server_dir / "logs"),
+                    "enable_container_logging": True,
+                }
+                self._sandbox_environment_manager = SandboxEnvironmentManager(sandbox_config)
+                self._executor_factory = None
+
+                logger.info(
+                    "Sandbox environment manager initialized (async)",
+                    extra={
+                        "event": "sandbox_manager_initialized_async",
+                        "episode_id": episode_id,
+                    },
+                )
+
+            # Create episode environment WITHOUT health checks
+            log_operation_start(
+                logger,
+                "create_sandbox_environment_async",
+                episode_id=episode_id,
+                environment=task.environment,
+            )
+            try:
+                # Extract environment name from task.environment
+                # Can be str or dict with "base_template" key
+                environment_name = (
+                    task.environment
+                    if isinstance(task.environment, str)
+                    else task.environment.get("base_template", str(task.environment))
+                )
+                self._sandbox_environment_manager.create_episode_environment_async(
+                    episode_id, environment_name, target_episode_id
+                )
+                log_operation_success(
+                    logger,
+                    "create_sandbox_environment_async",
+                    episode_id=episode_id,
+                    environment=task.environment,
+                )
+            except Exception as exc:
+                log_operation_failure(
+                    logger,
+                    "create_sandbox_environment_async",
+                    exc,
+                    episode_id=episode_id,
+                    environment=task.environment,
+                )
+                raise
+        else:
+            logger.warning(
+                "Task has no sandbox environment",
+                extra={
+                    "event": "task_environment_missing_async",
+                    "episode_id": episode_id,
+                },
+            )
+
+        # Configure execution settings (same as sync version)
+        execution_config = task.execution_config.copy()
+
+        executor_types = self.executor_factory.get_available_executors()
+        for executor_type in executor_types:
+            config_attr = f"{executor_type}_config"
+            if hasattr(task, config_attr):
+                config_value = getattr(task, config_attr)
+                if config_value:
+                    execution_config[executor_type] = config_value
+
+        self._configuration = execution_config
+
+        # Register episode configuration
+        self.executor_factory.register_episode_configuration(
+            episode_id=episode_id,
+            allowed_executors=task.allowed_executors,
+            episode_config=execution_config,
+        )
+
+        logger.info(
+            "Execution manager configured for episode (async - health pending)",
+            extra={
+                "event": "execution_manager_configured_async",
+                "episode_id": episode_id,
+                "allowed_executors": task.allowed_executors,
+            },
+        )
+
+    async def wait_for_episode_healthy(self, episode_id: str, timeout_seconds: int = 180) -> None:
+        """
+        Wait for episode environment to become healthy.
+
+        Must be called after configure_for_task_async().
+
+        Args:
+            episode_id: Episode identifier
+            timeout_seconds: Maximum time to wait for health checks
+
+        Raises:
+            RuntimeError: If sandbox manager not initialized or episode not found
+        """
+        import asyncio
+
+        if self._sandbox_environment_manager is None:
+            raise RuntimeError("Sandbox manager not initialized")
+
+        logger.debug(
+            "Waiting for episode environment health",
+            extra={
+                "event": "episode_health_wait_start",
+                "episode_id": episode_id,
+                "timeout_seconds": timeout_seconds,
+            },
+        )
+
+        # Run health checks in thread pool to avoid blocking event loop
+        await asyncio.to_thread(
+            self._sandbox_environment_manager.wait_for_episode_healthy,
+            episode_id,
+            timeout_seconds=timeout_seconds,
+        )
+
+        logger.info(
+            "Episode environment healthy",
+            extra={
+                "event": "episode_health_ready",
+                "episode_id": episode_id,
+            },
+        )
 
     def to_mcp_tools(self, episode_id: Optional[str] = None) -> List[mcp_types.Tool]:
         """

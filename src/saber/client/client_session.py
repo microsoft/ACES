@@ -14,6 +14,7 @@ from ..logging_config import get_session_manager_logger
 from ..models import (  # Use shared api models directly
     BenchmarkInfo,
     EpisodeCreateResponse,
+    EpisodeStatusResponse,
     EvalSubmission,
     PolicyResponse,
     SessionCreateResponse,
@@ -245,16 +246,20 @@ class ClientSessionManager:
         if status == 200:
             episode_response = EpisodeCreateResponse(**result)
 
-            log_msg = "Episode created"
+            log_msg = (
+                f"Episode creation request acknowledged - episode {episode_response.episode_id} "
+                "initialization in progress"
+            )
             log_data = {
-                "event": "episode_created",
+                "event": "episode_creation_acknowledged",
                 "session_id": session_id,
                 "task_id": task_id,
                 "episode_id": episode_response.episode_id,
+                "state": episode_response.state,
             }
 
             if episode_response.attached_to_episode_id:
-                log_msg = "Episode attached to dependency"
+                log_msg += f" (attached to {episode_response.attached_to_episode_id})"
                 log_data["attached_to_episode_id"] = episode_response.attached_to_episode_id
 
             logger.info(log_msg, extra=log_data)
@@ -272,6 +277,162 @@ class ClientSessionManager:
                 },
             )
             raise Exception(f"Failed to create episode: {status} - {result}")
+
+    async def get_episode_status(self, session_id: str, episode_id: str) -> EpisodeStatusResponse:
+        """
+        Get episode status for readiness polling.
+
+        Args:
+            session_id: Session ID
+            episode_id: Episode ID
+
+        Returns:
+            EpisodeStatusResponse with current episode state
+
+        Raises:
+            Exception: If status request fails
+        """
+        url = f"{self.base_url}/api/v1/session/{session_id}/episodes/{episode_id}/status"
+
+        async with aiohttp.ClientSession() as session:
+            timeout = aiohttp.ClientTimeout(total=self.timeout)
+            async with session.get(url, timeout=timeout) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return EpisodeStatusResponse(**data)
+                else:
+                    error_text = await response.text()
+                    raise Exception(f"Failed to get episode status: {response.status} - {error_text}")
+
+    async def wait_for_episode_ready(
+        self,
+        session_id: str,
+        episode_id: str,
+        timeout_seconds: int = 300,
+        min_poll_interval: float = 10.0,
+    ) -> EpisodeStatusResponse:
+        """
+        Poll episode status until it becomes ready or fails.
+
+        Args:
+            session_id: Session ID
+            episode_id: Episode ID
+            timeout_seconds: Maximum time to wait (default 300s)
+            min_poll_interval: Minimum seconds between status checks (default 10s)
+
+        Returns:
+            EpisodeStatusResponse when episode is ready
+
+        Raises:
+            TimeoutError: If episode not ready within timeout
+            Exception: If episode creation failed
+        """
+        import time
+
+        start_time = time.time()
+
+        logger.info(
+            f"Waiting for episode {episode_id} to become ready...",
+            extra={
+                "event": "wait_for_episode_ready_start",
+                "session_id": session_id,
+                "episode_id": episode_id,
+                "timeout_seconds": timeout_seconds,
+                "min_poll_interval": min_poll_interval,
+            },
+        )
+
+        while True:
+            status = await self.get_episode_status(session_id, episode_id)
+            elapsed = time.time() - start_time
+
+            if status.is_ready:
+                logger.info(
+                    f"Episode {episode_id} is ready (elapsed: {elapsed:.1f}s)",
+                    extra={
+                        "event": "wait_for_episode_ready_success",
+                        "session_id": session_id,
+                        "episode_id": episode_id,
+                        "state": status.state,
+                        "elapsed_seconds": elapsed,
+                    },
+                )
+                return status
+
+            if status.state == "failed_creation":
+                error_msg = status.creation_error or "Unknown error"
+                logger.error(
+                    f"Episode {episode_id} creation failed: {error_msg}",
+                    extra={
+                        "event": "wait_for_episode_ready_failed",
+                        "session_id": session_id,
+                        "episode_id": episode_id,
+                        "error": error_msg,
+                    },
+                )
+                raise Exception(f"Episode creation failed: {error_msg}")
+
+            if status.state in {"failed", "timeout"}:
+                raise Exception(f"Episode entered terminal state '{status.state}' before readiness")
+
+            if status.state == "completed":
+                raise Exception("Episode completed before readiness")
+
+            if elapsed >= timeout_seconds:
+                logger.error(
+                    f"Episode {episode_id} readiness timeout after {elapsed:.1f}s",
+                    extra={
+                        "event": "wait_for_episode_ready_timeout",
+                        "session_id": session_id,
+                        "episode_id": episode_id,
+                        "elapsed_seconds": elapsed,
+                        "timeout_seconds": timeout_seconds,
+                        "last_state": status.state,
+                    },
+                )
+                raise TimeoutError(
+                    f"Episode {episode_id} not ready after {timeout_seconds}s (current state: {status.state})"
+                )
+
+            # Log polling status update
+            logger.info(
+                f"Episode {episode_id} status: {status.state} (elapsed: {elapsed:.1f}s)",
+                extra={
+                    "event": "episode_status_poll",
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                    "state": status.state,
+                    "elapsed_seconds": elapsed,
+                    "is_ready": status.is_ready,
+                },
+            )
+
+            await asyncio.sleep(min_poll_interval)
+
+    async def create_episode_and_wait(
+        self, session_id: str, task_id: str, timeout_seconds: int = 300
+    ) -> EpisodeCreateResponse:
+        """
+        Create episode and wait for it to become ready (convenience method).
+
+        Args:
+            session_id: Session ID
+            task_id: Task ID
+            timeout_seconds: Maximum time to wait for readiness
+
+        Returns:
+            EpisodeCreateResponse when episode is ready
+
+        Raises:
+            Exception: If creation or readiness check fails
+        """
+        # Create episode (returns immediately)
+        response = await self.create_episode(session_id, task_id)
+
+        # Wait for ready
+        await self.wait_for_episode_ready(session_id, response.episode_id, timeout_seconds=timeout_seconds)
+
+        return response
 
     async def get_policy_response(self, session_id: str, episode_id: str) -> Optional[PolicyResponse]:
         """

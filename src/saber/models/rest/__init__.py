@@ -63,17 +63,31 @@ class PolicyResponse(BaseModel):
 
 
 class EpisodeCreateResponse(BaseModel):
-    """Response model for episode creation."""
+    """Response model for episode creation (async)."""
 
     episode_id: str = Field(description="Unique episode identifier")
     task_id: str = Field(description="Task identifier for this episode")
     session_id: str = Field(description="Session identifier")
-    state: str = Field(description="Initial episode state")
-    message: str = Field(description="Success message")
+    state: str = Field(description="Initial episode state (typically 'creating')")
+    message: str = Field(description="Status message")
     episode_context: Optional[EpisodeContext] = Field(None, description="Episode context with limits and metadata")
     attached_to_episode_id: Optional[str] = Field(
         None, description="Episode ID this episode is attached to due to dependencies"
     )
+
+
+class EpisodeStatusResponse(BaseModel):
+    """Response model for episode status/readiness polling."""
+
+    episode_id: str = Field(description="Episode identifier")
+    task_id: str = Field(description="Task identifier")
+    session_id: str = Field(description="Session identifier")
+    state: str = Field(description="Current episode state")
+    is_ready: bool = Field(description="Whether episode is ready for execution")
+    message: str = Field(description="Status message")
+    creation_error: Optional[str] = Field(None, description="Error message if creation failed")
+    episode_context: Optional[EpisodeContext] = Field(None, description="Episode context (available when ready)")
+    attached_to_episode_id: Optional[str] = Field(None, description="Attached episode ID if applicable")
 
 
 class EpisodeListResponse(BaseModel):

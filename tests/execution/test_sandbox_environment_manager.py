@@ -352,3 +352,194 @@ networks:
             manager._get_compose_file_path("test_sandbox")
 
         assert "Sandbox environments directory not found" in str(excinfo.value)
+
+
+class TestSandboxEnvironmentManagerAsync:
+    """Test cases for SandboxEnvironmentManager async episode creation."""
+
+    @pytest.fixture
+    def sandbox_config(self):
+        """Standard sandbox configuration for testing."""
+        return {
+            "domain": "test_domain"
+        }
+
+    @pytest.fixture
+    def manager(self, mock_environments_dir, sandbox_config):
+        """Create a SandboxEnvironmentManager instance."""
+        with patch.dict(os.environ, {}, clear=False):
+            manager = SandboxEnvironmentManager(sandbox_config)
+            manager._is_ready = True
+            manager.environments_path = mock_environments_dir
+            manager.environments_base_path = mock_environments_dir
+            yield manager
+
+    @pytest.fixture
+    def mock_environments_dir(self):
+        """Create a temporary environments directory with a test compose file."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            env_dir = Path(temp_dir)
+
+            # Create test compose file
+            compose_file = env_dir / "test_sandbox.compose.yml"
+            compose_file.write_text("""
+version: '3.8'
+services:
+  test-service:
+    image: alpine:latest
+    command: sleep 3600
+    labels:
+      - "saber.execution.service=true"
+      - "saber.service.type=sandbox"
+    networks:
+      - test-network
+networks:
+  test-network:
+    driver: bridge
+""")
+            yield env_dir
+
+    @patch('saber.server.execution.sandbox.sandbox_environment_manager.ComposeOrchestrator')
+    def test_create_episode_environment_async_success(self, mock_orchestrator_class, manager):
+        """Test successful async episode environment creation."""
+        # Setup mock orchestrator
+        mock_orchestrator = Mock()
+        mock_orchestrator.processed_compose_path = "/tmp/processed_test.yml"
+        mock_orchestrator_class.return_value = mock_orchestrator
+
+        # Create episode async
+        orchestrator, processed_path = manager.create_episode_environment_async(
+            "test-episode-async-001",
+            "test_sandbox"
+        )
+
+        # Verify orchestrator was created
+        mock_orchestrator_class.assert_called_once()
+
+        # CRITICAL: Verify start_environment_async was called (not start_environment)
+        mock_orchestrator.start_environment_async.assert_called_once()
+        mock_orchestrator.start_environment.assert_not_called()
+
+        # Verify episode is tracked
+        assert "test-episode-async-001" in manager.active_orchestrators
+        assert manager.active_orchestrators["test-episode-async-001"] is mock_orchestrator
+
+        # Verify compose file is tracked
+        assert "test-episode-async-001" in manager.episode_compose_files
+
+        # Verify returned values
+        assert orchestrator is mock_orchestrator
+        assert processed_path is not None
+
+    @patch('saber.server.execution.sandbox.sandbox_environment_manager.ComposeOrchestrator')
+    def test_wait_for_episode_healthy_success(self, mock_orchestrator_class, manager):
+        """Test successful episode health check after async creation."""
+        # Setup mock orchestrator with processed_compose_path attribute
+        mock_orchestrator = Mock()
+        mock_orchestrator.processed_compose_path = "/tmp/processed_test.yml"
+        mock_orchestrator.wait_for_healthy = Mock()  # Mock the health check method
+        mock_orchestrator_class.return_value = mock_orchestrator
+
+        # Create episode async first
+        manager.create_episode_environment_async("test-episode-health-002", "test_sandbox")
+
+        # Now wait for healthy
+        manager.wait_for_episode_healthy("test-episode-health-002", timeout_seconds=180)
+
+        # CRITICAL: Verify wait_for_healthy was called with the processed compose path
+        mock_orchestrator.wait_for_healthy.assert_called_once()
+        call_args = mock_orchestrator.wait_for_healthy.call_args
+
+        # Verify the compose_file_path argument is the processed path from orchestrator
+        assert call_args[1]['compose_file_path'] == mock_orchestrator.processed_compose_path
+        assert call_args[1]['timeout_seconds'] == 180
+
+    @patch('saber.server.execution.sandbox.sandbox_environment_manager.ComposeOrchestrator')
+    def test_wait_for_episode_healthy_no_orchestrator(self, mock_orchestrator_class, manager):
+        """Test wait_for_healthy fails if episode not found."""
+        with pytest.raises(SandboxExecutionError) as excinfo:
+            manager.wait_for_episode_healthy("nonexistent-episode", timeout_seconds=180)
+
+        assert "No active environment found" in str(excinfo.value)
+        assert "nonexistent-episode" in str(excinfo.value)
+
+    @patch('saber.server.execution.sandbox.sandbox_environment_manager.ComposeOrchestrator')
+    def test_wait_for_episode_healthy_no_processed_path(self, mock_orchestrator_class, manager):
+        """Test wait_for_healthy fails if orchestrator has no processed path."""
+        # Setup mock orchestrator WITHOUT processed_compose_path attribute
+        mock_orchestrator = Mock(spec=['start_environment_async'])  # No processed_compose_path
+        mock_orchestrator_class.return_value = mock_orchestrator
+
+        # Create episode async
+        manager.create_episode_environment_async("test-episode-no-path-003", "test_sandbox")
+
+        # Try to wait for healthy - should fail
+        with pytest.raises(SandboxExecutionError) as excinfo:
+            manager.wait_for_episode_healthy("test-episode-no-path-003", timeout_seconds=180)
+
+        assert "No processed compose path found" in str(excinfo.value)
+
+    @patch('saber.server.execution.sandbox.sandbox_environment_manager.ComposeOrchestrator')
+    def test_async_full_workflow(self, mock_orchestrator_class, manager):
+        """Test the complete async workflow: create_async -> wait_healthy."""
+        # Setup mock orchestrator
+        mock_orchestrator = Mock()
+        mock_orchestrator.processed_compose_path = "/tmp/processed_workflow.yml"
+        mock_orchestrator.wait_for_healthy = Mock()
+        mock_orchestrator_class.return_value = mock_orchestrator
+
+        episode_id = "test-episode-workflow-004"
+
+        # Step 1: Create episode async
+        orchestrator, processed_path = manager.create_episode_environment_async(
+            episode_id,
+            "test_sandbox"
+        )
+
+        # Verify async start was called, not sync start
+        mock_orchestrator.start_environment_async.assert_called_once()
+        mock_orchestrator.start_environment.assert_not_called()
+        mock_orchestrator.wait_for_healthy.assert_not_called()  # Not called yet
+
+        # Step 2: Wait for healthy
+        manager.wait_for_episode_healthy(episode_id, timeout_seconds=180)
+
+        # Verify health check was called with processed path
+        mock_orchestrator.wait_for_healthy.assert_called_once()
+        health_call = mock_orchestrator.wait_for_healthy.call_args
+        assert health_call[1]['compose_file_path'] == mock_orchestrator.processed_compose_path
+
+    @patch('saber.server.execution.sandbox.sandbox_environment_manager.ComposeOrchestrator')
+    def test_create_episode_environment_async_duplicate(self, mock_orchestrator_class, manager):
+        """Test that creating duplicate async episode fails."""
+        mock_orchestrator = Mock()
+        mock_orchestrator.processed_compose_path = "/tmp/processed.yml"
+        mock_orchestrator_class.return_value = mock_orchestrator
+
+        # Create first episode
+        manager.create_episode_environment_async("duplicate-episode", "test_sandbox")
+
+        # Try to create same episode again - should fail
+        with pytest.raises(SandboxExecutionError) as excinfo:
+            manager.create_episode_environment_async("duplicate-episode", "test_sandbox")
+
+        assert "already exists" in str(excinfo.value)
+
+    @patch('saber.server.execution.sandbox.sandbox_environment_manager.ComposeOrchestrator')
+    def test_wait_for_episode_healthy_propagates_errors(self, mock_orchestrator_class, manager):
+        """Test that health check errors are properly propagated."""
+        # Setup mock orchestrator that fails health check
+        mock_orchestrator = Mock()
+        mock_orchestrator.processed_compose_path = "/tmp/processed.yml"
+        mock_orchestrator.wait_for_healthy.side_effect = Exception("Health check timeout")
+        mock_orchestrator_class.return_value = mock_orchestrator
+
+        # Create episode async
+        manager.create_episode_environment_async("test-episode-fail-005", "test_sandbox")
+
+        # Try to wait for healthy - should propagate error
+        with pytest.raises(SandboxExecutionError) as excinfo:
+            manager.wait_for_episode_healthy("test-episode-fail-005", timeout_seconds=180)
+
+        assert "failed health checks" in str(excinfo.value)
+        assert "Health check timeout" in str(excinfo.value)

@@ -25,7 +25,7 @@ from ..logging_config import (
 from ..models import BenchmarkInfo, EpisodeEndResponse, EvalSubmission
 from .api.session_mcp_api import SessionMCPAPI
 from .api.session_rest_api import SessionRestAPI
-from .base import Action, CommandResult, Episode
+from .base import Action, CommandResult, Episode, EpisodeState
 from .benchmarks.benchmark_manager import BenchmarkManager
 from .benchmarks.task import Task
 from .episodes.constants import EpisodeTerminationReason
@@ -172,6 +172,13 @@ class SessionManager:
         # This serializes episode creation across ALL sessions to protect the Docker daemon
         # from being overwhelmed by concurrent Docker Compose environment creation
         self._episode_creation_lock = asyncio.Lock()
+
+        # Track background finalization tasks for async episode creation
+        self._episode_finalization_tasks: Dict[str, asyncio.Task[None]] = {}
+        # Semaphore to limit concurrent episode finalizations (health checks, not Docker compose)
+        # Note: Docker compose operations are serialized by _episode_creation_lock
+        # This semaphore prevents overwhelming the system with concurrent health checks
+        self._finalization_semaphore = asyncio.Semaphore(16)  # Max 16 concurrent finalizations
 
         # Manifest information for health endpoints
         self.manifest = manifest or {}
@@ -982,6 +989,57 @@ class SessionManager:
         except Exception as e:
             log_operation_failure(logger, "Orphaned episode cleanup check", str(e), session_id)
 
+        # CRITICAL FIX: Cancel pending finalization tasks for this session's episodes
+        cancelled_tasks = []
+        for episode_id in list(self._episode_finalization_tasks.keys()):
+            episode = self.episode_manager.get_episode_by_id(episode_id)
+            if episode and episode.session_id == session_id:
+                task = self._episode_finalization_tasks.get(episode_id)
+                if task and not task.done():
+                    task.cancel()
+                    cancelled_tasks.append(episode_id)
+                    logger.info(
+                        "Cancelled finalization task for episode",
+                        extra={
+                            "event": "finalization_task_cancelled",
+                            "session_id": session_id,
+                            "episode_id": episode_id,
+                        },
+                    )
+
+        # Wait for cancellations to complete (with timeout)
+        if cancelled_tasks:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(
+                        *[
+                            self._episode_finalization_tasks[eid]
+                            for eid in cancelled_tasks
+                            if eid in self._episode_finalization_tasks
+                        ],
+                        return_exceptions=True,
+                    ),
+                    timeout=5.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Finalization task cancellation timed out",
+                    extra={
+                        "event": "finalization_cancellation_timeout",
+                        "session_id": session_id,
+                        "cancelled_count": len(cancelled_tasks),
+                    },
+                )
+            except Exception as e:
+                logger.warning(
+                    "Error during finalization task cancellation",
+                    extra={
+                        "event": "finalization_cancellation_error",
+                        "session_id": session_id,
+                        "error": str(e),
+                    },
+                )
+
         # Mark session as inactive
         session.is_active = False
 
@@ -996,6 +1054,188 @@ class SessionManager:
             "Session terminated",
             extra={"event": "session_terminated", "session_id": session_id},
         )
+
+    async def initiate_episode(self, session_id: str, task_id: str) -> Episode:
+        """
+        Initiate episode creation for a task with automatic dependency resolution (async).
+
+        This method creates the episode and starts the Docker environment under a GLOBAL lock,
+        then releases the lock and continues finalization (health checks, prompts, etc.)
+        in a background task.
+
+        Returns immediately with episode in CREATING state. Clients must poll status
+        until episode becomes READY.
+
+        This method uses a GLOBAL lock to serialize Docker Compose environment creation
+        across all sessions, preventing concurrent operations that can overwhelm the
+        Docker daemon. The lock is released BEFORE health checks to allow parallelism.
+
+        Args:
+            session_id: ID of the client session
+            task_id: ID of the task to start
+
+        Returns:
+            Episode object in CREATING state
+        """
+        session = self._get_session(session_id)
+        session.update_activity()
+
+        # Get the task object to access its configuration
+        task = self.benchmark_manager.get_task(task_id)
+
+        # Acquire GLOBAL lock to serialize episode creation (Docker compose only)
+        async with self._episode_creation_lock:
+            logger.info(
+                "🔒 Episode creation lock acquired (global serialization active)",
+                extra={
+                    "event": "episode_creation_lock_acquired",
+                    "session_id": session_id,
+                    "task_id": task_id,
+                    "lock_scope": "global",
+                },
+            )
+
+            # Create episode in CREATING state (changed from ACTIVE)
+            episode = Episode(
+                task_id=task_id,
+                session_id=session_id,
+                state=EpisodeState.CREATING,  # Changed from ACTIVE
+                context=task.initial_context.copy() if task.initial_context else {},
+                creation_error=None,
+                metadata={"created_at": datetime.utcnow().isoformat()},
+                end_time=None,
+                eval_submission=None,
+                completion_reason=None,
+                submission=None,
+                depends_on_task_id=task.depends_on_task_id if task else None,
+                attached_to_episode_id=None,
+            )
+
+            # Add episode to episode manager tracking immediately
+            self.episode_manager.add_episode_to_session(session_id, episode)
+
+            logger.info(
+                "Episode created in CREATING state",
+                extra={
+                    "event": "episode_created",
+                    "session_id": session_id,
+                    "episode_id": episode.episode_id,
+                    "task_id": task_id,
+                    "state": "creating",
+                },
+            )
+
+            # Handle automatic dependency resolution
+            effective_attach_to_episode_id = None
+            if task.depends_on_task_id:
+                logger.info(
+                    "Task dependency detected",
+                    extra={
+                        "event": "task_dependency_detected",
+                        "session_id": session_id,
+                        "episode_id": episode.episode_id,
+                        "task_id": task_id,
+                        "depends_on_task_id": task.depends_on_task_id,
+                    },
+                )
+
+                # Get dependency configuration
+                dependency_config = self.benchmark_manager.get_dependency_config()
+
+                # Find available episode (with retry logic)
+                try:
+                    available_episode_id = await self.episode_manager.find_available_episode_for_dependency_with_retry(
+                        session_id=session_id,
+                        target_task_id=task.depends_on_task_id,
+                        dependent_task_id=task_id,
+                        max_wait_seconds=dependency_config["wait_seconds"],
+                        retry_interval=dependency_config["retry_interval"],
+                        max_retry_interval=dependency_config["max_retry_interval"],
+                    )
+                except ValueError as e:
+                    dependency_error = ValueError(f"Dependency validation failed: {e}")
+                    self.episode_manager.remove_episode_on_error(episode.episode_id, dependency_error)
+                    raise ValueError(f"Cannot create episode for task {task_id}: {e}")
+
+                if available_episode_id:
+                    effective_attach_to_episode_id = available_episode_id
+                    self.episode_manager.attach_episode_to_episode(episode.episode_id, available_episode_id)
+                    logger.info(
+                        "Episode attached to dependency",
+                        extra={
+                            "event": "episode_dependency_attached",
+                            "session_id": session_id,
+                            "episode_id": episode.episode_id,
+                            "dependency_episode_id": available_episode_id,
+                        },
+                    )
+                else:
+                    dependency_error = ValueError(
+                        f"No available episodes with required dependency task_id {task.depends_on_task_id} "
+                        f"(waited {dependency_config['wait_seconds']}s)"
+                    )
+                    self.episode_manager.remove_episode_on_error(episode.episode_id, dependency_error)
+                    raise ValueError(
+                        f"Cannot create episode for task {task_id}: no available episodes with required dependency "
+                        f"task_id {task.depends_on_task_id} after waiting {dependency_config['wait_seconds']}s"
+                    )
+
+            # Start Docker environment (WITHOUT health checks) - runs in thread pool
+            try:
+                await asyncio.to_thread(
+                    self.execution_manager.configure_for_task_async,
+                    episode.episode_id,
+                    task,
+                    session_id=session_id,
+                    target_episode_id=effective_attach_to_episode_id,
+                )
+            except Exception as e:
+                logger.error(
+                    "Failed to start Docker environment",
+                    extra={
+                        "event": "episode_docker_start_failed",
+                        "session_id": session_id,
+                        "episode_id": episode.episode_id,
+                        "task_id": task_id,
+                        "error": str(e),
+                    },
+                )
+                self.episode_manager.mark_episode_failed_creation(episode.episode_id, str(e))
+                self.episode_manager.remove_episode_on_error(episode.episode_id, e)
+                raise HTTPException(status_code=500, detail=f"Failed to start Docker environment: {e}")
+
+            logger.info(
+                "🔓 Episode creation lock released (Docker started, health pending)",
+                extra={
+                    "event": "episode_creation_lock_released",
+                    "episode_id": episode.episode_id,
+                    "task_id": task_id,
+                },
+            )
+
+        # AFTER LOCK RELEASE: Spawn background task for finalization
+        finalization_coro = self._finalize_episode_creation(
+            episode_id=episode.episode_id,
+            session_id=session_id,
+            task_id=task_id,
+            task=task,
+            attach_to_episode_id=effective_attach_to_episode_id,
+        )
+        self._schedule_episode_finalization(episode.episode_id, finalization_coro)
+
+        # Add to session immediately
+        session.add_active_episode(episode.episode_id)
+
+        logger.info(
+            "Episode initiated (background finalization in progress)",
+            extra={
+                "event": "episode_initiated",
+                "episode_id": episode.episode_id,
+                "state": episode.state.value,
+            },
+        )
+
+        return episode
 
     async def start_episode(self, session_id: str, task_id: str) -> Episode:
         """
@@ -1098,7 +1338,7 @@ class SessionManager:
 
             # Configure execution manager with task object, episode ID, and attachment (automatic only)
             # This includes Docker Compose environment creation and health checks
-            # Run in thread pool since this is blocking I/O that can take ~7 seconds
+            # Run in thread pool since this is blocking I/O
             try:
                 await asyncio.to_thread(
                     self.execution_manager.configure_for_task,
@@ -1211,6 +1451,328 @@ class SessionManager:
             },
         )
         return episode
+
+    def _schedule_episode_finalization(self, episode_id: str, finalization_coro: Any) -> None:
+        """
+        Register background finalization work with concurrency limits.
+
+        Args:
+            episode_id: Episode identifier
+            finalization_coro: Coroutine for finalization work
+        """
+
+        async def _run() -> None:
+            # HIGH FIX: Semaphore controls concurrent health checks to prevent system overload
+            # Docker compose operations are already serialized by _episode_creation_lock
+            async with self._finalization_semaphore:
+                logger.debug(
+                    "Episode finalization acquired semaphore slot",
+                    extra={
+                        "event": "finalization_semaphore_acquired",
+                        "episode_id": episode_id,
+                    },
+                )
+                try:
+                    await finalization_coro
+                finally:
+                    self._episode_finalization_tasks.pop(episode_id, None)
+                    logger.debug(
+                        "Episode finalization released semaphore slot",
+                        extra={
+                            "event": "finalization_semaphore_released",
+                            "episode_id": episode_id,
+                        },
+                    )
+
+        task = asyncio.create_task(_run(), name=f"episode-finalize-{episode_id}")
+        self._episode_finalization_tasks[episode_id] = task
+        task.add_done_callback(lambda t: self._handle_finalization_task_done(episode_id, t))
+
+    def _handle_finalization_task_done(self, episode_id: str, task: asyncio.Task[None]) -> None:
+        """
+        Surface task errors and mark failures when needed.
+
+        Args:
+            episode_id: Episode identifier
+            task: Asyncio task that finished
+        """
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            logger.info(
+                "Episode finalization task cancelled",
+                extra={"event": "episode_finalization_cancelled", "episode_id": episode_id},
+            )
+        except Exception as e:
+            logger.error(
+                "Episode finalization crashed",
+                extra={
+                    "event": "episode_finalization_crashed",
+                    "episode_id": episode_id,
+                    "error": str(e),
+                },
+            )
+            self.episode_manager.mark_episode_failed_creation(episode_id, f"Finalization crashed: {e}")
+
+    async def _finalize_episode_creation(
+        self,
+        episode_id: str,
+        session_id: str,
+        task_id: str,
+        task: Task,
+        attach_to_episode_id: Optional[str] = None,
+    ) -> None:
+        """
+        Background task that finalizes episode creation after Docker compose.
+
+        Runs OUTSIDE the global lock:
+        1. Wait for health checks
+        2. Generate prompts
+        3. Configure policy
+        4. Configure episode manager
+        5. Configure evaluation
+        6. Mark episode READY
+
+        Args:
+            episode_id: Episode identifier
+            session_id: Session identifier
+            task_id: Task identifier
+            task: Task object
+            attach_to_episode_id: Optional attached episode ID
+        """
+        try:
+            logger.info(
+                "Episode finalization started",
+                extra={
+                    "event": "episode_finalization_started",
+                    "episode_id": episode_id,
+                },
+            )
+
+            # Wait for health checks
+            try:
+                health_task = self.execution_manager.wait_for_episode_healthy(
+                    episode_id=episode_id, timeout_seconds=180
+                )
+                # HIGH FIX: Tighter timeout - only 20s buffer instead of 120s to prevent hung tasks
+                await asyncio.wait_for(health_task, timeout=200)
+            except asyncio.TimeoutError:
+                error_msg = "Health check exceeded 200s timeout"
+                logger.error(
+                    "Episode health check timed out",
+                    extra={
+                        "event": "episode_health_check_timeout",
+                        "episode_id": episode_id,
+                        "timeout_seconds": 200,
+                    },
+                )
+                self.episode_manager.mark_episode_failed_creation(episode_id, error_msg)
+                await self._cleanup_failed_episode_environment(episode_id)
+                return
+            except Exception as e:
+                logger.error(
+                    "Episode health check failed",
+                    extra={
+                        "event": "episode_health_check_failed",
+                        "episode_id": episode_id,
+                        "error": str(e),
+                    },
+                )
+                self.episode_manager.mark_episode_failed_creation(episode_id, f"Health check failed: {e}")
+                await self._cleanup_failed_episode_environment(episode_id)
+                return
+
+            # Generate prompts
+            try:
+                rendered_prompts = self.benchmark_manager.prompt_generator.render_agent_prompts_for_task(task)
+                instruction_prompt = rendered_prompts["instruction"]
+                self.policy_manager.set_episode_policy(episode_id, session_id, instruction_prompt)
+            except Exception as e:
+                logger.error(
+                    "Episode prompt generation failed",
+                    extra={
+                        "event": "episode_prompt_generation_failed",
+                        "episode_id": episode_id,
+                        "error": str(e),
+                    },
+                )
+                self.episode_manager.mark_episode_failed_creation(episode_id, f"Prompt generation failed: {e}")
+                await self._cleanup_failed_episode_environment(episode_id)
+                return
+
+            # Configure episode manager
+            try:
+                await self.episode_manager.configure_for_task(episode_id, task)
+            except Exception as e:
+                logger.error(
+                    "Episode manager configuration failed",
+                    extra={
+                        "event": "episode_manager_config_failed",
+                        "episode_id": episode_id,
+                        "error": str(e),
+                    },
+                )
+                self.episode_manager.mark_episode_failed_creation(episode_id, f"Episode configuration failed: {e}")
+                await self._cleanup_failed_episode_environment(episode_id)
+                return
+
+            # Configure evaluation
+            try:
+                self.evaluation_manager.configure_for_task(task)
+            except Exception as e:
+                logger.error(
+                    "Evaluation configuration failed",
+                    extra={
+                        "event": "evaluation_config_failed",
+                        "episode_id": episode_id,
+                        "error": str(e),
+                    },
+                )
+                self.episode_manager.mark_episode_failed_creation(episode_id, f"Evaluation configuration failed: {e}")
+                await self._cleanup_failed_episode_environment(episode_id)
+                return
+
+            # Log episode start (non-fatal)
+            try:
+                await self.evaluation_manager.log_episode_start(session_id, episode_id, task_id)
+            except Exception as e:
+                logger.warning(
+                    "Failed to log episode start (non-fatal)",
+                    extra={
+                        "event": "episode_start_logging_failed",
+                        "episode_id": episode_id,
+                        "error": str(e),
+                    },
+                )
+
+            # Mark episode as READY
+            self.episode_manager.mark_episode_ready(episode_id)
+
+            logger.info(
+                "Episode finalization completed - episode ready",
+                extra={
+                    "event": "episode_finalization_completed",
+                    "episode_id": episode_id,
+                    "state": "ready",
+                },
+            )
+
+        except asyncio.CancelledError:
+            logger.info(
+                "Episode finalization cancelled",
+                extra={
+                    "event": "episode_finalization_cancelled",
+                    "episode_id": episode_id,
+                },
+            )
+            self.episode_manager.mark_episode_failed_creation(
+                episode_id, "Episode finalization cancelled during shutdown"
+            )
+            await self._cleanup_failed_episode_environment(episode_id)
+            raise
+        except Exception as e:
+            logger.error(
+                "Episode finalization failed with unexpected error",
+                extra={
+                    "event": "episode_finalization_unexpected_error",
+                    "episode_id": episode_id,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+            )
+            self.episode_manager.mark_episode_failed_creation(episode_id, f"Unexpected finalization error: {e}")
+            await self._cleanup_failed_episode_environment(episode_id)
+
+    async def _cleanup_failed_episode_environment(self, episode_id: str) -> None:
+        """
+        Best-effort teardown when finalization fails.
+
+        Args:
+            episode_id: Episode identifier
+        """
+        try:
+            await asyncio.to_thread(self.execution_manager.cleanup_episode, episode_id)
+            logger.info(
+                "Successfully cleaned up failed episode environment",
+                extra={
+                    "event": "episode_failure_cleanup_success",
+                    "episode_id": episode_id,
+                },
+            )
+        except Exception as exc:
+            # HIGH FIX: Escalate to error (not warning) since this leaves orphaned resources
+            logger.error(
+                "Episode teardown after failure encountered errors - resources may be orphaned",
+                extra={
+                    "event": "episode_failure_cleanup_error",
+                    "episode_id": episode_id,
+                    "error": str(exc),
+                },
+            )
+
+            # Fallback: Try force cleanup via direct docker compose down
+            try:
+                import subprocess
+
+                # Get the sandbox environment manager to find the compose project name
+                if (
+                    hasattr(self.execution_manager, "_sandbox_environment_manager")
+                    and self.execution_manager._sandbox_environment_manager
+                ):
+                    project_name = f"saber-episode-{episode_id}"
+                    logger.info(
+                        "Attempting fallback cleanup with docker compose down",
+                        extra={
+                            "event": "episode_fallback_cleanup_attempt",
+                            "episode_id": episode_id,
+                            "project_name": project_name,
+                        },
+                    )
+                    result = await asyncio.to_thread(
+                        subprocess.run,
+                        ["docker", "compose", "-p", project_name, "down", "-v", "--remove-orphans"],
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                    if result.returncode == 0:
+                        logger.info(
+                            "Fallback cleanup succeeded",
+                            extra={
+                                "event": "episode_fallback_cleanup_success",
+                                "episode_id": episode_id,
+                            },
+                        )
+                    else:
+                        logger.error(
+                            "Fallback cleanup failed",
+                            extra={
+                                "event": "episode_fallback_cleanup_failed",
+                                "episode_id": episode_id,
+                                "stderr": result.stderr,
+                            },
+                        )
+            except Exception as fallback_exc:
+                logger.error(
+                    "Fallback cleanup also failed - manual intervention required",
+                    extra={
+                        "event": "episode_fallback_cleanup_exception",
+                        "episode_id": episode_id,
+                        "error": str(fallback_exc),
+                    },
+                )
+
+    def get_episode_status(self, episode_id: str) -> Optional[Episode]:
+        """
+        Get episode for status checking.
+
+        Args:
+            episode_id: Episode identifier
+
+        Returns:
+            Episode object or None if not found
+        """
+        return self.episode_manager.get_episode_by_id(episode_id)
 
     def get_benchmark_info(self) -> BenchmarkInfo:
         """

@@ -12,6 +12,7 @@ from typing import Any, Dict, List, NamedTuple, Optional
 from saber.logging_config import LogCategory, get_saber_logger
 
 from ..base import Action, CommandResult, Episode, EpisodeState, Step
+from ..benchmarks.task import Task
 from .constants import EpisodeTerminationReason
 from .exceptions import EpisodeNotFoundException
 
@@ -82,6 +83,62 @@ class EpisodeManager:
             self.completed_episodes[episode_id] = episode
         return episode
 
+    def mark_episode_ready(self, episode_id: str) -> None:
+        """
+        Mark an episode as ready for execution (async creation completed successfully).
+
+        Args:
+            episode_id: Episode identifier
+
+        Raises:
+            EpisodeNotFoundException: If episode not found
+        """
+        episode = self.get_episode_by_id(episode_id)
+        if not episode:
+            raise EpisodeNotFoundException(f"Episode {episode_id} not found")
+
+        episode.state = EpisodeState.READY
+        logger.info(
+            "Episode marked ready",
+            extra={
+                "event": "episode_marked_ready",
+                "episode_id": episode_id,
+                "session_id": episode.session_id,
+                "task_id": episode.task_id,
+            },
+        )
+
+    def mark_episode_failed_creation(self, episode_id: str, error_message: str) -> None:
+        """
+        Mark an episode as failed during async creation.
+
+        Args:
+            episode_id: Episode identifier
+            error_message: Error description
+
+        Raises:
+            EpisodeNotFoundException: If episode not found
+        """
+        episode = self.get_episode_by_id(episode_id)
+        if not episode:
+            raise EpisodeNotFoundException(f"Episode {episode_id} not found")
+
+        episode.state = EpisodeState.FAILED_CREATION
+        episode.creation_error = error_message
+        episode.end_time = datetime.utcnow()
+        episode.completion_reason = f"creation_failed: {error_message}"
+
+        logger.error(
+            "Episode creation failed",
+            extra={
+                "event": "episode_creation_failed",
+                "episode_id": episode_id,
+                "session_id": episode.session_id,
+                "task_id": episode.task_id,
+                "error": error_message,
+            },
+        )
+
     def initialize_file_copier(self, server_base_dir: Any) -> None:
         """
         Initialize the file copier for copying files to episode containers.
@@ -105,7 +162,7 @@ class EpisodeManager:
     async def copy_initial_files(
         self,
         episode_id: str,
-        task: Any,
+        task: Task,
         container_prefix: str = "default",
     ) -> None:
         """
@@ -377,7 +434,7 @@ class EpisodeManager:
             },
         )
 
-    async def configure_for_task(self, episode_id: str, task: Any) -> None:
+    async def configure_for_task(self, episode_id: str, task: Task) -> None:
         """
         Configure EpisodeManager for a specific task/episode.
 
@@ -542,6 +599,7 @@ class EpisodeManager:
             session_id=session_id,
             state=EpisodeState.ACTIVE,
             context=initial_context or {},
+            creation_error=None,
             metadata={"created_at": datetime.utcnow().isoformat()},
             end_time=None,
             eval_submission=None,

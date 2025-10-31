@@ -435,9 +435,24 @@ async def create_saber_inspect_agent(
 
                 # Create episode - wrap in try/except to provide better error context
                 try:
-                    episode_response = await session_manager.create_episode(session_id, task_id)
+                    # Use async episode creation with wait for ready state
+                    episode_response = await session_manager.create_episode_and_wait(session_id, task_id)
                     task_store.set("saber_current_episode", episode_response)
                     task_store.set("saber_attached_to_episode_id", episode_response.attached_to_episode_id)
+                except TimeoutError as timeout_error:
+                    logger.error(
+                        "Episode creation timed out waiting for ready state",
+                        extra={
+                            "event": "agent_episode_creation_timeout",
+                            "error": str(timeout_error),
+                            "session_id": session_id,
+                            "task_id": task_id,
+                        },
+                    )
+                    raise ValueError(
+                        f"Episode creation timed out for task {task_id}: {timeout_error}. "
+                        "The episode may have failed during environment setup."
+                    ) from timeout_error
                 except Exception as episode_error:
                     logger.error(
                         "Failed to create episode for agent execution",
