@@ -6,6 +6,7 @@ Provides basic start/stop operations for Docker Compose files with episode isola
 Includes command execution capabilities for designated execution services.
 """
 
+import asyncio
 import os
 import subprocess
 import time
@@ -800,8 +801,8 @@ class ComposeOrchestrator:
                 "This indicates an improper orchestrator initialization."
             )
 
-        # Get execution container using episode-aware resolution
-        container = self.get_execution_container()
+        # Get execution container using episode-aware resolution (offload to thread pool)
+        container = await self.get_execution_container_async()
         if not container:
             expected_name = self._get_actual_container_name(self.execution_service_name)
             raise RuntimeError(
@@ -824,20 +825,26 @@ class ComposeOrchestrator:
         start_time = time.time()
 
         try:
-            # Execute command via docker exec
-            exec_result = container.exec_run(
-                cmd=command,
-                workdir=working_dir,
-                detach=False,
-                stdout=True,
-                stderr=True,
-                stream=False,
-                demux=True,  # Separate stdout and stderr
-                tty=False,
-                privileged=False,
-                user=None,  # Use container's default user
-                environment=None,
-                socket=False,
+            # Execute command via docker exec in thread pool with timeout enforcement
+            # This allows concurrent tool execution across multiple episodes
+            # Wrap with asyncio.wait_for to enforce timeout (Docker SDK doesn't support timeouts natively)
+            exec_result = await asyncio.wait_for(
+                asyncio.to_thread(
+                    container.exec_run,
+                    cmd=command,
+                    workdir=working_dir,
+                    detach=False,
+                    stdout=True,
+                    stderr=True,
+                    stream=False,
+                    demux=True,  # Separate stdout and stderr
+                    tty=False,
+                    privileged=False,
+                    user=None,  # Use container's default user
+                    environment=None,
+                    socket=False,
+                ),
+                timeout=timeout,  # Enforce timeout from execution_config
             )
 
             execution_time = time.time() - start_time
@@ -860,10 +867,33 @@ class ComposeOrchestrator:
                     "command": command,
                     "exit_code": exec_result.exit_code,
                     "execution_time_seconds": round(execution_time, 2),
+                    "timeout_seconds": timeout,
                 },
             )
 
             return result
+
+        except asyncio.TimeoutError:
+            # Command exceeded timeout - kill and return timeout error
+            execution_time = time.time() - start_time
+            logger.error(
+                "Container command execution timed out",
+                extra={
+                    "event": "container_command_execution_timeout",
+                    "container_name": container.name,
+                    "command": command,
+                    "timeout_seconds": timeout,
+                    "execution_time_seconds": round(execution_time, 2),
+                },
+            )
+
+            # Return timeout error result with exit code 124 (standard timeout exit code)
+            return CommandResult(
+                stdout="",
+                stderr=f"Command execution timed out after {timeout} seconds",
+                exit_code=124,
+                execution_time=execution_time,
+            )
 
         except Exception as e:
             execution_time = time.time() - start_time
@@ -886,9 +916,11 @@ class ComposeOrchestrator:
                 execution_time=execution_time,
             )
 
-    def get_execution_container(self) -> Any:
+    async def get_execution_container_async(self) -> Any:
         """
         Get the container designated for command execution using episode-aware resolution.
+
+        This async version offloads blocking Docker calls to a thread pool.
 
         Returns:
             Docker container object if found, None otherwise
@@ -915,12 +947,12 @@ class ComposeOrchestrator:
                 },
             )
 
-            # Try to get the container
+            # Try to get the container (offload to thread pool to avoid blocking)
             try:
-                container = self.docker_client.containers.get(actual_container_name)
+                container = await asyncio.to_thread(self.docker_client.containers.get, actual_container_name)
 
-                # Verify container is running
-                container.reload()  # Refresh container state
+                # Verify container is running (offload to thread pool)
+                await asyncio.to_thread(container.reload)  # Refresh container state
                 if container.status != "running":
                     logger.error(
                         "Execution container not running",
@@ -948,8 +980,8 @@ class ComposeOrchestrator:
             except Exception as e:
                 # Handle docker.errors.NotFound and other exceptions
                 if docker and hasattr(docker, "errors") and isinstance(e, docker.errors.NotFound):
-                    # Log available containers for debugging
-                    all_containers = self.docker_client.containers.list(all=True)
+                    # Log available containers for debugging (offload to thread pool)
+                    all_containers = await asyncio.to_thread(self.docker_client.containers.list, all=True)
                     available_containers = []
                     for container_item in all_containers:
                         image_obj = getattr(container_item, "image", None)
@@ -995,6 +1027,34 @@ class ComposeOrchestrator:
                     "error": str(e),
                 },
             )
+            return None
+
+    def get_execution_container(self) -> Any:
+        """
+        Get the container designated for command execution (synchronous wrapper).
+
+        Deprecated: Use get_execution_container_async() instead for better concurrency.
+        This method exists for backward compatibility but may block the event loop.
+
+        Returns:
+            Docker container object if found, None otherwise
+        """
+        # Synchronous fallback - may block event loop
+        if not self.execution_service_name:
+            logger.error(
+                "Execution service missing",
+                extra={"event": "execution_service_missing"},
+            )
+            return None
+
+        try:
+            actual_container_name = self._get_actual_container_name(self.execution_service_name)
+            container = self.docker_client.containers.get(actual_container_name)
+            container.reload()
+            if container.status != "running":
+                return None
+            return container
+        except Exception:
             return None
 
     def stop_environment(

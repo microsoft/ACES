@@ -70,16 +70,18 @@ class SandboxFileCopier:
         episode_id: str,
         file_mappings: Dict[str, str],
         container_prefix: str = "default",
+        container_name: Optional[str] = None,
     ) -> None:
         """
         Copy files into a running episode container.
 
         Args:
-            episode_id: The episode ID (used to construct container name)
+            episode_id: The episode ID (used to construct container name if container_name not provided)
             file_mappings: Dictionary mapping destination paths in container to source paths
                           relative to data_dir. Example:
                           {"/root/pom.xml": "sandbox_files/challenge/pom.xml"}
-            container_prefix: Container name prefix (default: "default")
+            container_prefix: Container name prefix (default: "default") - used if container_name not provided
+            container_name: Full container name (optional) - if provided, overrides container_prefix
 
         Raises:
             NotFound: If container or source file not found
@@ -96,7 +98,9 @@ class SandboxFileCopier:
             )
             return
 
-        container_name = f"{container_prefix}-{episode_id}"
+        # Use provided container_name or construct from prefix
+        if container_name is None:
+            container_name = f"{container_prefix}-{episode_id}"
 
         logger.info(
             "File copy operation starting",
@@ -219,15 +223,18 @@ class SandboxFileCopier:
             },
         )
 
+        # Determine the parent directory where the tar should be extracted
+        # Docker's put_archive extracts to the specified path, so we need the parent
+        dest_parent = dest_container_path.parent.as_posix() or "/"
+
+        # Ensure parent directory exists in container
+        self._ensure_directory_exists(container, dest_parent, episode_id)
+
         # Create tar archive in memory
         if source_path.is_dir():
             tar_stream = self._create_tar_for_directory(source_path, dest_container_path)
         else:
             tar_stream = self._create_tar_for_file(source_path, dest_container_path)
-
-        # Determine the parent directory where the tar should be extracted
-        # Docker's put_archive extracts to the specified path, so we need the parent
-        dest_parent = dest_container_path.parent.as_posix() or "/"
 
         try:
             container.put_archive(dest_parent, tar_stream)
@@ -250,6 +257,79 @@ class SandboxFileCopier:
                 },
             )
             raise
+
+    def _ensure_directory_exists(
+        self,
+        container: "Container",
+        directory_path: str,
+        episode_id: str,
+    ) -> None:
+        """
+        Ensure a directory exists in the container, creating it if necessary.
+
+        Args:
+            container: Docker container object
+            directory_path: Directory path in container (absolute path)
+            episode_id: Episode ID for logging
+        """
+        try:
+            # Try to stat the directory
+            exit_code, _ = container.exec_run(
+                f"test -d {directory_path}",
+                demux=False,
+            )
+
+            if exit_code == 0:
+                # Directory exists
+                logger.debug(
+                    "Parent directory exists",
+                    extra={
+                        "event": "parent_dir_exists",
+                        "episode_id": episode_id,
+                        "directory": directory_path,
+                    },
+                )
+                return
+
+            # Directory doesn't exist, create it
+            logger.info(
+                "Creating parent directory in container",
+                extra={
+                    "event": "parent_dir_create",
+                    "episode_id": episode_id,
+                    "directory": directory_path,
+                },
+            )
+
+            exit_code, output = container.exec_run(
+                f"mkdir -p {directory_path}",
+                demux=False,
+            )
+
+            if exit_code != 0:
+                error_msg = output.decode() if output else "unknown error"
+                raise RuntimeError(f"Failed to create directory {directory_path}: {error_msg}")
+
+            logger.debug(
+                "Parent directory created successfully",
+                extra={
+                    "event": "parent_dir_created",
+                    "episode_id": episode_id,
+                    "directory": directory_path,
+                },
+            )
+
+        except Exception as e:
+            logger.warning(
+                "Error checking/creating parent directory",
+                extra={
+                    "event": "parent_dir_check_error",
+                    "episode_id": episode_id,
+                    "directory": directory_path,
+                    "error": str(e),
+                },
+            )
+            # Don't fail - let the put_archive fail if the directory really doesn't work
 
     def _create_tar_for_file(self, source_path: Path, dest_path: PurePosixPath | str) -> io.BytesIO:
         """

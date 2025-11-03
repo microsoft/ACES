@@ -137,7 +137,11 @@ benchmark_config:
 
 global_defaults:
   execution_config:
-    timeout: 300
+    executors:
+      bash_executor:
+        timeout: 300
+      python_executor:
+        timeout: 300
   episode_config:
     max_steps: 50
 
@@ -165,7 +169,11 @@ benchmark_config:
 
 global_defaults:
   execution_config:
-    timeout: 300
+    executors:
+      bash_executor:
+        timeout: 300
+      python_executor:
+        timeout: 300
   episode_config:
     max_steps: 50
 
@@ -179,9 +187,11 @@ tasks:
     description: "First test task"
     prompt_template_file: "test_task_prompt.md"
     execution_config:
-      allowed_executors:
-        - bash_executor
-        - python_executor
+      executors:
+        bash_executor:
+          timeout: 300
+        python_executor:
+          timeout: 300
     submission_evaluation_config:
       strategy: "static"
       criteria:
@@ -200,9 +210,11 @@ tasks:
     description: "Second test task"
     prompt_template_file: "test_task_prompt.md"
     execution_config:
-      allowed_executors:
-        - bash_executor
-        - python_executor
+      executors:
+        bash_executor:
+          timeout: 300
+        python_executor:
+          timeout: 300
     submission_evaluation_config:
       strategy: "static"
       criteria:
@@ -293,7 +305,11 @@ benchmark_config:
 
 global_defaults:
   execution_config:
-    timeout: 300
+    executors:
+      bash_executor:
+        timeout: 300
+      python_executor:
+        timeout: 300
   episode_config:
     max_steps: 50
 
@@ -307,9 +323,11 @@ tasks:
     description: "A test task"
     prompt_template_file: "test_task_prompt.md"
     execution_config:
-      allowed_executors:
-        - bash_executor
-        - python_executor
+      executors:
+        bash_executor:
+          timeout: 300
+        python_executor:
+          timeout: 300
     submission_evaluation_config:
       strategy: "static"
       criteria:
@@ -355,9 +373,11 @@ tasks:
     title: "Task 1"
     description: "First task"
     execution_config:
-      allowed_executors:
-        - bash_executor
-        - python_executor
+      executors:
+        bash_executor:
+          timeout: 300
+        python_executor:
+          timeout: 300
     submission_evaluation_config:
       strategy: "static"
       criteria:
@@ -371,9 +391,11 @@ tasks:
     title: "Task 2"
     description: "Second task"
     execution_config:
-      allowed_executors:
-        - bash_executor
-        - python_executor
+      executors:
+        bash_executor:
+          timeout: 300
+        python_executor:
+          timeout: 300
     submission_evaluation_config:
       strategy: "static"
       criteria:
@@ -429,7 +451,11 @@ benchmark_config:
 
 global_defaults:
   execution_config:
-    timeout: 300
+    executors:
+      bash_executor:
+        timeout: 300
+      python_executor:
+        timeout: 300
   episode_config:
     max_steps: 50
 
@@ -443,9 +469,11 @@ tasks:
     description: "Uses domain default"
     prompt_template_file: "test_task_prompt.md"
     execution_config:
-      allowed_executors:
-        - bash_executor
-        - python_executor
+      executors:
+        bash_executor:
+          timeout: 300
+        python_executor:
+          timeout: 300
     submission_evaluation_config:
       strategy: "static"
       criteria:
@@ -460,9 +488,11 @@ tasks:
     description: "Overrides domain default"
     prompt_template_file: "test_task_prompt.md"
     execution_config:
-      allowed_executors:
-        - bash_executor
-        - python_executor
+      executors:
+        bash_executor:
+          timeout: 300
+        python_executor:
+          timeout: 300
     submission_evaluation_config:
       strategy: "static"
       criteria:
@@ -499,7 +529,11 @@ benchmark_config:
 
 global_defaults:
   execution_config:
-    timeout: 300
+    executors:
+      bash_executor:
+        timeout: 300
+      python_executor:
+        timeout: 300
   episode_config:
     max_steps: 50
 
@@ -513,9 +547,11 @@ tasks:
     description: "A test task"
     prompt_template_file: "test_task_prompt.md"
     execution_config:
-      allowed_executors:
-        - bash_executor
-        - python_executor
+      executors:
+        bash_executor:
+          timeout: 300
+        python_executor:
+          timeout: 300
     submission_evaluation_config:
       strategy: "static"
       criteria:
@@ -582,7 +618,11 @@ benchmark_config:
 
 global_defaults:
   execution_config:
-    timeout: 300
+    executors:
+      bash_executor:
+        timeout: 300
+      python_executor:
+        timeout: 300
   episode_config:
     max_steps: 50
 
@@ -628,7 +668,11 @@ benchmark_config:
 
 global_defaults:
   execution_config:
-    timeout: 300
+    executors:
+      bash_executor:
+        timeout: 300
+      python_executor:
+        timeout: 300
   episode_config:
     max_steps: 50
 
@@ -676,7 +720,11 @@ benchmark_config:
 
 global_defaults:
   execution_config:
-    timeout: 300
+    executors:
+      bash_executor:
+        timeout: 300
+      python_executor:
+        timeout: 300
   episode_config:
     max_steps: 50
 
@@ -719,7 +767,11 @@ benchmark_config:
 
 global_defaults:
   execution_config:
-    timeout: 300
+    executors:
+      bash_executor:
+        timeout: 300
+      python_executor:
+        timeout: 300
   episode_config:
     max_steps: 50
 
@@ -864,8 +916,9 @@ benchmark_config:
 
 global_defaults:
   execution_config:
-    timeout: 300
-    allowed_executors: ["bash_executor"]
+    executors:
+      bash_executor:
+        timeout: 300
   episode_config:
     max_steps: 50
 

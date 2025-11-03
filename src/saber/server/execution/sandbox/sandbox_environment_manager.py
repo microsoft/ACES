@@ -369,6 +369,33 @@ class SandboxEnvironmentManager:
         """
         return self.active_orchestrators.get(episode_id)
 
+    def get_execution_container_name(self, episode_id: str) -> Optional[str]:
+        """
+        Get the actual execution container name for an episode.
+
+        Args:
+            episode_id: Episode identifier
+
+        Returns:
+            Container name if episode exists and has execution service, None otherwise
+        """
+        orchestrator = self.active_orchestrators.get(episode_id)
+        if not orchestrator or not orchestrator.execution_service_name:
+            return None
+
+        try:
+            return orchestrator._get_actual_container_name(orchestrator.execution_service_name)
+        except Exception as e:
+            logger.warning(
+                "Failed to get execution container name",
+                extra={
+                    "event": "get_execution_container_name_failed",
+                    "episode_id": episode_id,
+                    "error": str(e),
+                },
+            )
+            return None
+
     def stop_episode_environment(self, episode_id: str) -> bool:
         """
         Stop and clean up episode-specific sandbox environment.

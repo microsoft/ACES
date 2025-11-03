@@ -63,7 +63,10 @@ class TestBenchmarkConfigLoaderPermanentSupport:
                     "sandbox_environment": "test_sandbox",
                     "permanent_environment": "default",  # Reference to the global permanent environment
                     "execution_config": {
-                        "allowed_executors": ["bash", "python"]
+                        "executors": {
+                            "bash": {"timeout": 30},
+                        "python": {"timeout": 30}
+                        }
                     },
                     "submission_evaluation_config": {
                         "strategy": "static",
@@ -103,7 +106,10 @@ class TestBenchmarkConfigLoaderPermanentSupport:
                     "prompts": {"instruction": "test_task_no_permanent_prompt.md", "assistant": "test_task_no_permanent_prompt.md", "submit": "test_task_no_permanent_prompt.md"},
                     "sandbox_environment": "test_sandbox",
                     "execution_config": {
-                        "allowed_executors": ["bash", "python"]
+                        "executors": {
+                            "bash": {"timeout": 30},
+                        "python": {"timeout": 30}
+                        }
                     },
                     "submission_evaluation_config": {
                         "strategy": "static",
@@ -160,8 +166,8 @@ class TestBenchmarkConfigLoaderPermanentSupport:
         assert isinstance(task, Task)
         assert task.title == "Test Task with Permanent Environment"
         assert task.environment == "test_sandbox"  # This is the sandbox environment
-        assert "bash" in task.allowed_executors
-        assert "python" in task.allowed_executors
+        assert "bash" in task.execution_config["executors"]
+        assert "python" in task.execution_config["executors"]
 
         # Verify permanent environment is available at the loader level
         assert loader.get_permanent_environment() is not None
@@ -180,7 +186,7 @@ class TestBenchmarkConfigLoaderPermanentSupport:
         assert isinstance(task, Task)
         assert task.title == "Test Task without Permanent Environment"
         assert task.environment == "test_sandbox"
-        assert "bash" in task.allowed_executors
+        assert "bash" in task.execution_config["executors"]
 
     def test_load_all_tasks(self, temp_tasks_file):
         """Test loading all tasks including those with permanent environments."""
@@ -209,8 +215,11 @@ class TestBenchmarkConfigLoaderPermanentSupport:
             "sandbox_environment": "test_sandbox",
             "permanent_environment": "default",
             "execution_config": {
-                "allowed_executors": ["bash", "python"]
-            },
+                        "executors": {
+                            "bash": {"timeout": 30},
+                        "python": {"timeout": 30}
+                        }
+                    },
             "submission_evaluation_config": {
                 "strategy": "static",
                 "criteria": {
@@ -273,8 +282,11 @@ class TestBenchmarkConfigLoaderPermanentSupport:
             "prompts": {"instruction": "permanent_only_task_prompt.md", "assistant": "permanent_only_task_prompt.md", "submit": "permanent_only_task_prompt.md"},
             "permanent_environment": "default",
             "execution_config": {
-                "allowed_executors": ["bash", "python"]
-            },
+                        "executors": {
+                            "bash": {"timeout": 30},
+                        "python": {"timeout": 30}
+                        }
+                    },
             "submission_evaluation_config": {
                 "strategy": "static",
                 "criteria": {

@@ -44,6 +44,7 @@ class ExecutionManager:
         self._config_dir = config_dir
         self._permanent_environment_manager: Optional[PermanentEnvironmentManager] = None
         self._sandbox_environment_manager: Optional[SandboxEnvironmentManager] = None
+        self._file_copier: Optional[Any] = None  # SandboxFileCopier instance
 
         # Check for debug mode from environment variable
         self._debug_mode = os.getenv("SABER_DEBUG_MODE", "false").lower() in ("true", "1", "yes")
@@ -70,6 +71,9 @@ class ExecutionManager:
         # Episode-specific execution tracking for concurrent commands
         self._active_executions: Dict[str, int] = {}  # episode_id -> count of active executions
         self._max_concurrent_per_episode = 3  # Allow multiple concurrent commands per episode
+
+        # Initialize file copier
+        self._initialize_file_copier()
 
         logger.info(
             "Execution manager initialized",
@@ -503,8 +507,17 @@ class ExecutionManager:
         # Create new configuration for this task
         self._configuration = execution_config
 
-        # Register episode configuration with the single executor factory
-        allowed_executors = task.allowed_executors
+        # Derive allowed_executors from executors config if not explicitly set
+        # If executors section exists, use its keys as allowed executors
+        if "executors" in execution_config and execution_config["executors"]:
+            allowed_executors = list(execution_config["executors"].keys())
+        elif task.allowed_executors:
+            # Fall back to task.allowed_executors if no executors section
+            allowed_executors = task.allowed_executors
+        else:
+            # No explicit configuration - allow all
+            allowed_executors = None
+
         episode_config = execution_config
 
         self.executor_factory.register_episode_configuration(
@@ -638,10 +651,21 @@ class ExecutionManager:
 
         self._configuration = execution_config
 
+        # Derive allowed_executors from executors config if not explicitly set
+        # If executors section exists, use its keys as allowed executors
+        if "executors" in execution_config and execution_config["executors"]:
+            allowed_executors = list(execution_config["executors"].keys())
+        elif task.allowed_executors:
+            # Fall back to task.allowed_executors if no executors section
+            allowed_executors = task.allowed_executors
+        else:
+            # No explicit configuration - allow all
+            allowed_executors = None
+
         # Register episode configuration
         self.executor_factory.register_episode_configuration(
             episode_id=episode_id,
-            allowed_executors=task.allowed_executors,
+            allowed_executors=allowed_executors,
             episode_config=execution_config,
         )
 
@@ -650,7 +674,7 @@ class ExecutionManager:
             extra={
                 "event": "execution_manager_configured_async",
                 "episode_id": episode_id,
-                "allowed_executors": task.allowed_executors,
+                "allowed_executors": allowed_executors,
             },
         )
 
@@ -695,6 +719,146 @@ class ExecutionManager:
                 "episode_id": episode_id,
             },
         )
+
+    def get_execution_container_name(self, episode_id: str) -> Optional[str]:
+        """
+        Get the actual execution container name for an episode.
+
+        Args:
+            episode_id: Episode identifier
+
+        Returns:
+            Container name if available, None otherwise
+        """
+        if not self._sandbox_environment_manager:
+            return None
+
+        return self._sandbox_environment_manager.get_execution_container_name(episode_id)
+
+    def _initialize_file_copier(self) -> None:
+        """Initialize the file copier for copying files to execution containers."""
+        from .sandbox.file_copier import SandboxFileCopier
+
+        # Server base directory is parent of config directory
+        server_base_dir = Path(self._config_dir).parent
+        self._file_copier = SandboxFileCopier(base_dir=server_base_dir)
+
+        logger.info(
+            "File copier initialized for execution manager",
+            extra={
+                "event": "execution_file_copier_initialized",
+                "server_base_dir": str(server_base_dir),
+            },
+        )
+
+    async def copy_initial_files_to_episode(
+        self,
+        episode_id: str,
+        task: Task,
+    ) -> None:
+        """
+        Copy initial files specified in task configuration to episode execution container.
+
+        This method automatically determines the correct execution container name
+        and copies files there.
+
+        Args:
+            episode_id: The episode ID
+            task: Task object with initial_files configuration
+
+        Raises:
+            RuntimeError: If file copier is not configured or container name cannot be determined
+            Exception: If file copy operation fails after retries
+        """
+        if not self._file_copier:
+            raise RuntimeError("File copier not initialized")
+
+        if not task or not hasattr(task, "initial_files") or not task.initial_files:
+            logger.debug(
+                "No initial files to copy",
+                extra={
+                    "event": "no_initial_files",
+                    "episode_id": episode_id,
+                    "task_id": getattr(task, "task_id", None),
+                },
+            )
+            return
+
+        # Get the execution container name
+        container_name = self.get_execution_container_name(episode_id)
+        if not container_name:
+            raise RuntimeError(
+                f"Cannot determine execution container name for episode {episode_id}. "
+                "Ensure sandbox environment is running and configured properly."
+            )
+
+        logger.info(
+            "Copying initial files to episode execution container",
+            extra={
+                "event": "episode_initial_files_copy_start",
+                "episode_id": episode_id,
+                "task_id": getattr(task, "task_id", None),
+                "file_count": len(task.initial_files),
+                "container_name": container_name,
+            },
+        )
+
+        # Retry logic for file copy (container might not be fully ready immediately after health check)
+        max_retries = 5
+        retry_delay = 1.0  # Start with 1 second
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                await self._file_copier.copy_files_to_episode(
+                    episode_id=episode_id,
+                    file_mappings=task.initial_files,
+                    container_name=container_name,
+                )
+
+                logger.info(
+                    "Initial files copied successfully",
+                    extra={
+                        "event": "episode_initial_files_copy_success",
+                        "episode_id": episode_id,
+                        "task_id": getattr(task, "task_id", None),
+                        "file_count": len(task.initial_files),
+                        "container_name": container_name,
+                    },
+                )
+                return  # Success!
+
+            except Exception as e:
+                if attempt < max_retries:
+                    import asyncio
+
+                    logger.warning(
+                        "Container not ready for file copy, retrying",
+                        extra={
+                            "event": "episode_initial_files_copy_retry",
+                            "episode_id": episode_id,
+                            "task_id": getattr(task, "task_id", None),
+                            "attempt": attempt,
+                            "max_retries": max_retries,
+                            "retry_delay": retry_delay,
+                            "error": str(e),
+                            "container_name": container_name,
+                        },
+                    )
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                else:
+                    logger.error(
+                        "Failed to copy initial files after all retries",
+                        extra={
+                            "event": "episode_initial_files_copy_failed",
+                            "episode_id": episode_id,
+                            "task_id": getattr(task, "task_id", None),
+                            "attempts": max_retries,
+                            "error": str(e),
+                            "container_name": container_name,
+                        },
+                    )
+                    raise RuntimeError(f"Failed to copy initial files to container: {e}") from e
 
     def to_mcp_tools(self, episode_id: Optional[str] = None) -> List[mcp_types.Tool]:
         """

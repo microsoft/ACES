@@ -19,7 +19,7 @@ Priority Fixes Implemented:
 """
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -59,11 +59,12 @@ class PromptContext:
     task_id: str
     task_title: str
     task_description: str
-    timeout_seconds: int
+    timeout_seconds: int  # Legacy field: maximum timeout across all executors
     max_steps: int
     environment: str
     subtasks: List[Dict[str, Any]]
     allowed_executors: List[str]
+    executor_timeouts: Optional[Dict[str, int]] = field(default=None)  # New field: per-executor timeouts
     initial_context: Optional[Dict[str, Any]] = None
     initial_files: Optional[Dict[str, str]] = None
 
@@ -80,6 +81,10 @@ class PromptContext:
             "subtasks": self.subtasks,
             "allowed_executors": self.allowed_executors,
         }
+
+        # Add executor_timeouts if provided
+        if self.executor_timeouts:
+            result["executor_timeouts"] = self.executor_timeouts
 
         # Add initial_context if provided
         if self.initial_context:
@@ -343,9 +348,11 @@ class PromptGenerator:
             PromptContext with all variables needed for template rendering
         """
         missing: List[str] = []
-        # timeout must exist
-        if not (task.execution_config and "timeout" in task.execution_config):
-            missing.append("execution_config.timeout")
+
+        # Validate execution_config has executors section
+        if not (task.execution_config and "executors" in task.execution_config):
+            missing.append("execution_config.executors")
+
         # max_steps must exist
         if not (task.episode_config and "max_steps" in task.episode_config):
             missing.append("episode_config.max_steps")
@@ -359,7 +366,18 @@ class PromptGenerator:
                 f"Task '{task.task_id}' missing required configuration fields for prompt context: {missing}"
             )
 
-        timeout_seconds = task.execution_config["timeout"]
+        # Extract executor-specific timeouts
+        executor_timeouts = {}
+        max_timeout = 0
+        if "executors" in task.execution_config:
+            for executor_type, executor_config in task.execution_config["executors"].items():
+                if "timeout" in executor_config:
+                    timeout = executor_config["timeout"]
+                    executor_timeouts[executor_type] = int(timeout)
+                    max_timeout = max(max_timeout, timeout)
+
+        # Use maximum timeout for legacy timeout_seconds field
+        timeout_seconds = max_timeout if max_timeout > 0 else 300
         max_steps = task.episode_config["max_steps"]
 
         # Convert environment to string representation
@@ -369,15 +387,15 @@ class PromptGenerator:
         subtasks_data = []
         if task.subtasks:
             for subtask in task.subtasks:
-                subtask_dict = {
+                subtask_dict: Dict[str, Any] = {
                     "subtask_id": subtask.subtask_id,
                     "title": subtask.title,
                     "description": subtask.description,
                     "objective": subtask.objective,
                 }
-                # Include hint field if it exists
-                if hasattr(subtask, "hint") and subtask.hint:
-                    subtask_dict["hint"] = subtask.hint
+                # Include hints field if it exists
+                if hasattr(subtask, "hints") and subtask.hints:
+                    subtask_dict["hints"] = subtask.hints
                 subtasks_data.append(subtask_dict)
         # Allowed executors now required (validated above)
         allowed_executors = task.allowed_executors or []
@@ -392,6 +410,7 @@ class PromptGenerator:
             environment=environment_str,
             subtasks=subtasks_data,
             allowed_executors=allowed_executors,
+            executor_timeouts=executor_timeouts,  # Add per-executor timeouts
             initial_context=task.initial_context,  # Include initial_context from task
             initial_files=task.initial_files,  # Include initial_files from task
         )

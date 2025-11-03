@@ -201,15 +201,13 @@ class ExecutorFactory:
         default_config = executor_class.get_default_config()
 
         # Get executor-specific configuration from global configuration
-        executor_config = self._configuration.get(executor_type, {})
+        # Look under 'executors' key first, then fall back to root level (for backwards compatibility)
+        executors_section = self._configuration.get("executors", {})
+        executor_config = executors_section.get(executor_type, self._configuration.get(executor_type, {}))
 
-        # Merge with defaults, giving preference to provided config
+        # Merge with defaults, giving preference to executor-specific config
+        # No global timeout override - each executor must specify its own timeout
         merged_config = {**default_config, **executor_config}
-
-        # Override timeout from global config if available
-        global_timeout = self._configuration.get("timeout")
-        if global_timeout is not None:
-            merged_config["timeout"] = global_timeout
 
         # Prepare additional parameters for specific executor needs
         additional_params = {}
@@ -263,7 +261,15 @@ class ExecutorFactory:
                 )
                 allowed_executors = list(self._all_available_executors)
             else:
-                allowed_executors = episode_config.get("allowed_executors", [])
+                # Derive allowed_executors from stored episode configuration
+                # Check for explicit allowed_executors first (backwards compat)
+                # Then check for executors section keys
+                if "allowed_executors" in episode_config:
+                    allowed_executors = episode_config.get("allowed_executors", [])
+                elif "executors" in episode_config and episode_config["executors"]:
+                    allowed_executors = list(episode_config["executors"].keys())
+                else:
+                    allowed_executors = []
 
         for executor_type in allowed_executors:
             try:

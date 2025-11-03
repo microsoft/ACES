@@ -59,8 +59,8 @@ async def create_mcp_client_with_retry(
     url: str,
     headers: Dict[str, str],
     name: str,
-    timeout: float = 300.0,
-    sse_read_timeout: float = 300.0,
+    timeout: float = 3600.0,  # 1 hour default for long-running commands
+    sse_read_timeout: float = 3600.0,  # 1 hour default for long-running commands
     max_retries: int = 3,
 ) -> Tool:
     """
@@ -73,8 +73,8 @@ async def create_mcp_client_with_retry(
         url: MCP server URL
         headers: HTTP headers for session/episode context
         name: Display name for the MCP server
-        timeout: Timeout for HTTP operations (default: 300s)
-        sse_read_timeout: Timeout for SSE read operations (default: 300s)
+        timeout: Timeout for HTTP operations (default: 3600s = 1 hour for long commands)
+        sse_read_timeout: Timeout for SSE read operations (default: 3600s = 1 hour)
         max_retries: Maximum number of retry attempts (default: 3)
 
     Returns:
@@ -88,13 +88,14 @@ async def create_mcp_client_with_retry(
     for attempt in range(max_retries):
         try:
             logger.info(
-                f"Creating MCP client (attempt {attempt + 1}/{max_retries})",
+                f"Creating MCP client (attempt {attempt + 1}/{max_retries}) with {timeout}s timeout",
                 extra={
                     "event": "mcp_client_create_attempt",
                     "attempt": attempt + 1,
                     "max_retries": max_retries,
                     "url": url,
                     "timeout": timeout,
+                    "sse_read_timeout": sse_read_timeout,
                 },
             )
 
@@ -112,6 +113,7 @@ async def create_mcp_client_with_retry(
                     "event": "mcp_client_created",
                     "attempt": attempt + 1,
                     "url": url,
+                    "timeout": timeout,
                 },
             )
             return mcp_tool
@@ -156,8 +158,8 @@ async def mcp_client_lifecycle(
     url: str,
     headers: Dict[str, str],
     name: str = "MCP Tools",
-    timeout: float = 300.0,
-    sse_read_timeout: float = 300.0,
+    timeout: float = 3600.0,  # 1 hour default for long-running commands
+    sse_read_timeout: float = 3600.0,  # 1 hour default for long-running commands
     max_retries: int = 3,
 ) -> AsyncIterator[Tool]:
     """
@@ -179,8 +181,8 @@ async def mcp_client_lifecycle(
         url: MCP server URL
         headers: HTTP headers for session/episode context
         name: Display name for the MCP server
-        timeout: Timeout for HTTP operations (default: 300s)
-        sse_read_timeout: Timeout for SSE read operations (default: 300s)
+        timeout: Timeout for HTTP operations (default: 3600s = 1 hour for long commands)
+        sse_read_timeout: Timeout for SSE read operations (default: 3600s = 1 hour)
         max_retries: Maximum number of retry attempts (default: 3)
 
     Yields:
@@ -561,32 +563,156 @@ async def create_saber_inspect_agent(
                                 time=processed_time,
                             )
 
-                            try:
-                                json_result = eval_submission.model_dump_json()
-                                logger.debug(
-                                    "EvalSubmission serialized to JSON",
+                            # Success path - end episode and return result
+                            cascade_end = episode_response.attached_to_episode_id is not None
+
+                            logger.info(
+                                "Agent execution completed successfully - ending episode",
+                                extra={
+                                    "event": "agent_execution_success",
+                                    "episode_id": episode_response.episode_id,
+                                    "cascade_end": cascade_end,
+                                },
+                            )
+
+                            await session_manager.end_episode(
+                                episode_response.session_id,
+                                episode_response.episode_id,
+                                reason="completed",
+                                result=eval_submission,
+                                cascade_end_attached_episodes=cascade_end,
+                            )
+
+                            log_operation_success(
+                                logger,
+                                "agent_execution",
+                                agent_id=agent_id,
+                                implementation=implementation_name,
+                                episode_id=episode_response.episode_id,
+                                task_id=task_id,
+                            )
+
+                            # Return the result from successful agent execution
+                            return result
+
+                        except Exception as exc:
+                            # Unified exception handler for agent execution failures
+                            error_type = type(exc).__name__
+                            error_message = str(exc)
+
+                            # Check if this is a tool call limit error - treat it as completion, not failure
+                            is_tool_call_limit = (
+                                "tool call limit" in error_message.lower()
+                                or "exhausted available tool calls" in error_message.lower()
+                                or "LimitExceededError" in error_type
+                            )
+
+                            # Check if it's a timeout error
+                            is_timeout = "timeout" in error_type.lower() or "timeout" in error_message.lower()
+
+                            if is_tool_call_limit:
+                                # Tool call limit is a normal completion condition, not an error
+                                logger.info(
+                                    "Agent reached tool call limit - ending episode normally",
                                     extra={
-                                        "event": "eval_submission_serialized",
-                                        "payload_bytes": len(json_result),
-                                    },
-                                )
-                            except Exception as json_error:
-                                logger.error(
-                                    "EvalSubmission serialization failed",
-                                    extra={
-                                        "event": "eval_submission_serialization_failed",
-                                        "error": str(json_error),
+                                        "event": "agent_tool_call_limit_reached",
+                                        "error": error_message,
+                                        "exception_type": error_type,
                                         "episode_id": episode_response.episode_id,
                                     },
                                 )
-                                logger.debug(
-                                    "EvalSubmission payload snapshot",
+
+                                # Create submission indicating limit reached
+                                eval_submission = EvalSubmission(
+                                    episode_id=episode_response.episode_id,
+                                    task_id=task_id,
+                                    model="unknown",
+                                    choices=[],
+                                    submission="Agent reached tool call limit",
+                                    tokens={},
+                                    time=0.0,
+                                )
+
+                                reason = "completed"
+                                completion_reason = "tool_call_limit"
+
+                            elif is_timeout:
+                                # Timeout errors
+                                logger.error(
+                                    "Agent execution timed out - command may have completed on "
+                                    "server but client timed out waiting for response",
                                     extra={
-                                        "event": "eval_submission_serialization_payload",
-                                        "payload": eval_submission.model_dump(),
+                                        "event": "agent_execution_timeout",
+                                        "error": error_message,
+                                        "error_type": error_type,
+                                        "session_id": session_id,
+                                        "task_id": task_id,
+                                        "episode_id": episode_response.episode_id,
+                                        "timeout_hint": "Consider breaking long commands into "
+                                        "smaller chunks or increasing mcp_timeout",
                                     },
                                 )
-                                raise
+
+                                eval_submission = EvalSubmission(
+                                    episode_id=episode_response.episode_id,
+                                    task_id=task_id,
+                                    model="unknown",
+                                    choices=[],
+                                    submission=f"Agent execution timed out: {error_message}",
+                                    tokens={},
+                                    time=0.0,
+                                )
+
+                                reason = "error"
+                                completion_reason = "timeout"
+
+                            else:
+                                # General agent execution errors
+                                log_operation_failure(
+                                    logger,
+                                    "agent_execution",
+                                    exc,
+                                    agent_id=agent_id,
+                                    implementation=implementation_name,
+                                    episode_id=episode_response.episode_id,
+                                    task_id=task_id,
+                                )
+
+                                logger.error(
+                                    "Agent execution failed",
+                                    extra={
+                                        "event": "agent_execution_failed",
+                                        "error": error_message,
+                                        "error_type": error_type,
+                                        "session_id": session_id,
+                                        "task_id": task_id,
+                                        "episode_id": episode_response.episode_id,
+                                    },
+                                )
+
+                                eval_submission = EvalSubmission(
+                                    episode_id=episode_response.episode_id,
+                                    task_id=task_id,
+                                    model="unknown",
+                                    choices=[],
+                                    submission=f"Agent execution failed: {error_type}: {error_message}",
+                                    tokens={},
+                                    time=0.0,
+                                )
+
+                                reason = "error"
+                                completion_reason = "execution_error"
+
+                            # Common handling for all exception types
+                            logger.info(
+                                "Created failure/completion submission",
+                                extra={
+                                    "event": "graceful_failure_submission",
+                                    "episode_id": episode_response.episode_id,
+                                    "error_type": error_type,
+                                    "reason": reason,
+                                },
+                            )
 
                             cascade_end = episode_response.attached_to_episode_id is not None
                             if cascade_end:
@@ -605,91 +731,26 @@ async def create_saber_inspect_agent(
                                     "event": "end_episode_invocation",
                                     "episode_id": episode_response.episode_id,
                                     "cascade_end": cascade_end,
-                                },
-                            )
-                            await session_manager.end_episode(
-                                episode_response.session_id,
-                                episode_response.episode_id,
-                                reason="completed",
-                                result=eval_submission,
-                                cascade_end_attached_episodes=cascade_end,
-                            )
-                            logger.info(
-                                "Episode ended successfully",
-                                extra={
-                                    "event": "episode_completed",
-                                    "episode_id": episode_response.episode_id,
-                                    "cascade_end": cascade_end,
+                                    "reason": reason,
                                 },
                             )
 
-                            log_operation_success(
-                                logger,
-                                "agent_execution",
-                                agent_id=agent_id,
-                                implementation=implementation_name,
-                                episode_id=episode_response.episode_id,
-                                task_id=task_id,
-                            )
-                            return result
-
-                        except Exception as exc:
-                            # Check if this is a tool call limit error - treat it as completion, not failure
-                            is_tool_call_limit = (
-                                "tool call limit" in str(exc).lower()
-                                or "exhausted available tool calls" in str(exc).lower()
-                                or "LimitExceededError" in type(exc).__name__
-                            )
-
-                            if is_tool_call_limit:
-                                # Tool call limit is a normal completion condition, not an error
-                                logger.info(
-                                    "Agent reached tool call limit - ending episode normally",
-                                    extra={
-                                        "event": "agent_tool_call_limit_reached",
-                                        "error": str(exc),
-                                        "exception_type": type(exc).__name__,
-                                        "episode_id": episode_response.episode_id,
-                                    },
-                                )
-
-                                # Create submission indicating limit reached
-                                limit_submission = EvalSubmission(
-                                    episode_id=episode_response.episode_id,
-                                    task_id=task_id,
-                                    model="unknown",
-                                    choices=[],
-                                    submission="Agent reached tool call limit",
-                                    tokens={},
-                                    time=0.0,
-                                )
-
-                                cascade_end = episode_response.attached_to_episode_id is not None
-
-                                logger.info(
-                                    "Ending episode after reaching tool call limit",
-                                    extra={
-                                        "event": "end_episode_tool_limit",
-                                        "episode_id": episode_response.episode_id,
-                                        "cascade_end": cascade_end,
-                                    },
-                                )
-
-                                # End episode with "completed" reason, not "error"
+                            # End episode with submission - wrap in try/except for graceful error handling
+                            try:
                                 await session_manager.end_episode(
                                     episode_response.session_id,
                                     episode_response.episode_id,
-                                    reason="completed",
-                                    result=limit_submission,
+                                    reason=reason,
+                                    result=eval_submission,
                                     cascade_end_attached_episodes=cascade_end,
                                 )
-
                                 logger.info(
-                                    "Episode ended after tool call limit",
+                                    "Episode ended after agent execution error",
                                     extra={
-                                        "event": "episode_completed_tool_limit",
+                                        "event": "episode_completed",
                                         "episode_id": episode_response.episode_id,
                                         "cascade_end": cascade_end,
+                                        "reason": reason,
                                     },
                                 )
 
@@ -700,78 +761,33 @@ async def create_saber_inspect_agent(
                                     implementation=implementation_name,
                                     episode_id=episode_response.episode_id,
                                     task_id=task_id,
-                                    completion_reason="tool_call_limit",
+                                    completion_reason=completion_reason,
                                 )
 
-                                # Return the current state instead of raising
-                                return state
-
-                            # For actual errors (not tool call limits), proceed with error handling
-                            log_operation_failure(
-                                logger,
-                                "agent_execution",
-                                exc,
-                                agent_id=agent_id,
-                                implementation=implementation_name,
-                                episode_id=episode_response.episode_id,
-                                task_id=task_id,
-                            )
-
-                            logger.error(
-                                "Agent execution failed",
-                                extra={
-                                    "event": "agent_execution_failed",
-                                    "error": str(exc),
-                                    "exception_type": type(exc).__name__,
-                                    "episode_id": episode_response.episode_id,
-                                },
-                            )
-
-                            error_submission = EvalSubmission(
-                                episode_id=episode_response.episode_id,
-                                task_id=task_id,
-                                model="unknown",
-                                choices=[],
-                                submission=f"Episode failed: {str(exc)}",
-                                tokens={},
-                                time=0.0,
-                            )
-
-                            cascade_end = episode_response.attached_to_episode_id is not None
-                            if cascade_end:
-                                logger.info(
-                                    "Episode failure will cascade-end parent episode",
+                            except Exception as cleanup_error:
+                                # Gracefully handle episode cleanup errors
+                                logger.error(
+                                    "Episode cleanup failed after agent execution",
                                     extra={
-                                        "event": "episode_cascade_failure",
+                                        "event": "episode_cleanup_failed",
+                                        "error": str(cleanup_error),
+                                        "error_type": type(cleanup_error).__name__,
+                                        "session_id": session_id,
                                         "episode_id": episode_response.episode_id,
-                                        "parent_episode_id": episode_response.attached_to_episode_id,
+                                    },
+                                )
+                                # Don't re-raise - we want to return the state even if cleanup fails
+                                logger.warning(
+                                    "Continuing despite cleanup error - state was captured",
+                                    extra={
+                                        "event": "episode_cleanup_error_ignored",
+                                        "episode_id": episode_response.episode_id,
                                     },
                                 )
 
-                            logger.info(
-                                "Ending episode after failure",
-                                extra={
-                                    "event": "end_episode_after_failure",
-                                    "episode_id": episode_response.episode_id,
-                                    "cascade_end": cascade_end,
-                                },
-                            )
-                            await session_manager.end_episode(
-                                episode_response.session_id,
-                                episode_response.episode_id,
-                                reason="error",
-                                result=error_submission,
-                                cascade_end_attached_episodes=cascade_end,
-                            )
-                            logger.error(
-                                "Episode ended with failure",
-                                extra={
-                                    "event": "episode_failed",
-                                    "episode_id": episode_response.episode_id,
-                                    "cascade_end": cascade_end,
-                                },
-                            )
-                            raise
+                            # Return state since agent execution failed before result was created
+                            # For tool call limit, this allows the scorer to still run
+                            return state
 
                     # MCP client cleanup happens automatically when exiting async with block
 

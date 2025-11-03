@@ -837,7 +837,7 @@ class TestSaberScorerStepEvaluation:
 
             # Check original scorer metadata is preserved
             assert "scorer_version" in metadata
-            assert metadata["scorer_version"] == "2.0"
+            assert metadata["scorer_version"] == "2.1"
 
     @pytest.mark.asyncio
     async def test_concurrent_evaluation_handling(self, scorer_config, saber_context):

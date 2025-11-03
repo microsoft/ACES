@@ -723,7 +723,7 @@ class SessionRestAPI:
                     # Step evaluation is optional
                     raise HTTPException(status_code=404, detail="Task has no step evaluation config")
 
-                # Build subtasks data with max_score
+                # Build subtasks data with max_score and weight
                 subtasks_data = [
                     {
                         "subtask_id": st.subtask_id,
@@ -731,6 +731,7 @@ class SessionRestAPI:
                         "description": st.description,
                         "objective": st.objective,
                         "max_score": st.max_score,  # Direct field from SubTask
+                        "weight": st.weight,  # Weight for graded scoring
                     }
                     for st in task.subtasks
                 ]

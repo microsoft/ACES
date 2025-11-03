@@ -398,6 +398,17 @@ def saber_scorer() -> Scorer:
             RuntimeError: If SABER context missing or evaluation fails
         """
         try:
+            # Log scorer invocation for debugging
+            logger.info(
+                "Scorer invoked",
+                extra={
+                    "event": "scorer_invoked",
+                    "state_is_none": state is None,
+                    "state_messages_is_none": state.messages is None if state else "state_is_none",
+                    "state_metadata": state.metadata if state else None,
+                },
+            )
+
             # Extract SABER context from inspect_ai store (same pattern as old working code)
             task_store = store()
             session_manager = task_store.get("saber_session_manager")
@@ -407,14 +418,38 @@ def saber_scorer() -> Scorer:
             current_episode = task_store.get("saber_current_episode")
             episode_id = current_episode.episode_id if current_episode else None
 
+            # Log context state for debugging
+            logger.info(
+                "SABER context state",
+                extra={
+                    "event": "saber_context_check",
+                    "session_manager_present": session_manager is not None,
+                    "session_id_present": session_id is not None,
+                    "current_episode_present": current_episode is not None,
+                    "episode_id": episode_id,
+                },
+            )
+
             # Validate SABER context (fail-fast)
             if not session_manager:
-                raise RuntimeError("Missing saber_session_manager in store")
+                logger.error(
+                    "Scorer called after session_manager cleanup",
+                    extra={"event": "scorer_missing_session_manager"},
+                )
+                raise RuntimeError("Missing saber_session_manager in store - likely called after cleanup")
 
             if not session_id:
+                logger.error(
+                    "Scorer called without session_id",
+                    extra={"event": "scorer_missing_session_id"},
+                )
                 raise RuntimeError("Missing saber_session_id in store")
 
             if not episode_id:
+                logger.error(
+                    "Scorer called without episode_id",
+                    extra={"event": "scorer_missing_episode_id", "current_episode": current_episode},
+                )
                 raise RuntimeError("Missing episode_id from saber_current_episode in store")
 
             logger.info(
@@ -438,17 +473,28 @@ def saber_scorer() -> Scorer:
             submission_score = await _score_submission(submission_data, submission_criteria, session_manager, state)
 
             # Step 6: Score steps (if configured)
-            step_score = 0.0
+            unweighted_step_score = 0.0  # For logging/debugging only
+            weighted_step_score = 0.0
             step_evaluations: List[StepEvaluation] = []
             subtask_scores: Dict[str, float] = {}  # Track individual subtask scores
 
             if step_criteria:
-                step_score, step_evaluations = await _score_steps(
+                unweighted_step_score, step_evaluations = await _score_steps(
                     steps_data, step_criteria, submission_criteria.task_context, session_manager, state
                 )
 
                 # Calculate individual subtask scores for metrics
                 subtasks_with_scores = {st["subtask_id"]: st.get("max_score", 0.0) for st in step_criteria.subtasks}
+                subtasks_with_weights = {st["subtask_id"]: st.get("weight", 1.0) for st in step_criteria.subtasks}
+
+                logger.debug(
+                    "Subtask configuration loaded",
+                    extra={
+                        "subtasks_with_scores": subtasks_with_scores,
+                        "subtasks_with_weights": subtasks_with_weights,
+                        "event": "subtask_config_loaded",
+                    },
+                )
 
                 # Collect unique objective_ids that were completed
                 completed_objectives = set()
@@ -457,17 +503,30 @@ def saber_scorer() -> Scorer:
                         completed_objectives.add(step_eval.objective_id)
 
                 # Build subtask_scores dict with individual scores
+                # Store UNWEIGHTED scores (1.0 or 0.0) for individual checkpoint metrics
+                # The weighting happens at aggregation level only
                 for subtask_id, max_score in subtasks_with_scores.items():
                     if subtask_id in completed_objectives:
+                        # Unweighted: just 1.0 if completed (since max_score is always 1.0)
                         subtask_scores[subtask_id] = max_score
                     else:
                         subtask_scores[subtask_id] = 0.0
 
-            # Calculate totals
-            total_score = submission_score + step_score
+                # Calculate weighted step score for comparison with submission
+                # This is the actual subtask score used in metrics
+                weighted_step_score = 0.0
+                for subtask_id in completed_objectives:
+                    if subtask_id in subtasks_with_scores and subtask_id in subtasks_with_weights:
+                        weighted_step_score += subtasks_with_scores[subtask_id] * subtasks_with_weights[subtask_id]
+
+            # Total score is the sum of submission score and weighted subtask score
+            total_score = submission_score + weighted_step_score
+            # Max possible is submission max (1.0) + weighted subtask max (1.0) = 2.0
             max_possible = submission_criteria.scoring.get("max_score", 1.0)
             if step_criteria:
-                max_possible += sum(st.get("max_score", 0.0) for st in step_criteria.subtasks)
+                # Add the maximum weighted subtask score (sum of all weights)
+                max_weighted_subtask = sum(st.get("weight", 1.0) for st in step_criteria.subtasks)
+                max_possible += max_weighted_subtask
 
             # Step 7: Submit evaluation result
             evaluation_result = EvaluationResultSubmission(
@@ -479,9 +538,11 @@ def saber_scorer() -> Scorer:
                 details={
                     "task_id": submission_criteria.task_id,
                     "submission_score": submission_score,
-                    "step_score": step_score,
+                    "unweighted_step_score": unweighted_step_score,
+                    "weighted_step_score": weighted_step_score,
                     "step_evaluations": [se.model_dump() for se in step_evaluations],
-                    "client_scorer_version": "2.0",
+                    "client_scorer_version": "2.1",
+                    "scoring_method": "max",
                 },
             )
 
@@ -494,7 +555,9 @@ def saber_scorer() -> Scorer:
                     "episode_id": episode_id,
                     "total_score": total_score,
                     "submission_score": submission_score,
-                    "step_score": step_score,
+                    "unweighted_step_score": unweighted_step_score,
+                    "weighted_step_score": weighted_step_score,
+                    "scoring_method": "max",
                     "event": "client_eval_complete",
                 },
             )
@@ -513,12 +576,14 @@ def saber_scorer() -> Scorer:
                 "submission_score": submission_score,
                 "max_possible": max_possible,
                 "task_id": task_id,
-                "scorer_version": "2.0",
+                "scorer_version": "2.1",
+                "scoring_method": "max",
             }
 
             # Only add subtask-related metadata when subtasks are being scored
             if step_criteria:
-                metadata["subtask_score"] = step_score
+                metadata["subtask_score"] = weighted_step_score
+                metadata["weighted_subtask_score"] = weighted_step_score
                 metadata["step_evaluations"] = [se.model_dump() for se in step_evaluations]
                 metadata["subtask_scores"] = subtask_scores  # Keep nested for programmatic access
 
@@ -533,7 +598,10 @@ def saber_scorer() -> Scorer:
 
             # Build explanation based on whether subtasks were scored
             if step_criteria:
-                explanation = f"Client eval: submission={submission_score}/{max_sub_score}, subtasks={step_score}"
+                explanation = (
+                    f"Client eval (max): submission={submission_score}, "
+                    f"weighted_subtasks={weighted_step_score:.2f}, final={total_score}"
+                )
             else:
                 explanation = f"Client eval: submission={submission_score}/{max_sub_score}"
 
@@ -547,14 +615,22 @@ def saber_scorer() -> Scorer:
         except Exception as exc:
             logger.error(
                 "Client-side evaluation failed",
-                extra={"error": str(exc), "error_type": type(exc).__name__, "event": "client_eval_failure"},
+                extra={
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                    "event": "client_eval_failure",
+                    "state_is_none": state is None if "state" in locals() else "not_in_scope",
+                    "state_messages_is_none": (
+                        state.messages is None if state and "state" in locals() else "cannot_check"
+                    ),
+                },
                 exc_info=True,
             )
             return Score(
                 value=0.0,
                 answer="",
                 explanation=f"Client-side evaluation failed: {exc}",
-                metadata={"error": str(exc), "scorer_version": "2.0"},
+                metadata={"error": str(exc), "scorer_version": "2.1"},
             )
 
     return score
@@ -858,7 +934,7 @@ async def _score_steps(
         if step_eval.objective_id in subtasks_with_scores:
             completed_objectives.add(step_eval.objective_id)
 
-    # Sum scores for unique objectives only
+    # Sum scores for unique objectives only (unweighted for internal tracking)
     total_score = 0.0
     for objective_id in completed_objectives:
         total_score += subtasks_with_scores[objective_id]

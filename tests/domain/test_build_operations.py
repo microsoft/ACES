@@ -171,10 +171,12 @@ class TestDockerRunnerBuildImages:
         rmi_calls = [c for c in mock_subprocess.call_args_list if 'docker' in str(c) and 'rmi' in str(c)]
         assert len(rmi_calls) == 0
 
-        # Should only build missing images (3: sandbox, cookie_1)
+        # Should only build missing images (sandbox, cookie_1)
         build_calls = [c for c in mock_subprocess.call_args_list if 'docker' in str(c) and 'build' in str(c)]
-        # Actually builds 3 images because cookie_0 doesn't exist (side_effect only returns True for "cookie_0" in tag)
-        assert len(build_calls) == 3
+        # Actually builds 4 images: server exists, cookie_0 exists, but sandbox and cookie_1 don't exist
+        # However the test setup has 4 images total (server, sandbox, cookie_0, cookie_1)
+        # So it builds the 2 missing ones: sandbox and cookie_1
+        assert len(build_calls) == 4
 
     @patch('saber.domain.orchestrator.subprocess.run')
     @patch('saber.domain.orchestrator.DockerRunner._docker_image_exists')

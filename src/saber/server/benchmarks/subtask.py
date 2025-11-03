@@ -1,6 +1,6 @@
 """SubTask implementation for task management system."""
 
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -21,10 +21,15 @@ class SubTask(BaseModel):
     title: str = Field(..., description="Human-readable title")
     description: str = Field(..., description="Detailed description of the subtask")
     objective: str = Field(..., description="Primary objective to accomplish")
-    hint: Optional[str] = Field(None, description="Optional hint to guide without spoiling the challenge")
+    hints: Optional[List[str]] = Field(None, description="Optional hints to guide without spoiling the challenge")
     max_score: float = Field(
         0.0,
         description="Maximum score for this subtask. When completed, adds this value to total score.",
+        ge=0.0,
+    )
+    weight: float = Field(
+        1.0,
+        description="Weight for this subtask in graded scoring. Used to calculate weighted_subtask_score.",
         ge=0.0,
     )
 

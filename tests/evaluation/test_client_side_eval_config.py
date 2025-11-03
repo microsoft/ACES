@@ -28,8 +28,9 @@ global_defaults:
     assistant: "test_assistant.md"
     submit: "test_submit.md"
   execution_config:
-    timeout: 30
-    allowed_executors: ["bash"]
+    executors:
+      bash:
+        timeout: 30
   episode_config:
     max_steps: 10
 
@@ -45,7 +46,6 @@ tasks:
       assistant: "test_assistant.md"
       submit: "test_submit.md"
     execution_config:
-      allowed_executors: ["bash"]
     episode_config:
       max_steps: 10
     submission_evaluation_config:
@@ -112,8 +112,9 @@ global_defaults:
     assistant: "test_assistant.md"
     submit: "test_submit.md"
   execution_config:
-    timeout: 30
-    allowed_executors: ["bash"]
+    executors:
+      bash:
+        timeout: 30
   episode_config:
     max_steps: 10
 
@@ -129,7 +130,6 @@ tasks:
       assistant: "test_assistant.md"
       submit: "test_submit.md"
     execution_config:
-      allowed_executors: ["bash"]
     episode_config:
       max_steps: 10
     submission_evaluation_config:
@@ -174,8 +174,9 @@ global_defaults:
     assistant: "test_assistant.md"
     submit: "test_submit.md"
   execution_config:
-    timeout: 30
-    allowed_executors: ["bash"]
+    executors:
+      bash:
+        timeout: 30
   episode_config:
     max_steps: 10
 
@@ -191,7 +192,6 @@ tasks:
       assistant: "test_assistant.md"
       submit: "test_submit.md"
     execution_config:
-      allowed_executors: ["bash"]
     episode_config:
       max_steps: 10
     submission_evaluation_config:
@@ -233,8 +233,9 @@ global_defaults:
     assistant: "test_assistant.md"
     submit: "test_submit.md"
   execution_config:
-    timeout: 30
-    allowed_executors: ["bash"]
+    executors:
+      bash:
+        timeout: 30
   episode_config:
     max_steps: 10
 
@@ -250,7 +251,6 @@ tasks:
       assistant: "test_assistant.md"
       submit: "test_submit.md"
     execution_config:
-      allowed_executors: ["bash"]
     episode_config:
       max_steps: 10
     submission_evaluation_config:
@@ -300,8 +300,9 @@ global_defaults:
     assistant: "test_assistant.md"
     submit: "test_submit.md"
   execution_config:
-    timeout: 30
-    allowed_executors: ["bash"]
+    executors:
+      bash:
+        timeout: 30
   episode_config:
     max_steps: 10
 
@@ -317,7 +318,6 @@ tasks:
       assistant: "test_assistant.md"
       submit: "test_submit.md"
     execution_config:
-      allowed_executors: ["bash"]
     episode_config:
       max_steps: 10
     submission_evaluation_config:
@@ -378,8 +378,9 @@ global_defaults:
     assistant: "test_assistant.md"
     submit: "test_submit.md"
   execution_config:
-    timeout: 30
-    allowed_executors: ["bash"]
+    executors:
+      bash:
+        timeout: 30
   episode_config:
     max_steps: 10
 
@@ -395,7 +396,6 @@ tasks:
       assistant: "test_assistant.md"
       submit: "test_submit.md"
     execution_config:
-      allowed_executors: ["bash"]
     episode_config:
       max_steps: 10
     submission_evaluation_config:
@@ -444,8 +444,9 @@ global_defaults:
     assistant: "test_assistant.md"
     submit: "test_submit.md"
   execution_config:
-    timeout: 30
-    allowed_executors: ["bash"]
+    executors:
+      bash:
+        timeout: 30
   episode_config:
     max_steps: 10
 
@@ -461,7 +462,6 @@ tasks:
       assistant: "test_assistant.md"
       submit: "test_submit.md"
     execution_config:
-      allowed_executors: ["bash"]
     episode_config:
       max_steps: 10
     submission_evaluation_config:
@@ -500,8 +500,9 @@ global_defaults:
     assistant: "test_assistant.md"
     submit: "test_submit.md"
   execution_config:
-    timeout: 30
-    allowed_executors: ["bash"]
+    executors:
+      bash:
+        timeout: 30
   episode_config:
     max_steps: 10
 
@@ -517,7 +518,6 @@ tasks:
       assistant: "test_assistant.md"
       submit: "test_submit.md"
     execution_config:
-      allowed_executors: ["bash"]
     episode_config:
       max_steps: 10
     submission_evaluation_config:
@@ -557,8 +557,9 @@ global_defaults:
     assistant: "test_assistant.md"
     submit: "test_submit.md"
   execution_config:
-    timeout: 30
-    allowed_executors: ["bash"]
+    executors:
+      bash:
+        timeout: 30
   episode_config:
     max_steps: 10
 
@@ -574,7 +575,6 @@ tasks:
       assistant: "test_assistant.md"
       submit: "test_submit.md"
     execution_config:
-      allowed_executors: ["bash"]
     episode_config:
       max_steps: 10
     submission_evaluation_config:
@@ -614,8 +614,9 @@ global_defaults:
     assistant: "test_assistant.md"
     submit: "test_submit.md"
   execution_config:
-    timeout: 30
-    allowed_executors: ["bash"]
+    executors:
+      bash:
+        timeout: 30
   episode_config:
     max_steps: 10
 
@@ -631,7 +632,6 @@ tasks:
       assistant: "test_assistant.md"
       submit: "test_submit.md"
     execution_config:
-      allowed_executors: ["bash"]
     episode_config:
       max_steps: 10
     submission_evaluation_config:
@@ -671,8 +671,9 @@ global_defaults:
     assistant: "test_assistant.md"
     submit: "test_submit.md"
   execution_config:
-    timeout: 30
-    allowed_executors: ["bash"]
+    executors:
+      bash:
+        timeout: 30
   episode_config:
     max_steps: 10
 
@@ -688,7 +689,6 @@ tasks:
       assistant: "test_assistant.md"
       submit: "test_submit.md"
     execution_config:
-      allowed_executors: ["bash"]
     episode_config:
       max_steps: 10
     submission_evaluation_config:
@@ -734,8 +734,9 @@ global_defaults:
     assistant: "test_assistant.md"
     submit: "test_submit.md"
   execution_config:
-    timeout: 30
-    allowed_executors: ["bash"]
+    executors:
+      bash:
+        timeout: 30
   episode_config:
     max_steps: 10
 
@@ -751,7 +752,6 @@ tasks:
       assistant: "test_assistant.md"
       submit: "test_submit.md"
     execution_config:
-      allowed_executors: ["bash"]
     episode_config:
       max_steps: 10
     submission_evaluation_config:
@@ -788,8 +788,9 @@ global_defaults:
     assistant: "test_assistant.md"
     submit: "test_submit.md"
   execution_config:
-    timeout: 30
-    allowed_executors: ["bash"]
+    executors:
+      bash:
+        timeout: 30
   episode_config:
     max_steps: 10
 
@@ -805,7 +806,6 @@ tasks:
       assistant: "test_assistant.md"
       submit: "test_submit.md"
     execution_config:
-      allowed_executors: ["bash"]
     episode_config:
       max_steps: 10
     submission_evaluation_config:
@@ -842,8 +842,9 @@ global_defaults:
     assistant: "test_assistant.md"
     submit: "test_submit.md"
   execution_config:
-    timeout: 30
-    allowed_executors: ["bash"]
+    executors:
+      bash:
+        timeout: 30
   episode_config:
     max_steps: 10
 
@@ -859,7 +860,6 @@ tasks:
       assistant: "test_assistant.md"
       submit: "test_submit.md"
     execution_config:
-      allowed_executors: ["bash"]
     episode_config:
       max_steps: 10
     submission_evaluation_config:
@@ -897,8 +897,9 @@ global_defaults:
     assistant: "test_assistant.md"
     submit: "test_submit.md"
   execution_config:
-    timeout: 30
-    allowed_executors: ["bash"]
+    executors:
+      bash:
+        timeout: 30
   episode_config:
     max_steps: 10
 
@@ -914,7 +915,6 @@ tasks:
       assistant: "test_assistant.md"
       submit: "test_submit.md"
     execution_config:
-      allowed_executors: ["bash"]
     episode_config:
       max_steps: 10
     submission_evaluation_config:
@@ -952,8 +952,9 @@ global_defaults:
     assistant: "test_assistant.md"
     submit: "test_submit.md"
   execution_config:
-    timeout: 30
-    allowed_executors: ["bash"]
+    executors:
+      bash:
+        timeout: 30
   episode_config:
     max_steps: 10
 
@@ -969,7 +970,6 @@ tasks:
       assistant: "test_assistant.md"
       submit: "test_submit.md"
     execution_config:
-      allowed_executors: ["bash"]
     episode_config:
       max_steps: 10
     submission_evaluation_config:
@@ -1007,8 +1007,9 @@ global_defaults:
     assistant: "test_assistant.md"
     submit: "test_submit.md"
   execution_config:
-    timeout: 30
-    allowed_executors: ["bash"]
+    executors:
+      bash:
+        timeout: 30
   episode_config:
     max_steps: 10
 
@@ -1024,7 +1025,6 @@ tasks:
       assistant: "test_assistant.md"
       submit: "test_submit.md"
     execution_config:
-      allowed_executors: ["bash"]
     episode_config:
       max_steps: 10
     submission_evaluation_config:
@@ -1066,8 +1066,9 @@ global_defaults:
     assistant: "test_assistant.md"
     submit: "test_submit.md"
   execution_config:
-    timeout: 30
-    allowed_executors: ["bash"]
+    executors:
+      bash:
+        timeout: 30
   episode_config:
     max_steps: 20
 
@@ -1083,8 +1084,11 @@ tasks:
       assistant: "task_assistant.md"
       submit: "task_submit.md"
     execution_config:
-      timeout: 600
-      allowed_executors: ["bash", "python"]
+      executors:
+        bash:
+          timeout: 600
+        python:
+          timeout: 600
     episode_config:
       max_steps: 15
     submission_evaluation_config:
@@ -1110,14 +1114,16 @@ tasks:
         objective: Environment is configured correctly
         scoring:
           max_score: 0.15
-        hint: "Check the configuration files"
+        hints:
+          - "Check the configuration files"
       - subtask_id: checkpoint_2
         title: Data Collection
         description: Collect necessary data
         objective: All data is collected
         scoring:
           max_score: 0.20
-        hint: "Look in the logs directory"
+        hints:
+          - "Look in the logs directory"
       - subtask_id: checkpoint_3
         title: Analysis
         description: Analyze the collected data
@@ -1169,12 +1175,12 @@ tasks:
             subtask1 = task.subtasks[0]
             assert subtask1.subtask_id == "checkpoint_1"
             assert subtask1.max_score == 0.15
-            assert subtask1.hint == "Check the configuration files"
+            assert subtask1.hints == ["Check the configuration files"]
 
             subtask2 = task.subtasks[1]
             assert subtask2.subtask_id == "checkpoint_2"
             assert subtask2.max_score == 0.20
-            assert subtask2.hint == "Look in the logs directory"
+            assert subtask2.hints == ["Look in the logs directory"]
 
             subtask3 = task.subtasks[2]
             assert subtask3.subtask_id == "checkpoint_3"
@@ -1189,8 +1195,10 @@ tasks:
             assert total_score == 1.0
 
             # Verify execution and episode configs
-            assert task.execution_config["timeout"] == 600
-            assert set(task.execution_config["allowed_executors"]) == {"bash", "python"}
+            assert "executors" in task.execution_config
+            assert "bash" in task.execution_config["executors"]
+            assert task.execution_config["executors"]["bash"]["timeout"] == 600
+
             assert task.episode_config["max_steps"] == 15
 
         finally:

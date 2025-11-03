@@ -209,11 +209,6 @@ class SessionManager:
         }
         self.execution_manager.initialize_permanent_environment_manager(permanent_config)
 
-        # Initialize file copier for sandbox file provisioning
-        # Use server base directory (parent of config/) to allow access to docker/, data/, etc.
-        server_base_dir = Path(config_dir).parent
-        self.episode_manager.initialize_file_copier(server_base_dir)
-
         self.policy_manager = PolicyManager(domain_name)
         self.evaluation_manager = EvaluationManager()
 
@@ -1613,6 +1608,22 @@ class SessionManager:
                     },
                 )
                 self.episode_manager.mark_episode_failed_creation(episode_id, f"Episode configuration failed: {e}")
+                await self._cleanup_failed_episode_environment(episode_id)
+                return
+
+            # Copy initial files to execution container (after health checks pass)
+            try:
+                await self.execution_manager.copy_initial_files_to_episode(episode_id, task)
+            except Exception as e:
+                logger.error(
+                    "Initial files copy failed",
+                    extra={
+                        "event": "episode_initial_files_copy_failed",
+                        "episode_id": episode_id,
+                        "error": str(e),
+                    },
+                )
+                self.episode_manager.mark_episode_failed_creation(episode_id, f"File copy failed: {e}")
                 await self._cleanup_failed_episode_environment(episode_id)
                 return
 

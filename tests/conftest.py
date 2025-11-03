@@ -86,7 +86,11 @@ global_defaults:
     assistant: "malware_family_analysis_prompt.md"
     submit: "malware_family_analysis_prompt.md"
   execution_config:
-    timeout: 300
+    executors:
+      bash_executor:
+        timeout: 300
+      python_executor:
+        timeout: 300
   episode_config:
     max_steps: 50
 
@@ -99,9 +103,11 @@ tasks:
     title: "Malware Family Classification and Analysis"
     description: "Analyze malware sample to determine family, capabilities, and threat level"
     execution_config:
-      allowed_executors:
-        - bash_executor
-        - python_executor
+      executors:
+        bash_executor:
+          timeout: 300
+        python_executor:
+          timeout: 300
     submission_evaluation_config:
       strategy: "static"
       criteria:
@@ -143,7 +149,11 @@ global_defaults:
     assistant: "malware_analysis_prompt.md"
     submit: "malware_analysis_prompt.md"
   execution_config:
-    timeout: 300
+    executors:
+      bash_executor:
+        timeout: 300
+      python_executor:
+        timeout: 300
   episode_config:
     max_steps: 50
 
@@ -456,7 +466,11 @@ domain: "malware_classification"
 
 global_defaults:
   execution_config:
-    timeout: 300
+    executors:
+      bash_executor:
+        timeout: 300
+      python_executor:
+        timeout: 300
   episode_config:
     max_steps: 50
 
@@ -484,7 +498,11 @@ benchmark_config:
 
 global_defaults:
   execution_config:
-    timeout: 300
+    executors:
+      bash_executor:
+        timeout: 300
+      python_executor:
+        timeout: 300
   episode_config:
     max_steps: 50
 
@@ -512,7 +530,11 @@ benchmark_config:
 
 global_defaults:
   execution_config:
-    timeout: 300
+    executors:
+      bash_executor:
+        timeout: 300
+      python_executor:
+        timeout: 300
   episode_config:
     max_steps: 50
 
@@ -540,7 +562,11 @@ benchmark_config:
 
 global_defaults:
   execution_config:
-    timeout: 300
+    executors:
+      bash_executor:
+        timeout: 300
+      python_executor:
+        timeout: 300
   episode_config:
     max_steps: 50
 
@@ -557,9 +583,11 @@ tasks:
       assistant: "assistants/security_analysis_assistant.md"
       submit: "submits/security_analysis_submit.md"
     execution_config:
-      allowed_executors:
-        - bash_executor
-        - python_executor
+      executors:
+        bash_executor:
+          timeout: 300
+        python_executor:
+          timeout: 300
     submission_evaluation_config:
       strategy: "static"
       criteria:

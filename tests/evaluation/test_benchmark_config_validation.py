@@ -72,9 +72,9 @@ tasks:
       assistant: "test_task_prompt.md"
       submit: "test_task_prompt.md"
     execution_config:
-      timeout: 300
-      allowed_executors:
-        - "test_executor"
+      executors:
+        test_executor:
+          timeout: 300
     episode_config:
       max_steps: 10
     submission_evaluation_config:
@@ -118,9 +118,9 @@ tasks:
     description: "Task with LLM evaluation"
     prompt_template_file: "test_template.j2"
     execution_config:
-      timeout: 300
-      allowed_executors:
-        - "test_executor"
+      executors:
+        test_executor:
+          timeout: 300
     episode_config:
       max_steps: 10
     submission_evaluation_config:
@@ -164,9 +164,9 @@ tasks:
     description: "Task without evaluation config"
     prompt_template_file: "test_template.j2"
     execution_config:
-      timeout: 300
-      allowed_executors:
-        - "test_executor"
+      executors:
+        test_executor:
+          timeout: 300
     episode_config:
       max_steps: 10
     subtasks: []
@@ -197,9 +197,9 @@ tasks:
     description: "Task with invalid evaluation strategy"
     prompt_template_file: "test_template.j2"
     execution_config:
-      timeout: 300
-      allowed_executors:
-        - "test_executor"
+      executors:
+        test_executor:
+          timeout: 300
     episode_config:
       max_steps: 10
     submission_evaluation_config:
@@ -236,9 +236,9 @@ tasks:
     description: "Task without criteria section"
     prompt_template_file: "test_template.j2"
     execution_config:
-      timeout: 300
-      allowed_executors:
-        - "test_executor"
+      executors:
+        test_executor:
+          timeout: 300
     episode_config:
       max_steps: 10
     submission_evaluation_config:
@@ -274,9 +274,9 @@ tasks:
     description: "Task with invalid max_score"
     prompt_template_file: "test_template.j2"
     execution_config:
-      timeout: 300
-      allowed_executors:
-        - "test_executor"
+      executors:
+        test_executor:
+          timeout: 300
     episode_config:
       max_steps: 10
     submission_evaluation_config:
@@ -313,9 +313,9 @@ tasks:
     description: "Static task without expected_answers"
     prompt_template_file: "test_template.j2"
     execution_config:
-      timeout: 300
-      allowed_executors:
-        - "test_executor"
+      executors:
+        test_executor:
+          timeout: 300
     episode_config:
       max_steps: 10
     submission_evaluation_config:
@@ -352,9 +352,9 @@ tasks:
     description: "LLM task without golden_answer"
     prompt_template_file: "test_template.j2"
     execution_config:
-      timeout: 300
-      allowed_executors:
-        - "test_executor"
+      executors:
+        test_executor:
+          timeout: 300
     episode_config:
       max_steps: 10
     submission_evaluation_config:
@@ -396,9 +396,9 @@ tasks:
     description: "LLM task without model"
     prompt_template_file: "test_template.j2"
     execution_config:
-      timeout: 300
-      allowed_executors:
-        - "test_executor"
+      executors:
+        test_executor:
+          timeout: 300
     episode_config:
       max_steps: 10
     submission_evaluation_config:

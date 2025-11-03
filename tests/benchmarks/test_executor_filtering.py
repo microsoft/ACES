@@ -26,7 +26,14 @@ class TestExecutorFiltering:
             },
             "global_defaults": {
                 "execution_config": {
-                    "timeout": 300
+                    "executors": {
+                        "bash": {
+                            "timeout": 300
+                        },
+                        "python": {
+                            "timeout": 300
+                        }
+                    }
                 },
                 "episode_config": {
                     "max_steps": 50
@@ -39,9 +46,6 @@ class TestExecutorFiltering:
                     "title": "Test Task",
                     "description": "Test description",
                     "prompts": {"instruction": "test_task_prompt.md", "assistant": "test_task_prompt.md", "submit": "test_task_prompt.md"},
-                    "execution_config": {
-                        "allowed_executors": ["bash", "python"]
-                    },
                     "submission_evaluation_config": {
                         "strategy": "static",
                         "criteria": {
@@ -73,8 +77,14 @@ class TestExecutorFiltering:
             },
             "global_defaults": {
                 "execution_config": {
-                    "timeout": 300,
-                    "allowed_executors": ["bash", "python"]
+                    "executors": {
+                        "bash": {
+                            "timeout": 300
+                        },
+                        "python": {
+                            "timeout": 300
+                        }
+                    }
                 },
                 "episode_config": {
                     "max_steps": 50
@@ -256,7 +266,7 @@ class TestExecutorFiltering:
 
         try:
             loader = BenchmarkConfigLoader("test_domain")
-            with pytest.raises(InvalidTaskDefinitionException, match="allowed_executors must be a non-empty list"):
+            with pytest.raises(InvalidTaskDefinitionException, match="missing required execution_config.executors"):
                 loader.load_tasks_from_file(temp_path)
 
         finally:

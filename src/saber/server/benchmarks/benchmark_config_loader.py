@@ -21,8 +21,82 @@ from .task import Task
 
 logger = get_saber_logger(LogCategory.CONFIG, __name__)
 
+# Configuration field names
+FIELD_DOMAIN = "domain"
+FIELD_EXECUTORS = "executors"
+FIELD_TASKS = "tasks"
+FIELD_GLOBAL_DEFAULTS = "global_defaults"
+FIELD_BENCHMARK_CONFIG = "benchmark_config"
+FIELD_PERMANENT_ENVIRONMENT = "permanent_environment"
+FIELD_EXECUTION_CONFIG = "execution_config"
+FIELD_EPISODE_CONFIG = "episode_config"
+FIELD_DEPENDENCY_CONFIG = "dependency_config"
+FIELD_PROMPTS = "prompts"
+FIELD_TIMEOUT = "timeout"
+FIELD_MAX_STEPS = "max_steps"
+FIELD_EPISODE_ATTEMPTS = "episode_attempts"
+FIELD_ALLOWED_EXECUTORS = "allowed_executors"
 
-def deep_merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+# Task field names
+FIELD_TASK_ID = "task_id"
+FIELD_TITLE = "title"
+FIELD_DESCRIPTION = "description"
+FIELD_INITIAL_CONTEXT = "initial_context"
+FIELD_ENVIRONMENT = "environment"
+FIELD_SANDBOX_ENVIRONMENT = "sandbox_environment"
+FIELD_DEPENDS_ON_TASK_ID = "depends_on_task_id"
+FIELD_INITIAL_FILES = "initial_files"
+FIELD_SUBTASKS = "subtasks"
+FIELD_INHERIT_SHARED = "inherit_shared"
+
+# Subtask field names
+FIELD_SUBTASK_ID = "subtask_id"
+FIELD_OBJECTIVE = "objective"
+FIELD_HINTS = "hints"
+FIELD_SCORING = "scoring"
+FIELD_MAX_SCORE = "max_score"
+
+# Evaluation config field names
+FIELD_SUBMISSION_EVALUATION_CONFIG = "submission_evaluation_config"
+FIELD_STEP_EVALUATION_CONFIG = "step_evaluation_config"
+FIELD_STRATEGY = "strategy"
+FIELD_CRITERIA = "criteria"
+FIELD_MODEL = "model"
+FIELD_EXPECTED_ANSWERS = "expected_answers"
+FIELD_JUDGE_SYSTEM_TEMPLATE = "judge_system_template"
+FIELD_JUDGE_USER_TEMPLATE = "judge_user_template"
+FIELD_STEPS_PER_MESSAGE = "steps_per_message"
+
+# Dependency config field names
+FIELD_WAIT_SECONDS = "wait_seconds"
+FIELD_RETRY_INTERVAL = "retry_interval"
+FIELD_MAX_RETRY_INTERVAL = "max_retry_interval"
+
+# Prompt types
+PROMPT_TYPE_INSTRUCTION = "instruction"
+PROMPT_TYPE_ASSISTANT = "assistant"
+PROMPT_TYPE_SUBMIT = "submit"
+REQUIRED_PROMPT_TYPES = [PROMPT_TYPE_INSTRUCTION, PROMPT_TYPE_ASSISTANT, PROMPT_TYPE_SUBMIT]
+
+# Evaluation strategies
+EVAL_STRATEGY_STATIC = "static"
+EVAL_STRATEGY_LLM_JUDGE = "llm_judge"
+VALID_EVAL_STRATEGIES = [EVAL_STRATEGY_STATIC, EVAL_STRATEGY_LLM_JUDGE]
+
+# File names
+FILENAME_GLOBAL_CONFIG = "global.yaml"
+FILENAME_GLOBAL_CONFIG_YML = "global.yml"
+FILENAME_SHARED_CONFIG = "shared.yaml"
+FILENAME_SHARED_CONFIG_YML = "shared.yml"
+EXCLUDED_CONFIG_FILES = [
+    FILENAME_GLOBAL_CONFIG,
+    FILENAME_GLOBAL_CONFIG_YML,
+    FILENAME_SHARED_CONFIG,
+    FILENAME_SHARED_CONFIG_YML,
+]
+
+
+def deep_merge_dicts(base: Dict[str, Any], override: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """
     Deep merge two dictionaries, with override values taking precedence.
 
@@ -34,6 +108,10 @@ def deep_merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str
         New dictionary with deep merged values
     """
     result = base.copy()
+
+    # Handle None override (e.g., when YAML has empty/null value)
+    if override is None:
+        return result
 
     for key, value in override.items():
         if key in result and isinstance(result[key], dict) and isinstance(value, dict):
@@ -222,7 +300,7 @@ class BenchmarkConfigLoader:
                 log_operation_failure(logger, "benchmark_tasks_file_load", error, **operation_context)
                 raise error
 
-            yaml_domain = self.yaml_data.get("domain")
+            yaml_domain = self.yaml_data.get(FIELD_DOMAIN)
             if yaml_domain != self.domain:
                 error = InvalidTaskDefinitionException(
                     f"Domain mismatch: expected '{self.domain}', got '{yaml_domain}'",
@@ -231,7 +309,7 @@ class BenchmarkConfigLoader:
                 log_operation_failure(logger, "benchmark_tasks_file_load", error, **operation_context)
                 raise error
 
-            self.permanent_environment = self.yaml_data.get("permanent_environment")
+            self.permanent_environment = self.yaml_data.get(FIELD_PERMANENT_ENVIRONMENT)
             logger.info(
                 "Permanent environment configuration processed",
                 extra={
@@ -246,13 +324,13 @@ class BenchmarkConfigLoader:
             self._parse_global_defaults()
             self._parse_benchmark_config()
 
-            tasks_data = self.yaml_data.get("tasks", [])
+            tasks_data = self.yaml_data.get(FIELD_TASKS, [])
             if not isinstance(tasks_data, list):
                 error = InvalidTaskDefinitionException("Tasks must be a list", str(tasks_path))
                 log_operation_failure(logger, "benchmark_tasks_file_load", error, **operation_context)
                 raise error
 
-            executors_data = self.yaml_data.get("executors")
+            executors_data = self.yaml_data.get(FIELD_EXECUTORS)
             if executors_data is not None:
                 if not isinstance(executors_data, list):
                     error = InvalidTaskDefinitionException("Executors must be a list", str(tasks_path))
@@ -342,7 +420,7 @@ class BenchmarkConfigLoader:
                 log_operation_failure(logger, "benchmark_global_config_load", error, **operation_context)
                 raise error
 
-            yaml_domain = global_data.get("domain")
+            yaml_domain = global_data.get(FIELD_DOMAIN)
             if yaml_domain != self.domain:
                 error = InvalidTaskDefinitionException(
                     f"Domain mismatch in global.yaml: expected '{self.domain}', got '{yaml_domain}'",
@@ -353,7 +431,7 @@ class BenchmarkConfigLoader:
 
             self.yaml_data = global_data
 
-            self.permanent_environment = global_data.get("permanent_environment")
+            self.permanent_environment = global_data.get(FIELD_PERMANENT_ENVIRONMENT)
             logger.info(
                 "Global permanent environment processed",
                 extra={
@@ -400,7 +478,7 @@ class BenchmarkConfigLoader:
         # Find all .yaml and .yml files recursively, excluding global.yaml and shared.yaml
         for pattern in ["**/*.yaml", "**/*.yml"]:
             for yaml_file in tasks_dir.glob(pattern):
-                if yaml_file.name not in ["global.yaml", "global.yml", "shared.yaml", "shared.yml"]:
+                if yaml_file.name not in EXCLUDED_CONFIG_FILES:
                     task_files.append(yaml_file)
 
         # Sort for deterministic loading order
@@ -450,7 +528,7 @@ class BenchmarkConfigLoader:
             shared_config = self._load_shared_config(task_file_path.parent)
 
             # Parse tasks from this file
-            tasks_data = file_data.get("tasks", [])
+            tasks_data = file_data.get(FIELD_TASKS, [])
             if not isinstance(tasks_data, list):
                 error = InvalidTaskDefinitionException(
                     "'tasks' section must be a list of task objects", str(task_file_path)
@@ -546,7 +624,7 @@ class BenchmarkConfigLoader:
         Returns:
             Shared configuration dictionary (empty if no shared.yaml found)
         """
-        shared_file = directory / "shared.yaml"
+        shared_file = directory / FILENAME_SHARED_CONFIG
 
         if not shared_file.exists():
             logger.debug(
@@ -603,8 +681,8 @@ class BenchmarkConfigLoader:
             return task_data
 
         # Check if task explicitly opts into shared config inheritance
-        inherit_shared = task_data.get("inherit_shared", False)
-        task_id = task_data.get("task_id", "unknown")
+        inherit_shared = task_data.get(FIELD_INHERIT_SHARED, False)
+        task_id = task_data.get(FIELD_TASK_ID, "unknown")
 
         # If shared config exists but task doesn't explicitly inherit, skip merging
         if not inherit_shared:
@@ -724,13 +802,13 @@ class BenchmarkConfigLoader:
             - retry_interval: Initial retry interval (default: 0.5)
             - max_retry_interval: Maximum retry interval (default: 2.0)
         """
-        dependency_config = self.global_defaults.get("dependency_config", {})
+        dependency_config = self.global_defaults.get(FIELD_DEPENDENCY_CONFIG, {})
 
         # Provide sensible defaults
         return {
-            "wait_seconds": dependency_config.get("wait_seconds", 10.0),
-            "retry_interval": dependency_config.get("retry_interval", 0.5),
-            "max_retry_interval": dependency_config.get("max_retry_interval", 2.0),
+            FIELD_WAIT_SECONDS: dependency_config.get(FIELD_WAIT_SECONDS, 10.0),
+            FIELD_RETRY_INTERVAL: dependency_config.get(FIELD_RETRY_INTERVAL, 0.5),
+            FIELD_MAX_RETRY_INTERVAL: dependency_config.get(FIELD_MAX_RETRY_INTERVAL, 2.0),
         }
 
     def _parse_global_defaults(self) -> None:
@@ -743,7 +821,7 @@ class BenchmarkConfigLoader:
         if self.yaml_data is None:
             return
 
-        global_defaults_data = self.yaml_data.get("global_defaults")
+        global_defaults_data = self.yaml_data.get(FIELD_GLOBAL_DEFAULTS)
 
         if global_defaults_data is None:
             # No global defaults specified - use empty dict
@@ -761,17 +839,17 @@ class BenchmarkConfigLoader:
             raise InvalidTaskDefinitionException("global_defaults must be a dictionary")
 
         # Parse global prompts defaults (optional)
-        if "prompts" in global_defaults_data:
-            prompts_config = global_defaults_data["prompts"]
+        if FIELD_PROMPTS in global_defaults_data:
+            prompts_config = global_defaults_data[FIELD_PROMPTS]
             if not isinstance(prompts_config, dict):
                 raise InvalidTaskDefinitionException("global_defaults.prompts must be a dictionary")
 
             # Validate prompt types if provided - partial prompts are allowed in global defaults
             for prompt_type, template_file in prompts_config.items():
-                if prompt_type not in ["instruction", "assistant", "submit"]:
+                if prompt_type not in REQUIRED_PROMPT_TYPES:
                     raise InvalidTaskDefinitionException(
                         f"global_defaults.prompts contains invalid prompt type '{prompt_type}'. "
-                        f"Valid types: instruction, assistant, submit"
+                        f"Valid types: {', '.join(REQUIRED_PROMPT_TYPES)}"
                     )
                 if not isinstance(template_file, str) or not template_file.strip():
                     raise InvalidTaskDefinitionException(
@@ -783,14 +861,20 @@ class BenchmarkConfigLoader:
             logger.info("No global prompts defaults specified")
 
         # Validate structure of global defaults
-        valid_sections = ["execution_config", "episode_config", "benchmark_config", "dependency_config", "prompts"]
+        valid_sections = [
+            FIELD_EXECUTION_CONFIG,
+            FIELD_EPISODE_CONFIG,
+            FIELD_BENCHMARK_CONFIG,
+            FIELD_DEPENDENCY_CONFIG,
+            FIELD_PROMPTS,
+        ]
         for section_name in global_defaults_data:
             if section_name not in valid_sections:
                 raise InvalidTaskDefinitionException(
                     f"Invalid section '{section_name}' in global_defaults. " f"Valid sections are: {valid_sections}"
                 )
 
-            if section_name != "prompts" and not isinstance(global_defaults_data[section_name], dict):
+            if section_name != FIELD_PROMPTS and not isinstance(global_defaults_data[section_name], dict):
                 raise InvalidTaskDefinitionException(f"global_defaults.{section_name} must be a dictionary")
 
         # Store global defaults
@@ -818,8 +902,8 @@ class BenchmarkConfigLoader:
         if self.yaml_data is None:
             raise InvalidTaskDefinitionException("No YAML data loaded")
 
-        benchmark_data = self.yaml_data.get("benchmark_config")
-        global_benchmark_defaults = self.global_defaults.get("benchmark_config", {})
+        benchmark_data = self.yaml_data.get(FIELD_BENCHMARK_CONFIG)
+        global_benchmark_defaults = self.global_defaults.get(FIELD_BENCHMARK_CONFIG, {})
 
         # Merge global defaults with domain-level configuration
         merged_config = {}
@@ -835,13 +919,13 @@ class BenchmarkConfigLoader:
             merged_config.update(benchmark_data)
 
         # Ensure we have episode_attempts configured
-        if "episode_attempts" not in merged_config:
+        if FIELD_EPISODE_ATTEMPTS not in merged_config:
             raise InvalidTaskDefinitionException(
                 "Missing required 'episode_attempts' in benchmark configuration. "
                 "You must specify episode_attempts either in benchmark_config or global_defaults.benchmark_config."
             )
 
-        episode_attempts = merged_config["episode_attempts"]
+        episode_attempts = merged_config[FIELD_EPISODE_ATTEMPTS]
         if not isinstance(episode_attempts, int) or episode_attempts < 1:
             raise InvalidTaskDefinitionException(
                 f"episode_attempts must be a positive integer, got: {episode_attempts}"
@@ -855,7 +939,7 @@ class BenchmarkConfigLoader:
                 "event": "benchmark_config_loaded",
                 "domain": self.domain,
                 "keys": list(self.benchmark_config.keys()),
-                "episode_attempts": self.benchmark_config.get("episode_attempts"),
+                "episode_attempts": self.benchmark_config.get(FIELD_EPISODE_ATTEMPTS),
             },
         )
 
@@ -879,17 +963,17 @@ class BenchmarkConfigLoader:
 
         try:
             # Updated required fields - removed prompt_template_file, prompts are handled separately
-            required_fields = ["task_id", "title", "description"]
+            required_fields = [FIELD_TASK_ID, FIELD_TITLE, FIELD_DESCRIPTION]
             for field in required_fields:
                 if field not in task_data:
                     failure_context = {"missing_field": field}
                     raise InvalidTaskDefinitionException(f"Missing required field: {field}")
 
-            task_id = task_data["task_id"]
-            operation_context["task_id"] = task_id
-            title = task_data["title"]
-            description = task_data["description"]
-            initial_context = task_data.get("initial_context", {})
+            task_id = task_data[FIELD_TASK_ID]
+            operation_context[FIELD_TASK_ID] = task_id
+            title = task_data[FIELD_TITLE]
+            description = task_data[FIELD_DESCRIPTION]
+            initial_context = task_data.get(FIELD_INITIAL_CONTEXT, {})
 
             logger.debug(
                 "Parsing benchmark task",
@@ -901,9 +985,8 @@ class BenchmarkConfigLoader:
                 },
             )
 
-            # NEW: Parse prompts with global defaults inheritance
-            if "prompts" in task_data:
-                task_prompts = task_data["prompts"]
+            if FIELD_PROMPTS in task_data:
+                task_prompts = task_data[FIELD_PROMPTS]
                 if not isinstance(task_prompts, dict):
                     raise InvalidTaskDefinitionException(f"Task '{task_id}' prompts must be a dictionary")
             else:
@@ -911,9 +994,9 @@ class BenchmarkConfigLoader:
 
             # Inherit from global defaults, allow task-level overrides
             final_prompts = {}
-            global_prompts = self.global_defaults.get("prompts", {})
+            global_prompts = self.global_defaults.get(FIELD_PROMPTS, {})
 
-            for prompt_type in ["instruction", "assistant", "submit"]:
+            for prompt_type in REQUIRED_PROMPT_TYPES:
                 if prompt_type in task_prompts:
                     final_prompts[prompt_type] = task_prompts[prompt_type]
                 elif prompt_type in global_prompts:
@@ -940,112 +1023,135 @@ class BenchmarkConfigLoader:
                 },
             )
 
-            sandbox_environment = task_data.get("environment") or task_data.get("sandbox_environment")
+            sandbox_environment = task_data.get(FIELD_ENVIRONMENT) or task_data.get(FIELD_SANDBOX_ENVIRONMENT)
             logger.debug(
                 "Resolved task environment settings",
                 extra={
                     "event": "benchmark_task_environment_resolved",
                     "task_id": task_id,
                     "resolved_environment": sandbox_environment,
-                    "environment_field": task_data.get("environment"),
-                    "sandbox_environment_field": task_data.get("sandbox_environment"),
+                    "environment_field": task_data.get(FIELD_ENVIRONMENT),
+                    "sandbox_environment_field": task_data.get(FIELD_SANDBOX_ENVIRONMENT),
                 },
             )
 
-            task_execution_config = task_data.get("execution_config", {})
-            global_execution_defaults = self.global_defaults.get("execution_config", {})
+            task_execution_config = task_data.get(FIELD_EXECUTION_CONFIG, {})
+            global_execution_defaults = self.global_defaults.get(FIELD_EXECUTION_CONFIG, {})
 
             execution_config = deep_merge_dicts(global_execution_defaults, task_execution_config)
-            if "timeout" not in execution_config:
-                failure_context = {"missing_field": "execution_config.timeout"}
-                message = f"Task '{task_id}' missing required execution_config.timeout " "(no implicit default)"
-                raise InvalidTaskDefinitionException(message)
-            if not isinstance(execution_config["timeout"], int) or execution_config["timeout"] <= 0:
-                failure_context = {"invalid_field": "execution_config.timeout", "value": execution_config["timeout"]}
-                message = (
-                    f"Task '{task_id}' execution_config.timeout must be positive int, "
-                    f"got: {execution_config['timeout']}"
-                )
+
+            # Validate executors section exists and has at least one executor configured
+            if FIELD_EXECUTORS not in execution_config or not execution_config[FIELD_EXECUTORS]:
+                failure_context = {"missing_field": f"{FIELD_EXECUTION_CONFIG}.{FIELD_EXECUTORS}"}
+                message = f"Task '{task_id}' missing required {FIELD_EXECUTION_CONFIG}.{FIELD_EXECUTORS} section"
                 raise InvalidTaskDefinitionException(message)
 
-            if "allowed_executors" not in execution_config and self.allowed_executors is not None:
-                execution_config["allowed_executors"] = self.allowed_executors
-            if "allowed_executors" not in execution_config:
-                failure_context = {"missing_field": "execution_config.allowed_executors"}
-                message = f"Task '{task_id}' missing required allowed_executors " "(no implicit default)"
-                raise InvalidTaskDefinitionException(message)
-            if not isinstance(execution_config["allowed_executors"], list) or not execution_config["allowed_executors"]:
+            if not isinstance(execution_config[FIELD_EXECUTORS], dict):
                 failure_context = {
-                    "invalid_field": "execution_config.allowed_executors",
-                    "value": execution_config["allowed_executors"],
+                    "invalid_field": f"{FIELD_EXECUTION_CONFIG}.{FIELD_EXECUTORS}",
+                    "value": execution_config[FIELD_EXECUTORS],
                 }
-                message = (
-                    f"Task '{task_id}' allowed_executors must be a non-empty list, "
-                    f"got: {execution_config['allowed_executors']}"
-                )
+                message = f"Task '{task_id}' {FIELD_EXECUTION_CONFIG}.{FIELD_EXECUTORS} must be a dictionary"
                 raise InvalidTaskDefinitionException(message)
 
-            task_episode_config = task_data.get("episode_config", {})
-            global_episode_defaults = self.global_defaults.get("episode_config", {})
+            # Validate each executor has a timeout configured
+            for executor_type, executor_config in execution_config[FIELD_EXECUTORS].items():
+                if not isinstance(executor_config, dict):
+                    failure_context = {
+                        "invalid_field": f"{FIELD_EXECUTION_CONFIG}.{FIELD_EXECUTORS}.{executor_type}",
+                        "value": executor_config,
+                    }
+                    message = f"Task '{task_id}' executor config for '{executor_type}' must be a dictionary"
+                    raise InvalidTaskDefinitionException(message)
+
+                if FIELD_TIMEOUT not in executor_config:
+                    failure_context = {
+                        "missing_field": f"{FIELD_EXECUTION_CONFIG}.{FIELD_EXECUTORS}.{executor_type}.{FIELD_TIMEOUT}"
+                    }
+                    message = f"Task '{task_id}' executor '{executor_type}' missing required {FIELD_TIMEOUT}"
+                    raise InvalidTaskDefinitionException(message)
+
+                timeout = executor_config[FIELD_TIMEOUT]
+                if not isinstance(timeout, int) or timeout <= 0:
+                    failure_context = {
+                        "invalid_field": (
+                            f"{FIELD_EXECUTION_CONFIG}.{FIELD_EXECUTORS}." f"{executor_type}.{FIELD_TIMEOUT}"
+                        ),
+                        "value": timeout,
+                    }
+                    message = (
+                        f"Task '{task_id}' executor '{executor_type}' {FIELD_TIMEOUT} "
+                        f"must be positive int, got: {timeout}"
+                    )
+                    raise InvalidTaskDefinitionException(message)
+
+            task_episode_config = task_data.get(FIELD_EPISODE_CONFIG, {})
+            global_episode_defaults = self.global_defaults.get(FIELD_EPISODE_CONFIG, {})
 
             episode_config = deep_merge_dicts(global_episode_defaults, task_episode_config)
 
-            if "max_steps" not in episode_config:
-                failure_context = {"missing_field": "episode_config.max_steps"}
-                message = f"Task '{task_id}' missing required episode_config.max_steps " "(no implicit default)"
+            if FIELD_MAX_STEPS not in episode_config:
+                failure_context = {"missing_field": f"{FIELD_EPISODE_CONFIG}.{FIELD_MAX_STEPS}"}
+                message = (
+                    f"Task '{task_id}' missing required {FIELD_EPISODE_CONFIG}.{FIELD_MAX_STEPS} "
+                    "(no implicit default)"
+                )
                 raise InvalidTaskDefinitionException(message)
-            if not isinstance(episode_config["max_steps"], int) or episode_config["max_steps"] <= 0:
+            if not isinstance(episode_config[FIELD_MAX_STEPS], int) or episode_config[FIELD_MAX_STEPS] <= 0:
                 failure_context = {
-                    "invalid_field": "episode_config.max_steps",
-                    "value": episode_config["max_steps"],
+                    "invalid_field": f"{FIELD_EPISODE_CONFIG}.{FIELD_MAX_STEPS}",
+                    "value": episode_config[FIELD_MAX_STEPS],
                 }
                 message = (
-                    f"Task '{task_id}' episode_config.max_steps must be positive int, "
-                    f"got: {episode_config['max_steps']}"
+                    f"Task '{task_id}' {FIELD_EPISODE_CONFIG}.{FIELD_MAX_STEPS} must be positive int, "
+                    f"got: {episode_config[FIELD_MAX_STEPS]}"
                 )
                 raise InvalidTaskDefinitionException(message)
 
-            task_benchmark_config = task_data.get("benchmark_config", {})
-            global_benchmark_defaults = self.global_defaults.get("benchmark_config", {})
+            task_benchmark_config = task_data.get(FIELD_BENCHMARK_CONFIG, {})
+            global_benchmark_defaults = self.global_defaults.get(FIELD_BENCHMARK_CONFIG, {})
 
             if not isinstance(task_benchmark_config, dict):
-                failure_context = {"invalid_field": "benchmark_config", "value": task_benchmark_config}
+                failure_context = {"invalid_field": FIELD_BENCHMARK_CONFIG, "value": task_benchmark_config}
                 raise InvalidTaskDefinitionException(
-                    f"Task '{task_id}' benchmark_config must be a dictionary if provided"
+                    f"Task '{task_id}' {FIELD_BENCHMARK_CONFIG} must be a dictionary if provided"
                 )
 
-            if "episode_attempts" in task_benchmark_config:
-                episode_attempts = task_benchmark_config["episode_attempts"]
+            if FIELD_EPISODE_ATTEMPTS in task_benchmark_config:
+                episode_attempts = task_benchmark_config[FIELD_EPISODE_ATTEMPTS]
                 if not isinstance(episode_attempts, int) or episode_attempts < 1:
                     failure_context = {
-                        "invalid_field": "benchmark_config.episode_attempts",
+                        "invalid_field": f"{FIELD_BENCHMARK_CONFIG}.{FIELD_EPISODE_ATTEMPTS}",
                         "value": episode_attempts,
                     }
                     raise InvalidTaskDefinitionException(
-                        f"Task '{task_id}' episode_attempts must be a positive integer, got: {episode_attempts}"
+                        f"Task '{task_id}' {FIELD_EPISODE_ATTEMPTS} must be a positive integer, got: {episode_attempts}"
                     )
 
             merged_benchmark_config: Dict[str, Any] = {}
             merged_benchmark_config = deep_merge_dicts(merged_benchmark_config, global_benchmark_defaults)
             merged_benchmark_config = deep_merge_dicts(merged_benchmark_config, self.benchmark_config)
             merged_benchmark_config = deep_merge_dicts(merged_benchmark_config, task_benchmark_config)
-            if "episode_attempts" not in merged_benchmark_config or merged_benchmark_config["episode_attempts"] < 1:
-                failure_context = {"missing_field": "benchmark_config.episode_attempts"}
+            if (
+                FIELD_EPISODE_ATTEMPTS not in merged_benchmark_config
+                or merged_benchmark_config[FIELD_EPISODE_ATTEMPTS] < 1
+            ):
+                failure_context = {"missing_field": f"{FIELD_BENCHMARK_CONFIG}.{FIELD_EPISODE_ATTEMPTS}"}
                 message = (
-                    f"Task '{task_id}' does not have valid episode_attempts configuration. "
-                    "Each task must have episode_attempts either from domain-level benchmark_config "
+                    f"Task '{task_id}' does not have valid {FIELD_EPISODE_ATTEMPTS} configuration. "
+                    f"Each task must have {FIELD_EPISODE_ATTEMPTS} either from domain-level {FIELD_BENCHMARK_CONFIG} "
                     "or task-level override."
                 )
                 raise InvalidTaskDefinitionException(message)
 
             # NEW FORMAT ONLY: Load submission_evaluation_config and step_evaluation_config
             # NO backward compatibility with old evaluation_config
-            submission_evaluation_config = task_data.get("submission_evaluation_config")
-            step_evaluation_config = task_data.get("step_evaluation_config")
+            submission_evaluation_config = task_data.get(FIELD_SUBMISSION_EVALUATION_CONFIG)
+            step_evaluation_config = task_data.get(FIELD_STEP_EVALUATION_CONFIG)
 
             if not submission_evaluation_config:
                 raise InvalidTaskDefinitionException(
-                    f"Task '{task_id}' missing required submission_evaluation_config section. "
+                    f"Task '{task_id}' missing required {FIELD_SUBMISSION_EVALUATION_CONFIG} section. "
                     "All tasks MUST have submission evaluation configuration."
                 )
 
@@ -1057,26 +1163,26 @@ class BenchmarkConfigLoader:
                 self._validate_step_evaluation_config(step_evaluation_config, task_id)
 
             # Parse initial_files if present
-            initial_files = task_data.get("initial_files")
+            initial_files = task_data.get(FIELD_INITIAL_FILES)
             if initial_files is not None:
                 if not isinstance(initial_files, dict):
-                    failure_context = {"invalid_field": "initial_files", "value": initial_files}
+                    failure_context = {"invalid_field": FIELD_INITIAL_FILES, "value": initial_files}
                     raise InvalidTaskDefinitionException(
-                        f"Task '{task_id}' initial_files must be a dictionary if provided"
+                        f"Task '{task_id}' {FIELD_INITIAL_FILES} must be a dictionary if provided"
                     )
                 # Validate that all values are strings (paths)
                 for dest_path, source_path in initial_files.items():
                     if not isinstance(dest_path, str) or not isinstance(source_path, str):
                         failure_context = {
-                            "invalid_field": "initial_files",
+                            "invalid_field": FIELD_INITIAL_FILES,
                             "dest_path": dest_path,
                             "source_path": source_path,
                         }
                         raise InvalidTaskDefinitionException(
-                            f"Task '{task_id}' initial_files entries must be string -> string mappings"
+                            f"Task '{task_id}' {FIELD_INITIAL_FILES} entries must be string -> string mappings"
                         )
 
-            subtasks_data = task_data.get("subtasks", [])
+            subtasks_data = task_data.get(FIELD_SUBTASKS, [])
             subtasks = []
 
             logger.debug(
@@ -1109,6 +1215,11 @@ class BenchmarkConfigLoader:
                 )
 
             # Create Task with new prompts parameter (instead of prompt_template_file)
+            # Derive allowed_executors from executors config keys
+            allowed_executors = (
+                list(execution_config[FIELD_EXECUTORS].keys()) if FIELD_EXECUTORS in execution_config else None
+            )
+
             task = Task(
                 task_id=task_id,
                 domain=self.domain,
@@ -1118,13 +1229,13 @@ class BenchmarkConfigLoader:
                 subtasks=subtasks,
                 initial_context=initial_context,
                 environment=sandbox_environment,
-                allowed_executors=execution_config.get("allowed_executors", self.allowed_executors),
+                allowed_executors=allowed_executors,
                 execution_config=execution_config,
                 episode_config=episode_config,
                 benchmark_config=merged_benchmark_config,
                 submission_evaluation_config=submission_evaluation_config,
                 step_evaluation_config=step_evaluation_config,
-                depends_on_task_id=task_data.get("depends_on_task_id"),
+                depends_on_task_id=task_data.get(FIELD_DEPENDS_ON_TASK_ID),
                 initial_files=initial_files,
             )
 
@@ -1163,31 +1274,34 @@ class BenchmarkConfigLoader:
         Returns:
             SubTask instance
         """
-        required_fields = ["subtask_id", "title", "description", "objective"]
+        required_fields = [FIELD_SUBTASK_ID, FIELD_TITLE, FIELD_DESCRIPTION, FIELD_OBJECTIVE]
         for field in required_fields:
             if field not in subtask_data:
                 raise InvalidTaskDefinitionException(f"Missing required subtask field: {field}")
 
-        # NEW FORMAT: Extract max_score from scoring dict
+        # NEW FORMAT: Extract max_score and weight from scoring dict
         max_score = 0.0
-        if "scoring" in subtask_data:
-            scoring = subtask_data["scoring"]
+        weight = 1.0  # Default weight
+        if FIELD_SCORING in subtask_data:
+            scoring = subtask_data[FIELD_SCORING]
             if isinstance(scoring, dict):
-                max_score = scoring.get("max_score", 0.0)
+                max_score = scoring.get(FIELD_MAX_SCORE, 0.0)
+                weight = scoring.get("weight", 1.0)
             else:
                 raise InvalidTaskDefinitionException(
-                    f"Subtask '{subtask_data['subtask_id']}' has invalid scoring format. "
-                    f"Expected dict with 'max_score' key, got: {type(scoring).__name__}"
+                    f"Subtask '{subtask_data[FIELD_SUBTASK_ID]}' has invalid {FIELD_SCORING} format. "
+                    f"Expected dict with '{FIELD_MAX_SCORE}' key, got: {type(scoring).__name__}"
                 )
 
         return SubTask(
-            subtask_id=subtask_data["subtask_id"],
+            subtask_id=subtask_data[FIELD_SUBTASK_ID],
             task_id=task_id,
-            title=subtask_data["title"],
-            description=subtask_data["description"],
-            objective=subtask_data["objective"],
-            hint=subtask_data.get("hint"),
+            title=subtask_data[FIELD_TITLE],
+            description=subtask_data[FIELD_DESCRIPTION],
+            objective=subtask_data[FIELD_OBJECTIVE],
+            hints=subtask_data.get(FIELD_HINTS),
             max_score=max_score,
+            weight=weight,
         )
 
     def _validate_submission_evaluation_config(self, eval_config: Dict[str, Any], task_id: str) -> None:
@@ -1202,60 +1316,62 @@ class BenchmarkConfigLoader:
             InvalidTaskDefinitionException: If configuration is invalid
         """
         # Validate strategy
-        strategy = eval_config.get("strategy")
-        if strategy not in ("static", "llm_judge"):
+        strategy = eval_config.get(FIELD_STRATEGY)
+        if strategy not in VALID_EVAL_STRATEGIES:
             raise InvalidTaskDefinitionException(
                 f"Task '{task_id}': Invalid submission evaluation strategy. "
-                f"Must be 'static' or 'llm_judge', got: {strategy}"
+                f"Must be one of {VALID_EVAL_STRATEGIES}, got: {strategy}"
             )
 
         # Validate criteria section
-        criteria = eval_config.get("criteria")
+        criteria = eval_config.get(FIELD_CRITERIA)
         if not isinstance(criteria, dict):
             raise InvalidTaskDefinitionException(
-                f"Task '{task_id}': Missing or invalid criteria in submission_evaluation_config"
+                f"Task '{task_id}': Missing or invalid {FIELD_CRITERIA} in {FIELD_SUBMISSION_EVALUATION_CONFIG}"
             )
 
         # Validate scoring section
-        scoring = eval_config.get("scoring", {})
+        scoring = eval_config.get(FIELD_SCORING, {})
         if not isinstance(scoring, dict):
             raise InvalidTaskDefinitionException(
-                f"Task '{task_id}': scoring must be a dictionary in submission_evaluation_config"
+                f"Task '{task_id}': {FIELD_SCORING} must be a dictionary in {FIELD_SUBMISSION_EVALUATION_CONFIG}"
             )
 
-        max_score = scoring.get("max_score", 1.0)
+        max_score = scoring.get(FIELD_MAX_SCORE, 1.0)
         if not isinstance(max_score, (int, float)) or max_score <= 0:
             raise InvalidTaskDefinitionException(
-                f"Task '{task_id}': max_score must be a positive number, got: {max_score}"
+                f"Task '{task_id}': {FIELD_MAX_SCORE} must be a positive number, got: {max_score}"
             )
 
         # Strategy-specific validation
-        if strategy == "static":
-            expected_answers = criteria.get("expected_answers")
+        if strategy == EVAL_STRATEGY_STATIC:
+            expected_answers = criteria.get(FIELD_EXPECTED_ANSWERS)
             if not expected_answers or not isinstance(expected_answers, list):
                 raise InvalidTaskDefinitionException(
-                    f"Task '{task_id}': static strategy requires 'expected_answers' as a list"
+                    f"Task '{task_id}': static strategy requires '{FIELD_EXPECTED_ANSWERS}' as a list"
                 )
 
-        elif strategy == "llm_judge":
-            model = criteria.get("model")
+        elif strategy == EVAL_STRATEGY_LLM_JUDGE:
+            model = criteria.get(FIELD_MODEL)
             if not model or not isinstance(model, str):
                 raise InvalidTaskDefinitionException(
-                    f"Task '{task_id}': llm_judge strategy requires 'model' as a string"
+                    f"Task '{task_id}': llm_judge strategy requires '{FIELD_MODEL}' as a string"
                 )
 
             # Template paths (NOT rendered content) - must be explicitly defined
-            judge_system_template = criteria.get("judge_system_template")
+            judge_system_template = criteria.get(FIELD_JUDGE_SYSTEM_TEMPLATE)
             if not judge_system_template or not isinstance(judge_system_template, str):
                 raise InvalidTaskDefinitionException(
-                    f"Task '{task_id}': llm_judge requires 'judge_system_template' path"
+                    f"Task '{task_id}': llm_judge requires '{FIELD_JUDGE_SYSTEM_TEMPLATE}' path"
                 )
-            self._validate_template_path(judge_system_template, "judge_system_template", task_id)
+            self._validate_template_path(judge_system_template, FIELD_JUDGE_SYSTEM_TEMPLATE, task_id)
 
-            judge_user_template = criteria.get("judge_user_template")
+            judge_user_template = criteria.get(FIELD_JUDGE_USER_TEMPLATE)
             if not judge_user_template or not isinstance(judge_user_template, str):
-                raise InvalidTaskDefinitionException(f"Task '{task_id}': llm_judge requires 'judge_user_template' path")
-            self._validate_template_path(judge_user_template, "judge_user_template", task_id)
+                raise InvalidTaskDefinitionException(
+                    f"Task '{task_id}': llm_judge requires '{FIELD_JUDGE_USER_TEMPLATE}' path"
+                )
+            self._validate_template_path(judge_user_template, FIELD_JUDGE_USER_TEMPLATE, task_id)
 
     def _validate_step_evaluation_config(self, eval_config: Dict[str, Any], task_id: str) -> None:
         """
@@ -1269,46 +1385,48 @@ class BenchmarkConfigLoader:
             InvalidTaskDefinitionException: If configuration is invalid
         """
         # Validate strategy
-        strategy = eval_config.get("strategy")
-        if strategy not in ("static", "llm_judge"):
+        strategy = eval_config.get(FIELD_STRATEGY)
+        if strategy not in VALID_EVAL_STRATEGIES:
             raise InvalidTaskDefinitionException(
                 f"Task '{task_id}': Invalid step evaluation strategy. "
-                f"Must be 'static' or 'llm_judge', got: {strategy}"
+                f"Must be one of {VALID_EVAL_STRATEGIES}, got: {strategy}"
             )
 
         # Validate criteria section
-        criteria = eval_config.get("criteria")
+        criteria = eval_config.get(FIELD_CRITERIA)
         if not isinstance(criteria, dict):
             raise InvalidTaskDefinitionException(
-                f"Task '{task_id}': Missing or invalid criteria in step_evaluation_config"
+                f"Task '{task_id}': Missing or invalid {FIELD_CRITERIA} in {FIELD_STEP_EVALUATION_CONFIG}"
             )
 
         # Only llm_judge makes sense for step evaluation
-        if strategy == "llm_judge":
-            model = criteria.get("model")
+        if strategy == EVAL_STRATEGY_LLM_JUDGE:
+            model = criteria.get(FIELD_MODEL)
             if not model or not isinstance(model, str):
-                raise InvalidTaskDefinitionException(f"Task '{task_id}': step evaluation llm_judge requires 'model'")
+                raise InvalidTaskDefinitionException(
+                    f"Task '{task_id}': step evaluation llm_judge requires '{FIELD_MODEL}'"
+                )
 
             # Template paths
-            judge_system_template = criteria.get("judge_system_template")
+            judge_system_template = criteria.get(FIELD_JUDGE_SYSTEM_TEMPLATE)
             if not judge_system_template or not isinstance(judge_system_template, str):
                 raise InvalidTaskDefinitionException(
-                    f"Task '{task_id}': step evaluation requires 'judge_system_template' path"
+                    f"Task '{task_id}': step evaluation requires '{FIELD_JUDGE_SYSTEM_TEMPLATE}' path"
                 )
-            self._validate_template_path(judge_system_template, "judge_system_template", task_id)
+            self._validate_template_path(judge_system_template, FIELD_JUDGE_SYSTEM_TEMPLATE, task_id)
 
-            judge_user_template = criteria.get("judge_user_template")
+            judge_user_template = criteria.get(FIELD_JUDGE_USER_TEMPLATE)
             if not judge_user_template or not isinstance(judge_user_template, str):
                 raise InvalidTaskDefinitionException(
-                    f"Task '{task_id}': step evaluation requires 'judge_user_template' path"
+                    f"Task '{task_id}': step evaluation requires '{FIELD_JUDGE_USER_TEMPLATE}' path"
                 )
-            self._validate_template_path(judge_user_template, "judge_user_template", task_id)
+            self._validate_template_path(judge_user_template, FIELD_JUDGE_USER_TEMPLATE, task_id)
 
             # steps_per_message is optional
-            steps_per_message = criteria.get("steps_per_message", 10)
+            steps_per_message = criteria.get(FIELD_STEPS_PER_MESSAGE, 10)
             if not isinstance(steps_per_message, int) or steps_per_message < 1:
                 raise InvalidTaskDefinitionException(
-                    f"Task '{task_id}': steps_per_message must be a positive integer, got: {steps_per_message}"
+                    f"Task '{task_id}': {FIELD_STEPS_PER_MESSAGE} must be a positive integer, got: {steps_per_message}"
                 )
 
     def _validate_template_path(self, template_path: str, field_name: str, task_id: str) -> None:

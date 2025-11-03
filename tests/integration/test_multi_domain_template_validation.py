@@ -89,8 +89,9 @@ global_defaults:
     assistant: "missing_template.md"
     submit: "missing_template.md"
   execution_config:
-    allowed_executors: ["bash"]
-    timeout: 30
+    executors:
+      bash:
+        timeout: 30
   episode_config:
     max_steps: 5
   benchmark_config:
