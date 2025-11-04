@@ -31,7 +31,7 @@ class TestComposeFileValidation:
         manager = SandboxEnvironmentManager(config)
 
         with pytest.raises(SandboxExecutionError) as excinfo:
-            manager.create_episode_environment("test_episode", "nonexistent_environment")
+            manager.create_episode_environment_async("test_episode", "nonexistent_environment")
 
         assert "Sandbox environments directory not found" in str(excinfo.value)
 
@@ -56,7 +56,7 @@ class TestComposeFileValidation:
                 manager = SandboxEnvironmentManager(config)
 
                 with pytest.raises(SandboxExecutionError) as excinfo:
-                    manager.create_episode_environment("test_episode", "test_env")
+                    manager.create_episode_environment_async("test_episode", "test_env")
 
                 assert "Compose file path is not a file" in str(excinfo.value)
             finally:
@@ -339,7 +339,7 @@ class TestConfigurationValidation:
 
         # Should fail when trying to create environment with nonexistent domain structure
         with pytest.raises(SandboxExecutionError) as excinfo:
-            manager.create_episode_environment("test_episode", "test_env")
+            manager.create_episode_environment_async("test_episode", "test_env")
 
         assert "Compose file not found" in str(excinfo.value)
 
@@ -354,7 +354,7 @@ class TestConfigurationValidation:
 
         # Should fail when trying to create environment with invalid domain type
         with pytest.raises((SandboxExecutionError, TypeError)):
-            manager.create_episode_environment("test_episode", "test_env")
+            manager.create_episode_environment_async("test_episode", "test_env")
 
     def test_permanent_environment_missing_compose_file(self):
         """Test that missing compose file fails for permanent environments."""
@@ -417,12 +417,13 @@ services:
                 manager = SandboxEnvironmentManager(config)
 
                 # Create first episode
-                result = manager.create_episode_environment("duplicate-test", "test_env")
-                assert result is True
+                orchestrator, compose_path = manager.create_episode_environment_async("duplicate-test", "test_env")
+                assert orchestrator is not None
+                assert compose_path is not None
 
                 # Try to create duplicate
                 with pytest.raises(SandboxExecutionError) as excinfo:
-                    manager.create_episode_environment("duplicate-test", "test_env")
+                    manager.create_episode_environment_async("duplicate-test", "test_env")
 
                 assert "already exists" in str(excinfo.value)
 
@@ -471,7 +472,7 @@ services:
                 manager._is_ready = False
 
                 with pytest.raises(SandboxExecutionError) as excinfo:
-                    manager.create_episode_environment("test-episode", "test_env")
+                    manager.create_episode_environment_async("test-episode", "test_env")
 
                 assert "not ready" in str(excinfo.value)
 

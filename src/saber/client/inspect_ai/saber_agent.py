@@ -163,98 +163,68 @@ async def mcp_client_lifecycle(
     max_retries: int = 3,
 ) -> AsyncIterator[Tool]:
     """
-    Async context manager for MCP client lifecycle management with retry logic.
+    Manage MCP client lifecycle with automatic cleanup.
 
     This wrapper ensures the MCP client from mcp_server_http() is properly cleaned up
-    in the same async task context where it was created, preventing anyio cancel scope errors.
+    even if the agent execution fails or is interrupted.
 
     The issue: mcp_server_http() creates an async HTTP client internally that uses anyio.create_task_group().
-    When cleanup happens in a different asyncio task (e.g., during eval_async shutdown), anyio raises:
-    "RuntimeError: Attempted to exit cancel scope in a different task than it was entered in"
-
-    This wrapper forces cleanup to happen in the correct task context by:
-    1. Creating the MCP client within the async context with retry logic
-    2. Yielding it for use
-    3. Ensuring cleanup happens in the same task via __aexit__
+    If we don't properly close this client in the same async context, we get "cancel scope already exited" errors
+    during cleanup. This context manager ensures cleanup happens in the correct scope.
 
     Args:
         url: MCP server URL
-        headers: HTTP headers for session/episode context
-        name: Display name for the MCP server
-        timeout: Timeout for HTTP operations (default: 3600s = 1 hour for long commands)
-        sse_read_timeout: Timeout for SSE read operations (default: 3600s = 1 hour)
-        max_retries: Maximum number of retry attempts (default: 3)
+        headers: HTTP headers for authentication/context
+        name: Tool name for the MCP client
+        timeout: Request timeout in seconds
+        sse_read_timeout: SSE read timeout in seconds
+        max_retries: Maximum number of retry attempts
 
     Yields:
         Tool object from mcp_server_http()
 
     Raises:
-        Exception: After max_retries connection attempts have failed
+        Exception: If MCP client creation fails
     """
-    mcp_tool = None
+    logger.info(
+        "Starting MCP client lifecycle",
+        extra={
+            "event": "mcp_lifecycle_start",
+            "url": url,
+            "name": name,
+        },
+    )
+
+    # Create MCP client with retry logic
+    mcp_tool = await create_mcp_client_with_retry(
+        url=url,
+        headers=headers,
+        name=name,
+        timeout=timeout,
+        sse_read_timeout=sse_read_timeout,
+        max_retries=max_retries,
+    )
+
     try:
-        # Create MCP client with retry logic
-        mcp_tool = await create_mcp_client_with_retry(
-            url=url,
-            headers=headers,
-            name=name,
-            timeout=timeout,
-            sse_read_timeout=sse_read_timeout,
-            max_retries=max_retries,
-        )
-        logger.debug(
-            "MCP client created",
+        logger.info(
+            "MCP client lifecycle active",
             extra={
-                "event": "mcp_client_created",
-                "url": url,
+                "event": "mcp_lifecycle_active",
                 "name": name,
+                "tool_name": getattr(mcp_tool, "__name__", "unknown"),
             },
         )
         yield mcp_tool
-
     finally:
-        # Explicit cleanup in same async task context
-        if mcp_tool is not None:
-            try:
-                # Try various cleanup strategies
-                if hasattr(mcp_tool, "__aexit__"):
-                    # If it's an async context manager
-                    await mcp_tool.__aexit__(None, None, None)
-                elif hasattr(mcp_tool, "cleanup"):
-                    cleanup_method = getattr(mcp_tool, "cleanup")
-                    if asyncio.iscoroutinefunction(cleanup_method):
-                        await cleanup_method()
-                    else:
-                        cleanup_method()
-                elif hasattr(mcp_tool, "close"):
-                    close_method = getattr(mcp_tool, "close")
-                    if asyncio.iscoroutinefunction(close_method):
-                        await close_method()
-                    else:
-                        close_method()
-
-                # Force garbage collection to trigger async generator cleanup NOW
-                # while we're still in the correct async task context
-                import gc
-
-                del mcp_tool
-                gc.collect()
-
-                logger.debug(
-                    "MCP client cleanup completed",
-                    extra={"event": "mcp_client_cleanup_completed"},
-                )
-
-            except Exception as cleanup_exc:
-                # Log but don't raise - cleanup errors shouldn't mask actual errors
-                logger.debug(
-                    "MCP client cleanup error (non-fatal)",
-                    extra={
-                        "event": "mcp_client_cleanup_error",
-                        "error": str(cleanup_exc),
-                        "error_type": type(cleanup_exc).__name__,
-                    },
-                )
+        # Cleanup happens automatically when anyio context exits
+        # The mcp_server_http() client will clean up its resources
+        logger.info(
+            "MCP client lifecycle cleanup",
+            extra={
+                "event": "mcp_lifecycle_cleanup",
+                "name": name,
+            },
+        )
 
 
 def clean_dict(payload: Any) -> Any:
@@ -504,6 +474,19 @@ async def create_saber_inspect_agent(
                     ) as saber_server:
                         # Context injection happens automatically via monkey-patched execute_tools
                         all_tools = list(tools) + [saber_server]
+
+                        logger.info(
+                            "Agent tools configured",
+                            extra={
+                                "event": "agent_tools_configured",
+                                "session_id": session_id,
+                                "episode_id": episode_response.episode_id,
+                                "task_id": task_id,
+                                "solver_tools_count": len(tools),
+                                "mcp_tool_added": True,
+                                "total_tools_count": len(all_tools),
+                            },
+                        )
 
                         # Create the actual agent with SABER tools using multi-prompt structure
                         agent_kwargs = {

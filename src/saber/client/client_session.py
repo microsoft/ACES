@@ -704,18 +704,24 @@ class ClientSessionManager:
                         )
                     else:
                         error_text = await response.text()
-                        logger.warning(
-                            "Failed to end episode",
+                        logger.error(
+                            "Failed to end episode - server returned error",
                             extra={
                                 "event": "episode_end_failed",
                                 "session_id": session_id,
                                 "episode_id": episode_id,
                                 "status_code": response.status,
                                 "response_text": error_text,
+                                "url": url,
+                                "reason": reason,
                             },
                         )
-        except Exception as exc:
-            logger.warning(
+                        # Raise exception so caller knows the operation failed
+                        raise RuntimeError(
+                            f"Failed to end episode {episode_id}: " f"HTTP {response.status} - {error_text}"
+                        )
+        except aiohttp.ClientError as exc:
+            logger.error(
                 "Episode end request error",
                 extra={
                     "event": "episode_end_request_error",
@@ -724,7 +730,21 @@ class ClientSessionManager:
                     "error": str(exc),
                 },
             )
-            # Don't raise - episode end failures shouldn't break cleanup
+            raise  # Re-raise so caller knows the operation failed
+        except RuntimeError:
+            # Re-raise RuntimeError from non-200 response above
+            raise
+        except Exception as exc:
+            logger.error(
+                "Unexpected error during episode end",
+                extra={
+                    "event": "episode_end_unexpected_error",
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                    "error": str(exc),
+                },
+            )
+            raise
 
     async def update_episode_status(self, episode_id: str, status: str) -> None:
         """

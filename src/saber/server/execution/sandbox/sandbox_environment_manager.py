@@ -138,88 +138,6 @@ class SandboxEnvironmentManager:
 
         return compose_file_path
 
-    def create_episode_environment(
-        self, episode_id: str, sandbox_environment: str, target_episode_id: Optional[str] = None
-    ) -> bool:
-        """
-        Create episode-specific sandbox environment using static compose file.
-
-        Args:
-            episode_id: Episode identifier for unique container naming
-            sandbox_environment: Name of sandbox environment (e.g., "excytin_sandbox")
-            target_episode_id: Optional episode ID to attach network to
-
-        Returns:
-            True if environment created successfully
-
-        Raises:
-            SandboxExecutionError: If environment for episode already exists or cannot be created
-        """
-        if not self._is_ready:
-            raise SandboxExecutionError("SandboxManager is not ready yet. Please wait for initialization to complete.")
-
-        if episode_id in self.active_orchestrators:
-            raise SandboxExecutionError(f"Environment for episode {episode_id} already exists")
-
-        try:
-            # Get compose file path for this environment
-            compose_file_path = self._get_compose_file_path(sandbox_environment)
-
-            logger.info(
-                "Sandbox environment creation requested",
-                extra={
-                    "event": "sandbox_env_creation_requested",
-                    "episode_id": episode_id,
-                    "sandbox_environment": sandbox_environment,
-                    "compose_file": str(compose_file_path),
-                    "target_episode_id": target_episode_id,
-                },
-            )
-
-            # Create new orchestrator for this episode with logging configuration
-            orchestrator = ComposeOrchestrator(logging_config=self.logging_config)
-
-            # Create environment configuration with permanent network prefix and optional network attachment
-            # This allows sandbox environments to reference permanent environment networks
-            permanent_network_prefix = f"{self.domain}_permanent_environment_"
-            config = ComposeEnvironmentConfig(
-                episode_id=episode_id,
-                permanent_network_prefix=permanent_network_prefix,
-                target_episode_id=target_episode_id,
-            )
-
-            # Start environment with configuration
-            orchestrator.start_environment(str(compose_file_path), config)
-
-            # Track the orchestrator and its compose file
-            self.active_orchestrators[episode_id] = orchestrator
-            self.episode_compose_files[episode_id] = compose_file_path
-
-            logger.info(
-                "Sandbox environment created",
-                extra={
-                    "event": "sandbox_env_created",
-                    "episode_id": episode_id,
-                    "sandbox_environment": sandbox_environment,
-                    "compose_file": str(compose_file_path),
-                    "target_episode_id": target_episode_id,
-                },
-            )
-            return True
-
-        except Exception as e:
-            logger.error(
-                "Sandbox environment creation failed",
-                extra={
-                    "event": "sandbox_env_creation_failed",
-                    "episode_id": episode_id,
-                    "sandbox_environment": sandbox_environment,
-                    "target_episode_id": target_episode_id,
-                    "error": str(e),
-                },
-            )
-            raise SandboxExecutionError(f"Failed to create sandbox environment for episode {episode_id}: {e}")
-
     def create_episode_environment_async(
         self, episode_id: str, sandbox_environment: str, target_episode_id: Optional[str] = None
     ) -> tuple[ComposeOrchestrator, Path]:
@@ -267,12 +185,13 @@ class SandboxEnvironmentManager:
                 target_episode_id=target_episode_id,
             )
 
-            # Start environment WITHOUT health checks
-            orchestrator.start_environment_async(str(compose_file_path), config)
-
-            # Track the orchestrator and compose file immediately
+            # Track the orchestrator and compose file BEFORE starting containers
+            # This ensures cleanup can find the orchestrator even if interrupted during container startup
             self.active_orchestrators[episode_id] = orchestrator
             self.episode_compose_files[episode_id] = compose_file_path
+
+            # Start environment WITHOUT health checks
+            orchestrator.start_environment_async(str(compose_file_path), config)
 
             logger.info(
                 "Async sandbox environment started (health checks pending)",

@@ -328,7 +328,16 @@ class EnvironmentValidator:
                 continue
 
             if not self._docker_image_exists(image_tag):
-                errors.append(f"Docker image '{image_tag}' not found. Use --build to create it.")
+                # Keep message lines under 120 chars for flake8
+                slug = manifest.get("domain", {}).get("slug", "<domain>")
+                errors.append(
+                    (
+                        "Docker image '%s' not found.\n"
+                        "  Build with inspect eval: uv run inspect eval domains/%s --model <model> -T build=true\n"
+                        "  Or use saber-domain CLI: uv run saber-domain build %s --build"
+                    )
+                    % (image_tag, slug, slug)
+                )
 
     def _validate_base_images(self, errors: List[str]) -> None:
         """Validate base images exist."""
@@ -341,7 +350,16 @@ class EnvironmentValidator:
             for image_name, image_config in base_images_config["images"].items():
                 image_tag = image_config["tag"]
                 if not self._docker_image_exists(image_tag):
-                    errors.append(f"Base image '{image_tag}' not found. Use --build to create it.")
+                    # Keep message lines under 120 chars for flake8
+                    errors.append(
+                        (
+                            "Base image '%s' not found.\n"
+                            "  Build with inspect eval: uv run inspect eval domains/<domain> \
+                                --model <model> -T build=true\n"
+                            "  Or use saber-domain CLI: uv run saber-domain build <domain> --build"
+                        )
+                        % (image_tag,)
+                    )
         except Exception as e:
             errors.append(f"Failed to validate base images: {e}")
 

@@ -55,7 +55,7 @@ class SABERRestClient:
         Raises:
             Exception: If request fails or server returns error
         """
-        url = f"{self.saber_server_url}/api/v1/benchmark"
+        url = f"{self.saber_server_url}/api/v1/tasks"
 
         operation = "fetch_benchmark_info"
         log_operation_start(logger, operation, url=url)

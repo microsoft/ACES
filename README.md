@@ -10,18 +10,17 @@ SABER provides a modern architecture for evaluating security agents through a du
 
 - **Client Side**: `inspect_ai` integration with async orchestration, agent management, and MCP client for tool access
 - **Server Side**: FastAPI REST API + FastMCP server managing sessions, benchmarks, and Docker-sandboxed execution
-- **Domain Management**: CLI-based orchestration via `uv run saber-domain` for domain lifecycle management
+- **Domain Management**: Integrated with `inspect eval` CLI with automatic server lifecycle management via task parameters
 
 The system emphasizes **fail-fast validation**, **type safety with Pydantic**, and **async context managers** for reliable resource management.
 
 ## Key Components
 
-### Client Components
-- **`run_saber_eval_async`**: Main entry point for inspect_ai-compatible evaluations
-- **`SABEREvaluationOrchestrator`**: Async context manager coordinating evaluation lifecycle
-- **`ClientSessionManager`**: Unified interface for REST + MCP communication with server
-- **`AgentManager`**: Agent discovery and lifecycle management
-- **`DatasetManager`**: Dataset creation from server benchmark tasks
+### Inspect AI Integration
+- **`SABERSandboxEnvironment`**: Custom sandbox environment implementing task/sample lifecycle hooks
+- **`create_domain_task`**: Factory for creating domain tasks with automatic server management
+- **`saber_tools`**: ToolSource providing lazy access to SABER MCP tools
+- **`SABERAgentRegistry`**: Domain-specific agent discovery and registration
 
 ### Server Components
 - **`SessionManager`**: Central orchestrator for multi-session server management
@@ -30,14 +29,13 @@ The system emphasizes **fail-fast validation**, **type safety with Pydantic**, a
 - **`BenchmarkManager`**: YAML-based task and benchmark configuration
 - **`ExecutionManager`**: Docker sandbox orchestration for secure command execution
 
-### Domain CLI (`saber-domain`)
-Command-line interface for domain lifecycle management:
-- **`list`**: Show available security domains
-- **`validate`**: Verify domain configuration and structure
-- **`build`**: Build Docker images for domain
-- **`start`**: Launch domain server with REST + MCP APIs
-- **`stop`**: Shutdown domain services
-- **`test`**: Run full evaluation cycle with automated server management
+### Domain Task Integration
+SABER domains are exposed as `inspect_ai` tasks with automatic lifecycle management:
+- **Automatic startup**: Server starts on first evaluation with health checks
+- **Flexible build modes**: Incremental build, complete rebuild, or selective rebuild via `-T` flags
+- **Task filtering**: Filter to specific scenarios using exact match or glob patterns
+- **Server persistence**: Keep server running between evaluations for faster iteration (default)
+- **Graceful shutdown**: Stop server after evaluation with `-T stop_saber_after=true`
 
 ## Quick Start
 
@@ -62,7 +60,7 @@ Command-line interface for domain lifecycle management:
 
 3. **Verify installation:**
    ```bash
-   uv run python -c "from saber.client.inspect_ai import run_saber_eval_async; print('✅ SABER installed')"
+   uv run python -c "from saber.inspect_ai import SABERSandboxEnvironment; print('✅ SABER installed')"
    ```
 
 4. **Configure environment variables:**
@@ -77,124 +75,166 @@ Command-line interface for domain lifecycle management:
    #   AZUREAI_OPENAI_API_VERSION=2024-12-01-preview
    ```
    
-   **Note**: The `.env` file is gitignored and will never be committed. Domain-specific variables (ports, image names, etc.) are auto-configured by the `saber-domain` CLI and don't require manual editing.
+   **Note**: The `.env` file is gitignored and will never be committed. Domain-specific variables (ports, image names, etc.) are configured via task parameters (`-T` flags) and don't require environment variables.
 
 ### Running Domains
 
-**Run from SABER Context**
-```
-cd /path/to/SABER
-```
+All domain operations use `inspect eval` commands with task parameters (`-T`) to control SABER behavior. The SABER server is automatically managed - started on first evaluation and kept running for faster subsequent runs.
 
-**Help menu**
+**Available domains** in `domains/`:
+- `excytin_demo` - Database forensics and incident response demonstrations
+
+**List available tasks:**
 ```bash
-uv run saber-domain --help
+uv run inspect list tasks
 ```
 
-**List available domains:**
+**Basic evaluation:**
 ```bash
-uv run saber-domain list
+# Evaluate the excytin_demo domain (server auto-starts and stays running after)
+uv run inspect eval domains/excytin_demo --model openai/gpt-4
 ```
 
-**Build domain images:**
+**Server endpoints** (when running):
+- REST API: `http://localhost:8000`
+- MCP Server: `http://localhost:8001`
+
+**Build options:**
 
 The build system supports three mutually exclusive modes:
 
 ```bash
-# 1. INCREMENTAL BUILD (default): Build only missing images
+# 1. INCREMENTAL BUILD: Build only missing images
 #    - Fastest option for development
-#    - Skips images that already exist
-uv run saber-domain build cybench
+#    - Only builds images that don't exist
+uv run inspect eval domains/excytin_demo --model openai/gpt-4 -T build=true
 
 # 2. COMPLETE REBUILD: Remove and rebuild all images
 #    - Use when you need a clean slate
 #    - Removes ALL existing domain images and rebuilds from scratch
-uv run saber-domain build cybench --rebuild-all
+uv run inspect eval domains/excytin_demo --model openai/gpt-4 -T rebuild_all=true
 
 # 3. SELECTIVE REBUILD: Remove and rebuild specific images by prefix
 #    - Rebuild only server image
-uv run saber-domain build cybench --rebuild server
-#    - Rebuild all cookie challenge images (cookie_*)
-uv run saber-domain build cybench --rebuild cookie
-#    - Rebuild sandbox image
-uv run saber-domain build cybench --rebuild sandbox
+uv run inspect eval domains/excytin_demo --model openai/gpt-4 -T rebuild=server
 ```
 
-**Important**: These three options (`--build` is implicit default, `--rebuild-all`, `--rebuild <prefix>`) are mutually exclusive and cannot be combined.
+**Important**: These three options (`build`, `rebuild_all`, `rebuild=<prefix>`) are mutually exclusive and cannot be combined.
 
-**Start a domain server:**
-
-The `start` command also supports all three build modes:
+**Server lifecycle management:**
 
 ```bash
-# Start without building (server must already have images)
-uv run saber-domain start cybench
-# helpful --dry-run flag here will provide diagnostics for the run
-# Server endpoints:
-#   REST API: http://localhost:8000
-#   MCP Server: http://localhost:8001
+# Keep server running after evaluation (default for faster re-runs)
+uv run inspect eval domains/excytin_demo --model openai/gpt-4
 
-# Build missing images before starting (INCREMENTAL):
-uv run saber-domain start cybench --build
+# Stop server after evaluation completes (clean shutdown)
+uv run inspect eval domains/excytin_demo --model openai/gpt-4 -T stop_saber_after=true
 
-# Rebuild all images before starting (COMPLETE REBUILD):
-uv run saber-domain start cybench --rebuild-all
-
-# Rebuild specific images before starting (SELECTIVE REBUILD):
-uv run saber-domain start cybench --rebuild server    # Only rebuild server
-uv run saber-domain start cybench --rebuild cookie    # Only rebuild cookie_* images
+# Rebuild all images AND stop server after
+uv run inspect eval domains/excytin_demo --model openai/gpt-4 -T rebuild_all=true -T stop_saber_after=true
 ```
 
-**Note**: The `--rebuild` and `--rebuild-all` flags will stop the server first if it's running, rebuild the images, then start the server with the new images.
-
-**Run evaluation tests:**
-
-The `test` command automatically manages the server lifecycle and supports all build modes:
+**Task filtering:**
 
 ```bash
-# Basic test (server kept running after completion for faster re-runs)
-uv run saber-domain test cybench
+# Filter to specific tasks using exact match
+uv run inspect eval domains/excytin_demo --model openai/gpt-4 -T task_filter=incident_5_task_1
 
-# Test with INCREMENTAL BUILD (builds only missing images):
-uv run saber-domain test cybench --build --stop-after
-
-# Test with COMPLETE REBUILD (removes and rebuilds all images):
-uv run saber-domain test cybench --rebuild-all --stop-after
-
-# Test with SELECTIVE REBUILD (rebuild specific images):
-uv run saber-domain test cybench --rebuild server --stop-after
-
-# Additional helpful flags:
-# --stop-after: Stop server after test completion (default keeps running)
-# --dry-run: Show what would happen without executing
-# --no-ui: Disable TUI and use console output instead
+# Filter using glob patterns
+uv run inspect eval domains/excytin_demo --model openai/gpt-4 -T task_filter="incident_*"
 ```
 
-**How it works**:
-- Automatically starts server if not running
-- Runs evaluation against the domain
-- By default, keeps server running for faster subsequent tests
-- Use `--stop-after` to clean up after completion
+**Custom ports:**
 
-**Stop domain:**
 ```bash
-uv run saber-domain stop cybench
+# Use non-default ports (useful for running multiple domains)
+uv run inspect eval domains/excytin_demo --model openai/gpt-4 -T rest_port=9000 -T mcp_port=9001
+```
+
+**Combined example:**
+
+```bash
+# Rebuild server images, filter to incident tasks, and stop server after
+uv run inspect eval domains/excytin_demo \
+    --model openai/gpt-4 \
+    -T rebuild=server \
+    -T task_filter="incident_*" \
+    -T stop_saber_after=true
+```
+
+**Manual server cleanup:**
+
+If the server doesn't shut down properly, you can manually stop containers:
+
+```bash
+# View running containers
+docker ps
+
+# Stop domain containers
+docker stop $(docker ps -q --filter "name=<domain_slug>")
 ```
 
 ### Running Evaluations Programmatically
 
-```python
-from saber.client.inspect_ai import run_saber_eval_async
-from saber.client.models import SABERConfig
+For programmatic evaluation, use the standard `inspect eval()` API:
 
-config = SABERConfig(
-    server_url="http://localhost:8000",
-    mcp_url="http://localhost:8001",
-    agent_name="my_agent",
-    max_episodes=10
+```python
+from inspect_ai import eval
+
+# Evaluate a domain task directly
+results = eval(
+    "domains/excytin_demo",
+    model="openai/gpt-4",
+    task_args={
+        "task_filter": "incident_*",
+        "build": True,
+        "stop_saber_after": False  # Keep server running
+    }
 )
 
-eval_log = await run_saber_eval_async(config)
+# Or import the task function directly
+from domains.excytin_demo.excytin_demo import excytin_demo
+
+task = excytin_demo(
+    task_filter="incident_5_*",
+    rest_port=8000,
+    mcp_port=8001,
+    build=True
+)
+
+results = eval(task, model="openai/gpt-4")
+```
+
+For custom integration with SABER tools:
+
+```python
+from inspect_ai import Task, eval
+from inspect_ai.dataset import Sample
+from inspect_ai.solver import generate, use_tools
+from saber.inspect_ai import saber_tools
+
+# Create custom task with SABER sandbox
+task = Task(
+    dataset=[
+        Sample(
+            input="Investigate database breach in incident 5",
+            target="unauthorized access detected",
+            metadata={"task_id": "incident_5_task_1"}  # Required!
+        )
+    ],
+    sandbox=("saber", {
+        "domain_slug": "excytin_demo",
+        "domains_root": "domains",
+        "rest_port": 8000,
+        "mcp_port": 8001
+    }),
+    solver=[
+        use_tools(saber_tools()),  # Access SABER MCP tools
+        generate()
+    ]
+)
+
+results = eval(task, model="openai/gpt-4")
 ```
 
 ## Development and Contributing
@@ -246,19 +286,20 @@ class AgentConfig(BaseModel):
 **Standard installation (default):**
 ```bash
 uv sync --all-extras
-# Uses inspect_ai from MSEC ADO repository
+# Uses inspect_ai from MSEC ADO repository (dev/saber_integration branch)
 ```
 
 **Local development with inspect_ai:**
+
+When SABER is used as part of the `oss_saber` project, inspect_ai is automatically sourced from the sibling submodule via the parent project's `pyproject.toml` override. No manual configuration needed.
+
+For standalone SABER development with local inspect_ai:
 ```bash
 # 1. Edit pyproject.toml [tool.uv.sources]:
-#    Comment out: inspect-ai = { git = "https://..." }
-#    Uncomment: inspect-ai = { path = "./external/inspect_ai" }
+#    Replace: inspect-ai = { git = "https://..." }
+#    With:    inspect-ai = { path = "../inspect_ai", editable = true }
 
-# 2. Initialize submodule
-git submodule update --init --recursive
-
-# 3. Install
+# 2. Install
 uv sync --all-extras
 ```
 

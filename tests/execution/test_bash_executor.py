@@ -268,7 +268,7 @@ class TestBashExecutorIntegration:
             "user": "tooluser:tooluser",
         }
         manager.get_episode_environment.return_value = mock_docker_sandbox_environment
-        manager.create_episode_environment.return_value = mock_docker_sandbox_environment
+        manager.create_episode_environment_async.return_value = mock_docker_sandbox_environment
         return manager
 
     @pytest.fixture
@@ -384,8 +384,8 @@ class TestBashExecutorIntegration:
         assert result.success is True
         assert result.data["stdout"] == "test\n"
 
-        # Verify that create_episode_environment was NOT called since environment exists
-        mock_sandbox_manager_with_env.create_episode_environment.assert_not_called()
+        # Verify that create_episode_environment_async was NOT called since environment exists
+        mock_sandbox_manager_with_env.create_episode_environment_async.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_execute_docker_exception_handling(self, docker_bash_tool_with_env, mock_sandbox_manager_with_env):

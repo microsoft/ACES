@@ -70,36 +70,46 @@ Agents have access to containerized tools via MCP:
 
 ### Running the Domain
 
-**From the SABER root directory:**
+**This domain has been migrated to Inspect AI integration.** It's now available as a built-in domain in SABER installations.
 
+**From any workspace with SABER installed:**
+
+**1. Discover the domain:**
 ```bash
-cd /path/to/saber
+uv run inspect list tasks | grep excytin_demo
+# Output: domains/excytin_demo/excytin_demo.py@excytin_demo
 ```
 
-**1. Build domain images:**
+**2. Run all tasks:**
 ```bash
-uv run saber-domain build excytin_demo
+# Auto-builds images, auto-starts server, runs evaluation
+uv run inspect eval domains/excytin_demo --model openai/gpt-4
 ```
 
-**2. Start the domain server:**
+**3. Run specific tasks:**
 ```bash
-uv run saber-domain start excytin_demo
-# Server endpoints:
-#   REST API: http://localhost:8000
-#   MCP Server: http://localhost:8001
+# Run all incident_5 tasks
+uv run inspect eval domains/excytin_demo \
+  -T task_filter=incident_5_* \
+  --model openai/gpt-4
+
+# Run a single task
+uv run inspect eval domains/excytin_demo \
+  -T task_filter=incident_5_task_1 \
+  --model openai/gpt-4
 ```
 
-**3. Run evaluation tests:**
+**4. Advanced options:**
 ```bash
-uv run saber-domain test excytin_demo
+# Rebuild all images
+uv run inspect eval domains/excytin_demo \
+  -T rebuild_all=true \
+  --model openai/gpt-4
 
-# With additional options:
-uv run saber-domain test excytin_demo --rebuild-all --stop-after
-```
-
-**4. Stop the domain:**
-```bash
-uv run saber-domain stop excytin_demo
+# Stop server after completion
+uv run inspect eval domains/excytin_demo \
+  -T stop_saber_after=true \
+  --model openai/gpt-4
 ```
 
 ### Inspecting Results
@@ -135,7 +145,7 @@ tasks:
 **Client Configuration** (`client/saber.yaml`):
 ```yaml
 server:
-  mode: auto  # URLs auto-configured by saber-domain
+  mode: auto  # URLs auto-configured by inspect_ai task
 
 tasks:
   task_ids: ["incident_5_task_1"]
@@ -169,7 +179,10 @@ max_parallel_tasks: 2
 
 3. **Test the new task**:
    ```bash
-   uv run saber-domain test excytin_demo --rebuild-all
+   uv run inspect eval domains/excytin_demo \
+     -T task_filter=incident_5_task_4 \
+     -T rebuild_all=true \
+     --model openai/gpt-4
    ```
 
 ### Adding Custom Tools
@@ -186,7 +199,9 @@ RUN apt-get update && \
 
 Then rebuild:
 ```bash
-uv run saber-domain build excytin_demo
+uv run inspect eval domains/excytin_demo \
+  -T rebuild=sandbox \
+  --model openai/gpt-4
 ```
 
 ### Database Schema Exploration
@@ -217,14 +232,18 @@ evaluation_config:
 
 ### Testing Best Practices
 
-1. **Use `--dry-run` for validation**:
+1. **Test with rebuild for clean state**:
    ```bash
-   uv run saber-domain start excytin_demo --dry-run
+   uv run inspect eval domains/excytin_demo \
+     -T rebuild_all=true \
+     --model openai/gpt-4
    ```
 
-2. **Test with `--stop-after` for cleanup**:
+2. **Stop server after testing**:
    ```bash
-   uv run saber-domain test excytin_demo --stop-after
+   uv run inspect eval domains/excytin_demo \
+     -T stop_saber_after=true \
+     --model openai/gpt-4
    ```
 
 3. **Monitor server logs**:

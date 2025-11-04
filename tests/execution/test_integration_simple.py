@@ -53,7 +53,7 @@ class TestComponentIntegration:
         assert execution_manager._sandbox_environment_manager is None
 
         # But it should be ready to be initialized when needed
-        assert hasattr(execution_manager, 'configure_for_task')
+        assert hasattr(execution_manager, 'configure_for_task_async')
         assert hasattr(execution_manager, 'is_sandbox_ready')
 
     def test_security_validator_configuration_integration(self):

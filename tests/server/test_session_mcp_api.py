@@ -722,7 +722,7 @@ class TestCustomListToolsHandler:
             return f"requested: {url}"
 
         # Get FastMCP's default tool list format
-        fastmcp_tools = await fastmcp_server._mcp_list_tools()
+        fastmcp_tools = await fastmcp_server._list_tools_mcp()
 
         # Mock our MCP API's headers to have episode context
         with patch.object(mcp_api_with_tools, '_get_headers') as mock_get_headers:

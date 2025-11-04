@@ -7,7 +7,7 @@ name = "saber"
 version = "0.1.0"
 description = "Security Agent Benchmarking and Evaluation Research (SABER) - A distributed system for benchmarking agentic workflows in cybersecurity domains"
 readme = "README.md"
-requires-python = ">=3.11,<3.13"
+requires-python = ">=3.11,<3.14"
 license = {text = "MIT"}
 authors = [
     {name = "SABER Team"}
@@ -20,8 +20,10 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering",
     "Topic :: Security",
     "Topic :: Software Development :: Libraries :: Python Modules",
@@ -74,17 +76,15 @@ local-dev = [
     # No additional dependencies needed - just changes the source
 ]
 
-[project.urls]
-Homepage = "https://github.com/saber-team/saber"
-Documentation = "https://saber.readthedocs.io"
-Repository = "https://github.com/saber-team/saber"
-Issues = "https://github.com/saber-team/saber/issues"
-
 [project.scripts]
 saber-server = "saber.server.cli:main"
 saber-client = "saber.client.cli:main"
 saber-mcp-service = "saber.mcp_service.__main__:cli"
 saber-domain = "saber.domain.cli:main"
+inspect = "inspect_ai._cli.main:main"
+
+[project.entry-points.inspect_ai]
+saber = "saber.inspect_ai._registry"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/saber"]
@@ -99,19 +99,7 @@ include = [
 allow-direct-references = true
 
 [tool.uv.sources]
-# PRODUCTION: MSEC ADO repository installation with SABER integration branch (DEFAULT for standardized deployment)
-# This is the standardized approach for production deployments using the SABER-specific integration branch
 inspect-ai = { git = "https://MSECAIModels@dev.azure.com/MSECAIModels/Benchmarking/_git/inspect_ai", branch = "dev/saber_integration" }
-
-# DEVELOPMENT: Local development with external directory (alternative for local development)
-# To use local development with git submodule, comment the line above and uncomment below:
-# inspect-ai = { path = "./external/inspect_ai" }
-# NOTE: For local git submodule development, also run:
-#   git submodule update --init --recursive
-#   git submodule update --remote external/inspect_ai  # to update to latest
-
-# Alternative: PyPI installation (if inspect-ai becomes available on PyPI)
-# inspect-ai = { version = "*" }
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -247,4 +235,5 @@ exclude_lines = [
 [dependency-groups]
 dev = [
     "types-pyyaml>=6.0.12.20250822",
+    "types-requests>=2.32.4.20250913",
 ]

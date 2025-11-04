@@ -186,7 +186,8 @@ def _convert_saber_task_to_sample(task_info: TaskInfo, attempt: int = 1) -> Samp
     )
 
     # Create unique sample ID for each attempt
-    sample_id = f"{task_info.task_id}_attempt_{attempt}"
+    # Use double underscore to avoid collision with task IDs containing single underscores
+    sample_id = f"{task_info.task_id}__attempt_{attempt}"
 
     # Create inspect_ai Sample
     sample = Sample(id=sample_id, input=task_input, target=task_target, metadata=task_metadata)
@@ -198,25 +199,19 @@ def _create_task_input(task_info: TaskInfo) -> str:
     """
     Create inspect_ai input string from SABER TaskInfo object.
 
-    This is the task description that will be provided to the agent as context
-    (NOT the agent prompt - that's set when creating the agent).
+    Returns the full rendered instruction prompt that will be shown to the user
+    and passed to the agent. This is the same content that gets used in
+    AgentPrompt.instructions during agent execution.
 
     Args:
         task_info: SABER TaskInfo object
 
     Returns:
-        Formatted task input string for the agent to understand the task
+        Full rendered instruction prompt for the task
     """
-
-    input_parts = [
-        f"Task: {task_info.description}",
-    ]
-
-    # Add title if different from description
-    if task_info.title and task_info.title != task_info.description:
-        input_parts.insert(0, f"Title: {task_info.title}")
-
-    return "\n".join(input_parts)
+    # Return the full rendered instruction prompt from the server
+    # This includes all Jinja2-rendered content (objectives, files, subtasks, etc.)
+    return task_info.instruction_prompt
 
 
 def _create_task_target(task_info: TaskInfo) -> str:

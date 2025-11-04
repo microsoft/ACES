@@ -50,6 +50,7 @@ class ClientSession(BaseModel):
     client_id: str = Field(..., description="Client identifier")
 
     # Multi-episode support
+    creating_episode_ids: List[str] = Field(default_factory=list, description="Episodes in creation (holding lock)")
     active_episode_ids: List[str] = Field(default_factory=list, description="Currently active episode IDs")
     episode_history: List[str] = Field(
         default_factory=list, description="All completed episode IDs in chronological order"
@@ -73,6 +74,20 @@ class ClientSession(BaseModel):
         """Update the last activity timestamp."""
         self.last_activity = datetime.utcnow()
 
+    def add_creating_episode(self, episode_id: str) -> None:
+        """Add an episode to the creating episodes list (while holding creation lock)."""
+        if episode_id not in self.creating_episode_ids:
+            self.creating_episode_ids.append(episode_id)
+            self.update_activity()
+
+    def move_to_active_episode(self, episode_id: str) -> None:
+        """Move an episode from creating to active (after Docker startup completes)."""
+        if episode_id in self.creating_episode_ids:
+            self.creating_episode_ids.remove(episode_id)
+        if episode_id not in self.active_episode_ids:
+            self.active_episode_ids.append(episode_id)
+            self.update_activity()
+
     def add_active_episode(self, episode_id: str) -> None:
         """Add an episode to the active episodes list."""
         if episode_id not in self.active_episode_ids:
@@ -83,6 +98,12 @@ class ClientSession(BaseModel):
         """Remove an episode from active episodes."""
         if episode_id in self.active_episode_ids:
             self.active_episode_ids.remove(episode_id)
+            self.update_activity()
+
+    def remove_creating_episode(self, episode_id: str) -> None:
+        """Remove an episode from creating episodes (on error during creation)."""
+        if episode_id in self.creating_episode_ids:
+            self.creating_episode_ids.remove(episode_id)
             self.update_activity()
 
     def complete_episode(self, episode_id: str) -> None:
@@ -108,15 +129,16 @@ class ClientSession(BaseModel):
         return None
 
     def has_active_episodes(self) -> bool:
-        """Check if session has any active episodes."""
-        return len(self.active_episode_ids) > 0
+        """Check if session has any active or creating episodes."""
+        return len(self.creating_episode_ids) > 0 or len(self.active_episode_ids) > 0
 
     def get_episode_count(self) -> Dict[str, int]:
         """Get episode counts for analytics."""
         return {
+            "creating": len(self.creating_episode_ids),
             "active": len(self.active_episode_ids),
             "completed": len(self.episode_history),
-            "total": len(self.active_episode_ids) + len(self.episode_history),
+            "total": len(self.creating_episode_ids) + len(self.active_episode_ids) + len(self.episode_history),
         }
 
 
@@ -832,20 +854,54 @@ class SessionManager:
         log_session_end(logger, session_id, "SessionManager termination")
         session = self._get_session(session_id)
 
+        # Acquire episode creation lock to prevent race with episodes being added to lists
+        async with self._episode_creation_lock:
+            # Mark session as inactive to prevent new episodes from being created during termination
+            session.is_active = False
+            logger.info(
+                "Session marked as inactive - no new episodes will be accepted",
+                extra={
+                    "event": "session_marked_inactive",
+                    "session_id": session_id,
+                },
+            )
+
+            # Capture episodes from BOTH creating and active lists while holding the lock
+            # This ensures we clean up episodes that are mid-creation (holding lock, Docker starting)
+            # as well as fully created episodes
+            creating_episodes = list(session.creating_episode_ids)
+            active_episodes = list(session.active_episode_ids)
+            episodes_to_terminate = creating_episodes + active_episodes
+
+            logger.info(
+                "Captured all episodes for termination (while holding lock)",
+                extra={
+                    "event": "session_episodes_captured_for_termination",
+                    "session_id": session_id,
+                    "creating_episode_count": len(creating_episodes),
+                    "active_episode_count": len(active_episodes),
+                    "total_episode_count": len(episodes_to_terminate),
+                    "creating_episode_ids": creating_episodes,
+                    "active_episode_ids": active_episodes,
+                },
+            )
+
+        # Release lock before terminating episodes (to avoid blocking new requests)
         # End all active episodes (this will trigger individual episode cleanup)
-        if session.has_active_episodes():
+        if episodes_to_terminate:
             try:
                 logger.info(
                     "Terminating active episodes during session shutdown",
                     extra={
                         "event": "session_active_episodes_terminating",
                         "session_id": session_id,
-                        "active_episode_count": len(session.active_episode_ids),
-                        "active_episode_ids": list(session.active_episode_ids),
+                        "active_episode_count": len(episodes_to_terminate),
+                        "active_episode_ids": episodes_to_terminate,
                     },
                 )
-                # End all active episodes - each will trigger its own cleanup
-                for episode_id in session.active_episode_ids.copy():  # Copy to avoid modification during iteration
+                # End all active episodes - mark them as terminated first
+                episodes_needing_cleanup = []
+                for episode_id in episodes_to_terminate:
                     try:
                         # Check if episode is already completed before forcing termination
                         episode = self.episode_manager.get_episode_by_id(episode_id)
@@ -871,6 +927,7 @@ class SessionManager:
                                 "termination_reason": EpisodeTerminationReason.SESSION_TERMINATED,
                             },
                         )
+                        episodes_needing_cleanup.append(episode_id)
                     except Exception as e:
                         logger.warning(
                             "Failed to terminate episode during session shutdown",
@@ -883,7 +940,43 @@ class SessionManager:
                             },
                         )
 
-                # Clear remaining state
+                # Cleanup all episode Docker containers in parallel
+                if episodes_needing_cleanup:
+
+                    async def cleanup_episode_task(ep_id: str) -> None:
+                        try:
+                            await asyncio.to_thread(
+                                self.execution_manager.cleanup_episode,
+                                ep_id,
+                                {"episode_end_reason": EpisodeTerminationReason.SESSION_TERMINATED},
+                            )
+                            logger.info(
+                                "Episode Docker cleanup completed during session shutdown",
+                                extra={
+                                    "event": "session_episode_cleanup_completed",
+                                    "session_id": session_id,
+                                    "episode_id": ep_id,
+                                },
+                            )
+                        except Exception as cleanup_error:
+                            logger.warning(
+                                "Failed to cleanup episode Docker during session shutdown",
+                                extra={
+                                    "event": "session_episode_cleanup_failed",
+                                    "session_id": session_id,
+                                    "episode_id": ep_id,
+                                    "error": str(cleanup_error),
+                                    "error_type": type(cleanup_error).__name__,
+                                },
+                            )
+
+                    # Run all cleanup tasks in parallel
+                    await asyncio.gather(
+                        *[cleanup_episode_task(ep_id) for ep_id in episodes_needing_cleanup], return_exceptions=True
+                    )
+
+                # Clear remaining state from both lists
+                session.creating_episode_ids.clear()
                 session.active_episode_ids.clear()
                 session.task_queue.clear()
             except Exception as e:
@@ -1080,6 +1173,19 @@ class SessionManager:
 
         # Acquire GLOBAL lock to serialize episode creation (Docker compose only)
         async with self._episode_creation_lock:
+            # Check again INSIDE the lock - session might have been terminated while waiting
+            if not session.is_active:
+                logger.warning(
+                    "Cannot create episode - session terminated while waiting for lock",
+                    extra={
+                        "event": "episode_creation_rejected_session_terminated_during_wait",
+                        "session_id": session_id,
+                        "task_id": task_id,
+                    },
+                )
+                raise HTTPException(
+                    status_code=409, detail=f"Cannot create episode: session {session_id} is terminating"
+                )
             logger.info(
                 "🔒 Episode creation lock acquired (global serialization active)",
                 extra={
@@ -1109,14 +1215,18 @@ class SessionManager:
             # Add episode to episode manager tracking immediately
             self.episode_manager.add_episode_to_session(session_id, episode)
 
+            # Add to creating_episode_ids IMMEDIATELY (while holding lock) to ensure it's tracked for cleanup
+            session.add_creating_episode(episode.episode_id)
+
             logger.info(
-                "Episode created in CREATING state",
+                "Episode created in CREATING state and added to creating_episode_ids",
                 extra={
                     "event": "episode_created",
                     "session_id": session_id,
                     "episode_id": episode.episode_id,
                     "task_id": task_id,
                     "state": "creating",
+                    "creating_episode_ids_count": len(session.creating_episode_ids),
                 },
             )
 
@@ -1150,6 +1260,8 @@ class SessionManager:
                 except ValueError as e:
                     dependency_error = ValueError(f"Dependency validation failed: {e}")
                     self.episode_manager.remove_episode_on_error(episode.episode_id, dependency_error)
+                    # Remove from creating list on dependency error
+                    session.remove_creating_episode(episode.episode_id)
                     raise ValueError(f"Cannot create episode for task {task_id}: {e}")
 
                 if available_episode_id:
@@ -1170,6 +1282,8 @@ class SessionManager:
                         f"(waited {dependency_config['wait_seconds']}s)"
                     )
                     self.episode_manager.remove_episode_on_error(episode.episode_id, dependency_error)
+                    # Remove from creating list on dependency error
+                    session.remove_creating_episode(episode.episode_id)
                     raise ValueError(
                         f"Cannot create episode for task {task_id}: no available episodes with required dependency "
                         f"task_id {task.depends_on_task_id} after waiting {dependency_config['wait_seconds']}s"
@@ -1197,14 +1311,21 @@ class SessionManager:
                 )
                 self.episode_manager.mark_episode_failed_creation(episode.episode_id, str(e))
                 self.episode_manager.remove_episode_on_error(episode.episode_id, e)
+                # Remove from creating list on error
+                session.remove_creating_episode(episode.episode_id)
                 raise HTTPException(status_code=500, detail=f"Failed to start Docker environment: {e}")
 
+            # Move from creating to active BEFORE releasing lock (Docker startup complete)
+            session.move_to_active_episode(episode.episode_id)
+
             logger.info(
-                "🔓 Episode creation lock released (Docker started, health pending)",
+                "🔓 Episode creation lock released (Docker started, moved to active)",
                 extra={
                     "event": "episode_creation_lock_released",
                     "episode_id": episode.episode_id,
                     "task_id": task_id,
+                    "active_episode_ids_count": len(session.active_episode_ids),
+                    "creating_episode_ids_count": len(session.creating_episode_ids),
                 },
             )
 
@@ -1217,9 +1338,6 @@ class SessionManager:
             attach_to_episode_id=effective_attach_to_episode_id,
         )
         self._schedule_episode_finalization(episode.episode_id, finalization_coro)
-
-        # Add to session immediately
-        session.add_active_episode(episode.episode_id)
 
         logger.info(
             "Episode initiated (background finalization in progress)",
@@ -1336,7 +1454,7 @@ class SessionManager:
             # Run in thread pool since this is blocking I/O
             try:
                 await asyncio.to_thread(
-                    self.execution_manager.configure_for_task,
+                    self.execution_manager.configure_for_task_async,
                     episode.episode_id,
                     task,
                     session_id=session_id,

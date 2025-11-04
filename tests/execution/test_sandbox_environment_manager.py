@@ -119,20 +119,21 @@ networks:
         mock_orchestrator_class.return_value = mock_orchestrator
 
         # Test
-        result = manager.create_episode_environment("test-episode-123", "test_sandbox")
+        orchestrator, compose_path = manager.create_episode_environment_async("test-episode-123", "test_sandbox")
 
         # Verify
-        assert result is True
+        assert orchestrator is not None
+        assert compose_path is not None
         assert "test-episode-123" in manager.active_orchestrators
         assert "test-episode-123" in manager.episode_compose_files
-        mock_orchestrator.start_environment.assert_called_once()
+        mock_orchestrator.start_environment_async.assert_called_once()
 
     def test_create_episode_environment_not_ready(self, manager):
         """Test episode creation fails when manager not ready."""
         manager._is_ready = False
 
         with pytest.raises(SandboxExecutionError) as excinfo:
-            manager.create_episode_environment("test-episode", "test_sandbox")
+            manager.create_episode_environment_async("test-episode", "test_sandbox")
 
         assert "not ready yet" in str(excinfo.value)
 
@@ -140,18 +141,18 @@ networks:
     def test_create_episode_environment_already_exists(self, mock_orchestrator_class, manager):
         """Test episode creation fails when episode already exists."""
         # Create first environment
-        manager.create_episode_environment("test-episode", "test_sandbox")
+        manager.create_episode_environment_async("test-episode", "test_sandbox")
 
         # Try to create again
         with pytest.raises(SandboxExecutionError) as excinfo:
-            manager.create_episode_environment("test-episode", "test_sandbox")
+            manager.create_episode_environment_async("test-episode", "test_sandbox")
 
         assert "already exists" in str(excinfo.value)
 
     def test_create_episode_environment_missing_compose_file(self, manager):
         """Test episode creation fails when compose file doesn't exist."""
         with pytest.raises(SandboxExecutionError) as excinfo:
-            manager.create_episode_environment("test-episode", "nonexistent_sandbox")
+            manager.create_episode_environment_async("test-episode", "nonexistent_sandbox")
 
         assert "Compose file not found" in str(excinfo.value)
 
@@ -160,20 +161,20 @@ networks:
         """Test episode creation handles orchestrator failure."""
         # Setup mock to fail
         mock_orchestrator = Mock()
-        mock_orchestrator.start_environment.side_effect = RuntimeError("Docker error")
+        mock_orchestrator.start_environment_async.side_effect = RuntimeError("Docker error")
         mock_orchestrator_class.return_value = mock_orchestrator
 
         # Test
         with pytest.raises(SandboxExecutionError) as excinfo:
-            manager.create_episode_environment("test-episode", "test_sandbox")
+            manager.create_episode_environment_async("test-episode", "test_sandbox")
 
-        assert "Failed to create sandbox environment" in str(excinfo.value)
+        assert "Failed to create async sandbox environment" in str(excinfo.value)
 
     @patch('saber.server.execution.sandbox.sandbox_environment_manager.ComposeOrchestrator')
     def test_get_episode_environment_exists(self, mock_orchestrator_class, manager):
         """Test getting orchestrator for existing episode."""
         # Create environment
-        manager.create_episode_environment("test-episode", "test_sandbox")
+        manager.create_episode_environment_async("test-episode", "test_sandbox")
 
         # Get environment
         orchestrator = manager.get_episode_environment("test-episode")
@@ -192,7 +193,7 @@ networks:
         # Setup - create environment first
         mock_orchestrator = Mock()
         mock_orchestrator_class.return_value = mock_orchestrator
-        manager.create_episode_environment("test-episode", "test_sandbox")
+        manager.create_episode_environment_async("test-episode", "test_sandbox")
 
         # Test
         result = manager.stop_episode_environment("test-episode")
@@ -216,7 +217,7 @@ networks:
         mock_orchestrator = Mock()
         mock_orchestrator.stop_environment.side_effect = RuntimeError("Docker error")
         mock_orchestrator_class.return_value = mock_orchestrator
-        manager.create_episode_environment("test-episode", "test_sandbox")
+        manager.create_episode_environment_async("test-episode", "test_sandbox")
 
         # Test
         with pytest.raises(SandboxExecutionError) as excinfo:
@@ -232,8 +233,8 @@ networks:
         mock_orchestrator2 = Mock()
         mock_orchestrator_class.side_effect = [mock_orchestrator1, mock_orchestrator2]
 
-        manager.create_episode_environment("episode-1", "test_sandbox")
-        manager.create_episode_environment("episode-2", "test_sandbox")
+        manager.create_episode_environment_async("episode-1", "test_sandbox")
+        manager.create_episode_environment_async("episode-2", "test_sandbox")
 
         # Test
         manager.cleanup_all_episodes()
@@ -251,8 +252,8 @@ networks:
         mock_orchestrator1.stop_environment.side_effect = RuntimeError("Docker error")
         mock_orchestrator_class.side_effect = [mock_orchestrator1, mock_orchestrator2]
 
-        manager.create_episode_environment("episode-1", "test_sandbox")
-        manager.create_episode_environment("episode-2", "test_sandbox")
+        manager.create_episode_environment_async("episode-1", "test_sandbox")
+        manager.create_episode_environment_async("episode-2", "test_sandbox")
 
         # Test - should not raise exception even with failures
         manager.cleanup_all_episodes()
@@ -270,7 +271,7 @@ networks:
         assert manager.is_episode_active("test-episode") is False
 
         # Create episode
-        manager.create_episode_environment("test-episode", "test_sandbox")
+        manager.create_episode_environment_async("test-episode", "test_sandbox")
 
         # Now should be active
         assert manager.is_episode_active("test-episode") is True
@@ -282,8 +283,8 @@ networks:
         assert manager.get_active_episodes() == []
 
         # Create episodes
-        manager.create_episode_environment("episode-1", "test_sandbox")
-        manager.create_episode_environment("episode-2", "test_sandbox")
+        manager.create_episode_environment_async("episode-1", "test_sandbox")
+        manager.create_episode_environment_async("episode-2", "test_sandbox")
 
         # Should return both episodes
         active_episodes = manager.get_active_episodes()
@@ -299,7 +300,7 @@ networks:
         assert status is None
 
         # Create episode
-        manager.create_episode_environment("test-episode", "test_sandbox")
+        manager.create_episode_environment_async("test-episode", "test_sandbox")
 
         # Get status
         status = manager.get_episode_status("test-episode")
@@ -319,9 +320,9 @@ networks:
         mock_orchestrator_class.side_effect = [mock_orchestrator1, mock_orchestrator2, mock_orchestrator3]
 
         # Create multiple episodes
-        manager.create_episode_environment("episode-a", "test_sandbox")
-        manager.create_episode_environment("episode-b", "test_sandbox")
-        manager.create_episode_environment("episode-c", "test_sandbox")
+        manager.create_episode_environment_async("episode-a", "test_sandbox")
+        manager.create_episode_environment_async("episode-b", "test_sandbox")
+        manager.create_episode_environment_async("episode-c", "test_sandbox")
 
         # Verify each episode has its own orchestrator
         assert len(manager.active_orchestrators) == 3
@@ -330,9 +331,9 @@ networks:
         assert manager.get_episode_environment("episode-c") is mock_orchestrator3
 
         # Verify each orchestrator was called with episode-specific parameters
-        mock_orchestrator1.start_environment.assert_called_once()
-        mock_orchestrator2.start_environment.assert_called_once()
-        mock_orchestrator3.start_environment.assert_called_once()
+        mock_orchestrator1.start_environment_async.assert_called_once()
+        mock_orchestrator2.start_environment_async.assert_called_once()
+        mock_orchestrator3.start_environment_async.assert_called_once()
 
     def test_get_compose_file_path_valid(self, manager):
         """Test getting compose file path for valid environment."""

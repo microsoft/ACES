@@ -25,6 +25,7 @@ from inspect_ai.util import store
 from jinja2 import BaseLoader, Environment, TemplateError
 
 from ...logging_config import LogCategory, get_saber_logger
+from ...models.core import EvalSubmission
 from ...models.evaluation_utils import parse_step_evaluations
 from ...models.rest.evaluation import (
     EpisodeStepsResponse,
@@ -548,6 +549,10 @@ def saber_scorer() -> Scorer:
 
             await session_manager.submit_evaluation_result(session_id, episode_id, evaluation_result)
 
+            eval_complete_msg = (
+                f"Client-side evaluation completed: score={total_score:.2f} "
+                f"(submission={submission_score:.2f}, weighted_steps={weighted_step_score:.2f})"
+            )
             logger.info(
                 "Client-side evaluation completed",
                 extra={
@@ -562,9 +567,55 @@ def saber_scorer() -> Scorer:
                 },
             )
 
-            # Step 8: Return score for inspect_ai
-            max_sub_score = submission_criteria.scoring.get("max_score", 1.0)
+            # Extract task_id early - needed for episode cleanup
             task_id = submission_criteria.task_id
+
+            # Step 8: Store submission for sandbox cleanup to use when ending episode
+            # The sandbox's sample_cleanup will end the episode (unified cleanup path)
+            # We just need to make the submission available for it
+            try:
+                # Create EvalSubmission from the submission_data we fetched earlier
+                eval_submission = EvalSubmission(
+                    episode_id=episode_id,
+                    task_id=task_id,
+                    model=submission_data.model or "unknown",
+                    choices=[],  # Not available in submission_data
+                    submission=submission_data.submission,
+                    tokens=submission_data.tokens,
+                    time=submission_data.execution_time or 0.0,
+                )
+
+                # Store submission in inspect_ai store for sandbox cleanup to use
+                # The sandbox will retrieve this and pass it to end_episode
+                store().set("saber_episode_submission", eval_submission)
+
+                logger.debug(
+                    "Submission stored for sandbox cleanup to end episode",
+                    extra={
+                        "session_id": session_id,
+                        "episode_id": episode_id,
+                        "event": "scorer_submission_stored",
+                        "note": "Sandbox sample_cleanup will end episode with this submission",
+                    },
+                )
+            except Exception as store_error:
+                # Log but don't fail scoring if we can't store the submission
+                # The sandbox will still end the episode, just without the submission
+                logger.warning(
+                    "Failed to store submission for sandbox cleanup",
+                    extra={
+                        "session_id": session_id,
+                        "episode_id": episode_id,
+                        "error_type": type(store_error).__name__,
+                        "error_details": str(store_error),
+                        "event": "scorer_submission_store_failed",
+                        "note": "Episode will be ended without submission",
+                    },
+                    exc_info=True,
+                )
+
+            # Step 9: Return score for inspect_ai
+            max_sub_score = submission_criteria.scoring.get("max_score", 1.0)
 
             # Ensure task_id is in state.metadata so it appears in sample_metadata
             if state.metadata is None:
@@ -613,6 +664,7 @@ def saber_scorer() -> Scorer:
             )
 
         except Exception as exc:
+            error_msg = f"Client-side evaluation failed: {type(exc).__name__}: {exc}"
             logger.error(
                 "Client-side evaluation failed",
                 extra={

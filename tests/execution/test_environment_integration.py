@@ -155,8 +155,9 @@ networks:
                 assert manager.wait_for_ready(timeout=1) is True
 
                 # Create episode environment
-                result = manager.create_episode_environment(episode_id, "excytin_sandbox")
-                assert result is True
+                orchestrator, compose_path = manager.create_episode_environment_async(episode_id, "excytin_sandbox")
+                assert orchestrator is not None
+                assert compose_path is not None
                 assert manager.is_episode_active(episode_id) is True
                 assert episode_id in manager.get_active_episodes()
 
@@ -256,8 +257,9 @@ networks:
             try:
                 # Create multiple episodes
                 for episode_id in episode_ids:
-                    result = manager.create_episode_environment(episode_id, "excytin_sandbox")
-                    assert result is True
+                    orchestrator, compose_path = manager.create_episode_environment_async(episode_id, "excytin_sandbox")
+                    assert orchestrator is not None
+                    assert compose_path is not None
                     assert manager.is_episode_active(episode_id) is True
 
                 # Verify all episodes are active
@@ -318,8 +320,9 @@ invalid yaml content
 
             # Try to create an episode with valid environment
             try:
-                result = manager.create_episode_environment("valid-episode", "valid_env")
-                assert result is True
+                orchestrator, compose_path = manager.create_episode_environment_async("valid-episode", "valid_env")
+                assert orchestrator is not None
+                assert compose_path is not None
                 manager.stop_episode_environment("valid-episode")
             except Exception as e:
                 # May fail due to Docker not being available, but file validation should pass
@@ -327,7 +330,7 @@ invalid yaml content
 
             # Invalid environment should fail when trying to create episode
             with pytest.raises(SandboxExecutionError) as excinfo:
-                manager.create_episode_environment("invalid-episode", "invalid_env")
+                manager.create_episode_environment_async("invalid-episode", "invalid_env")
 
         finally:
             # Restore original working directory
@@ -357,8 +360,9 @@ invalid yaml content
             try:
                 # Create an episode
                 episode_id = "recovery-test-episode"
-                result = manager.create_episode_environment(episode_id, "excytin_sandbox")
-                assert result is True
+                orchestrator, compose_path = manager.create_episode_environment_async(episode_id, "excytin_sandbox")
+                assert orchestrator is not None
+                assert compose_path is not None
 
                 # Simulate partial failure by stopping the orchestrator directly
                 orchestrator = manager.get_episode_environment(episode_id)
@@ -467,7 +471,7 @@ services:
 
             # Creating manager should succeed, but trying to create episode should fail
             with pytest.raises(SandboxExecutionError) as excinfo:
-                manager.create_episode_environment("test-episode", "nonexistent_env")
+                manager.create_episode_environment_async("test-episode", "nonexistent_env")
 
             assert "Compose file not found" in str(excinfo.value)
         finally:
@@ -498,7 +502,7 @@ services:
 
             # But creating an environment should fail due to invalid syntax
             with pytest.raises(SandboxExecutionError):
-                manager.create_episode_environment("syntax-test-episode", "test_env")
+                manager.create_episode_environment_async("syntax-test-episode", "test_env")
 
         finally:
             # Restore original working directory
@@ -542,7 +546,7 @@ services:
 
             # Creating environment with empty compose should fail
             with pytest.raises(SandboxExecutionError):
-                manager.create_episode_environment("empty-test-episode", "test_env")
+                manager.create_episode_environment_async("empty-test-episode", "test_env")
 
         finally:
             # Restore original working directory
@@ -564,7 +568,7 @@ services:
 
             # Trying to create episode without environments directory should fail
             with pytest.raises(SandboxExecutionError) as excinfo:
-                manager.create_episode_environment("test-episode", "some_env")
+                manager.create_episode_environment_async("test-episode", "some_env")
 
             assert "Sandbox environments directory not found" in str(excinfo.value)
         finally:

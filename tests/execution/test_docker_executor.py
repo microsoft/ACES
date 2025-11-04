@@ -86,8 +86,8 @@ class TestDockerExecutor:
 
         assert result == mock_docker_environment
         docker_executor._sandbox_manager.get_episode_environment.assert_called_once_with(episode_id)
-        # Verify create_session_environment was NOT called since environment exists
-        docker_executor._sandbox_manager.create_episode_environment.assert_not_called()
+        # Verify create_episode_environment_async was NOT called since environment exists
+        docker_executor._sandbox_manager.create_episode_environment_async.assert_not_called()
 
     def test_get_episode_environment_not_found(self, docker_executor):
         """Test behavior when episode environment doesn't exist."""

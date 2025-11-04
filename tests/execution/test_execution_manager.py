@@ -120,10 +120,10 @@ class TestExecutionManager:
         registry._sandbox_environment_manager = mock_sandbox_manager
 
         # The registry fixture already mocks SandboxEnvironmentManager, just need to access it
-        registry.configure_for_task("episode123", mock_task, session_id="session123")
+        registry.configure_for_task_async("episode123", mock_task, session_id="session123")
 
         # Should have called environment creation on the mocked sandbox manager with environment string
-        mock_sandbox_manager.create_episode_environment.assert_called_once_with(
+        mock_sandbox_manager.create_episode_environment_async.assert_called_once_with(
             "episode123", "test_env", None
         )
 
@@ -401,7 +401,7 @@ class TestExecutionManager:
         mock_task.python_config = None
 
         # Configure ExecutionManager with the task
-        registry.configure_for_task("episode123", mock_task, session_id="timeout_test_session")
+        registry.configure_for_task_async("episode123", mock_task, session_id="timeout_test_session")
 
         # Verify timeout was set in configuration
         assert registry._configuration["timeout"] == 150
@@ -433,7 +433,7 @@ class TestExecutionManager:
         mock_task.python_config = None
 
         # Configure ExecutionManager with the task
-        registry.configure_for_task("default_timeout_session", mock_task)
+        registry.configure_for_task_async("default_timeout_session", mock_task)
 
         # Verify no global timeout is set
         assert "timeout" not in registry._configuration
@@ -593,9 +593,9 @@ class TestExecutionManagerDebugMode:
         mock_task.python_config = None
 
         episode_id = "test-episode-123"
-        execution_manager.configure_for_task(episode_id, mock_task, session_id="session123")
+        execution_manager.configure_for_task_async(episode_id, mock_task, session_id="session123")
 
-        # Verify episode_id was passed to create_episode_environment
-        mock_sandbox_instance.create_episode_environment.assert_called_once_with(
+        # Verify episode_id was passed to create_episode_environment_async
+        mock_sandbox_instance.create_episode_environment_async.assert_called_once_with(
             episode_id, "test_env", None
         )
