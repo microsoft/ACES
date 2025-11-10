@@ -117,6 +117,7 @@ def create_domain_task(
         rebuild: Optional[str] = None,
         rebuild_all: bool = False,
         stop_saber_after: bool = False,
+        max_concurrent_episodes: int = 8,
         **kwargs: Any,
     ) -> Task:
         """Task callable invoked by Inspect AI with CLI parameters.
@@ -132,6 +133,7 @@ def create_domain_task(
             rebuild_all: Remove and rebuild all images (default: False)
             stop_saber_after: Stop SABER domain after task completes (default: False).
                 If False, server stays running for faster re-runs.
+            max_concurrent_episodes: Max concurrent episodes (default: 8, 0 = unlimited)
             **kwargs: Additional parameters passed through
 
         Returns:
@@ -174,6 +176,7 @@ def create_domain_task(
                 rebuild_param,
                 compose_template_path,
                 stop_saber_after,
+                max_concurrent_episodes,
                 **kwargs,
             )
         except Exception as e:
@@ -287,6 +290,7 @@ async def _start_and_load_tasks(
     rebuild: Optional[str],
     compose_template_path: Optional[Path],
     stop_saber_after: bool,
+    max_concurrent_episodes: int,
     **kwargs: Any,
 ) -> Task:
     """Start SABER domain and load tasks as dataset.
@@ -316,6 +320,7 @@ async def _start_and_load_tasks(
         rebuild: Optional rebuild filter
         compose_template_path: Optional compose template
         stop_saber_after: Stop domain after evaluation
+        max_concurrent_episodes: Max concurrent episodes
         **kwargs: Additional parameters
 
     Returns:
@@ -509,6 +514,7 @@ async def _start_and_load_tasks(
                     "mcp_port": mcp_port,
                     "compose_template_path": compose_template_path,
                     "cleanup": stop_saber_after,  # Pass cleanup flag to sandbox
+                    "max_concurrent_episodes": max_concurrent_episodes,  # Limit concurrent episode execution
                 },
             ),
             solver=saber_solver,
@@ -516,7 +522,6 @@ async def _start_and_load_tasks(
             # SABER defaults for evaluation behavior
             # These can be overridden via inspect eval CLI flags
             fail_on_error=False,  # Continue evaluation even if samples fail (use --fail-on-error to override)
-            max_samples=8,  # Realistic number of concurrent episodes to run
             epochs=1,  # Run each sample once by default (use --epochs N to override)
         )
 

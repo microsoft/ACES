@@ -199,19 +199,23 @@ def _create_task_input(task_info: TaskInfo) -> str:
     """
     Create inspect_ai input string from SABER TaskInfo object.
 
-    Returns the full rendered instruction prompt that will be shown to the user
-    and passed to the agent. This is the same content that gets used in
-    AgentPrompt.instructions during agent execution.
+    Returns a concise task summary for the initial user message.
+    The full instruction prompt is passed to the agent via metadata
+    and becomes part of the system message through AgentPrompt.instructions.
+
+    This prevents duplication - the instruction prompt should NOT appear
+    as both a user message AND a system message.
 
     Args:
         task_info: SABER TaskInfo object
 
     Returns:
-        Full rendered instruction prompt for the task
+        Concise task summary (title + description)
     """
-    # Return the full rendered instruction prompt from the server
-    # This includes all Jinja2-rendered content (objectives, files, subtasks, etc.)
-    return task_info.instruction_prompt
+    # Return a simple task summary for the user message
+    # The full instruction_prompt is already in metadata and will be used
+    # in AgentPrompt.instructions (system message), so we don't duplicate it here
+    return f"Title: {task_info.title}\nTask: {task_info.description}"
 
 
 def _create_task_target(task_info: TaskInfo) -> str:

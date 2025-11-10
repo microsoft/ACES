@@ -85,6 +85,11 @@ class SABERSandboxEnvironment:
     _registry: Dict[str, Dict[str, Any]] = {}
     _lock = threading.Lock()
 
+    # Class-level semaphore for episode concurrency control
+    # Limits how many episodes can be created/run simultaneously across all domains
+    _episode_semaphore: Optional[asyncio.Semaphore] = None
+    _max_concurrent_episodes: int = 8  # Default: 8 concurrent episodes
+
     def __init__(
         self,
         domain_slug: str,
@@ -95,6 +100,7 @@ class SABERSandboxEnvironment:
         mcp_timeout: float = 300.0,
         rest_base_url: Optional[str] = None,
         mcp_url: Optional[str] = None,
+        max_concurrent_episodes: Optional[int] = None,
     ):
         """Initialize SABER sandbox instance.
 
@@ -107,6 +113,7 @@ class SABERSandboxEnvironment:
             mcp_timeout: Timeout for MCP operations (default: 300s)
             rest_base_url: Override REST base URL (default: http://localhost:{rest_port})
             mcp_url: Override MCP URL (default: http://localhost:{mcp_port})
+            max_concurrent_episodes: Max concurrent episodes (default: 8, None = unlimited)
         """
         self._domain_slug = domain_slug
         self._domains_root = Path(domains_root)
@@ -114,6 +121,10 @@ class SABERSandboxEnvironment:
         self._mcp_port = mcp_port
         self._compose_template_path = compose_template_path
         self._mcp_timeout = mcp_timeout
+
+        # Set max concurrent episodes (instance can override class default)
+        if max_concurrent_episodes is not None:
+            type(self)._max_concurrent_episodes = max_concurrent_episodes
 
         # Construct URLs
         self._rest_base_url = rest_base_url or f"http://localhost:{rest_port}"
@@ -206,6 +217,25 @@ class SABERSandboxEnvironment:
             )
             del cls._registry[domain_slug]
             return True
+
+    @classmethod
+    def _get_episode_semaphore(cls) -> Optional[asyncio.Semaphore]:
+        """Get or create the class-level episode concurrency semaphore.
+
+        Returns:
+            Semaphore limiting concurrent episodes, or None if unlimited
+        """
+        if cls._max_concurrent_episodes is None or cls._max_concurrent_episodes <= 0:
+            return None
+
+        if cls._episode_semaphore is None:
+            cls._episode_semaphore = asyncio.Semaphore(cls._max_concurrent_episodes)
+            logger.info(
+                f"Created episode concurrency semaphore (limit: {cls._max_concurrent_episodes})",
+                extra={"max_concurrent_episodes": cls._max_concurrent_episodes},
+            )
+
+        return cls._episode_semaphore
 
     @classmethod
     async def task_init_environment(
@@ -512,6 +542,23 @@ class SABERSandboxEnvironment:
             self._session_manager._current_session_id = self._session_id
 
         try:
+            # Acquire semaphore to limit concurrent episode creation
+            # This controls how many episodes can run simultaneously
+            semaphore = self._get_episode_semaphore()
+            if semaphore is not None:
+                logger.debug(
+                    f"Acquiring episode semaphore for task {self._task_id}",
+                    extra={
+                        "task_id": self._task_id,
+                        "max_concurrent": self._max_concurrent_episodes,
+                    },
+                )
+                await semaphore.acquire()
+                logger.debug(
+                    f"Episode semaphore acquired for task {self._task_id}",
+                    extra={"task_id": self._task_id},
+                )
+
             # Create episode via REST API (using shared session manager)
             self._episode_id = await self._create_episode(self._session_id, self._task_id)
             logger.debug(
@@ -716,6 +763,15 @@ class SABERSandboxEnvironment:
                     exc_info=True,
                 )
             finally:
+                # Release episode semaphore to allow next sample to run
+                semaphore = self._get_episode_semaphore()
+                if semaphore is not None:
+                    semaphore.release()
+                    logger.debug(
+                        f"Released episode semaphore for task {self._task_id}",
+                        extra={"task_id": self._task_id},
+                    )
+
                 self._reset_state()
 
     @classmethod
