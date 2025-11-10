@@ -17,10 +17,10 @@ from inspect_ai.dataset import Sample
 
 from saber.models import BenchmarkInfo, TaskInfo
 
-# Add workspace root to sys.path for domain imports
-_WORKSPACE_ROOT = Path(__file__).parent.parent.parent.parent.parent
-if str(_WORKSPACE_ROOT) not in sys.path:
-    sys.path.insert(0, str(_WORKSPACE_ROOT))
+# Add saber root to sys.path for domain imports (external/saber)
+_SABER_ROOT = Path(__file__).parent.parent.parent
+if str(_SABER_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SABER_ROOT))
 
 
 @pytest.fixture
@@ -86,28 +86,15 @@ def clear_all_registries():
 class TestDomainTaskImport:
     """Test that domain task modules can be imported safely."""
 
-    def test_import_cybench_no_side_effects(self):
-        """Test importing domains/cybench doesn't start server."""
+    def test_import_excytin_demo_no_side_effects(self):
+        """Test importing domains/excytin_demo doesn't start server."""
         from saber.inspect_ai.tasks import _active_domains
 
         # Import should succeed
-        from domains.cybench import cybench
+        from domains.excytin_demo.excytin_demo import excytin_demo
 
         # Should be a callable
-        assert callable(cybench)
-
-        # Should not have started server
-        assert len(_active_domains) == 0
-
-    def test_import_excytin_no_side_effects(self):
-        """Test importing domains/excytin doesn't start server."""
-        from saber.inspect_ai.tasks import _active_domains
-
-        # Import should succeed
-        from domains.excytin import excytin
-
-        # Should be a callable
-        assert callable(excytin)
+        assert callable(excytin_demo)
 
         # Should not have started server
         assert len(_active_domains) == 0
@@ -329,14 +316,12 @@ class TestInspectListTasks:
         # This is a manual verification test - document expected behavior
         # In real usage:
         # $ uv run inspect list tasks | grep domains/
-        # Should show: domains/cybench, domains/excytin
+        # Should show: domains/excytin_demo
 
         # We can verify the tasks are importable
-        from domains.cybench import cybench
-        from domains.excytin import excytin
+        from domains.excytin_demo.excytin_demo import excytin_demo
 
-        assert callable(cybench)
-        assert callable(excytin)
+        assert callable(excytin_demo)
 
         # And that importing didn't start servers
         from saber.inspect_ai.tasks import _active_domains

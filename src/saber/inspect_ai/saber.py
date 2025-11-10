@@ -130,6 +130,9 @@ class SABERSandboxEnvironment:
         # Domain context (set during task_init)
         self._context: Optional[DomainContext] = None
 
+        # Session manager for API interactions (created lazily when needed)
+        self._session_manager: Optional[ClientSessionManager] = None
+
     @classmethod
     def default_concurrency(cls) -> Optional[int]:
         """Default max_sandboxes for SABER provider.
@@ -495,9 +498,22 @@ class SABERSandboxEnvironment:
             mcp_url_base = entry["mcp_url"]
             self._session_id = entry["session_id"]  # Get shared session from registry
 
+        # Create session manager if not already created
+        if self._session_manager is None:
+            from saber.client.models import SessionManagerConfig
+
+            config = SessionManagerConfig(
+                base_url=rest_base_url,
+                mcp_server_url=mcp_url_base,
+                client_id="inspect_ai_sandbox",
+                rest_timeout=30.0,
+            )
+            self._session_manager = ClientSessionManager(config=config)
+            self._session_manager._current_session_id = self._session_id
+
         try:
-            # Create episode via REST API (using shared session)
-            self._episode_id = await self._create_episode(rest_base_url, self._session_id, self._task_id)
+            # Create episode via REST API (using shared session manager)
+            self._episode_id = await self._create_episode(self._session_id, self._task_id)
             logger.debug(
                 "Created SABER episode for sample",
                 extra={
@@ -514,22 +530,10 @@ class SABERSandboxEnvironment:
             metadata["saber_episode_id"] = self._episode_id
             metadata["saber_domain_slug"] = self._domain_slug
 
-            # Create session manager for scorer to use
-            # The scorer needs this to fetch evaluation data from the server
-            from saber.client.models import SessionManagerConfig
-
-            session_manager_config = SessionManagerConfig(
-                base_url=rest_base_url,
-                mcp_server_url=mcp_url_base,
-                client_id="inspect_ai_sandbox",
-                rest_timeout=30.0,
-            )
-            session_manager = ClientSessionManager(config=session_manager_config)
-            session_manager._current_session_id = self._session_id  # Set the session ID
-
             # Store session manager and context in inspect_ai store for scorer
+            # The scorer needs this to fetch evaluation data from the server
             task_store = store()
-            task_store.set("saber_session_manager", session_manager)
+            task_store.set("saber_session_manager", self._session_manager)
             task_store.set("saber_session_id", self._session_id)
             task_store.set("saber_task_id", self._task_id)
             # Store episode info that will be updated by agent/solver
@@ -648,7 +652,7 @@ class SABERSandboxEnvironment:
 
         except Exception as e:
             # Cleanup partial state (initialization failure counts as interrupted)
-            await self._cleanup_partial_state(rest_base_url, interrupted=True)
+            await self._cleanup_partial_state(interrupted=True)
             raise PrerequisiteError(
                 f"Failed to initialize SABER sandbox for sample (task_id={self._task_id}): {e}"
             ) from e
@@ -700,16 +704,8 @@ class SABERSandboxEnvironment:
 
         # Shield cleanup from cancellation - we need this to complete even during shutdown
         with anyio.CancelScope(shield=True):
-            rest_base_url = None
             try:
-                # Get REST URL from registry
-                with self._lock:
-                    entry = self._registry.get(self._domain_slug)
-                    if entry:
-                        rest_base_url = entry["rest_url"]
-
-                if rest_base_url:
-                    await self._cleanup_partial_state(rest_base_url, interrupted=interrupted)
+                await self._cleanup_partial_state(interrupted=interrupted)
             except Exception as e:
                 logger.warning(
                     f"Error during sample cleanup: {e}",
@@ -954,64 +950,42 @@ class SABERSandboxEnvironment:
                     text = await response.text()
                     raise Exception(f"Failed to terminate SABER session: {response.status} - {text}")
 
-    async def _create_episode(self, rest_base_url: str, session_id: str, task_id: str) -> str:
-        """Create SABER episode via REST API and wait for it to be ready."""
-        import aiohttp
+    async def _create_episode(self, session_id: str, task_id: str) -> str:
+        """Create SABER episode via REST API and wait for it to be ready.
 
-        # Create episode
-        url = f"{rest_base_url}/api/v1/session/{session_id}/episodes"
-        params = {"task_id": task_id}
+        Episode creation is asynchronous - the POST returns immediately with an episode ID,
+        but Docker container setup can take several minutes. We use the ClientSessionManager's
+        create_episode_and_wait method which has proper timeout and polling logic.
+        """
+        if self._session_manager is None:
+            raise SandboxError("Session manager not initialized")
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, params=params, timeout=aiohttp.ClientTimeout(total=30)) as response:
-                if response.status != 200:
-                    text = await response.text()
-                    raise PrerequisiteError(f"Failed to create SABER episode: {response.status} - {text}")
-                data = await response.json()
-                episode_id = data["episode_id"]
+        # This uses the same logic as the old saber-domain flow:
+        # - 300s timeout (5 minutes) for Docker setup
+        # - 10s polling interval to avoid hammering server
+        # - Proper error handling for failed_creation state
+        try:
+            response = await self._session_manager.create_episode_and_wait(
+                session_id=session_id,
+                task_id=task_id,
+                timeout_seconds=300,
+            )
+            episode_id: str = response.episode_id
+            return episode_id
+        except Exception as e:
+            raise PrerequisiteError(f"Failed to create episode for task {task_id}: {e}") from e
 
-        # Wait for episode to be ready (poll status endpoint)
-        max_wait = 30  # seconds
-        poll_interval = 0.5  # seconds
-        elapsed = 0.0
-
-        logger.debug(f"Waiting for episode {episode_id} to become ready...")
-
-        async with aiohttp.ClientSession() as session:
-            while elapsed < max_wait:
-                status_url = f"{rest_base_url}/api/v1/session/{session_id}/episodes/{episode_id}/status"
-                try:
-                    async with session.get(status_url, timeout=aiohttp.ClientTimeout(total=5)) as response:
-                        if response.status == 200:
-                            status_data = await response.json()
-                            state = status_data.get("state", "unknown")
-
-                            if state in ("ready", "active"):
-                                logger.debug(f"Episode {episode_id} is {state}")
-                                return str(episode_id)
-                            elif state == "error":
-                                raise PrerequisiteError(f"Episode {episode_id} entered error state")
-                            # Otherwise keep polling (pending, initializing, etc.)
-                except Exception as e:
-                    logger.debug(f"Status check failed (will retry): {e}")
-
-                await asyncio.sleep(poll_interval)
-                elapsed += poll_interval
-
-        raise PrerequisiteError(f"Episode {episode_id} did not become ready within {max_wait}s")
-
-    async def _cleanup_partial_state(self, rest_base_url: str, interrupted: bool = False) -> None:
+    async def _cleanup_partial_state(self, interrupted: bool = False) -> None:
         """Best-effort cleanup of episode.
 
         Unified episode ending for all paths - this is the single place where episodes end.
         Note: Session is NOT terminated here - it's shared across all samples and cleaned up in task_cleanup.
 
         Args:
-            rest_base_url: Base URL for REST API
             interrupted: Whether this is an interrupted (non-happy path) cleanup
         """
         # End episode if it exists (both happy and interrupted paths)
-        if self._episode_id:
+        if self._episode_id and self._session_manager:
             try:
                 # Determine reason based on interrupted flag
                 reason = "interrupted" if interrupted else "completed"
@@ -1034,7 +1008,10 @@ class SABERSandboxEnvironment:
 
                     import requests
 
-                    url = f"{rest_base_url}/api/v1/session/{self._session_id}/episodes/{self._episode_id}"
+                    base_url = self._session_manager.base_url
+                    session_id = self._session_id
+                    episode_id = self._episode_id
+                    url = f"{base_url}/api/v1/session/{session_id}/episodes/{episode_id}"
                     params = {
                         "reason": reason,
                         "cascade_end_attached_episodes": "false",
@@ -1089,18 +1066,7 @@ class SABERSandboxEnvironment:
                         },
                     )
                 else:
-                    # Happy path - use async client
-                    from saber.client.client_session import ClientSessionManager
-                    from saber.client.models import SessionManagerConfig
-
-                    config = SessionManagerConfig(
-                        base_url=rest_base_url,
-                        mcp_server_url="",  # Not needed for episode ending
-                        client_id="inspect_ai_sandbox_cleanup",
-                        rest_timeout=10.0,
-                    )
-                    session_manager = ClientSessionManager(config=config)
-
+                    # Happy path - use async session manager
                     # Get submission from store if available (happy path after scorer)
                     submission = None
                     try:
@@ -1114,7 +1080,7 @@ class SABERSandboxEnvironment:
                         pass
 
                     # End episode with submission
-                    await session_manager.end_episode(
+                    await self._session_manager.end_episode(
                         session_id=self._session_id,
                         episode_id=self._episode_id,
                         reason=reason,

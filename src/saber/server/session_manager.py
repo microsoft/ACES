@@ -1955,22 +1955,20 @@ class SessionManager:
 
         task = self.benchmark_manager.get_task(episode.task_id)
 
-        # Handle submission based on reason - only require submission for successful completion
-        if reason in ["completed", "agent_completed", "success"] and submission is None:
-            raise HTTPException(
-                status_code=400, detail="Successful episode completion requires a submission for evaluation"
-            )
-
-        # Extract submission text and store EvalSubmission object if provided
+        # Handle submission - it's now optional even for successful completion
+        # Some workflows may end episodes without explicit submissions
         if submission is not None:
             # Store the EvalSubmission object for rich evaluation data
             episode.eval_submission = submission
             # Extract the submission text for the episode.submission field
             episode.submission = submission.submission
         else:
-            # No submission provided (error case)
+            # No submission provided - set default based on reason
             episode.eval_submission = None
-            episode.submission = "Episode failed - no submission"
+            if reason in ["completed", "agent_completed", "success"]:
+                episode.submission = "Episode completed without explicit submission"
+            else:
+                episode.submission = f"Episode ended: {reason}"
 
         # Move episode from active to history IMMEDIATELY to prevent session termination override
         session.complete_episode(episode_id)
