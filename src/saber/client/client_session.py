@@ -720,6 +720,22 @@ class ClientSessionManager:
                         raise RuntimeError(
                             f"Failed to end episode {episode_id}: " f"HTTP {response.status} - {error_text}"
                         )
+        except asyncio.TimeoutError:
+            # Timeout during episode end - the server likely received and processed the request
+            # but the response didn't arrive in time. This is usually not a critical error.
+            logger.warning(
+                "Timeout waiting for episode end response (episode likely ended successfully on server)",
+                extra={
+                    "event": "episode_end_timeout",
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                    "timeout": self.timeout,
+                    "reason": reason,
+                    "url": url,
+                    "note": "Server likely processed the request successfully despite timeout",
+                },
+            )
+            # Don't re-raise - treat as non-fatal since episode likely ended on server
         except aiohttp.ClientError as exc:
             logger.error(
                 "Episode end request error",
@@ -736,13 +752,20 @@ class ClientSessionManager:
             raise
         except Exception as exc:
             logger.error(
-                "Unexpected error during episode end",
+                f"Unexpected error during episode end: {type(exc).__name__}: {exc}",
                 extra={
                     "event": "episode_end_unexpected_error",
                     "session_id": session_id,
                     "episode_id": episode_id,
                     "error": str(exc),
+                    "error_type": type(exc).__name__,
+                    "error_module": type(exc).__module__,
+                    "url": url,
+                    "reason": reason,
+                    "has_result": result is not None,
+                    "cascade_end_attached_episodes": cascade_end_attached_episodes,
                 },
+                exc_info=True,  # This will include the full traceback in the logs
             )
             raise
 
