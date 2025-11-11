@@ -6,7 +6,8 @@ MCP tools are now handled natively by inspect_ai via mcp_server_http().
 """
 
 import asyncio
-from typing import Any, Awaitable, Callable, List, Optional
+import random
+from typing import Any, Awaitable, Callable, List, Optional, Tuple
 
 import aiohttp
 
@@ -30,6 +31,7 @@ from ..models.rest.evaluation import (
     StepEvaluationCriteriaResponse,
     SubmissionEvaluationCriteriaResponse,
 )
+from ..server import EpisodeState
 from .models import SessionManagerConfig
 
 logger = get_session_manager_logger(__name__)
@@ -143,9 +145,10 @@ class ClientSessionManager:
                     )
 
         # All retries exhausted
+        error_msg = str(last_exception) if last_exception else "Unknown error"
         raise Exception(
             f"{operation_name} failed after {max_retries} attempts. "
-            f"Last error: {type(last_exception).__name__}: {str(last_exception)}"
+            f"Last error: {type(last_exception).__name__}: {error_msg}"
         ) from last_exception
 
     async def create_session(self) -> str:
@@ -359,7 +362,7 @@ class ClientSessionManager:
                 )
                 return status
 
-            if status.state == "failed_creation":
+            if status.state == EpisodeState.FAILED_CREATION.value:
                 error_msg = status.creation_error or "Unknown error"
                 logger.error(
                     f"Episode {episode_id} creation failed: {error_msg}",
@@ -372,10 +375,10 @@ class ClientSessionManager:
                 )
                 raise Exception(f"Episode creation failed: {error_msg}")
 
-            if status.state in {"failed", "timeout"}:
+            if status.state in {EpisodeState.FAILED.value, EpisodeState.TIMEOUT.value}:
                 raise Exception(f"Episode entered terminal state '{status.state}' before readiness")
 
-            if status.state == "completed":
+            if status.state == EpisodeState.COMPLETED.value:
                 raise Exception("Episode completed before readiness")
 
             if elapsed >= timeout_seconds:
@@ -430,7 +433,41 @@ class ClientSessionManager:
         response = await self.create_episode(session_id, task_id)
 
         # Wait for ready
-        await self.wait_for_episode_ready(session_id, response.episode_id, timeout_seconds=timeout_seconds)
+        try:
+            await self.wait_for_episode_ready(session_id, response.episode_id, timeout_seconds=timeout_seconds)
+        except TimeoutError as e:
+            # Re-raise with more context about which episode timed out
+            logger.error(
+                f"Episode {response.episode_id} failed to become ready within {timeout_seconds}s",
+                extra={
+                    "event": "create_episode_and_wait_timeout",
+                    "session_id": session_id,
+                    "task_id": task_id,
+                    "episode_id": response.episode_id,
+                    "timeout_seconds": timeout_seconds,
+                },
+            )
+            raise TimeoutError(
+                f"Episode {response.episode_id} for task '{task_id}' failed to become ready within {timeout_seconds}s. "
+                f"Original error: {str(e)}"
+            ) from e
+        except Exception as e:
+            # Re-raise other exceptions with context
+            logger.error(
+                f"Episode {response.episode_id} readiness check failed",
+                extra={
+                    "event": "create_episode_and_wait_failed",
+                    "session_id": session_id,
+                    "task_id": task_id,
+                    "episode_id": response.episode_id,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+            )
+            raise Exception(
+                f"Episode {response.episode_id} for task '{task_id}' readiness check failed: "
+                f"{type(e).__name__}: {str(e)}"
+            ) from e
 
         return response
 
@@ -648,6 +685,402 @@ class ClientSessionManager:
                     )
                     # Don't raise - termination failures shouldn't break cleanup
 
+    async def verify_episode_ended(
+        self,
+        session_id: str,
+        episode_id: str,
+        timeout: float = 10.0,
+    ) -> Tuple[bool, str]:
+        """
+        Verify if an episode has actually ended by checking its status.
+
+        Args:
+            session_id: Session ID
+            episode_id: Episode ID to verify
+            timeout: Timeout for verification request in seconds (default: 10.0)
+
+        Returns:
+            Tuple of (is_ended, state_description)
+            - (True, "COMPLETED") - Episode successfully ended
+            - (True, "FAILED") - Episode ended with failure
+            - (False, "ACTIVE") - Episode still active
+            - (False, "CREATING") - Episode still creating
+            - (False, "UNKNOWN") - Cannot determine state
+        """
+        try:
+            # Use the proper status endpoint
+            url = f"{self.base_url}/api/v1/session/{session_id}/episodes/{episode_id}/status"
+            async with aiohttp.ClientSession() as session:
+                client_timeout = aiohttp.ClientTimeout(total=timeout)
+                async with session.get(url, timeout=client_timeout) as response:
+                    if response.status == 404:
+                        # Episode not found - likely moved to completed episodes
+                        logger.debug(
+                            "Episode not found via status endpoint (likely completed)",
+                            extra={
+                                "event": "episode_verification_not_found",
+                                "session_id": session_id,
+                                "episode_id": episode_id,
+                            },
+                        )
+                        return (True, "COMPLETED")
+
+                    if response.status == 200:
+                        data = await response.json()
+                        state = data.get("state", "UNKNOWN")
+
+                        # Episode states that indicate completion
+                        # Compare against enum values (handling case-insensitivity)
+                        state_upper = state.upper()
+                        terminal_states = {
+                            EpisodeState.COMPLETED.value.upper(),
+                            EpisodeState.FAILED.value.upper(),
+                            EpisodeState.FAILED_CREATION.value.upper(),
+                        }
+
+                        if state_upper in terminal_states:
+                            logger.debug(
+                                f"Episode verified as ended with state: {state}",
+                                extra={
+                                    "event": "episode_verification_ended",
+                                    "session_id": session_id,
+                                    "episode_id": episode_id,
+                                    "state": state,
+                                },
+                            )
+                            return (True, state)
+                        else:
+                            logger.debug(
+                                f"Episode still active with state: {state}",
+                                extra={
+                                    "event": "episode_verification_active",
+                                    "session_id": session_id,
+                                    "episode_id": episode_id,
+                                    "state": state,
+                                },
+                            )
+                            return (False, state)
+
+                    # Unexpected status code
+                    logger.warning(
+                        f"Unexpected status code during verification: {response.status}",
+                        extra={
+                            "event": "episode_verification_unexpected_status",
+                            "session_id": session_id,
+                            "episode_id": episode_id,
+                            "status_code": response.status,
+                        },
+                    )
+                    # Try to get response text for debugging
+                    try:
+                        response_text = await response.text()
+                        logger.warning(
+                            f"Verification response body: {response_text[:500]}",
+                            extra={
+                                "event": "episode_verification_response_body",
+                                "session_id": session_id,
+                                "episode_id": episode_id,
+                                "response_text": response_text[:500],
+                            },
+                        )
+                    except Exception:
+                        pass
+                    return (False, "UNKNOWN")
+
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Timeout during episode verification",
+                extra={
+                    "event": "episode_verification_timeout",
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                },
+                exc_info=True,
+            )
+            return (False, "UNKNOWN")
+        except aiohttp.ClientError as e:
+            logger.warning(
+                "Network error during episode verification",
+                extra={
+                    "event": "episode_verification_network_error",
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+                exc_info=True,
+            )
+            return (False, "UNKNOWN")
+        except Exception as e:
+            logger.error(
+                f"Failed to verify episode state: {type(e).__name__}: {str(e)}",
+                extra={
+                    "event": "episode_verification_error",
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                    "error_module": type(e).__module__,
+                },
+                exc_info=True,  # This will include full traceback
+            )
+            return (False, "UNKNOWN")
+
+    async def end_episode_with_retry(
+        self,
+        session_id: str,
+        episode_id: str,
+        reason: str = "completed",
+        result: Optional[EvalSubmission] = None,
+        cascade_end_attached_episodes: bool = False,
+        max_retries: int = 5,
+        initial_backoff: float = 1.0,
+        max_backoff: float = 30.0,
+    ) -> bool:
+        """
+        End an episode with retry logic and verification.
+
+        This method implements robust episode ending with:
+        - Multiple retry attempts with exponential backoff
+        - Verification of episode state after attempts
+        - Detection of already-ended episodes (idempotent)
+        - Comprehensive error logging
+
+        Args:
+            session_id: Session ID
+            episode_id: Episode ID
+            reason: Completion reason
+            result: Optional EvalSubmission data
+            cascade_end_attached_episodes: If True, also end attached episodes
+            max_retries: Maximum number of retry attempts (default: 5)
+            initial_backoff: Initial backoff delay in seconds (default: 1.0)
+            max_backoff: Maximum backoff delay in seconds (default: 30.0)
+
+        Returns:
+            True if episode was successfully ended and verified, False otherwise
+        """
+        backoff = initial_backoff
+        last_error = None
+
+        for attempt in range(max_retries + 1):  # +1 for initial attempt
+            try:
+                logger.info(
+                    f"Attempting to end episode (attempt {attempt + 1}/{max_retries + 1})",
+                    extra={
+                        "event": "episode_end_attempt",
+                        "session_id": session_id,
+                        "episode_id": episode_id,
+                        "attempt": attempt + 1,
+                        "max_retries": max_retries + 1,
+                        "backoff": backoff if attempt > 0 else 0,
+                    },
+                )
+
+                # Attempt to end the episode
+                await self.end_episode(
+                    session_id=session_id,
+                    episode_id=episode_id,
+                    reason=reason,
+                    result=result,
+                    cascade_end_attached_episodes=cascade_end_attached_episodes,
+                )
+
+                # Verify the episode actually ended
+                # Add small delay before verification to let server process
+                await asyncio.sleep(0.5)
+
+                # Try verification with a couple of quick retries for transient issues
+                is_ended = False
+                state = "UNKNOWN"
+                for verify_attempt in range(2):  # 2 attempts max
+                    is_ended, state = await self.verify_episode_ended(
+                        session_id, episode_id, timeout=10.0  # Longer timeout for verification
+                    )
+
+                    if is_ended or state != "UNKNOWN":
+                        break  # Got a definitive answer
+
+                    if verify_attempt < 1:  # Only sleep before second attempt
+                        await asyncio.sleep(1.0)
+
+                if is_ended:
+                    logger.info(
+                        f"Episode successfully ended and verified (state: {state})",
+                        extra={
+                            "event": "episode_end_verified_success",
+                            "session_id": session_id,
+                            "episode_id": episode_id,
+                            "state": state,
+                            "attempts_required": attempt + 1,
+                        },
+                    )
+                    return True
+                elif state == "UNKNOWN":
+                    # If we got 200 OK from DELETE but verification is uncertain,
+                    # treat as success rather than retrying endlessly
+                    # (verification might fail due to timing or endpoint issues)
+                    logger.warning(
+                        "Episode end succeeded (200 OK) but verification inconclusive - treating as success",
+                        extra={
+                            "event": "episode_end_verification_inconclusive",
+                            "session_id": session_id,
+                            "episode_id": episode_id,
+                            "state": state,
+                            "attempt": attempt + 1,
+                            "note": "Check logs above for verification error details",
+                        },
+                    )
+                    return True
+                else:
+                    logger.warning(
+                        f"Episode end succeeded but verification shows state: {state}",
+                        extra={
+                            "event": "episode_end_verification_mismatch",
+                            "session_id": session_id,
+                            "episode_id": episode_id,
+                            "state": state,
+                            "attempt": attempt + 1,
+                        },
+                    )
+                    # Continue to retry - episode is still ACTIVE/CREATING
+                    last_error = f"Episode still in state {state} after end request"
+
+            except RuntimeError as e:
+                error_str = str(e)
+
+                # Check if episode is already ended (400 or 404 errors are OK)
+                if "400" in error_str or "not active" in error_str.lower():
+                    # Might be already ended, verify
+                    is_ended, state = await self.verify_episode_ended(session_id, episode_id)
+                    if is_ended:
+                        logger.info(
+                            f"Episode already ended (idempotent success, state: {state})",
+                            extra={
+                                "event": "episode_end_already_ended",
+                                "session_id": session_id,
+                                "episode_id": episode_id,
+                                "state": state,
+                            },
+                        )
+                        return True
+                    else:
+                        logger.error(
+                            "Episode returned 'not active' but verification shows still active",
+                            extra={
+                                "event": "episode_end_inconsistent_state",
+                                "session_id": session_id,
+                                "episode_id": episode_id,
+                                "state": state,
+                            },
+                        )
+                        last_error = f"Inconsistent state: {error_str}"
+                else:
+                    # Server error, retryable
+                    last_error = error_str
+                    logger.warning(
+                        f"Episode end attempt {attempt + 1} failed: {error_str}",
+                        extra={
+                            "event": "episode_end_attempt_failed",
+                            "session_id": session_id,
+                            "episode_id": episode_id,
+                            "attempt": attempt + 1,
+                            "error": error_str,
+                        },
+                    )
+
+            except (asyncio.TimeoutError, aiohttp.ClientError) as e:
+                # Network/timeout errors are retryable
+                last_error = f"{type(e).__name__}: {str(e)}"
+                logger.warning(
+                    f"Episode end attempt {attempt + 1} failed with network error",
+                    extra={
+                        "event": "episode_end_network_error",
+                        "session_id": session_id,
+                        "episode_id": episode_id,
+                        "attempt": attempt + 1,
+                        "error": last_error,
+                    },
+                )
+
+                # After timeout, verify if episode ended anyway
+                is_ended, state = await self.verify_episode_ended(session_id, episode_id)
+                if is_ended:
+                    logger.info(
+                        f"Episode ended despite timeout (state: {state})",
+                        extra={
+                            "event": "episode_end_timeout_but_verified",
+                            "session_id": session_id,
+                            "episode_id": episode_id,
+                            "state": state,
+                        },
+                    )
+                    return True
+
+            except Exception as e:
+                # Unexpected error
+                last_error = f"Unexpected {type(e).__name__}: {str(e)}"
+                logger.error(
+                    f"Episode end attempt {attempt + 1} failed with unexpected error",
+                    extra={
+                        "event": "episode_end_unexpected_error",
+                        "session_id": session_id,
+                        "episode_id": episode_id,
+                        "attempt": attempt + 1,
+                        "error": last_error,
+                        "error_type": type(e).__name__,
+                    },
+                    exc_info=True,
+                )
+
+            # If not last attempt, apply backoff
+            if attempt < max_retries:
+                # Add jitter to prevent thundering herd
+                jitter = random.uniform(-0.1 * backoff, 0.1 * backoff)
+                sleep_time = min(backoff + jitter, max_backoff)
+
+                logger.debug(
+                    f"Retrying episode end after {sleep_time:.2f}s",
+                    extra={
+                        "event": "episode_end_retry_backoff",
+                        "session_id": session_id,
+                        "episode_id": episode_id,
+                        "backoff_seconds": sleep_time,
+                        "next_attempt": attempt + 2,
+                    },
+                )
+
+                await asyncio.sleep(sleep_time)
+                backoff *= 2.0  # Exponential backoff
+
+        # All retries exhausted - final verification
+        is_ended, state = await self.verify_episode_ended(session_id, episode_id)
+
+        if is_ended:
+            logger.warning(
+                f"Episode ended but required all {max_retries + 1} attempts (state: {state})",
+                extra={
+                    "event": "episode_end_retries_exhausted_but_verified",
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                    "state": state,
+                    "last_error": last_error,
+                },
+            )
+            return True
+        else:
+            logger.error(
+                f"Failed to end episode after {max_retries + 1} attempts (state: {state})",
+                extra={
+                    "event": "episode_end_failed_all_retries",
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                    "state": state,
+                    "attempts": max_retries + 1,
+                    "last_error": last_error,
+                },
+            )
+            return False
+
     async def end_episode(
         self,
         session_id: str,
@@ -657,7 +1090,9 @@ class ClientSessionManager:
         cascade_end_attached_episodes: bool = False,
     ) -> None:
         """
-        End an episode via REST API.
+        End an episode via REST API (single attempt, no retry).
+
+        For robust episode ending with retry logic, use end_episode_with_retry() instead.
 
         Args:
             session_id: Session ID

@@ -95,6 +95,28 @@ uv run inspect list tasks
 uv run inspect eval domains/excytin_demo --model openai/gpt-4
 ```
 
+**Enable detailed logging for debugging:**
+
+The `INSPECT_LOG_LEVEL` environment variable is extremely helpful for debugging SABER evaluations:
+
+```bash
+# Enable detailed logging to see server communication, tool calls, and execution details
+INSPECT_LOG_LEVEL=info uv run inspect eval domains/excytin_demo --model openai/gpt-4
+
+# Combine with other options for comprehensive debugging
+INSPECT_LOG_LEVEL=info uv run inspect eval domains/excytin_demo \
+    --model openai/azure/gpt-4.1 \
+    -T max_concurrent_episodes=12 \
+    -T task_filter="incident_*"
+```
+
+**Note:** This is not a default option but provides valuable insights into:
+- Server startup and health checks
+- MCP tool discovery and invocation
+- Docker sandbox execution
+- Episode lifecycle events
+- Task loading and filtering
+
 **Server endpoints** (when running):
 - REST API: `http://localhost:8000`
 - MCP Server: `http://localhost:8001`
@@ -142,6 +164,9 @@ uv run inspect eval domains/excytin_demo --model openai/gpt-4 -T task_filter=inc
 
 # Filter using glob patterns
 uv run inspect eval domains/excytin_demo --model openai/gpt-4 -T task_filter="incident_*"
+
+# Filter to multiple patterns (OR logic)
+uv run inspect eval domains/excytin_demo --model openai/gpt-4 -T task_filter="incident_5_*,incident_6_*"
 ```
 
 **Custom ports:**
@@ -287,20 +312,6 @@ class AgentConfig(BaseModel):
 ```bash
 uv sync --all-extras
 # Uses inspect_ai from MSEC ADO repository (dev/saber_integration branch)
-```
-
-**Local development with inspect_ai:**
-
-When SABER is used as part of the `oss_saber` project, inspect_ai is automatically sourced from the sibling submodule via the parent project's `pyproject.toml` override. No manual configuration needed.
-
-For standalone SABER development with local inspect_ai:
-```bash
-# 1. Edit pyproject.toml [tool.uv.sources]:
-#    Replace: inspect-ai = { git = "https://..." }
-#    With:    inspect-ai = { path = "../inspect_ai", editable = true }
-
-# 2. Install
-uv sync --all-extras
 ```
 
 ---

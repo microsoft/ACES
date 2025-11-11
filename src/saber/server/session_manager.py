@@ -190,15 +190,16 @@ class SessionManager:
         self.cleanup_task: Optional[asyncio.Task[None]] = None
         self.shutdown_event = asyncio.Event()
 
-        # Global lock for episode creation to prevent Docker resource exhaustion
-        # This serializes episode creation across ALL sessions to protect the Docker daemon
-        # from being overwhelmed by concurrent Docker Compose environment creation
-        self._episode_creation_lock = asyncio.Lock()
+        # Semaphore for episode creation to limit concurrent Docker resource usage
+        # This limits episode creation to prevent overwhelming the Docker daemon
+        # with too many concurrent Docker Compose environment creations
+        # Increased from Lock (1) to Semaphore(3) to allow moderate concurrency
+        self._episode_creation_lock = asyncio.Semaphore(3)  # Max 3 concurrent episode creations
 
         # Track background finalization tasks for async episode creation
         self._episode_finalization_tasks: Dict[str, asyncio.Task[None]] = {}
         # Semaphore to limit concurrent episode finalizations (health checks, not Docker compose)
-        # Note: Docker compose operations are serialized by _episode_creation_lock
+        # Note: Docker compose operations are limited by _episode_creation_lock semaphore
         # This semaphore prevents overwhelming the system with concurrent health checks
         self._finalization_semaphore = asyncio.Semaphore(16)  # Max 16 concurrent finalizations
 
@@ -1309,6 +1310,43 @@ class SessionManager:
                         "error": str(e),
                     },
                 )
+
+                # Clean up any partially-created Docker resources (networks, containers, etc.)
+                # This is critical when 'docker compose up' fails partway through
+                try:
+                    logger.info(
+                        "Attempting to clean up Docker resources after failed episode creation",
+                        extra={
+                            "event": "episode_failed_creation_cleanup_started",
+                            "episode_id": episode.episode_id,
+                            "task_id": task_id,
+                        },
+                    )
+                    await asyncio.to_thread(
+                        self.execution_manager.cleanup_episode,
+                        episode.episode_id,
+                    )
+                    logger.info(
+                        "Docker resource cleanup completed after failed episode creation",
+                        extra={
+                            "event": "episode_failed_creation_cleanup_completed",
+                            "episode_id": episode.episode_id,
+                            "task_id": task_id,
+                        },
+                    )
+                except Exception as cleanup_error:
+                    # Log cleanup failure but don't mask original error
+                    logger.warning(
+                        "Failed to clean up Docker resources after episode creation failure",
+                        extra={
+                            "event": "episode_failed_creation_cleanup_failed",
+                            "episode_id": episode.episode_id,
+                            "task_id": task_id,
+                            "cleanup_error": str(cleanup_error),
+                            "original_error": str(e),
+                        },
+                    )
+
                 self.episode_manager.mark_episode_failed_creation(episode.episode_id, str(e))
                 self.episode_manager.remove_episode_on_error(episode.episode_id, e)
                 # Remove from creating list on error
@@ -1923,6 +1961,9 @@ class SessionManager:
         """
         End a specific episode for a session with evaluation.
 
+        This method is IDEMPOTENT - it can be safely called multiple times for the same episode.
+        If the episode is already completed, it returns a success response with the existing state.
+
         Args:
             session_id: ID of the client session
             episode_id: ID of the specific episode to end
@@ -1934,24 +1975,70 @@ class SessionManager:
             EpisodeEndResponse with evaluation result
 
         Raises:
-            HTTPException: If episode not active or submission missing
+            HTTPException: If episode not found or session invalid
             EvaluationError: If evaluation fails
         """
         session = self._get_session(session_id)
         session.update_activity()
 
-        # Validate episode is active in this session
+        # Get episode first to check its state
+        episode = self.episode_manager.get_episode_by_id(episode_id)
+        if not episode:
+            raise HTTPException(status_code=404, detail=f"Episode {episode_id} not found")
+
+        # IDEMPOTENT HANDLING: Check if episode is already complete
+        if episode.is_complete:
+            logger.info(
+                "Episode already ended - returning existing state (idempotent)",
+                extra={
+                    "event": "episode_end_idempotent",
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                    "existing_state": episode.state.value,
+                    "existing_reason": episode.completion_reason,
+                    "requested_reason": reason,
+                },
+            )
+
+            # Return success response with existing episode state
+            success = episode.state == EpisodeState.COMPLETED
+            return EpisodeEndResponse(
+                episode_ended=True,
+                episode_id=episode_id,
+                success=success,
+                reason=episode.completion_reason or reason,
+                previous_task_id=episode.task_id,
+                active_episodes_remaining=len(session.active_episode_ids),
+                evaluation_result=None,  # Client-side evaluation
+            )
+
+        # Validate episode is active in this session (only if not already complete)
         if episode_id not in session.active_episode_ids:
+            # Check if it's in the history (completed but we didn't catch it above)
+            if episode_id in session.episode_history:
+                logger.info(
+                    "Episode in history but not marked complete in manager - treating as already ended",
+                    extra={
+                        "event": "episode_end_in_history",
+                        "session_id": session_id,
+                        "episode_id": episode_id,
+                    },
+                )
+                return EpisodeEndResponse(
+                    episode_ended=True,
+                    episode_id=episode_id,
+                    success=True,
+                    reason="previously_completed",
+                    previous_task_id=episode.task_id,
+                    active_episodes_remaining=len(session.active_episode_ids),
+                    evaluation_result=None,
+                )
+
             raise HTTPException(
                 status_code=400,
                 detail=f"Episode {episode_id} is not active in session {session_id}. "
                 f"Active episodes: {session.active_episode_ids}",
             )
-
-        # Get episode and task for evaluation
-        episode = self.episode_manager.get_episode_by_id(episode_id)
-        if not episode:
-            raise HTTPException(status_code=404, detail=f"Episode {episode_id} not found")
 
         task = self.benchmark_manager.get_task(episode.task_id)
 

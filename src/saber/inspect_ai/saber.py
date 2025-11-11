@@ -148,10 +148,15 @@ class SABERSandboxEnvironment:
     def default_concurrency(cls) -> Optional[int]:
         """Default max_sandboxes for SABER provider.
 
-        Returns None to indicate no maximum concurrency limit.
-        SABER handles resource management internally via Docker.
+        Returns the configured max_concurrent_episodes to control how many
+        samples (episodes) can run concurrently. This tells Inspect AI to
+        limit concurrent sample execution to match SABER's episode semaphore.
+
+        Returns None for unlimited concurrency (if max_concurrent_episodes <= 0).
         """
-        return None
+        if cls._max_concurrent_episodes is None or cls._max_concurrent_episodes <= 0:
+            return None
+        return cls._max_concurrent_episodes
 
     @classmethod
     def config_files(cls) -> list[str]:
@@ -180,6 +185,7 @@ class SABERSandboxEnvironment:
             mcp_port=(int, 8001),
             compose_template_path=(Optional[Path], None),
             cleanup=(bool, False),  # Default to False - keep server running
+            max_concurrent_episodes=(Optional[int], None),  # Limit concurrent episodes
             __config__=ConfigDict(frozen=True),
         )
 
@@ -288,6 +294,16 @@ class SABERSandboxEnvironment:
         domains_root = config.domains_root  # type: ignore[attr-defined]
         rest_port = getattr(config, "rest_port", 8000)
         mcp_port = getattr(config, "mcp_port", 8001)
+
+        # Set max_concurrent_episodes from config EARLY (before Inspect AI queries default_concurrency)
+        max_concurrent_episodes = getattr(config, "max_concurrent_episodes", None)
+        if max_concurrent_episodes is not None:
+            cls._max_concurrent_episodes = max_concurrent_episodes
+            logger.info(
+                f"Set max_concurrent_episodes to {max_concurrent_episodes} from task config",
+                extra={"max_concurrent_episodes": max_concurrent_episodes},
+            )
+
         # Import here to avoid circular dependency
         from .tasks import get_active_domain
 
@@ -483,6 +499,7 @@ class SABERSandboxEnvironment:
             rest_port=getattr(config, "rest_port", 8000),
             mcp_port=getattr(config, "mcp_port", 8001),
             compose_template_path=getattr(config, "compose_template_path", None),
+            max_concurrent_episodes=getattr(config, "max_concurrent_episodes", None),
         )
 
         # Check if this is a completed sample from eval-retry
@@ -536,28 +553,54 @@ class SABERSandboxEnvironment:
                 base_url=rest_base_url,
                 mcp_server_url=mcp_url_base,
                 client_id="inspect_ai_sandbox",
-                rest_timeout=30.0,
+                rest_timeout=180.0,  # Increased to 3 minutes for episode creation with queueing
             )
             self._session_manager = ClientSessionManager(config=config)
             self._session_manager._current_session_id = self._session_id
 
+        # Track semaphore outside try block so exception handler can release it
+        semaphore_acquired = False
+        semaphore = self._get_episode_semaphore()
+
         try:
             # Acquire semaphore to limit concurrent episode creation
             # This controls how many episodes can run simultaneously
-            semaphore = self._get_episode_semaphore()
             if semaphore is not None:
                 logger.debug(
-                    f"Acquiring episode semaphore for task {self._task_id}",
+                    f"Acquiring episode semaphore for task {self._task_id} (available: {semaphore._value})",
                     extra={
                         "task_id": self._task_id,
                         "max_concurrent": self._max_concurrent_episodes,
+                        "semaphore_available": semaphore._value,
                     },
                 )
-                await semaphore.acquire()
-                logger.debug(
-                    f"Episode semaphore acquired for task {self._task_id}",
-                    extra={"task_id": self._task_id},
-                )
+
+                # Use asyncio.wait_for to add timeout to semaphore acquisition
+                # This prevents indefinite waiting if all slots are leaked
+                try:
+                    await asyncio.wait_for(semaphore.acquire(), timeout=300.0)  # 5 minute timeout
+                    semaphore_acquired = True
+                    logger.debug(
+                        f"Episode semaphore acquired for task {self._task_id} (remaining: {semaphore._value})",
+                        extra={
+                            "task_id": self._task_id,
+                            "semaphore_remaining": semaphore._value,
+                        },
+                    )
+                except asyncio.TimeoutError:
+                    logger.error(
+                        f"Timeout waiting for episode semaphore for task {self._task_id} (waited 300s)",
+                        extra={
+                            "task_id": self._task_id,
+                            "max_concurrent": self._max_concurrent_episodes,
+                            "event": "semaphore_acquisition_timeout",
+                        },
+                    )
+                    raise PrerequisiteError(
+                        f"Timeout waiting for episode semaphore (waited 300s). "
+                        f"This may indicate semaphore slot leakage or insufficient capacity. "
+                        f"Max concurrent episodes: {self._max_concurrent_episodes}"
+                    )
 
             # Create episode via REST API (using shared session manager)
             self._episode_id = await self._create_episode(self._session_id, self._task_id)
@@ -698,6 +741,21 @@ class SABERSandboxEnvironment:
             )
 
         except Exception as e:
+            # CRITICAL: Release semaphore BEFORE cleanup to prevent permanent slot leakage
+            # This fixes the bug where failed episode creation would leak semaphore slots,
+            # causing capacity to degrade from 8 -> 7 -> 6 -> 5 over time during long test runs
+            if semaphore_acquired and semaphore is not None:
+                semaphore.release()
+                logger.debug(
+                    f"Released episode semaphore after init failure for task {self._task_id} "
+                    f"(available: {semaphore._value})",
+                    extra={
+                        "task_id": self._task_id,
+                        "semaphore_available": semaphore._value,
+                        "event": "semaphore_released_on_init_failure",
+                    },
+                )
+
             # Cleanup partial state (initialization failure counts as interrupted)
             await self._cleanup_partial_state(interrupted=True)
             raise PrerequisiteError(
@@ -768,8 +826,12 @@ class SABERSandboxEnvironment:
                 if semaphore is not None:
                     semaphore.release()
                     logger.debug(
-                        f"Released episode semaphore for task {self._task_id}",
-                        extra={"task_id": self._task_id},
+                        f"Released episode semaphore for task {self._task_id} (available: {semaphore._value})",
+                        extra={
+                            "task_id": self._task_id,
+                            "semaphore_available": semaphore._value,
+                            "event": "semaphore_released_on_cleanup",
+                        },
                     )
 
                 self._reset_state()
@@ -1012,27 +1074,60 @@ class SABERSandboxEnvironment:
         Episode creation is asynchronous - the POST returns immediately with an episode ID,
         but Docker container setup can take several minutes. We use the ClientSessionManager's
         create_episode_and_wait method which has proper timeout and polling logic.
+
+        Timeline:
+        - Episode POST returns immediately with episode_id
+        - Docker compose starts (serialized by global lock)
+        - Background finalization: health checks (200s timeout), prompt generation, etc.
+        - Client polls for is_ready=True
+
+        Timeout must exceed server-side health check timeout (200s) plus buffer for other
+        finalization steps. Using 400s (6.67 minutes) to ensure server can complete or fail.
         """
         if self._session_manager is None:
             raise SandboxError("Session manager not initialized")
 
-        # This uses the same logic as the old saber-domain flow:
-        # - 300s timeout (5 minutes) for Docker setup
-        # - 10s polling interval to avoid hammering server
-        # - Proper error handling for failed_creation state
         try:
             response = await self._session_manager.create_episode_and_wait(
                 session_id=session_id,
                 task_id=task_id,
-                timeout_seconds=300,
+                timeout_seconds=400,  # Increased from 300s to exceed server health check timeout
             )
             episode_id: str = response.episode_id
             return episode_id
+        except TimeoutError as e:
+            # Provide clear timeout diagnostic
+            error_msg = (
+                f"Episode creation timed out after 400s for task '{task_id}'. "
+                f"This usually indicates Docker health checks are taking too long or containers failed to start. "
+                f"Check server logs for details. Error: {str(e)}"
+            )
+            logger.error(
+                error_msg,
+                extra={
+                    "event": "episode_creation_timeout",
+                    "task_id": task_id,
+                    "session_id": session_id,
+                    "timeout_seconds": 400,
+                },
+            )
+            raise PrerequisiteError(error_msg) from e
         except Exception as e:
-            raise PrerequisiteError(f"Failed to create episode for task {task_id}: {e}") from e
+            # Provide context for other errors
+            error_msg = f"Failed to create episode for task '{task_id}': {type(e).__name__}: {str(e)}"
+            logger.error(
+                error_msg,
+                extra={
+                    "event": "episode_creation_failed",
+                    "task_id": task_id,
+                    "session_id": session_id,
+                    "error_type": type(e).__name__,
+                },
+            )
+            raise PrerequisiteError(error_msg) from e
 
     async def _cleanup_partial_state(self, interrupted: bool = False) -> None:
-        """Best-effort cleanup of episode.
+        """Best-effort cleanup of episode with robust retry logic.
 
         Unified episode ending for all paths - this is the single place where episodes end.
         Note: Session is NOT terminated here - it's shared across all samples and cleaned up in task_cleanup.
@@ -1059,8 +1154,9 @@ class SABERSandboxEnvironment:
                 # For interrupted cleanup, use fire-and-forget HTTP to avoid event loop shutdown issues
                 if interrupted:
                     # Use synchronous requests library for reliability during shutdown
-                    # Fire-and-forget: send request without waiting for response
+                    # NOW WITH RETRY for better reliability
                     import threading
+                    import time
 
                     import requests
 
@@ -1068,61 +1164,113 @@ class SABERSandboxEnvironment:
                     session_id = self._session_id
                     episode_id = self._episode_id
                     url = f"{base_url}/api/v1/session/{session_id}/episodes/{episode_id}"
+                    verify_url = f"{base_url}/api/v1/session/{session_id}/episodes/{episode_id}/status"
                     params = {
                         "reason": reason,
                         "cascade_end_attached_episodes": "false",
                     }
 
-                    def send_delete_request() -> None:
-                        """Fire-and-forget delete request in background thread."""
-                        try:
-                            # Short timeout - we just want to send the request, not wait for full processing
-                            response = requests.delete(url, params=params, timeout=2.0)
-                            if response.status_code == 200:
-                                logger.info(
-                                    f"Episode end request sent successfully (reason={reason})",
-                                    extra={
-                                        "session_id": self._session_id,
-                                        "episode_id": self._episode_id,
-                                        "reason": reason,
-                                    },
-                                )
-                            else:
-                                logger.debug(
-                                    f"Episode end request returned {response.status_code}",
-                                    extra={
-                                        "session_id": self._session_id,
-                                        "episode_id": self._episode_id,
-                                        "status_code": response.status_code,
-                                    },
-                                )
-                        except Exception as e:
-                            # Log at debug level - server might still receive and process the request
-                            logger.debug(
-                                f"Episode end request exception (server may still process): {e}",
-                                extra={
-                                    "session_id": self._session_id,
-                                    "episode_id": self._episode_id,
-                                },
-                            )
+                    def send_delete_request_with_retry() -> bool:
+                        """Send delete request with retry logic in background thread."""
+                        max_retries = 3
+                        for attempt in range(max_retries):
+                            try:
+                                # Longer timeout than before - 5s instead of 2s
+                                response = requests.delete(url, params=params, timeout=5.0)
 
-                    # Start in non-daemon thread and wait briefly for completion
-                    # Non-daemon prevents process exit until thread completes or timeout
-                    thread = threading.Thread(target=send_delete_request, daemon=False)
+                                if response.status_code == 200:
+                                    # Verify episode actually ended
+                                    time.sleep(0.5)  # Brief wait for server processing
+                                    verify_response = requests.get(verify_url, timeout=2.0)
+                                    if verify_response.status_code == 404:
+                                        logger.info(
+                                            f"Episode end verified successfully (attempt {attempt + 1}/{max_retries})",
+                                            extra={
+                                                "session_id": session_id,
+                                                "episode_id": episode_id,
+                                                "reason": reason,
+                                            },
+                                        )
+                                        return True
+                                    else:
+                                        logger.debug(
+                                            f"Episode ended but verification inconclusive "
+                                            f"(status {verify_response.status_code})",
+                                            extra={
+                                                "session_id": session_id,
+                                                "episode_id": episode_id,
+                                                "verify_status": verify_response.status_code,
+                                            },
+                                        )
+                                        return True  # Accept success even if verification unclear
+
+                                elif response.status_code == 400:
+                                    # Might be already ended
+                                    logger.info(
+                                        f"Episode already ended (attempt {attempt + 1}/{max_retries})",
+                                        extra={
+                                            "session_id": session_id,
+                                            "episode_id": episode_id,
+                                        },
+                                    )
+                                    return True
+
+                                else:
+                                    logger.debug(
+                                        f"Episode end request returned {response.status_code} "
+                                        f"(attempt {attempt + 1}/{max_retries})",
+                                        extra={
+                                            "session_id": session_id,
+                                            "episode_id": episode_id,
+                                            "status_code": response.status_code,
+                                            "attempt": attempt + 1,
+                                        },
+                                    )
+
+                            except Exception as e:
+                                logger.debug(
+                                    f"Episode end request attempt {attempt + 1}/{max_retries} failed: {e}",
+                                    extra={
+                                        "session_id": session_id,
+                                        "episode_id": episode_id,
+                                        "attempt": attempt + 1,
+                                        "error": str(e),
+                                    },
+                                )
+
+                            # Retry with backoff
+                            if attempt < max_retries - 1:
+                                backoff = 1.0 * (attempt + 1)
+                                time.sleep(backoff)
+
+                        # All retries exhausted
+                        logger.warning(
+                            f"Episode end failed after {max_retries} attempts (interrupted cleanup)",
+                            extra={
+                                "session_id": session_id,
+                                "episode_id": episode_id,
+                            },
+                        )
+                        return False
+
+                    # Start in non-daemon thread and wait for completion
+                    # Non-daemon prevents process exit until thread completes
+                    # Increased timeout to allow for retries: 3 attempts * ~6s each = 18s max
+                    thread = threading.Thread(target=send_delete_request_with_retry, daemon=False)
                     thread.start()
-                    thread.join(timeout=1.5)  # Wait max 1.5 seconds for request to send
+                    thread.join(timeout=20.0)  # Wait up to 20s for retries to complete
 
                     logger.info(
-                        f"Episode end request initiated in background (reason={reason})",
+                        f"Episode end request initiated with retry in background (reason={reason})",
                         extra={
                             "session_id": self._session_id,
                             "episode_id": self._episode_id,
                             "reason": reason,
-                            "note": "Waited up to 1.5s for request to send",
+                            "note": "Used retry logic with up to 3 attempts",
                         },
                     )
                 else:
-                    # Happy path - use async session manager
+                    # Happy path - use async session manager WITH RETRY
                     # Get submission from store if available (happy path after scorer)
                     submission = None
                     try:
@@ -1135,23 +1283,37 @@ class SABERSandboxEnvironment:
                         # Store might not be available or submission not set - that's ok
                         pass
 
-                    # End episode with submission
-                    await self._session_manager.end_episode(
+                    # End episode with submission - USING ROBUST RETRY
+                    success = await self._session_manager.end_episode_with_retry(
                         session_id=self._session_id,
                         episode_id=self._episode_id,
                         reason=reason,
                         result=submission,
                         cascade_end_attached_episodes=False,
+                        max_retries=5,  # More retries for happy path
+                        initial_backoff=1.0,
+                        max_backoff=30.0,
                     )
 
-                    logger.info(
-                        f"Episode ended successfully (reason={reason})",
-                        extra={
-                            "session_id": self._session_id,
-                            "episode_id": self._episode_id,
-                            "reason": reason,
-                        },
-                    )
+                    if success:
+                        logger.info(
+                            f"Episode ended successfully with verification (reason={reason})",
+                            extra={
+                                "session_id": self._session_id,
+                                "episode_id": self._episode_id,
+                                "reason": reason,
+                            },
+                        )
+                    else:
+                        logger.error(
+                            f"Episode ending failed after retries - may be orphaned (reason={reason})",
+                            extra={
+                                "session_id": self._session_id,
+                                "episode_id": self._episode_id,
+                                "reason": reason,
+                                "event": "episode_end_failed_with_retry",
+                            },
+                        )
 
             except (asyncio.CancelledError, asyncio.TimeoutError):
                 # Cancellation/timeout during shutdown - log but don't raise
@@ -1168,7 +1330,7 @@ class SABERSandboxEnvironment:
                 )
             except Exception as e:
                 logger.warning(
-                    f"Failed to end episode (server will eventually clean up): {e}",
+                    f"Failed to end episode with retry (server will eventually clean up): {e}",
                     extra={
                         "session_id": self._session_id,
                         "episode_id": self._episode_id,

@@ -256,6 +256,240 @@ class TestTaskCallableExecution:
             assert len(task.dataset) == 1
             assert task.dataset[0].id == "labyrinth_easy__attempt_1"
 
+    def test_task_callable_with_multi_filter(
+        self,
+        mock_domain_context,
+    ):
+        """Test task callable with multiple comma-separated filters."""
+        from saber.inspect_ai.tasks import create_domain_task
+
+        # Create multiple tasks with different prefixes
+        tasks = [
+            TaskInfo(
+                task_id="xss_0_flag_capture",
+                title="XSS Task 0",
+                description="XSS",
+                episode_attempts=1,
+                subtask_count=0,
+                max_steps=10,
+                instruction_prompt="",
+                assistant_prompt="",
+                submit_prompt="",
+            ),
+            TaskInfo(
+                task_id="xss_1_blind",
+                title="XSS Task 1",
+                description="XSS Blind",
+                episode_attempts=1,
+                subtask_count=0,
+                max_steps=10,
+                instruction_prompt="",
+                assistant_prompt="",
+                submit_prompt="",
+            ),
+            TaskInfo(
+                task_id="sql_injection_basic",
+                title="SQL Task",
+                description="SQL Injection",
+                episode_attempts=1,
+                subtask_count=0,
+                max_steps=10,
+                instruction_prompt="",
+                assistant_prompt="",
+                submit_prompt="",
+            ),
+            TaskInfo(
+                task_id="cmd_injection_task",
+                title="CMD Task",
+                description="Command Injection",
+                episode_attempts=1,
+                subtask_count=0,
+                max_steps=10,
+                instruction_prompt="",
+                assistant_prompt="",
+                submit_prompt="",
+            ),
+        ]
+
+        mock_benchmark_info = BenchmarkInfo(
+            domain="test_domain",
+            tasks=tasks,
+            total_tasks=4,
+            total_episodes=4,
+        )
+
+        with patch('saber.inspect_ai.tasks._get_or_create_portal') as mock_portal_func, \
+             patch('saber.inspect_ai.tasks.DomainController') as mock_controller_class, \
+             patch('saber.inspect_ai.tasks._wait_for_server_health'), \
+             patch('saber.inspect_ai.tasks.SABERRestClient') as mock_client_class, \
+             patch('saber.inspect_ai.tasks.create_saber_dataset') as mock_create_dataset, \
+             patch('saber.inspect_ai.tasks._resolve_agent_implementation') as mock_resolve_agent:
+
+            mock_controller = AsyncMock()
+            mock_controller.start = AsyncMock(return_value=mock_domain_context)
+            mock_controller.check_running_domain = AsyncMock(return_value=None)
+            mock_controller_class.return_value = mock_controller
+
+            mock_resolve_agent.return_value = MagicMock()
+
+            mock_client = MagicMock()
+            mock_client.get_benchmark_info = AsyncMock(return_value=mock_benchmark_info)
+            mock_client_class.return_value = mock_client
+
+            # create_saber_dataset will receive the filtered tasks (xss_* and sql_*)
+            mock_create_dataset.return_value = [
+                Sample(
+                    id="sql_injection_basic__attempt_1",
+                    input="SQL",
+                    target="Pass",
+                    metadata={"task_id": "sql_injection_basic"},
+                ),
+                Sample(
+                    id="xss_0_flag_capture__attempt_1",
+                    input="XSS 0",
+                    target="Pass",
+                    metadata={"task_id": "xss_0_flag_capture"},
+                ),
+                Sample(
+                    id="xss_1_blind__attempt_1",
+                    input="XSS 1",
+                    target="Pass",
+                    metadata={"task_id": "xss_1_blind"},
+                ),
+            ]
+
+            def mock_portal_call(async_func, *args, **kwargs):
+                import asyncio
+                loop = asyncio.new_event_loop()
+                try:
+                    return loop.run_until_complete(async_func(*args, **kwargs))
+                finally:
+                    loop.close()
+
+            mock_portal = MagicMock()
+            mock_portal.call = mock_portal_call
+            mock_portal_func.return_value = mock_portal
+
+            # Create and execute callable with multi-filter
+            task_callable = create_domain_task("test_domain", Path("/test/domains"))
+            task = task_callable(task_filter="xss_*,sql_*")
+
+            # Verify both XSS and SQL tasks in dataset (3 total)
+            assert len(task.dataset) == 3
+            task_ids = {sample.metadata["task_id"] for sample in task.dataset}
+            assert "xss_0_flag_capture" in task_ids
+            assert "xss_1_blind" in task_ids
+            assert "sql_injection_basic" in task_ids
+            # CMD task should NOT be included
+            assert "cmd_injection_task" not in task_ids
+
+    def test_task_callable_with_mixed_filters(
+        self,
+        mock_domain_context,
+    ):
+        """Test task callable with mix of exact and glob filters."""
+        from saber.inspect_ai.tasks import create_domain_task
+
+        tasks = [
+            TaskInfo(
+                task_id="xss_0_flag_capture",
+                title="XSS Task 0",
+                description="XSS",
+                episode_attempts=1,
+                subtask_count=0,
+                max_steps=10,
+                instruction_prompt="",
+                assistant_prompt="",
+                submit_prompt="",
+            ),
+            TaskInfo(
+                task_id="sql_injection_basic",
+                title="SQL Task",
+                description="SQL",
+                episode_attempts=1,
+                subtask_count=0,
+                max_steps=10,
+                instruction_prompt="",
+                assistant_prompt="",
+                submit_prompt="",
+            ),
+            TaskInfo(
+                task_id="cmd_injection_advanced",
+                title="CMD Task",
+                description="CMD",
+                episode_attempts=1,
+                subtask_count=0,
+                max_steps=10,
+                instruction_prompt="",
+                assistant_prompt="",
+                submit_prompt="",
+            ),
+        ]
+
+        mock_benchmark_info = BenchmarkInfo(
+            domain="test_domain",
+            tasks=tasks,
+            total_tasks=3,
+            total_episodes=3,
+        )
+
+        with patch('saber.inspect_ai.tasks._get_or_create_portal') as mock_portal_func, \
+             patch('saber.inspect_ai.tasks.DomainController') as mock_controller_class, \
+             patch('saber.inspect_ai.tasks._wait_for_server_health'), \
+             patch('saber.inspect_ai.tasks.SABERRestClient') as mock_client_class, \
+             patch('saber.inspect_ai.tasks.create_saber_dataset') as mock_create_dataset, \
+             patch('saber.inspect_ai.tasks._resolve_agent_implementation') as mock_resolve_agent:
+
+            mock_controller = AsyncMock()
+            mock_controller.start = AsyncMock(return_value=mock_domain_context)
+            mock_controller.check_running_domain = AsyncMock(return_value=None)
+            mock_controller_class.return_value = mock_controller
+
+            mock_resolve_agent.return_value = MagicMock()
+
+            mock_client = MagicMock()
+            mock_client.get_benchmark_info = AsyncMock(return_value=mock_benchmark_info)
+            mock_client_class.return_value = mock_client
+
+            # Should match: exact "xss_0_flag_capture" + glob "cmd_*"
+            mock_create_dataset.return_value = [
+                Sample(
+                    id="cmd_injection_advanced__attempt_1",
+                    input="CMD",
+                    target="Pass",
+                    metadata={"task_id": "cmd_injection_advanced"},
+                ),
+                Sample(
+                    id="xss_0_flag_capture__attempt_1",
+                    input="XSS",
+                    target="Pass",
+                    metadata={"task_id": "xss_0_flag_capture"},
+                ),
+            ]
+
+            def mock_portal_call(async_func, *args, **kwargs):
+                import asyncio
+                loop = asyncio.new_event_loop()
+                try:
+                    return loop.run_until_complete(async_func(*args, **kwargs))
+                finally:
+                    loop.close()
+
+            mock_portal = MagicMock()
+            mock_portal.call = mock_portal_call
+            mock_portal_func.return_value = mock_portal
+
+            # Create and execute with mixed filters
+            task_callable = create_domain_task("test_domain", Path("/test/domains"))
+            task = task_callable(task_filter="xss_0_flag_capture,cmd_*")
+
+            # Verify exact match + glob match (but not sql)
+            assert len(task.dataset) == 2
+            task_ids = {sample.metadata["task_id"] for sample in task.dataset}
+            assert "xss_0_flag_capture" in task_ids
+            assert "cmd_injection_advanced" in task_ids
+            assert "sql_injection_basic" not in task_ids
+
 
 class TestCleanupOnFailure:
     """Test cleanup occurs properly on failure paths."""

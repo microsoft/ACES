@@ -372,6 +372,25 @@ class ComposeOrchestrator:
             return result
 
         except subprocess.CalledProcessError as e:
+            # Parse stderr to extract actual Docker error
+            stderr_text = e.stderr if e.stderr else ""
+
+            # Detect specific error conditions
+            is_subnet_exhausted = "all predefined address pools have been fully subnetted" in stderr_text
+            is_network_error = "failed to create network" in stderr_text
+            is_port_conflict = "port is already allocated" in stderr_text or "address already in use" in stderr_text
+
+            # Build enhanced error message with diagnostic hints
+            error_hints = []
+            if is_subnet_exhausted:
+                error_hints.append(
+                    "Docker subnet pool exhausted - clean up unused networks with 'docker network prune'"
+                )
+            if is_network_error:
+                error_hints.append("Network creation failed - check for orphaned networks")
+            if is_port_conflict:
+                error_hints.append("Port conflict detected - another container may be using the same port")
+
             if self.container_logger:
                 self.container_logger.log_container_lifecycle_event(
                     event_type="start_failure",
@@ -381,7 +400,14 @@ class ComposeOrchestrator:
                         "compose_file": str(compose_file_path),
                         "episode_id": config.episode_id,
                     },
-                    additional_data={"error": str(e)},
+                    additional_data={
+                        "error": str(e),
+                        "stderr": stderr_text,
+                        "is_subnet_exhausted": is_subnet_exhausted,
+                        "is_network_error": is_network_error,
+                        "is_port_conflict": is_port_conflict,
+                        "error_hints": error_hints,
+                    },
                 )
 
             logger.error(
@@ -390,10 +416,20 @@ class ComposeOrchestrator:
                     "event": "compose_environment_async_start_failed",
                     "project_name": self.project_name,
                     "episode_id": config.episode_id,
-                    "stderr": e.stderr,
+                    "stderr": stderr_text,
+                    "exit_code": e.returncode,
+                    "is_subnet_exhausted": is_subnet_exhausted,
+                    "is_network_error": is_network_error,
+                    "is_port_conflict": is_port_conflict,
+                    "error_hints": error_hints,
                 },
             )
-            raise RuntimeError(f"Failed to start environment: {e}")
+
+            # Include diagnostic hint in exception message
+            error_msg = f"Failed to start environment: {e}"
+            if error_hints:
+                error_msg += f" | Hints: {'; '.join(error_hints)}"
+            raise RuntimeError(error_msg)
 
     def wait_for_healthy(self, compose_file_path: str, timeout_seconds: int = 180, check_interval: float = 2.0) -> None:
         """
@@ -1215,7 +1251,7 @@ class ComposeOrchestrator:
 
     def cleanup_episode(self, episode_id: str) -> bool:
         """
-        Clean up all containers for a specific episode.
+        Clean up all containers and networks for a specific episode.
 
         Args:
             episode_id: Episode ID to clean up
@@ -1224,6 +1260,7 @@ class ComposeOrchestrator:
             bool: True if cleanup succeeded, False otherwise
         """
         project_name = f"saber-episode-{episode_id}"
+        network_name = f"saber-episode-{episode_id}"
 
         logger.info(
             "Episode cleanup requested",
@@ -1231,19 +1268,22 @@ class ComposeOrchestrator:
                 "event": "episode_cleanup_requested",
                 "episode_id": episode_id,
                 "project_name": project_name,
+                "network_name": network_name,
             },
         )
 
+        cleanup_success = True
+
         try:
-            # Stop and remove all containers for this episode project
+            # First, try docker compose down (works for fully created environments)
             cmd = ["docker", "compose", "-p", project_name, "down", "--volumes", "--remove-orphans"]
 
             result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=60)
 
             logger.info(
-                "Episode cleanup completed",
+                "Episode compose cleanup completed",
                 extra={
-                    "event": "episode_cleanup_completed",
+                    "event": "episode_compose_cleanup_completed",
                     "episode_id": episode_id,
                     "project_name": project_name,
                 },
@@ -1257,30 +1297,78 @@ class ComposeOrchestrator:
                         "stdout": result.stdout,
                     },
                 )
-            return True
 
         except subprocess.CalledProcessError as e:
-            logger.error(
-                "Episode cleanup failed",
+            # Compose down failed - log but continue to network cleanup
+            logger.warning(
+                "Episode compose cleanup failed (may not have been fully created)",
                 extra={
-                    "event": "episode_cleanup_failed",
+                    "event": "episode_compose_cleanup_failed",
                     "episode_id": episode_id,
                     "project_name": project_name,
+                    "error": str(e),
                     "stderr": e.stderr,
-                    "return_code": getattr(e, "returncode", None),
                 },
             )
-            return False
-        except subprocess.TimeoutExpired:
+            cleanup_success = False
+
+        # Additionally, explicitly remove the episode network if it exists
+        # This handles cases where 'docker compose up' failed partway through
+        try:
+            # Check if network exists first
+            check_cmd = ["docker", "network", "inspect", network_name]
+            check_result = subprocess.run(check_cmd, capture_output=True, text=True, timeout=10)
+
+            if check_result.returncode == 0:
+                # Network exists, remove it
+                remove_cmd = ["docker", "network", "rm", network_name]
+                subprocess.run(remove_cmd, capture_output=True, text=True, check=True, timeout=10)
+
+                logger.info(
+                    "Episode network removed",
+                    extra={
+                        "event": "episode_network_removed",
+                        "episode_id": episode_id,
+                        "network_name": network_name,
+                    },
+                )
+                cleanup_success = True
+            else:
+                # Network doesn't exist, nothing to clean up
+                logger.debug(
+                    "Episode network does not exist (already cleaned up or never created)",
+                    extra={
+                        "event": "episode_network_not_found",
+                        "episode_id": episode_id,
+                        "network_name": network_name,
+                    },
+                )
+
+        except subprocess.CalledProcessError as e:
+            # Network removal failed
             logger.error(
-                "Episode cleanup timed out",
+                "Failed to remove episode network",
                 extra={
-                    "event": "episode_cleanup_timeout",
+                    "event": "episode_network_removal_failed",
+                    "episode_id": episode_id,
+                    "network_name": network_name,
+                    "error": str(e),
+                    "stderr": e.stderr,
+                },
+            )
+            cleanup_success = False
+
+        if cleanup_success:
+            logger.info(
+                "Episode cleanup completed successfully",
+                extra={
+                    "event": "episode_cleanup_completed",
                     "episode_id": episode_id,
                     "project_name": project_name,
                 },
             )
-            return False
+
+        return cleanup_success
 
     def validate_compose_file(self, compose_file_path: Path) -> None:
         """

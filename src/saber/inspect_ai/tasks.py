@@ -21,7 +21,7 @@ import asyncio
 import fnmatch
 import threading
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import aiohttp
 import anyio
@@ -125,7 +125,12 @@ def create_domain_task(
         Args:
             rest_port: REST API port (default: 8000)
             mcp_port: MCP API port (default: 8001)
-            task_filter: Optional task filter (exact match or glob pattern)
+            task_filter: Optional task filter (exact match, glob pattern, or comma-separated)
+                Examples:
+                - "xss_0_flag_capture" (exact match)
+                - "xss_*" (glob pattern)
+                - "xss_*,sql_*" (multiple patterns with OR logic)
+                - "xss_0_flag_capture,sql_*,cmd_*" (mix of exact and glob)
             agent: Agent implementation to use (default: domain-specific default)
             log_level: Logging level for domain services (default: "INFO")
             build: Build missing images before starting (default: False)
@@ -302,7 +307,7 @@ async def _start_and_load_tasks(
     4. Starts DomainController with health checks
     5. Waits for server health with retry/backoff
     6. Queries REST API for benchmark info
-    7. Applies task_filter (exact + glob)
+    7. Applies task_filter (exact, glob, or comma-separated patterns with OR logic)
     8. Converts to dataset with pre-assigned IDs
     9. Returns Task with MemoryDataset and sandbox config
 
@@ -313,7 +318,7 @@ async def _start_and_load_tasks(
         domains_root: Path to domains directory
         rest_port: REST API port
         mcp_port: MCP API port
-        task_filter: Optional task filter pattern
+        task_filter: Optional task filter pattern (supports comma-separated patterns)
         agent_name: Name of agent implementation to use
         log_level: Logging level
         build: Optional build filter
@@ -628,7 +633,7 @@ async def _wait_for_server_health(
 
 def _apply_task_filter(
     tasks: List[Any],
-    task_filter: str,
+    task_filter: Union[str, List[str]],
     domain_slug: str,
 ) -> List[Any]:
     """Apply task filter with exact and glob pattern matching.
@@ -637,32 +642,63 @@ def _apply_task_filter(
     - Exact match: task_filter="labyrinth_linguist_task_hard"
     - Glob pattern: task_filter="labyrinth_*"
     - Glob pattern: task_filter="*_hard"
+    - Multiple filters (OR logic): task_filter="xss_*,sql_*"
+    - Multiple filters with exact: task_filter="xss_0_flag_capture,sql_*,cmd_injection_task"
+
+    Multiple filters are separated by commas and matched with OR logic.
+    Each filter can be an exact match or a glob pattern.
 
     Args:
         tasks: List of TaskInfo objects from server
-        task_filter: Filter pattern (exact or glob)
+        task_filter: Filter pattern (exact, glob, or comma-separated patterns)
+                    Can be a string or a list (Inspect AI may parse comma-separated values as lists)
         domain_slug: Domain slug for error messages
 
     Returns:
-        Filtered list of TaskInfo objects
+        Filtered list of TaskInfo objects (deduplicated)
 
     Raises:
-        PrerequisiteError: If no tasks match the filter
+        PrerequisiteError: If no tasks match any of the filters
     """
-    # Try exact match first
-    exact_matches = [t for t in tasks if t.task_id == task_filter]
-    if exact_matches:
-        return exact_matches
+    # Handle both string and list inputs (Inspect AI may parse "a,b" as ["a", "b"])
+    if isinstance(task_filter, list):
+        filter_patterns = [str(p).strip() for p in task_filter]
+    else:
+        # Split on comma to support multiple filters
+        filter_patterns = [pattern.strip() for pattern in task_filter.split(",")]
 
-    # Try glob pattern
-    glob_matches = [t for t in tasks if fnmatch.fnmatch(t.task_id, task_filter)]
-    if glob_matches:
-        return glob_matches
+    # Collect all matching tasks across all patterns
+    # Use dict to deduplicate by task_id while preserving TaskInfo objects
+    matched_tasks: Dict[str, Any] = {}
+
+    for pattern in filter_patterns:
+        if not pattern:  # Skip empty patterns
+            continue
+
+        # Try exact match first
+        exact_matches = [t for t in tasks if t.task_id == pattern]
+        if exact_matches:
+            for task in exact_matches:
+                matched_tasks[task.task_id] = task
+            continue
+
+        # Try glob pattern
+        glob_matches = [t for t in tasks if fnmatch.fnmatch(t.task_id, pattern)]
+        if glob_matches:
+            for task in glob_matches:
+                matched_tasks[task.task_id] = task
+
+    # Convert back to list and maintain consistent ordering
+    if matched_tasks:
+        # Sort by task_id for deterministic ordering
+        return sorted(matched_tasks.values(), key=lambda t: t.task_id)
 
     # No matches - provide helpful error
     available_ids = [t.task_id for t in tasks]
+    # Format task_filter for error message
+    filter_display = task_filter if isinstance(task_filter, str) else ",".join(task_filter)
     raise PrerequisiteError(
-        f"No tasks matched filter '{task_filter}' in domain '{domain_slug}'.\n\n"
+        f"No tasks matched filter '{filter_display}' in domain '{domain_slug}'.\n\n"
         f"Available tasks ({len(available_ids)}):\n"
         + "\n".join(f"  - {task_id}" for task_id in sorted(available_ids)[:20])
         + (f"\n  ... and {len(available_ids) - 20} more" if len(available_ids) > 20 else "")
