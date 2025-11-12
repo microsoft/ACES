@@ -471,7 +471,9 @@ def saber_scorer() -> Scorer:
             step_criteria = await session_manager.get_step_evaluation_criteria(session_id, episode_id)
 
             # Step 5: Score submission
-            submission_score = await _score_submission(submission_data, submission_criteria, session_manager, state)
+            submission_score, submission_explanation = await _score_submission(
+                submission_data, submission_criteria, session_manager, state
+            )
 
             # Step 6: Score steps (if configured)
             unweighted_step_score = 0.0  # For logging/debugging only
@@ -543,7 +545,7 @@ def saber_scorer() -> Scorer:
                     "weighted_step_score": weighted_step_score,
                     "step_evaluations": [se.model_dump() for se in step_evaluations],
                     "client_scorer_version": "2.1",
-                    "scoring_method": "max",
+                    "scoring_method": "sum",
                 },
             )
 
@@ -562,7 +564,7 @@ def saber_scorer() -> Scorer:
                     "submission_score": submission_score,
                     "unweighted_step_score": unweighted_step_score,
                     "weighted_step_score": weighted_step_score,
-                    "scoring_method": "max",
+                    "scoring_method": "sum",
                     "event": "client_eval_complete",
                 },
             )
@@ -650,11 +652,12 @@ def saber_scorer() -> Scorer:
             # Build explanation based on whether subtasks were scored
             if step_criteria:
                 explanation = (
-                    f"Client eval (max): submission={submission_score}, "
-                    f"weighted_subtasks={weighted_step_score:.2f}, final={total_score}"
+                    f"{submission_explanation}, "
+                    f"weighted_subtasks={weighted_step_score:.2f}, "
+                    f"sum(submission, subtasks)={total_score}"
                 )
             else:
-                explanation = f"Client eval: submission={submission_score}/{max_sub_score}"
+                explanation = f"{submission_explanation}"
 
             return Score(
                 value=total_score,
@@ -698,7 +701,7 @@ async def _score_submission(
     criteria: SubmissionEvaluationCriteriaResponse,
     session_manager: Any,
     state: TaskState,
-) -> float:
+) -> tuple[float, str]:
     """
     Score submission using configured strategy.
 
@@ -709,7 +712,7 @@ async def _score_submission(
         state: Task state
 
     Returns:
-        Submission score (0.0 to max_score)
+        Tuple of (submission_score, explanation) where score is 0.0 to max_score
     """
     strategy = criteria.strategy
     if strategy == "static":
@@ -722,7 +725,7 @@ async def _score_submission(
 
 async def _score_submission_static(
     submission_data: EpisodeSubmissionResponse, criteria: SubmissionEvaluationCriteriaResponse
-) -> float:
+) -> tuple[float, str]:
     """
     Static submission scoring (pattern matching).
 
@@ -731,7 +734,7 @@ async def _score_submission_static(
         criteria: Submission evaluation criteria
 
     Returns:
-        Score (0.0 or max_score)
+        Tuple of (score, explanation) where score is 0.0 or max_score
     """
     expected_answers = criteria.criteria.get("expected_answers", [])
     max_score = criteria.scoring.get("max_score", 1.0)
@@ -747,10 +750,12 @@ async def _score_submission_static(
                 "Static submission match found",
                 extra={"expected": expected, "score": max_score, "event": "static_submission_match"},
             )
-            return max_score
+            explanation = f"submission={max_score} Expected: {expected_answers}"
+            return max_score, explanation
 
     logger.info("Static submission no match", extra={"score": 0.0, "event": "static_submission_no_match"})
-    return 0.0
+    explanation = f"submission=0.0 Expected: {expected_answers}"
+    return 0.0, explanation
 
 
 async def _score_submission_llm(
@@ -758,7 +763,7 @@ async def _score_submission_llm(
     criteria: SubmissionEvaluationCriteriaResponse,
     session_manager: Any,
     state: TaskState,
-) -> float:
+) -> tuple[float, str]:
     """
     LLM submission scoring with client-side template rendering.
 
@@ -769,7 +774,7 @@ async def _score_submission_llm(
         state: Task state
 
     Returns:
-        Score (0.0 or max_score based on LLM judgment)
+        Tuple of (score, explanation) where score is 0.0 or max_score based on LLM judgment
     """
     # Get template content directly from criteria
     system_template = criteria.criteria.get("judge_system_template")
@@ -793,9 +798,10 @@ async def _score_submission_llm(
     env = Environment(loader=TemplateStringLoader({"system": system_template, "user": user_template}))
 
     # Build context
+    golden_answer = criteria.criteria.get("golden_answer", "")
     context = {
         "question": criteria.task_context.description,
-        "golden_answer": criteria.criteria.get("golden_answer", ""),
+        "golden_answer": golden_answer,
         "submission": submission_data.submission,
         "task_id": criteria.task_id,
         "domain": criteria.task_context.domain,
@@ -830,13 +836,20 @@ async def _score_submission_llm(
     # Check for INCORRECT first (since INCORRECT contains CORRECT as substring)
     if "INCORRECT" in judge_response:
         logger.info("LLM judge: INCORRECT", extra={"score": 0.0, "event": "llm_submission_incorrect"})
-        return 0.0
+        explanation = f"submission=0.0 Expected: {golden_answer}" if golden_answer else "submission=0.0"
+        return 0.0, explanation
     elif "CORRECT" in judge_response:
         logger.info("LLM judge: CORRECT", extra={"score": max_score, "event": "llm_submission_correct"})
-        return max_score
+        explanation = (
+            f"submission={max_score} Expected: {golden_answer}" if golden_answer else f"submission={max_score}"
+        )
+        return max_score, explanation
     else:
         logger.info("LLM judge: UNCLEAR", extra={"score": 0.0, "event": "llm_submission_unclear"})
-        return 0.0
+        explanation = (
+            f"submission=0.0 (unclear) Expected: {golden_answer}" if golden_answer else "submission=0.0 (unclear)"
+        )
+        return 0.0, explanation
 
 
 # ============================================================================
