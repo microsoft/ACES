@@ -186,7 +186,6 @@ def create_domain_task(
                 stop_saber_after,
                 max_concurrent_episodes,
                 run_preflight,
-                **kwargs,
             )
         except Exception as e:
             # Ensure we have a clean error message
