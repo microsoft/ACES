@@ -596,6 +596,50 @@ class SessionRestAPI:
                 )
                 raise HTTPException(status_code=500, detail=f"Failed to get episode submission: {exc}") from exc
 
+        @self.app.post("/api/v1/session/{session_id}/episodes/{episode_id}/submission")
+        async def post_episode_submission_endpoint(
+            session_id: str, episode_id: str, submission: EvalSubmission
+        ) -> dict:
+            """
+            Store episode submission without ending the episode.
+
+            Args:
+                session_id: Session ID
+                episode_id: Episode ID
+                submission: EvalSubmission with answer and metadata
+
+            Returns:
+                Success response
+            """
+            log_operation_start(logger, "post_episode_submission", session_id=session_id, episode_id=episode_id)
+            try:
+                episode = self.session_manager.get_episode_by_id(episode_id)
+                if not episode:
+                    raise HTTPException(status_code=404, detail="Episode not found")
+
+                # Store the submission on the episode (doesn't end it)
+                episode.eval_submission = submission
+                episode.submission = submission.submission
+
+                logger.info(
+                    "Episode submission stored (episode remains active)",
+                    extra={
+                        "event": "episode_submission_stored",
+                        "session_id": session_id,
+                        "episode_id": episode_id,
+                        "submission_length": len(submission.submission),
+                    },
+                )
+
+                return {"success": True, "message": "Submission stored"}
+            except HTTPException:
+                raise
+            except Exception as exc:
+                log_operation_failure(
+                    logger, "post_episode_submission", exc, session_id=session_id, episode_id=episode_id
+                )
+                raise HTTPException(status_code=500, detail=f"Failed to store episode submission: {exc}") from exc
+
         @self.app.get("/api/v1/session/{session_id}/episodes/{episode_id}/steps")
         async def get_episode_steps_endpoint(session_id: str, episode_id: str) -> EpisodeStepsResponse:
             """Get episode step history for client-side evaluation."""

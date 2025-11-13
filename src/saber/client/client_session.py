@@ -1593,6 +1593,34 @@ class ClientSessionManager:
     # NEW CLIENT-SIDE EVALUATION METHODS (Breaking Change Migration)
     # ============================================================================
 
+    async def post_episode_submission(self, session_id: str, episode_id: str, submission: EvalSubmission) -> None:
+        """
+        Store episode submission without ending the episode.
+
+        Called by scorer BEFORE evaluation to capture the agent's answer.
+        Episode remains alive during scoring, then sample_cleanup ends it.
+
+        Args:
+            session_id: Session ID
+            episode_id: Episode ID
+            submission: EvalSubmission with answer and metadata
+
+        Raises:
+            Exception: If request fails
+        """
+        logger.debug(
+            "Posting episode submission",
+            extra={"event": "post_episode_submission", "session_id": session_id, "episode_id": episode_id},
+        )
+
+        url = f"{self.base_url}/api/v1/session/{session_id}/episodes/{episode_id}/submission"
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=submission.model_dump()) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    raise Exception(f"Failed to post episode submission: {response.status} - {error_text}")
+
     async def get_episode_submission(self, session_id: str, episode_id: str) -> EpisodeSubmissionResponse:
         """
         Get episode submission data for client-side evaluation.

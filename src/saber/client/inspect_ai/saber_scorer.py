@@ -3,12 +3,14 @@ SABER Task Scorer for inspect_ai - CLIENT-SIDE EVALUATION (Breaking Change Migra
 
 Complete rewrite for client-side evaluation architecture.
 ALL evaluation logic happens on the client:
+- Extract and submit agent's answer to server (keeps episode alive)
 - Fetch submission and steps from server
 - Fetch evaluation criteria (template paths only)
 - Fetch and render templates with Jinja2
 - Execute LLM evaluation
 - Calculate scores
 - Submit results to server
+- Episode remains alive until sample_cleanup ends it
 
 NO server-side evaluation. NO backward compatibility.
 
@@ -37,6 +39,25 @@ from ...models.rest.evaluation import (
 )
 
 logger = get_saber_logger(LogCategory.EVALUATION, __name__)
+
+
+# ============================================================================
+# Utility Functions
+# ============================================================================
+
+
+def clean_dict(payload: Any) -> Any:
+    """Remove None/False values to prevent server-side type coercion issues."""
+    if isinstance(payload, dict):
+        cleaned: Dict[str, Any] = {}
+        for key, value in payload.items():
+            if value is None or value is False:
+                continue
+            cleaned[key] = clean_dict(value)
+        return cleaned
+    if isinstance(payload, list):
+        return [clean_dict(item) for item in payload if item is not None and item is not False]
+    return payload
 
 
 # ============================================================================
@@ -373,12 +394,14 @@ def saber_scorer() -> Scorer:
     Client-side evaluation scorer (BREAKING CHANGE).
 
     Handles ALL evaluation logic on the client:
-    1. Fetch submission and steps from server
-    2. Fetch evaluation criteria (template paths)
-    3. Fetch and render templates with Jinja2
-    4. Execute LLM calls
-    5. Calculate scores
-    6. Submit results to server
+    1. Submit agent's answer to server (keeps episode alive during scoring)
+    2. Fetch submission and steps from server
+    3. Fetch evaluation criteria (template paths)
+    4. Fetch and render templates with Jinja2
+    5. Execute LLM calls
+    6. Calculate scores
+    7. Submit results to server
+    8. Episode remains alive - sample_cleanup will end it
 
     Returns:
         Scorer function that performs client-side evaluation
@@ -458,24 +481,65 @@ def saber_scorer() -> Scorer:
                 extra={"session_id": session_id, "episode_id": episode_id, "event": "client_eval_start"},
             )
 
-            # Step 1: Fetch submission data
+            # Step 1: Submit the agent's answer to the server (keeps episode alive during scoring)
+            # Extract submission from state.output.completion (the agent's final answer)
+            agent_answer = state.output.completion if state.output else ""
+
+            # Get task_id from current_episode for the EvalSubmission
+            task_id = current_episode.task_id if hasattr(current_episode, "task_id") else "unknown"
+
+            # Extract model name as string (state.model is a ModelName object)
+            model_name = str(state.model) if hasattr(state, "model") and state.model else "unknown"
+
+            # Extract token usage from state.output if available
+            tokens = {}
+            if state.output and hasattr(state.output, "usage") and state.output.usage:
+                # Get token usage and ensure all values are integers (convert None to 0)
+                usage_dict = state.output.usage.model_dump()
+                tokens = {k: v if v is not None else 0 for k, v in usage_dict.items()}
+
+            # Create EvalSubmission from agent's completion
+            eval_submission = EvalSubmission(
+                episode_id=episode_id,
+                task_id=task_id,
+                model=model_name,
+                choices=[],  # Not available in state
+                submission=agent_answer,
+                tokens=tokens,
+                time=0.0,  # Could calculate if needed
+            )
+
+            # Post submission to server (episode stays alive)
+            await session_manager.post_episode_submission(session_id, episode_id, eval_submission)
+
+            logger.info(
+                "Agent submission posted to server (episode remains active)",
+                extra={
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                    "submission_length": len(agent_answer),
+                    "event": "scorer_submission_posted",
+                },
+            )
+
+            # Step 2: Fetch submission data (should now contain what we just posted)
             submission_data = await session_manager.get_episode_submission(session_id, episode_id)
 
-            # Step 2: Fetch step history
+            # Step 3: Fetch step history
             steps_data = await session_manager.get_episode_steps(session_id, episode_id)
 
-            # Step 3: Fetch submission evaluation criteria
+            # Step 4: Fetch submission evaluation criteria
             submission_criteria = await session_manager.get_submission_evaluation_criteria(session_id, episode_id)
 
-            # Step 4: Fetch step evaluation criteria (optional)
+            # Step 5: Fetch step evaluation criteria (optional)
             step_criteria = await session_manager.get_step_evaluation_criteria(session_id, episode_id)
 
-            # Step 5: Score submission
+            # Step 6: Score submission
             submission_score, submission_explanation = await _score_submission(
                 submission_data, submission_criteria, session_manager, state
             )
 
-            # Step 6: Score steps (if configured)
+            # Step 7: Score steps (if configured)
             unweighted_step_score = 0.0  # For logging/debugging only
             weighted_step_score = 0.0
             step_evaluations: List[StepEvaluation] = []
@@ -531,7 +595,7 @@ def saber_scorer() -> Scorer:
                 max_weighted_subtask = sum(st.get("weight", 1.0) for st in step_criteria.subtasks)
                 max_possible += max_weighted_subtask
 
-            # Step 7: Submit evaluation result
+            # Step 8: Submit evaluation result
             evaluation_result = EvaluationResultSubmission(
                 strategy="client_side_evaluation",
                 raw_score=total_score,
@@ -544,7 +608,7 @@ def saber_scorer() -> Scorer:
                     "unweighted_step_score": unweighted_step_score,
                     "weighted_step_score": weighted_step_score,
                     "step_evaluations": [se.model_dump() for se in step_evaluations],
-                    "client_scorer_version": "2.1",
+                    "client_scorer_version": "2.2",
                     "scoring_method": "sum",
                 },
             )
@@ -569,52 +633,11 @@ def saber_scorer() -> Scorer:
                 },
             )
 
-            # Extract task_id early - needed for episode cleanup
+            # Extract task_id for metadata
             task_id = submission_criteria.task_id
 
-            # Step 8: Store submission for sandbox cleanup to use when ending episode
-            # The sandbox's sample_cleanup will end the episode (unified cleanup path)
-            # We just need to make the submission available for it
-            try:
-                # Create EvalSubmission from the submission_data we fetched earlier
-                eval_submission = EvalSubmission(
-                    episode_id=episode_id,
-                    task_id=task_id,
-                    model=submission_data.model or "unknown",
-                    choices=[],  # Not available in submission_data
-                    submission=submission_data.submission,
-                    tokens=submission_data.tokens,
-                    time=submission_data.execution_time or 0.0,
-                )
-
-                # Store submission in inspect_ai store for sandbox cleanup to use
-                # The sandbox will retrieve this and pass it to end_episode
-                store().set("saber_episode_submission", eval_submission)
-
-                logger.debug(
-                    "Submission stored for sandbox cleanup to end episode",
-                    extra={
-                        "session_id": session_id,
-                        "episode_id": episode_id,
-                        "event": "scorer_submission_stored",
-                        "note": "Sandbox sample_cleanup will end episode with this submission",
-                    },
-                )
-            except Exception as store_error:
-                # Log but don't fail scoring if we can't store the submission
-                # The sandbox will still end the episode, just without the submission
-                logger.warning(
-                    "Failed to store submission for sandbox cleanup",
-                    extra={
-                        "session_id": session_id,
-                        "episode_id": episode_id,
-                        "error_type": type(store_error).__name__,
-                        "error_details": str(store_error),
-                        "event": "scorer_submission_store_failed",
-                        "note": "Episode will be ended without submission",
-                    },
-                    exc_info=True,
-                )
+            # NOTE: Submission already posted to server in Step 1
+            # Episode remains alive through scoring and will be ended by sample_cleanup
 
             # Step 9: Return score for inspect_ai
             max_sub_score = submission_criteria.scoring.get("max_score", 1.0)
@@ -629,7 +652,7 @@ def saber_scorer() -> Scorer:
                 "submission_score": submission_score,
                 "max_possible": max_possible,
                 "task_id": task_id,
-                "scorer_version": "2.1",
+                "scorer_version": "2.2",
                 "scoring_method": "max",
             }
 
@@ -685,7 +708,7 @@ def saber_scorer() -> Scorer:
                 value=0.0,
                 answer="",
                 explanation=f"Client-side evaluation failed: {exc}",
-                metadata={"error": str(exc), "scorer_version": "2.1"},
+                metadata={"error": str(exc), "scorer_version": "2.2"},
             )
 
     return score
