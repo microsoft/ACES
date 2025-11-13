@@ -117,7 +117,8 @@ def create_domain_task(
         rebuild: Optional[str] = None,
         rebuild_all: bool = False,
         stop_saber_after: bool = False,
-        max_concurrent_episodes: int = 8,
+        max_concurrent_episodes: int = 16,
+        run_preflight: bool = False,
         **kwargs: Any,
     ) -> Task:
         """Task callable invoked by Inspect AI with CLI parameters.
@@ -139,6 +140,8 @@ def create_domain_task(
             stop_saber_after: Stop SABER domain after task completes (default: False).
                 If False, server stays running for faster re-runs.
             max_concurrent_episodes: Max concurrent episodes (default: 8, 0 = unlimited)
+            run_preflight: Run preflight check on all compose environments before evaluation
+                (default: False). If any environments fail health checks, evaluation aborts.
             **kwargs: Additional parameters passed through
 
         Returns:
@@ -182,6 +185,7 @@ def create_domain_task(
                 compose_template_path,
                 stop_saber_after,
                 max_concurrent_episodes,
+                run_preflight,
                 **kwargs,
             )
         except Exception as e:
@@ -283,6 +287,106 @@ def _create_saber_solver(agent_name: str, agent_factory: Callable) -> Solver:
     return saber_agent_solver()
 
 
+async def _run_preflight_check(
+    domain_slug: str,
+    domains_root: Path,
+    concurrency: int = 8,
+    timeout: int = 180,
+) -> None:
+    """Run saber-domain preflight check before evaluation.
+
+    Executes the preflight CLI command to validate all compose environments
+    are healthy before starting the evaluation. This catches configuration
+    issues early and prevents wasted evaluation time.
+
+    Args:
+        domain_slug: Domain to check
+        domains_root: Path to domains directory
+        concurrency: Number of environments to check in parallel (default: 8)
+        timeout: Timeout per environment in seconds (default: 180)
+
+    Raises:
+        PrerequisiteError: If preflight check fails or command execution fails
+    """
+    import sys
+
+    logger.info(
+        f"Running preflight check for domain '{domain_slug}'",
+        extra={
+            "domain": domain_slug,
+            "concurrency": concurrency,
+            "timeout": timeout,
+        },
+    )
+
+    # Find the saber-domain CLI
+    # Try to use the same Python interpreter and environment
+    cli_cmd = [sys.executable, "-m", "saber.domain.cli", "preflight", domain_slug]
+
+    # Add options
+    cli_cmd.extend(["-c", str(concurrency)])
+    cli_cmd.extend(["--timeout", str(timeout)])
+    cli_cmd.append("--verbose")  # Show detailed progress
+
+    # Set working directory to domains_root parent for proper path resolution
+    cwd = domains_root.parent if domains_root.parent.exists() else domains_root
+
+    try:
+        # Run preflight command, streaming output
+        process = await asyncio.create_subprocess_exec(
+            *cli_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=cwd,
+        )
+
+        # Stream output line by line
+        assert process.stdout is not None
+        while True:
+            line = await process.stdout.readline()
+            if not line:
+                break
+            # Log each line from preflight (strip trailing newline)
+            line_str = line.decode("utf-8").rstrip()
+            if line_str:
+                logger.info(f"[preflight] {line_str}")
+
+        # Wait for completion
+        exit_code = await process.wait()
+
+        if exit_code != 0:
+            raise PrerequisiteError(
+                f"Preflight check failed for domain '{domain_slug}' (exit code: {exit_code}).\n\n"
+                f"One or more compose environments failed health checks.\n"
+                f"Review the preflight output above for details on which environments failed.\n\n"
+                f"To fix:\n"
+                f"  1. Check compose file configurations in domains/{domain_slug}/server/config/environments/\n"
+                f"  2. Verify healthcheck endpoints match your service ports\n"
+                f"  3. Run preflight manually for debugging: uv run saber-domain preflight {domain_slug} --verbose"
+            )
+
+        logger.info(
+            f"Preflight check passed for domain '{domain_slug}'",
+            extra={"domain": domain_slug},
+        )
+
+    except FileNotFoundError as e:
+        raise PrerequisiteError(
+            f"Failed to run saber-domain preflight command.\n\n"
+            f"Ensure SABER is properly installed:\n"
+            f"  uv pip install -e external/saber\n\n"
+            f"Error: {e}"
+        ) from e
+    except Exception as e:
+        if isinstance(e, PrerequisiteError):
+            raise
+        raise PrerequisiteError(
+            f"Preflight check failed with unexpected error: {e}\n\n"
+            f"Command: {' '.join(cli_cmd)}\n"
+            f"Working directory: {cwd}"
+        ) from e
+
+
 async def _start_and_load_tasks(
     domain_slug: str,
     domains_root: Path,
@@ -296,6 +400,7 @@ async def _start_and_load_tasks(
     compose_template_path: Optional[Path],
     stop_saber_after: bool,
     max_concurrent_episodes: int,
+    run_preflight: bool,
     **kwargs: Any,
 ) -> Task:
     """Start SABER domain and load tasks as dataset.
@@ -304,12 +409,13 @@ async def _start_and_load_tasks(
     1. Validates parameters
     2. Checks for concurrent domain usage (process-local registry)
     3. Performs preflight check for already-running instances
-    4. Starts DomainController with health checks
-    5. Waits for server health with retry/backoff
-    6. Queries REST API for benchmark info
-    7. Applies task_filter (exact, glob, or comma-separated patterns with OR logic)
-    8. Converts to dataset with pre-assigned IDs
-    9. Returns Task with MemoryDataset and sandbox config
+    4. Runs preflight environment checks if requested (before domain startup)
+    5. Starts DomainController with health checks
+    6. Waits for server health with retry/backoff
+    7. Queries REST API for benchmark info
+    8. Applies task_filter (exact, glob, or comma-separated patterns with OR logic)
+    9. Converts to dataset with pre-assigned IDs
+    10. Returns Task with MemoryDataset and sandbox config
 
     Cleanup is guaranteed via try/finally on all failure paths.
 
@@ -326,6 +432,7 @@ async def _start_and_load_tasks(
         compose_template_path: Optional compose template
         stop_saber_after: Stop domain after evaluation
         max_concurrent_episodes: Max concurrent episodes
+        run_preflight: Run preflight check on all compose environments before starting
         **kwargs: Additional parameters
 
     Returns:
@@ -414,6 +521,16 @@ async def _start_and_load_tasks(
 
         if not existing and not running_domain:
             # No domain running - start it fresh
+
+            # Run preflight check if requested (before starting domain)
+            if run_preflight:
+                await _run_preflight_check(
+                    domain_slug=domain_slug,
+                    domains_root=domains_root,
+                    concurrency=max_concurrent_episodes,
+                    timeout=180,
+                )
+
             # Create controller (CLI-based, no compose_template_path needed)
             controller = DomainController(
                 domains_root=Path(domains_root),

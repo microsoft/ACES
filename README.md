@@ -176,14 +176,29 @@ uv run inspect eval domains/excytin_demo --model openai/gpt-4 -T task_filter="in
 uv run inspect eval domains/excytin_demo --model openai/gpt-4 -T rest_port=9000 -T mcp_port=9001
 ```
 
+**Preflight validation:**
+
+```bash
+# Run preflight health checks on all environments before evaluation
+# Validates all compose files are properly configured
+uv run inspect eval domains/excytin_demo --model openai/gpt-4 -T run_preflight=true
+
+# Useful when making changes to domain configurations
+uv run inspect eval domains/excytin_demo \
+    --model openai/gpt-4 \
+    -T rebuild_all=true \
+    -T run_preflight=true
+```
+
 **Combined example:**
 
 ```bash
-# Rebuild server images, filter to incident tasks, and stop server after
+# Rebuild server images, filter to incident tasks, preflight check, and stop server after
 uv run inspect eval domains/excytin_demo \
     --model openai/gpt-4 \
     -T rebuild=server \
     -T task_filter="incident_*" \
+    -T run_preflight=true \
     -T stop_saber_after=true
 ```
 
@@ -213,6 +228,7 @@ results = eval(
     task_args={
         "task_filter": "incident_*",
         "build": True,
+        "run_preflight": True,  # Validate environments before evaluation
         "stop_saber_after": False  # Keep server running
     }
 )

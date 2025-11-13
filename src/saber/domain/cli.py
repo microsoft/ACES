@@ -500,6 +500,74 @@ def test(
         ctx.exit(1)
 
 
+@cli.command(name="preflight")  # type: ignore[misc]
+@click.argument("domain")  # type: ignore[misc]
+@click.option(
+    "--concurrency",
+    "-c",
+    type=int,
+    default=16,
+    help="Number of environments to test in parallel",
+)  # type: ignore[misc]
+@click.option(
+    "--timeout",
+    "-t",
+    type=int,
+    default=90,
+    help="Health check timeout in seconds per environment",
+)  # type: ignore[misc]
+@click.option("--pattern", "-p", help="Filter compose files by pattern (e.g., 'cmd', 'cookie_0')")  # type: ignore[misc]
+@click.option("--verbose", "-v", is_flag=True, help="Show detailed output")  # type: ignore[misc]
+@click.option("--fail-fast", is_flag=True, help="Stop on first failure")  # type: ignore[misc]
+@click.pass_context  # type: ignore[misc]
+def preflight(
+    ctx: click.Context,
+    domain: str,
+    concurrency: int,
+    timeout: int,
+    pattern: str | None,
+    verbose: bool,
+    fail_fast: bool,
+) -> None:
+    """Run preflight checks on all challenge environments.
+
+    This command discovers and tests all compose files in the domain's sandbox
+    environments directory. Each environment is brought up, health-checked, and
+    torn down to verify it can start successfully.
+
+    Examples:
+        saber-domain preflight romulus                    # Test all environments
+        saber-domain preflight romulus -c 8               # Test 8 in parallel
+        saber-domain preflight romulus -p cmd             # Only test cmd/* environments
+        saber-domain preflight romulus -p cookie_0        # Test specific environment
+        saber-domain preflight romulus --fail-fast        # Stop on first error
+    """
+    try:
+        orchestrator = _create_orchestrator(ctx.obj.get("domains_root"))
+
+        # Run preflight check implementation
+        import asyncio
+
+        asyncio.run(
+            _preflight_check_impl(
+                orchestrator=orchestrator,
+                domain=domain,
+                concurrency=concurrency,
+                timeout=timeout,
+                pattern=pattern,
+                verbose=verbose or ctx.obj.get("verbose", False),
+                fail_fast=fail_fast,
+            )
+        )
+
+    except DomainError as e:
+        click.echo(f"Error: {e}", err=True)
+        ctx.exit(1)
+    except KeyboardInterrupt:
+        click.echo("\n⚠️  Preflight check cancelled by user", err=True)
+        ctx.exit(130)
+
+
 @cli.command(name="test-resources")  # type: ignore[misc]
 @click.pass_context  # type: ignore[misc]
 def test_resources(ctx: click.Context) -> None:
@@ -1196,6 +1264,398 @@ def _import_saber_client() -> tuple[Any, Any]:
         return SABERConfig, SABERConfigLoader
     except ImportError as e:
         raise DomainError(f"SABER client components not available: {e}")
+
+
+async def _preflight_check_impl(
+    orchestrator: DomainOrchestrator,
+    domain: str,
+    concurrency: int,
+    timeout: int,
+    pattern: str | None,
+    verbose: bool,
+    fail_fast: bool,
+) -> None:
+    """Implementation of the preflight check command."""
+    import asyncio
+    import signal
+    from concurrent.futures import ThreadPoolExecutor
+    from pathlib import Path
+
+    # Track cancellation state
+    cancellation_requested = False
+
+    def signal_handler(signum: int, frame: Any) -> None:
+        """Handle Ctrl+C gracefully."""
+        nonlocal cancellation_requested
+        if not cancellation_requested:
+            cancellation_requested = True
+            click.echo("\n")
+            click.echo("⚠️  " + click.style("Ctrl+C detected - cancelling preflight check...", fg="yellow", bold=True))
+            click.echo("   Cleaning up running containers, please wait...")
+            click.echo("   " + click.style("(Please don't spam Ctrl+C, cleanup is in progress)", fg="yellow"))
+        else:
+            click.echo("\n⚠️  Multiple interrupts detected - please wait for cleanup to complete")
+
+    # Register signal handler
+    old_handler = signal.signal(signal.SIGINT, signal_handler)
+
+    try:
+        # Phase 1: Validate domain
+        click.echo(f"🔍 Validating domain {domain}...")
+        try:
+            orchestrator.validate_domain(domain)
+            click.echo("✓ Domain configuration valid")
+        except Exception as e:
+            raise DomainError(f"Domain validation failed: {e}")
+
+        # Phase 2: Discover compose files
+        click.echo("📋 Discovering challenge environments...")
+        domains_root = orchestrator.manifest_loader.domains_root
+        domain_path = domains_root / domain
+        sandbox_envs_path = domain_path / "server" / "config" / "environments" / "sandbox"
+        permanent_envs_path = domain_path / "server" / "config" / "environments" / "permanent"
+
+        # Find all compose files from both sandbox and permanent environments
+        compose_files = []
+
+        # Collect sandbox environments
+        if sandbox_envs_path.exists():
+            sandbox_files = list(sandbox_envs_path.rglob("*.compose.yml"))
+            compose_files.extend(sandbox_files)
+            if sandbox_files:
+                click.echo(f"  Found {len(sandbox_files)} sandbox environment(s)")
+
+        # Collect permanent environments
+        if permanent_envs_path.exists():
+            permanent_files = list(permanent_envs_path.glob("*.compose.yml"))
+            compose_files.extend(permanent_files)
+            if permanent_files:
+                click.echo(f"  Found {len(permanent_files)} permanent environment(s)")
+
+        if not compose_files:
+            click.echo(f"⚠️  No compose files found in {domain_path / 'server' / 'config' / 'environments'}")
+            return
+
+        # Apply pattern filter if specified
+        if pattern:
+            compose_files = [f for f in compose_files if pattern in str(f)]
+            if not compose_files:
+                click.echo(f"⚠️  No compose files matching pattern '{pattern}'")
+                return
+
+        click.echo(f"✓ Found {len(compose_files)} total environment(s) to test")
+        if pattern:
+            click.echo(f"  (filtered by pattern: {pattern})")
+        click.echo()
+
+        # Keep track of base environments path for relative naming
+        envs_base_path = domain_path / "server" / "config" / "environments"
+
+        # Phase 3: Run preflight checks in parallel
+        click.echo(f"🚀 Starting preflight checks (concurrency: {concurrency}, timeout: {timeout}s)...")
+        click.echo("─" * 80)
+
+        results = []
+        failed_count = 0
+        success_count = 0
+        start_time = asyncio.get_event_loop().time()
+
+        # Create semaphore to limit concurrency
+        semaphore = asyncio.Semaphore(concurrency)
+
+        async def test_environment(compose_file: Path) -> dict:
+            """Test a single environment."""
+            nonlocal failed_count, success_count
+
+            # Get environment name (relative path from environments dir)
+            env_name = str(compose_file.relative_to(envs_base_path))
+
+            # Check for cancellation
+            if cancellation_requested:
+                return {
+                    "name": env_name,
+                    "status": "cancelled",
+                    "message": "Cancelled by user",
+                }
+
+            async with semaphore:
+                if fail_fast and failed_count > 0:
+                    return {
+                        "name": env_name,
+                        "status": "skipped",
+                        "message": "Skipped due to previous failure (--fail-fast)",
+                    }
+
+                # Check again inside semaphore as value could have changed
+                if cancellation_requested:
+                    return {  # type: ignore[unreachable]
+                        "name": env_name,
+                        "status": "cancelled",
+                        "message": "Cancelled by user",
+                    }
+
+                if verbose:
+                    click.echo(f"⏳ Testing: {env_name}")
+                test_start = asyncio.get_event_loop().time()
+
+                # Run the test in a thread pool to avoid blocking
+                loop = asyncio.get_event_loop()
+                with ThreadPoolExecutor() as executor:
+                    result = await loop.run_in_executor(
+                        executor, _test_single_environment, compose_file, timeout, verbose
+                    )
+
+                test_elapsed = asyncio.get_event_loop().time() - test_start
+
+                # Update counters
+                if result["status"] == "success":
+                    success_count += 1
+                    click.echo(f"✓ {click.style('PASS', fg='green')}: {env_name} ({int(test_elapsed)}s)")
+                elif result["status"] == "failed":
+                    failed_count += 1
+                    click.echo(f"✗ {click.style('FAIL', fg='red')}: {env_name} ({int(test_elapsed)}s)")
+                    if result.get("message"):
+                        # Always show error message for failures
+                        click.echo(f"  Error: {result['message']}")
+                else:
+                    click.echo(f"⊘ {click.style('SKIP', fg='yellow')}: {env_name}")
+
+                return result
+
+        # Run all tests
+        tasks = [test_environment(compose_file) for compose_file in compose_files]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Handle any exceptions from gather
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                results[i] = {
+                    "name": str(compose_files[i].relative_to(envs_base_path)),
+                    "status": "failed",
+                    "message": f"Unexpected error: {result}",
+                }
+                failed_count += 1
+
+        elapsed = asyncio.get_event_loop().time() - start_time
+
+        # Phase 4: Report results
+        click.echo()
+        click.echo("─" * 80)
+
+        if cancellation_requested:
+            click.echo("📊 Preflight Check Results " + click.style("(CANCELLED)", fg="yellow", bold=True))
+        else:
+            click.echo("📊 Preflight Check Results")
+
+        click.echo("─" * 80)
+        click.echo(f"Total: {len(compose_files)}")
+        click.echo(f"{click.style('Passed', fg='green')}: {success_count}")
+        click.echo(f"{click.style('Failed', fg='red')}: {failed_count}")
+        click.echo(f"Time: {elapsed:.1f}s")
+        click.echo()
+
+        # Show failed environments if any
+        if failed_count > 0:
+            click.echo(f"{click.style('Failed Environments:', fg='red', bold=True)}")
+            for result in results:
+                if isinstance(result, dict) and result["status"] == "failed":
+                    click.echo(f"  • {result['name']}")
+                    if verbose:
+                        click.echo(f"    {result['message']}")
+            click.echo()
+
+            if cancellation_requested:
+                raise DomainError(f"Preflight check cancelled by user ({failed_count} failures before cancellation)")
+            else:
+                raise DomainError(f"Preflight check failed: {failed_count} environment(s) failed")
+        elif cancellation_requested:
+            click.echo(click.style("⚠️  Preflight check was cancelled by user", fg="yellow", bold=True))
+            raise DomainError("Preflight check cancelled by user")
+        else:
+            click.echo(f"{click.style('✓ All environments passed!', fg='green', bold=True)}")
+
+    finally:
+        # Restore original signal handler
+        signal.signal(signal.SIGINT, old_handler)
+
+
+def _test_single_environment(compose_file: Path, timeout: int, verbose: bool) -> dict:
+    """Test a single environment by bringing it up and checking health.
+
+    This runs in a thread pool to avoid blocking the async event loop.
+    """
+    import os
+    import re
+    import subprocess
+    import tempfile
+    import time
+    import uuid
+
+    import yaml
+
+    from saber.server.execution.sandbox.compose_health_checker import ComposeHealthChecker
+    from saber.server.execution.sandbox.environment_config import ComposeEnvironmentConfig
+
+    # Generate unique episode ID for this test
+    episode_id = str(uuid.uuid4())
+    project_name = f"preflight-{episode_id}"
+
+    # Create environment config
+    config = ComposeEnvironmentConfig(
+        episode_id=episode_id,
+        project_name=project_name,
+        config_type="sandbox",
+    )
+
+    env_vars = config.to_env_dict()
+
+    # Process compose file to inject network (if needed) and resolve variables
+    processed_compose_path = None
+    env_name = str(compose_file.name)
+
+    try:
+        # Read and process compose file
+        with open(compose_file, "r") as f:
+            compose_content = f.read()
+
+        # Manually resolve environment variables in the compose content
+        # This ensures ${EPISODE_ID} gets replaced before we parse the YAML
+        def replace_env_var(match: Any) -> str:
+            var_expr = match.group(1)
+            # Handle ${VAR:-default} syntax
+            if ":-" in var_expr:
+                var_name, default = var_expr.split(":-", 1)
+                return str(env_vars.get(var_name, default))
+            else:
+                return str(env_vars.get(var_expr, match.group(0)))
+
+        # Replace ${VAR} and ${VAR:-default} patterns
+        resolved_content = re.sub(r"\$\{([^}]+)\}", replace_env_var, compose_content)
+
+        # Now parse the resolved YAML
+        compose_data = yaml.safe_load(resolved_content)
+
+        # Inject network if needed (same as ComposeOrchestrator does)
+        if "networks" not in compose_data:
+            compose_data["networks"] = {}
+
+        if "saber-episode-network" not in compose_data["networks"]:
+            compose_data["networks"]["saber-episode-network"] = {"driver": "bridge"}
+
+        # Create temporary processed file with resolved variables
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as tmp:
+            yaml.dump(compose_data, tmp)
+            processed_compose_path = tmp.name
+
+        # Prepare environment
+        env = os.environ.copy()
+        env.update(env_vars)
+
+        # Start environment
+        if verbose:
+            click.echo(f"  → Starting containers for {env_name}...")
+
+        start_cmd = ["docker", "compose", "-f", processed_compose_path, "-p", project_name, "up", "-d"]
+
+        result = subprocess.run(start_cmd, env=env, capture_output=True, text=True, timeout=60)
+
+        if result.returncode != 0:
+            return {
+                "name": env_name,
+                "status": "failed",
+                "message": f"Failed to start: {result.stderr[:200]}",
+            }
+
+        if verbose:
+            click.echo("  → Containers started, checking health...")
+
+        # Wait for health checks with periodic updates
+        health_checker = ComposeHealthChecker()
+
+        try:
+            # Custom health check with periodic updates
+            start_time = time.time()
+            check_interval = 2.0
+            update_interval = 10  # Show update every 10 seconds
+            last_update_time = 0
+
+            while True:
+                elapsed = time.time() - start_time
+
+                # Check if we've exceeded timeout
+                if elapsed > timeout:
+                    raise TimeoutError(f"Health check timed out after {timeout}s")
+
+                # Get current health status
+                health_summary = health_checker.get_service_health_summary(processed_compose_path, project_name)
+
+                # Show periodic updates
+                if verbose and (elapsed - last_update_time >= update_interval):
+                    healthy = health_summary["healthy_count"]
+                    total = health_summary["total_count"]
+                    click.echo(f"  → [{int(elapsed)}s] Health: {healthy}/{total} services healthy")
+
+                    # Show details of unhealthy services
+                    for svc_name, svc_info in health_summary["services"].items():
+                        if not svc_info.get("healthy", False):
+                            reason = svc_info.get("reason", "unknown")
+                            click.echo(f"     • {svc_name}: {reason}")
+
+                    last_update_time = int(elapsed)
+
+                # Check if all services are healthy
+                if health_summary["overall_healthy"]:
+                    if verbose:
+                        click.echo(f"  → All services healthy after {int(elapsed)}s")
+                    return {
+                        "name": env_name,
+                        "status": "success",
+                        "message": f"All services healthy ({int(elapsed)}s)",
+                    }
+
+                # Wait before next check
+                time.sleep(check_interval)
+
+        except TimeoutError as e:
+            return {
+                "name": env_name,
+                "status": "failed",
+                "message": str(e),
+            }
+        except Exception as e:
+            return {
+                "name": env_name,
+                "status": "failed",
+                "message": f"Health check failed: {str(e)[:200]}",
+            }
+
+    except subprocess.TimeoutExpired:
+        return {
+            "name": env_name,
+            "status": "failed",
+            "message": "Docker compose up timed out",
+        }
+    except Exception as e:
+        return {
+            "name": env_name,
+            "status": "failed",
+            "message": f"Error: {str(e)[:200]}",
+        }
+    finally:
+        # Always cleanup
+        if verbose:
+            click.echo(f"  → Cleaning up {env_name}...")
+
+        try:
+            # Stop and remove containers
+            down_cmd = ["docker", "compose", "-p", project_name, "down", "-v", "--remove-orphans"]
+            subprocess.run(down_cmd, capture_output=True, timeout=30)
+
+            # Remove temporary file
+            if processed_compose_path and Path(processed_compose_path).exists():
+                Path(processed_compose_path).unlink()
+        except Exception:
+            pass  # Best effort cleanup
 
 
 def main() -> None:
