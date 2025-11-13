@@ -490,6 +490,11 @@ class ExecutionManager:
 
         self._configuration = execution_config
 
+        # Update the factory's configuration and clear cached executors
+        # This ensures executors created after this point use the new config
+        if self._executor_factory is not None:
+            self._executor_factory.update_configuration(execution_config)
+
         # Derive allowed_executors from executors config if not explicitly set
         # If executors section exists, use its keys as allowed executors
         if "executors" in execution_config and execution_config["executors"]:

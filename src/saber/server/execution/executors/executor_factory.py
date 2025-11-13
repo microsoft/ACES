@@ -38,10 +38,12 @@ class ExecutorFactory:
 
         Args:
             sandbox_manager: Sandbox manager for Docker operations
-            configuration: Base execution configuration dictionary
+            configuration: Base execution configuration dictionary (stored by reference, not copied)
         """
         self._sandbox_manager = sandbox_manager
-        self._configuration = configuration or {}
+        # Store configuration by reference so updates to the dict are reflected
+        # This allows ExecutionManager to update config after factory creation
+        self._configuration = configuration if configuration is not None else {}
         self._executor_instances: Dict[str, DockerExecutor] = {}
 
         # Get all available executors from the global registry
@@ -309,6 +311,39 @@ class ExecutorFactory:
                 )
 
         return tools
+
+    def update_configuration(self, new_configuration: Dict[str, Any]) -> None:
+        """
+        Update the factory's configuration and clear cached executors.
+
+        This is needed when configuration changes after the factory is created,
+        such as when a task is loaded with new execution settings.
+
+        Args:
+            new_configuration: New configuration dictionary to use
+        """
+        logger.info(
+            "Updating executor factory configuration",
+            extra={
+                "event": "executor_factory_config_update",
+                "old_config_has_executors": "executors" in self._configuration,
+                "new_config_has_executors": "executors" in new_configuration,
+            },
+        )
+
+        # Update the configuration reference
+        self._configuration = new_configuration
+
+        # Clear cached executors since they were created with old config
+        if self._executor_instances:
+            logger.debug(
+                "Clearing cached executors due to config update",
+                extra={
+                    "event": "executor_factory_cache_clear",
+                    "cached_executor_count": len(self._executor_instances),
+                },
+            )
+            self._executor_instances.clear()
 
     def cleanup_all_executors(self) -> None:
         """Clean up all executor instances."""
