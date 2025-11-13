@@ -13,8 +13,6 @@ Key features:
 - Health check retry logic with backoff
 - Task filtering with exact and glob pattern matching
 - Robust cleanup on all failure paths
-
-Component 1 of the SABER Domain Task factory pattern.
 """
 
 import asyncio
@@ -687,7 +685,6 @@ async def _start_and_load_tasks(
             scorer=saber_scorer(),  # Client-side evaluation
             # SABER defaults for evaluation behavior
             # These can be overridden via inspect eval CLI flags
-            fail_on_error=False,  # Continue evaluation even if samples fail (use --fail-on-error to override)
             epochs=1,  # Run each sample once by default (use --epochs N to override)
         )
 
