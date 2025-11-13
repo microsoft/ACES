@@ -307,6 +307,7 @@ async def _run_preflight_check(
     Raises:
         PrerequisiteError: If preflight check fails or command execution fails
     """
+    import signal
     import sys
 
     logger.info(
@@ -317,6 +318,11 @@ async def _run_preflight_check(
             "timeout": timeout,
         },
     )
+
+    # Print to terminal for user feedback
+    print(f"\n🚀 Running preflight check for domain '{domain_slug}'...")
+    print(f"   Testing {concurrency} environments in parallel (timeout: {timeout}s per environment)")
+    print("   Press Ctrl+C to cancel\n")
 
     # Find the saber-domain CLI
     # Try to use the same Python interpreter and environment
@@ -330,32 +336,59 @@ async def _run_preflight_check(
     # Set working directory to domains_root parent for proper path resolution
     cwd = domains_root.parent if domains_root.parent.exists() else domains_root
 
+    process = None
     try:
-        # Run preflight command, streaming output
+        # Run preflight command with direct stdout/stderr passthrough for real-time output
         process = await asyncio.create_subprocess_exec(
             *cli_cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
+            stdout=None,  # Pass through to terminal
+            stderr=None,  # Pass through to terminal
             cwd=cwd,
         )
 
-        # Stream output line by line
-        assert process.stdout is not None
-        while True:
-            line = await process.stdout.readline()
-            if not line:
-                break
-            # Log each line from preflight (strip trailing newline)
-            line_str = line.decode("utf-8").rstrip()
-            if line_str:
-                logger.info(f"[preflight] {line_str}")
+        # Wait for completion with cancellation support
+        try:
+            exit_code = await process.wait()
+        except asyncio.CancelledError:
+            # User hit Ctrl+C - terminate the subprocess gracefully
+            print("\n⚠️  Ctrl+C detected - cancelling preflight check...")
+            print("   Sending termination signal to preflight process...")
 
-        # Wait for completion
-        exit_code = await process.wait()
+            if process.returncode is None:  # Process still running
+                try:
+                    # Send SIGINT first (graceful)
+                    process.send_signal(signal.SIGINT)
+                    print("   Waiting for cleanup to complete (this may take a few seconds)...")
+
+                    # Wait up to 10 seconds for graceful shutdown
+                    try:
+                        await asyncio.wait_for(process.wait(), timeout=10.0)
+                        print("   ✓ Preflight check cancelled and cleaned up")
+                    except asyncio.TimeoutError:
+                        # If graceful didn't work, force terminate
+                        print("   Graceful shutdown timed out, forcing termination...")
+                        process.terminate()
+                        try:
+                            await asyncio.wait_for(process.wait(), timeout=5.0)
+                            print("   ✓ Preflight check forcefully terminated")
+                        except asyncio.TimeoutError:
+                            # Last resort - kill
+                            print("   Force termination timed out, killing process...")
+                            process.kill()
+                            await process.wait()
+                            print("   ✓ Preflight check killed")
+                except Exception as e:
+                    logger.warning(f"Error during preflight cancellation: {e}")
+                    print(f"   ⚠️  Warning: Error during cleanup: {e}")
+
+            raise PrerequisiteError(
+                "Preflight check cancelled by user (Ctrl+C). "
+                "Some Docker containers may still be cleaning up in the background."
+            )
 
         if exit_code != 0:
             raise PrerequisiteError(
-                f"Preflight check failed for domain '{domain_slug}' (exit code: {exit_code}).\n\n"
+                f"\nPreflight check failed for domain '{domain_slug}' (exit code: {exit_code}).\n\n"
                 f"One or more compose environments failed health checks.\n"
                 f"Review the preflight output above for details on which environments failed.\n\n"
                 f"To fix:\n"
@@ -368,6 +401,7 @@ async def _run_preflight_check(
             f"Preflight check passed for domain '{domain_slug}'",
             extra={"domain": domain_slug},
         )
+        print(f"\n✅ Preflight check passed for domain '{domain_slug}'\n")
 
     except FileNotFoundError as e:
         raise PrerequisiteError(
@@ -376,6 +410,9 @@ async def _run_preflight_check(
             f"  uv pip install -e external/saber\n\n"
             f"Error: {e}"
         ) from e
+    except asyncio.CancelledError:
+        # Re-raise CancelledError to properly propagate cancellation
+        raise
     except Exception as e:
         if isinstance(e, PrerequisiteError):
             raise
@@ -384,6 +421,14 @@ async def _run_preflight_check(
             f"Command: {' '.join(cli_cmd)}\n"
             f"Working directory: {cwd}"
         ) from e
+    finally:
+        # Ensure process is cleaned up even if something goes wrong
+        if process is not None and process.returncode is None:
+            try:
+                process.kill()
+                await process.wait()
+            except Exception:
+                pass  # Best effort cleanup
 
 
 async def _start_and_load_tasks(
