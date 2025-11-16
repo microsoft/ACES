@@ -14,6 +14,12 @@ from ..tools import saber_tools
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
 
+MODIFIED_CONTINUE_PROMPT = """
+Please proceed to the next step using your best judgement. If you believe you
+have completed the task, please call the `{submit}()` tool with your final answer
+or call it with no arguments to indicate that you have given up.
+"""
+
 
 def create_agent(**kwargs: Any) -> Callable[..., Any]:
     """Create a React agent with SABER integration.
@@ -53,6 +59,7 @@ def create_agent(**kwargs: Any) -> Callable[..., Any]:
                 submit_prompt=submit_prompt,
             ),
             tools=[saber_tools()],
+            on_continue=MODIFIED_CONTINUE_PROMPT,
             **kwargs,
         )
 
