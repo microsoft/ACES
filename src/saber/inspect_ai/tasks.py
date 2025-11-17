@@ -117,6 +117,7 @@ def create_domain_task(
         stop_saber_after: bool = False,
         max_concurrent_episodes: int = 16,
         run_preflight: bool = False,
+        enable_debug_logging: bool = False,
         **kwargs: Any,
     ) -> Task:
         """Task callable invoked by Inspect AI with CLI parameters.
@@ -140,6 +141,8 @@ def create_domain_task(
             max_concurrent_episodes: Max concurrent episodes (default: 8, 0 = unlimited)
             run_preflight: Run preflight check on all compose environments before evaluation
                 (default: False). If any environments fail health checks, evaluation aborts.
+            enable_debug_logging: Enable detailed episode lifecycle debug logging
+                (default: False). When enabled, creates detailed logs in logs/saber_episode_debug_*.log
             **kwargs: Additional parameters passed through
 
         Returns:
@@ -184,6 +187,7 @@ def create_domain_task(
                 stop_saber_after,
                 max_concurrent_episodes,
                 run_preflight,
+                enable_debug_logging,
             )
         except Exception as e:
             # Ensure we have a clean error message
@@ -217,9 +221,10 @@ def _create_saber_solver(agent_name: str, agent_factory: Callable) -> Solver:
 
         async def solve(state: TaskState, generate: Generate) -> TaskState:
             """Execute SABER agent with prompts from metadata."""
-            
+
             # DEBUG: Log solver invocation
             from ..debug_logging import EpisodeDebugLogger
+
             debug_logger = EpisodeDebugLogger("solver")
             debug_logger.info(
                 "🎯 SOLVER_INVOKED: SABER solver called by Inspect AI",
@@ -273,20 +278,20 @@ def _create_saber_solver(agent_name: str, agent_factory: Callable) -> Solver:
             # agent_factory() returns a function that accepts prompts
             # Call it with prompts to get the actual agent
             create_with_prompts = agent_factory()
-            
+
             # DEBUG: Log factory result
             debug_logger.info(
                 "🏗️ SOLVER: agent_factory returned, calling with prompts",
                 agent_name=agent_name,
                 create_with_prompts_type=type(create_with_prompts).__name__,
             )
-            
+
             agent = create_with_prompts(
                 instruction_prompt=instruction_prompt,
                 assistant_prompt=assistant_prompt,
                 submit_prompt=submit_prompt,
             )
-            
+
             # DEBUG: Log agent creation complete
             debug_logger.info(
                 "✅ SOLVER: Agent created, about to execute",
@@ -475,6 +480,7 @@ async def _start_and_load_tasks(
     stop_saber_after: bool,
     max_concurrent_episodes: int,
     run_preflight: bool,
+    enable_debug_logging: bool = False,
     **kwargs: Any,
 ) -> Task:
     """Start SABER domain and load tasks as dataset.
@@ -711,6 +717,7 @@ async def _start_and_load_tasks(
                     "compose_template_path": compose_template_path,
                     "cleanup": stop_saber_after,  # Pass cleanup flag to sandbox
                     "max_concurrent_episodes": max_concurrent_episodes,  # Limit concurrent episode execution
+                    "enable_debug_logging": enable_debug_logging,  # Enable detailed lifecycle debug logging
                 },
             ),
             solver=saber_solver,

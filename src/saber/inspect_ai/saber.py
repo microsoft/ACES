@@ -9,29 +9,39 @@ domain ownership semantics.
 """
 
 import asyncio
+import inspect
 import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import aiohttp
+import anyio
+import requests  # type: ignore[import-untyped]
 from inspect_ai._util.error import PrerequisiteError
 from inspect_ai.tool import Tool, mcp_server_http
+from inspect_ai.tool._mcp._local import MCPServerLocal
 from inspect_ai.util import sandboxenv, store
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, create_model
 
 from saber.client.client_session import ClientSessionManager
+from saber.client.models import SessionManagerConfig
 from saber.debug_logging import (
+    EpisodeDebugLogger,
+    clear_episode_context,
+    enable_debug_logging,
     log_episode_end_complete,
     log_episode_end_request,
     log_lifecycle_summary,
     log_sample_cleanup_called,
     log_sample_init_complete,
     log_sample_init_start,
-    clear_episode_context,
 )
 from saber.logging_config import LogCategory, get_saber_logger
 from saber.models.mcp import OrchestrationEnvironment
 
 from .server import DomainContext, DomainController
+from .tasks import get_active_domain, remove_active_domain
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
 
@@ -111,6 +121,7 @@ class SABERSandboxEnvironment:
         rest_base_url: Optional[str] = None,
         mcp_url: Optional[str] = None,
         max_concurrent_episodes: Optional[int] = None,
+        enable_debug_logging: bool = False,
     ):
         """Initialize SABER sandbox instance.
 
@@ -124,6 +135,7 @@ class SABERSandboxEnvironment:
             rest_base_url: Override REST base URL (default: http://localhost:{rest_port})
             mcp_url: Override MCP URL (default: http://localhost:{mcp_port})
             max_concurrent_episodes: Max concurrent episodes (default: 8, None = unlimited)
+            enable_debug_logging: Enable detailed episode lifecycle debug logging (default: False)
         """
         self._domain_slug = domain_slug
         self._domains_root = Path(domains_root)
@@ -131,6 +143,7 @@ class SABERSandboxEnvironment:
         self._mcp_port = mcp_port
         self._compose_template_path = compose_template_path
         self._mcp_timeout = mcp_timeout
+        self._enable_debug_logging = enable_debug_logging
 
         # Set max concurrent episodes (instance can override class default)
         if max_concurrent_episodes is not None:
@@ -185,8 +198,6 @@ class SABERSandboxEnvironment:
         Since SABER passes config as constructor kwargs (not a BaseModel),
         we create a simple BaseModel wrapper to satisfy the interface.
         """
-        from pydantic import ConfigDict, create_model
-
         # Create a dynamic model with the config fields (frozen=True for hashability)
         SABERConfig = create_model(
             "SABERConfig",
@@ -306,6 +317,12 @@ class SABERSandboxEnvironment:
         rest_port = getattr(config, "rest_port", 8000)
         mcp_port = getattr(config, "mcp_port", 8001)
 
+        # Enable debug logging if requested
+        enable_debug = getattr(config, "enable_debug_logging", False)
+        if enable_debug:
+            enable_debug_logging()
+            logger.info("Episode lifecycle debug logging enabled")
+
         # Set max_concurrent_episodes from config EARLY (before Inspect AI queries default_concurrency)
         max_concurrent_episodes = getattr(config, "max_concurrent_episodes", None)
         if max_concurrent_episodes is not None:
@@ -314,9 +331,6 @@ class SABERSandboxEnvironment:
                 f"Set max_concurrent_episodes to {max_concurrent_episodes} from task config",
                 extra={"max_concurrent_episodes": max_concurrent_episodes},
             )
-
-        # Import here to avoid circular dependency
-        from .tasks import get_active_domain
 
         with cls._lock:
             # Check if domain already in sandbox registry
@@ -543,8 +557,6 @@ class SABERSandboxEnvironment:
         Args:
             metadata: Sample metadata dict with 'task_id'
         """
-        import time
-        
         init_start_time = time.time()
         self._task_id = metadata["task_id"]
         self._sample_id = metadata.get("sample_id", self._task_id)  # Store sample_id for cleanup
@@ -562,8 +574,6 @@ class SABERSandboxEnvironment:
 
         # Create session manager if not already created
         if self._session_manager is None:
-            from saber.client.models import SessionManagerConfig
-
             config = SessionManagerConfig(
                 base_url=rest_base_url,
                 mcp_server_url=mcp_url_base,
@@ -627,8 +637,7 @@ class SABERSandboxEnvironment:
                     "task_id": self._task_id,
                 },
             )
-            
-            # 🔍 DEBUG: Log sample initialization start
+
             log_sample_init_start(
                 task_id=self._task_id,
                 sample_id=self._sample_id,
@@ -643,12 +652,11 @@ class SABERSandboxEnvironment:
             metadata["saber_session_id"] = self._session_id
             metadata["saber_episode_id"] = self._episode_id
             metadata["saber_domain_slug"] = self._domain_slug
-            
-            # DEBUG: Verify metadata was set (use EpisodeDebugLogger for proper output)
-            from saber.debug_logging import EpisodeDebugLogger
+
+            # Log metadata configuration for debugging episode lifecycle issues
             debug_logger = EpisodeDebugLogger("metadata")
             debug_logger.info(
-                "📝 METADATA_SET: Set saber metadata in Sample.metadata",
+                "Sample metadata configured with SABER IDs",
                 sample_id=metadata.get("sample_id"),
                 saber_episode_id_set=metadata.get("saber_episode_id"),
                 saber_session_id_set=metadata.get("saber_session_id"),
@@ -662,7 +670,7 @@ class SABERSandboxEnvironment:
             task_store.set("saber_session_manager", self._session_manager)
             task_store.set("saber_session_id", self._session_id)
             task_store.set("saber_task_id", self._task_id)
-            
+
             # Store episode mapping using centralized helper (prevents race conditions)
             sample_id = metadata.get("sample_id", self._task_id)
             self._store_episode_mapping(
@@ -691,10 +699,10 @@ class SABERSandboxEnvironment:
                 HEADER_ORCHESTRATION_ENV: OrchestrationEnvironment.INSPECT.value,
             }
 
-            # DEBUG: Log episode ID being baked into MCP headers
+            # Log MCP headers for debugging episode lifecycle issues
             debug_logger = EpisodeDebugLogger("mcp_client")
             debug_logger.info(
-                "🔧 MCP_HEADERS: Baking episode ID into MCP client headers",
+                "MCP client headers configured",
                 sample_id=sample_id,
                 episode_id_in_headers=mcp_headers[HEADER_EPISODE_ID],
                 episode_id_instance_var=self._episode_id,
@@ -788,8 +796,8 @@ class SABERSandboxEnvironment:
                     "task_id": self._task_id,
                 },
             )
-            
-            # 🔍 DEBUG: Log sample initialization complete
+
+            # Log completion of sample initialization
             init_duration = time.time() - init_start_time
             log_sample_init_complete(
                 duration=init_duration,
@@ -838,23 +846,21 @@ class SABERSandboxEnvironment:
             environments: Dict of SABERSandboxEnvironment instances to cleanup
             interrupted: Whether the sample was interrupted
         """
-        import inspect
-        
-        # 🔍 DEBUG: Log who called sample_cleanup
+        # Capture caller info for debugging
         caller_frame = inspect.currentframe()
         caller_info = "unknown"
         if caller_frame and caller_frame.f_back:
             caller_info = f"{caller_frame.f_back.f_code.co_filename}:{caller_frame.f_back.f_lineno}"
-        
+
         for name, env in environments.items():
-            # 🔍 DEBUG: Log sample cleanup call
+            # Log sample cleanup call
             log_sample_cleanup_called(
                 interrupted=interrupted,
                 caller=caller_info,
                 task_name=task_name,
                 environment_name=name,
             )
-            
+
             try:
                 await env._cleanup_sample(interrupted=interrupted)
             except Exception as e:
@@ -878,8 +884,6 @@ class SABERSandboxEnvironment:
                 If True, end the episode with reason="interrupted"
                 If False, assume scorer already ended the episode (happy path)
         """
-        import anyio
-
         # Shield cleanup from cancellation - we need this to complete even during shutdown
         with anyio.CancelScope(shield=True):
             try:
@@ -894,11 +898,11 @@ class SABERSandboxEnvironment:
                     exc_info=True,
                 )
             finally:
-                # 🔍 DEBUG: Log lifecycle summary before clearing context
+                # Log lifecycle summary before cleanup
                 log_lifecycle_summary()
-                
+
                 # Clean up episode mapping using centralized helper (prevents race conditions)
-                if hasattr(self, '_sample_id') and self._sample_id:
+                if hasattr(self, "_sample_id") and self._sample_id:
                     try:
                         self._remove_episode_mapping(
                             sample_id=self._sample_id,
@@ -913,25 +917,21 @@ class SABERSandboxEnvironment:
                 # MEMORY LEAK FIX: Clean up MCP client session cache to prevent accumulation
                 # With unique server names, each sample creates a cache entry that never gets cleaned.
                 # For 10,000+ samples, this would cause significant memory leaks.
-                if hasattr(self, '_mcp_client') and self._mcp_client is not None:
+                if hasattr(self, "_mcp_client") and self._mcp_client is not None:
                     try:
-                        # Import here to avoid circular imports
-                        from inspect_ai.tool._mcp._local import MCPServerLocal
-                        import anyio
-                        
                         # Build the cache key that would have been used for this sample
                         task_id = anyio.get_current_task().id
                         server_name = f"SABER {self._domain_slug} Tools - {self._sample_id}"
                         cache_key = f"{task_id}_{server_name}"
-                        
+
                         # Remove from cache if it exists
                         if cache_key in MCPServerLocal._task_sessions:
                             cached_session = MCPServerLocal._task_sessions.pop(cache_key)
-                            
+
                             # Properly close the cached session if it's active
-                            if hasattr(cached_session, '_session') and cached_session._session is not None:
+                            if hasattr(cached_session, "_session") and cached_session._session is not None:
                                 await cached_session.__aexit__(None, None, None)
-                            
+
                             logger.debug(
                                 f"Cleaned up MCP session cache for sample {self._sample_id}",
                                 extra={
@@ -945,7 +945,7 @@ class SABERSandboxEnvironment:
                             f"Failed to clean up MCP session cache for sample {self._sample_id}: {cache_cleanup_err}",
                             extra={"sample_id": self._sample_id, "task_id": self._task_id},
                         )
-                
+
                 # Release episode semaphore to allow next sample to run
                 semaphore = self._get_episode_semaphore()
                 if semaphore is not None:
@@ -960,8 +960,8 @@ class SABERSandboxEnvironment:
                     )
 
                 self._reset_state()
-                
-                # 🔍 DEBUG: Clear episode context after cleanup
+
+                # Clear episode context after cleanup
                 clear_episode_context()
 
     @classmethod
@@ -993,9 +993,6 @@ class SABERSandboxEnvironment:
         # Get cleanup preference from config (stop_saber_after flag)
         # If config has cleanup field, use it; otherwise use the cleanup parameter
         cleanup_requested = getattr(config, "cleanup", cleanup)
-
-        # Import here to avoid circular dependency
-        from .tasks import remove_active_domain
 
         with cls._lock:
             entry = cls._registry.get(domain_slug)
@@ -1107,18 +1104,16 @@ class SABERSandboxEnvironment:
         task_id: str,
     ) -> None:
         """Store episode mapping in Inspect AI store with thread-safe locking.
-        
+
         This centralizes all episode mapping storage to prevent race conditions
         from concurrent read-modify-write operations on the shared store.
-        
+
         Args:
             sample_id: Unique sample identifier (includes attempt suffix)
             episode_id: SABER episode ID
             session_id: SABER session ID
             task_id: Task ID (for debugging)
         """
-        from inspect_ai.util import store
-        
         task_store = store()
         with cls._episode_mapping_lock:
             episode_mapping = task_store.get("saber_episode_mapping", {})
@@ -1134,7 +1129,7 @@ class SABERSandboxEnvironment:
                 },
             )()
             task_store.set("saber_episode_mapping", episode_mapping)
-            
+
             logger.debug(
                 f"Stored episode mapping for sample {sample_id}",
                 extra={
@@ -1149,15 +1144,13 @@ class SABERSandboxEnvironment:
     @classmethod
     def _remove_episode_mapping(cls, sample_id: str, task_id: str) -> None:
         """Remove episode mapping from Inspect AI store with thread-safe locking.
-        
+
         This centralizes all episode mapping cleanup to prevent race conditions.
-        
+
         Args:
             sample_id: Unique sample identifier to remove
             task_id: Task ID (for debugging/logging)
         """
-        from inspect_ai.util import store
-        
         task_store = store()
         with cls._episode_mapping_lock:
             episode_mapping = task_store.get("saber_episode_mapping", {})
@@ -1185,8 +1178,6 @@ class SABERSandboxEnvironment:
         Returns:
             Session ID
         """
-        import aiohttp
-
         url = f"{rest_base_url}/api/v1/session"
         params = {"client_id": f"inspect_ai_{task_name}"}
 
@@ -1210,10 +1201,6 @@ class SABERSandboxEnvironment:
             rest_base_url: Base URL for REST API
             session_id: Session ID to terminate
         """
-        import threading
-
-        import requests  # type: ignore[import-untyped]
-
         url = f"{rest_base_url}/api/v1/session/{session_id}"
 
         def send_delete_request() -> None:
@@ -1337,8 +1324,8 @@ class SABERSandboxEnvironment:
                         "event": "sandbox_cleanup_end_episode",
                     },
                 )
-                
-                # 🔍 DEBUG: Log episode end request
+
+                # Log episode end request
                 log_episode_end_request(
                     reason=reason,
                     interrupted=interrupted,
@@ -1348,11 +1335,6 @@ class SABERSandboxEnvironment:
                 if interrupted:
                     # Use synchronous requests library for reliability during shutdown
                     # NOW WITH RETRY for better reliability
-                    import threading
-                    import time
-
-                    import requests
-
                     base_url = self._session_manager.base_url
                     session_id = self._session_id
                     episode_id = self._episode_id
@@ -1467,8 +1449,6 @@ class SABERSandboxEnvironment:
                     # Get submission from store if available (happy path after scorer)
                     submission = None
                     try:
-                        from inspect_ai.util import store
-
                         task_store = store()
                         # Scorer may have stored the submission for us
                         submission = task_store.get("saber_episode_submission")
@@ -1497,8 +1477,8 @@ class SABERSandboxEnvironment:
                                 "reason": reason,
                             },
                         )
-                        
-                        # 🔍 DEBUG: Log episode end completion
+
+                        # Log successful episode end
                         log_episode_end_complete(success=True)
                     else:
                         logger.error(
@@ -1510,8 +1490,8 @@ class SABERSandboxEnvironment:
                                 "event": "episode_end_failed_with_retry",
                             },
                         )
-                        
-                        # 🔍 DEBUG: Log episode end completion (failed)
+
+                        # Log failed episode end
                         log_episode_end_complete(success=False)
 
             except (asyncio.CancelledError, asyncio.TimeoutError):

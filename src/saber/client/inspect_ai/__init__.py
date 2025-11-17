@@ -19,11 +19,12 @@ For public SABER agent API, use:
 # Dataset and evaluation exports
 from .saber_dataset import create_saber_dataset
 
+# Scorer exports
+from .saber_scorer import saber_scorer
+
 # # Main eval_async integration exports
 # from .saber_eval_async import run_saber_eval_async
 
-# Scorer exports
-from .saber_scorer import saber_scorer
 
 __all__ = [
     # Agent registrations (triggers decorators)

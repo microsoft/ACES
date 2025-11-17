@@ -1025,13 +1025,11 @@ class SessionManager:
                 },
             )
 
-        # Check for any orphaned episodes that might still need cleanup
+        # Check for any orphaned episodes that might need cleanup
         # Only clean up episodes that are still in creating or active state
         try:
             log_operation_start(logger, "Orphaned episode cleanup check", session_id)
-            episodes_to_cleanup = list(
-                session.creating_episode_ids.union(session.active_episode_ids)
-            )
+            episodes_to_cleanup = list(set(session.creating_episode_ids) | set(session.active_episode_ids))
             logger.info(
                 "Checking for orphaned episodes",
                 extra={
@@ -1885,7 +1883,7 @@ class SessionManager:
         episode = self.episode_manager.get_episode_by_id(episode_id)
         if episode:
             session_id = episode.session_id
-            session = self.sessions.get(session_id)
+            session = self.active_sessions.get(session_id)
             if session:
                 session.remove_active_episode(episode_id)
                 logger.info(
@@ -1896,7 +1894,7 @@ class SessionManager:
                         "session_id": session_id,
                     },
                 )
-        
+
         try:
             await asyncio.to_thread(self.execution_manager.cleanup_episode, episode_id)
             logger.info(
@@ -2285,7 +2283,7 @@ class SessionManager:
 
         Returns:
             CommandResult with execution results
-            
+
         Raises:
             HTTPException: If episode is not active (404) or not in correct state
         """
@@ -2297,31 +2295,28 @@ class SessionManager:
             raise HTTPException(
                 status_code=404,
                 detail=f"Episode {episode_id} is not active in session {session_id}. "
-                f"Active episodes: {session.active_episode_ids}"
+                f"Active episodes: {session.active_episode_ids}",
             )
 
         episode = self.episode_manager.get_episode_by_id(episode_id)
         if not episode:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Episode {episode_id} not found in episode manager"
-            )
-        
+            raise HTTPException(status_code=404, detail=f"Episode {episode_id} not found in episode manager")
+
         if episode.state == EpisodeState.CREATING:
             raise HTTPException(
                 status_code=409,  # Conflict - resource exists but not ready
                 detail=f"Episode {episode_id} is still being created (background finalization in progress). "
-                "Please retry in a few seconds."
+                "Please retry in a few seconds.",
             )
         elif episode.state == EpisodeState.FAILED_CREATION:
             raise HTTPException(
                 status_code=500,  # Internal server error - episode creation failed
-                detail=f"Episode {episode_id} failed creation: {episode.creation_error or 'unknown error'}"
+                detail=f"Episode {episode_id} failed creation: {episode.creation_error or 'unknown error'}",
             )
         elif episode.state != EpisodeState.READY and episode.state != EpisodeState.ACTIVE:
             raise HTTPException(
                 status_code=409,  # Conflict - episode in wrong state
-                detail=f"Episode {episode_id} is not ready (state: {episode.state.value})"
+                detail=f"Episode {episode_id} is not ready (state: {episode.state.value})",
             )
 
         try:

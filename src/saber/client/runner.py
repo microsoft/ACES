@@ -61,7 +61,7 @@ def run_saber_evaluation(config: SABERConfig, verbose: bool = False) -> Optional
         logger.info("Starting eval_async task app")
 
         # Import inspect_ai modules only when needed
-        from .inspect_ai import run_saber_eval_async
+        from .inspect_ai import run_saber_eval_async  # type: ignore[attr-defined]
 
         # eval_async becomes the main entrypoint - handles UI, dataset iteration, everything
         eval_result = await run_saber_eval_async(config)
