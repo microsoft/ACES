@@ -188,6 +188,7 @@ def _convert_saber_task_to_sample(task_info: TaskInfo, attempt: int = 1) -> Samp
     # Create unique sample ID for each attempt
     # Use double underscore to avoid collision with task IDs containing single underscores
     sample_id = f"{task_info.task_id}__attempt_{attempt}"
+    task_metadata["sample_id"] = sample_id
 
     # Create inspect_ai Sample
     sample = Sample(id=sample_id, input=task_input, target=task_target, metadata=task_metadata)

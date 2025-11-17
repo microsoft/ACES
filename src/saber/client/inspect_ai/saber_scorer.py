@@ -437,9 +437,14 @@ def saber_scorer() -> Scorer:
             task_store = store()
             session_manager = task_store.get("saber_session_manager")
             session_id = task_store.get("saber_session_id")
+            task_id = task_store.get("saber_task_id", "unknown")
 
-            # Get episode_id from task store (set by SABER agent)
-            current_episode = task_store.get("saber_current_episode")
+            # FIX: Get episode_id from sample_id-keyed mapping to prevent cross-contamination
+            # CRITICAL: Multiple attempts (attempt_1, attempt_2, attempt_3) share the same task_id
+            # but run concurrently. Must use sample_id (which includes attempt suffix) as key.
+            sample_id = state.metadata.get("sample_id", task_id)  # Fallback to task_id if not set
+            episode_mapping = task_store.get("saber_episode_mapping", {})
+            current_episode = episode_mapping.get(sample_id)
             episode_id = current_episode.episode_id if current_episode else None
 
             # Log context state for debugging
@@ -451,6 +456,8 @@ def saber_scorer() -> Scorer:
                     "session_id_present": session_id is not None,
                     "current_episode_present": current_episode is not None,
                     "episode_id": episode_id,
+                    "task_id": task_id,
+                    "sample_id": sample_id,
                 },
             )
 

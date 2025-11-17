@@ -845,14 +845,23 @@ class SessionManager:
         )
         return session
 
-    async def terminate_session(self, session_id: str) -> None:
+    async def terminate_session(self, session_id: str, reason: str = "unknown") -> None:
         """
         Terminate a client session and cleanup resources.
 
         Args:
             session_id: ID of the session to terminate
+            reason: Reason for termination (e.g., 'client_request', 'timeout', 'error')
         """
-        log_session_end(logger, session_id, "SessionManager termination")
+        logger.info(
+            "Session termination initiated",
+            extra={
+                "event": "session_termination_initiated",
+                "session_id": session_id,
+                "reason": reason,
+            },
+        )
+        log_session_end(logger, session_id, f"SessionManager termination - {reason}")
         session = self._get_session(session_id)
 
         # Acquire episode creation lock to prevent race with episodes being added to lists
@@ -977,6 +986,17 @@ class SessionManager:
                     )
 
                 # Clear remaining state from both lists
+                logger.info(
+                    "Clearing all episode IDs from session state during termination",
+                    extra={
+                        "event": "session_episode_ids_cleared",
+                        "session_id": session_id,
+                        "creating_count_before_clear": len(session.creating_episode_ids),
+                        "active_count_before_clear": len(session.active_episode_ids),
+                        "creating_episode_ids": list(session.creating_episode_ids),
+                        "active_episode_ids": list(session.active_episode_ids),
+                    },
+                )
                 session.creating_episode_ids.clear()
                 session.active_episode_ids.clear()
                 session.task_queue.clear()
@@ -1006,15 +1026,20 @@ class SessionManager:
             )
 
         # Check for any orphaned episodes that might still need cleanup
+        # Only clean up episodes that are still in creating or active state
         try:
             log_operation_start(logger, "Orphaned episode cleanup check", session_id)
-            episodes_to_cleanup = list(session.episode_history)
+            episodes_to_cleanup = list(
+                session.creating_episode_ids.union(session.active_episode_ids)
+            )
             logger.info(
                 "Checking for orphaned episodes",
                 extra={
                     "event": "orphaned_episode_cleanup_check",
                     "session_id": session_id,
                     "episode_ids": episodes_to_cleanup,
+                    "creating_count": len(session.creating_episode_ids),
+                    "active_count": len(session.active_episode_ids),
                 },
             )
 
@@ -1857,6 +1882,21 @@ class SessionManager:
         Args:
             episode_id: Episode identifier
         """
+        episode = self.episode_manager.get_episode_by_id(episode_id)
+        if episode:
+            session_id = episode.session_id
+            session = self.sessions.get(session_id)
+            if session:
+                session.remove_active_episode(episode_id)
+                logger.info(
+                    "Removed failed episode from session active list",
+                    extra={
+                        "event": "failed_episode_removed_from_session",
+                        "episode_id": episode_id,
+                        "session_id": session_id,
+                    },
+                )
+        
         try:
             await asyncio.to_thread(self.execution_manager.cleanup_episode, episode_id)
             logger.info(
@@ -2059,6 +2099,17 @@ class SessionManager:
 
         # Move episode from active to history IMMEDIATELY to prevent session termination override
         session.complete_episode(episode_id)
+        logger.info(
+            "Episode removed from active_episode_ids (client end_episode call)",
+            extra={
+                "event": "episode_removed_from_active_client_end",
+                "session_id": session_id,
+                "episode_id": episode_id,
+                "reason": reason,
+                "remaining_active_episodes": len(session.active_episode_ids),
+                "active_episode_ids": session.active_episode_ids,
+            },
+        )
 
         # End episode through episode manager (pass submission text, not EvalSubmission object)
         submission_text = submission.submission if submission else None
@@ -2234,15 +2285,43 @@ class SessionManager:
 
         Returns:
             CommandResult with execution results
+            
+        Raises:
+            HTTPException: If episode is not active (404) or not in correct state
         """
         session = self._get_session(session_id)
         session.update_activity()
 
-        # Validate episode is active in this session
+        # Validate episode is active in this session - raise HTTP 404 for proper error handling
         if episode_id not in session.active_episode_ids:
-            return CommandResult.error_result(
-                error=f"Episode {episode_id} is not active in session {session_id}. "
+            raise HTTPException(
+                status_code=404,
+                detail=f"Episode {episode_id} is not active in session {session_id}. "
                 f"Active episodes: {session.active_episode_ids}"
+            )
+
+        episode = self.episode_manager.get_episode_by_id(episode_id)
+        if not episode:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Episode {episode_id} not found in episode manager"
+            )
+        
+        if episode.state == EpisodeState.CREATING:
+            raise HTTPException(
+                status_code=409,  # Conflict - resource exists but not ready
+                detail=f"Episode {episode_id} is still being created (background finalization in progress). "
+                "Please retry in a few seconds."
+            )
+        elif episode.state == EpisodeState.FAILED_CREATION:
+            raise HTTPException(
+                status_code=500,  # Internal server error - episode creation failed
+                detail=f"Episode {episode_id} failed creation: {episode.creation_error or 'unknown error'}"
+            )
+        elif episode.state != EpisodeState.READY and episode.state != EpisodeState.ACTIVE:
+            raise HTTPException(
+                status_code=409,  # Conflict - episode in wrong state
+                detail=f"Episode {episode_id} is not ready (state: {episode.state.value})"
             )
 
         try:
@@ -2278,8 +2357,26 @@ class SessionManager:
 
             # End episode if step indicates completion OR if EpisodeManager indicates termination
             if step_result.step.done:
+                logger.info(
+                    "Episode auto-terminating due to step.done=True",
+                    extra={
+                        "event": "episode_auto_terminate_step_done",
+                        "session_id": session_id,
+                        "episode_id": episode_id,
+                        "step_number": len(episode.steps),
+                    },
+                )
                 self.episode_manager.end_episode(episode_id, EpisodeTerminationReason.COMPLETED)
                 session.complete_episode(episode_id)
+                logger.info(
+                    "Episode removed from active_episode_ids (step.done)",
+                    extra={
+                        "event": "episode_removed_from_active_step_done",
+                        "session_id": session_id,
+                        "episode_id": episode_id,
+                        "remaining_active_episodes": len(session.active_episode_ids),
+                    },
+                )
                 # Add termination metadata to command result
                 if not hasattr(command_result, "metadata") or command_result.metadata is None:
                     command_result.metadata = {}
@@ -2301,8 +2398,28 @@ class SessionManager:
                     )
             elif step_result.should_terminate:
                 termination_reason = step_result.termination_reason or EpisodeTerminationReason.TERMINATED
+                logger.info(
+                    "Episode auto-terminating due to should_terminate=True",
+                    extra={
+                        "event": "episode_auto_terminate_should_terminate",
+                        "session_id": session_id,
+                        "episode_id": episode_id,
+                        "termination_reason": termination_reason,
+                        "step_number": len(episode.steps),
+                    },
+                )
                 self.episode_manager.end_episode(episode_id, termination_reason)
                 session.complete_episode(episode_id)
+                logger.info(
+                    "Episode removed from active_episode_ids (should_terminate)",
+                    extra={
+                        "event": "episode_removed_from_active_should_terminate",
+                        "session_id": session_id,
+                        "episode_id": episode_id,
+                        "termination_reason": termination_reason,
+                        "remaining_active_episodes": len(session.active_episode_ids),
+                    },
+                )
                 # Add termination metadata to command result
                 if not hasattr(command_result, "metadata") or command_result.metadata is None:
                     command_result.metadata = {}

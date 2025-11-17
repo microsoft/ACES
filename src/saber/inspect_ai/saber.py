@@ -19,6 +19,15 @@ from inspect_ai.util import sandboxenv, store
 from pydantic import BaseModel
 
 from saber.client.client_session import ClientSessionManager
+from saber.debug_logging import (
+    log_episode_end_complete,
+    log_episode_end_request,
+    log_lifecycle_summary,
+    log_sample_cleanup_called,
+    log_sample_init_complete,
+    log_sample_init_start,
+    clear_episode_context,
+)
 from saber.logging_config import LogCategory, get_saber_logger
 from saber.models.mcp import OrchestrationEnvironment
 
@@ -84,6 +93,7 @@ class SABERSandboxEnvironment:
     # Class-level registry: domain_slug -> metadata
     _registry: Dict[str, Dict[str, Any]] = {}
     _lock = threading.Lock()
+    _episode_mapping_lock = threading.Lock()  # Protects episode_mapping read-modify-write
 
     # Class-level semaphore for episode concurrency control
     # Limits how many episodes can be created/run simultaneously across all domains
@@ -133,6 +143,7 @@ class SABERSandboxEnvironment:
         # Per-instance state (managed during sample lifecycle)
         self._episode_id: Optional[str] = None
         self._task_id: Optional[str] = None
+        self._sample_id: Optional[str] = None
         self._mcp_client: Optional[Tool] = None
 
         # Session state (set during task_init, shared across all samples)
@@ -532,7 +543,11 @@ class SABERSandboxEnvironment:
         Args:
             metadata: Sample metadata dict with 'task_id'
         """
+        import time
+        
+        init_start_time = time.time()
         self._task_id = metadata["task_id"]
+        self._sample_id = metadata.get("sample_id", self._task_id)  # Store sample_id for cleanup
 
         # Get registry entry to access URLs and session_id
         with self._lock:
@@ -612,6 +627,15 @@ class SABERSandboxEnvironment:
                     "task_id": self._task_id,
                 },
             )
+            
+            # 🔍 DEBUG: Log sample initialization start
+            log_sample_init_start(
+                task_id=self._task_id,
+                sample_id=self._sample_id,
+                episode_id=self._episode_id,
+                session_id=self._session_id,
+                domain_slug=self._domain_slug,
+            )
 
             # Store session and episode IDs in sample metadata for eval-retry support
             # This allows completed samples to be identified and skipped during retries
@@ -619,6 +643,18 @@ class SABERSandboxEnvironment:
             metadata["saber_session_id"] = self._session_id
             metadata["saber_episode_id"] = self._episode_id
             metadata["saber_domain_slug"] = self._domain_slug
+            
+            # DEBUG: Verify metadata was set (use EpisodeDebugLogger for proper output)
+            from saber.debug_logging import EpisodeDebugLogger
+            debug_logger = EpisodeDebugLogger("metadata")
+            debug_logger.info(
+                "📝 METADATA_SET: Set saber metadata in Sample.metadata",
+                sample_id=metadata.get("sample_id"),
+                saber_episode_id_set=metadata.get("saber_episode_id"),
+                saber_session_id_set=metadata.get("saber_session_id"),
+                episode_id_instance_var=self._episode_id,
+                session_id_instance_var=self._session_id,
+            )
 
             # Store session manager and context in inspect_ai store for scorer
             # The scorer needs this to fetch evaluation data from the server
@@ -626,18 +662,14 @@ class SABERSandboxEnvironment:
             task_store.set("saber_session_manager", self._session_manager)
             task_store.set("saber_session_id", self._session_id)
             task_store.set("saber_task_id", self._task_id)
-            # Store episode info that will be updated by agent/solver
-            task_store.set(
-                "saber_current_episode",
-                type(
-                    "Episode",
-                    (),
-                    {
-                        "episode_id": self._episode_id,
-                        "session_id": self._session_id,
-                        "attached_to_episode_id": None,
-                    },
-                )(),
+            
+            # Store episode mapping using centralized helper (prevents race conditions)
+            sample_id = metadata.get("sample_id", self._task_id)
+            self._store_episode_mapping(
+                sample_id=sample_id,
+                episode_id=self._episode_id,
+                session_id=self._session_id,
+                task_id=self._task_id,
             )
 
             logger.debug(
@@ -645,6 +677,8 @@ class SABERSandboxEnvironment:
                 extra={
                     "session_id": self._session_id,
                     "episode_id": self._episode_id,
+                    "task_id": self._task_id,
+                    "sample_id": sample_id,
                     "event": "saber_context_stored",
                 },
             )
@@ -656,6 +690,16 @@ class SABERSandboxEnvironment:
                 HEADER_TASK_ID: self._task_id,
                 HEADER_ORCHESTRATION_ENV: OrchestrationEnvironment.INSPECT.value,
             }
+
+            # DEBUG: Log episode ID being baked into MCP headers
+            debug_logger = EpisodeDebugLogger("mcp_client")
+            debug_logger.info(
+                "🔧 MCP_HEADERS: Baking episode ID into MCP client headers",
+                sample_id=sample_id,
+                episode_id_in_headers=mcp_headers[HEADER_EPISODE_ID],
+                episode_id_instance_var=self._episode_id,
+                task_id=self._task_id,
+            )
 
             mcp_url = f"{mcp_url_base}/mcp"
             logger.debug(
@@ -681,8 +725,13 @@ class SABERSandboxEnvironment:
                         },
                     )
 
+                    # CRITICAL: Name must be unique per sample to prevent MCP client caching!
+                    # mcp_server_http() caches sessions by (task_id, name), so if multiple
+                    # samples use the same name, they share the same MCP session with the
+                    # FIRST sample's headers (causing episode ID cross-contamination).
+                    # Using sample_id ensures each sample gets its own MCP client.
                     self._mcp_client = mcp_server_http(
-                        name=f"SABER {self._domain_slug} Tools",
+                        name=f"SABER {self._domain_slug} Tools - {sample_id}",
                         url=mcp_url,
                         headers=mcp_headers,
                         timeout=self._mcp_timeout,
@@ -739,6 +788,14 @@ class SABERSandboxEnvironment:
                     "task_id": self._task_id,
                 },
             )
+            
+            # 🔍 DEBUG: Log sample initialization complete
+            init_duration = time.time() - init_start_time
+            log_sample_init_complete(
+                duration=init_duration,
+                sample_id=self._sample_id,
+                mcp_url=mcp_url,
+            )
 
         except Exception as e:
             # CRITICAL: Release semaphore BEFORE cleanup to prevent permanent slot leakage
@@ -781,7 +838,23 @@ class SABERSandboxEnvironment:
             environments: Dict of SABERSandboxEnvironment instances to cleanup
             interrupted: Whether the sample was interrupted
         """
+        import inspect
+        
+        # 🔍 DEBUG: Log who called sample_cleanup
+        caller_frame = inspect.currentframe()
+        caller_info = "unknown"
+        if caller_frame and caller_frame.f_back:
+            caller_info = f"{caller_frame.f_back.f_code.co_filename}:{caller_frame.f_back.f_lineno}"
+        
         for name, env in environments.items():
+            # 🔍 DEBUG: Log sample cleanup call
+            log_sample_cleanup_called(
+                interrupted=interrupted,
+                caller=caller_info,
+                task_name=task_name,
+                environment_name=name,
+            )
+            
             try:
                 await env._cleanup_sample(interrupted=interrupted)
             except Exception as e:
@@ -821,6 +894,58 @@ class SABERSandboxEnvironment:
                     exc_info=True,
                 )
             finally:
+                # 🔍 DEBUG: Log lifecycle summary before clearing context
+                log_lifecycle_summary()
+                
+                # Clean up episode mapping using centralized helper (prevents race conditions)
+                if hasattr(self, '_sample_id') and self._sample_id:
+                    try:
+                        self._remove_episode_mapping(
+                            sample_id=self._sample_id,
+                            task_id=self._task_id or "unknown",
+                        )
+                    except Exception as cleanup_err:
+                        logger.warning(
+                            f"Failed to clean up episode mapping for sample {self._sample_id}: {cleanup_err}",
+                            extra={"sample_id": self._sample_id, "task_id": self._task_id},
+                        )
+
+                # MEMORY LEAK FIX: Clean up MCP client session cache to prevent accumulation
+                # With unique server names, each sample creates a cache entry that never gets cleaned.
+                # For 10,000+ samples, this would cause significant memory leaks.
+                if hasattr(self, '_mcp_client') and self._mcp_client is not None:
+                    try:
+                        # Import here to avoid circular imports
+                        from inspect_ai.tool._mcp._local import MCPServerLocal
+                        import anyio
+                        
+                        # Build the cache key that would have been used for this sample
+                        task_id = anyio.get_current_task().id
+                        server_name = f"SABER {self._domain_slug} Tools - {self._sample_id}"
+                        cache_key = f"{task_id}_{server_name}"
+                        
+                        # Remove from cache if it exists
+                        if cache_key in MCPServerLocal._task_sessions:
+                            cached_session = MCPServerLocal._task_sessions.pop(cache_key)
+                            
+                            # Properly close the cached session if it's active
+                            if hasattr(cached_session, '_session') and cached_session._session is not None:
+                                await cached_session.__aexit__(None, None, None)
+                            
+                            logger.debug(
+                                f"Cleaned up MCP session cache for sample {self._sample_id}",
+                                extra={
+                                    "cache_key": cache_key,
+                                    "remaining_cache_entries": len(MCPServerLocal._task_sessions),
+                                    "event": "mcp_cache_cleanup",
+                                },
+                            )
+                    except Exception as cache_cleanup_err:
+                        logger.warning(
+                            f"Failed to clean up MCP session cache for sample {self._sample_id}: {cache_cleanup_err}",
+                            extra={"sample_id": self._sample_id, "task_id": self._task_id},
+                        )
+                
                 # Release episode semaphore to allow next sample to run
                 semaphore = self._get_episode_semaphore()
                 if semaphore is not None:
@@ -835,6 +960,9 @@ class SABERSandboxEnvironment:
                     )
 
                 self._reset_state()
+                
+                # 🔍 DEBUG: Clear episode context after cleanup
+                clear_episode_context()
 
     @classmethod
     async def task_cleanup(
@@ -967,7 +1095,84 @@ class SABERSandboxEnvironment:
         self._episode_id = None
         self._mcp_client = None
         self._task_id = None
+        self._sample_id = None  # Reset sample_id for next sample
         # Note: _session_id is NOT reset - it's shared across all samples
+
+    @classmethod
+    def _store_episode_mapping(
+        cls,
+        sample_id: str,
+        episode_id: str,
+        session_id: str,
+        task_id: str,
+    ) -> None:
+        """Store episode mapping in Inspect AI store with thread-safe locking.
+        
+        This centralizes all episode mapping storage to prevent race conditions
+        from concurrent read-modify-write operations on the shared store.
+        
+        Args:
+            sample_id: Unique sample identifier (includes attempt suffix)
+            episode_id: SABER episode ID
+            session_id: SABER session ID
+            task_id: Task ID (for debugging)
+        """
+        from inspect_ai.util import store
+        
+        task_store = store()
+        with cls._episode_mapping_lock:
+            episode_mapping = task_store.get("saber_episode_mapping", {})
+            episode_mapping[sample_id] = type(
+                "Episode",
+                (),
+                {
+                    "episode_id": episode_id,
+                    "session_id": session_id,
+                    "attached_to_episode_id": None,
+                    "task_id": task_id,
+                    "sample_id": sample_id,
+                },
+            )()
+            task_store.set("saber_episode_mapping", episode_mapping)
+            
+            logger.debug(
+                f"Stored episode mapping for sample {sample_id}",
+                extra={
+                    "sample_id": sample_id,
+                    "episode_id": episode_id,
+                    "task_id": task_id,
+                    "total_mappings": len(episode_mapping),
+                    "event": "episode_mapping_stored",
+                },
+            )
+
+    @classmethod
+    def _remove_episode_mapping(cls, sample_id: str, task_id: str) -> None:
+        """Remove episode mapping from Inspect AI store with thread-safe locking.
+        
+        This centralizes all episode mapping cleanup to prevent race conditions.
+        
+        Args:
+            sample_id: Unique sample identifier to remove
+            task_id: Task ID (for debugging/logging)
+        """
+        from inspect_ai.util import store
+        
+        task_store = store()
+        with cls._episode_mapping_lock:
+            episode_mapping = task_store.get("saber_episode_mapping", {})
+            if sample_id in episode_mapping:
+                del episode_mapping[sample_id]
+                task_store.set("saber_episode_mapping", episode_mapping)
+                logger.debug(
+                    f"Removed episode mapping for sample {sample_id}",
+                    extra={
+                        "sample_id": sample_id,
+                        "task_id": task_id,
+                        "remaining_mappings": len(episode_mapping),
+                        "event": "episode_mapping_removed",
+                    },
+                )
 
     @classmethod
     async def _create_session_for_task(cls, rest_base_url: str, task_name: str) -> str:
@@ -1050,24 +1255,6 @@ class SABERSandboxEnvironment:
             },
         )
 
-    @classmethod
-    async def _terminate_session(cls, rest_base_url: str, session_id: str) -> None:
-        """Terminate SABER session (async version - unused, kept for compatibility).
-
-        Args:
-            rest_base_url: Base URL for REST API
-            session_id: Session ID to terminate
-        """
-        import aiohttp
-
-        url = f"{rest_base_url}/api/v1/session/{session_id}"
-
-        async with aiohttp.ClientSession() as session:
-            async with session.delete(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                if response.status != 200:
-                    text = await response.text()
-                    raise Exception(f"Failed to terminate SABER session: {response.status} - {text}")
-
     async def _create_episode(self, session_id: str, task_id: str) -> str:
         """Create SABER episode via REST API and wait for it to be ready.
 
@@ -1149,6 +1336,12 @@ class SABERSandboxEnvironment:
                         "reason": reason,
                         "event": "sandbox_cleanup_end_episode",
                     },
+                )
+                
+                # 🔍 DEBUG: Log episode end request
+                log_episode_end_request(
+                    reason=reason,
+                    interrupted=interrupted,
                 )
 
                 # For interrupted cleanup, use fire-and-forget HTTP to avoid event loop shutdown issues
@@ -1304,6 +1497,9 @@ class SABERSandboxEnvironment:
                                 "reason": reason,
                             },
                         )
+                        
+                        # 🔍 DEBUG: Log episode end completion
+                        log_episode_end_complete(success=True)
                     else:
                         logger.error(
                             f"Episode ending failed after retries - may be orphaned (reason={reason})",
@@ -1314,6 +1510,9 @@ class SABERSandboxEnvironment:
                                 "event": "episode_end_failed_with_retry",
                             },
                         )
+                        
+                        # 🔍 DEBUG: Log episode end completion (failed)
+                        log_episode_end_complete(success=False)
 
             except (asyncio.CancelledError, asyncio.TimeoutError):
                 # Cancellation/timeout during shutdown - log but don't raise

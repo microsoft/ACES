@@ -217,6 +217,16 @@ def _create_saber_solver(agent_name: str, agent_factory: Callable) -> Solver:
 
         async def solve(state: TaskState, generate: Generate) -> TaskState:
             """Execute SABER agent with prompts from metadata."""
+            
+            # DEBUG: Log solver invocation
+            from ..debug_logging import EpisodeDebugLogger
+            debug_logger = EpisodeDebugLogger("solver")
+            debug_logger.info(
+                "🎯 SOLVER_INVOKED: SABER solver called by Inspect AI",
+                agent_name=agent_name,
+                state_metadata_keys=list(state.metadata.keys()) if state.metadata else [],
+                state_messages_count=len(state.messages) if state.messages else 0,
+            )
 
             # Extract prompts from sample metadata
             metadata = state.metadata
@@ -252,14 +262,36 @@ def _create_saber_solver(agent_name: str, agent_factory: Callable) -> Solver:
                 },
             )
 
+            # DEBUG: Log before calling agent factory
+            debug_logger.info(
+                "🏭 SOLVER: Calling agent_factory to create agent",
+                agent_name=agent_name,
+                agent_factory_type=type(agent_factory).__name__,
+            )
+
             # Create agent using the factory
             # agent_factory() returns a function that accepts prompts
             # Call it with prompts to get the actual agent
             create_with_prompts = agent_factory()
+            
+            # DEBUG: Log factory result
+            debug_logger.info(
+                "🏗️ SOLVER: agent_factory returned, calling with prompts",
+                agent_name=agent_name,
+                create_with_prompts_type=type(create_with_prompts).__name__,
+            )
+            
             agent = create_with_prompts(
                 instruction_prompt=instruction_prompt,
                 assistant_prompt=assistant_prompt,
                 submit_prompt=submit_prompt,
+            )
+            
+            # DEBUG: Log agent creation complete
+            debug_logger.info(
+                "✅ SOLVER: Agent created, about to execute",
+                agent_name=agent_name,
+                agent_type=type(agent).__name__,
             )
 
             # Execute the agent
