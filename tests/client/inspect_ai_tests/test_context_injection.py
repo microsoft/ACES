@@ -23,7 +23,7 @@ from inspect_ai._util.content import ContentText, ContentReasoning
 from inspect_ai.model._call_tools import ExecuteToolsResult
 from inspect_ai.model._chat_message import ChatMessageAssistant, ChatMessageSystem, ChatMessageUser
 
-from saber.client.inspect_ai.context_injection import (
+from saber.inspect_ai.context_injection import (
     _get_context,
     _sanitize_text,
     _truncate_text,
@@ -142,6 +142,49 @@ def test_extract_reasoning_no_reasoning():
     assert result is None
 
 
+def test_extract_reasoning_redacted_with_summary():
+    """Test extraction from redacted reasoning with summary available."""
+    message = ChatMessageAssistant(content=[
+        ContentReasoning(
+            reasoning="encrypted_base64_string_here",
+            summary="This is a human-readable summary of the reasoning",
+            redacted=True
+        ),
+        ContentText(text="Message")
+    ])
+    result = extract_reasoning_content(message)
+    # Should return the summary, not the encrypted reasoning
+    assert result == "This is a human-readable summary of the reasoning"
+
+
+def test_extract_reasoning_redacted_without_summary():
+    """Test extraction from redacted reasoning without summary."""
+    message = ChatMessageAssistant(content=[
+        ContentReasoning(
+            reasoning="encrypted_base64_string_here",
+            redacted=True
+        ),
+        ContentText(text="Message")
+    ])
+    result = extract_reasoning_content(message)
+    # Should return None since encrypted reasoning is not useful
+    assert result is None
+
+
+def test_extract_reasoning_not_redacted():
+    """Test extraction from non-redacted reasoning (normal case)."""
+    message = ChatMessageAssistant(content=[
+        ContentReasoning(
+            reasoning="This is the actual reasoning content",
+            redacted=False
+        ),
+        ContentText(text="Message")
+    ])
+    result = extract_reasoning_content(message)
+    # Should return the actual reasoning
+    assert result == "This is the actual reasoning content"
+
+
 # ============================================================================
 # Test: is_saber_mcp_tool()
 # ============================================================================
@@ -241,7 +284,7 @@ async def test_saber_tool_params_injects_into_saber_tool():
     context.set_context("Assistant message", "Reasoning content")
 
     # Mock the original tool_params to return base params
-    with patch('saber.client.inspect_ai.context_injection.original_tool_params') as mock_original:
+    with patch('saber.inspect_ai.context_injection.original_tool_params') as mock_original:
         mock_original.return_value = {"command": "ls -la"}
 
         # Call saber_tool_params
@@ -269,7 +312,7 @@ async def test_saber_tool_params_skips_non_saber_tools():
     context.set_context("Assistant message", "Reasoning content")
 
     # Mock the original tool_params
-    with patch('saber.client.inspect_ai.context_injection.original_tool_params') as mock_original:
+    with patch('saber.inspect_ai.context_injection.original_tool_params') as mock_original:
         mock_original.return_value = {"query": "test"}
 
         # Call saber_tool_params
@@ -293,7 +336,7 @@ async def test_saber_tool_params_no_context():
         return "result"
 
     # Mock the original tool_params
-    with patch('saber.client.inspect_ai.context_injection.original_tool_params') as mock_original:
+    with patch('saber.inspect_ai.context_injection.original_tool_params') as mock_original:
         mock_original.return_value = {"command": "ls"}
 
         # Call saber_tool_params without context
@@ -317,7 +360,7 @@ async def test_saber_execute_tools_stores_context(simple_messages):
     context.clear_context()
 
     # Mock original execute_tools
-    with patch('saber.client.inspect_ai.context_injection.original_execute_tools') as mock_execute:
+    with patch('saber.inspect_ai.context_injection.original_execute_tools') as mock_execute:
         mock_execute.return_value = ExecuteToolsResult(
             messages=[],
             output=None
@@ -347,7 +390,7 @@ async def test_saber_execute_tools_captures_assistant_message(simple_messages):
         captured_context['reasoning'] = ctx.reasoning
         return ExecuteToolsResult(messages=[], output=None)
 
-    with patch('saber.client.inspect_ai.context_injection.original_execute_tools', side_effect=mock_execute_with_capture):
+    with patch('saber.inspect_ai.context_injection.original_execute_tools', side_effect=mock_execute_with_capture):
         await saber_execute_tools(simple_messages, [], None)
 
     # Verify context was captured during execution
@@ -370,7 +413,7 @@ async def test_saber_execute_tools_clears_context_on_error():
     # Set some context first
     context.set_context("should be cleared", "on error")
 
-    with patch('saber.client.inspect_ai.context_injection.original_execute_tools') as mock_execute:
+    with patch('saber.inspect_ai.context_injection.original_execute_tools') as mock_execute:
         mock_execute.side_effect = Exception("Test error")
 
         # Should handle error, clear context, and re-raise
@@ -410,7 +453,7 @@ async def test_integration_context_flows_to_tool_params():
 
     async def mock_execute_with_tool_call(messages, tools, max_output):
         # While context is set, simulate tool_params being called
-        with patch('saber.client.inspect_ai.context_injection.original_tool_params') as mock_original:
+        with patch('saber.inspect_ai.context_injection.original_tool_params') as mock_original:
             mock_original.return_value = {"command": "ls"}
 
             params = saber_tool_params({"command": "ls"}, bash)
@@ -418,7 +461,7 @@ async def test_integration_context_flows_to_tool_params():
 
         return ExecuteToolsResult(messages=[], output=None)
 
-    with patch('saber.client.inspect_ai.context_injection.original_execute_tools', side_effect=mock_execute_with_tool_call):
+    with patch('saber.inspect_ai.context_injection.original_execute_tools', side_effect=mock_execute_with_tool_call):
         await saber_execute_tools(messages, [], None)
 
     # Verify context was injected
@@ -441,7 +484,7 @@ async def test_integration_reasoning_extraction_and_injection(reasoning_messages
     injected_params = {}
 
     async def mock_execute_with_tool_call(messages, tools, max_output):
-        with patch('saber.client.inspect_ai.context_injection.original_tool_params') as mock_original:
+        with patch('saber.inspect_ai.context_injection.original_tool_params') as mock_original:
             mock_original.return_value = {"param": "value"}
 
             params = saber_tool_params({"param": "value"}, python)
@@ -449,7 +492,7 @@ async def test_integration_reasoning_extraction_and_injection(reasoning_messages
 
         return ExecuteToolsResult(messages=[], output=None)
 
-    with patch('saber.client.inspect_ai.context_injection.original_execute_tools', side_effect=mock_execute_with_tool_call):
+    with patch('saber.inspect_ai.context_injection.original_execute_tools', side_effect=mock_execute_with_tool_call):
         await saber_execute_tools(reasoning_messages, [], None)
 
     # Verify both message and reasoning were injected
@@ -621,7 +664,7 @@ def test_configure_context_injection_enabled():
 def test_configure_context_injection_tools():
     """Test configuring tool set."""
     # Save original config
-    from saber.client.inspect_ai.context_injection import _config
+    from saber.inspect_ai.context_injection import _config
     original_tools = _config.registered_tools.copy()
 
     # Clear tool discovery cache
@@ -652,7 +695,7 @@ def test_configure_context_injection_flags():
         max_context_size=5000
     )
 
-    from saber.client.inspect_ai.context_injection import _config
+    from saber.inspect_ai.context_injection import _config
 
     assert _config.inject_reasoning is False
     assert _config.inject_assistant_message is True
@@ -670,7 +713,7 @@ def test_configure_context_injection_flags():
 async def test_tool_params_respects_config():
     """Test that tool_params respects configuration."""
     # Save original config state
-    from saber.client.inspect_ai.context_injection import _config
+    from saber.inspect_ai.context_injection import _config
     original_inject_reasoning = _config.inject_reasoning
 
     configure_context_injection(inject_reasoning=False)
@@ -683,7 +726,7 @@ async def test_tool_params_respects_config():
     bash_mock.__name__ = "bash"
     bash_mock._saber_context_injection = False
 
-    with patch('saber.client.inspect_ai.context_injection.original_tool_params') as mock_original:
+    with patch('saber.inspect_ai.context_injection.original_tool_params') as mock_original:
         mock_original.return_value = {"command": "ls"}
 
         result = saber_tool_params({"command": "ls"}, bash_mock)
@@ -725,7 +768,7 @@ async def test_metrics_capture_success():
         ChatMessageAssistant(content="Test message")
     ]
 
-    with patch('saber.client.inspect_ai.context_injection.original_execute_tools') as mock_execute:
+    with patch('saber.inspect_ai.context_injection.original_execute_tools') as mock_execute:
         mock_execute.return_value = ExecuteToolsResult(messages=[], output=None)
         await saber_execute_tools(messages, [], None)
 
@@ -748,7 +791,7 @@ async def test_metrics_injection_success():
     bash_mock.__name__ = "bash"
     bash_mock._saber_context_injection = False
 
-    with patch('saber.client.inspect_ai.context_injection.original_tool_params') as mock_original:
+    with patch('saber.inspect_ai.context_injection.original_tool_params') as mock_original:
         mock_original.return_value = {"command": "ls"}
         saber_tool_params({"command": "ls"}, bash_mock)
 
@@ -763,7 +806,7 @@ def test_metrics_success_rate():
     """Test success rate calculation."""
     reset_context_injection_metrics()
 
-    from saber.client.inspect_ai.context_injection import _metrics
+    from saber.inspect_ai.context_injection import _metrics
 
     _metrics.record_capture_attempt(success=True)
     _metrics.record_capture_attempt(success=True)
@@ -899,8 +942,8 @@ async def test_execute_tools_handles_extraction_errors():
     # Create a message that will cause extraction to fail
     messages = [ChatMessageAssistant(content="Valid content")]
 
-    with patch('saber.client.inspect_ai.context_injection.original_execute_tools') as mock_execute:
-        with patch('saber.client.inspect_ai.context_injection.extract_assistant_content') as mock_extract:
+    with patch('saber.inspect_ai.context_injection.original_execute_tools') as mock_execute:
+        with patch('saber.inspect_ai.context_injection.extract_assistant_content') as mock_extract:
             mock_extract.side_effect = Exception("Extraction failed")
             mock_execute.return_value = ExecuteToolsResult(messages=[], output=None)
 
@@ -922,8 +965,8 @@ async def test_tool_params_handles_injection_errors():
     async def bash(**kwargs):
         pass
 
-    with patch('saber.client.inspect_ai.context_injection.original_tool_params') as mock_original:
-        with patch('saber.client.inspect_ai.context_injection._sanitize_and_truncate') as mock_sanitize:
+    with patch('saber.inspect_ai.context_injection.original_tool_params') as mock_original:
+        with patch('saber.inspect_ai.context_injection._sanitize_and_truncate') as mock_sanitize:
             mock_original.return_value = {"command": "ls"}
             mock_sanitize.side_effect = Exception("Sanitization failed")
 

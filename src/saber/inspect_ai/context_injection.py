@@ -504,7 +504,11 @@ def extract_assistant_content(message: ChatMessageAssistant) -> str | None:
 
 
 def extract_reasoning_content(message: ChatMessageAssistant) -> str | None:
-    """Extract reasoning content from assistant message (o1/o3 models) with sanitization."""
+    """Extract reasoning content from assistant message (o1/o3 models) with sanitization.
+
+    When reasoning is redacted (encrypted), prefer the summary instead.
+    If no summary is available and reasoning is encrypted, return None.
+    """
     # Check reasoning attribute first (o1 models)
     if hasattr(message, "reasoning") and message.reasoning:
         return _sanitize_and_truncate(str(message.reasoning))
@@ -513,8 +517,16 @@ def extract_reasoning_content(message: ChatMessageAssistant) -> str | None:
     if isinstance(message.content, list):
         for item in message.content:
             if isinstance(item, ContentReasoning):
+                # If reasoning is redacted (encrypted), prefer summary
+                if hasattr(item, "redacted") and item.redacted:
+                    # Use summary if available, otherwise skip encrypted reasoning
+                    if hasattr(item, "summary") and item.summary:
+                        return _sanitize_and_truncate(str(item.summary))
+                    # Don't return encrypted reasoning - it's not useful
+                    logger.debug("🔍 Skipping encrypted reasoning (no summary available)")
+                    return None
                 # ContentReasoning has a 'reasoning' attribute (not 'text')
-                if hasattr(item, "reasoning"):
+                elif hasattr(item, "reasoning"):
                     return _sanitize_and_truncate(str(item.reasoning))
 
     return None
