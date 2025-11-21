@@ -3,9 +3,17 @@
 Logging Category: EVALUATION (no logging hooks defined in this module).
 """
 
-# Evaluation strategy constants
-EVAL_STRATEGY_STATIC = "static"
-EVAL_STRATEGY_LLM_JUDGE = "llm_judge"
+# Import centralized constants from models layer
+from ...models.constants import (
+    SubmissionEvaluationStrategy,
+    StepEvaluationStrategy,
+    EvaluationStrategy,
+    EVAL_STRATEGY_STATIC,
+    EVAL_STRATEGY_LLM_JUDGE,
+    EVAL_STRATEGY_TOOL_CALL,
+    VALID_SUBMISSION_EVAL_STRATEGIES,
+    VALID_STEP_EVAL_STRATEGIES,
+)
 
-# Phase 2: Both static and LLM judge evaluation strategies are now supported
-SUPPORTED_STRATEGIES = {EVAL_STRATEGY_STATIC, EVAL_STRATEGY_LLM_JUDGE}
+# Backwards compatibility - kept for any code that might import from here
+SUPPORTED_STRATEGIES = {EVAL_STRATEGY_STATIC, EVAL_STRATEGY_LLM_JUDGE, EVAL_STRATEGY_TOOL_CALL}

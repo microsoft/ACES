@@ -95,92 +95,156 @@ tasks:
     def test_load_tasks_with_subtasks(self):
         """Test loading tasks with subtasks from YAML."""
         yaml_content = """
-domain: test_domain
+    domain: test_domain
+    global_defaults:
+      prompts:
+        instruction: "test_instruction.md"
+        assistant: "test_assistant.md"
+        submit: "test_submit.md"
 
-global_defaults:
-  execution_config:
-    executors:
-      bash:
-        timeout: 30
-  episode_config:
-    max_steps: 6
-  prompts:
-    instruction: "test_instruction.md"
-    assistant: "test_assistant.md"
-    submit: "test_submit.md"
-  benchmark_config:
-    episode_attempts: 2
-  prompts:
-    instruction: "test_instruction.md"
-    assistant: "test_assistant.md"
-    submit: "test_submit.md"
+    benchmark_config:
+      episode_attempts: 4
+    tasks:
+      - task_id: "incident_5_task_1"
+        title: "incident_5_task_1"
+        description: "What is the IP address associated with the Manatee Tempest activity
+          group detected in this security incident?"
+        prompt_template_file: timeout_task_template.md
+        environment: test_env
+        execution_config:
+          allowed_executors: ["bash", "python"]
+          timeout: 180
+        episode_config:
+          max_steps: 25
 
-benchmark_config:
-  episode_attempts: 2
+        inherit_shared: true
+        initial_context:
+          incident_context: "A command and control behavior was blocked on host `vnevado-win10r`,
+            which indicated an active infection by malware that could replicate and receive
+            commands from remote attackers. This malware was active, and precautionary measures
+            should be taken to check for residual signs of infection. The process involved
+            had the ID 1332 and ran the command `curl http://vectorsandarrows.com`."
+          question: "What is the IP address associated with the Manatee Tempest activity
+            group detected in this security incident?"
 
-tasks:
-  - task_id: complex_task
-    title: Complex Task
-    description: A task with multiple subtasks
-    prompt_template_file: complex_task_template.md
-    execution_config:
-      timeout: 300
-      allowed_executors:
-        - "test_executor"
-    episode_config:
-      max_steps: 10
-    submission_evaluation_config:
-      strategy: "static"
-      criteria:
-        expected_answers:
-          - "test_answer"
-      scoring:
-        max_score: 1.0
-    initial_context:
-      timeout: 300
-    subtasks:
-      - subtask_id: subtask1
-        title: First Subtask
-        description: First step of the task
-        objective: Complete first step
-      - subtask_id: subtask2
-        title: Second Subtask
-        description: Second step of the task
-        objective: Complete second step
+        submission_evaluation_config:
+          strategy: static
+          criteria:
+            expected_answers:
+            - 198.43.121.209
+          scoring:
+            max_score: 1.0
+            weight: 1.0
+
+        step_evaluation_config:
+          strategy: llm_judge
+          criteria:
+            model: "openai/azure/gpt-4.1"
+            judge_system_template: "prompts/judge/step/cybersecurity_incident_system.md"
+            judge_user_template: "prompts/judge/step/judge/cybersecurity_incident_user.md"
+            steps_per_message: 10
+          scoring:
+            max_score: 0.15
+            weight: 1.0
+
+        subtasks:
+          - subtask_id: "checkpoint_1"
+            title: "Checkpoint 1"
+            description: "The account with SID `S-1-5-21-1840191660-8534830288-125585561-1522`
+              was involved in a Command and Control behavior that was blocked."
+            objective: "Identify key details related to the potential compromise that might
+              help in solving the main task."
+            step_evaluation_config:
+              strategy: llm_judge
+              criteria:
+                model: "openai/azure/gpt-4.1"
+                judge_system_template: "prompts/judge/step/cybersecurity_incident_system.md"
+                judge_user_template: "prompts/judge/step/judge/cybersecurity_incident_user.md"
+                steps_per_message: 10
+              scoring:
+                max_score: 0.20
+                weight: 0.5
+
+          - subtask_id: "checkpoint_2"
+            title: "Checkpoint 2"
+            description: "The cybercriminal group known as Manatee Tempest, which is associated
+              with the IP address `198.43.121.209`, was active during the incident."
+            objective: "Identify key details related to the potential compromise that might
+              help in solving the main task."
+            step_evaluation_config:
+              strategy: static
+              criteria:
+                expected_outputs: "Manatee Tempest"
+              scoring:
+                max_score: 0.3
+                weight: 0.45
+
 """
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            f.write(yaml_content)
-            temp_path = f.name
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tasks_dir = Path(temp_dir) / "tasks"
+            tasks_dir.mkdir()
 
-        try:
+            # Create global.yaml
+            global_yaml = tasks_dir / "global.yaml"
+            global_content = """
+      domain: test_domain
+      global_defaults:
+        prompts:
+          instruction: "test_instruction.md"
+          assistant: "test_assistant.md"
+          submit: "test_submit.md"
+
+      benchmark_config:
+        episode_attempts: 4
+"""
+            with open(global_yaml, "w") as f:
+                f.write(global_content)
+
+            # Create task file
+            task_file = tasks_dir / "subtask_test.yaml"
+            with open(task_file, "w") as f:
+                f.write(yaml_content)
+
             loader = BenchmarkConfigLoader("test_domain")
-            tasks = loader.load_tasks_from_file(temp_path)
+            tasks = loader.load_tasks_from_directory(str(tasks_dir))
+            
+            assert "incident_5_task_1" in tasks
+            task = tasks["incident_5_task_1"]
+            assert task.task_id == "incident_5_task_1"
+            assert task.title == "incident_5_task_1"
+            assert task.step_evaluation_config
+            assert (task.step_evaluation_config.get("strategy") == "llm_judge")
+            assert(task.step_evaluation_config.get("scoring").get("max_score") == 0.15)
+            assert(task.step_evaluation_config.get("scoring").get("weight") == 1.0)
+            assert(task.step_evaluation_config.get("criteria").get("model") == "openai/azure/gpt-4.1")
 
-            assert "complex_task" in tasks
-            task = tasks["complex_task"]
-            assert task.task_id == "complex_task"
-            assert task.title == "Complex Task"
             assert len(task.subtasks) == 2
 
             # Check first subtask
             subtask1 = task.subtasks[0]
             assert isinstance(subtask1, SubTask)
-            assert subtask1.subtask_id == "subtask1"
-            assert subtask1.title == "First Subtask"
-            assert subtask1.objective == "Complete first step"
+            assert subtask1.subtask_id == "checkpoint_1"
+            assert subtask1.title == "Checkpoint 1"
+            assert subtask1.objective == "Identify key details related to the potential compromise that might help in solving the main task."
+            assert subtask1.subtask_strategy == "llm_judge"
+            assert subtask1.subtask_criteria is not None
+            assert subtask1.subtask_criteria.get("judge_user_template") == "prompts/judge/step/judge/cybersecurity_incident_user.md"
+            assert(subtask1.subtask_max_score == 0.2)
+            assert(subtask1.subtask_weight == 0.5)
+            assert subtask1.subtask_id == "checkpoint_1"
+            assert subtask1.task_id == "incident_5_task_1" 
 
             # Check second subtask
             subtask2 = task.subtasks[1]
             assert isinstance(subtask2, SubTask)
-            assert subtask2.subtask_id == "subtask2"
-            assert subtask2.title == "Second Subtask"
-            assert subtask2.objective == "Complete second step"
-
-            # Check task context
-            assert task.initial_context["timeout"] == 300
-        finally:
-            os.unlink(temp_path)
+            assert subtask2.subtask_id == "checkpoint_2"
+            assert subtask2.title == "Checkpoint 2"
+            assert subtask2.objective == "Identify key details related to the potential compromise that might help in solving the main task."
+            assert subtask2.subtask_strategy == "static"
+            assert subtask2.subtask_criteria.get("expected_outputs") == "Manatee Tempest"
+            assert(subtask2.subtask_max_score == 0.3)
+            assert(subtask2.subtask_weight == 0.45)
 
     def test_load_tasks_missing_file(self):
         """Test loading from non-existent file."""
@@ -2578,3 +2642,282 @@ shared_config:
             # Verify evaluation config is properly configured
             assert task.submission_evaluation_config["strategy"] == "static"
             assert "expected_answers" in task.submission_evaluation_config["criteria"]
+
+
+class TestBenchmarkConfigLoaderValidation:
+    """Test cases for validation methods in BenchmarkConfigLoader."""
+
+    def test_validate_step_evaluation_config_static_strategy(self):
+        """Test validation of step evaluation config with static strategy."""
+        loader = BenchmarkConfigLoader("test_domain")
+        
+        # Valid static strategy config
+        valid_static_config = {
+            "strategy": "static",
+            "criteria": {
+                "expected_outputs": ["test_output"]
+            },
+            "scoring": {
+                "max_score": 1.0,
+                "weight": 0.5
+            }
+        }
+        
+        # Should not raise any exception
+        loader._validate_step_evaluation_config(valid_static_config, "test_task")
+        
+        # Test missing expected_outputs
+        invalid_static_config = {
+            "strategy": "static",
+            "criteria": {
+                "wrong_field": ["test_output"]
+            },
+            "scoring": {
+                "max_score": 1.0,
+                "weight": 0.5
+            }
+        }
+        
+        with pytest.raises(InvalidTaskDefinitionException, match="must have either 'expected_outputs' in criteria"):
+            loader._validate_step_evaluation_config(invalid_static_config, "test_task")
+
+    def test_validate_step_evaluation_config_tool_call_strategy(self):
+        """Test validation of step evaluation config with tool_call strategy."""
+        loader = BenchmarkConfigLoader("test_domain")
+        
+        # Valid tool_call strategy config
+        valid_tool_call_config = {
+            "strategy": "tool_call",
+            "criteria": {
+                "expected_tools": ["grep", "find"]
+            },
+            "scoring": {
+                "max_score": 2.0,
+                "weight": 1.0
+            }
+        }
+        
+        # Should not raise any exception
+        loader._validate_step_evaluation_config(valid_tool_call_config, "test_task")
+        
+        # Test missing expected_tools
+        invalid_tool_call_config = {
+            "strategy": "tool_call",
+            "criteria": {
+                "wrong_field": ["grep"]
+            },
+            "scoring": {
+                "max_score": 2.0,
+                "weight": 1.0
+            }
+        }
+        
+        with pytest.raises(InvalidTaskDefinitionException, match="must have 'expected_tools' in criteria"):
+            loader._validate_step_evaluation_config(invalid_tool_call_config, "test_task")
+
+    def test_validate_step_evaluation_config_llm_judge_strategy(self):
+        """Test validation of step evaluation config with llm_judge strategy."""
+        loader = BenchmarkConfigLoader("test_domain")
+        
+        # Valid llm_judge strategy config
+        valid_llm_judge_config = {
+            "strategy": "llm_judge",
+            "criteria": {
+                "model": "gpt-4",
+                "judge_system_template": "prompts/judge/system.md",
+                "judge_user_template": "prompts/judge/user.md",
+                "steps_per_message": 10
+            },
+            "scoring": {
+                "max_score": 1.5,
+                "weight": 0.8  # Changed from 2.0 to 0.8 (valid)
+            }
+        }
+        
+        # Should not raise any exception
+        loader._validate_step_evaluation_config(valid_llm_judge_config, "test_task")
+        
+        # Test missing model
+        invalid_config_no_model = {
+            "strategy": "llm_judge",
+            "criteria": {
+                "judge_system_template": "prompts/judge/system.md",
+                "judge_user_template": "prompts/judge/user.md"
+            },
+            "scoring": {
+                "max_score": 1.5,
+                "weight": 0.8  # Changed from 2.0 to 0.8 (valid)
+            }
+        }
+        
+        with pytest.raises(InvalidTaskDefinitionException, match="step evaluation llm_judge requires 'model'"):
+            loader._validate_step_evaluation_config(invalid_config_no_model, "test_task")
+        
+        # Test missing judge_system_template
+        invalid_config_no_system_template = {
+            "strategy": "llm_judge",
+            "criteria": {
+                "model": "gpt-4",
+                "judge_user_template": "prompts/judge/user.md"
+            },
+            "scoring": {
+                "max_score": 1.5,
+                "weight": 0.8  # Changed from 2.0 to 0.8 (valid)
+            }
+        }
+        
+        with pytest.raises(InvalidTaskDefinitionException, match="step evaluation requires 'judge_system_template' path"):
+            loader._validate_step_evaluation_config(invalid_config_no_system_template, "test_task")
+        
+        # Test missing judge_user_template
+        invalid_config_no_user_template = {
+            "strategy": "llm_judge",
+            "criteria": {
+                "model": "gpt-4",
+                "judge_system_template": "prompts/judge/system.md"
+            },
+            "scoring": {
+                "max_score": 1.5,
+                "weight": 0.8  # Changed from 2.0 to 0.8 (valid)
+            }
+        }
+        
+        with pytest.raises(InvalidTaskDefinitionException, match="step evaluation requires 'judge_user_template' path"):
+            loader._validate_step_evaluation_config(invalid_config_no_user_template, "test_task")
+        
+        # Test invalid steps_per_message
+        invalid_config_bad_steps = {
+            "strategy": "llm_judge",
+            "criteria": {
+                "model": "gpt-4",
+                "judge_system_template": "prompts/judge/system.md",
+                "judge_user_template": "prompts/judge/user.md",
+                "steps_per_message": 0
+            },
+            "scoring": {
+                "max_score": 1.5,
+                "weight": 0.8  # Changed from 2.0 to 0.8 (valid)
+            }
+        }
+        
+        with pytest.raises(InvalidTaskDefinitionException, match="steps_per_message must be a positive integer"):
+            loader._validate_step_evaluation_config(invalid_config_bad_steps, "test_task")
+
+    def test_validate_step_evaluation_config_invalid_strategy(self):
+        """Test validation with invalid strategy."""
+        loader = BenchmarkConfigLoader("test_domain")
+        
+        invalid_strategy_config = {
+            "strategy": "invalid_strategy",
+            "criteria": {
+                "some_field": "some_value"
+            },
+            "scoring": {
+                "max_score": 1.0,
+                "weight": 1.0
+            }
+        }
+        
+        with pytest.raises(InvalidTaskDefinitionException, match="Invalid step evaluation strategy.*Must be 'static', 'tool_call' or 'llm_judge'"):
+            loader._validate_step_evaluation_config(invalid_strategy_config, "test_task")
+
+    def test_validate_step_evaluation_config_scoring_validation(self):
+        """Test validation of scoring section."""
+        loader = BenchmarkConfigLoader("test_domain")
+        
+        # Test missing scoring section (should default)
+        config_no_scoring = {
+            "strategy": "static",
+            "criteria": {
+                "expected_outputs": ["test"]
+            }
+        }
+        
+        # Should not raise exception (scoring section is optional with defaults)
+        loader._validate_step_evaluation_config(config_no_scoring, "test_task")
+        
+        # Test invalid max_score
+        config_invalid_max_score = {
+            "strategy": "static",
+            "criteria": {
+                "expected_outputs": ["test"]
+            },
+            "scoring": {
+                "max_score": -1.0,
+                "weight": 1.0
+            }
+        }
+        
+        with pytest.raises(InvalidTaskDefinitionException, match="max_score must be a non-negative number"):
+            loader._validate_step_evaluation_config(config_invalid_max_score, "test_task")
+        
+        # Test invalid weight
+        config_invalid_weight = {
+            "strategy": "static",
+            "criteria": {
+                "expected_outputs": ["test"]
+            },
+            "scoring": {
+                "max_score": 1.0,
+                "weight": -0.5
+            }
+        }
+        
+        with pytest.raises(InvalidTaskDefinitionException, match="weight must be a non-negative number"):
+            loader._validate_step_evaluation_config(config_invalid_weight, "test_task")
+        
+        # Test weight exceeding 1.0
+        config_weight_too_high = {
+            "strategy": "static",
+            "criteria": {
+                "expected_outputs": ["test"]
+            },
+            "scoring": {
+                "max_score": 1.0,
+                "weight": 1.5  # Invalid - exceeds 1.0
+            }
+        }
+        
+        with pytest.raises(InvalidTaskDefinitionException, match="weight must not exceed 1.0"):
+            loader._validate_step_evaluation_config(config_weight_too_high, "test_task")
+        
+        # Test non-dict scoring
+        config_non_dict_scoring = {
+            "strategy": "static",
+            "criteria": {
+                "expected_outputs": ["test"]
+            },
+            "scoring": "invalid"
+        }
+        
+        with pytest.raises(InvalidTaskDefinitionException, match="scoring must be a dictionary"):
+            loader._validate_step_evaluation_config(config_non_dict_scoring, "test_task")
+
+    def test_validate_step_evaluation_config_criteria_validation(self):
+        """Test validation of criteria section."""
+        loader = BenchmarkConfigLoader("test_domain")
+        
+        # Test missing criteria
+        config_no_criteria = {
+            "strategy": "static",
+            "scoring": {
+                "max_score": 1.0,
+                "weight": 1.0
+            }
+        }
+        
+        with pytest.raises(InvalidTaskDefinitionException, match="Missing or invalid criteria in step_evaluation_config"):
+            loader._validate_step_evaluation_config(config_no_criteria, "test_task")
+        
+        # Test non-dict criteria
+        config_non_dict_criteria = {
+            "strategy": "static",
+            "criteria": "invalid",
+            "scoring": {
+                "max_score": 1.0,
+                "weight": 1.0
+            }
+        }
+        
+        with pytest.raises(InvalidTaskDefinitionException, match="Missing or invalid criteria in step_evaluation_config"):
+            loader._validate_step_evaluation_config(config_non_dict_criteria, "test_task")

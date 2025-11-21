@@ -14,6 +14,7 @@ from ...logging_config import (
     log_operation_success,
 )
 from ...models import BenchmarkInfo, TaskInfo
+from ...models.constants import SubmissionEvaluationStrategy, StepEvaluationStrategy
 from ..base import Episode
 from .benchmark_config_loader import BenchmarkConfigLoader
 from .exceptions import SubTaskNotFoundException, TaskNotFoundException
@@ -307,7 +308,12 @@ class BenchmarkManager:
                     eval_configs.append(("step", task.step_evaluation_config))
 
                 for eval_type, eval_config in eval_configs:
-                    if eval_config and eval_config.get("strategy") == "llm_judge":
+                    # Check LLM strategy for both submission and step evaluation
+                    is_llm_strategy = (
+                        (eval_type == "submission" and eval_config.get("strategy") == SubmissionEvaluationStrategy.LLM_JUDGE) or
+                        (eval_type == "step" and eval_config.get("strategy") == StepEvaluationStrategy.LLM_JUDGE)
+                    )
+                    if eval_config and is_llm_strategy:
                         criteria = eval_config.get("criteria", {})
                         judge_system_template = criteria.get("judge_system_template")
                         judge_user_template = criteria.get("judge_user_template")

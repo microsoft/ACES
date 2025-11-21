@@ -28,7 +28,7 @@ from ..models.rest.evaluation import (
     EvaluationOverrideRequest,
     EvaluationResultResponse,
     EvaluationResultSubmission,
-    StepEvaluationCriteriaResponse,
+    SubtaskEvaluationCriteriaResponse,
     SubmissionEvaluationCriteriaResponse,
 )
 from ..server import EpisodeState
@@ -1713,41 +1713,42 @@ class ClientSessionManager:
                     error_text = await response.text()
                     raise Exception(f"Failed to get submission evaluation criteria: {response.status} - {error_text}")
 
-    async def get_step_evaluation_criteria(
+    async def get_subtask_evaluation_criteria(
         self, session_id: str, episode_id: str
-    ) -> Optional[StepEvaluationCriteriaResponse]:
+    ) -> Optional[List[SubtaskEvaluationCriteriaResponse]]:
         """
-        Get step evaluation criteria (template paths only, no rendering).
-        Returns None if step evaluation is not configured for the task.
+        Get subtask evaluation criteria (template paths only, no rendering).
+        Returns None if subtask evaluation is not configured for the task.
 
         Args:
             session_id: Session ID
             episode_id: Episode ID
 
         Returns:
-            StepEvaluationCriteriaResponse with template paths, or None if not configured
+            List of SubtaskEvaluationCriteriaResponse objects with template paths, or None if not configured
 
         Raises:
             Exception: If request fails (except 404 which returns None)
         """
         logger.debug(
-            "Fetching step evaluation criteria",
-            extra={"event": "get_step_evaluation_criteria", "session_id": session_id, "episode_id": episode_id},
+            "Fetching subtask evaluation criteria",
+            extra={"event": "get_subtask_evaluation_criteria", "session_id": session_id, "episode_id": episode_id},
         )
 
-        url = f"{self.base_url}/api/v1/session/{session_id}/episodes/{episode_id}/step-evaluation-criteria"
+        url = f"{self.base_url}/api/v1/session/{session_id}/episodes/{episode_id}/subtask-evaluation-criteria"
 
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as response:
                 if response.status == 200:
                     data = await response.json()
-                    return StepEvaluationCriteriaResponse(**data)
+                    # Server returns a list of SubtaskEvaluationCriteriaResponse objects
+                    return [SubtaskEvaluationCriteriaResponse(**item) for item in data]
                 elif response.status == 404:
-                    # Step evaluation is optional
+                    # Subtask evaluation is optional
                     return None
                 else:
                     error_text = await response.text()
-                    raise Exception(f"Failed to get step evaluation criteria: {response.status} - {error_text}")
+                    raise Exception(f"Failed to get subtask evaluation criteria: {response.status} - {error_text}")
 
     async def get_template_content(self, template_path: str) -> str:
         """

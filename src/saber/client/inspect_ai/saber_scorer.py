@@ -17,6 +17,7 @@ NO server-side evaluation. NO backward compatibility.
 Logging category: EVALUATION.
 """
 
+import asyncio
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from inspect_ai.model import ChatMessageSystem, ChatMessageUser, get_model
@@ -28,14 +29,14 @@ from jinja2 import BaseLoader, Environment, TemplateError
 
 from ...logging_config import LogCategory, get_saber_logger
 from ...models.core import EvalSubmission
-from ...models.evaluation_utils import parse_step_evaluations
+from ...models.constants import SubmissionEvaluationStrategy, StepEvaluationStrategy
 from ...models.rest.evaluation import (
     EpisodeStepsResponse,
     EpisodeSubmissionResponse,
     EvaluationResultSubmission,
     StepEvaluation,
-    StepEvaluationCriteriaResponse,
     SubmissionEvaluationCriteriaResponse,
+    SubtaskEvaluationCriteriaResponse,
 )
 
 logger = get_saber_logger(LogCategory.EVALUATION, __name__)
@@ -336,7 +337,8 @@ def subtask_score_metrics() -> Metric:
                 continue
 
             # Get the subtask_scores dict from metadata (only exists when step_criteria configured)
-            sample_subtask_scores = sample_score.score.metadata.get("subtask_scores")
+            # Look for unweighted scores (raw 0.0 or max_score values)
+            sample_subtask_scores = sample_score.score.metadata.get("subtask_scores_unweighted")
             if sample_subtask_scores is None:
                 # Skip samples without subtask scoring
                 continue
@@ -532,75 +534,68 @@ def saber_scorer() -> Scorer:
             # Step 2: Fetch submission data (should now contain what we just posted)
             submission_data = await session_manager.get_episode_submission(session_id, episode_id)
 
+            logger.debug(
+                "Fetched submission data",
+                extra={
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                    "submission": submission_data.submission,
+                    "submission_length": (len(submission_data.submission) if submission_data.submission else 0),
+                    "event": "submission_data_fetched",
+                },
+            )
+
             # Step 3: Fetch step history
             steps_data = await session_manager.get_episode_steps(session_id, episode_id)
 
             # Step 4: Fetch submission evaluation criteria
             submission_criteria = await session_manager.get_submission_evaluation_criteria(session_id, episode_id)
 
-            # Step 5: Fetch step evaluation criteria (optional)
-            step_criteria = await session_manager.get_step_evaluation_criteria(session_id, episode_id)
+            # Step 4: Fetch list of all subtask evaluation criteria,
+            # to be applied to the list of steps in score_steps (optional)
+            subtasks_criteria_list = await session_manager.get_subtask_evaluation_criteria(session_id, episode_id)
 
             # Step 6: Score submission
             submission_score, submission_explanation = await _score_submission(
                 submission_data, submission_criteria, session_manager, state
             )
 
-            # Step 7: Score steps (if configured)
-            unweighted_step_score = 0.0  # For logging/debugging only
-            weighted_step_score = 0.0
-            step_evaluations: List[StepEvaluation] = []
-            subtask_scores: Dict[str, float] = {}  # Track individual subtask scores
+            # Step 6: Score steps (if configured)
+            total_subtask_score = 0.0
+            step_evaluations: List[List[StepEvaluation]] = []
+            subtask_scores_weighted: Dict[str, float] = {}  # Track weighted subtask scores for total
+            subtask_scores_unweighted: Dict[str, float] = {}  # Track unweighted scores for individual metrics
 
-            if step_criteria:
-                unweighted_step_score, step_evaluations = await _score_steps(
-                    steps_data, step_criteria, submission_criteria.task_context, session_manager, state
+            if subtasks_criteria_list is not None and subtasks_criteria_list != []:
+                total_subtask_score, subtask_scores_raw_results, step_evaluations = await _score_all_subtasks(
+                    steps_data, subtasks_criteria_list, submission_criteria.task_context, session_manager, state
                 )
 
-                # Calculate individual subtask scores for metrics
-                subtasks_with_scores = {st["subtask_id"]: st.get("max_score", 0.0) for st in step_criteria.subtasks}
-                subtasks_with_weights = {st["subtask_id"]: st.get("weight", 1.0) for st in step_criteria.subtasks}
+                # Map individual scores back to subtask IDs
+                # Store both weighted (for totals) and unweighted (for individual metrics)
+                for i, criteria in enumerate(subtasks_criteria_list):
+                    if i < len(subtask_scores_raw_results):
+                        # Unweighted score (raw from strategy)
+                        unweighted_score = subtask_scores_raw_results[i]
+                        subtask_scores_unweighted[criteria.subtask_id] = unweighted_score
 
-                logger.debug(
-                    "Subtask configuration loaded",
-                    extra={
-                        "subtasks_with_scores": subtasks_with_scores,
-                        "subtasks_with_weights": subtasks_with_weights,
-                        "event": "subtask_config_loaded",
-                    },
-                )
-
-                # Collect unique objective_ids that were completed
-                completed_objectives = set()
-                for step_eval in step_evaluations:
-                    if step_eval.objective_id in subtasks_with_scores:
-                        completed_objectives.add(step_eval.objective_id)
-
-                # Build subtask_scores dict with individual scores
-                # Store UNWEIGHTED scores (1.0 or 0.0) for individual checkpoint metrics
-                # The weighting happens at aggregation level only
-                for subtask_id, max_score in subtasks_with_scores.items():
-                    if subtask_id in completed_objectives:
-                        # Unweighted: just 1.0 if completed (since max_score is always 1.0)
-                        subtask_scores[subtask_id] = max_score
+                        # Weighted score (for total calculation)
+                        weighted_score = unweighted_score * criteria.weight
+                        subtask_scores_weighted[criteria.subtask_id] = weighted_score
                     else:
-                        subtask_scores[subtask_id] = 0.0
+                        subtask_scores_unweighted[criteria.subtask_id] = 0.0
+                        subtask_scores_weighted[criteria.subtask_id] = 0.0
 
-                # Calculate weighted step score for comparison with submission
-                # This is the actual subtask score used in metrics
-                weighted_step_score = 0.0
-                for subtask_id in completed_objectives:
-                    if subtask_id in subtasks_with_scores and subtask_id in subtasks_with_weights:
-                        weighted_step_score += subtasks_with_scores[subtask_id] * subtasks_with_weights[subtask_id]
+                # Recalculate total with weights applied
+                total_subtask_score = sum(subtask_scores_weighted.values())
 
-            # Total score is the sum of submission score and weighted subtask score
-            total_score = submission_score + weighted_step_score
-            # Max possible is submission max (1.0) + weighted subtask max (1.0) = 2.0
+            # Calculate totals
+            total_score = submission_score + total_subtask_score
             max_possible = submission_criteria.scoring.get("max_score", 1.0)
-            if step_criteria:
-                # Add the maximum weighted subtask score (sum of all weights)
-                max_weighted_subtask = sum(st.get("weight", 1.0) for st in step_criteria.subtasks)
-                max_possible += max_weighted_subtask
+            if subtasks_criteria_list:
+                # Calculate max possible with weights applied
+                weighted_max_possible = sum(criteria.max_score * criteria.weight for criteria in subtasks_criteria_list)
+                max_possible += weighted_max_possible
 
             # Step 8: Submit evaluation result
             evaluation_result = EvaluationResultSubmission(
@@ -612,11 +607,20 @@ def saber_scorer() -> Scorer:
                 details={
                     "task_id": submission_criteria.task_id,
                     "submission_score": submission_score,
-                    "unweighted_step_score": unweighted_step_score,
-                    "weighted_step_score": weighted_step_score,
-                    "step_evaluations": [se.model_dump() for se in step_evaluations],
-                    "client_scorer_version": "2.2",
-                    "scoring_method": "sum",
+                    "total_subtask_score": total_subtask_score,
+                    "individual_subtasks_score_weighted": subtask_scores_weighted,
+                    "individual_subtasks_score_unweighted": subtask_scores_unweighted,
+                    "step_evaluations_by_subtask": {
+                        subtasks_criteria_list[i].subtask_id: {
+                            "strategy": subtasks_criteria_list[i].strategy,
+                            "max_score": subtasks_criteria_list[i].max_score,
+                            "weight": subtasks_criteria_list[i].weight,
+                            "step_evaluations": [se.model_dump() for se in step_evals],
+                        }
+                        for i, step_evals in enumerate(step_evaluations)
+                        if i < len(subtasks_criteria_list)
+                    },
+                    "client_scorer_version": "2.3",
                 },
             )
 
@@ -624,7 +628,7 @@ def saber_scorer() -> Scorer:
 
             eval_complete_msg = (
                 f"Client-side evaluation completed: score={total_score:.2f} "
-                f"(submission={submission_score:.2f}, weighted_steps={weighted_step_score:.2f})"
+                f"(submission={submission_score:.2f}, weighted_steps={total_subtask_score:.2f})"
             )
             logger.info(
                 "Client-side evaluation completed",
@@ -633,8 +637,7 @@ def saber_scorer() -> Scorer:
                     "episode_id": episode_id,
                     "total_score": total_score,
                     "submission_score": submission_score,
-                    "unweighted_step_score": unweighted_step_score,
-                    "weighted_step_score": weighted_step_score,
+                    "subtask_score": total_subtask_score,
                     "scoring_method": "sum",
                     "event": "client_eval_complete",
                 },
@@ -649,6 +652,11 @@ def saber_scorer() -> Scorer:
             # Step 9: Return score for inspect_ai
             max_sub_score = submission_criteria.scoring.get("max_score", 1.0)
 
+            # Calculate weighted max possible for explanation
+            weighted_max_possible = 0.0
+            if subtasks_criteria_list:
+                weighted_max_possible = sum(criteria.max_score * criteria.weight for criteria in subtasks_criteria_list)
+
             # Ensure task_id is in state.metadata so it appears in sample_metadata
             if state.metadata is None:
                 state.metadata = {}
@@ -659,20 +667,33 @@ def saber_scorer() -> Scorer:
                 "submission_score": submission_score,
                 "max_possible": max_possible,
                 "task_id": task_id,
-                "scorer_version": "2.2",
+                "scorer_version": "2.3",
                 "scoring_method": "max",
             }
 
             # Only add subtask-related metadata when subtasks are being scored
-            if step_criteria:
-                metadata["subtask_score"] = weighted_step_score
-                metadata["weighted_subtask_score"] = weighted_step_score
-                metadata["step_evaluations"] = [se.model_dump() for se in step_evaluations]
-                metadata["subtask_scores"] = subtask_scores  # Keep nested for programmatic access
+            if subtasks_criteria_list is not None and subtasks_criteria_list != []:
+                # Add subtask_score for the subtask_score() metric to find
+                metadata["subtask_score"] = total_subtask_score
+                metadata["step_evaluations_by_subtask"] = {
+                    subtasks_criteria_list[i].subtask_id: {
+                        "strategy": subtasks_criteria_list[i].strategy,
+                        "max_score": subtasks_criteria_list[i].max_score,
+                        "weight": subtasks_criteria_list[i].weight,
+                        "step_evaluations": [se.model_dump() for se in step_evals],
+                    }
+                    for i, step_evals in enumerate(step_evaluations)
+                    if i < len(subtasks_criteria_list)
+                }
+
+                # Store both weighted and unweighted scores for different purposes
+                metadata["subtask_scores_weighted"] = subtask_scores_weighted  # For internal use
+                metadata["subtask_scores_unweighted"] = subtask_scores_unweighted  # For metrics
 
                 # Add individual subtask scores as top-level metadata fields
                 # Format: <task_id>_<subtask_id>_score
-                for subtask_id, subtask_score_value in subtask_scores.items():
+                # Use UNWEIGHTED scores so individual checkpoints show 0.0 or 1.0 (or max_score)
+                for subtask_id, subtask_score_value in subtask_scores_unweighted.items():
                     # Sanitize IDs for metric names
                     sanitized_task = task_id.replace("-", "_").replace(" ", "_")
                     sanitized_subtask = subtask_id.replace("-", "_").replace(" ", "_")
@@ -680,10 +701,10 @@ def saber_scorer() -> Scorer:
                     metadata[metric_key] = subtask_score_value
 
             # Build explanation based on whether subtasks were scored
-            if step_criteria:
+            if subtasks_criteria_list is not None and subtasks_criteria_list != []:
                 explanation = (
                     f"{submission_explanation}, "
-                    f"weighted_subtasks={weighted_step_score:.2f}, "
+                    f"weighted_subtasks={total_subtask_score:.2f}, "
                     f"sum(submission, subtasks)={total_score}"
                 )
             else:
@@ -691,7 +712,7 @@ def saber_scorer() -> Scorer:
 
             return Score(
                 value=total_score,
-                answer=submission_data.submission,
+                answer=agent_answer,  # Use the agent answer we extracted earlier
                 explanation=explanation,
                 metadata=metadata,
             )
@@ -715,7 +736,7 @@ def saber_scorer() -> Scorer:
                 value=0.0,
                 answer="",
                 explanation=f"Client-side evaluation failed: {exc}",
-                metadata={"error": str(exc), "scorer_version": "2.2"},
+                metadata={"error": str(exc), "scorer_version": "2.3"},
             )
 
     return score
@@ -745,9 +766,9 @@ async def _score_submission(
         Tuple of (submission_score, explanation) where score is 0.0 to max_score
     """
     strategy = criteria.strategy
-    if strategy == "static":
+    if strategy == SubmissionEvaluationStrategy.STATIC:
         return await _score_submission_static(submission_data, criteria)
-    elif strategy == "llm_judge":
+    elif strategy == SubmissionEvaluationStrategy.LLM_JUDGE:
         return await _score_submission_llm(submission_data, criteria, session_manager, state)
     else:
         raise RuntimeError(f"Unknown submission strategy: {strategy}")
@@ -887,15 +908,259 @@ async def _score_submission_llm(
 # ============================================================================
 
 
-async def _score_steps(
+async def _score_all_subtasks(
     steps_data: EpisodeStepsResponse,
-    criteria: StepEvaluationCriteriaResponse,
+    list_of_all_subtask_criteria: List[SubtaskEvaluationCriteriaResponse],
+    task_context: Any,
+    session_manager: Any,
+    state: TaskState,
+) -> Tuple[float, List[float], List[List[StepEvaluation]]]:
+    """
+    Score all subtasks using their configured evaluation strategies.
+
+    Args:
+        steps_data: Episode steps data
+        list_of_all_subtask_criteria: List of subtask evaluation criteria
+        task_context: Task context
+        session_manager: Client session manager
+        state: Task state
+
+    Returns:
+        Tuple of (total_subtask_score, individual_scores, all_step_evaluations)
+    """
+    all_scores = []
+    total_subtask_score = 0.0
+    all_step_evaluations: List[List[StepEvaluation]] = []
+
+    logger.info(
+        "Starting subtask evaluation",
+        extra={
+            "subtask_count": len(list_of_all_subtask_criteria),
+            "subtasks": [
+                {"id": c.subtask_id, "strategy": c.strategy, "max_score": c.max_score, "weight": c.weight}
+                for c in list_of_all_subtask_criteria
+            ],
+            "event": "subtask_eval_start",
+        },
+    )
+
+    tasks = []
+
+    for criteria in list_of_all_subtask_criteria:
+        logger.info(
+            "Evaluating subtask with strategy",
+            extra={
+                "subtask_id": criteria.subtask_id,
+                "strategy": criteria.strategy,
+                "max_score": criteria.max_score,
+                "weight": criteria.weight,
+                "event": "subtask_eval_strategy",
+            },
+        )
+        if criteria.strategy == StepEvaluationStrategy.STATIC:
+            tasks.append(_score_subtask_static(steps_data, criteria))
+        elif criteria.strategy == StepEvaluationStrategy.TOOL_CALL:
+            tasks.append(_score_subtask_tool_call(steps_data, criteria))
+        elif criteria.strategy == StepEvaluationStrategy.LLM_JUDGE:
+            tasks.append(_score_subtask_llm(
+                steps_data, criteria, task_context, session_manager, state
+            ))
+        else:
+            raise RuntimeError(f"Unknown subtask strategy: {criteria.strategy}")
+
+    results = await asyncio.gather(*tasks)
+    for i, (subtask_score, step_evals) in enumerate(results):
+        criteria = list_of_all_subtask_criteria[i]
+        total_subtask_score += subtask_score
+        all_scores.append(subtask_score)
+        all_step_evaluations.append(step_evals)
+
+        logger.debug(
+            "Subtask scored",
+            extra={
+                "subtask_id": criteria.subtask_id,
+                "strategy": criteria.strategy,
+                "score": subtask_score,
+                "max_score": criteria.max_score,
+                "event": "subtask_scored",
+            },
+        )
+
+    logger.info(
+        "All subtasks scored",
+        extra={
+            "total_score": total_subtask_score,
+            "subtask_count": len(list_of_all_subtask_criteria),
+            "step_evaluations": len(all_step_evaluations[0]) if all_step_evaluations else 0,
+            "event": "all_subtasks_scored",
+        },
+    )
+
+    return total_subtask_score, all_scores, all_step_evaluations
+
+
+async def _score_subtask_static(
+    steps_data: EpisodeStepsResponse,
+    criteria: SubtaskEvaluationCriteriaResponse,
+) -> Tuple[float, List[StepEvaluation]]:
+    """
+    Score steps using static evaluation (pattern matching in outputs).
+
+    Args:
+        steps_data: Episode steps data
+        criteria: Step evaluation criteria
+
+    Returns:
+        Tuple of (subtask_score, list_of_step_evaluations)
+        where subtask_score is max_score if any step matches criteria, 0.0 otherwise
+    """
+    expected_outputs = criteria.criteria.get("expected_outputs", [])
+    max_score = criteria.max_score
+
+    if not expected_outputs:
+        logger.warning(
+            "No expected_outputs configured for static subtask strategy", extra={"subtask_id": criteria.subtask_id}
+        )
+        return 0.0, []
+
+    # Normalize to list
+    if isinstance(expected_outputs, str):
+        expected_outputs = [expected_outputs]
+
+    all_graded_steps = []
+    found_match = False
+
+    expected_outputs_lower = [e.lower() for e in expected_outputs]
+    for step in steps_data.steps:
+        step_score = 0.0
+        if step.tool_output:
+            output_lower = step.tool_output.lower()
+            if any(exp in output_lower for exp in expected_outputs_lower):
+                step_score = max_score
+                found_match = True
+                logger.info(
+                    "Static output match found with step tool output: %s at step %d",
+                    step.tool_output,
+                    step.step_number,
+                    extra={
+                        "step_number": step.step_number,
+                        "expected": expected_outputs,
+                        "subtask_id": criteria.subtask_id,
+                        "event": "static_output_match",
+                    },
+                )
+                break
+
+        all_graded_steps.append(
+            StepEvaluation(
+                step_number=step.step_number,
+                objective_id=criteria.subtask_id,
+                objective_type="subtask",
+                completed=step_score > 0,
+            )
+        )
+
+    # Award subtask score if any step matched
+    subtask_score = max_score if found_match else 0.0
+
+    logger.info(
+        "Static subtask evaluation complete",
+        extra={
+            "subtask_id": criteria.subtask_id,
+            "subtask_score": subtask_score,
+            "found_match": found_match,
+            "steps_evaluated": len(all_graded_steps),
+            "event": "static_subtask_complete",
+        },
+    )
+
+    return subtask_score, all_graded_steps
+
+
+async def _score_subtask_tool_call(
+    steps_data: EpisodeStepsResponse,
+    criteria: SubtaskEvaluationCriteriaResponse,
+) -> Tuple[float, List[StepEvaluation]]:
+    """
+    Score steps using tool call evaluation (matching tool names).
+
+    Args:
+        steps_data: Episode steps data
+        criteria: Step evaluation criteria
+
+    Returns:
+        Tuple of (subtask_score, list_of_step_evaluations)
+        where subtask_score is max_score if any step uses expected tools, 0.0 otherwise
+    """
+    expected_tools = criteria.criteria.get("expected_tools", [])
+    max_score = criteria.max_score
+
+    if not expected_tools:
+        logger.warning(
+            "No expected_tools configured for tool_call subtask strategy", extra={"subtask_id": criteria.subtask_id}
+        )
+        return 0.0, []
+
+    # Normalize to list
+    if isinstance(expected_tools, str):
+        expected_tools = [expected_tools]
+
+    all_graded_steps = []
+    found_match = False
+
+    for step in steps_data.steps:
+        step_score = 0.0
+
+        if step.tool_name and step.tool_name in expected_tools:
+            step_score = max_score
+            found_match = True
+            logger.info(
+                "Tool call match found at step %d with tool %s",
+                step.step_number,
+                step.tool_name,
+                extra={
+                    "step_number": step.step_number,
+                    "tool_name": step.tool_name,
+                    "subtask_id": criteria.subtask_id,
+                    "event": "tool_call_match",
+                },
+            )
+
+        all_graded_steps.append(
+            StepEvaluation(
+                step_number=step.step_number,
+                objective_id=criteria.subtask_id,
+                objective_type="subtask",
+                completed=step_score > 0,
+            )
+        )
+
+    # Award subtask score if any step matched
+    subtask_score = max_score if found_match else 0.0
+
+    logger.info(
+        "Tool call subtask evaluation complete",
+        extra={
+            "subtask_id": criteria.subtask_id,
+            "subtask_score": subtask_score,
+            "found_match": found_match,
+            "steps_evaluated": len(all_graded_steps),
+            "event": "tool_call_subtask_complete",
+        },
+    )
+
+    return subtask_score, all_graded_steps
+
+
+async def _score_subtask_llm(
+    steps_data: EpisodeStepsResponse,
+    criteria: SubtaskEvaluationCriteriaResponse,
     task_context: Any,
     session_manager: Any,
     state: TaskState,
 ) -> Tuple[float, List[StepEvaluation]]:
     """
-    Score steps with LLM evaluation and chunking.
+    Score steps using LLM evaluation.
 
     Args:
         steps_data: Episode steps data
@@ -966,24 +1231,20 @@ async def _score_steps(
         # Create episode-like object
         episode = EpisodeContextForTemplate(step_objects)
 
-        # Build context matching template expectations
+        # Build simplified context for subtask evaluation
+        # Use information directly from criteria instead of searching task_context
         context = {
             "question": task_context.description,
-            "golden_answer": criteria.criteria.get("golden_answer", ""),  # Add golden_answer
-            "episode": episode,  # Wrapped steps with get_step_count() method
-            "task": {  # Wrap subtasks in task object
-                "subtasks": [
-                    type(
-                        "Subtask",
-                        (),
-                        {
-                            "subtask_id": st["subtask_id"],
-                            "objective": st["objective"],
-                        },
-                    )()
-                    for st in criteria.subtasks
-                ]
+            "episode": episode,  # Steps to evaluate
+            # current subtask being evaluated
+            "subtask": {
+                "id": criteria.subtask_id,
+                "description": criteria.description,
+                "objective": criteria.objective,
+                "title": criteria.title,
             },
+            "model": criteria.criteria.get("model", ""),
+            "domain": task_context.domain if hasattr(task_context, "domain") else None,
             "task_id": criteria.task_id,
         }
 
@@ -1010,37 +1271,56 @@ async def _score_steps(
         response = await model.generate(state.messages)
         state.output = response  # Update state with LLM response
 
-        # Parse step evaluations
-        judge_response = state.output.completion
-        chunk_evals = parse_step_evaluations(judge_response, criteria.task_id)
-        all_step_evaluations.extend(chunk_evals)
+        # Parse LLM response for simple completion judgment
+        judge_response = state.output.completion.upper()
 
         logger.debug(
-            "Parsed step evaluations",
-            extra={"chunk": chunk_idx, "evaluations": len(chunk_evals), "event": "parse_step_chunk"},
+            "LLM response for chunk",
+            extra={"chunk": chunk_idx, "response_preview": judge_response[:100], "event": "llm_chunk_response"},
         )
 
-    # Calculate score from subtasks - deduplicate by objective_id to count each checkpoint only once
-    subtasks_with_scores = {st["subtask_id"]: st.get("max_score", 0.0) for st in criteria.subtasks}
+    # After processing all chunks, determine if subtask was completed
+    # Combine all LLM responses to make final judgment
+    # For now, use the last chunk's response (could be enhanced to consider all chunks)
+    completed = False
+    if "NO_COMPLETIONS" in judge_response:
+        completed = False
+    else:
+        completed = True
 
-    # Collect unique objective_ids that were completed
-    completed_objectives = set()
-    for step_eval in all_step_evaluations:
-        if step_eval.objective_id in subtasks_with_scores:
-            completed_objectives.add(step_eval.objective_id)
+    # Create step evaluations for all steps
+    # Mark all steps with the same completion status based on LLM judgment
+    for step in steps_data.steps:
+        all_step_evaluations.append(
+            StepEvaluation(
+                step_number=step.step_number,
+                objective_id=criteria.subtask_id,
+                objective_type="subtask",
+                completed=completed,
+            )
+        )
 
-    # Sum scores for unique objectives only (unweighted for internal tracking)
-    total_score = 0.0
-    for objective_id in completed_objectives:
-        total_score += subtasks_with_scores[objective_id]
+    # Calculate final score
+    total_score = criteria.max_score if completed else 0.0
 
     logger.info(
-        "Step evaluation complete",
+        "Subtask LLM evaluation completed.\nContext: %s\nSystem prompt: %s\nUser prompt: %s\nJudge response: %s",
+        context,
+        system_message,
+        user_message,
+        judge_response,
         extra={
+            "subtask_id": criteria.subtask_id,
             "total_score": total_score,
-            "evaluations": len(all_step_evaluations),
-            "unique_objectives": len(completed_objectives),
-            "event": "step_eval_complete",
+            "max_score": criteria.max_score,
+            "completed": completed,
+            "chunks_processed": len(step_chunks),
+            "step_evaluations_created": len(all_step_evaluations),
+            "event": "subtask_llm_eval_complete",
+            "context": context,
+            "system_prompt": system_message,
+            "user_prompt": user_message,
+            "judge_response": judge_response,
         },
     )
 

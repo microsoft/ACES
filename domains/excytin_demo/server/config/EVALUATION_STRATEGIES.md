@@ -86,9 +86,6 @@ Templates must be placed in `{config_dir}/prompts/judge/` directory and use Jinj
 
 **Episode Helper Methods:**
 - `{{ episode.get_step_count() }}` - Total number of steps
-- `{{ episode.get_last_n_steps(n) }}` - Last N steps
-- `{{ episode.get_failed_steps() }}` - Steps with errors
-- `{{ episode.get_commands_summary(max_length) }}` - Command summary
 - `{{ episode.duration }}` - Total execution time
 - `{{ episode.state }}` - Episode completion state
 
@@ -127,10 +124,10 @@ evaluation_config:
 
 ### Template Best Practices
 
-1. **Use Episode Data**: Leverage `episode.get_*` helper methods for rich analysis
+1. **Use Episode Data**: Leverage available episode properties like `episode.get_step_count()` and `episode.steps`
 2. **Truncate Output**: Limit command/output length to manage prompt size
 3. **Conditional Logic**: Use `{% if %}` blocks for optional sections
-4. **Error Analysis**: Include failed steps analysis with `episode.get_failed_steps()`
+4. **Manual Analysis**: Use Jinja2 loops to analyze steps manually
 5. **Domain-Specific Context**: Tailor templates to specific domains (cybersecurity, web pentesting, etc.)
 
 ### Example Template Structure
@@ -164,8 +161,8 @@ Model: {{ model }}
 **Duration:** {{ episode.duration }}s
 
 ### Recent Commands:
-{% for step in episode.get_last_n_steps(3) %}
-Step {{ step.step_number }}: {{ step.action.parameters.arguments }}
+{% for step in episode.steps[-3:] %}
+Step {{ step.step_number }}: {{ step.tool_name }}
 {% endfor %}
 
 Evaluate the response accuracy and methodology.

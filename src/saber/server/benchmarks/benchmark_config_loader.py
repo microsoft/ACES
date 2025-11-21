@@ -15,11 +15,21 @@ from ...logging_config import (
     log_operation_start,
     log_operation_success,
 )
+from ...models.constants import (
+    SubmissionEvaluationStrategy,
+    StepEvaluationStrategy,
+    EVAL_STRATEGY_STATIC,
+    EVAL_STRATEGY_LLM_JUDGE, 
+    EVAL_STRATEGY_TOOL_CALL,
+    VALID_SUBMISSION_EVAL_STRATEGIES,
+    VALID_STEP_EVAL_STRATEGIES,
+)
 from .exceptions import InvalidTaskDefinitionException
 from .subtask import SubTask
 from .task import Task
 
 logger = get_saber_logger(LogCategory.CONFIG, __name__)
+
 
 # Configuration field names
 FIELD_DOMAIN = "domain"
@@ -55,6 +65,7 @@ FIELD_OBJECTIVE = "objective"
 FIELD_HINTS = "hints"
 FIELD_SCORING = "scoring"
 FIELD_MAX_SCORE = "max_score"
+FIELD_WEIGHT = "weight"
 
 # Evaluation config field names
 FIELD_SUBMISSION_EVALUATION_CONFIG = "submission_evaluation_config"
@@ -78,11 +89,6 @@ PROMPT_TYPE_ASSISTANT = "assistant"
 PROMPT_TYPE_SUBMIT = "submit"
 REQUIRED_PROMPT_TYPES = [PROMPT_TYPE_INSTRUCTION, PROMPT_TYPE_ASSISTANT, PROMPT_TYPE_SUBMIT]
 
-# Evaluation strategies
-EVAL_STRATEGY_STATIC = "static"
-EVAL_STRATEGY_LLM_JUDGE = "llm_judge"
-VALID_EVAL_STRATEGIES = [EVAL_STRATEGY_STATIC, EVAL_STRATEGY_LLM_JUDGE]
-
 # File names
 FILENAME_GLOBAL_CONFIG = "global.yaml"
 FILENAME_GLOBAL_CONFIG_YML = "global.yml"
@@ -95,6 +101,9 @@ EXCLUDED_CONFIG_FILES = [
     FILENAME_SHARED_CONFIG_YML,
 ]
 
+# Default scoring weights
+DEFAULT_WEIGHT = 1.0
+DEFAULT_MAX_SCORE = 1.0
 
 def deep_merge_dicts(base: Dict[str, Any], override: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """
@@ -498,7 +507,7 @@ class BenchmarkConfigLoader:
 
     def _load_tasks_from_single_file(self, task_file_path: Path) -> Dict[str, Task]:
         """
-        Load tasks from a single task file.
+        Load tasks from a single task file. Also loads subtasks and their criteria.
 
         Args:
             task_file_path: Path to task file
@@ -946,6 +955,8 @@ class BenchmarkConfigLoader:
     def _parse_task(self, task_data: Dict[str, Any]) -> Task:
         """
         Parse a single task from YAML data.
+        Parses subtasks and subtask criteria
+        and sets task.subtasks to that parsed data
 
         Args:
             task_data: Dictionary containing task definition
@@ -985,6 +996,7 @@ class BenchmarkConfigLoader:
                 },
             )
 
+            # NEW: Parse prompts with global defaults inheritance
             if FIELD_PROMPTS in task_data:
                 task_prompts = task_data[FIELD_PROMPTS]
                 if not isinstance(task_prompts, dict):
@@ -1203,7 +1215,9 @@ class BenchmarkConfigLoader:
                         "total_subtasks": len(subtasks_data),
                     },
                 )
-                subtask = self._parse_subtask(subtask_data, task_id)
+
+                # Parse subtask
+                subtask = self._parse_subtask(subtask_data, task_id, step_evaluation_config)
                 subtasks.append(subtask)
                 logger.debug(
                     "Subtask parsed",
@@ -1260,9 +1274,11 @@ class BenchmarkConfigLoader:
             log_operation_failure(logger, "benchmark_task_parse", exc, **operation_context)
             raise
 
-    def _parse_subtask(self, subtask_data: Dict[str, Any], task_id: str) -> SubTask:
+    def _parse_subtask(
+        self, subtask_data: Dict[str, Any], task_id: str, step_evaluation_config: Optional[Dict[str, Any]]
+    ) -> SubTask:
         """
-        Parse a single subtask from YAML data.
+        Parse a single subtask from YAML data. Parse criteria, weight, max_score.
 
         NEW FORMAT ONLY: Supports scoring: { max_score: X } structure.
         NO backward compatibility with old direct max_score field.
@@ -1279,19 +1295,26 @@ class BenchmarkConfigLoader:
             if field not in subtask_data:
                 raise InvalidTaskDefinitionException(f"Missing required subtask field: {field}")
 
-        # NEW FORMAT: Extract max_score and weight from scoring dict
-        max_score = 0.0
-        weight = 1.0  # Default weight
-        if FIELD_SCORING in subtask_data:
-            scoring = subtask_data[FIELD_SCORING]
-            if isinstance(scoring, dict):
-                max_score = scoring.get(FIELD_MAX_SCORE, 0.0)
-                weight = scoring.get("weight", 1.0)
+        # Handle subtask_strategy and criteria validation
+        subtask_defined_step_evaluation_config = subtask_data.get(FIELD_STEP_EVALUATION_CONFIG)
+
+        if subtask_defined_step_evaluation_config:
+            self._validate_step_evaluation_config(subtask_defined_step_evaluation_config, task_id)
+            subtask_strategy = subtask_defined_step_evaluation_config.get(FIELD_STRATEGY)
+            subtask_criteria = subtask_defined_step_evaluation_config.get(FIELD_CRITERIA, {})
+            subtask_scoring = subtask_defined_step_evaluation_config.get(FIELD_SCORING, {})
+
+        else:
+            # if strategy is not defined per subtask, then use the step_evaluation_config
+            if step_evaluation_config:
+                subtask_strategy = step_evaluation_config.get(FIELD_STRATEGY)
+                subtask_criteria = step_evaluation_config.get(FIELD_CRITERIA, {})
+                subtask_scoring = step_evaluation_config.get(FIELD_SCORING, {})
             else:
-                raise InvalidTaskDefinitionException(
-                    f"Subtask '{subtask_data[FIELD_SUBTASK_ID]}' has invalid {FIELD_SCORING} format. "
-                    f"Expected dict with '{FIELD_MAX_SCORE}' key, got: {type(scoring).__name__}"
-                )
+                # no step evaluation config defined at task or subtask level
+                subtask_strategy = None
+                subtask_criteria = {}
+                subtask_scoring = {}
 
         return SubTask(
             subtask_id=subtask_data[FIELD_SUBTASK_ID],
@@ -1299,9 +1322,11 @@ class BenchmarkConfigLoader:
             title=subtask_data[FIELD_TITLE],
             description=subtask_data[FIELD_DESCRIPTION],
             objective=subtask_data[FIELD_OBJECTIVE],
-            hints=subtask_data.get(FIELD_HINTS),
-            max_score=max_score,
-            weight=weight,
+            hint=subtask_data.get(FIELD_HINTS),
+            subtask_strategy=subtask_strategy,  # Use validated strategy
+            subtask_criteria=subtask_criteria,  # Use validated criteria
+            subtask_weight=subtask_scoring.get(FIELD_WEIGHT, DEFAULT_WEIGHT),
+            subtask_max_score=subtask_scoring.get(FIELD_MAX_SCORE, DEFAULT_MAX_SCORE)
         )
 
     def _validate_submission_evaluation_config(self, eval_config: Dict[str, Any], task_id: str) -> None:
@@ -1317,10 +1342,10 @@ class BenchmarkConfigLoader:
         """
         # Validate strategy
         strategy = eval_config.get(FIELD_STRATEGY)
-        if strategy not in VALID_EVAL_STRATEGIES:
+        if strategy not in VALID_SUBMISSION_EVAL_STRATEGIES:
             raise InvalidTaskDefinitionException(
                 f"Task '{task_id}': Invalid submission evaluation strategy. "
-                f"Must be one of {VALID_EVAL_STRATEGIES}, got: {strategy}"
+                f"Must be one of {VALID_SUBMISSION_EVAL_STRATEGIES}, got: {strategy}"
             )
 
         # Validate criteria section
@@ -1373,6 +1398,7 @@ class BenchmarkConfigLoader:
                 )
             self._validate_template_path(judge_user_template, FIELD_JUDGE_USER_TEMPLATE, task_id)
 
+    # NEED TO VALIDATE SUBTASK EVALUATION CONFIG BY METHOD TYPE
     def _validate_step_evaluation_config(self, eval_config: Dict[str, Any], task_id: str) -> None:
         """
         Validate step_evaluation_config. NEW FORMAT ONLY.
@@ -1384,12 +1410,35 @@ class BenchmarkConfigLoader:
         Raises:
             InvalidTaskDefinitionException: If configuration is invalid
         """
+        # Validate scoring section
+        scoring = eval_config.get(FIELD_SCORING, {})
+        if not isinstance(scoring, dict):
+            raise InvalidTaskDefinitionException(
+                f"Task '{task_id}': scoring must be a dictionary in step_evaluation_config"
+            )
+
+        max_score = scoring.get(FIELD_MAX_SCORE, DEFAULT_MAX_SCORE)
+        weight = scoring.get(FIELD_WEIGHT, DEFAULT_WEIGHT)
+
+        if not isinstance(max_score, (int, float)) or max_score < 0:
+            raise InvalidTaskDefinitionException(
+                f"Task '{task_id}': max_score must be a non-negative number, got: {max_score}"
+            )
+
+        if not isinstance(weight, (int, float)) or weight < 0:
+            raise InvalidTaskDefinitionException(
+                f"Task '{task_id}': weight must be a non-negative number, got: {weight}"
+            )
+
+        if weight > 1.0:
+            raise InvalidTaskDefinitionException(f"Task '{task_id}': weight must not exceed 1.0, got: {weight}")
+
         # Validate strategy
         strategy = eval_config.get(FIELD_STRATEGY)
-        if strategy not in VALID_EVAL_STRATEGIES:
+        if strategy not in VALID_STEP_EVAL_STRATEGIES:
             raise InvalidTaskDefinitionException(
                 f"Task '{task_id}': Invalid step evaluation strategy. "
-                f"Must be one of {VALID_EVAL_STRATEGIES}, got: {strategy}"
+                f"Must be one of {VALID_STEP_EVAL_STRATEGIES}, got: {strategy}"
             )
 
         # Validate criteria section
@@ -1399,34 +1448,42 @@ class BenchmarkConfigLoader:
                 f"Task '{task_id}': Missing or invalid {FIELD_CRITERIA} in {FIELD_STEP_EVALUATION_CONFIG}"
             )
 
-        # Only llm_judge makes sense for step evaluation
-        if strategy == EVAL_STRATEGY_LLM_JUDGE:
+        # Validate criteria fields based on strategy
+
+        if strategy == EVAL_STRATEGY_STATIC:
+            if "expected_outputs" not in criteria:
+                raise InvalidTaskDefinitionException(
+                    "Subtask with static strategy must have either 'expected_outputs' in criteria"
+                )
+        elif strategy == EVAL_STRATEGY_TOOL_CALL:
+            if "expected_tools" not in criteria:
+                raise InvalidTaskDefinitionException(
+                    "Subtask with tool_call strategy must have 'expected_tools' in criteria"
+                )
+        elif strategy == EVAL_STRATEGY_LLM_JUDGE:
             model = criteria.get(FIELD_MODEL)
             if not model or not isinstance(model, str):
-                raise InvalidTaskDefinitionException(
-                    f"Task '{task_id}': step evaluation llm_judge requires '{FIELD_MODEL}'"
-                )
+                raise InvalidTaskDefinitionException(f"Task '{task_id}': step evaluation llm_judge requires 'model'")
 
             # Template paths
             judge_system_template = criteria.get(FIELD_JUDGE_SYSTEM_TEMPLATE)
             if not judge_system_template or not isinstance(judge_system_template, str):
                 raise InvalidTaskDefinitionException(
-                    f"Task '{task_id}': step evaluation requires '{FIELD_JUDGE_SYSTEM_TEMPLATE}' path"
+                    f"Task '{task_id}': step evaluation requires 'judge_system_template' path"
                 )
-            self._validate_template_path(judge_system_template, FIELD_JUDGE_SYSTEM_TEMPLATE, task_id)
-
+            self._validate_template_path(judge_system_template, "judge_system_template", task_id)
             judge_user_template = criteria.get(FIELD_JUDGE_USER_TEMPLATE)
             if not judge_user_template or not isinstance(judge_user_template, str):
                 raise InvalidTaskDefinitionException(
-                    f"Task '{task_id}': step evaluation requires '{FIELD_JUDGE_USER_TEMPLATE}' path"
+                    f"Task '{task_id}': step evaluation requires 'judge_user_template' path"
                 )
-            self._validate_template_path(judge_user_template, FIELD_JUDGE_USER_TEMPLATE, task_id)
+            self._validate_template_path(judge_user_template, "judge_user_template", task_id)
 
             # steps_per_message is optional
             steps_per_message = criteria.get(FIELD_STEPS_PER_MESSAGE, 10)
             if not isinstance(steps_per_message, int) or steps_per_message < 1:
                 raise InvalidTaskDefinitionException(
-                    f"Task '{task_id}': {FIELD_STEPS_PER_MESSAGE} must be a positive integer, got: {steps_per_message}"
+                    f"Task '{task_id}': steps_per_message must be a positive integer, got: {steps_per_message}"
                 )
 
     def _validate_template_path(self, template_path: str, field_name: str, task_id: str) -> None:

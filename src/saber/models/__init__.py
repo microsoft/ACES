@@ -13,6 +13,19 @@ from .admin import (
     SessionCleanupHistoryResponse,
 )
 
+# Constants and enumerations
+from .constants import (
+    EvaluationStrategy,
+    SubmissionEvaluationStrategy,
+    StepEvaluationStrategy,
+    EVAL_STRATEGY_STATIC,
+    EVAL_STRATEGY_LLM_JUDGE,
+    EVAL_STRATEGY_TOOL_CALL,
+    VALID_EVAL_STRATEGIES,
+    VALID_SUBMISSION_EVAL_STRATEGIES,
+    VALID_STEP_EVAL_STRATEGIES,
+)
+
 # Core domain models
 from .core import BenchmarkInfo, EvalSubmission, PolicyInfo, TaskInfo
 
@@ -62,6 +75,16 @@ from .rest import (
 )
 
 __all__ = [
+    # Constants and enumerations
+    "EvaluationStrategy",
+    "SubmissionEvaluationStrategy", 
+    "StepEvaluationStrategy",
+    "EVAL_STRATEGY_STATIC", 
+    "EVAL_STRATEGY_LLM_JUDGE",
+    "EVAL_STRATEGY_TOOL_CALL",
+    "VALID_EVAL_STRATEGIES",
+    "VALID_SUBMISSION_EVAL_STRATEGIES",
+    "VALID_STEP_EVAL_STRATEGIES",
     # Core domain models
     "BenchmarkInfo",
     "PolicyInfo",

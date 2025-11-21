@@ -9,7 +9,7 @@ Logging category: REST_API.
 
 # Forward declaration to avoid circular imports
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, List
 
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
@@ -20,9 +20,10 @@ from ...models import (
     EpisodeContext,
     EpisodeCreateResponse,
     EpisodeEndResponse,
-    EpisodeStatusResponse,
     EpisodeTaskResponse,
     EvalSubmission,
+    SubmissionEvaluationStrategy,
+    StepEvaluationStrategy,
     HealthResponse,
     PolicyResponse,
     SessionCreateResponse,
@@ -37,7 +38,7 @@ from ...models.rest.evaluation import (
     EvaluationResponse,
     EvaluationResultSubmission,
     EvaluationSummaryResponse,
-    StepEvaluationCriteriaResponse,
+    SubtaskEvaluationCriteriaResponse,
     SubmissionEvaluationCriteriaResponse,
     TaskEvaluationContext,
     TemplateContentResponse,
@@ -167,7 +168,7 @@ class SessionRestAPI:
 
         @self.app.post("/api/v1/session/{session_id}/episodes", response_model=EpisodeCreateResponse)
         async def create_episode_endpoint(session_id: str, task_id: str) -> EpisodeCreateResponse:
-            """Create a new episode for a specific task with automatic dependency resolution (async)."""
+            """Create a new episode for a specific task with automatic dependency resolution."""
             try:
                 log_operation_start(
                     logger,
@@ -176,8 +177,8 @@ class SessionRestAPI:
                     task_id=task_id,
                 )
 
-                # Initiate episode creation (returns immediately with CREATING state)
-                episode = await self.session_manager.initiate_episode(session_id, task_id)
+                # Create episode with automatic dependency resolution
+                episode = await self.session_manager.start_episode(session_id, task_id)
 
                 # Create episode context with limits and metadata
                 episode_context = EpisodeContext(
@@ -192,7 +193,7 @@ class SessionRestAPI:
                     task_id=task_id,
                     session_id=session_id,
                     state=episode.state.value,
-                    message="Episode creation initiated (poll status endpoint for readiness)"
+                    message="Episode created successfully"
                     + (f" (attached to {episode.attached_to_episode_id})" if episode.attached_to_episode_id else ""),
                     episode_context=episode_context,
                     attached_to_episode_id=episode.attached_to_episode_id,
@@ -227,55 +228,6 @@ class SessionRestAPI:
                     task_id=task_id,
                 )
                 raise HTTPException(status_code=500, detail=f"Failed to create episode: {exc}") from exc
-
-        @self.app.get("/api/v1/session/{session_id}/episodes/{episode_id}/status", response_model=EpisodeStatusResponse)
-        async def get_episode_status_endpoint(session_id: str, episode_id: str) -> EpisodeStatusResponse:
-            """Get episode status for readiness polling."""
-            try:
-                episode = self.session_manager.get_episode_status(episode_id)
-                if not episode:
-                    raise HTTPException(status_code=404, detail=f"Episode {episode_id} not found")
-
-                # Check if episode belongs to this session
-                if episode.session_id != session_id:
-                    raise HTTPException(
-                        status_code=403, detail=f"Episode {episode_id} does not belong to session {session_id}"
-                    )
-
-                # Create episode context if episode is ready
-                episode_context = None
-                if episode.is_ready:
-                    episode_context = EpisodeContext(
-                        session_id=session_id,
-                        task_timeout=None,
-                        max_steps=episode.max_steps,
-                        metadata=episode.metadata,
-                    )
-
-                return EpisodeStatusResponse(
-                    episode_id=episode.episode_id,
-                    task_id=episode.task_id,
-                    session_id=session_id,
-                    state=episode.state.value,
-                    is_ready=episode.is_ready,
-                    message=f"Episode {episode.state.value}",
-                    creation_error=episode.creation_error,
-                    episode_context=episode_context,
-                    attached_to_episode_id=episode.attached_to_episode_id,
-                )
-            except HTTPException:
-                raise
-            except Exception as exc:
-                logger.error(
-                    "Failed to get episode status",
-                    extra={
-                        "event": "get_episode_status_failed",
-                        "session_id": session_id,
-                        "episode_id": episode_id,
-                        "error": str(exc),
-                    },
-                )
-                raise HTTPException(status_code=500, detail=f"Failed to get episode status: {exc}") from exc
 
         @self.app.delete("/api/v1/session/{session_id}/episodes/{episode_id}", response_model=EpisodeEndResponse)
         async def end_episode_endpoint(
@@ -596,50 +548,6 @@ class SessionRestAPI:
                 )
                 raise HTTPException(status_code=500, detail=f"Failed to get episode submission: {exc}") from exc
 
-        @self.app.post("/api/v1/session/{session_id}/episodes/{episode_id}/submission")
-        async def post_episode_submission_endpoint(
-            session_id: str, episode_id: str, submission: EvalSubmission
-        ) -> dict:
-            """
-            Store episode submission without ending the episode.
-
-            Args:
-                session_id: Session ID
-                episode_id: Episode ID
-                submission: EvalSubmission with answer and metadata
-
-            Returns:
-                Success response
-            """
-            log_operation_start(logger, "post_episode_submission", session_id=session_id, episode_id=episode_id)
-            try:
-                episode = self.session_manager.get_episode_by_id(episode_id)
-                if not episode:
-                    raise HTTPException(status_code=404, detail="Episode not found")
-
-                # Store the submission on the episode (doesn't end it)
-                episode.eval_submission = submission
-                episode.submission = submission.submission
-
-                logger.info(
-                    "Episode submission stored (episode remains active)",
-                    extra={
-                        "event": "episode_submission_stored",
-                        "session_id": session_id,
-                        "episode_id": episode_id,
-                        "submission_length": len(submission.submission),
-                    },
-                )
-
-                return {"success": True, "message": "Submission stored"}
-            except HTTPException:
-                raise
-            except Exception as exc:
-                log_operation_failure(
-                    logger, "post_episode_submission", exc, session_id=session_id, episode_id=episode_id
-                )
-                raise HTTPException(status_code=500, detail=f"Failed to store episode submission: {exc}") from exc
-
         @self.app.get("/api/v1/session/{session_id}/episodes/{episode_id}/steps")
         async def get_episode_steps_endpoint(session_id: str, episode_id: str) -> EpisodeStepsResponse:
             """Get episode step history for client-side evaluation."""
@@ -708,7 +616,7 @@ class SessionRestAPI:
                 criteria_with_content = raw_criteria.copy()
 
                 # If LLM strategy, fetch template content
-                if task.submission_evaluation_config.get("strategy") == "llm_judge":
+                if task.submission_evaluation_config.get("strategy") == SubmissionEvaluationStrategy.LLM_JUDGE:
                     system_template_path = raw_criteria.get("judge_system_template")
                     user_template_path = raw_criteria.get("judge_user_template")
 
@@ -733,7 +641,7 @@ class SessionRestAPI:
                     session_id=session_id,
                     episode_id=episode_id,
                     task_id=task.task_id,
-                    strategy=task.submission_evaluation_config.get("strategy", "llm_judge"),
+                    strategy=task.submission_evaluation_config.get("strategy", SubmissionEvaluationStrategy.LLM_JUDGE),
                     criteria=criteria_with_content,
                     scoring=task.submission_evaluation_config.get("scoring", {}),
                     task_context=task_context,
@@ -748,12 +656,12 @@ class SessionRestAPI:
                     status_code=500, detail=f"Failed to get submission evaluation criteria: {exc}"
                 ) from exc
 
-        @self.app.get("/api/v1/session/{session_id}/episodes/{episode_id}/step-evaluation-criteria")
-        async def get_step_evaluation_criteria_endpoint(
+        @self.app.get("/api/v1/session/{session_id}/episodes/{episode_id}/subtask-evaluation-criteria")
+        async def get_subtask_evaluation_criteria_endpoint(
             session_id: str, episode_id: str
-        ) -> StepEvaluationCriteriaResponse:
-            """Get step evaluation criteria (template paths only, no rendering)."""
-            log_operation_start(logger, "get_step_evaluation_criteria", session_id=session_id, episode_id=episode_id)
+        ) -> List[SubtaskEvaluationCriteriaResponse]:
+            """Get subtask evaluation criteria (template paths only, no rendering)."""
+            log_operation_start(logger, "get_subtask_evaluation_criteria", session_id=session_id, episode_id=episode_id)
             try:
                 episode = self.session_manager.get_episode_by_id(episode_id)
                 if not episode:
@@ -763,11 +671,11 @@ class SessionRestAPI:
                 if not task:
                     raise HTTPException(status_code=404, detail="Task not found")
 
-                if not task.step_evaluation_config:
+                '''if not task.step_evaluation_config:
                     # Step evaluation is optional
-                    raise HTTPException(status_code=404, detail="Task has no step evaluation config")
+                    raise HTTPException(status_code=404, detail="Task has no step evaluation config")'''
 
-                # Build subtasks data with max_score and weight
+                # Build subtasks data with max_score
                 subtasks_data = [
                     {
                         "subtask_id": st.subtask_id,
@@ -775,7 +683,9 @@ class SessionRestAPI:
                         "description": st.description,
                         "objective": st.objective,
                         "max_score": st.max_score,  # Direct field from SubTask
-                        "weight": st.weight,  # Weight for graded scoring
+                        "subtask_strategy": st.subtask_strategy,
+                        "subtask_weight": st.subtask_weight,
+                        "subtask_criteria": st.subtask_criteria,
                     }
                     for st in task.subtasks
                 ]
@@ -789,13 +699,12 @@ class SessionRestAPI:
                 )
 
                 # Build criteria with template content (not paths)
-                raw_criteria = task.step_evaluation_config.get("criteria", {})
-                criteria_with_content = raw_criteria.copy()
-
-                # If LLM strategy, fetch template content
-                if task.step_evaluation_config.get("strategy") == "llm_judge":
-                    system_template_path = raw_criteria.get("judge_system_template")
-                    user_template_path = raw_criteria.get("judge_user_template")
+                subtask_evaluation_criteria_list = []
+                for st in task.subtasks:
+                    # If LLM strategy, fetch template content
+                    if st.subtask_strategy == StepEvaluationStrategy.LLM_JUDGE:
+                        system_template_path = st.subtask_criteria.get("judge_system_template")
+                        user_template_path = st.subtask_criteria.get("judge_user_template")
 
                     if system_template_path and user_template_path:
                         try:
@@ -806,30 +715,33 @@ class SessionRestAPI:
                                 user_template_path
                             )
 
-                            criteria_with_content["judge_system_template"] = system_content
-                            criteria_with_content["judge_user_template"] = user_content
+                            st.subtask_criteria["judge_system_template"] = system_content
+                            st.subtask_criteria["judge_user_template"] = user_content
                         except Exception as e:
                             logger.warning(
                                 f"Failed to load templates for step evaluation: {e}",
                                 extra={"system_path": system_template_path, "user_path": user_template_path},
                             )
+                    subtask_evaluation_criteria_list.append(
+                        SubtaskEvaluationCriteriaResponse(
+                            session_id=session_id,
+                            episode_id=episode_id,
+                            task_id=task.task_id,
+                            strategy=st.subtask_strategy,
+                            criteria=st.subtask_criteria,
+                            weight=st.subtask_weight,
+                            task_context=task_context,
+                        )
+                    )
 
-                return StepEvaluationCriteriaResponse(
-                    session_id=session_id,
-                    episode_id=episode_id,
-                    task_id=task.task_id,
-                    strategy=task.step_evaluation_config.get("strategy", "llm_judge"),
-                    criteria=criteria_with_content,
-                    subtasks=subtasks_data,
-                    task_context=task_context,
-                )
+                return subtask_evaluation_criteria_list
             except HTTPException:
                 raise
             except Exception as exc:
                 log_operation_failure(
-                    logger, "get_step_evaluation_criteria", exc, session_id=session_id, episode_id=episode_id
+                    logger, "get_subtask_evaluation_criteria", exc, session_id=session_id, episode_id=episode_id
                 )
-                raise HTTPException(status_code=500, detail=f"Failed to get step evaluation criteria: {exc}") from exc
+                raise HTTPException(status_code=500, detail=f"Failed to get subtask evaluation criteria: {exc}") from exc
 
         @self.app.get("/api/v1/templates/{template_path:path}")
         async def get_template_content_endpoint(template_path: str) -> TemplateContentResponse:

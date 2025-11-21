@@ -32,6 +32,7 @@ class Task:
         benchmark_config: Optional[Dict[str, Any]] = None,
         submission_evaluation_config: Optional[Dict[str, Any]] = None,
         step_evaluation_config: Optional[Dict[str, Any]] = None,
+        # Note - step evaluation config is also captured in the subtasks themselves
         depends_on_task_id: Optional[str] = None,
         initial_files: Optional[Dict[str, str]] = None,
     ):
@@ -87,7 +88,7 @@ class Task:
         self.benchmark_config = benchmark_config or {}
         # NEW FORMAT ONLY: Client-side evaluation configs
         self.submission_evaluation_config = submission_evaluation_config or {}
-        self.step_evaluation_config = step_evaluation_config or {}
+        self.step_evaluation_config = step_evaluation_config
         self.depends_on_task_id = depends_on_task_id
         self.initial_files = initial_files or {}
 

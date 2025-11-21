@@ -107,7 +107,6 @@ class EvaluationCriteriaResponse(BaseModel):
 
 class StepEvaluation(BaseModel):
     """Step-level evaluation result mapping step to completed objective."""
-
     step_number: int = Field(..., ge=0, description="Episode step number (0-indexed)")
     objective_id: str = Field(..., description="Subtask ID or task ID that was completed")
     objective_type: str = Field(..., description="Type: 'subtask' or 'task'")
@@ -226,7 +225,7 @@ class SubmissionEvaluationCriteriaResponse(BaseModel):
     session_id: str = Field(description="Session identifier")
     episode_id: str = Field(description="Episode identifier")
     task_id: str = Field(description="Task identifier")
-    strategy: str = Field(description="Evaluation strategy: 'static' or 'llm_judge'")
+    strategy: str = Field(description="Submission evaluation strategy (see SubmissionEvaluationStrategy enum): 'static' or 'llm_judge'")
     criteria: Dict[str, Any] = Field(
         description="Criteria dict with template CONTENT, golden_answer, model - everything needed for evaluation"
     )
@@ -234,17 +233,23 @@ class SubmissionEvaluationCriteriaResponse(BaseModel):
     task_context: TaskEvaluationContext = Field(description="Task context for evaluation")
 
 
-class StepEvaluationCriteriaResponse(BaseModel):
+class SubtaskEvaluationCriteriaResponse(BaseModel):
     """Step evaluation criteria - contains everything needed for client-side evaluation."""
 
     session_id: str = Field(description="Session identifier")
     episode_id: str = Field(description="Episode identifier")
     task_id: str = Field(description="Task identifier")
-    strategy: str = Field(description="Evaluation strategy: 'llm_judge'")
+    subtask_id: str = Field(description="Subtask identifier")
+    strategy: str = Field(description="Step evaluation strategy (see StepEvaluationStrategy enum): 'static', 'llm_judge', or 'tool_call'")
     criteria: Dict[str, Any] = Field(
         description="Criteria dict with template CONTENT, model, steps_per_message - everything needed for evaluation"
     )
-    subtasks: List[Dict[str, Any]] = Field(description="Subtask definitions with max_score")
+    max_score: float = Field(description="Subtask maximum score for scoring")
+    weight: float = Field(description="Subtask weight for scoring")
+    objective: str = Field(description="Subtask objective description")
+    title: str = Field(description="Subtask title")
+    description: str = Field(description="Subtask description")
+    #subtasks: List[Dict[str, Any]] = Field(description="Subtask definitions with max_score")
     task_context: TaskEvaluationContext = Field(description="Task context for evaluation")
 
 
