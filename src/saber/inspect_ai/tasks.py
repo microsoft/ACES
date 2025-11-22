@@ -29,11 +29,11 @@ from inspect_ai.dataset import MemoryDataset, Sample
 from inspect_ai.solver import Generate, Solver, TaskState, solver
 
 from ..client.api.rest_client import SABERRestClient
-from ..client.inspect_ai.saber_dataset import create_saber_dataset
-from ..client.inspect_ai.saber_scorer import saber_scorer
 from ..logging_config import LogCategory, get_saber_logger
 from ..models import BenchmarkInfo
 from .agents import AgentNotFoundError, SABERAgentRegistry
+from .saber_dataset import create_saber_dataset
+from .saber_scorer import saber_scorer
 from .server import DomainContext, DomainController
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)

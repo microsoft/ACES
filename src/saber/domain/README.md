@@ -227,54 +227,36 @@ saber-domain validate DOMAIN --verbose
 - Runs SABER evaluation against the domain
 - Keeps server running by default (use `--stop-after` to clean up)
 
-**Build Modes** - Same three mutually exclusive options as `build` and `start`:
-- **`--build`**: Incremental build - only build missing images before testing
-- **`--rebuild-all`**: Complete rebuild - remove and rebuild all images before testing
-- **`--rebuild <prefix>`**: Selective rebuild - rebuild specific images before testing
+**The `test` command has been deprecated.** Use `inspect eval` with the Inspect AI task files instead:
 
 ```bash
-# Basic test (server kept running after for faster re-runs)
-saber-domain test DOMAIN
+# Start the domain server
+saber-domain start DOMAIN
 
-# Test with INCREMENTAL BUILD (build missing images)
-saber-domain test DOMAIN --build
+# Run evaluation using Inspect AI
+uv run inspect eval domains/DOMAIN --model <your-model>
 
-# Test with COMPLETE REBUILD (rebuild all images)
-saber-domain test DOMAIN --rebuild-all
+# Examples with different models and limits
+uv run inspect eval domains/cybench --model openai/azure/gpt-4 --limit 5
+uv run inspect eval domains/excytin --model anthropic/claude-3-opus
 
-# Test with SELECTIVE REBUILD (rebuild only server)
-saber-domain test DOMAIN --rebuild server
+# Stop the server when done
+saber-domain stop DOMAIN
 
-# Test with cleanup (stop server after completion)
-saber-domain test DOMAIN --build --stop-after
-
-# Custom SABER config file
-saber-domain test DOMAIN --saber-yaml /path/to/custom/saber.yaml
-
-# Custom ports
-saber-domain test DOMAIN --rest-port 9000 --mcp-port 9001
-
-# Disable TUI, use console output
-saber-domain test DOMAIN --no-ui
-
-# Dry run to see what would happen
-saber-domain test DOMAIN --rebuild server --dry-run
-
-# Full example
-saber-domain test cybench \
-  --rebuild server \
-  --stop-after \
-  --rest-port 9000 \
-  --mcp-port 9001 \
-  --log-level DEBUG
+# Full workflow example
+saber-domain build cybench
+saber-domain start cybench
+uv run inspect eval domains/cybench --model <your-model>
+saber-domain stop cybench
 ```
 
-**How Test Works**:
-1. **Validation Phase**: Checks domain configuration and discovers SABER config
-2. **Build Phase** (if flag specified): Builds or rebuilds images as requested
-3. **Server Phase**: Starts server if not running, waits for health checks
-4. **Evaluation Phase**: Runs SABER evaluation with live progress tracking
-5. **Cleanup Phase** (optional): Stops server if `--stop-after` specified
+See the main README.md for more details on using `inspect eval` with SABER domains.
+
+**Why the change?**:
+- `inspect eval` is the native Inspect AI evaluation pathway
+- More performant and better maintained
+- Cleaner integration with Inspect AI tooling
+- Better logging and error handling
 
 **Important Notes**:
 - By default, server stays running after test for faster subsequent runs

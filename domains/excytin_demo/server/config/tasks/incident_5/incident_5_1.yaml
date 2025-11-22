@@ -80,7 +80,7 @@ tasks:
           scoring:
             max_score: 1.0
             weight: 0.25
-            
+
   - task_id: incident_5_task_2
     title: incident_5_task_2
     description: What is the command line of the suspicious process involved in the
@@ -120,4 +120,3 @@ tasks:
         http://vectorsandarrows.com` at `2024-06-20t09:29:42.3927529z`.
       objective: Identify key details related to the potential compromise that might
         help in solving the main task.
-  

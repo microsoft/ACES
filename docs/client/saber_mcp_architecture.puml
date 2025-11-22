@@ -1,8 +1,8 @@
-@startuml SABER MCP Architecture - Current Implementation
+@startuml SABER Context Injection Architecture
 
 !theme plain
 allowmixing
-title SABER - Model Context Protocol (MCP) Architecture - Current Implementation
+title SABER Context Injection - Assistant Message & Reasoning Flow
 
 skinparam class {
     BackgroundColor lightblue
@@ -17,63 +17,185 @@ skinparam component {
     FontSize 10
 }
 
-package "SABER Client - Current MCP Architecture" {
+skinparam sequence {
+    ArrowColor black
+    ActorBorderColor black
+}
 
-    package "inspect_ai Integration" {
-        class run_saber_eval_async {
-            +eval_async_compatible_interface
-            +automatic_resource_management
-            +fail_fast_validation
-            --
-            +run(tasks, model): EvalLog
-        }
+package "Context Injection System (saber/inspect_ai/context_injection.py)" {
 
-        class "inspect_ai Framework" as inspect_ai_fw {
-            +mcp_server_http()
-            +native_tool_discovery
-            +header_based_context
-        }
-
-        class saber_agent {
-            +uses mcp_server_http()
-            +dynamic policy fetching
-            +session/episode context management
-            --
-            +create_agent_for_task(): Agent
-        }
+    class ContextStorage {
+        +assistant_message: Optional[str]
+        +reasoning: Optional[str]
+        --
+        **Thread-Safe Storage**
+        - Uses contextvars for isolation
+        - Per-async-context storage
+        - Automatic cleanup
     }
 
-    package "Session Management" {
-        class ClientSessionManager {
-            +REST_API_only_for_session_management
-            +NO_custom_MCP_client_management
-            --
-            +create_session(): str
-            +create_episode(session_id, task_id)
-            +get_policy_response(): PolicyResponse
-            +terminate_session(): bool
-        }
-
-        class SABERRestClient {
-            +get_benchmark_info(): BenchmarkInfo
-            +create_session(): SessionCreateResponse
-            +create_episode(): EpisodeCreateResponse
-            +get_policy_info(): PolicyResponse
-            +health_check(): Dict[str, Any]
-        }
+    class saber_execute_tools {
+        --
+        **Tool Execution Wrapper**
+        +Intercepts execute_tools()
+        +Extracts assistant message
+        +Extracts reasoning (o1/o3 models)
+        +Stores in ContextStorage
+        +Calls original execute_tools()
+        +Clears context after
     }
 
-    package "Configuration Models" {
-        class SABERConfig {
-            +agent_assignments: List[AgentAssignment]
-            +server_url: str
-            +mcp_server_url: str
-            +task_ids: Optional[List[str]]
-            +log_level: str
-            +max_steps: int
-            --
-            +validate(): void
-            +to_session_config(): SessionManagerConfig
+    class saber_tool_params {
+        --
+        **Parameter Injection**
+        +Intercepts tool_params()
+        +Checks if SABER tool
+        +Injects context params:
+          - __saber_assistant_message__
+          - __saber_reasoning__
+        +Calls original tool_params()
+    }
+
+    class extract_assistant_content {
+        --
+        **Content Extraction**
+        +Extracts text from ChatMessageAssistant
+        +Handles string and ContentText[]
+        +Skips ContentReasoning
+        +Sanitizes and truncates (10KB limit)
+    }
+
+    class extract_reasoning_content {
+        --
+        **Reasoning Extraction**
+        +Extracts from reasoning attribute
+        +Extracts from ContentReasoning in list
+        +Checks redaction status
+        +Returns summary if redacted
+        +Sanitizes and truncates
+    }
+
+    class is_saber_mcp_tool {
+        --
+        **Tool Detection**
+        +Checks function name (bash, python, etc.)
+        +Checks _saber_tool attribute
+        +Returns true for SABER tools only
+    }
+
+    note right of is_saber_mcp_tool
+    **SABER Tool Detection**
+
+    Recognizes tools by:
+    - Name matching (bash, python, etc.)
+    - Explicit registration via @saber_tool
+
+    Non-SABER tools don't get context injection
+    (e.g., builtin Inspect AI tools)
+    end note
+}
+
+package "Inspect AI Framework" {
+    class execute_tools {
+        --
+        **Original Function**
+        (patched by saber_execute_tools)
+    }
+
+    class tool_params {
+        --
+        **Original Function**
+        (patched by saber_tool_params)
+    }
+
+    class ChatMessageAssistant {
+        +content: str | List[Content]
+        +reasoning: Optional[str]
+        --
+        **Agent Messages**
+        Contains what the agent said
+        before calling tools
+    }
+}
+
+package "SABER MCP Server" {
+    class "MCP Tools" as MCPTools {
+        +bash(command, **context)
+        +python(code, **context)
+        +read_file(path, **context)
+        +write_file(path, content, **context)
+        --
+        **Receives Context**
+        - __saber_assistant_message__
+        - __saber_reasoning__
+    }
+
+    note right of MCPTools
+    **Context Usage**
+
+    Server extracts special params:
+    - Logs assistant message
+    - Logs reasoning content
+    - Uses for evaluation
+    - Removes before execution
+
+    Enables understanding of
+    agent's thought process
+    end note
+}
+
+' Flow relationships
+saber_execute_tools ..> extract_assistant_content : uses
+saber_execute_tools ..> extract_reasoning_content : uses
+saber_execute_tools ..> ContextStorage : stores to
+saber_execute_tools ..> execute_tools : patches
+
+saber_tool_params ..> is_saber_mcp_tool : uses
+saber_tool_params ..> ContextStorage : reads from
+saber_tool_params ..> tool_params : patches
+
+execute_tools ..> tool_params : calls
+execute_tools ..> ChatMessageAssistant : receives
+tool_params ..> MCPTools : injects params
+
+note top of ContextStorage
+**Context Isolation**
+
+Uses Python's contextvars for thread-safe storage:
+- Each async task has isolated context
+- No cross-contamination between concurrent evals
+- Automatic cleanup when task completes
+- Supports concurrent Inspect AI evaluations
+end note
+
+note bottom of saber_execute_tools
+**Execution Flow**
+
+1. Inspect AI calls execute_tools(messages, tools)
+2. saber_execute_tools intercepts
+3. Extracts assistant message from last ChatMessageAssistant
+4. Extracts reasoning if present (o1/o3 models)
+5. Stores in contextvars
+6. Calls original execute_tools()
+7. Returns result
+8. Clears context
+end note
+
+note bottom of saber_tool_params
+**Parameter Injection Flow**
+
+1. Inspect AI calls tool_params(input_dict, func)
+2. saber_tool_params intercepts
+3. Calls original tool_params() first
+4. Checks if func is SABER tool
+5. If yes, retrieves context from ContextStorage
+6. Injects __saber_assistant_message__ param
+7. Injects __saber_reasoning__ param (if present)
+8. Returns enhanced params dict
+9. MCP client sends to SABER server
+end note
+
+@enduml
         }
 
         class SessionManagerConfig {

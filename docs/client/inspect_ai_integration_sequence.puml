@@ -1,103 +1,215 @@
-@startuml SABER Client-Server Interaction - Inspect AI Integration
+@startuml SABER Inspect AI Integration Sequence
 
 !theme plain
-title SABER Client-Server Interaction - Current Inspect AI Integration
+title SABER + Inspect AI Integration - Evaluation Workflow
 
 actor "User" as User
-participant "CLI" as CLI
-participant "SABEREvaluationOrchestrator" as Orchestrator
+participant "inspect CLI" as InspectCLI
+participant "Domain Task\n(cybench.py)" as DomainTask
+participant "create_domain_task" as TaskFactory
+participant "DomainController" as DomainCtrl
+participant "SABERSandboxEnvironment" as Sandbox
 participant "ClientSessionManager" as SessionMgr
-participant "AgentManager" as AgentMgr
-participant "DatasetManager" as DatasetMgr
-participant "SessionManager" as Server
-participant "InspectAIAgent" as Agent
-participant "MCP (via mcp_server_http)" as MCP
-participant "ExecutionManager" as ExecMgr
+participant "create_saber_dataset" as Dataset
+participant "saber_scorer" as Scorer
+participant "SABER Server" as Server
+participant "MCP Tools" as MCP
 
-User -> CLI: python -m saber.client --agent my_agent.py
-CLI -> CLI: setup_client_logging()
-CLI -> CLI: parse_arguments()
+User -> InspectCLI: inspect eval domains/cybench --model openai/gpt-4
 
-CLI -> Orchestrator: SABEREvaluationOrchestrator(config)
-activate Orchestrator
-
-note over Orchestrator: **Async Context Manager Entry**
-Orchestrator -> Orchestrator: __aenter__()
-Orchestrator -> Orchestrator: _validate_config()
-
-== Component Initialization (Fail-Fast) ==
-
-Orchestrator -> SessionMgr: ClientSessionManager(config)
-activate SessionMgr
-SessionMgr -> SessionMgr: __aenter__()
-
-SessionMgr -> Server: POST /api/v1/session
-activate Server
-Server -> Server: create_session(client_id)
-Server --> SessionMgr: SessionCreateResponse
-note right of SessionMgr
-  SessionCreateResponse:
-  - session_id
-  - created_at
-  - client_id
+note right of User
+**User Command**
+Standard Inspect AI command
+with domain task path
 end note
 
-note over Orchestrator, DatasetMgr: **Task Discovery**
-Orchestrator -> SessionMgr: discover_tasks()
+InspectCLI -> DomainTask: Load task module
+activate DomainTask
+
+DomainTask -> TaskFactory: @task\ncybench(**kwargs)
+activate TaskFactory
+
+note over TaskFactory
+**Task Factory Execution**
+- Extract parameters from kwargs
+- Setup domain configuration
+- Initialize server controller
+end note
+
+TaskFactory -> DomainCtrl: Start SABER domain server
+activate DomainCtrl
+
+DomainCtrl -> Server: saber-domain start cybench
+activate Server
+
+note right of Server
+**Server Launch**
+- Loads domain.yaml manifest
+- Initializes BenchmarkManager
+- Starts REST API (port 8000)
+- Starts MCP API (port 8001)
+end note
+
+DomainCtrl -> Server: Health check (wait for ready)
+Server --> DomainCtrl: Healthy
+
+note over TaskFactory, SessionMgr
+**Initialize Client Session**
+end note
+
+TaskFactory -> SessionMgr: Create session
+activate SessionMgr
+SessionMgr -> Server: POST /api/v1/session
+Server --> SessionMgr: session_id
+SessionMgr --> TaskFactory: ClientSessionManager instance
+
+note over TaskFactory, Dataset
+**Load Dataset from Server**
+end note
+
+TaskFactory -> Dataset: create_saber_dataset(session_mgr, task_filter)
+activate Dataset
+Dataset -> SessionMgr: get_tasks()
 SessionMgr -> Server: GET /api/v1/benchmark
 Server --> SessionMgr: BenchmarkInfo
-SessionMgr --> Orchestrator: List[TaskInfo]
+SessionMgr --> Dataset: List[TaskInfo]
 
-Orchestrator -> AgentMgr: AgentManager(config, session_mgr)
-activate AgentMgr
-AgentMgr -> AgentMgr: __aenter__(available_task_ids)
-note right of AgentMgr
-  Stores available task IDs
-  for agent resolution
+Dataset -> Dataset: Convert TaskInfo → inspect_ai.Sample
+note right of Dataset
+Each Sample contains:
+- task_id
+- instruction_prompt
+- assistant_prompt
+- submit_prompt
+- SABER metadata
 end note
 
-Orchestrator -> DatasetMgr: DatasetManager(session_mgr, config)
-activate DatasetMgr
-DatasetMgr -> DatasetMgr: __aenter__()
-note right of DatasetMgr
-  DatasetManager uses
-  session_manager for
-  all HTTP communication
+Dataset --> TaskFactory: List[Sample]
+deactivate Dataset
+
+note over TaskFactory, Sandbox
+**Create Sandbox Environment**
 end note
 
-== Dataset and Task Creation ==
+TaskFactory -> Sandbox: SABERSandboxEnvironment(domain, session_mgr)
+activate Sandbox
+Sandbox --> TaskFactory: Sandbox instance
 
-DatasetMgr -> DatasetMgr: create_dataset()
-DatasetMgr -> DatasetMgr: _create_task_samples()
-note right of DatasetMgr
-  Samples include metadata:
-  - task_id
-  - instruction_prompt
-  - assistant_prompt
-  - submit_prompt
+note over TaskFactory, Scorer
+**Create Scorer**
 end note
 
-AgentMgr -> AgentMgr: create_tasks(samples)
-AgentMgr -> AgentMgr: create_saber_inspect_agent()
-note right of AgentMgr
-  Uses InspectAIImplementationRegistry
-  to get agent implementation (e.g., 'react')
-  and wraps with SABER infrastructure
-end note
-AgentMgr -> Agent: @agent decorator
-activate Agent
-note right of Agent
-  Agent created with:
-  - AgentPrompt (3 prompts)
-  - MCP tools via mcp_server_http()
-  - Session/episode context
+TaskFactory -> Scorer: saber_scorer(session_mgr)
+activate Scorer
+Scorer --> TaskFactory: Scorer instance
+
+TaskFactory -> TaskFactory: Build Task(dataset, sandbox, scorer)
+TaskFactory --> DomainTask: Inspect AI Task
+deactivate TaskFactory
+DomainTask --> InspectCLI: Task
+
+note over InspectCLI
+**Inspect AI Execution**
+For each sample in dataset:
 end note
 
-== Inspect AI Evaluation Execution ==
+loop For each sample
 
-Orchestrator -> Orchestrator: execute()
+    InspectCLI -> Sandbox: setup(sample)
+    Sandbox -> SessionMgr: create_episode(task_id)
+    SessionMgr -> Server: POST /api/v1/session/{id}/episode
+    Server --> SessionMgr: episode_id, environment_spec
+    SessionMgr --> Sandbox: episode_id
 
-note over Orchestrator: **Uses inspect_ai.eval_async()**
+    Sandbox -> Sandbox: Store episode_id in store
+    note right of Sandbox
+    episode_id stored in Inspect AI's
+    global store for scorer access
+    end note
+
+    Sandbox --> InspectCLI: SandboxEnvironmentSpec
+
+    note over InspectCLI
+    **Agent Execution**
+    Inspect AI runs agent
+    (e.g., ReAct, custom agent)
+    end note
+
+    loop Agent Steps
+        InspectCLI -> InspectCLI: Agent generates tool call
+        InspectCLI -> Sandbox: exec(command)
+
+        Sandbox -> SessionMgr: Get MCP client
+        SessionMgr -> MCP: Execute tool via MCP
+        activate MCP
+
+        MCP -> Server: MCP tool call with session context
+        Server -> Server: Execute command in sandbox
+        Server --> MCP: Command result
+        deactivate MCP
+
+        MCP --> Sandbox: Tool result
+        Sandbox --> InspectCLI: ExecResult
+    end
+
+    note over InspectCLI, Scorer
+    **Scoring**
+    end note
+
+    InspectCLI -> Scorer: score(state, target)
+    Scorer -> Scorer: Get episode_id from store
+    Scorer -> SessionMgr: get_evaluation(episode_id)
+    SessionMgr -> Server: GET /api/v1/evaluation/{episode_id}
+    Server -> Server: Evaluate episode\n(submission + steps)
+    Server --> SessionMgr: EvaluationResponse
+    SessionMgr --> Scorer: Evaluation data
+
+    Scorer -> Scorer: Create Score object\n(value, explanation, metadata)
+    Scorer --> InspectCLI: Score
+
+    note over InspectCLI, Sandbox
+    **Episode Cleanup**
+    end note
+
+    InspectCLI -> Sandbox: cleanup()
+    Sandbox -> SessionMgr: end_episode(episode_id)
+    SessionMgr -> Server: POST /api/v1/session/{id}/episode/{eid}/end
+    Server -> Server: Cleanup episode resources
+    Server --> SessionMgr: Success
+    SessionMgr --> Sandbox: Success
+
+end
+
+note over InspectCLI
+**Evaluation Complete**
+All samples processed
+end note
+
+InspectCLI -> Sandbox: Final cleanup
+Sandbox -> SessionMgr: terminate_session()
+SessionMgr -> Server: DELETE /api/v1/session/{id}
+Server --> SessionMgr: Success
+
+Sandbox -> DomainCtrl: Stop server (if stop_saber_after=true)
+DomainCtrl -> Server: saber-domain stop cybench
+deactivate Server
+deactivate DomainCtrl
+
+deactivate Sandbox
+deactivate Scorer
+deactivate SessionMgr
+deactivate DomainTask
+
+InspectCLI --> User: EvalLog results
+
+note over User
+**Results**
+- Per-sample scores
+- Aggregate metrics
+- Logs saved to .inspect_ai/logs/
+end note
+
+@enduml
 Orchestrator -> "inspect_ai": eval_async(tasks, model, **kwargs)
 
 loop for each task/episode

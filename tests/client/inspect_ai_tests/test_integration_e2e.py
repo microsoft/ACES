@@ -15,7 +15,7 @@ import pytest
 from inspect_ai.model._chat_message import ChatMessageAssistant, ChatMessageSystem, ChatMessageUser
 from inspect_ai.model._call_tools import ExecuteToolsResult
 
-from saber.client.inspect_ai.context_injection import (
+from saber.inspect_ai.context_injection import (
     _get_context,
     saber_execute_tools,
     saber_tool_params,
@@ -64,8 +64,8 @@ async def test_end_to_end_context_injection():
         return ExecuteToolsResult(messages=[], output=result)
 
     # Patch and run
-    with patch('saber.client.inspect_ai.context_injection.original_execute_tools', side_effect=mock_execute_tools):
-        with patch('saber.client.inspect_ai.context_injection.original_tool_params', return_value={"command": "ls"}):
+    with patch('saber.inspect_ai.context_injection.original_execute_tools', side_effect=mock_execute_tools):
+        with patch('saber.inspect_ai.context_injection.original_tool_params', return_value={"command": "ls"}):
             result = await saber_execute_tools(messages, [mock_bash], None)
 
     # Verify context was injected

@@ -28,8 +28,8 @@ from ..models.rest.evaluation import (
     EvaluationOverrideRequest,
     EvaluationResultResponse,
     EvaluationResultSubmission,
-    SubtaskEvaluationCriteriaResponse,
     SubmissionEvaluationCriteriaResponse,
+    SubtaskEvaluationCriteriaResponse,
 )
 from ..server import EpisodeState
 from .models import SessionManagerConfig

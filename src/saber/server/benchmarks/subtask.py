@@ -23,7 +23,11 @@ class SubTask(BaseModel):
     objective: str = Field(..., description="Primary objective to accomplish")
     hint: Optional[str] = Field(None, description="Optional hint to guide without spoiling the challenge")
     subtask_strategy: Optional[str] = Field(
-        None, description="Optional evaluation strategy override for this subtask (see StepEvaluationStrategy enum: 'static', 'llm_judge', 'tool_call')"
+        None,
+        description=(
+            "Optional evaluation strategy override for this subtask "
+            "(see StepEvaluationStrategy enum: 'static', 'llm_judge', 'tool_call')"
+        ),
     )
     subtask_criteria: Optional[dict] = Field(
         None,

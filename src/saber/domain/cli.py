@@ -4,10 +4,8 @@ This module provides the Click-based CLI interface for domain operations
 with CLI-generated environment variables - no manual .env file editing required.
 """
 
-import subprocess
-import sys
 from pathlib import Path
-from typing import Any, Dict, cast
+from typing import Any, Dict
 
 import click
 
@@ -405,22 +403,24 @@ def _display_domain_status(domain: str, status_info: Dict[str, Any]) -> None:
 
 @cli.command()  # type: ignore[misc]
 @click.argument("domain")  # type: ignore[misc]
-@click.option("--saber-yaml", type=Path, help="Path to SABER config file")  # type: ignore[misc]
-@click.option("--stop-after", is_flag=True, help="Stop server after test completion")  # type: ignore[misc]
-@click.option("--rest-port", type=int, default=8000, help="REST API port")  # type: ignore[misc]
-@click.option("--mcp-port", type=int, default=8001, help="MCP port")  # type: ignore[misc]
-@click.option("--build", is_flag=True, help="Build missing images before starting")  # type: ignore[misc]
-@click.option("--rebuild-all", is_flag=True, help="Remove and rebuild all images before starting")  # type: ignore[misc]
+@click.option("--saber-yaml", type=Path, help="Path to SABER config file (deprecated)")  # type: ignore[misc]
+@click.option("--stop-after", is_flag=True, help="Stop server after test completion (deprecated)")  # type: ignore[misc]
+@click.option("--rest-port", type=int, default=8000, help="REST API port (deprecated)")  # type: ignore[misc]
+@click.option("--mcp-port", type=int, default=8001, help="MCP port (deprecated)")  # type: ignore[misc]
+@click.option("--build", is_flag=True, help="Build missing images before starting (deprecated)")  # type: ignore[misc]
+@click.option(
+    "--rebuild-all",
+    is_flag=True,
+    help="Remove and rebuild all images before starting (deprecated)",
+)  # type: ignore[misc]
 @click.option(
     "--rebuild",
-    help="Remove and rebuild images with names starting with this prefix before starting (e.g., 'server', 'cookie')",
+    help="Remove and rebuild images with names starting with this prefix (deprecated)",
 )  # type: ignore[misc]
-@click.option("--log-level", default="INFO", help="Logging level")  # type: ignore[misc]
-@click.option(
-    "--verbose", "-v", is_flag=True, help="Enable verbose logging (sets log level to DEBUG)"
-)  # type: ignore[misc]
-@click.option("--no-ui", is_flag=True, help="Disable TUI and use rich console output instead")  # type: ignore[misc]
-@click.option("--dry-run", is_flag=True, help="Show what would be done without executing")  # type: ignore[misc]
+@click.option("--log-level", default="INFO", help="Logging level (deprecated)")  # type: ignore[misc]
+@click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging (deprecated)")  # type: ignore[misc]
+@click.option("--no-ui", is_flag=True, help="Disable TUI (deprecated)")  # type: ignore[misc]
+@click.option("--dry-run", is_flag=True, help="Show what would be done (deprecated)")  # type: ignore[misc]
 @click.pass_context  # type: ignore[misc]
 def test(
     ctx: click.Context,
@@ -437,67 +437,100 @@ def test(
     no_ui: bool,
     dry_run: bool,
 ) -> None:
-    """Run SABER evaluation tests against domain server.
+    """[DEPRECATED] Run SABER evaluation tests against domain server.
 
-    By default, the server is kept running after test completion for subsequent runs.
-    Use --stop-after to explicitly stop the server when done.
+    ⚠️  This command has been DEPRECATED in favor of 'inspect eval'.
 
-    Examples:
-        saber-domain test cybench
-        saber-domain test cybench --no-ui
-        saber-domain test cybench --saber-yaml custom.yaml
-        saber-domain test cybench --build                       # Build missing images
-        saber-domain test cybench --stop-after --rebuild-all    # Rebuild all images
-        saber-domain test cybench --rebuild server              # Only rebuild server
-        saber-domain test romulus --rebuild cookie              # Only rebuild cookie_* images
+    The new workflow uses Inspect AI's native evaluation system with SABER's
+    SABERSandboxEnvironment integration for better performance and compatibility.
+
+    See below for the equivalent command for your use case.
     """
-    # FAIL FAST: Validate mutually exclusive build options
-    build_options_count = sum([build, rebuild_all, bool(rebuild)])
-    if build_options_count > 1:
-        click.echo("Error: Build options are mutually exclusive:", err=True)
-        click.echo("  --build: Only builds missing images", err=True)
-        click.echo("  --rebuild-all: Rebuilds all images", err=True)
-        click.echo("  --rebuild <prefix>: Rebuilds images matching prefix", err=True)
-        ctx.exit(1)
+    click.echo(click.style("\n⚠️  DEPRECATION WARNING", fg="yellow", bold=True))
+    click.echo(click.style("=" * 60, fg="yellow"))
+    click.echo()
+    click.echo("The 'saber-domain test' command has been deprecated.")
+    click.echo("Please use 'inspect eval' instead for better performance and compatibility.")
+    click.echo()
 
-    try:
-        orchestrator = _create_orchestrator(ctx.obj.get("domains_root"))
+    # Build the equivalent inspect eval command
+    inspect_cmd = f"uv run inspect eval domains/{domain}"
 
-        # Override log level if verbose flag is set
-        effective_log_level = "DEBUG" if verbose else log_level
+    # Add model (required for inspect eval)
+    click.echo(click.style("📋 Migration Guide:", fg="cyan", bold=True))
+    click.echo()
+    click.echo("Basic usage (specify your model):")
+    click.echo(click.style(f"  {inspect_cmd} --model <your-model>", fg="green"))
+    click.echo()
+    click.echo("Examples:")
+    click.echo(f"  {inspect_cmd} --model openai/azure/gpt-4")
+    click.echo(f"  {inspect_cmd} --model anthropic/claude-3-opus")
+    click.echo()
 
-        # Convert build options to orchestrator parameters
-        build_param = "" if build else None
-        rebuild_param = "" if rebuild_all else rebuild
+    # Show parameter mappings
+    task_params = []
 
-        # Run the test command implementation
-        import asyncio
+    if build:
+        task_params.append("-T build=true")
+    if rebuild_all:
+        task_params.append("-T rebuild_all=true")
+    if rebuild:
+        task_params.append(f"-T rebuild={rebuild}")
+    if rest_port != 8000:
+        task_params.append(f"-T rest_port={rest_port}")
+    if mcp_port != 8001:
+        task_params.append(f"-T mcp_port={mcp_port}")
+    if stop_after:
+        task_params.append("-T stop_saber_after=true")
 
-        asyncio.run(
-            _test_command_impl(
-                orchestrator=orchestrator,
-                domain=domain,
-                saber_yaml=saber_yaml,
-                stop_after=stop_after,
-                rest_port=rest_port,
-                mcp_port=mcp_port,
-                build=build_param,
-                rebuild=rebuild_param,
-                log_level=effective_log_level,
-                no_ui=no_ui,
-                dry_run=dry_run,
+    if task_params or saber_yaml or no_ui:
+        click.echo("With your current options:")
+        equivalent_cmd = inspect_cmd
+
+        if task_params:
+            equivalent_cmd += " " + " ".join(task_params)
+
+        equivalent_cmd += " --model <your-model>"
+
+        click.echo(click.style(f"  {equivalent_cmd}", fg="green"))
+        click.echo()
+        click.echo("  Replace <your-model> with your model, e.g.:")
+        click.echo("    --model openai/azure/gpt-4")
+        click.echo("    --model anthropic/claude-3-opus")
+        click.echo()
+
+        if saber_yaml:
+            click.echo(click.style("  Note:", fg="yellow") + " The --saber-yaml option is no longer needed.")
+            click.echo(
+                "  Task configuration is now defined in the domain task file (e.g., domains/excytin/excytin.py)."
             )
-        )
+            click.echo()
 
-    except DomainError as e:
-        click.echo(f"Error: {e}", err=True)
-        ctx.exit(1)
-    except KeyboardInterrupt:
-        click.echo("\nAborted by user", err=True)
-        ctx.exit(1)
-    except Exception as e:
-        click.echo(f"Test failed: {e}", err=True)
-        ctx.exit(1)
+        if no_ui:
+            click.echo(click.style("  Note:", fg="yellow") + " UI behavior is now controlled by Inspect AI.")
+            click.echo("  Use INSPECT_LOG_LEVEL=info for detailed output.")
+            click.echo()
+
+    click.echo(click.style("📚 Additional Resources:", fg="cyan", bold=True))
+    click.echo()
+    click.echo("  List available tasks:")
+    click.echo(click.style("    uv run inspect list tasks", fg="green"))
+    click.echo()
+    click.echo("  Filter specific tasks:")
+    click.echo(
+        click.style(
+            f"    uv run inspect eval domains/{domain} -T task_filter=task_name --model <your-model>", fg="green"
+        )
+    )
+    click.echo()
+    click.echo("  Documentation:")
+    click.echo("    README.md - Getting started and examples")
+    click.echo("    docs/INSPECT_AI_DOMAIN_TASKS.md - Complete inspect eval guide")
+    click.echo()
+    click.echo(click.style("=" * 60, fg="yellow"))
+    click.echo()
+
+    ctx.exit(1)
 
 
 @cli.command(name="preflight")  # type: ignore[misc]
@@ -589,681 +622,6 @@ def test_resources(ctx: click.Context) -> None:
     except DomainError as e:
         click.echo(f"✗ Resource resolution failed: {e}", err=True)
         ctx.exit(1)
-
-
-async def _test_command_impl(
-    orchestrator: DomainOrchestrator,
-    domain: str,
-    saber_yaml: Path | None,
-    stop_after: bool,
-    rest_port: int,
-    mcp_port: int,
-    build: str | None,
-    rebuild: str | None,
-    log_level: str,
-    no_ui: bool,
-    dry_run: bool,
-) -> None:
-    """Implementation of the test command."""
-
-    # Phase 0: Load environment variables FIRST
-    _load_test_environment(orchestrator.manifest_loader.domains_root)
-
-    # Phase 1: Validate domain and discover config
-    click.echo(f"🔍 Checking domain {domain}...")
-
-    try:
-        # Validate domain exists and is valid
-        orchestrator.validate_domain(domain)
-        click.echo("✓ Domain configuration valid")
-    except Exception as e:
-        raise DomainError(f"Domain validation failed: {e}")
-
-    # Discover SABER config file
-    config_path = _discover_saber_config(domain, saber_yaml, orchestrator.manifest_loader.domains_root)
-    click.echo(f"📋 Found test config: {config_path}")
-
-    if dry_run:
-        click.echo("🔍 Would check server status...")
-        click.echo(f"🚀 Would start {domain} server if needed (ports: REST={rest_port}, MCP={mcp_port})")
-        click.echo(f"📋 Would load test config: {config_path}")
-        click.echo("🧪 Would run SABER evaluation")
-        if stop_after:
-            click.echo("🛑 Would stop server after test")
-        else:
-            click.echo("ℹ️  Would keep server running")
-        return
-
-    # Phase 2: Server management
-    click.echo("🔍 Checking server status...")
-    we_started_server = await _ensure_server_running(
-        orchestrator, domain, rest_port, mcp_port, build, rebuild, log_level, dry_run
-    )
-
-    try:
-        # Phase 3: Load and hydrate SABER config
-        click.echo(f"📋 Loading test config: {config_path}")
-        saber_config = await _load_and_hydrate_saber_config(config_path, rest_port, mcp_port)
-
-        # Phase 4: Run SABER evaluation
-        click.echo("🧪 Running SABER evaluation...")
-        click.echo(f"   • Server: http://localhost:{rest_port}")
-        click.echo(f"   • MCP: http://localhost:{mcp_port}")
-        click.echo(f"   • Agents: {len(saber_config.agents)}")
-        click.echo(f"   • Tasks: {saber_config.task_ids or 'all available'}")
-        click.echo(f"   • Config: {config_path}")
-
-        # Extract runtime URLs for CLI override
-        rest_url = f"http://localhost:{rest_port}"
-        mcp_url = f"http://localhost:{mcp_port}"
-
-        # Find the repo root .env file path
-        repo_root = orchestrator.manifest_loader.domains_root.parent
-        env_file_path = repo_root / ".env"
-
-        try:
-            if no_ui:
-                click.echo("🎯 Starting SABER client with rich console output...")
-            else:
-                click.echo("🎯 Starting SABER client with TUI...")
-
-            # Build command arguments for subprocess call
-            # CRITICAL: Pass the config file path AND runtime URLs as overrides
-            # This ensures ALL configuration (including endpoint settings) is preserved
-            # while allowing runtime URL injection for auto mode
-            cmd_args = [
-                sys.executable,
-                "-m",
-                "saber.client",
-                "run",
-                "--config",
-                str(config_path),
-                "--rest-url",
-                rest_url,
-                "--mcp-url",
-                mcp_url,
-                "--domain",
-                domain,  # Pass domain for organized logging
-            ]
-
-            # Add no-ui flag if requested
-            if no_ui:
-                cmd_args.append("--no-ui")
-
-            # Add env file if it exists
-            if env_file_path.exists():
-                cmd_args.extend(["--env-file", str(env_file_path)])
-
-            # Call the SABER client CLI directly - this preserves TUI
-            import subprocess
-
-            subprocess.run(cmd_args, check=True, cwd=Path.cwd())
-
-            click.echo("✓ Evaluation completed successfully!")
-
-        except subprocess.CalledProcessError as e:
-            raise DomainError(f"SABER client execution failed: {e}") from e
-
-    finally:
-        # Phase 5: Optional cleanup
-        if stop_after and we_started_server:
-            click.echo("🛑 Stopping server...")
-            orchestrator.stop_domain(domain)
-        elif stop_after:
-            click.echo("ℹ️  Server was already running, not stopping")
-        else:
-            click.echo("ℹ️  Server kept running (use --stop-after to cleanup)")
-
-
-def _discover_saber_config(domain: str, explicit_path: Path | None, domains_root: Path) -> Path:
-    """Discover SABER config with fail-fast validation."""
-    if explicit_path:
-        if not explicit_path.exists():
-            raise DomainError(f"Explicit SABER config not found: {explicit_path}")
-        return explicit_path
-
-    # Standard location
-    canonical_path = domains_root / domain / "client" / "saber.yaml"
-    if canonical_path.exists():
-        return canonical_path
-
-    # No fallbacks - fail fast
-    raise DomainError(f"SABER config not found: {canonical_path}")
-
-
-async def _ensure_server_running(
-    orchestrator: DomainOrchestrator,
-    domain: str,
-    rest_port: int,
-    mcp_port: int,
-    build: str | None,
-    rebuild: str | None,
-    log_level: str,
-    dry_run: bool,
-) -> bool:
-    """Ensure server is running, return True if we started it."""
-
-    # Handle rebuild flag regardless of server status
-    if rebuild is not None:
-        # Stop the server first since we're rebuilding critical images
-        status = orchestrator.get_domain_status(domain)
-        if status.get("running", False):
-            if dry_run:
-                click.echo(f"🛑 Would stop {domain} server for rebuild")
-            else:
-                click.echo(f"🛑 Stopping {domain} server for rebuild...")
-                orchestrator.stop_domain(domain, dry_run=False)
-                click.echo("✓ Server stopped")
-
-        if dry_run:
-            rebuild_msg = f"🔨 Would rebuild {domain} images"
-            if rebuild:  # If not empty string
-                rebuild_msg += f" (filter: {rebuild})"
-            click.echo(rebuild_msg)
-        else:
-            rebuild_msg = f"🔨 Rebuilding {domain} images"
-            if rebuild:  # If not empty string
-                rebuild_msg += f" (filter: {rebuild})"
-            click.echo(rebuild_msg + "...")
-            orchestrator.build_domain(
-                domain, image_filter=rebuild if rebuild else None, dry_run=False, rebuild_mode=True
-            )
-            click.echo("✓ Images rebuilt successfully")
-
-    # Handle build flag (only build missing images)
-    elif build is not None:
-        if dry_run:
-            build_msg = f"🔨 Would build missing {domain} images"
-            if build:  # If not empty string
-                build_msg += f" (filter: {build})"
-            click.echo(build_msg)
-        else:
-            build_msg = f"🔨 Building missing {domain} images"
-            if build:  # If not empty string
-                build_msg += f" (filter: {build})"
-            click.echo(build_msg + "...")
-            orchestrator.build_domain(domain, image_filter=build if build else None, dry_run=False, rebuild_mode=False)
-            click.echo("✓ Images built successfully")
-
-    status = orchestrator.get_domain_status(domain)
-
-    if status.get("running", False):
-        # Server is running - show health status
-        health_status = status.get("health_status", "unknown")
-        if health_status == "unhealthy":
-            click.echo(f"⚠️  Server running but unhealthy for {domain} - proceeding with test")
-        else:
-            click.echo(f"✓ Server already running for {domain}")
-        return False  # We didn't start it
-
-    if dry_run:
-        click.echo(f"🚀 Would start server for {domain}")
-        return False
-
-    click.echo(f"🚀 Starting {domain} server...")
-    orchestrator.start_domain(
-        domain, rest_port, mcp_port, log_level, rebuild=None, dry_run=False
-    )  # rebuild=None since we already built above
-
-    # Wait for server readiness with detailed monitoring
-    await _wait_for_server_ready(rest_port, mcp_port, domain, orchestrator)
-    click.echo(f"✓ Server ready at http://localhost:{rest_port}")
-    return True  # We started it
-
-
-async def _wait_for_server_ready(rest_port: int, mcp_port: int, domain: str, orchestrator: DomainOrchestrator) -> None:
-    """
-    Wait for server to be ready with detailed health reporting and no timeout.
-
-    Shows periodic updates every 15 seconds with:
-    - Elapsed time
-    - Server health status
-    - Permanent environment health
-    - Error messages from logs
-
-    User can Ctrl+C to gracefully shutdown the server.
-    """
-    import asyncio
-    import signal
-
-    import aiohttp
-
-    health_url = f"http://localhost:{rest_port}/api/v1/health"
-    start_time = asyncio.get_event_loop().time()
-    last_report_time = 0
-    update_interval = 15  # Report every 15 seconds
-    shutdown_requested = False
-
-    def signal_handler(signum: int, frame: Any) -> None:
-        """Handle Ctrl+C gracefully."""
-        nonlocal shutdown_requested
-        shutdown_requested = True
-
-    # Register signal handler
-    signal.signal(signal.SIGINT, signal_handler)
-
-    click.echo("⏳ Waiting for server to become ready...")
-    click.echo("   Press Ctrl+C to stop and shutdown the server")
-    click.echo()
-
-    try:
-        while not shutdown_requested:
-            elapsed = int(asyncio.get_event_loop().time() - start_time)
-
-            # Check if server is ready
-            server_ready = False
-            health_data = None
-            connection_error = None
-
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(health_url, timeout=aiohttp.ClientTimeout(total=5)) as response:
-                        if response.status == 200:
-                            health_data = await response.json()
-                            server_ready = True
-                        else:
-                            connection_error = f"HTTP {response.status}"
-            except asyncio.TimeoutError:
-                connection_error = "Connection timeout"
-            except aiohttp.ClientConnectorError:
-                connection_error = "Connection refused"
-            except Exception as e:
-                connection_error = f"{type(e).__name__}: {str(e)[:50]}"
-
-            # If server is ready, we're done!
-            if server_ready:
-                click.echo(f"✓ Server ready after {elapsed}s")
-                return
-
-            # Show periodic status updates every 15 seconds
-            if elapsed - last_report_time >= update_interval:
-                last_report_time = elapsed
-                click.echo(f"📊 Status Update [{elapsed}s elapsed]")
-                click.echo(f"{'─' * 60}")
-
-                # Show connection status
-                if connection_error:
-                    click.echo(f"  🔌 Server Connection: {click.style(connection_error, fg='yellow')}")
-                else:
-                    click.echo(f"  🔌 Server Connection: {click.style('Connected', fg='green')}")
-
-                # Get and show container status
-                container_status = _get_container_status(domain)
-                if container_status:
-                    click.echo(f"  📦 Container Status: {container_status}")
-
-                # Show health endpoint data (server status and permanent environment)
-                if health_data:
-                    _show_health_details(health_data)
-                else:
-                    click.echo(f"  💛 Server Health: {click.style('not ready', fg='yellow')}")
-                    # Even if server isn't ready, try to check permanent environment directly
-                    perm_env_health = _check_permanent_environment_health_direct(domain, orchestrator)
-                    if perm_env_health:
-                        _show_permanent_environment_health(perm_env_health)
-
-                # Check for errors in server logs
-                errors = _scan_server_logs_for_errors(domain, since_seconds=update_interval + 5)
-                if errors:
-                    click.echo(f"  ❌ Errors Found in Logs ({len(errors)}):")
-                    for error in errors[:5]:  # Show max 5 errors
-                        # Truncate long error messages
-                        error_msg = error if len(error) <= 100 else error[:97] + "..."
-                        click.echo(f"     • {click.style(error_msg, fg='red')}")
-                    if len(errors) > 5:
-                        click.echo(f"     ... and {len(errors) - 5} more errors")
-                else:
-                    click.echo("  ✓ No errors in recent logs")
-
-                click.echo()
-
-            await asyncio.sleep(1)
-
-        # Shutdown was requested
-        click.echo()
-        click.echo("🛑 Shutdown requested by user")
-        click.echo("   Stopping server gracefully...")
-        orchestrator.stop_domain(domain)
-        click.echo("✓ Server stopped successfully")
-        raise DomainError("Server startup cancelled by user")
-
-    except DomainError:
-        raise
-    except Exception as e:
-        click.echo()
-        click.echo(f"❌ Unexpected error during server startup: {e}")
-        click.echo("   Attempting to stop server...")
-        try:
-            orchestrator.stop_domain(domain)
-        except Exception:
-            pass
-        raise DomainError(f"Server startup failed: {e}")
-    finally:
-        # Restore default signal handler
-        signal.signal(signal.SIGINT, signal.SIG_DFL)
-
-
-def _get_container_status(domain: str) -> str:
-    """Get Docker container status for the domain server."""
-    try:
-        result = subprocess.run(
-            ["docker", "ps", "-a", "--filter", f"name={domain}-saber-server", "--format", "{{.Status}}"],
-            capture_output=True,
-            text=True,
-            timeout=3,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            status = result.stdout.strip()
-            # Colorize status
-            if "Up" in status:
-                if "unhealthy" in status.lower():
-                    return cast(str, click.style(status, fg="yellow"))
-                elif "starting" in status.lower():
-                    return cast(str, click.style(status, fg="cyan"))
-                else:
-                    return cast(str, click.style(status, fg="green"))
-            else:
-                return cast(str, click.style(status, fg="red"))
-        return cast(str, click.style("Container not found", fg="red"))
-    except Exception as e:
-        return cast(str, click.style(f"Error: {e}", fg="red"))
-
-
-def _scan_server_logs_for_errors(domain: str, since_seconds: int = 20) -> list[str]:
-    """
-    Scan server logs for ERROR keywords.
-
-    Args:
-        domain: Domain name
-        since_seconds: Only look at logs from the last N seconds
-
-    Returns:
-        List of error messages found
-    """
-    try:
-        result = subprocess.run(
-            ["docker", "logs", "--since", f"{since_seconds}s", f"{domain}-saber-server"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-
-        if result.returncode != 0:
-            return []
-
-        # Combine stdout and stderr
-        all_logs = result.stdout + result.stderr
-
-        # Patterns to ignore (warnings, deprecations, stack traces from warnings)
-        ignore_patterns = [
-            "PydanticDeprecatedSince20",
-            "DeprecationWarning",
-            "FutureWarning",
-            "UserWarning",
-            "warnings.warn",
-            "PendingDeprecationWarning",
-            "RuntimeWarning",
-            "site-packages",  # Usually part of warning stack traces
-            ".py:",  # File references in warnings (e.g., "/path/file.py:123")
-        ]
-
-        # Find lines containing ERROR (case insensitive)
-        errors = []
-        for line in all_logs.split("\n"):
-            # Skip empty lines
-            if not line.strip():
-                continue
-
-            # Check if this is an ERROR line (not just warning)
-            if "ERROR" in line.upper():
-                # Skip if it's just a warning/deprecation or stack trace
-                if any(pattern in line for pattern in ignore_patterns):
-                    continue
-
-                # Also skip lines that look like file paths or warning context
-                if line.strip().startswith("/") or line.strip().startswith("File "):
-                    continue
-
-                # Clean up the line
-                line = line.strip()
-                if line:
-                    errors.append(line)
-
-        return errors
-    except Exception:
-        return []
-
-
-def _show_health_details(health_data: dict) -> None:
-    """Display health endpoint details."""
-    try:
-        # Show basic health info
-        domain = health_data.get("domain", "unknown")
-        status = health_data.get("status", "unknown")
-
-        if status == "healthy":
-            click.echo(f"  💚 Server Health: {click.style('healthy', fg='green')} (domain: {domain})")
-        else:
-            click.echo(f"  💛 Server Health: {click.style(status, fg='yellow')} (domain: {domain})")
-
-        # Show permanent environment health if present
-        perm_env = health_data.get("permanent_environment_health")
-        if perm_env:
-            is_healthy = perm_env.get("healthy", False)
-            if is_healthy:
-                click.echo(f"  🌍 Permanent Environment: {click.style('healthy', fg='green')}")
-            else:
-                click.echo(f"  🌍 Permanent Environment: {click.style('unhealthy', fg='yellow')}")
-
-                # Show details if available
-                details = perm_env.get("details", {})
-                if isinstance(details, dict):
-                    services = details.get("services", {})
-                    if services:
-                        click.echo("     Services:")
-                        for service_name, service_info in services.items():
-                            if isinstance(service_info, dict):
-                                svc_healthy = service_info.get("healthy", False)
-                                reason = service_info.get("reason", "unknown")
-                                if svc_healthy:
-                                    click.echo(f"       ✓ {service_name}: {reason}")
-                                else:
-                                    click.echo(f"       ✗ {service_name}: {click.style(reason, fg='yellow')}")
-
-                # Show error if present
-                error = perm_env.get("error")
-                if error:
-                    click.echo(f"     Error: {click.style(error, fg='red')}")
-    except Exception:
-        pass  # Don't fail on health detail display errors
-
-
-def _check_permanent_environment_health_direct(domain: str, orchestrator: DomainOrchestrator) -> dict | None:
-    """
-    Check permanent environment health directly via Docker.
-
-    This function queries the permanent environment containers directly without
-    needing the server to be fully ready.
-
-    Args:
-        domain: Domain name
-        orchestrator: Domain orchestrator instance
-
-    Returns:
-        Dictionary with permanent environment health info, or None if not configured
-    """
-    try:
-        # Get domain path - validate domain exists
-        orchestrator.validate_domain(domain)
-        domains_root = orchestrator.manifest_loader.domains_root
-        domain_path = domains_root / domain
-        config_dir = domain_path / "server" / "config"
-
-        # Check if there's a permanent environment configured
-        # Look for global.yaml to get permanent environment name
-        global_config_path = config_dir / "tasks" / "global.yaml"
-        if not global_config_path.exists():
-            return None
-
-        import yaml
-
-        with open(global_config_path, "r") as f:
-            global_config = yaml.safe_load(f)
-
-        permanent_env_name = global_config.get("permanent_environment")
-        if not permanent_env_name:
-            return None
-
-        # Get the compose file path
-        permanent_compose_path = config_dir / "environments" / "permanent" / f"{permanent_env_name}.compose.yml"
-        if not permanent_compose_path.exists():
-            return {
-                "healthy": False,
-                "status": "compose_file_missing",
-                "error": f"Compose file not found: {permanent_compose_path}",
-                "environment_name": permanent_env_name,
-            }
-
-        # Use ComposeHealthChecker to check service health
-        from saber.server.execution.sandbox.compose_health_checker import ComposeHealthChecker
-
-        health_checker = ComposeHealthChecker()
-        project_name = f"{domain}-permanent"
-
-        health_summary = health_checker.get_service_health_summary(str(permanent_compose_path), project_name)
-
-        return {
-            "healthy": health_summary["overall_healthy"],
-            "status": "checked",
-            "environment_name": permanent_env_name,
-            "project_name": project_name,
-            "healthy_services": health_summary["healthy_count"],
-            "total_services": health_summary["total_count"],
-            "services": health_summary["services"],
-            "error": health_summary.get("error"),
-        }
-    except Exception:
-        return None
-
-
-def _show_permanent_environment_health(perm_env_health: dict) -> None:
-    """Display permanent environment health status."""
-    try:
-        env_name = perm_env_health.get("environment_name", "unknown")
-        is_healthy = perm_env_health.get("healthy", False)
-        services = perm_env_health.get("services", {})
-
-        # Check if any services are still starting
-        has_starting_services = False
-        if services:
-            for service_info in services.values():
-                if isinstance(service_info, dict):
-                    reason = service_info.get("reason", "")
-                    if "starting" in reason.lower():
-                        has_starting_services = True
-                        break
-
-        # Determine status message
-        if is_healthy:
-            status_msg = click.style("healthy", fg="green")
-            icon = "🌍"
-        elif has_starting_services:
-            status_msg = click.style("starting", fg="cyan")
-            icon = "🌍"
-        else:
-            status_msg = click.style("unhealthy", fg="yellow")
-            icon = "🌍"
-
-        click.echo(f"  {icon} Permanent Environment ({env_name}): {status_msg}")
-
-        # Show service details
-        if services:
-            healthy_count = perm_env_health.get("healthy_services", 0)
-            total_count = perm_env_health.get("total_services", 0)
-            click.echo(f"     Services ({healthy_count}/{total_count} healthy):")
-            for service_name, service_info in services.items():
-                if isinstance(service_info, dict):
-                    svc_healthy = service_info.get("healthy", False)
-                    reason = service_info.get("reason", "unknown")
-
-                    if svc_healthy:
-                        click.echo(f"       ✓ {service_name}: {reason}")
-                    elif "starting" in reason.lower():
-                        click.echo(f"       ⏳ {service_name}: {click.style(reason, fg='cyan')}")
-                    else:
-                        click.echo(f"       ✗ {service_name}: {click.style(reason, fg='yellow')}")
-
-        # Show error if present
-        error = perm_env_health.get("error")
-        if error:
-            click.echo(f"     Error: {click.style(error, fg='red')}")
-    except Exception:
-        pass  # Don't fail on display errors
-
-
-async def _load_and_hydrate_saber_config(config_path: Path, rest_port: int, mcp_port: int) -> Any:
-    """Load SABER config and hydrate with runtime server URLs."""
-    # Import SABER client components
-    SABERConfig, SABERConfigLoader = _import_saber_client()
-
-    # Load config inputs (allows auto/missing server URLs)
-    config_inputs = SABERConfigLoader.load_config_inputs(config_path)
-
-    # Hydrate with runtime URLs if needed
-    server_config = config_inputs.get("server", {})
-    server_mode = server_config.get("mode")
-
-    if server_mode == "auto" or not server_config.get("rest_url"):
-        # Inject runtime URLs before creating SABERConfig
-        config_inputs["server"]["rest_url"] = f"http://localhost:{rest_port}"
-        config_inputs["server"]["mcp_url"] = f"http://localhost:{mcp_port}"
-
-    # Create final SABERConfig with hydrated URLs
-    saber_config = SABERConfigLoader._convert_yaml_to_saber_config(config_inputs, config_path)
-
-    # Verify session_config was created
-    if not saber_config.session_config:
-        raise DomainError(
-            f"Failed to create session config - server URLs may be missing. "
-            f"Config has rest_url={config_inputs.get('server', {}).get('rest_url')}, "
-            f"mcp_url={config_inputs.get('server', {}).get('mcp_url')}"
-        )
-
-    return saber_config
-
-
-def _load_test_environment(domains_root: Path) -> None:
-    """Load environment variables for SABER test execution."""
-    # Find repo root from domains_root (domains_root is typically /path/to/repo/domains)
-    repo_root = domains_root.parent  # /home/ms_test/repos/oss_saber
-    env_file = repo_root / ".env"
-
-    if not env_file.exists():
-        click.echo(f"⚠️  No .env file found at {env_file}")
-        click.echo("   LLM evaluation may fail without proper credentials")
-        click.echo(f"   Create {env_file} with your OpenAI/Azure credentials")
-        return
-
-    try:
-        from dotenv import load_dotenv
-
-        load_dotenv(env_file, override=False)  # Don't override existing env vars
-        click.echo(f"🔐 Loaded environment from {env_file}")
-    except ImportError:
-        raise DomainError("python-dotenv is required for .env file loading. " "Install with: uv add python-dotenv")
-    except Exception as e:
-        raise DomainError(f"Failed to load environment file {env_file}: {e}")
-
-
-def _import_saber_client() -> tuple[Any, Any]:
-    """Lazy import of SABER client components."""
-    try:
-        from saber.client.config_loader import SABERConfigLoader
-        from saber.client.models import SABERConfig
-
-        return SABERConfig, SABERConfigLoader
-    except ImportError as e:
-        raise DomainError(f"SABER client components not available: {e}")
 
 
 async def _preflight_check_impl(

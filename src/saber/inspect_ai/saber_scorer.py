@@ -27,10 +27,10 @@ from inspect_ai.solver import TaskState
 from inspect_ai.util import store
 from jinja2 import BaseLoader, Environment, TemplateError
 
-from ...logging_config import LogCategory, get_saber_logger
-from ...models.core import EvalSubmission
-from ...models.constants import SubmissionEvaluationStrategy, StepEvaluationStrategy
-from ...models.rest.evaluation import (
+from ..logging_config import LogCategory, get_saber_logger
+from ..models.constants import StepEvaluationStrategy, SubmissionEvaluationStrategy
+from ..models.core import EvalSubmission
+from ..models.rest.evaluation import (
     EpisodeStepsResponse,
     EpisodeSubmissionResponse,
     EvaluationResultSubmission,
@@ -962,9 +962,7 @@ async def _score_all_subtasks(
         elif criteria.strategy == StepEvaluationStrategy.TOOL_CALL:
             tasks.append(_score_subtask_tool_call(steps_data, criteria))
         elif criteria.strategy == StepEvaluationStrategy.LLM_JUDGE:
-            tasks.append(_score_subtask_llm(
-                steps_data, criteria, task_context, session_manager, state
-            ))
+            tasks.append(_score_subtask_llm(steps_data, criteria, task_context, session_manager, state))
         else:
             raise RuntimeError(f"Unknown subtask strategy: {criteria.strategy}")
 

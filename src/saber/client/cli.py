@@ -17,7 +17,7 @@ from typing import Any, Dict, Optional
 import click
 import yaml
 
-from ..logging_config import LogCategory, LoggingConfig, get_saber_logger, init_logging
+from ..logging_config import LoggingConfig, init_logging
 
 
 def load_environment_file(env_file_path: Optional[Path], verbose: bool = False) -> None:
@@ -1078,331 +1078,42 @@ def run_command(
     agent_id: Optional[str],
     task_ids: Optional[str],
 ) -> None:
-    """Run SABER evaluation with inspect-ai integration.
+    """[DEPRECATED] Run SABER evaluation with inspect-ai integration.
 
-    This command runs the main SABER evaluation workflow using inspect-ai's
-    task display and evaluation system. It requires a configuration file
-    that specifies the agent, server endpoints, and evaluation parameters.
+    ⚠️  This command has been DEPRECATED in favor of 'inspect eval'.
 
-    Domain-aware features:
-    - Use --domain and --domains-root to enable configuration validation
-    - Use --validate-config to enforce domain compatibility checks
-    - Configuration is validated against domain manifest capabilities
+    The 'saber.client run' command (and 'saber-domain test') have been deprecated.
+    Please use 'inspect eval' for better performance and compatibility.
 
-    Examples:
-      saber.client run --config saber.yaml
-      saber.client run --config saber.yaml --env-file .env
-      saber.client run --config saber.yaml --domain cybench --domains-root ./domains --validate-config
+    See 'saber-domain test --help' for migration guidance.
     """
-    from .config_loader import SABERConfigLoader
-    from .models import SABERConfig
-
-    active_logging_config = setup_client_logging(
-        verbose=verbose,
-        enable_file=not no_log_file,
-        log_dir_override=None,
-        domain=domain,
-    )
-    logger = get_saber_logger(LogCategory.HARNESS, __name__)
-
-    if active_logging_config.enable_file:
-        log_file_path = active_logging_config.log_dir / active_logging_config.file_name
-        click.echo(f"📝 Logs will be written to: {log_file_path}")
-    else:
-        click.echo("📝 File logging disabled; console output only.")
-
-    # Load environment file if specified or auto-detect
-    env_file_path: Optional[Path]
-    if env_file:
-        # Use explicitly provided env file path
-        env_file_path = env_file
-    else:
-        # Auto-detect .env in current directory
-        env_file_path = Path(".env") if Path(".env").exists() else None
-
-    try:
-        load_environment_file(env_file_path, verbose=verbose)
-    except ClientConfigError as e:
-        click.echo(f"❌ Environment loading error: {e}", err=True)
-        sys.exit(1)
-
-    # Check if we should use direct parameters or config file
-    # Direct mode requires agent_id or model to be set (in addition to URLs)
-    # This allows URL overrides when using --config without triggering direct mode
-    use_direct_params = any([agent_id, model]) and any([rest_url, mcp_url])
-
-    try:
-        if use_direct_params:
-            # Validate required direct parameters
-            missing_params = [
-                name
-                for name, value in [
-                    ("--rest-url", rest_url),
-                    ("--mcp-url", mcp_url),
-                    ("--model", model),
-                    ("--agent-id", agent_id),
-                ]
-                if not value
-            ]
-
-            if missing_params:
-                click.echo(f"❌ Missing required parameters: {', '.join(missing_params)}", err=True)
-                click.echo(
-                    "   When using direct parameters, all of --rest-url, --mcp-url, --model, --agent-id are required",
-                    err=True,
-                )
-                sys.exit(1)
-
-            # Create SABERConfig from direct parameters
-            from .models import AgentAssignment
-
-            task_list = task_ids.split(",") if task_ids else ["*"]
-            task_list = [t.strip() for t in task_list]
-
-            # Ensure non-None values for required fields
-            if not agent_id or not model:
-                click.echo("❌ agent_id and model are required", err=True)
-                sys.exit(1)
-
-            agents = [AgentAssignment(id=agent_id, model=model, tasks=task_list, kwargs={})]
-
-            # Ensure URLs are not None (already validated above)
-            assert rest_url is not None
-            assert mcp_url is not None
-
-            # Set domain-aware log directory
-            default_log_dir = f"logs/{domain}/client-logs" if domain else "logs/client-logs"
-
-            saber_config = SABERConfig.create(
-                model=model,
-                rest_url=rest_url,
-                mcp_url=mcp_url,
-                agents=agents,
-                task_ids=task_list,
-                client_id="saber-client",
-                log_level="INFO",
-                log_dir=default_log_dir,
-                domain=domain,  # Pass domain for logging organization
-                ui_enabled=not no_ui,  # Invert no_ui flag
-                endpoint_timeout=None,  # Use defaults from inspect_ai
-                endpoint_max_retries=None,  # Use defaults from inspect_ai
-                endpoint_max_connections=None,  # Use defaults from inspect_ai
-            )
-
-            click.echo("🔧 Using direct configuration parameters")
-            config_file_path: Optional[Path] = None  # No config file when using direct params
-
-        else:
-            # Use config file approach
-            if config:
-                # Use explicitly provided config path
-                config_file_path = Path(config)
-                if not config_file_path.exists():
-                    click.echo(f"❌ Configuration file not found: {config}", err=True)
-                    sys.exit(1)
-            else:
-                # Look for saber.yaml in current directory
-                config_file_path = Path("saber.yaml")
-                if not config_file_path.exists():
-                    click.echo(
-                        "❌ No configuration file found. "
-                        "Please provide --config or create saber.yaml in current directory",
-                        err=True,
-                    )
-                    sys.exit(1)
-
-            try:
-                # Load config - supports auto mode without URLs
-                loaded_config: SABERConfig = SABERConfigLoader.load_from_file(config_file_path, domain=domain)
-                saber_config = loaded_config
-                click.echo(f"📋 Using configuration file: {config_file_path}")
-
-                # Apply --no-ui flag override to config
-                if no_ui:
-                    saber_config.ui_enabled = False
-                    click.echo("🎯 UI disabled via --no-ui flag")
-
-                # Support URL overrides for auto mode or runtime hydration
-                # This allows saber-domain test to inject runtime URLs
-                if rest_url or mcp_url:
-                    if not saber_config.session_config:
-                        # Config is in auto mode - create session config with provided URLs
-                        if not rest_url or not mcp_url:
-                            click.echo(
-                                "❌ Both --rest-url and --mcp-url are required when hydrating auto mode config",
-                                err=True,
-                            )
-                            sys.exit(1)
-
-                        from .models import SessionManagerConfig
-
-                        saber_config.session_config = SessionManagerConfig.from_urls(
-                            rest_url=rest_url,
-                            mcp_url=mcp_url,
-                            client_id=(
-                                saber_config.session_config.client_id if saber_config.session_config else "saber-client"
-                            ),
-                        )
-                        click.echo(f"🔗 Hydrated config with runtime URLs (REST: {rest_url}, MCP: {mcp_url})")
-                    else:
-                        # Config already has URLs - allow override
-                        if rest_url:
-                            saber_config.session_config.base_url = rest_url
-                            click.echo(f"🔗 Overriding REST URL: {rest_url}")
-                        if mcp_url:
-                            saber_config.session_config.mcp_server_url = mcp_url
-                            click.echo(f"🔗 Overriding MCP URL: {mcp_url}")
-
-            except Exception as e:
-                click.echo(f"❌ Failed to load configuration file: {e}", err=True)
-                sys.exit(1)
-
-    except Exception as config_exc:
-        click.echo(f"❌ Configuration error: {config_exc}", err=True)
-        sys.exit(1)
-
-    # Domain-aware configuration validation (only for config file mode)
-    if not use_direct_params and ((domain and domains_root) or validate_config):
-        if not domain or not domains_root:
-            click.echo("❌ Domain-aware validation requires both --domain and --domains-root options", err=True)
-            sys.exit(1)
-
-        try:
-            if verbose:
-                click.echo(f"🔍 Validating configuration against domain: {domain}")
-
-            # Load domain manifest
-            manifest = load_domain_manifest(domains_root, domain)
-
-            # Ensure config_file_path is not None
-            if config_file_path is None:
-                click.echo("❌ Config file path is required for validation", err=True)
-                sys.exit(1)
-
-            # Load client config as YAML for validation
-            client_config = load_client_config(config_file_path)
-
-            # Validate configuration
-            manifest_path = domains_root / domain / "domain.yaml"
-            validation_result = validate_client_config_against_manifest(
-                client_config, manifest, config_file_path, manifest_path
-            )
-
-            if not validation_result["valid"]:
-                click.echo("❌ Configuration validation failed:", err=True)
-                for error in validation_result["errors"]:
-                    click.echo(f"   • {error}", err=True)
-                sys.exit(1)
-
-            if verbose:
-                click.echo("✅ Configuration validation passed!")
-                domain_info = manifest.get("domain", {})
-                click.echo(f"   Domain: {domain_info.get('name', domain)}")
-                click.echo(f"   Schema Version: {manifest.get('schemaVersion')}")
-                click.echo()
-
-            # Add domain context to logger
-            logger.info(
-                "Domain-aware validation completed",
-                extra={
-                    "domain": domain,
-                    "domain_name": manifest.get("domain", {}).get("name"),
-                    "schema_version": manifest.get("schemaVersion"),
-                    "manifest_path": str(manifest_path),
-                    "validation_status": "passed",
-                },
-            )
-
-        except ClientConfigError as e:
-            click.echo(f"❌ Domain validation failed: {e}", err=True)
-            sys.exit(1)
-
-    try:
-        if saber_config.log_dir and not no_log_file:
-            override_path = Path(saber_config.log_dir)
-            logger.info(
-                "Applying log directory override from configuration",
-                extra={"log_dir": str(override_path)},
-            )
-            active_logging_config = setup_client_logging(
-                verbose=verbose,
-                enable_file=True,
-                log_dir_override=override_path,
-                domain=domain,
-            )
-            logger = get_saber_logger(LogCategory.HARNESS, __name__)
-            log_file_path = active_logging_config.log_dir / active_logging_config.file_name
-            click.echo(f"📝 Logs will be written to: {log_file_path}")
-
-        if not saber_config.agents:
-            logger.error(
-                "No agents configured in SABER configuration",
-                extra={"config_path": str(config_file_path)},
-            )
-            click.echo("❌ No agents found in configuration", err=True)
-            sys.exit(1)
-
-        logger.info(
-            "Loaded SABER configuration",
-            extra={"config_path": str(config_file_path)},
-        )
-        logger.info(
-            "Agent assignments loaded",
-            extra={"assignment_count": len(saber_config.agents)},
-        )
-        for assignment in saber_config.agents:
-            logger.info(
-                "Agent assignment configured",
-                extra={"agent_id": assignment.id, "tasks": assignment.tasks},
-            )
-        if saber_config.session_config:
-            logger.info(
-                "Session endpoints resolved",
-                extra={
-                    "rest_url": saber_config.session_config.base_url,
-                    "mcp_url": saber_config.session_config.mcp_server_url,
-                },
-            )
-        else:
-            logger.info("Session configuration not provided")
-
-    except Exception as exc:
-        logger.exception(
-            "Failed to load SABER configuration",
-            extra={"config_path": str(config_file_path), "error": str(exc)},
-        )
-        click.echo(f"❌ Error loading config file: {exc}", err=True)
-        sys.exit(1)
-
-    logger.info("Starting SABER eval_async execution")
-
-    click.echo(f"🚀 Starting SABER evaluation with {len(saber_config.agents)} agent assignments")
-    for assignment in saber_config.agents:
-        tasks_str = ", ".join(assignment.tasks) if assignment.tasks != ["*"] else "all tasks"
-        click.echo(f"   • {assignment.id} → {tasks_str}")
-
-    click.echo(f"📊 Server: {saber_config.session_config.base_url if saber_config.session_config else 'N/A'}")
-    click.echo(f"🔗 MCP: {saber_config.session_config.mcp_server_url if saber_config.session_config else 'N/A'}")
+    click.echo(click.style("\n⚠️  DEPRECATION WARNING", fg="yellow", bold=True))
+    click.echo(click.style("=" * 60, fg="yellow"))
+    click.echo()
+    click.echo("The 'saber.client run' command has been deprecated.")
+    click.echo("This command was part of the old 'saber-domain test' pathway.")
+    click.echo()
+    click.echo("Please use 'inspect eval' instead:")
     click.echo()
 
-    # Use the reusable evaluation runner for proper TUI integration
-    try:
-        from .runner import run_saber_evaluation
+    if domain:
+        click.echo(click.style(f"  uv run inspect eval domains/{domain} --model <your-model>", fg="green"))
+    else:
+        click.echo(click.style("  uv run inspect eval domains/<domain_name> --model <your-model>", fg="green"))
 
-        eval_log = run_saber_evaluation(saber_config, verbose=verbose)
+    click.echo()
+    click.echo("Examples:")
+    click.echo("  --model openai/azure/gpt-4")
+    click.echo("  --model anthropic/claude-3-opus")
+    click.echo()
+    click.echo("For more information:")
+    click.echo(click.style("  saber-domain test --help", fg="cyan"))
+    click.echo("  README.md - Getting started with inspect eval")
+    click.echo()
+    click.echo(click.style("=" * 60, fg="yellow"))
+    click.echo()
 
-        if eval_log:
-            logger.info("Evaluation completed successfully", extra={"status": eval_log.status})
-        else:
-            logger.info("Evaluation completed with no log returned")
-
-    except KeyboardInterrupt:
-        logger.info("User interrupted execution", extra={"event": "keyboard_interrupt"})
-        sys.exit(0)
-    except Exception as exc:
-        logger.exception("Unexpected error during execution", extra={"error": str(exc)})
-        click.echo(f"❌ Unexpected error: {exc}", err=True)
-        raise  # Re-raise for debugging
+    sys.exit(1)
 
 
 def main() -> None:

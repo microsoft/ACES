@@ -11,7 +11,7 @@ from enum import Enum
 class SubmissionEvaluationStrategy(str, Enum):
     """
     Enumeration of supported evaluation strategies for main task submissions.
-    
+
     These strategies are available for evaluating final task submissions:
     - STATIC: Pattern matching against expected answers
     - LLM_JUDGE: LLM-based evaluation using judge templates
@@ -20,7 +20,7 @@ class SubmissionEvaluationStrategy(str, Enum):
     STATIC = "static"
     """Static evaluation using pattern matching against expected answers"""
 
-    LLM_JUDGE = "llm_judge" 
+    LLM_JUDGE = "llm_judge"
     """LLM-based evaluation using judge templates and models"""
 
     def __str__(self) -> str:
@@ -31,10 +31,10 @@ class SubmissionEvaluationStrategy(str, Enum):
 class StepEvaluationStrategy(str, Enum):
     """
     Enumeration of supported evaluation strategies for subtask step evaluation.
-    
+
     These strategies are available for evaluating individual steps/subtasks:
     - STATIC: Pattern matching against expected outputs in step results
-    - LLM_JUDGE: LLM-based evaluation using judge templates  
+    - LLM_JUDGE: LLM-based evaluation using judge templates
     - TOOL_CALL: Evaluation based on tool call analysis and execution patterns
     """
 
@@ -56,13 +56,13 @@ class StepEvaluationStrategy(str, Enum):
 class EvaluationStrategy(str, Enum):
     """
     Legacy unified evaluation strategy enum.
-    
+
     DEPRECATED: Use SubmissionEvaluationStrategy or StepEvaluationStrategy instead.
     Kept for backwards compatibility only.
     """
 
     STATIC = "static"
-    LLM_JUDGE = "llm_judge" 
+    LLM_JUDGE = "llm_judge"
     TOOL_CALL = "tool_call"
 
     def __str__(self) -> str:
@@ -71,7 +71,7 @@ class EvaluationStrategy(str, Enum):
 
 # Backwards compatibility - provide the old constant names
 EVAL_STRATEGY_STATIC = SubmissionEvaluationStrategy.STATIC
-EVAL_STRATEGY_LLM_JUDGE = SubmissionEvaluationStrategy.LLM_JUDGE  
+EVAL_STRATEGY_LLM_JUDGE = SubmissionEvaluationStrategy.LLM_JUDGE
 EVAL_STRATEGY_TOOL_CALL = StepEvaluationStrategy.TOOL_CALL
 
 # Valid strategies for different evaluation types

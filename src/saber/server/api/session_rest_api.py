@@ -9,7 +9,7 @@ Logging category: REST_API.
 
 # Forward declaration to avoid circular imports
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional, List
+from typing import TYPE_CHECKING, List, Optional
 
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
@@ -23,12 +23,12 @@ from ...models import (
     EpisodeStatusResponse,
     EpisodeTaskResponse,
     EvalSubmission,
-    SubmissionEvaluationStrategy,
-    StepEvaluationStrategy,
     HealthResponse,
     PolicyResponse,
     SessionCreateResponse,
     SessionTerminateResponse,
+    StepEvaluationStrategy,
+    SubmissionEvaluationStrategy,
 )
 from ...models.rest.evaluation import (
     EpisodeStepData,
@@ -39,8 +39,8 @@ from ...models.rest.evaluation import (
     EvaluationResponse,
     EvaluationResultSubmission,
     EvaluationSummaryResponse,
-    SubtaskEvaluationCriteriaResponse,
     SubmissionEvaluationCriteriaResponse,
+    SubtaskEvaluationCriteriaResponse,
     TaskEvaluationContext,
     TemplateContentResponse,
 )
@@ -766,9 +766,9 @@ class SessionRestAPI:
                 if not task:
                     raise HTTPException(status_code=404, detail="Task not found")
 
-                '''if not task.step_evaluation_config:
+                """if not task.step_evaluation_config:
                     # Step evaluation is optional
-                    raise HTTPException(status_code=404, detail="Task has no step evaluation config")'''
+                    raise HTTPException(status_code=404, detail="Task has no step evaluation config")"""
 
                 # Build subtasks data with max_score
                 subtasks_data = [
@@ -777,7 +777,7 @@ class SessionRestAPI:
                         "title": st.title,
                         "description": st.description,
                         "objective": st.objective,
-                        "max_score": st.max_score,  # Direct field from SubTask
+                        "max_score": st.subtask_max_score,  # Direct field from SubTask
                         "subtask_strategy": st.subtask_strategy,
                         "subtask_weight": st.subtask_weight,
                         "subtask_criteria": st.subtask_criteria,
@@ -798,33 +798,39 @@ class SessionRestAPI:
                 for st in task.subtasks:
                     # If LLM strategy, fetch template content
                     if st.subtask_strategy == StepEvaluationStrategy.LLM_JUDGE:
-                        system_template_path = st.subtask_criteria.get("judge_system_template")
-                        user_template_path = st.subtask_criteria.get("judge_user_template")
+                        if st.subtask_criteria is not None:
+                            system_template_path = st.subtask_criteria.get("judge_system_template")
+                            user_template_path = st.subtask_criteria.get("judge_user_template")
 
-                    if system_template_path and user_template_path:
-                        try:
-                            system_content = self.session_manager.benchmark_manager.get_template_content(
-                                system_template_path
-                            )
-                            user_content = self.session_manager.benchmark_manager.get_template_content(
-                                user_template_path
-                            )
+                            if system_template_path and user_template_path:
+                                try:
+                                    system_content = self.session_manager.benchmark_manager.get_template_content(
+                                        system_template_path
+                                    )
+                                    user_content = self.session_manager.benchmark_manager.get_template_content(
+                                        user_template_path
+                                    )
 
-                            st.subtask_criteria["judge_system_template"] = system_content
-                            st.subtask_criteria["judge_user_template"] = user_content
-                        except Exception as e:
-                            logger.warning(
-                                f"Failed to load templates for step evaluation: {e}",
-                                extra={"system_path": system_template_path, "user_path": user_template_path},
-                            )
+                                    st.subtask_criteria["judge_system_template"] = system_content
+                                    st.subtask_criteria["judge_user_template"] = user_content
+                                except Exception as e:
+                                    logger.warning(
+                                        f"Failed to load templates for step evaluation: {e}",
+                                        extra={"system_path": system_template_path, "user_path": user_template_path},
+                                    )
                     subtask_evaluation_criteria_list.append(
                         SubtaskEvaluationCriteriaResponse(
                             session_id=session_id,
                             episode_id=episode_id,
                             task_id=task.task_id,
-                            strategy=st.subtask_strategy,
-                            criteria=st.subtask_criteria,
+                            subtask_id=st.subtask_id,
+                            strategy=st.subtask_strategy or "",
+                            criteria=st.subtask_criteria or {},
+                            max_score=st.subtask_max_score,
                             weight=st.subtask_weight,
+                            objective=st.objective,
+                            title=st.title,
+                            description=st.description,
                             task_context=task_context,
                         )
                     )
@@ -836,7 +842,9 @@ class SessionRestAPI:
                 log_operation_failure(
                     logger, "get_subtask_evaluation_criteria", exc, session_id=session_id, episode_id=episode_id
                 )
-                raise HTTPException(status_code=500, detail=f"Failed to get subtask evaluation criteria: {exc}") from exc
+                raise HTTPException(
+                    status_code=500, detail=f"Failed to get subtask evaluation criteria: {exc}"
+                ) from exc
 
         @self.app.get("/api/v1/templates/{template_path:path}")
         async def get_template_content_endpoint(template_path: str) -> TemplateContentResponse:

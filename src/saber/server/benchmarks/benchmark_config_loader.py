@@ -15,14 +15,14 @@ from ...logging_config import (
     log_operation_start,
     log_operation_success,
 )
+from ...models.constants import StepEvaluationStrategy  # noqa: F401
+from ...models.constants import SubmissionEvaluationStrategy  # noqa: F401
 from ...models.constants import (
-    SubmissionEvaluationStrategy,
-    StepEvaluationStrategy,
+    EVAL_STRATEGY_LLM_JUDGE,
     EVAL_STRATEGY_STATIC,
-    EVAL_STRATEGY_LLM_JUDGE, 
     EVAL_STRATEGY_TOOL_CALL,
-    VALID_SUBMISSION_EVAL_STRATEGIES,
     VALID_STEP_EVAL_STRATEGIES,
+    VALID_SUBMISSION_EVAL_STRATEGIES,
 )
 from .exceptions import InvalidTaskDefinitionException
 from .subtask import SubTask
@@ -104,6 +104,7 @@ EXCLUDED_CONFIG_FILES = [
 # Default scoring weights
 DEFAULT_WEIGHT = 1.0
 DEFAULT_MAX_SCORE = 1.0
+
 
 def deep_merge_dicts(base: Dict[str, Any], override: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """
@@ -1326,7 +1327,7 @@ class BenchmarkConfigLoader:
             subtask_strategy=subtask_strategy,  # Use validated strategy
             subtask_criteria=subtask_criteria,  # Use validated criteria
             subtask_weight=subtask_scoring.get(FIELD_WEIGHT, DEFAULT_WEIGHT),
-            subtask_max_score=subtask_scoring.get(FIELD_MAX_SCORE, DEFAULT_MAX_SCORE)
+            subtask_max_score=subtask_scoring.get(FIELD_MAX_SCORE, DEFAULT_MAX_SCORE),
         )
 
     def _validate_submission_evaluation_config(self, eval_config: Dict[str, Any], task_id: str) -> None:

@@ -1,7 +1,7 @@
-@startuml SABER Client Architecture - Current Implementation
+@startuml SABER Inspect AI Integration Architecture
 
 !theme plain
-title SABER Client Architecture - Current Implementation
+title SABER Inspect AI Integration - Current Architecture
 
 skinparam class {
     BackgroundColor lightblue
@@ -16,271 +16,238 @@ skinparam component {
     FontSize 10
 }
 
-package "SABER Client Infrastructure" {
+skinparam package {
+    BackgroundColor lightyellow
+    BorderColor black
+}
 
-    class SABEREvaluationOrchestrator {
-        +config: SABERConfig
-        +agent_manager: Optional[AgentManager]
-        +dataset_manager: Optional[DatasetManager]
-        +session_manager: Optional[ClientSessionManager]
-        +_initialized: bool
+package "Domain Task Layer" {
+    class "Domain Task File" as DomainTask <<Python Module>> {
         --
-        +__aenter__(): SABEREvaluationOrchestrator
-        +__aexit__(): void
-        +execute(): EvalLog
-        +_validate_config(): void
+        **Example: domains/cybench/cybench.py**
+        +@task decorator
+        +create_domain_task() factory
         --
-        **Async Context Management**
-        +_ensure_components_initialized(): void
-        +_cleanup_components(): void
+        **Entry Point**
+        - Discovered by inspect list tasks
+        - Invoked by inspect eval
     }
 
-    class AgentManager {
-        +config: SABERConfig
+    note right of DomainTask
+    **User Entry Point**
+
+    Command:
+      inspect eval domains/cybench --model openai/gpt-4
+
+    The task file defines the domain,
+    dataset, sandbox, and scoring.
+    end note
+}
+
+package "SABER Inspect AI Integration (saber/inspect_ai/)" {
+
+    class create_domain_task {
+        +domain_slug: str
+        +domains_root: Path
+        +default_agent: str
+        --
+        **Task Factory**
+        +Creates Inspect AI Task
+        +Manages SABER server lifecycle
+        +Loads dataset from server
+        +Configures sandbox environment
+        --
+        **Returns:** Callable[..., Task]
+    }
+
+    class SABERSandboxEnvironment {
+        +domain: str
+        +rest_port: int = 8000
+        +mcp_port: int = 8001
         +session_manager: ClientSessionManager
-        +agent_registry: SABERAgentRegistry
-        +_initialized: bool
+        +episode_id: Optional[str]
         --
-        +create_tasks(): List[Task]
-        +__aenter__(): AgentManager
-        +__aexit__(): void
+        +setup(): SandboxEnvironmentSpec
+        +exec(): ExecResult
+        +__call__(): tuple[str, SandboxEnvironmentSpec]
         --
-        **Agent Integration**
-        +_resolve_agent_for_task(): Agent
-        +_create_inspect_ai_tasks(): List[Task]
+        **Sandbox Lifecycle**
+        +_start_domain_server(): void
+        +_stop_domain_server(): void
+        +_create_episode(): str
+        +_cleanup_episode(): void
     }
 
-    class DatasetManager {
-        +config: SABERConfig
+    class create_saber_dataset {
         +session_manager: ClientSessionManager
-        +benchmark_info: Optional[BenchmarkInfo]
-        +task_dataset: Optional[List[Sample]]
-        +_initialized: bool
+        +task_filter: Optional[str]
         --
-        +create_dataset(): List[Sample]
-        +__aenter__(): DatasetManager
-        +__aexit__(): void
+        **Dataset Factory**
+        +Fetches tasks from SABER server
+        +Creates inspect_ai.Sample instances
+        +Adds SABER metadata
         --
-        **Dataset Creation**
-        +_fetch_benchmark_info(): BenchmarkInfo
-        +_create_task_samples(): List[Sample]
+        **Returns:** List[Sample]
     }
+
+    class saber_scorer {
+        +session_manager: ClientSessionManager
+        --
+        **Scorer Implementation**
+        +Retrieves evaluation from server
+        +Creates inspect_ai.Score
+        +Includes submission + step scores
+        --
+        **Returns:** Scorer
+    }
+
+    class context_injection {
+        --
+        **Context Injection System**
+        +saber_tool_params()
+        +saber_execute_tools()
+        +extract_assistant_content()
+        +extract_reasoning_content()
+        --
+        **Patches Inspect AI**
+        - Injects assistant message context
+        - Injects reasoning content (o1/o3)
+        - Thread-safe with contextvars
+    }
+}
+
+package "Client Session Layer (saber/client/)" {
 
     class ClientSessionManager {
         +config: SessionManagerConfig
-        +base_url: str
-        +client_id: str
-        +timeout: float
+        +rest_client: SABERRestClient
         +_current_session_id: Optional[str]
         --
         +create_session(): str
         +terminate_session(): bool
-        +get_tasks(): List[TaskInfo]
         +create_episode(): EpisodeCreateResponse
+        +get_tasks(): List[TaskInfo]
         +get_policy_response(): PolicyResponse
-        +__aenter__(): ClientSessionManager
-        +__aexit__(): void
+        +submit_evaluation(): EvaluationResponse
         --
         **Session Lifecycle**
-        +_make_request(): Dict[str, Any]
-        +_handle_response(): Any
+        +__aenter__() / __aexit__()
     }
 
-    package "API Client Layer" {
-        class SABERRestClient {
-            +saber_server_url: str
-            +client_id: str
-            +request_timeout: aiohttp.ClientTimeout
-            --
-            +get_benchmark_info(): BenchmarkInfo
-            +create_session(): str
-            +create_episode(): EpisodeCreateResponse
-            +terminate_session(): bool
-            +get_task_info(): TaskInfo
-            +get_policy_info(): PolicyResponse
-            +health_check(): Dict[str, Any]
-            --
-            **HTTP Operations**
-            +_make_request(): Dict[str, Any]
-            +_handle_response(): Any
-        }
-    }
-
-    package "Agent System" {
-        class SABERAgentRegistry {
-            +_agents: Dict[str, Any]
-            --
-            +register_agent(): void
-            +get_agent(): Agent
-            +list_agents(): List[str]
-            --
-            **Agent Discovery**
-            +_discover_agents(): void
-        }
-
-        class SABERAgentFactory {
-            +registry: SABERAgentRegistry
-            --
-            +create_agent(): Agent
-            +get_available_agents(): List[str]
-            --
-            **Agent Creation**
-            +_resolve_agent_type(): str
-            +_create_agent_instance(): Agent
-        }
-    }
-
-    package "Inspect AI Integration" {
-        class saber_dataset {
-            --
-            **Dataset Factory Function**
-            +create_saber_dataset(): Dataset
-            --
-            **Features**
-            - Creates inspect_ai.Sample from TaskInfo
-            - Adds SABER metadata to samples
-            - Type-safe task conversion
-        }
-
-        class saber_agent {
-            --
-            **Agent Factory Function**
-            +saber_agent(): Agent
-            --
-            **SABER Integration**
-            - Uses mcp_server_http() for tools
-            - Dynamic policy fetching
-            - Session and episode management
-        }
-
-        class saber_scorer {
-            --
-            **Scorer Factory Function**
-            +saber_scorer(): Scorer
-            --
-            **Scoring Logic**
-            - Integration with SABER server evaluation
-            - Custom scoring for security tasks
-            - Results persistence
-        }
-
-        class run_saber_eval_async {
-            --
-            **Main Entry Point**
-            +run_saber_eval_async(): EvalLog
-            --
-            **Features**
-            - eval_async compatible interface
-            - Uses SABEREvaluationOrchestrator
-            - Automatic resource management
-        }
-    }
-
-    package "Configuration and Models" {
-        class SABERConfig {
-            +agent_assignments: List[AgentAssignment]
-            +server_url: str = "http://localhost:8000"
-            +mcp_server_url: str = "http://localhost:8001"
-            +task_ids: Optional[List[str]]
-            +log_level: str = "INFO"
-            +max_steps: int = 50
-            +log_dir: Optional[str]
-            +session_log_dir: Optional[str]
-            --
-            **Validation**
-            +validate(): void
-            +to_session_config(): SessionManagerConfig
-        }
-
-        class SessionManagerConfig {
-            +base_url: str
-            +client_id: str = "saber_client"
-            +rest_timeout: float = 30.0
-            +mcp_server_url: str
-            --
-            **Factory Methods**
-            +from_urls(): SessionManagerConfig
-        }
-
-        class AgentAssignment {
-            +agent_id: str
-            +task_ids: Optional[List[str]]
-            +agent_kwargs: Dict[str, Any]
-            --
-            **Task Assignment**
-            +applies_to_task(): bool
-        }
-    }
-
-    class CLI {
+    class SABERRestClient {
+        +base_url: str
+        +timeout: float
         --
-        +main(): void
-        +setup_client_logging(): void
-        +_parse_arguments(): argparse.Namespace
-        +_run_evaluation(): EvalLog
+        +get_benchmark_info(): BenchmarkInfo
+        +create_session(): SessionCreateResponse
+        +create_episode(): EpisodeCreateResponse
+        +get_evaluation(): EvaluationResponse
+        +health_check(): Dict[str, Any]
+        --
+        **HTTP Client**
+        - aiohttp based
+        - Fail-fast error handling
+    }
+
+    class SessionManagerConfig {
+        +base_url: str
+        +client_id: str
+        +rest_timeout: float
+        --
+        **Configuration**
+        +from_urls() factory
+        +from_env() factory
     }
 }
 
-' Core Relationships
-SABEREvaluationOrchestrator *-- AgentManager
-SABEREvaluationOrchestrator *-- DatasetManager
-SABEREvaluationOrchestrator *-- ClientSessionManager
-AgentManager *-- SABERAgentRegistry
-AgentManager ..> SABERAgentFactory : uses
-ClientSessionManager ..> SABERRestClient : uses
+package "Domain Server Layer (saber/domain/)" {
+    class DomainController {
+        +domain_slug: str
+        +domains_root: Path
+        +process: Optional[subprocess.Popen]
+        --
+        +start_server(): void
+        +stop_server(): void
+        +is_running(): bool
+        +health_check(): bool
+        --
+        **Server Lifecycle Management**
+        - Launches saber-domain start
+        - Health monitoring
+        - Graceful shutdown
+    }
+}
 
-' Inspect AI Integration
-run_saber_eval_async ..> SABEREvaluationOrchestrator : orchestrates
-saber_dataset ..> ClientSessionManager : fetches tasks
-saber_agent ..> ClientSessionManager : gets policy/context
-saber_scorer ..> ClientSessionManager : evaluation
+' Relationships
+DomainTask ..> create_domain_task : uses
+create_domain_task *-- SABERSandboxEnvironment : creates
+create_domain_task ..> create_saber_dataset : uses
+create_domain_task ..> saber_scorer : uses
+create_domain_task ..> DomainController : manages
 
-' Configuration
-SABEREvaluationOrchestrator ..> SABERConfig : uses
-SABERConfig *-- AgentAssignment
-SABERConfig ..> SessionManagerConfig : converts to
-ClientSessionManager ..> SessionManagerConfig : uses
+SABERSandboxEnvironment *-- ClientSessionManager : uses
+SABERSandboxEnvironment ..> context_injection : applies patches
+create_saber_dataset ..> ClientSessionManager : uses
+saber_scorer ..> ClientSessionManager : uses
 
-' CLI orchestration
-CLI ..> run_saber_eval_async : calls
+ClientSessionManager *-- SABERRestClient : uses
+ClientSessionManager ..> SessionManagerConfig : configured by
 
-' External communication
-SABERRestClient ..> "SABER Server" : "HTTP REST API"
-saber_agent ..> "SABER Server" : "MCP via mcp_server_http()"
+DomainController ..> "SABER Server" : launches/manages
 
-note top of SABEREvaluationOrchestrator
-**SABER Evaluation Orchestrator - Main Entry Point**
-- Async context manager for proper resource management
-- Upfront configuration validation with fail-fast design
-- Component lifecycle management (Agent, Dataset, Session managers)
-- BREAKING CHANGE: No backwards compatibility with old patterns
-- Uses inspect_ai framework for agent evaluation
+SABERRestClient ..> "SABER Server REST API" : HTTP calls
+SABERSandboxEnvironment ..> "SABER Server MCP API" : tool execution
+
+note top of create_domain_task
+**Domain Task Factory**
+
+Creates the Inspect AI Task with:
+- Dataset loaded from SABER server
+- SABERSandboxEnvironment for tool execution
+- SABER scorer for evaluation
+- Domain server lifecycle management
+
+Called by domain task files to create
+discoverable Inspect AI tasks.
 end note
 
-note right of ClientSessionManager
-**Session Management - REST API Only**
-- Pure aiohttp REST client (no MCP client management)
-- Session creation and episode management
-- Policy and task information retrieval
-- Automatic session cleanup on exit
-- MCP handled by inspect_ai's mcp_server_http()
+note right of SABERSandboxEnvironment
+**SABER Sandbox Environment**
+
+Implements Inspect AI SandboxEnvironment protocol:
+- Manages SABER domain server lifecycle
+- Creates/manages episodes per sample
+- Provides MCP tool execution
+- Handles context injection for agent messages
+- Automatic cleanup on completion
+
+This is the bridge between Inspect AI
+and SABER's security testing infrastructure.
 end note
 
-note left of saber_agent
-**Inspect AI Native MCP Integration**
-- Uses inspect_ai's mcp_server_http() for tools
-- Dynamic policy fetching from SABER server
-- Session and episode context management
-- No custom MCP client needed
+note left of ClientSessionManager
+**Client Session Manager**
+
+Manages communication with SABER server:
+- REST API for session/episode management
+- Task and policy information retrieval
+- Evaluation submission and retrieval
+- Async context manager for cleanup
+
+Used by all Inspect AI integration components.
 end note
 
-note bottom of SABERConfig
-**Configuration Model**
-- Agent assignment based configuration
-- Support for multiple agents per evaluation
-- Environment variable support
-- Conversion to component-specific configs
-- Fail-fast validation on initialization
+note bottom of context_injection
+**Context Injection System**
+
+Patches Inspect AI's tool execution to inject:
+- Assistant message content (what agent said)
+- Reasoning content (o1/o3 model internal reasoning)
+
+This context is sent to SABER tools via
+special parameters for evaluation and logging.
+
+Thread-safe via contextvars for concurrent evals.
 end note
 
 @enduml

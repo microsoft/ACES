@@ -182,100 +182,93 @@ package "SABER Server Side" {
     }
 }
 
-package "SABER Client Side" {
+package "SABER Client Side - Inspect AI Integration" {
 
-    class SABEREvaluationOrchestrator {
-        +config: SABERConfig
-        +_exit_stack: Optional[AsyncExitStack]
-        +_session_manager: Optional[ClientSessionManager]
-        +_agent_manager: Optional[AgentManager]
-        +_dataset_manager: Optional[DatasetManager]
-        +_validated: bool
+    class "Domain Task File" as DomainTask {
         --
-        +__aenter__(): SABEREvaluationOrchestrator
-        +__aexit__(): void
-        +execute(): EvalLog
-        +_validate_config(): void
-        +_test_server_connectivity(): void
-        +_initialize_shared_session_manager(): ClientSessionManager
-        +_initialize_agent_manager(): AgentManager
-        +_initialize_dataset_manager(): DatasetManager
-        +_upload_eval_files(): List[str]
+        **Example: domains/cybench/cybench.py**
+        +@task decorator
+        +create_domain_task() factory
+        --
+        **Entry Point**
+        +Discovered by inspect list tasks
+        +Invoked by inspect eval
     }
 
-    class AgentManager {
-        +config: SABERConfig
-        +session_manager: ClientSessionManager
-        +task_agent_resolver: TaskAgentResolver
-        +_agent_cache: Dict[str, Any]
+    class create_domain_task {
+        +domain_slug: str
+        +domains_root: Path
         --
-        +create_tasks(): List[Task]
-        +resolve_agent_for_sample(sample: Sample): str
-        +get_agent_info(agent_id: str): AgentInfo
-        +__aenter__(): AgentManager
-        +__aexit__(): void
+        **Task Factory**
+        +Creates Inspect AI Task
+        +Manages server lifecycle
+        +Loads dataset
+        +Configures sandbox
     }
 
-    class DatasetManager {
-        +config: SABERConfig
+    class SABERSandboxEnvironment {
+        +domain: str
         +session_manager: ClientSessionManager
-        +benchmark_info: Optional[BenchmarkInfo]
-        +task_dataset: Optional[List[Sample]]
+        +episode_id: Optional[str]
         --
-        +create_dataset(): List[Sample]
-        +_create_samples_from_tasks(): List[Sample]
-        +__aenter__(): DatasetManager
-        +__aexit__(): void
+        +setup(): SandboxEnvironmentSpec
+        +exec(): ExecResult
+        +__call__(): tuple
+        --
+        **Sandbox Lifecycle**
+        +_start_domain_server()
+        +_create_episode()
+        +_cleanup_episode()
+    }
+
+    class create_saber_dataset {
+        +session_manager: ClientSessionManager
+        +task_filter: Optional[str]
+        --
+        **Dataset Factory**
+        +Fetches tasks from server
+        +Creates inspect_ai.Sample instances
+    }
+
+    class saber_scorer {
+        +session_manager: ClientSessionManager
+        --
+        **Scorer Implementation**
+        +Retrieves evaluation from server
+        +Creates inspect_ai.Score
     }
 
     class ClientSessionManager {
         +config: SessionManagerConfig
-        +base_url: str
-        +client_id: str
-        +timeout: float
+        +rest_client: SABERRestClient
         +_current_session_id: Optional[str]
         --
         +create_session(): str
-        +terminate_session(session_id: str): bool
-        +get_benchmark_info(): BenchmarkInfo
-        +create_episode(session_id: str, task_id: str): EpisodeCreateResponse
-        +end_episode(session_id: str, episode_id: str, reason: str): EpisodeEndResponse
-        +get_task_info(session_id: str): TaskInfo
-        +get_policy_response(session_id: str): PolicyResponse
-        +get_evaluation_criteria(session_id: str, episode_id: str): EvaluationCriteriaResponse
-        +override_evaluation(session_id: str, episode_id: str, request: EvaluationOverrideRequest): EvaluationOverrideResponse
-        +upload_evaluation_file(session_id: str, episode_id: str, file_path: str): EvaluationFileUploadResponse
-        +health_check(): Dict[str, Any]
+        +terminate_session(): bool
+        +create_episode(): EpisodeCreateResponse
+        +get_tasks(): List[TaskInfo]
+        +get_policy_response(): PolicyResponse
+        +submit_evaluation(): EvaluationResponse
     }
 
     class SABERRestClient {
-        +saber_server_url: str
-        +request_timeout: float
+        +base_url: str
+        +timeout: float
         --
         +get_benchmark_info(): BenchmarkInfo
+        +create_session(): SessionCreateResponse
+        +create_episode(): EpisodeCreateResponse
+        +get_evaluation(): EvaluationResponse
         +health_check(): Dict[str, Any]
-        +get_evaluation(session_id: str, episode_id: str): EvaluationResponse
-        +list_evaluations(session_id: str, task_id: Optional[str]): EvaluationListResponse
-        +get_evaluation_summary(session_id: str): EvaluationSummaryResponse
-        +_make_request(method: str, endpoint: str, **kwargs): Any
     }
 
-    class CLI {
+    class DomainController {
+        +domain_slug: str
+        +process: Optional[subprocess.Popen]
         --
-        +main(): void
-        +run_command(config_path: Optional[str], verbose: bool, no_log_file: bool): void
-        +inspect_logs_command(log_path: str, format: str): void
-        +load_environment_file(env_file_path: Optional[Path], verbose: bool): void
-        +load_domain_manifest(domains_root: Path, domain: str): Dict[str, Any]
-        +load_client_config(config_path: Path): Dict[str, Any]
-    }
-
-    class run_saber_eval_async {
-        --
-        +run_saber_eval_async(config: Union[SABERConfig, str, Path], env_file: Optional[Path]): EvalLog
-        +discover_session_log_files(session_log_dir: str, session_id: str): List[str]
-        +upload_file_with_retry(session_manager: Any, session_id: str, file_path: str): Dict
-        +_load_config_from_path(config_path: Path, env_file: Optional[Path]): SABERConfig
+        +start_server(): void
+        +stop_server(): void
+        +health_check(): bool
     }
 }
 
@@ -292,17 +285,24 @@ SessionManager *-- SessionMCPAPI
 EvaluationManager *-- SessionEvaluationService : provides store
 
 ' Client Internal Relationships
-SABEREvaluationOrchestrator *-- AgentManager
-SABEREvaluationOrchestrator *-- DatasetManager
-SABEREvaluationOrchestrator *-- ClientSessionManager
-ClientSessionManager ..> SABERRestClient : uses
-CLI ..> SABEREvaluationOrchestrator : orchestrates
-run_saber_eval_async ..> SABEREvaluationOrchestrator : creates and manages
+DomainTask ..> create_domain_task : uses
+create_domain_task *-- SABERSandboxEnvironment : creates
+create_domain_task ..> create_saber_dataset : uses
+create_domain_task ..> saber_scorer : uses
+create_domain_task ..> DomainController : manages
+
+SABERSandboxEnvironment *-- ClientSessionManager : uses
+create_saber_dataset ..> ClientSessionManager : uses
+saber_scorer ..> ClientSessionManager : uses
+
+ClientSessionManager *-- SABERRestClient : uses
+DomainController ..> SessionManager : launches/manages
 
 ' Client-Server Communication
 ClientSessionManager ..> SessionRestAPI : "HTTP REST API calls"
-ClientSessionManager ..> SessionMCPAPI : "MCP protocol via inspect_ai"
+SABERSandboxEnvironment ..> SessionMCPAPI : "MCP tool execution"
 SABERRestClient ..> SessionRestAPI : "Direct HTTP calls"
+DomainController ..> SessionManager : "Process management"
 
 note top of SessionManager
 **SABER Domain Server & Session Manager - Current Implementation**
@@ -328,38 +328,51 @@ note top of ExecutionManager
 - Health checks and comprehensive error handling with fail-fast principles
 end note
 
-note left of SABEREvaluationOrchestrator
-**SABER Evaluation Orchestrator - Current Implementation**
-- Top-level orchestration component with async context manager lifecycle
-- Manages component lifecycle with proper resource management and fail-fast error handling
-- Uses inspect_ai framework for agent evaluation with native SABER integration
-- Provides upfront configuration validation and server connectivity testing
-- Coordinates AgentManager, DatasetManager, and ClientSessionManager with shared resources
-- Supports evaluation file upload and retrieval from server
-- Entry point via run_saber_eval_async function for inspect_ai compatibility
-- BREAKING CHANGE: No backwards compatibility - clean async architecture only
+note left of create_domain_task
+**Domain Task Factory - Inspect AI Integration**
+
+Entry point for SABER evaluations via Inspect AI:
+- Creates Inspect AI Task with SABER components
+- Manages domain server lifecycle (start/stop)
+- Loads dataset from SABER server via create_saber_dataset()
+- Configures SABERSandboxEnvironment for tool execution
+- Attaches saber_scorer for evaluation
+- Supports task filtering and agent configuration
+
+Used by domain task files (e.g., cybench.py, excytin.py)
+to create discoverable Inspect AI tasks.
+
+Command: inspect eval domains/<domain> --model <model>
 end note
 
 note top of ClientSessionManager
 **SABER Client Session Manager - Current Implementation**
-- Manages HTTP session lifecycle with SABER server via REST API
-- Supports session creation, episode management, policy retrieval, and evaluation operations
-- Direct integration with evaluate criteria retrieval and evaluation file upload
-- MCP tool execution handled natively by inspect_ai via mcp_server_http()
-- Implements fail-fast error handling with structured exceptions and proper timeouts
-- Stateless design with per-request authentication and comprehensive error reporting
-- Thread-safe execution with proper resource cleanup
+
+Manages HTTP session lifecycle with SABER server:
+- Session creation and episode management via REST API
+- Task and policy information retrieval
+- Evaluation submission and retrieval
+- MCP tool execution handled by Inspect AI's mcp_server_http()
+- Fail-fast error handling with structured exceptions
+- Async context manager for proper resource cleanup
+- Used by SABERSandboxEnvironment, dataset, and scorer
+
+No custom MCP client - Inspect AI handles MCP natively.
 end note
 
-note bottom of run_saber_eval_async
-**Main Entry Point Function - inspect_ai Integration**
-- Primary entry point for SABER evaluations compatible with inspect_ai framework
-- Loads configuration from file or SABERConfig object with environment variable support
-- Creates and manages SABEREvaluationOrchestrator with proper async context handling
-- Handles evaluation file discovery and upload with retry logic
-- Returns native inspect_ai EvalLog for compatibility with inspect_ai tooling
-- Supports both programmatic and CLI usage patterns
-- Clean separation between SABER orchestration and inspect_ai evaluation execution
+note bottom of SABERSandboxEnvironment
+**SABER Sandbox Environment - Inspect AI Bridge**
+
+Implements Inspect AI SandboxEnvironment protocol:
+- Manages SABER domain server lifecycle
+- Creates and manages episodes per evaluation sample
+- Provides MCP tool execution via Inspect AI
+- Handles context injection for agent messages
+- Automatic episode cleanup on sample completion
+- Stores episode_id in Inspect AI's global store
+
+This is the bridge between Inspect AI's agent framework
+and SABER's security testing infrastructure.
 end note
 
 @enduml

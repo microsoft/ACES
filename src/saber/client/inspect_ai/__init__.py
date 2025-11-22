@@ -1,42 +1,19 @@
-"""SABER × Inspect AI Integration
+"""SABER × Inspect AI Integration - Deprecated Import Location
 
-Low-level inspect_ai specific implementations and utilities.
-This module should only be imported by SABER internals, not by end users.
+This module is deprecated. Imports have been moved to saber.inspect_ai.
+For backwards compatibility, we re-export from the new location.
 
-For public SABER agent API, use:
-    from saber.client import SABERAgentRegistry, SABERAgentFactory
+Deprecated: Import from saber.inspect_ai instead of saber.client.inspect_ai
 """
 
-# Import SABER agent registrations to trigger decorator execution
-from . import saber_agent  # This triggers SABER agent registration decorators
-
-# Low-level inspect_ai implementation registry (internal use only)
-from .agent_implementations import InspectAIImplementationRegistry, register_inspect_ai_implementation
-
-# Context injection exports (monkey-patching happens automatically on import)
-from .context_injection import saber_execute_tools
-
-# Dataset and evaluation exports
-from .saber_dataset import create_saber_dataset
-
-# Main eval_async integration exports
-from .saber_eval_async import run_saber_eval_async
-
-# Scorer exports
-from .saber_scorer import saber_scorer
+# Re-export from new location for backwards compatibility
+from saber.inspect_ai import create_saber_dataset, saber_scorer
+from saber.inspect_ai.context_injection import _get_context, saber_execute_tools, saber_tool_params
 
 __all__ = [
-    # Agent registrations (triggers decorators)
-    "saber_agent",
-    # Low-level implementation registry (internal)
-    "InspectAIImplementationRegistry",
-    "register_inspect_ai_implementation",
-    # Main eval_async integration
-    "run_saber_eval_async",
-    # Dataset and evaluation
     "create_saber_dataset",
-    # Context injection (automatic via monkey-patch)
-    "saber_execute_tools",
-    # Scorer
     "saber_scorer",
+    "_get_context",
+    "saber_execute_tools",
+    "saber_tool_params",
 ]

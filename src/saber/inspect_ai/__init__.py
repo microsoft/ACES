@@ -27,6 +27,8 @@ from ..logging_config import LogCategory, get_saber_logger
 # TODO: Migrate to scoped patching using saber_context_injection_patch() context manager
 from .context_injection import saber_execute_tools, saber_tool_params
 from .saber import SABERSandboxEnvironment, SandboxError
+from .saber_dataset import create_saber_dataset
+from .saber_scorer import saber_scorer
 from .tasks import create_domain_task
 from .tools import SABERToolSource, saber_tools
 
@@ -52,4 +54,6 @@ __all__ = [
     "SABERToolSource",
     "saber_tools",
     "create_domain_task",
+    "create_saber_dataset",
+    "saber_scorer",
 ]

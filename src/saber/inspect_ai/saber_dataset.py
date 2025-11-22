@@ -24,14 +24,14 @@ from typing import List
 
 from inspect_ai.dataset import Sample
 
-from ...logging_config import (
+from ..logging_config import (
     LogCategory,
     get_saber_logger,
     log_operation_failure,
     log_operation_start,
     log_operation_success,
 )
-from ...models import TaskInfo
+from ..models import TaskInfo
 
 logger = get_saber_logger(LogCategory.HARNESS, __name__)
 

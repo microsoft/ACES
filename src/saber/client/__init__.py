@@ -5,16 +5,13 @@ Client-side harness and utilities for running agent benchmarks against a SABER s
 using containerized agent execution with a shared MCP sidecar.
 
 Programmatic usage:
-    from saber.client import SABERHarness, SABERHarnessConfig
+    from saber.client import SABERRestClient
 
-    config = SABERHarnessConfig(server_url="http://localhost:8000")
-    harness = SABERHarness(config)
-    await harness.initialize(my_agent)
-    results = await harness.run()
+    client = SABERRestClient(server_url="http://localhost:8000")
+    # Use client for API calls
 """
 
 from ..models import BenchmarkInfo, PolicyInfo, SessionInfo, StepResponse, TaskInfo
-from .agent import AgentManager, SABERAgentFactory, SABERAgentRegistry, register_saber_agent
 from .api import SABERRestClient
 from .models import SABERConfig
 
@@ -23,11 +20,6 @@ __all__ = [
     "SABERConfig",
     # API client
     "SABERRestClient",
-    # Agent registry and factory (main public API)
-    "SABERAgentRegistry",
-    "SABERAgentFactory",
-    "register_saber_agent",
-    "AgentManager",
     # API models
     "StepResponse",
     "TaskInfo",
