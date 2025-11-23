@@ -1,0 +1,159 @@
+@startuml Task Handler Class Diagram
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam handwritten false
+skinparam defaultFontName Arial
+
+title Task Handler Architecture\n(Polymorphic Episode Lifecycle Management)
+
+package "saber.models" {
+  abstract class BenchmarkTask {
+    +task_type: str
+    +benchmark_task_id: str
+    +execution_mode: TaskExecutionMode
+    +episode_attempts: int
+    --
+    {abstract} +get_task_ids(): List[str]
+    {abstract} +get_total_episodes(): int
+    {abstract} +matches_filter(pattern: str): bool
+  }
+  
+  class SingleEpisodeTask {
+    +task_type: "single"
+    +task_id: str
+    +domain: str
+    +title: str
+    +max_steps: int
+    +instruction_prompt: str
+    +assistant_prompt: str
+    +submit_prompt: str
+    --
+    +get_task_ids(): List[str]
+    +get_total_episodes(): int
+    +matches_filter(pattern): bool
+  }
+  
+  class OrchestratedTask {
+    +task_type: "orchestrated"
+    +orchestration_strategy: OrchestrationStrategy
+    +sub_tasks: List[SubTaskDefinition]
+    +orchestration_config: Dict
+    --
+    +get_task_ids(): List[str]
+    +get_total_episodes(): int
+    +matches_filter(pattern): bool
+  }
+  
+  class SubTaskDefinition {
+    +task_id: str
+    +role: str
+    +order: int
+    +depends_on_role: str | None
+    +domain: str
+    +instruction_prompt: str
+    +assistant_prompt: str
+    +submit_prompt: str
+    +max_steps: int
+  }
+  
+  enum TaskExecutionMode {
+    SINGLE
+    ORCHESTRATED
+  }
+  
+  enum OrchestrationStrategy {
+    SEQUENTIAL_PAIRED
+    PARALLEL
+    CONDITIONAL
+  }
+}
+
+package "saber.inspect_ai.task_handlers" {
+  abstract class BenchmarkTaskHandler {
+    #_semaphore_acquired: bool
+    #_acquired_semaphore_ref: Semaphore
+    #_cleanup_error_count: int
+    #_cleanup_lock: asyncio.Lock
+    --
+    +__del__(): void
+    {abstract} +initialize(): Dict[str, Any]
+    {abstract} +cleanup(): CleanupResult
+  }
+  
+  class SingleEpisodeTaskHandler {
+    --
+    +initialize(task, session_id, session_manager, semaphore): Dict
+    +cleanup(state, session_id, session_manager, semaphore): CleanupResult
+  }
+  
+  class OrchestratedTaskHandler {
+    --
+    +initialize(task, session_id, session_manager, semaphore): Dict
+    +cleanup(state, session_id, session_manager, semaphore): CleanupResult
+  }
+  
+  class CleanupResult <<dataclass>> {
+    +success: bool
+    +error_count: int
+    +errors: List[str]
+    +semaphore_released: bool
+    +threshold_exceeded: bool
+    --
+    +has_errors: bool @property
+  }
+  
+  class "get_benchmark_task_handler()" as Factory {
+    +get_benchmark_task_handler(task: BenchmarkTask): BenchmarkTaskHandler
+  }
+}
+
+' Relationships
+BenchmarkTask <|-- SingleEpisodeTask
+BenchmarkTask <|-- OrchestratedTask
+OrchestratedTask *-- "1..*" SubTaskDefinition : contains
+BenchmarkTask ..> TaskExecutionMode : uses
+OrchestratedTask ..> OrchestrationStrategy : uses
+
+BenchmarkTaskHandler <|-- SingleEpisodeTaskHandler
+BenchmarkTaskHandler <|-- OrchestratedTaskHandler
+BenchmarkTaskHandler ..> CleanupResult : returns
+Factory ..> BenchmarkTaskHandler : creates
+Factory ..> SingleEpisodeTask : inspects
+Factory ..> OrchestratedTask : inspects
+
+note right of BenchmarkTaskHandler::__del__
+  **Semaphore Leak Detection**
+  Logs critical error if handler
+  destroyed without cleanup()
+end note
+
+note bottom of SingleEpisodeTaskHandler
+  **Handles 1 Episode:**
+  - Acquire semaphore
+  - Create episode
+  - Wait for ready
+  - (Agent executes externally)
+  - End episode
+  - Release semaphore
+end note
+
+note bottom of OrchestratedTaskHandler
+  **Handles N Episodes (1 Semaphore):**
+  - Acquire ONE semaphore slot
+  - Create episodes sequentially
+    (dependency order)
+  - Wait for each to be ready
+  - (Agents execute externally)
+  - End all episodes
+  - Release ONE semaphore slot
+end note
+
+note top of Factory
+  **Polymorphic Dispatch:**
+  isinstance(task, SingleEpisodeTask)
+    → SingleEpisodeTaskHandler
+  isinstance(task, OrchestratedTask)
+    → OrchestratedTaskHandler
+end note
+
+@enduml

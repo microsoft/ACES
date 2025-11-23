@@ -25,7 +25,7 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
-from saber.server.base import Action, CommandResult
+from saber.server.base import Action, CommandResult, EpisodeState
 from saber.server.session_manager import SessionManager
 
 
@@ -88,6 +88,7 @@ class TestSessionManagerIntegration:
         mock_episode = MagicMock()
         mock_episode.episode_id = "episode_123"
         mock_episode.task_id = "task_456"
+        mock_episode.state = EpisodeState.READY
         mock_episode.is_complete = False
         mock_episode.steps = []  # Start with empty steps
 
@@ -116,6 +117,8 @@ class TestSessionManagerIntegration:
         manager.episode_manager.start_episode.return_value = mock_episode
         # Also mock get_current_episode for execute_action calls
         manager.episode_manager.get_current_episode.return_value = mock_episode
+        # Mock get_episode_by_id for execute_action validation
+        manager.episode_manager.get_episode_by_id.return_value = mock_episode
         # Mock step method to return the proper StepResult objects
         from saber.server.episodes.episode_manager import StepResult
         step_result1 = StepResult(step=mock_step1, should_terminate=False, termination_reason=None)
@@ -285,6 +288,13 @@ class TestSessionManagerErrorHandling:
         # Add episode to session's active episodes (replacing current_episode_id)
         session.add_active_episode("episode_123")
 
+        # Mock episode manager to return a proper episode object
+        from saber.server.base import EpisodeState
+        mock_episode_obj = MagicMock()
+        mock_episode_obj.episode_id = "episode_123"
+        mock_episode_obj.state = EpisodeState.READY
+        manager.episode_manager.get_episode_by_id = MagicMock(return_value=mock_episode_obj)
+
         # Mock execution manager to fail
         manager.execution_manager.step.side_effect = Exception("Execution failed")
 
@@ -308,8 +318,10 @@ class TestSessionManagerErrorHandling:
         # Mock episode manager to return a valid episode
         mock_episode_obj = MagicMock()
         mock_episode_obj.episode_id = "episode_123"
+        mock_episode_obj.state = EpisodeState.READY
         mock_episode_obj.add_step = MagicMock()
         manager.episode_manager.get_episode.return_value = mock_episode_obj
+        manager.episode_manager.get_episode_by_id.return_value = mock_episode_obj
 
         # Mock execution to succeed but episode manager to fail
         command_result = CommandResult(exit_code=0, stdout="success", stderr="", execution_time=0.1)
@@ -340,8 +352,10 @@ class TestSessionManagerErrorHandling:
         # Mock episode manager to return a valid episode
         mock_episode_obj = MagicMock()
         mock_episode_obj.episode_id = "episode_123"
+        mock_episode_obj.state = EpisodeState.READY
         mock_episode_obj.add_step = MagicMock()
         manager.episode_manager.get_episode.return_value = mock_episode_obj
+        manager.episode_manager.get_episode_by_id.return_value = mock_episode_obj
 
         # Mock successful execution
         command_result = CommandResult(exit_code=0, stdout="success", stderr="", execution_time=0.1)
@@ -454,22 +468,28 @@ class TestSessionManagerErrorHandling:
 
         # Start multiple episodes concurrently
         episode_ids = []
+        episodes_dict = {}  # Track all episodes for get_episode_by_id
+
         for task_id, timeout in task_configs:
             # Mock the episode manager to return a proper episode object
             mock_episode = MagicMock()
             mock_episode.episode_id = f"episode_{task_id}_{timeout}"
             mock_episode.task_id = task_id  # Use actual task_id string
+            mock_episode.state = EpisodeState.READY  # Start as READY, not COMPLETED
+            mock_episode.completion_reason = None
+            mock_episode.is_complete = False  # Not complete yet
             manager.episode_manager.start_episode = MagicMock(return_value=mock_episode)
-
-            # Mock get_episode_by_id to return the same episode for end_episode
-            manager.episode_manager.get_episode_by_id = MagicMock(return_value=mock_episode)
 
             started_episode = await manager.start_episode(session_id, task_id)
             episode_ids.append(started_episode.episode_id)
+            episodes_dict[started_episode.episode_id] = mock_episode
 
             # Add episode to session for validation (the real start_episode would do this)
             if started_episode.episode_id not in session.active_episode_ids:
                 session.active_episode_ids.append(started_episode.episode_id)
+
+        # Mock get_episode_by_id to return the correct episode based on episode_id
+        manager.episode_manager.get_episode_by_id = MagicMock(side_effect=lambda eid: episodes_dict.get(eid))
 
         # Verify all episodes are tracked in the session
         assert len(session.active_episode_ids) == 4
@@ -501,6 +521,12 @@ class TestSessionManagerErrorHandling:
             tokens={"input": 10, "output": 20, "total": 30},
             time=1.5
         )
+
+        # Mock episode_manager.end_episode to return the episode
+        manager.episode_manager.end_episode = MagicMock(return_value=episodes_dict[episode_to_end])
+
+        # Mock execution_manager.cleanup_episode
+        manager.execution_manager.cleanup_episode = MagicMock(return_value=True)
 
         await manager.end_episode(session_id, episode_to_end, "completed", mock_submission)
 
@@ -535,6 +561,7 @@ class TestSessionManagerErrorHandling:
 
         sessions_and_episodes = {}
         total_episodes = 0
+        all_episodes_dict = {}  # Track all episodes for get_episode_by_id
 
         # Create sessions and start episodes for each
         for client_name, task_names in session_configs:
@@ -559,13 +586,14 @@ class TestSessionManagerErrorHandling:
                 mock_episode = MagicMock()
                 mock_episode.episode_id = episode_id
                 mock_episode.task_id = task_id  # Use actual task_id string
+                mock_episode.state = EpisodeState.READY  # Start as READY, not COMPLETED
+                mock_episode.completion_reason = None
+                mock_episode.is_complete = False  # Not complete yet
                 manager.episode_manager.start_episode = MagicMock(return_value=mock_episode)
-
-                # Mock get_episode_by_id to return the same episode for end_episode
-                manager.episode_manager.get_episode_by_id = MagicMock(return_value=mock_episode)
 
                 started_episode = await manager.start_episode(session_id, task_id)
                 episode_ids.append(started_episode.episode_id)
+                all_episodes_dict[started_episode.episode_id] = mock_episode
                 if started_episode.episode_id not in session.active_episode_ids:
                     session.active_episode_ids.append(started_episode.episode_id)
                 total_episodes += 1
@@ -576,6 +604,15 @@ class TestSessionManagerErrorHandling:
                 "episode_ids": episode_ids,
                 "task_names": task_names
             }
+
+        # Mock get_episode_by_id to return the correct episode based on episode_id
+        manager.episode_manager.get_episode_by_id = MagicMock(side_effect=lambda eid: all_episodes_dict.get(eid))
+
+        # Mock episode_manager.end_episode to return the episode
+        manager.episode_manager.end_episode = MagicMock(side_effect=lambda eid, *args: all_episodes_dict.get(eid))
+
+        # Mock execution_manager.cleanup_episode
+        manager.execution_manager.cleanup_episode = MagicMock(return_value=True)
 
         # Verify all sessions and episodes are properly managed
         assert len(manager.active_sessions) == 4

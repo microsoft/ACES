@@ -60,6 +60,7 @@ class TestCascadeTermination:
             },
             initial_context={"test": "context"},
             depends_on_task_id="independent_task",
+            role="dependent_role",
             episode_config={"max_steps": 10}
         )
 

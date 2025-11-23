@@ -270,9 +270,9 @@ services:
         # Should return True on success
         assert result is True
 
-        # Verify cleanup command
-        call_args = mock_run.call_args
-        cmd = call_args[0][0]
+        # Verify cleanup command - check the FIRST call (compose down)
+        first_call_args = mock_run.call_args_list[0]
+        cmd = first_call_args[0][0]
 
         assert "docker" in cmd
         assert "compose" in cmd

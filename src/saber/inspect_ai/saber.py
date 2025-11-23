@@ -38,9 +38,11 @@ from saber.debug_logging import (
     log_sample_init_start,
 )
 from saber.logging_config import LogCategory, get_saber_logger
+from saber.models import BenchmarkTask, MetadataKeys, OrchestratedTask, SingleEpisodeTask, TaskExecutionMode
 from saber.models.mcp import OrchestrationEnvironment
 
 from .server import DomainContext, DomainController
+from .task_handlers import get_benchmark_task_handler
 from .tasks import get_active_domain, remove_active_domain
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
@@ -159,6 +161,12 @@ class SABERSandboxEnvironment:
         self._sample_id: Optional[str] = None
         self._mcp_client: Optional[Tool] = None
 
+        # Handler state for orchestrated tasks
+        self._handler: Optional[Any] = None  # BenchmarkTaskHandler instance
+        self._handler_state: Optional[Dict[str, Any]] = None
+        self._episode_ids: Optional[list[str]] = None  # All episode IDs for this sample
+        self._primary_episode_id: Optional[str] = None  # Primary episode ID
+
         # Session state (set during task_init, shared across all samples)
         self._session_id: Optional[str] = None
 
@@ -172,15 +180,19 @@ class SABERSandboxEnvironment:
     def default_concurrency(cls) -> Optional[int]:
         """Default max_sandboxes for SABER provider.
 
-        Returns the configured max_concurrent_episodes to control how many
-        samples (episodes) can run concurrently. This tells Inspect AI to
-        limit concurrent sample execution to match SABER's episode semaphore.
+        Returns None to allow unlimited concurrent sample initialization.
 
-        Returns None for unlimited concurrency (if max_concurrent_episodes <= 0).
+        CRITICAL: We return None (unlimited) instead of max_concurrent_episodes because:
+        1. Orchestrated tasks need multiple samples to run concurrently (e.g., blue+red)
+        2. SABER's semaphore controls episode concurrency INTERNALLY, not Inspect AI
+        3. If we returned max_concurrent_episodes=1, Inspect AI would queue samples,
+           preventing orchestrated samples from running together
+
+        The semaphore in _get_episode_semaphore() handles the actual concurrency limit
+        at the episode creation level, allowing orchestrated samples to coordinate.
         """
-        if cls._max_concurrent_episodes is None or cls._max_concurrent_episodes <= 0:
-            return None
-        return cls._max_concurrent_episodes
+        # Always return None - let SABER's internal semaphore handle concurrency
+        return None
 
     @classmethod
     def config_files(cls) -> list[str]:
@@ -505,17 +517,43 @@ class SABERSandboxEnvironment:
             Dict with single 'default' key mapping to initialized SABERSandboxEnvironment
 
         Raises:
-            ValueError: If metadata missing 'task_id' or config is None
+            ValueError: If metadata missing 'task_id'/'benchmark_task' or config is None
             SandboxError: If session/episode creation fails
         """
         if config is None:
             raise ValueError("SABER sandbox config is required for sample_init")
 
-        if "task_id" not in metadata:
+        # Check for either benchmark_task (new format) or task_id (legacy format)
+        if "benchmark_task" not in metadata and "task_id" not in metadata:
             raise ValueError(
-                "Missing 'task_id' in metadata. Please ensure your dataset provides a 'task_id'. "
-                "The task_id is required to start a SABER episode for this sample."
+                "Missing 'task_id' or 'benchmark_task' in metadata. "
+                "Please ensure your dataset provides either 'task_id' (legacy) or 'benchmark_task' (new). "
+                "These identifiers are required to start a SABER episode for this sample."
             )
+
+        # Debug logging to track sample initialization
+        debug_logger = EpisodeDebugLogger("sample_init")
+        debug_logger.info(
+            "sample_init called",
+            task_name=task_name,
+            execution_mode=metadata.get(MetadataKeys.EXECUTION_MODE),
+            sample_id=metadata.get(MetadataKeys.SAMPLE_ID),
+            orchestration_id=metadata.get(MetadataKeys.ORCHESTRATION_ID),
+            sub_task_role=metadata.get(MetadataKeys.SUB_TASK_ROLE),
+            task_id=metadata.get(MetadataKeys.TASK_ID),
+        )
+
+        # PROMINENT logging for orchestrated samples
+        logger.info(
+            f">>> sample_init ENTRY: role={metadata.get(MetadataKeys.SUB_TASK_ROLE)}, "
+            f"depends_on={metadata.get(MetadataKeys.DEPENDS_ON_ROLE)}, "
+            f"orchestration={metadata.get(MetadataKeys.ORCHESTRATION_ID)}",
+            extra={
+                "role": metadata.get(MetadataKeys.SUB_TASK_ROLE),
+                "depends_on_role": metadata.get(MetadataKeys.DEPENDS_ON_ROLE),
+                "orchestration_id": metadata.get(MetadataKeys.ORCHESTRATION_ID),
+            },
+        )
 
         # Create instance
         instance = cls(
@@ -529,20 +567,20 @@ class SABERSandboxEnvironment:
 
         # Check if this is a completed sample from eval-retry
         # (inspect_ai's eval_retry will skip these samples, but we still need to provide an instance)
-        if "saber_session_id" in metadata and "saber_episode_id" in metadata:
+        if MetadataKeys.SABER_SESSION_ID in metadata and MetadataKeys.SABER_EPISODE_ID in metadata:
             logger.info(
                 "Sample already has SABER IDs (eval-retry completed sample), creating minimal instance",
                 extra={
-                    "task_id": metadata["task_id"],
-                    "session_id": metadata["saber_session_id"],
-                    "episode_id": metadata["saber_episode_id"],
+                    "task_id": metadata[MetadataKeys.TASK_ID],
+                    "session_id": metadata[MetadataKeys.SABER_SESSION_ID],
+                    "episode_id": metadata[MetadataKeys.SABER_EPISODE_ID],
                     "mode": "eval_retry_completed_sample",
                 },
             )
             # Set IDs from metadata but don't create new episode
-            instance._session_id = metadata["saber_session_id"]
-            instance._episode_id = metadata["saber_episode_id"]
-            instance._task_id = metadata["task_id"]
+            instance._session_id = metadata[MetadataKeys.SABER_SESSION_ID]
+            instance._episode_id = metadata[MetadataKeys.SABER_EPISODE_ID]
+            instance._task_id = metadata[MetadataKeys.TASK_ID]
             # Don't create MCP client - sample won't be executed
             return {"default": instance}
 
@@ -552,14 +590,31 @@ class SABERSandboxEnvironment:
         return {"default": instance}
 
     async def _init_sample(self, metadata: dict[str, str]) -> None:
-        """Internal method to initialize episode for sample.
+        """Internal method to initialize episode(s) for sample using task handlers.
+
+        This method now supports both single and orchestrated tasks through polymorphic handlers.
 
         Args:
-            metadata: Sample metadata dict with 'task_id'
+            metadata: Sample metadata dict with 'benchmark_task' or 'task_id'
         """
         init_start_time = time.time()
-        self._task_id = metadata["task_id"]
-        self._sample_id = metadata.get("sample_id", self._task_id)  # Store sample_id for cleanup
+
+        # Extract task information from metadata
+        benchmark_task = None
+        task_id: Optional[str] = None
+
+        if MetadataKeys.BENCHMARK_TASK in metadata:
+            # New polymorphic task format
+            task_data = metadata[MetadataKeys.BENCHMARK_TASK]
+            if not isinstance(task_data, dict):  # type: ignore[unreachable]
+                raise SandboxError(f"Invalid benchmark task data type: {type(task_data)}")
+            benchmark_task = self._deserialize_benchmark_task(task_data)  # type: ignore[unreachable]
+            task_id = benchmark_task.benchmark_task_id
+
+        # Set task_id with fallback
+        self._task_id = task_id or metadata.get(MetadataKeys.SAMPLE_ID) or "unknown"
+
+        self._sample_id = metadata.get(MetadataKeys.SAMPLE_ID, self._task_id)
 
         # Get registry entry to access URLs and session_id
         with self._lock:
@@ -583,108 +638,103 @@ class SABERSandboxEnvironment:
             self._session_manager = ClientSessionManager(config=config)
             self._session_manager._current_session_id = self._session_id
 
-        # Track semaphore outside try block so exception handler can release it
-        semaphore_acquired = False
-        semaphore = self._get_episode_semaphore()
-
         try:
-            # Acquire semaphore to limit concurrent episode creation
-            # This controls how many episodes can run simultaneously
-            if semaphore is not None:
-                logger.debug(
-                    f"Acquiring episode semaphore for task {self._task_id} (available: {semaphore._value})",
-                    extra={
-                        "task_id": self._task_id,
-                        "max_concurrent": self._max_concurrent_episodes,
-                        "semaphore_available": semaphore._value,
-                    },
+            # Check execution mode to determine how to handle episode creation
+            execution_mode = metadata.get(MetadataKeys.EXECUTION_MODE)
+
+            if execution_mode == "orchestrated_sub_task":
+                # NEW: Multi-sample orchestration approach
+                # Each sub-task is a separate sample coordinated via OrchestrationCoordinator
+                await self._init_orchestrated_sub_task(metadata)
+            elif benchmark_task is not None:
+                # Use task handler pattern for single episode tasks
+                # (OrchestratedTask should not reach here with new dataset creation)
+                self._handler = get_benchmark_task_handler(benchmark_task)  # type: ignore[unreachable]
+
+                # Get semaphore (handler will manage acquire/release)
+                semaphore = self._get_episode_semaphore()
+
+                # Initialize episode(s) using handler
+                # Handler acquires semaphore and creates all needed episodes
+                self._handler_state = await self._handler.initialize(
+                    benchmark_task=benchmark_task,
+                    session_id=self._session_id,
+                    session_manager=self._session_manager,
+                    semaphore=semaphore,
                 )
 
-                # Use asyncio.wait_for to add timeout to semaphore acquisition
-                # This prevents indefinite waiting if all slots are leaked
-                try:
-                    await asyncio.wait_for(semaphore.acquire(), timeout=300.0)  # 5 minute timeout
-                    semaphore_acquired = True
-                    logger.debug(
-                        f"Episode semaphore acquired for task {self._task_id} (remaining: {semaphore._value})",
-                        extra={
-                            "task_id": self._task_id,
-                            "semaphore_remaining": semaphore._value,
-                        },
-                    )
-                except asyncio.TimeoutError:
-                    logger.error(
-                        f"Timeout waiting for episode semaphore for task {self._task_id} (waited 300s)",
-                        extra={
-                            "task_id": self._task_id,
-                            "max_concurrent": self._max_concurrent_episodes,
-                            "event": "semaphore_acquisition_timeout",
-                        },
-                    )
-                    raise PrerequisiteError(
-                        f"Timeout waiting for episode semaphore (waited 300s). "
-                        f"This may indicate semaphore slot leakage or insufficient capacity. "
-                        f"Max concurrent episodes: {self._max_concurrent_episodes}"
-                    )
+                # Extract episode information from handler state
+                self._episode_ids = self._handler_state["episode_ids"]
+                self._primary_episode_id = self._handler_state["primary_episode_id"]
+                # Set _episode_id for backward compatibility
+                self._episode_id = self._primary_episode_id
 
-            # Create episode via REST API (using shared session manager)
-            self._episode_id = await self._create_episode(self._session_id, self._task_id)
-            logger.debug(
-                "Created SABER episode for sample",
-                extra={
-                    "session_id": self._session_id,
-                    "episode_id": self._episode_id,
-                    "task_id": self._task_id,
-                },
-            )
+                logger.debug(
+                    "Created episodes using task handler",
+                    extra={
+                        "session_id": self._session_id,
+                        "episode_ids": self._episode_ids,
+                        "primary_episode_id": self._primary_episode_id,
+                        "task_id": self._task_id,
+                        "execution_mode": metadata.get(MetadataKeys.EXECUTION_MODE, "unknown"),
+                    },
+                )
 
             log_sample_init_start(
                 task_id=self._task_id,
                 sample_id=self._sample_id,
-                episode_id=self._episode_id,
+                episode_id=self._primary_episode_id,
                 session_id=self._session_id,
                 domain_slug=self._domain_slug,
             )
 
             # Store session and episode IDs in sample metadata for eval-retry support
-            # This allows completed samples to be identified and skipped during retries
-            # Note: metadata is passed by reference, so these updates persist to the Sample
-            metadata["saber_session_id"] = self._session_id
-            metadata["saber_episode_id"] = self._episode_id
-            metadata["saber_domain_slug"] = self._domain_slug
+            primary_episode_id_str = self._primary_episode_id or "unknown"
+            metadata[MetadataKeys.SABER_SESSION_ID] = self._session_id
+            metadata[MetadataKeys.SABER_EPISODE_ID] = primary_episode_id_str
+            metadata[MetadataKeys.SABER_DOMAIN_SLUG] = self._domain_slug
 
-            # Log metadata configuration for debugging episode lifecycle issues
+            # Log metadata configuration
             debug_logger = EpisodeDebugLogger("metadata")
             debug_logger.info(
                 "Sample metadata configured with SABER IDs",
-                sample_id=metadata.get("sample_id"),
-                saber_episode_id_set=metadata.get("saber_episode_id"),
-                saber_session_id_set=metadata.get("saber_session_id"),
+                sample_id=metadata.get(MetadataKeys.SAMPLE_ID),
+                saber_episode_id_set=metadata.get(MetadataKeys.SABER_EPISODE_ID),
+                saber_session_id_set=metadata.get(MetadataKeys.SABER_SESSION_ID),
                 episode_id_instance_var=self._episode_id,
                 session_id_instance_var=self._session_id,
             )
 
             # Store session manager and context in inspect_ai store for scorer
-            # The scorer needs this to fetch evaluation data from the server
             task_store = store()
             task_store.set("saber_session_manager", self._session_manager)
             task_store.set("saber_session_id", self._session_id)
             task_store.set("saber_task_id", self._task_id)
 
-            # Store episode mapping using centralized helper (prevents race conditions)
-            sample_id = metadata.get("sample_id", self._task_id)
+            # Store episode mapping
+            sample_id = metadata.get(MetadataKeys.SAMPLE_ID, self._task_id)
+            primary_episode_id = self._primary_episode_id
+            session_id = self._session_id
+            task_id = self._task_id
+
+            # Ensure all values are strings for _store_episode_mapping
+            assert isinstance(sample_id, str), f"sample_id must be str, got {type(sample_id)}"
+            assert isinstance(primary_episode_id, str), f"episode_id must be str, got {type(primary_episode_id)}"
+            assert isinstance(session_id, str), f"session_id must be str, got {type(session_id)}"
+            assert isinstance(task_id, str), f"task_id must be str, got {type(task_id)}"
+
             self._store_episode_mapping(
                 sample_id=sample_id,
-                episode_id=self._episode_id,
-                session_id=self._session_id,
-                task_id=self._task_id,
+                episode_id=primary_episode_id,
+                session_id=session_id,
+                task_id=task_id,
             )
 
             logger.debug(
                 "Stored SABER context in inspect_ai store for scorer",
                 extra={
                     "session_id": self._session_id,
-                    "episode_id": self._episode_id,
+                    "episode_id": self._primary_episode_id,
                     "task_id": self._task_id,
                     "sample_id": sample_id,
                     "event": "saber_context_stored",
@@ -694,18 +744,18 @@ class SABERSandboxEnvironment:
             # Construct MCP client with headers and retry logic
             mcp_headers = {
                 HEADER_SESSION_ID: self._session_id,
-                HEADER_EPISODE_ID: self._episode_id,
+                HEADER_EPISODE_ID: self._primary_episode_id,
                 HEADER_TASK_ID: self._task_id,
                 HEADER_ORCHESTRATION_ENV: OrchestrationEnvironment.INSPECT.value,
             }
 
-            # Log MCP headers for debugging episode lifecycle issues
+            # Log MCP headers for debugging
             debug_logger = EpisodeDebugLogger("mcp_client")
             debug_logger.info(
                 "MCP client headers configured",
                 sample_id=sample_id,
                 episode_id_in_headers=mcp_headers[HEADER_EPISODE_ID],
-                episode_id_instance_var=self._episode_id,
+                episode_id_instance_var=self._primary_episode_id,
                 task_id=self._task_id,
             )
 
@@ -729,15 +779,11 @@ class SABERSandboxEnvironment:
                             "attempt": attempt + 1,
                             "max_retries": max_retries,
                             "session_id": self._session_id,
-                            "episode_id": self._episode_id,
+                            "episode_id": self._primary_episode_id,
                         },
                     )
 
                     # CRITICAL: Name must be unique per sample to prevent MCP client caching!
-                    # mcp_server_http() caches sessions by (task_id, name), so if multiple
-                    # samples use the same name, they share the same MCP session with the
-                    # FIRST sample's headers (causing episode ID cross-contamination).
-                    # Using sample_id ensures each sample gets its own MCP client.
                     self._mcp_client = mcp_server_http(
                         name=f"SABER {self._domain_slug} Tools - {sample_id}",
                         url=mcp_url,
@@ -750,12 +796,9 @@ class SABERSandboxEnvironment:
                         extra={
                             "attempt": attempt + 1,
                             "session_id": self._session_id,
-                            "episode_id": self._episode_id,
+                            "episode_id": self._primary_episode_id,
                         },
                     )
-
-                    # Don't enter the context here - let Inspect AI manage it
-                    # The MCP server will be entered when Inspect AI calls .tools() on it
 
                     break  # Success, exit retry loop
 
@@ -792,7 +835,7 @@ class SABERSandboxEnvironment:
                 "SABER sandbox ready for sample execution",
                 extra={
                     "session_id": self._session_id,
-                    "episode_id": self._episode_id,
+                    "episode_id": self._primary_episode_id,
                     "task_id": self._task_id,
                 },
             )
@@ -806,26 +849,320 @@ class SABERSandboxEnvironment:
             )
 
         except Exception as e:
-            # CRITICAL: Release semaphore BEFORE cleanup to prevent permanent slot leakage
-            # This fixes the bug where failed episode creation would leak semaphore slots,
-            # causing capacity to degrade from 8 -> 7 -> 6 -> 5 over time during long test runs
-            if semaphore_acquired and semaphore is not None:
-                semaphore.release()
-                logger.debug(
-                    f"Released episode semaphore after init failure for task {self._task_id} "
-                    f"(available: {semaphore._value})",
-                    extra={
-                        "task_id": self._task_id,
-                        "semaphore_available": semaphore._value,
-                        "event": "semaphore_released_on_init_failure",
-                    },
-                )
+            # Use handler for cleanup if available
+            if self._handler is not None and self._handler_state is not None:
+                semaphore = self._get_episode_semaphore()
+                try:
+                    cleanup_result = await self._handler.cleanup(
+                        state=self._handler_state,
+                        session_id=self._session_id,
+                        session_manager=self._session_manager,
+                        semaphore=semaphore,
+                    )
+                    if cleanup_result.has_errors:
+                        logger.warning(
+                            "Handler cleanup completed with errors during init error",
+                            extra={
+                                "task_id": self._task_id,
+                                "error_count": cleanup_result.error_count,
+                                "errors": cleanup_result.errors,
+                            },
+                        )
+                except Exception as cleanup_err:
+                    logger.error(
+                        "Handler cleanup failed during init error",
+                        extra={
+                            "task_id": self._task_id,
+                            "error": str(cleanup_err),
+                        },
+                    )
+            else:
+                # Legacy cleanup path (manual semaphore release)
+                semaphore = self._get_episode_semaphore()
+                if self._handler_state and self._handler_state.get("semaphore_acquired") and semaphore:
+                    semaphore.release()
+                    logger.debug(
+                        f"Released episode semaphore after init failure for task {self._task_id}",
+                        extra={
+                            "task_id": self._task_id,
+                            "semaphore_available": semaphore._value,
+                            "event": "semaphore_released_on_init_failure",
+                        },
+                    )
 
-            # Cleanup partial state (initialization failure counts as interrupted)
+            # Cleanup partial state
             await self._cleanup_partial_state(interrupted=True)
             raise PrerequisiteError(
                 f"Failed to initialize SABER sandbox for sample (task_id={self._task_id}): {e}"
             ) from e
+
+    async def _init_orchestrated_sub_task(self, metadata: dict[str, str]) -> None:
+        """Initialize episode for an orchestrated sub-task sample.
+
+        This method handles the new multi-sample orchestration approach where each
+        sub-task (e.g., blue, red) is a separate sample coordinated via OrchestrationCoordinator.
+
+        Key behaviors:
+        - Root sample (depends_on_role=None): Acquires semaphore, registers orchestration
+        - Dependent sample: Joins orchestration, waits for dependency to be READY
+        - All samples: Create single episode, record episode_id with coordinator
+
+        Args:
+            metadata: Sample metadata with orchestration info
+        """
+        from .orchestration_coordinator import OrchestrationCoordinator
+
+        orchestration_id = metadata[MetadataKeys.ORCHESTRATION_ID]
+        role = metadata[MetadataKeys.SUB_TASK_ROLE]
+        task_id = metadata[MetadataKeys.TASK_ID]
+        depends_on_role = metadata.get(MetadataKeys.DEPENDS_ON_ROLE)
+        order = metadata[MetadataKeys.ORDER]
+
+        # Debug logging
+        debug_logger = EpisodeDebugLogger("orchestrated_init")
+        debug_logger.info(
+            "Initializing orchestrated sub-task",
+            orchestration_id=orchestration_id,
+            role=role,
+            task_id=task_id,
+            depends_on_role=depends_on_role,
+            order=order,
+            sample_id=self._sample_id,
+        )
+
+        coordinator = OrchestrationCoordinator()
+        semaphore = self._get_episode_semaphore()
+        semaphore_acquired = False
+
+        try:
+            if depends_on_role is None:
+                # Root sample - acquire semaphore and register orchestration
+                if semaphore:
+                    await semaphore.acquire()
+                    semaphore_acquired = True
+                    logger.debug(
+                        f"Acquired semaphore for root sample {role} in orchestration {orchestration_id}",
+                        extra={
+                            "orchestration_id": orchestration_id,
+                            "role": role,
+                            "semaphore_available": semaphore._value if hasattr(semaphore, "_value") else "unknown",
+                        },
+                    )
+
+                # Register root sample with coordinator
+                success = coordinator.register_root_sample(
+                    orchestration_id=orchestration_id,
+                    role=role,
+                    sample_id=self._sample_id,
+                    semaphore=semaphore,
+                )
+
+                if not success:
+                    raise SandboxError(f"Failed to register root sample for orchestration {orchestration_id}")
+            else:
+                # Dependent sample - register and wait for dependency
+                success = await coordinator.register_dependent_sample(
+                    orchestration_id=orchestration_id,
+                    role=role,
+                    sample_id=self._sample_id,
+                    depends_on_role=depends_on_role,
+                    order=order,
+                    timeout=60.0,
+                )
+
+                if not success:
+                    raise SandboxError(
+                        f"Failed to register dependent sample {role} for orchestration {orchestration_id}"
+                    )
+
+                # Wait for dependency to be ready
+                logger.info(
+                    f"Sample {role} waiting for dependency {depends_on_role}",
+                    extra={
+                        "orchestration_id": orchestration_id,
+                        "role": role,
+                        "depends_on_role": depends_on_role,
+                    },
+                )
+
+                dependency_episode_id = await coordinator.wait_for_dependency_ready(
+                    orchestration_id=orchestration_id,
+                    role=role,
+                    session_manager=self._session_manager,
+                    session_id=self._session_id,
+                    timeout=300.0,
+                )
+
+                logger.info(
+                    f"Dependency {depends_on_role} is ready with episode {dependency_episode_id}",
+                    extra={
+                        "orchestration_id": orchestration_id,
+                        "role": role,
+                        "depends_on_role": depends_on_role,
+                        "dependency_episode_id": dependency_episode_id,
+                    },
+                )
+
+            # Create single episode for this sub-task
+            if self._session_manager is None:
+                raise SandboxError("Session manager not initialized")
+            episode_response = await self._session_manager.create_episode(
+                self._session_id,
+                task_id,
+            )
+            self._episode_id = episode_response.episode_id
+            self._episode_ids = [self._episode_id]
+            self._primary_episode_id = self._episode_id
+
+            logger.debug(
+                f"Created episode for orchestrated sub-task {role}",
+                extra={
+                    "orchestration_id": orchestration_id,
+                    "role": role,
+                    "task_id": task_id,
+                    "episode_id": self._episode_id,
+                },
+            )
+
+            # Wait for episode to be ready
+            if self._session_manager is None:
+                raise SandboxError("Session manager not initialized")
+            await self._session_manager.wait_for_episode_ready(
+                self._session_id,
+                self._episode_id,
+            )
+
+            # Record episode_id with coordinator (signals dependents)
+            coordinator.set_episode_id(
+                orchestration_id=orchestration_id,
+                role=role,
+                episode_id=self._episode_id,
+            )
+
+            # Create handler state for cleanup
+            self._handler_state = {
+                "episode_ids": [self._episode_id],
+                "primary_episode_id": self._episode_id,
+                "semaphore_acquired": semaphore_acquired,
+                "orchestration_id": orchestration_id,
+                "sub_task_role": role,
+            }
+
+            logger.info(
+                f"Orchestrated sub-task {role} ready for execution",
+                extra={
+                    "orchestration_id": orchestration_id,
+                    "role": role,
+                    "episode_id": self._episode_id,
+                },
+            )
+
+        except Exception as e:
+            # Cleanup on failure
+            if semaphore_acquired and semaphore:
+                semaphore.release()
+                logger.debug(
+                    "Released semaphore after orchestrated sub-task init failure",
+                    extra={
+                        "orchestration_id": orchestration_id,
+                        "role": role,
+                    },
+                )
+
+            # Trigger cascade termination if orchestration was started
+            try:
+                coordinator.trigger_termination(orchestration_id)
+            except Exception as term_err:
+                logger.warning(
+                    f"Failed to trigger termination during init failure: {term_err}",
+                    extra={"orchestration_id": orchestration_id},
+                )
+
+            raise SandboxError(f"Failed to initialize orchestrated sub-task {role}: {e}") from e
+
+    async def _cleanup_orchestrated_sub_task(self) -> None:
+        """Cleanup orchestrated sub-task sample.
+
+        This method:
+        1. Triggers cascade termination (marks all samples in orchestration for cleanup)
+        2. Ends all episodes returned by coordinator
+        3. Cleans up this sample
+        4. Releases semaphore if this is the last sample
+        """
+        from .orchestration_coordinator import OrchestrationCoordinator
+
+        if self._handler_state is None:
+            raise SandboxError("Handler state not initialized")
+
+        orchestration_id = self._handler_state["orchestration_id"]
+        role = self._handler_state["sub_task_role"]
+        coordinator = OrchestrationCoordinator()
+
+        # Trigger cascade termination for entire orchestration
+        episodes_to_cleanup = coordinator.trigger_termination(orchestration_id)
+
+        logger.info(
+            f"Triggered cascade termination for orchestration {orchestration_id}",
+            extra={
+                "orchestration_id": orchestration_id,
+                "role": role,
+                "episodes_to_cleanup": len(episodes_to_cleanup),
+            },
+        )
+
+        # End all episodes in the orchestration
+        for cleanup_role, episode_id in episodes_to_cleanup:
+            try:
+                if self._session_manager is None:
+                    raise SandboxError("Session manager not initialized")
+                await self._session_manager.end_episode(self._session_id, episode_id)
+                logger.debug(
+                    f"Ended episode for role {cleanup_role}",
+                    extra={
+                        "orchestration_id": orchestration_id,
+                        "role": cleanup_role,
+                        "episode_id": episode_id,
+                    },
+                )
+            except Exception as e:
+                logger.error(
+                    f"Failed to end episode {episode_id} for role {cleanup_role}",
+                    extra={
+                        "orchestration_id": orchestration_id,
+                        "role": cleanup_role,
+                        "episode_id": episode_id,
+                        "error": str(e),
+                    },
+                )
+
+        # Cleanup this sample and check if semaphore should be released
+        semaphore = self._get_episode_semaphore()
+        should_release = coordinator.cleanup_sample(
+            orchestration_id=orchestration_id,
+            role=role,
+            semaphore=semaphore,
+        )
+
+        # Release semaphore if this is the last sample
+        if should_release and semaphore:
+            semaphore.release()
+            logger.debug(
+                f"Released semaphore after last sample cleanup in orchestration {orchestration_id}",
+                extra={
+                    "orchestration_id": orchestration_id,
+                    "role": role,
+                    "semaphore_available": semaphore._value if hasattr(semaphore, "_value") else "unknown",
+                },
+            )
+
+        logger.info(
+            f"Cleaned up orchestrated sub-task {role}",
+            extra={
+                "orchestration_id": orchestration_id,
+                "role": role,
+                "semaphore_released": should_release,
+            },
+        )
 
     @classmethod
     async def sample_cleanup(
@@ -877,17 +1214,50 @@ class SABERSandboxEnvironment:
     async def _cleanup_sample(self, interrupted: bool = False) -> None:
         """Internal method to cleanup sample state.
 
-        Ends episode and terminates session.
+        Now handles both single episode tasks and orchestrated sub-tasks.
+        For orchestrated sub-tasks, coordinates termination via OrchestrationCoordinator.
 
         Args:
             interrupted: Whether the sample was interrupted (Ctrl+C, error, etc.)
-                If True, end the episode with reason="interrupted"
-                If False, assume scorer already ended the episode (happy path)
         """
         # Shield cleanup from cancellation - we need this to complete even during shutdown
         with anyio.CancelScope(shield=True):
             try:
-                await self._cleanup_partial_state(interrupted=interrupted)
+                # Check if this is an orchestrated sub-task
+                if self._handler_state and "orchestration_id" in self._handler_state:
+                    await self._cleanup_orchestrated_sub_task()
+                elif self._handler is not None and self._handler_state is not None:
+                    # Use handler for cleanup (single episode tasks)
+                    semaphore = self._get_episode_semaphore()
+                    cleanup_result = await self._handler.cleanup(
+                        state=self._handler_state,
+                        session_id=self._session_id,
+                        session_manager=self._session_manager,
+                        semaphore=semaphore,
+                    )
+                    if cleanup_result.has_errors:
+                        logger.warning(
+                            "Handler cleanup completed with errors",
+                            extra={
+                                "task_id": self._task_id,
+                                "episode_ids": self._handler_state.get("episode_ids", []),
+                                "error_count": cleanup_result.error_count,
+                                "errors": cleanup_result.errors,
+                                "semaphore_released": cleanup_result.semaphore_released,
+                            },
+                        )
+                    else:
+                        logger.debug(
+                            "Handler cleanup completed successfully",
+                            extra={
+                                "task_id": self._task_id,
+                                "episode_ids": self._handler_state.get("episode_ids", []),
+                                "semaphore_released": cleanup_result.semaphore_released,
+                            },
+                        )
+                else:
+                    # Legacy cleanup path
+                    await self._cleanup_partial_state(interrupted=interrupted)
             except Exception as e:
                 logger.warning(
                     f"Error during sample cleanup: {e}",
@@ -947,17 +1317,20 @@ class SABERSandboxEnvironment:
                         )
 
                 # Release episode semaphore to allow next sample to run
-                semaphore = self._get_episode_semaphore()
-                if semaphore is not None:
-                    semaphore.release()
-                    logger.debug(
-                        f"Released episode semaphore for task {self._task_id} (available: {semaphore._value})",
-                        extra={
-                            "task_id": self._task_id,
-                            "semaphore_available": semaphore._value,
-                            "event": "semaphore_released_on_cleanup",
-                        },
-                    )
+                # BUT ONLY if this is NOT an orchestrated sub-task (coordinator handles those)
+                is_orchestrated = self._handler_state and "orchestration_id" in self._handler_state
+                if not is_orchestrated:
+                    semaphore = self._get_episode_semaphore()
+                    if semaphore is not None:
+                        semaphore.release()
+                        logger.debug(
+                            f"Released episode semaphore for task {self._task_id} (available: {semaphore._value})",
+                            extra={
+                                "task_id": self._task_id,
+                                "semaphore_available": semaphore._value,
+                                "event": "semaphore_released_on_cleanup",
+                            },
+                        )
 
                 self._reset_state()
 
@@ -1517,6 +1890,39 @@ class SABERSandboxEnvironment:
                     },
                     exc_info=True,
                 )
+
+    def _deserialize_benchmark_task(self, data: Dict[str, Any]) -> BenchmarkTask:
+        """Deserialize BenchmarkTask from metadata dict.
+
+        Args:
+            data: Serialized benchmark task data from sample metadata
+
+        Returns:
+            SingleEpisodeTask or OrchestratedTask instance
+
+        Raises:
+            ValueError: If task_type/execution_mode is unknown or data is invalid
+        """
+        # Try task_type first (new discriminator field), fall back to execution_mode
+        task_type = data.get(MetadataKeys.TASK_TYPE.value) or data.get(MetadataKeys.EXECUTION_MODE.value)
+
+        if task_type is None:
+            raise ValueError(
+                f"Missing '{MetadataKeys.TASK_TYPE.value}' or "
+                f"'{MetadataKeys.EXECUTION_MODE.value}' in benchmark task data. "
+                f"Available keys: {list(data.keys())}"
+            )
+
+        if task_type == TaskExecutionMode.SINGLE.value:
+            return SingleEpisodeTask(**data)
+        elif task_type == TaskExecutionMode.ORCHESTRATED.value:
+            return OrchestratedTask(**data)
+        else:
+            raise ValueError(
+                f"Unknown task type: {task_type}. "
+                f"Expected '{TaskExecutionMode.SINGLE.value}' or '{TaskExecutionMode.ORCHESTRATED.value}'. "
+                f"Data keys: {list(data.keys())}"
+            )
 
     async def connection(self, *, user: Optional[str] = None) -> Any:
         """Get connection information for SABER sandbox.

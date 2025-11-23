@@ -87,15 +87,15 @@ tasks:
             # Check first subtask
             subtask1 = task.subtasks[0]
             assert subtask1.subtask_id == "checkpoint_1"
-            assert subtask1.max_score == 0.3
+            assert subtask1.subtask_max_score == 0.3
 
             # Check second subtask
             subtask2 = task.subtasks[1]
             assert subtask2.subtask_id == "checkpoint_2"
-            assert subtask2.max_score == 0.7
+            assert subtask2.subtask_max_score == 0.7
 
             # Verify total score
-            total_score = sum(s.max_score for s in task.subtasks)
+            total_score = sum(s.subtask_max_score for s in task.subtasks)
             assert total_score == 1.0
 
         finally:
@@ -157,8 +157,8 @@ tasks:
             task = tasks["test_task_no_scoring"]
             subtask = task.subtasks[0]
 
-            # Should default to 0.0 when scoring is missing
-            assert subtask.max_score == 0.0
+            # Should default to 1.0 when scoring is missing (DEFAULT_MAX_SCORE)
+            assert subtask.subtask_max_score == 1.0
 
         finally:
             os.unlink(temp_path)
@@ -216,7 +216,7 @@ tasks:
         try:
             loader = BenchmarkConfigLoader("test_domain")
 
-            with pytest.raises(InvalidTaskDefinitionException, match="invalid scoring format"):
+            with pytest.raises(InvalidTaskDefinitionException, match="scoring must be a dictionary"):
                 loader.load_tasks_from_file(temp_path)
 
         finally:
@@ -279,8 +279,8 @@ tasks:
             task = tasks["test_task_empty_scoring"]
             subtask = task.subtasks[0]
 
-            # Should default to 0.0 when max_score is missing from scoring dict
-            assert subtask.max_score == 0.0
+            # Should default to 1.0 when max_score is missing from scoring dict (DEFAULT_MAX_SCORE)
+            assert subtask.subtask_max_score == 1.0
 
         finally:
             os.unlink(temp_path)
@@ -1174,24 +1174,24 @@ tasks:
 
             subtask1 = task.subtasks[0]
             assert subtask1.subtask_id == "checkpoint_1"
-            assert subtask1.max_score == 0.15
+            assert subtask1.subtask_max_score == 0.15
             assert subtask1.hints == ["Check the configuration files"]
 
             subtask2 = task.subtasks[1]
             assert subtask2.subtask_id == "checkpoint_2"
-            assert subtask2.max_score == 0.20
+            assert subtask2.subtask_max_score == 0.20
             assert subtask2.hints == ["Look in the logs directory"]
 
             subtask3 = task.subtasks[2]
             assert subtask3.subtask_id == "checkpoint_3"
-            assert subtask3.max_score == 0.35
+            assert subtask3.subtask_max_score == 0.35
 
             subtask4 = task.subtasks[3]
             assert subtask4.subtask_id == "checkpoint_4"
-            assert subtask4.max_score == 0.30
+            assert subtask4.subtask_max_score == 0.30
 
             # Verify total subtask scores sum correctly
-            total_score = sum(s.max_score for s in task.subtasks)
+            total_score = sum(s.subtask_max_score for s in task.subtasks)
             assert total_score == 1.0
 
             # Verify execution and episode configs

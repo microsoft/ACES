@@ -165,7 +165,7 @@ class TestEpisodeStatusEndpoint:
         session_id = "test-session"
         task_id = "test-task"
 
-        # Mock episode creation response - use AsyncMock since initiate_episode is async
+        # Mock episode creation response - use AsyncMock since start_episode is async
         mock_episode = Mock()
         mock_episode.episode_id = "new-episode-123"
         mock_episode.session_id = session_id
@@ -174,7 +174,7 @@ class TestEpisodeStatusEndpoint:
         mock_episode.attached_to_episode_id = None
         mock_episode.max_steps = 50
         mock_episode.metadata = {}
-        manager.initiate_episode = AsyncMock(return_value=mock_episode)
+        manager.start_episode = AsyncMock(return_value=mock_episode)
 
         response = client.post(
             f"/api/v1/session/{session_id}/episodes",

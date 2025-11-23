@@ -1,8 +1,7 @@
-"""
-SABER Models Constants - Shared constants and enumerations.
+"""Constants for SABER models and metadata.
 
-This module provides centralized constants that are used across multiple
-components of the SABER system to ensure consistency.
+This module provides centralized constants and enumerations that are used across
+multiple components of the SABER system to ensure consistency and avoid magic strings.
 """
 
 from enum import Enum
@@ -78,3 +77,63 @@ EVAL_STRATEGY_TOOL_CALL = StepEvaluationStrategy.TOOL_CALL
 VALID_SUBMISSION_EVAL_STRATEGIES = [strategy.value for strategy in SubmissionEvaluationStrategy]
 VALID_STEP_EVAL_STRATEGIES = [strategy.value for strategy in StepEvaluationStrategy]
 VALID_EVAL_STRATEGIES = VALID_STEP_EVAL_STRATEGIES  # Legacy compatibility
+
+
+class MetadataKeys(str, Enum):
+    """Standard metadata keys used in sample metadata dictionaries.
+
+    These keys are used when converting benchmark tasks to Inspect AI samples
+    and when deserializing tasks from sample metadata.
+    """
+
+    # Core identifiers
+    TASK_ID = "task_id"
+    SAMPLE_ID = "sample_id"
+    SESSION_ID = "session_id"
+    EPISODE_ID = "episode_id"
+
+    # Task execution metadata
+    EXECUTION_MODE = "execution_mode"
+    BENCHMARK_TASK = "benchmark_task"
+    TASK_TYPE = "task_type"
+
+    # Orchestration metadata
+    ORCHESTRATION_ID = "orchestration_id"
+    ORCHESTRATION_STRATEGY = "orchestration_strategy"
+    SUB_TASK_ROLE = "sub_task_role"
+    DEPENDS_ON_ROLE = "depends_on_role"
+    ORDER = "order"
+
+    # SABER-specific metadata (for eval-retry)
+    SABER_SESSION_ID = "saber_session_id"
+    SABER_EPISODE_ID = "saber_episode_id"
+    SABER_DOMAIN_SLUG = "saber_domain_slug"
+
+    # Task configuration
+    ATTEMPT = "attempt"
+    TOTAL_ATTEMPTS = "total_attempts"
+    TOOL_CALL_LIMIT = "tool_call_limit"
+    INSTRUCTION_PROMPT = "instruction_prompt"
+    ASSISTANT_PROMPT = "assistant_prompt"
+    SUBMIT_PROMPT = "submit_prompt"
+
+    # Score metadata (used in score.metadata dictionaries)
+    SUBMISSION_SCORE = "submission_score"
+    SUBTASK_SCORE = "subtask_score"
+    WEIGHTED_SUBTASK_SCORE = "weighted_subtask_score"
+    STEP_EVALUATIONS = "step_evaluations"
+    SUBTASK_SCORES = "subtask_scores"
+
+
+__all__ = [
+    "EvaluationStrategy",
+    "SubmissionEvaluationStrategy",
+    "StepEvaluationStrategy",
+    "EVAL_STRATEGY_STATIC",
+    "EVAL_STRATEGY_LLM_JUDGE",
+    "EVAL_STRATEGY_TOOL_CALL",
+    "VALID_SUBMISSION_EVAL_STRATEGIES",
+    "VALID_STEP_EVAL_STRATEGIES",
+    "VALID_EVAL_STRATEGIES",
+    "MetadataKeys",
+]

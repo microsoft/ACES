@@ -101,3 +101,30 @@ class InvalidEvaluationRequestError(EvaluationRetrievalError):
     """Invalid evaluation request parameters (422)."""
 
     pass
+
+
+# Role-Based Configuration Exceptions
+
+
+class RoleConfigurationError(SABEREvaluationError):
+    """Base exception for role-based configuration errors."""
+
+    pass
+
+
+class RoleNotFoundError(RoleConfigurationError):
+    """Requested role not found in configuration."""
+
+    pass
+
+
+class RoleConfigLoadError(RoleConfigurationError):
+    """Failed to load role configuration from file/string."""
+
+    pass
+
+
+class InvalidRoleOverrideError(RoleConfigurationError):
+    """Invalid role override in CLI parameters."""
+
+    pass

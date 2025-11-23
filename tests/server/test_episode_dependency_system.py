@@ -50,6 +50,7 @@ class TestEpisodeDependencySystem:
             },
             initial_context={"test": "context"},
             depends_on_task_id="independent_task",
+            role="dependent_role",
             episode_config={"max_steps": 10}
         )
 
@@ -65,6 +66,7 @@ class TestEpisodeDependencySystem:
             },
             initial_context={"test": "context"},
             depends_on_task_id="independent_task",
+            role="another_dependent_role",
             episode_config={"max_steps": 10}
         )
 
@@ -80,6 +82,7 @@ class TestEpisodeDependencySystem:
             },
             initial_context={"test": "context"},
             depends_on_task_id="circular_task",  # Self-reference
+            role="circular_role",
             episode_config={"max_steps": 10}
         )
 

@@ -28,15 +28,16 @@ from inspect_ai.util import store
 from jinja2 import BaseLoader, Environment, TemplateError
 
 from ..logging_config import LogCategory, get_saber_logger
-from ..models.constants import StepEvaluationStrategy, SubmissionEvaluationStrategy
+from ..models.constants import MetadataKeys, StepEvaluationStrategy, SubmissionEvaluationStrategy
 from ..models.core import EvalSubmission
+from ..models.evaluation_utils import parse_step_evaluations
 from ..models.rest.evaluation import (
     EpisodeStepsResponse,
     EpisodeSubmissionResponse,
     EvaluationResultSubmission,
     StepEvaluation,
-    SubmissionEvaluationCriteriaResponse,
     SubtaskEvaluationCriteriaResponse,
+    SubmissionEvaluationCriteriaResponse,
 )
 
 logger = get_saber_logger(LogCategory.EVALUATION, __name__)
@@ -173,7 +174,7 @@ def submission_score() -> Metric:
         submission_scores = []
         for sample_score in scores:
             if sample_score.score.metadata:
-                submission_score_value = sample_score.score.metadata.get("submission_score", 0.0)
+                submission_score_value = sample_score.score.metadata.get(MetadataKeys.SUBMISSION_SCORE, 0.0)
                 submission_scores.append(float(submission_score_value))
 
         return sum(submission_scores) / len(submission_scores) if submission_scores else 0.0
@@ -199,7 +200,7 @@ def subtask_score() -> Metric:
             if sample_score.score.metadata:
                 # Only include samples that have subtask_score in metadata
                 # (i.e., tasks with step_evaluation_config configured)
-                subtask_score_value = sample_score.score.metadata.get("subtask_score")
+                subtask_score_value = sample_score.score.metadata.get(MetadataKeys.SUBTASK_SCORE)
                 if subtask_score_value is not None:
                     subtask_scores.append(float(subtask_score_value))
 
@@ -234,12 +235,12 @@ def per_task_submission_scores() -> Metric:
 
             # Get task_id from sample metadata
             sample_metadata = sample_score.sample_metadata or {}
-            task_id = sample_metadata.get("task_id")
+            task_id = sample_metadata.get(MetadataKeys.TASK_ID)
             if not task_id:
                 continue
 
             # Get submission score
-            submission_score_value = sample_score.score.metadata.get("submission_score", 0.0)
+            submission_score_value = sample_score.score.metadata.get(MetadataKeys.SUBMISSION_SCORE, 0.0)
 
             # Track by task_id
             if task_id not in task_submission_scores:
@@ -282,12 +283,12 @@ def per_task_subtask_scores() -> Metric:
 
             # Get task_id from sample metadata
             sample_metadata = sample_score.sample_metadata or {}
-            task_id = sample_metadata.get("task_id")
+            task_id = sample_metadata.get(MetadataKeys.TASK_ID)
             if not task_id:
                 continue
 
             # Only include samples that have subtask_score in metadata
-            subtask_score_value = sample_score.score.metadata.get("subtask_score")
+            subtask_score_value = sample_score.score.metadata.get(MetadataKeys.SUBTASK_SCORE)
             if subtask_score_value is None:
                 continue
 
@@ -332,13 +333,12 @@ def subtask_score_metrics() -> Metric:
 
             # Get task_id from sample metadata
             sample_metadata = sample_score.sample_metadata or {}
-            task_id = sample_metadata.get("task_id")
+            task_id = sample_metadata.get(MetadataKeys.TASK_ID)
             if not task_id:
                 continue
 
             # Get the subtask_scores dict from metadata (only exists when step_criteria configured)
-            # Look for unweighted scores (raw 0.0 or max_score values)
-            sample_subtask_scores = sample_score.score.metadata.get("subtask_scores_unweighted")
+            sample_subtask_scores = sample_score.score.metadata.get(MetadataKeys.SUBTASK_SCORES)
             if sample_subtask_scores is None:
                 # Skip samples without subtask scoring
                 continue
@@ -444,7 +444,7 @@ def saber_scorer() -> Scorer:
             # FIX: Get episode_id from sample_id-keyed mapping to prevent cross-contamination
             # CRITICAL: Multiple attempts (attempt_1, attempt_2, attempt_3) share the same task_id
             # but run concurrently. Must use sample_id (which includes attempt suffix) as key.
-            sample_id = state.metadata.get("sample_id", task_id)  # Fallback to task_id if not set
+            sample_id = state.metadata.get(MetadataKeys.SAMPLE_ID, task_id)  # Fallback to task_id if not set
             episode_mapping = task_store.get("saber_episode_mapping", {})
             current_episode = episode_mapping.get(sample_id)
             episode_id = current_episode.episode_id if current_episode else None
@@ -660,35 +660,23 @@ def saber_scorer() -> Scorer:
             # Ensure task_id is in state.metadata so it appears in sample_metadata
             if state.metadata is None:
                 state.metadata = {}
-            state.metadata["task_id"] = task_id
+            state.metadata[MetadataKeys.TASK_ID] = task_id
 
-            # Build metadata - only include subtask data if step_criteria exists
+            # Build metadata - only include subtask data if subtasks_criteria_list exists
             metadata = {
-                "submission_score": submission_score,
+                MetadataKeys.SUBMISSION_SCORE: submission_score,
                 "max_possible": max_possible,
-                "task_id": task_id,
+                MetadataKeys.TASK_ID: task_id,
                 "scorer_version": "2.3",
-                "scoring_method": "max",
+                "scoring_method": "sum",
             }
 
             # Only add subtask-related metadata when subtasks are being scored
             if subtasks_criteria_list is not None and subtasks_criteria_list != []:
-                # Add subtask_score for the subtask_score() metric to find
-                metadata["subtask_score"] = total_subtask_score
-                metadata["step_evaluations_by_subtask"] = {
-                    subtasks_criteria_list[i].subtask_id: {
-                        "strategy": subtasks_criteria_list[i].strategy,
-                        "max_score": subtasks_criteria_list[i].max_score,
-                        "weight": subtasks_criteria_list[i].weight,
-                        "step_evaluations": [se.model_dump() for se in step_evals],
-                    }
-                    for i, step_evals in enumerate(step_evaluations)
-                    if i < len(subtasks_criteria_list)
-                }
-
-                # Store both weighted and unweighted scores for different purposes
-                metadata["subtask_scores_weighted"] = subtask_scores_weighted  # For internal use
-                metadata["subtask_scores_unweighted"] = subtask_scores_unweighted  # For metrics
+                metadata[MetadataKeys.SUBTASK_SCORE] = total_subtask_score
+                metadata[MetadataKeys.WEIGHTED_SUBTASK_SCORE] = total_subtask_score
+                metadata[MetadataKeys.STEP_EVALUATIONS] = [se.model_dump() for se in sum(step_evaluations, [])]
+                metadata[MetadataKeys.SUBTASK_SCORES] = subtask_scores_weighted  # Keep nested for programmatic access
 
                 # Add individual subtask scores as top-level metadata fields
                 # Format: <task_id>_<subtask_id>_score

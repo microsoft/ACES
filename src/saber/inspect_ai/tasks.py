@@ -25,18 +25,46 @@ import aiohttp
 import anyio
 from inspect_ai import Task
 from inspect_ai._util.error import PrerequisiteError
-from inspect_ai.dataset import MemoryDataset, Sample
 from inspect_ai.solver import Generate, Solver, TaskState, solver
 
 from ..client.api.rest_client import SABERRestClient
+from ..client.config_loader import RoleConfigLoader
+from ..client.models import RoleBasedConfig
 from ..logging_config import LogCategory, get_saber_logger
 from ..models import BenchmarkInfo
+from ..models.constants import MetadataKeys
 from .agents import AgentNotFoundError, SABERAgentRegistry
 from .saber_dataset import create_saber_dataset
 from .saber_scorer import saber_scorer
 from .server import DomainContext, DomainController
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
+
+
+def _all_roles_have_models(role_config: RoleBasedConfig) -> bool:
+    """Check if all roles in configuration have models defined.
+
+    Args:
+        role_config: Role-based configuration object
+
+    Returns:
+        True if all roles have models (or defaults provide a model), False otherwise
+    """
+    # Must have at least one role defined
+    if not role_config.roles:
+        return False
+
+    # If defaults has a model, all roles will inherit it
+    if role_config.defaults and role_config.defaults.model:
+        return True
+
+    # Check if all explicit roles have models
+    for role_name, role_conf in role_config.roles.items():
+        if not role_conf.model:
+            return False
+
+    return True
+
 
 # Process-wide registry tracking active domains
 # Key: domain_slug
@@ -118,6 +146,8 @@ def create_domain_task(
         max_concurrent_episodes: int = 16,
         run_preflight: bool = False,
         enable_debug_logging: bool = False,
+        roles: Optional[Union[str, dict]] = None,
+        roles_file: Optional[str] = None,
         **kwargs: Any,
     ) -> Task:
         """Task callable invoked by Inspect AI with CLI parameters.
@@ -143,7 +173,16 @@ def create_domain_task(
                 (default: False). If any environments fail health checks, evaluation aborts.
             enable_debug_logging: Enable detailed episode lifecycle debug logging
                 (default: False). When enabled, creates detailed logs in logs/saber_episode_debug_*.log
-            **kwargs: Additional parameters passed through
+            roles: Role-based configuration for orchestrated tasks. Can be:
+                - Dict (inline): {'red': {'agent': 'react', 'model': 'gpt-4'}, ...}
+                - String as JSON: '{"red": {"agent": "react"}}'
+                Note: For file-based configs, use roles_file parameter instead.
+            roles_file: Path to YAML/JSON role configuration file (relative or absolute).
+                Examples:
+                - 'configs/saber_dual_roles.yaml' (relative to current directory)
+                - '/absolute/path/to/roles.yaml'
+                This is the preferred method for file-based configs (simpler than roles parameter).
+            **kwargs: Additional parameters passed through (may include role overrides like red_model=...)
 
         Returns:
             Inspect AI Task with fully-populated dataset
@@ -168,6 +207,42 @@ def create_domain_task(
         # Use CLI agent override or domain default
         agent_to_use = agent if agent is not None else default_agent
 
+        # Process role-based configuration if provided
+        role_config_obj = None
+        roles_source = roles_file or roles  # Prefer roles_file if both provided
+
+        if roles_source is not None:
+            try:
+                # Extract role-specific overrides from kwargs (e.g., red_model=gpt-4)
+                role_overrides: Dict[str, Dict[str, Any]] = {}
+                for key, value in list(kwargs.items()):
+                    if "_" in key:
+                        parts = key.split("_", 1)
+                        if len(parts) == 2:
+                            # Potential role override like "red_model"
+                            role_name, field_name = parts
+                            if role_name not in role_overrides:
+                                role_overrides[role_name] = {}
+                            role_overrides[role_name][field_name] = value
+                            # Remove from kwargs so it's not passed downstream
+                            del kwargs[key]
+
+                # Load and merge role configuration
+                base_config = RoleConfigLoader.load(roles_source)
+                role_config_obj = RoleConfigLoader.merge_with_overrides(base_config, role_overrides)
+
+                logger.info(
+                    "Loaded role-based configuration",
+                    extra={
+                        "domain": domain_slug,
+                        "roles": list(role_config_obj.roles.keys()) if role_config_obj.roles else [],
+                        "has_defaults": role_config_obj.defaults is not None,
+                        "override_count": len(role_overrides),
+                    },
+                )
+            except Exception as e:
+                raise PrerequisiteError(f"Failed to load role configuration: {e}") from e
+
         # Get the portal and run async startup
         portal = _get_or_create_portal()
 
@@ -188,6 +263,7 @@ def create_domain_task(
                 max_concurrent_episodes,
                 run_preflight,
                 enable_debug_logging,
+                role_config_obj,
             )
         except Exception as e:
             # Ensure we have a clean error message
@@ -198,7 +274,7 @@ def create_domain_task(
     return task_callable
 
 
-def _create_saber_solver(agent_name: str, agent_factory: Callable) -> Solver:
+def _create_saber_solver(agent_name: str, agent_factory: Callable, role_config: Optional[Any] = None) -> Solver:
     """Create solver with SABER agent that extracts prompts from metadata.
 
     This solver:
@@ -210,6 +286,7 @@ def _create_saber_solver(agent_name: str, agent_factory: Callable) -> Solver:
     Args:
         agent_name: Name of the agent implementation
         agent_factory: Callable that creates the agent with prompts
+        role_config: Optional role-based configuration for model selection
 
     Returns:
         Solver that runs SABER agent with dynamic prompts
@@ -235,9 +312,9 @@ def _create_saber_solver(agent_name: str, agent_factory: Callable) -> Solver:
 
             # Extract prompts from sample metadata
             metadata = state.metadata
-            instruction_prompt = metadata.get("instruction_prompt")
-            assistant_prompt = metadata.get("assistant_prompt")
-            submit_prompt = metadata.get("submit_prompt")
+            instruction_prompt = metadata.get(MetadataKeys.INSTRUCTION_PROMPT)
+            assistant_prompt = metadata.get(MetadataKeys.ASSISTANT_PROMPT)
+            submit_prompt = metadata.get(MetadataKeys.SUBMIT_PROMPT)
 
             # Validate prompts are present
             if not instruction_prompt:
@@ -260,7 +337,7 @@ def _create_saber_solver(agent_name: str, agent_factory: Callable) -> Solver:
                 f"SABER agent '{agent_name}' starting with prompts from metadata",
                 extra={
                     "agent": agent_name,
-                    "task_id": metadata.get("task_id"),
+                    "task_id": metadata.get(MetadataKeys.TASK_ID),
                     "instruction_length": len(instruction_prompt),
                     "assistant_length": len(assistant_prompt),
                     "submit_length": len(submit_prompt),
@@ -299,9 +376,81 @@ def _create_saber_solver(agent_name: str, agent_factory: Callable) -> Solver:
                 agent_type=type(agent).__name__,
             )
 
-            # Execute the agent
+            # Check for role-based model selection
+            role = metadata.get(MetadataKeys.SUB_TASK_ROLE)
+
+            # DEBUG: Log role detection
+            debug_logger.info(
+                "🔍 ROLE CHECK",
+                role=role,
+                has_role_config=role_config is not None,
+                metadata_keys=list(metadata.keys()) if metadata else [],
+            )
+
+            if role and role_config:
+                from inspect_ai.model import get_model
+                from inspect_ai.model._model import active_model, active_model_context_var
+
+                # Get role-specific model from configuration
+                try:
+                    role_agent_config = role_config.get_config_for_role(role)
+                    role_model_name = role_agent_config.model
+
+                    if role_model_name:
+                        logger.info(
+                            f"Using role-specific model for '{role}' role: {role_model_name}",
+                            extra={
+                                "role": role,
+                                "model": role_model_name,
+                                "task_id": metadata.get(MetadataKeys.TASK_ID),
+                            },
+                        )
+
+                        # Get the model instance
+                        role_model = get_model(role_model_name)
+
+                        # Save current model to restore later
+                        previous_model = active_model()
+
+                        try:
+                            # Set role-specific model as active using context var
+                            active_model_context_var.set(role_model)
+
+                            # Execute agent with role-specific model context
+                            result = await agent(state)
+                        finally:
+                            # Restore previous model
+                            if previous_model:
+                                active_model_context_var.set(previous_model)
+                            else:
+                                # If no previous model, clear the context
+                                active_model_context_var.set(None)
+
+                        logger.info(
+                            f"SABER agent '{agent_name}' execution complete with role model",
+                            extra={
+                                "agent": agent_name,
+                                "role": role,
+                                "model": role_model_name,
+                                "task_id": metadata.get(MetadataKeys.TASK_ID),
+                            },
+                        )
+                        return result
+
+                except Exception as e:
+                    logger.warning(
+                        "Failed to apply role-based model, using default",
+                        extra={
+                            "role": role,
+                            "error": str(e),
+                            "task_id": metadata.get(MetadataKeys.TASK_ID),
+                        },
+                    )
+
+            # Execute the agent with default model
             logger.debug(
-                f"Executing SABER agent '{agent_name}'", extra={"agent": agent_name, "task_id": metadata.get("task_id")}
+                f"Executing SABER agent '{agent_name}'",
+                extra={"agent": agent_name, "task_id": metadata.get(MetadataKeys.TASK_ID)},
             )
             result = await agent(state)
 
@@ -309,7 +458,7 @@ def _create_saber_solver(agent_name: str, agent_factory: Callable) -> Solver:
                 f"SABER agent '{agent_name}' execution complete",
                 extra={
                     "agent": agent_name,
-                    "task_id": metadata.get("task_id"),
+                    "task_id": metadata.get(MetadataKeys.TASK_ID),
                     "completion_length": len(result.output.completion) if result.output.completion else 0,
                 },
             )
@@ -481,6 +630,7 @@ async def _start_and_load_tasks(
     max_concurrent_episodes: int,
     run_preflight: bool,
     enable_debug_logging: bool = False,
+    role_config: Optional[Any] = None,
     **kwargs: Any,
 ) -> Task:
     """Start SABER domain and load tasks as dataset.
@@ -687,26 +837,74 @@ async def _start_and_load_tasks(
                 },
             )
 
-        # Convert to dataset with pre-assigned IDs
-        samples: List[Sample] = await create_saber_dataset(tasks_to_load)
+        # Convert to SABERDataset with orchestration-aware slicing
+        dataset = await create_saber_dataset(tasks_to_load)  # type: ignore[arg-type]
 
         logger.info(
-            f"Created dataset with {len(samples)} samples",
+            f"Created dataset with {len(dataset)} samples",
             extra={
                 "domain": domain_slug,
-                "sample_count": len(samples),
+                "sample_count": len(dataset),
                 "task_count": len(tasks_to_load),
             },
         )
 
-        # Create solver with the resolved agent
-        saber_solver = _create_saber_solver(agent_name, agent_factory)
+        # Check for orchestrated tasks and log info (SABERDataset handles --limit automatically)
+        orchestrations: Dict[str, List[str]] = {}
+        for sample in dataset:
+            orch_id = sample.metadata.get(MetadataKeys.ORCHESTRATION_ID) if sample.metadata else None
+            if orch_id:
+                if orch_id not in orchestrations:
+                    orchestrations[orch_id] = []
+                orchestrations[orch_id].append(sample.id)
 
-        # Construct Task with MemoryDataset, sandbox config, solver, and scorer
+        if orchestrations:
+            logger.info(
+                f"Dataset contains {len(orchestrations)} orchestrated task(s). "
+                f"SABERDataset will automatically preserve orchestration boundaries when --limit is applied.",
+                extra={
+                    "domain": domain_slug,
+                    "orchestration_count": len(orchestrations),
+                    "total_samples": len(dataset),
+                    "orchestrations": {k: len(v) for k, v in orchestrations.items()},
+                },
+            )
+        # Create solver with the resolved agent and role_config for model selection
+        saber_solver = _create_saber_solver(agent_name, agent_factory, role_config)
+
+        # Construct Task with SABERDataset, sandbox config, solver, and scorer
+        # The SABERDataset automatically handles orchestration-aware slicing
         # The sandbox config points to SABERSandboxEnvironment
         # The scorer performs client-side evaluation after agent execution
+
+        # Check if role_config provides all models (allows bypassing --model requirement)
+        task_model: Optional[str] = None
+        if role_config and _all_roles_have_models(role_config):
+            # All roles have models - use first role's model as Task default
+            #
+            # NOTE: This Task is used ONLY when running via `inspect eval` command.
+            # Role-based model assignment is fully supported only when using SABER's
+            # native runner (EvaluationOrchestrator), which creates separate Task
+            # instances per role via AgentManager.create_agent_task().
+            #
+            # When using `inspect eval`, there is only one Task and one model context,
+            # so we use the first role's model as a reasonable default.
+            first_role = list(role_config.roles.keys())[0]
+            first_role_config = role_config.get_config_for_role(first_role)
+            task_model = first_role_config.model
+            logger.info(
+                "All roles have models defined - using first role's model as Task default",
+                extra={
+                    "domain": domain_slug,
+                    "roles": list(role_config.roles.keys()) if role_config.roles else [],
+                    "default_model": task_model,
+                    "default_from_role": first_role,
+                },
+            )
+
         task = Task(
-            dataset=MemoryDataset(samples),
+            dataset=dataset,
+            model=task_model,  # None if all roles have models, otherwise uses Inspect AI's default
             sandbox=(
                 "saber",
                 {
@@ -731,7 +929,7 @@ async def _start_and_load_tasks(
             f"SABER task construction complete for domain '{domain_slug}'",
             extra={
                 "domain": domain_slug,
-                "sample_count": len(samples),
+                "sample_count": len(dataset),
             },
         )
 
@@ -833,7 +1031,10 @@ def _apply_task_filter(
     task_filter: Union[str, List[str]],
     domain_slug: str,
 ) -> List[Any]:
-    """Apply task filter with exact and glob pattern matching.
+    """Apply task filter with exact and glob pattern matching using polymorphic dispatch.
+
+    Supports both legacy TaskInfo and new polymorphic BenchmarkTask types.
+    Uses the polymorphic matches_filter() method on each task for type-safe filtering.
 
     Supports:
     - Exact match: task_filter="labyrinth_linguist_task_hard"
@@ -842,17 +1043,21 @@ def _apply_task_filter(
     - Multiple filters (OR logic): task_filter="xss_*,sql_*"
     - Multiple filters with exact: task_filter="xss_0_flag_capture,sql_*,cmd_injection_task"
 
+    For OrchestratedTask: Matching ANY sub-task includes the entire orchestration.
+    For SingleEpisodeTask: Matches against the single task_id.
+    For TaskInfo: Legacy exact/glob matching against task_id.
+
     Multiple filters are separated by commas and matched with OR logic.
     Each filter can be an exact match or a glob pattern.
 
     Args:
-        tasks: List of TaskInfo objects from server
+        tasks: List of TaskInfo or BenchmarkTask objects from server
         task_filter: Filter pattern (exact, glob, or comma-separated patterns)
                     Can be a string or a list (Inspect AI may parse comma-separated values as lists)
         domain_slug: Domain slug for error messages
 
     Returns:
-        Filtered list of TaskInfo objects (deduplicated)
+        Filtered list of tasks (deduplicated)
 
     Raises:
         PrerequisiteError: If no tasks match any of the filters
@@ -865,33 +1070,46 @@ def _apply_task_filter(
         filter_patterns = [pattern.strip() for pattern in task_filter.split(",")]
 
     # Collect all matching tasks across all patterns
-    # Use dict to deduplicate by task_id while preserving TaskInfo objects
+    # Use dict to deduplicate - key depends on task type
     matched_tasks: Dict[str, Any] = {}
 
     for pattern in filter_patterns:
         if not pattern:  # Skip empty patterns
             continue
 
-        # Try exact match first
-        exact_matches = [t for t in tasks if t.task_id == pattern]
-        if exact_matches:
-            for task in exact_matches:
-                matched_tasks[task.task_id] = task
-            continue
-
-        # Try glob pattern
-        glob_matches = [t for t in tasks if fnmatch.fnmatch(t.task_id, pattern)]
-        if glob_matches:
-            for task in glob_matches:
-                matched_tasks[task.task_id] = task
+        # Use polymorphic matches_filter() if available (BenchmarkTask types)
+        # Otherwise fall back to legacy exact/glob matching (TaskInfo)
+        for task in tasks:
+            if hasattr(task, "matches_filter"):
+                # New polymorphic task types (SingleEpisodeTask, OrchestratedTask)
+                if task.matches_filter(pattern):
+                    # Use benchmark_task_id as key for deduplication
+                    matched_tasks[task.benchmark_task_id] = task
+            else:
+                # Legacy TaskInfo - use exact/glob matching
+                task_id = task.task_id
+                if task_id == pattern or fnmatch.fnmatch(task_id, pattern):
+                    matched_tasks[task_id] = task
 
     # Convert back to list and maintain consistent ordering
     if matched_tasks:
-        # Sort by task_id for deterministic ordering
-        return sorted(matched_tasks.values(), key=lambda t: t.task_id)
+        # Sort by task ID for deterministic ordering
+        def get_sort_key(t: Any) -> str:
+            if hasattr(t, "benchmark_task_id"):
+                return str(t.benchmark_task_id)
+            else:
+                return str(t.task_id)
+
+        return sorted(matched_tasks.values(), key=get_sort_key)
 
     # No matches - provide helpful error
-    available_ids = [t.task_id for t in tasks]
+    available_ids = []
+    for task in tasks:
+        if hasattr(task, "benchmark_task_id"):
+            available_ids.append(task.benchmark_task_id)
+        else:
+            available_ids.append(task.task_id)
+
     # Format task_filter for error message
     filter_display = task_filter if isinstance(task_filter, str) else ",".join(task_filter)
     raise PrerequisiteError(

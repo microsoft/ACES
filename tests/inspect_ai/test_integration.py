@@ -15,7 +15,7 @@ import pytest
 from inspect_ai import Task
 from inspect_ai.dataset import Sample
 
-from saber.models import BenchmarkInfo, TaskInfo
+from saber.models import BenchmarkInfo, SingleEpisodeTask
 
 # Add saber root to sys.path for domain imports (external/saber)
 _SABER_ROOT = Path(__file__).parent.parent.parent
@@ -24,14 +24,15 @@ if str(_SABER_ROOT) not in sys.path:
 
 
 @pytest.fixture
-def mock_task_info():
-    """Mock TaskInfo for testing."""
-    return TaskInfo(
+def mock_task():
+    """Mock SingleEpisodeTask for testing."""
+    return SingleEpisodeTask(
+        benchmark_task_id="integration_test_task",
         task_id="integration_test_task",
+        domain="test_domain",
         title="Integration Test Task",
         description="A task for integration testing",
         episode_attempts=1,
-        subtask_count=0,
         max_steps=10,
         instruction_prompt="Test instruction",
         assistant_prompt="Test assistant",
@@ -40,11 +41,11 @@ def mock_task_info():
 
 
 @pytest.fixture
-def mock_benchmark_info(mock_task_info):
+def mock_benchmark_info(mock_task):
     """Mock BenchmarkInfo."""
     return BenchmarkInfo(
         domain="test_domain",
-        tasks=[mock_task_info],
+        tasks=[mock_task],
         total_tasks=1,
         total_episodes=1,
     )
@@ -177,23 +178,25 @@ class TestTaskCallableExecution:
 
         # Create multiple tasks
         tasks = [
-            TaskInfo(
+            SingleEpisodeTask(
+                benchmark_task_id="labyrinth_easy",
                 task_id="labyrinth_easy",
+                domain="test_domain",
                 title="Easy",
                 description="Easy",
                 episode_attempts=1,
-                subtask_count=0,
                 max_steps=10,
                 instruction_prompt="",
                 assistant_prompt="",
                 submit_prompt="",
             ),
-            TaskInfo(
+            SingleEpisodeTask(
+                benchmark_task_id="labyrinth_hard",
                 task_id="labyrinth_hard",
+                domain="test_domain",
                 title="Hard",
                 description="Hard",
                 episode_attempts=1,
-                subtask_count=0,
                 max_steps=10,
                 instruction_prompt="",
                 assistant_prompt="",
@@ -265,45 +268,49 @@ class TestTaskCallableExecution:
 
         # Create multiple tasks with different prefixes
         tasks = [
-            TaskInfo(
+            SingleEpisodeTask(
+                benchmark_task_id="xss_0_flag_capture",
                 task_id="xss_0_flag_capture",
+                domain="test_domain",
                 title="XSS Task 0",
                 description="XSS",
                 episode_attempts=1,
-                subtask_count=0,
                 max_steps=10,
                 instruction_prompt="",
                 assistant_prompt="",
                 submit_prompt="",
             ),
-            TaskInfo(
+            SingleEpisodeTask(
+                benchmark_task_id="xss_1_blind",
                 task_id="xss_1_blind",
+                domain="test_domain",
                 title="XSS Task 1",
                 description="XSS Blind",
                 episode_attempts=1,
-                subtask_count=0,
                 max_steps=10,
                 instruction_prompt="",
                 assistant_prompt="",
                 submit_prompt="",
             ),
-            TaskInfo(
+            SingleEpisodeTask(
+                benchmark_task_id="sql_injection_basic",
                 task_id="sql_injection_basic",
+                domain="test_domain",
                 title="SQL Task",
                 description="SQL Injection",
                 episode_attempts=1,
-                subtask_count=0,
                 max_steps=10,
                 instruction_prompt="",
                 assistant_prompt="",
                 submit_prompt="",
             ),
-            TaskInfo(
+            SingleEpisodeTask(
+                benchmark_task_id="cmd_injection_task",
                 task_id="cmd_injection_task",
+                domain="test_domain",
                 title="CMD Task",
                 description="Command Injection",
                 episode_attempts=1,
-                subtask_count=0,
                 max_steps=10,
                 instruction_prompt="",
                 assistant_prompt="",
@@ -391,34 +398,37 @@ class TestTaskCallableExecution:
         from saber.inspect_ai.tasks import create_domain_task
 
         tasks = [
-            TaskInfo(
+            SingleEpisodeTask(
+                benchmark_task_id="xss_0_flag_capture",
                 task_id="xss_0_flag_capture",
+                domain="test_domain",
                 title="XSS Task 0",
                 description="XSS",
                 episode_attempts=1,
-                subtask_count=0,
                 max_steps=10,
                 instruction_prompt="",
                 assistant_prompt="",
                 submit_prompt="",
             ),
-            TaskInfo(
+            SingleEpisodeTask(
+                benchmark_task_id="sql_injection_basic",
                 task_id="sql_injection_basic",
+                domain="test_domain",
                 title="SQL Task",
                 description="SQL",
                 episode_attempts=1,
-                subtask_count=0,
                 max_steps=10,
                 instruction_prompt="",
                 assistant_prompt="",
                 submit_prompt="",
             ),
-            TaskInfo(
+            SingleEpisodeTask(
+                benchmark_task_id="cmd_injection_advanced",
                 task_id="cmd_injection_advanced",
+                domain="test_domain",
                 title="CMD Task",
                 description="CMD",
                 episode_attempts=1,
-                subtask_count=0,
                 max_steps=10,
                 instruction_prompt="",
                 assistant_prompt="",

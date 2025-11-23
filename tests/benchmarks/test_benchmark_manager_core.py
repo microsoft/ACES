@@ -47,6 +47,7 @@ class TestBenchmarkManagerCore:
         mock_task.prompts={"instruction": "test_prompt.md", "assistant": "test_prompt.md", "submit": "test_prompt.md"}
         mock_task.task_id = "test_task"
         mock_task.submission_evaluation_config = None  # No LLM judge config
+        mock_task.depends_on_task_id = None  # No dependencies
         mock_tasks = {"test_task": mock_task}
         mock_load.return_value = mock_tasks
 
@@ -951,3 +952,295 @@ tasks:
         # Verify the error message indicates template validation failure
         error_message = str(exc_info.value)
         assert "Template validation failed" in error_message
+
+
+class TestBenchmarkManagerOrchestrationRoles:
+    """Test cases for orchestrated task role configuration."""
+
+    def test_orchestrated_task_uses_yaml_roles(self, tmp_path, temp_config_dir_helper):
+        """Test that orchestrated tasks use roles from YAML instead of hardcoded values."""
+        yaml_content = """
+domain: test_domain
+
+global_defaults:
+  execution_config:
+    executors:
+      bash:
+        timeout: 30
+  episode_config:
+    max_steps: 10
+  prompts:
+    instruction: "instructions/default.md"
+    assistant: "assistants/default.md"
+    submit: "submits/default.md"
+
+benchmark_config:
+  episode_attempts: 1
+
+executors:
+  - bash
+
+tasks:
+  - task_id: "blue_defend"
+    role: blue
+    title: "Blue Team Defense"
+    description: "Defender task"
+    prompts:
+      instruction: "instructions/blue.md"
+      assistant: "assistants/blue.md"
+      submit: "submits/blue.md"
+    submission_evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers: ["defended"]
+      scoring:
+        max_score: 1.0
+    subtasks: []
+
+  - task_id: "red_attack"
+    role: red
+    depends_on_task_id: "blue_defend"
+    title: "Red Team Attack"
+    description: "Attacker task"
+    prompts:
+      instruction: "instructions/red.md"
+      assistant: "assistants/red.md"
+      submit: "submits/red.md"
+    submission_evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers: ["attacked"]
+      scoring:
+        max_score: 1.0
+    subtasks: []
+"""
+        temp_config_dir = temp_config_dir_helper(tmp_path, yaml_content)
+
+        # Create template files to satisfy validation
+        prompts_dir = Path(temp_config_dir) / "prompts"
+        for subdir in ["instructions", "assistants", "submits"]:
+            (prompts_dir / subdir).mkdir(parents=True, exist_ok=True)
+            for template in ["default.md", "blue.md", "red.md"]:
+                (prompts_dir / subdir / template).write_text("# Template")
+
+        manager = BenchmarkManager("test_domain", temp_config_dir)
+        tasks = manager.list_benchmark_tasks()
+
+        # With dependencies, we should see both tasks listed
+        # The blue task should have role="blue" and red should have role="red"
+        assert len(tasks) >= 1
+
+        # Find tasks by ID
+        blue_task = next((t for t in tasks if t.get("task_id") == "blue_defend"), None)
+        red_task = next((t for t in tasks if t.get("task_id") == "red_attack"), None)
+
+        # At minimum, the blue task should exist
+        assert blue_task is not None
+
+        # Check that tasks were loaded with roles from YAML
+        assert manager.tasks["blue_defend"].role == "blue"
+        assert manager.tasks["red_attack"].role == "red"
+
+    def test_orchestrated_task_root_validation(self, tmp_path, temp_config_dir_helper):
+        """Test that orchestration fails if root task lacks role."""
+        yaml_content = """
+domain: test_domain
+
+global_defaults:
+  execution_config:
+    executors:
+      bash:
+        timeout: 30
+  episode_config:
+    max_steps: 10
+  prompts:
+    instruction: "instructions/default.md"
+    assistant: "assistants/default.md"
+    submit: "submits/default.md"
+
+benchmark_config:
+  episode_attempts: 1
+
+executors:
+  - bash
+
+tasks:
+  - task_id: "root_task"
+    # Missing role field - should fail
+    title: "Root Task"
+    description: "Root without role"
+    prompts:
+      instruction: "instructions/root.md"
+      assistant: "assistants/root.md"
+      submit: "submits/root.md"
+    submission_evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers: ["test"]
+      scoring:
+        max_score: 1.0
+    subtasks: []
+
+  - task_id: "dependent_task"
+    role: dependent
+    depends_on_task_id: "root_task"
+    title: "Dependent Task"
+    description: "Depends on root"
+    prompts:
+      instruction: "instructions/dependent.md"
+      assistant: "assistants/dependent.md"
+      submit: "submits/dependent.md"
+    submission_evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers: ["test"]
+      scoring:
+        max_score: 1.0
+    subtasks: []
+"""
+        temp_config_dir = temp_config_dir_helper(tmp_path, yaml_content)
+
+        # Create template files
+        templates_dir = Path(temp_config_dir) / "templates"
+        for subdir in ["instructions", "assistants", "submits"]:
+            (templates_dir / subdir).mkdir(parents=True, exist_ok=True)
+            for template in ["default.md", "root.md", "dependent.md"]:
+                (templates_dir / subdir / template).write_text("# Template")
+
+        # Should fail during initialization when validating dependencies
+        with pytest.raises(InvalidTaskDefinitionException, match="Root task 'root_task' must have a 'role' defined"):
+            BenchmarkManager("test_domain", temp_config_dir)
+
+    def test_orchestrated_task_custom_semantic_roles(self, tmp_path, temp_config_dir_helper):
+        """Test orchestration with custom semantic role names."""
+        yaml_content = """
+domain: test_domain
+
+global_defaults:
+  execution_config:
+    executors:
+      bash:
+        timeout: 30
+  episode_config:
+    max_steps: 10
+  prompts:
+    instruction: "instructions/default.md"
+    assistant: "assistants/default.md"
+    submit: "submits/default.md"
+
+benchmark_config:
+  episode_attempts: 1
+
+executors:
+  - bash
+
+tasks:
+  - task_id: "defender_task"
+    role: defender
+    title: "System Defender"
+    description: "Defend the system"
+    prompts:
+      instruction: "instructions/defender.md"
+      assistant: "assistants/defender.md"
+      submit: "submits/defender.md"
+    submission_evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers: ["defended"]
+      scoring:
+        max_score: 1.0
+    subtasks: []
+
+  - task_id: "attacker_task"
+    role: attacker
+    depends_on_task_id: "defender_task"
+    title: "System Attacker"
+    description: "Attack the system"
+    prompts:
+      instruction: "instructions/attacker.md"
+      assistant: "assistants/attacker.md"
+      submit: "submits/attacker.md"
+    submission_evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers: ["attacked"]
+      scoring:
+        max_score: 1.0
+    subtasks: []
+"""
+        temp_config_dir = temp_config_dir_helper(tmp_path, yaml_content)
+
+        # Create template files
+        prompts_dir = Path(temp_config_dir) / "prompts"
+        for subdir in ["instructions", "assistants", "submits"]:
+            (prompts_dir / subdir).mkdir(parents=True, exist_ok=True)
+            for template in ["default.md", "defender.md", "attacker.md"]:
+                (prompts_dir / subdir / template).write_text("# Template")
+
+        manager = BenchmarkManager("test_domain", temp_config_dir)
+        tasks = manager.list_benchmark_tasks()
+
+        # Check that tasks were loaded with custom semantic roles
+        assert manager.tasks["defender_task"].role == "defender"
+        assert manager.tasks["attacker_task"].role == "attacker"
+        assert manager.tasks["attacker_task"].depends_on_task_id == "defender_task"
+
+    def test_single_task_without_role_not_orchestrated(self, tmp_path, temp_config_dir_helper):
+        """Test that single tasks without roles are not treated as orchestrated."""
+        yaml_content = """
+domain: test_domain
+
+global_defaults:
+  execution_config:
+    executors:
+      bash:
+        timeout: 30
+  episode_config:
+    max_steps: 10
+  prompts:
+    instruction: "instructions/default.md"
+    assistant: "assistants/default.md"
+    submit: "submits/default.md"
+
+benchmark_config:
+  episode_attempts: 1
+
+executors:
+  - bash
+
+tasks:
+  - task_id: "single_task"
+    # No role field - single episode task
+    title: "Single Task"
+    description: "Standalone task"
+    prompts:
+      instruction: "instructions/single.md"
+      assistant: "assistants/single.md"
+      submit: "submits/single.md"
+    submission_evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers: ["completed"]
+      scoring:
+        max_score: 1.0
+    subtasks: []
+"""
+        temp_config_dir = temp_config_dir_helper(tmp_path, yaml_content)
+
+        # Create template files
+        prompts_dir = Path(temp_config_dir) / "prompts"
+        for subdir in ["instructions", "assistants", "submits"]:
+            (prompts_dir / subdir).mkdir(parents=True, exist_ok=True)
+            for template in ["default.md", "single.md"]:
+                (prompts_dir / subdir / template).write_text("# Template")
+
+        manager = BenchmarkManager("test_domain", temp_config_dir)
+        tasks = manager.list_benchmark_tasks()
+
+        # Should have 1 task
+        assert len(tasks) == 1
+        assert tasks[0]["task_id"] == "single_task"
+
+        # Verify the task has no role (it's a single episode task)
+        assert manager.tasks["single_task"].role is None
+        assert manager.tasks["single_task"].depends_on_task_id is None

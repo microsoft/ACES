@@ -104,11 +104,6 @@ class Action(BaseModel):
     )
     timestamp: datetime = Field(default_factory=datetime.utcnow, description="When the action was initiated")
 
-    class Config:
-        """Pydantic configuration."""
-
-        json_encoders = {datetime: lambda v: v.isoformat()}
-
 
 class Step(BaseModel):
     """Represents a complete action-response cycle within an episode."""
@@ -119,11 +114,6 @@ class Step(BaseModel):
     response: Dict[str, Any] = Field(..., description="Tool execution result")
     context_snapshot: Dict[str, Any] = Field(default_factory=dict, description="Context state at this step")
     done: bool = Field(False, description="Whether the episode ended after this step")
-
-    class Config:
-        """Pydantic configuration."""
-
-        json_encoders = {datetime: lambda v: v.isoformat()}
 
 
 class EpisodeState(Enum):
@@ -164,11 +154,6 @@ class Episode(BaseModel):
     )
     attached_to_episode_id: Optional[str] = Field(None, description="Episode ID this episode is attached to")
     attached_episode_ids: List[str] = Field(default_factory=list, description="Episode IDs attached to this episode")
-
-    class Config:
-        """Pydantic configuration."""
-
-        json_encoders = {datetime: lambda v: v.isoformat()}
 
     @property
     def is_complete(self) -> bool:

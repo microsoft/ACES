@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from saber.server.base import Action, CommandResult, Episode, Step
+from saber.server.base import Action, CommandResult, Episode, EpisodeState, Step
 from saber.server.session_manager import SessionManager
 
 
@@ -22,8 +22,7 @@ class TestSessionManagerEpisodes:
         episode = MagicMock(spec=Episode)
         episode.episode_id = "episode_123"
         episode.task_id = "task_456"
-        episode.state = MagicMock()
-        episode.state.value = "active"
+        episode.state = EpisodeState.READY  # Use actual enum value
         episode.steps = []
         return episode
 
@@ -171,8 +170,10 @@ class TestSessionManagerEpisodes:
         # Mock episode manager to return a valid episode
         mock_episode_obj = MagicMock()
         mock_episode_obj.episode_id = "episode_123"
+        mock_episode_obj.state = EpisodeState.READY
         mock_episode_obj.add_step = MagicMock()
         manager.episode_manager.get_episode.return_value = mock_episode_obj
+        manager.episode_manager.get_episode_by_id.return_value = mock_episode_obj
 
         # Mock execution and episode manager responses
         command_result = CommandResult(exit_code=0, stdout="test output", stderr="", execution_time=0.1)
@@ -242,8 +243,10 @@ class TestSessionManagerEpisodes:
         # Mock episode manager to return a valid episode
         mock_episode_obj = MagicMock()
         mock_episode_obj.episode_id = "episode_123"
+        mock_episode_obj.state = EpisodeState.READY
         mock_episode_obj.add_step = MagicMock()
         manager.episode_manager.get_episode.return_value = mock_episode_obj
+        manager.episode_manager.get_episode_by_id.return_value = mock_episode_obj
 
         # Mock step as completed
         mock_step.done = True
@@ -282,6 +285,12 @@ class TestSessionManagerEpisodes:
         session_id = session.session_id
         # Add episode to session's active episodes (replacing current_episode_id)
         session.add_active_episode("episode_123")
+
+        # Mock episode manager to return a valid episode
+        mock_episode_obj = MagicMock()
+        mock_episode_obj.episode_id = "episode_123"
+        mock_episode_obj.state = EpisodeState.READY
+        manager.episode_manager.get_episode_by_id.return_value = mock_episode_obj
 
         # Mock execution manager to raise exception
         manager.execution_manager.step.side_effect = Exception("Execution failed")

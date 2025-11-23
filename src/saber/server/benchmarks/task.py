@@ -34,6 +34,7 @@ class Task:
         step_evaluation_config: Optional[Dict[str, Any]] = None,
         # Note - step evaluation config is also captured in the subtasks themselves
         depends_on_task_id: Optional[str] = None,
+        role: Optional[str] = None,
         initial_files: Optional[Dict[str, str]] = None,
     ):
         """
@@ -59,6 +60,10 @@ class Task:
             submission_evaluation_config: Submission-level evaluation config (strategy, criteria, scoring)
             step_evaluation_config: Step-level evaluation config (strategy, criteria, subtasks)
             depends_on_task_id: Task ID that episodes of this task should connect to when created
+            role: Role identifier for model/agent assignment in orchestrated tasks. Use domain-
+                appropriate naming (e.g., cyber='blue'/'red', commerce='buyer'/'seller',
+                network='client'/'server'). Required when depends_on_task_id is set. Not
+                needed for standalone tasks.
             initial_files: Dictionary mapping destination paths in container to source paths
                 relative to server/data directory. Example:
                 {"/root/pom.xml": "sandbox_files/challenge/pom.xml"}
@@ -73,6 +78,13 @@ class Task:
                 raise ValueError(f"Task '{task_id}': missing required prompt type '{prompt_type}'")
             if not isinstance(prompts[prompt_type], str) or not prompts[prompt_type].strip():
                 raise ValueError(f"Task '{task_id}': prompt type '{prompt_type}' must be a non-empty string")
+
+        # Validate role configuration - fail fast
+        if depends_on_task_id and not role:
+            raise ValueError(
+                f"Task '{task_id}': 'role' is required when 'depends_on_task_id' is set. "
+                f"Add 'role: <role_name>' to the task YAML file."
+            )
 
         self.task_id = task_id
         self.domain = domain
@@ -90,6 +102,7 @@ class Task:
         self.submission_evaluation_config = submission_evaluation_config or {}
         self.step_evaluation_config = step_evaluation_config
         self.depends_on_task_id = depends_on_task_id
+        self.role = role
         self.initial_files = initial_files or {}
 
         # Create lookup map for efficient subtask access

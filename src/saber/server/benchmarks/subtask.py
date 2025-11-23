@@ -21,7 +21,7 @@ class SubTask(BaseModel):
     title: str = Field(..., description="Human-readable title")
     description: str = Field(..., description="Detailed description of the subtask")
     objective: str = Field(..., description="Primary objective to accomplish")
-    hint: Optional[str] = Field(None, description="Optional hint to guide without spoiling the challenge")
+    hints: Optional[list[str]] = Field(None, description="Optional hints to guide without spoiling the challenge")
     subtask_strategy: Optional[str] = Field(
         None,
         description=(

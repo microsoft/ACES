@@ -29,18 +29,19 @@ from saber.inspect_ai.tasks import (
     get_active_domain,
     remove_active_domain,
 )
-from saber.models import BenchmarkInfo, TaskInfo
+from saber.models import BenchmarkInfo, SingleEpisodeTask
 
 
 @pytest.fixture
-def mock_task_info():
-    """Mock TaskInfo for testing."""
-    return TaskInfo(
+def mock_task():
+    """Mock SingleEpisodeTask for testing."""
+    return SingleEpisodeTask(
+        benchmark_task_id="test_task",
         task_id="test_task",
+        domain="test_domain",
         title="Test Task",
         description="A test task",
         episode_attempts=2,
-        subtask_count=0,
         max_steps=10,
         instruction_prompt="Test instruction",
         assistant_prompt="Test assistant",
@@ -49,11 +50,11 @@ def mock_task_info():
 
 
 @pytest.fixture
-def mock_benchmark_info(mock_task_info):
+def mock_benchmark_info(mock_task):
     """Mock BenchmarkInfo with tasks."""
     return BenchmarkInfo(
         domain="test_domain",
-        tasks=[mock_task_info],
+        tasks=[mock_task],
         total_tasks=1,
         total_episodes=2,
     )
@@ -160,6 +161,8 @@ class TestStartAndLoadTasks:
                 rebuild=None,
                 compose_template_path=None,
                 stop_saber_after=False,
+                max_concurrent_episodes=3,
+                run_preflight=False,
             )
 
                 # Verify
@@ -225,6 +228,8 @@ class TestStartAndLoadTasks:
                 rebuild=None,
                 compose_template_path=None,
                 stop_saber_after=False,
+                max_concurrent_episodes=3,
+                run_preflight=False,
             )
 
             # Verify task was created successfully
@@ -259,6 +264,8 @@ class TestStartAndLoadTasks:
                     rebuild=None,
                     compose_template_path=None,
                     stop_saber_after=False,
+                    max_concurrent_episodes=3,
+                    run_preflight=False,
                 )
 
             assert "Docker error" in str(exc_info.value)
@@ -298,6 +305,8 @@ class TestStartAndLoadTasks:
                     rebuild=None,
                     compose_template_path=None,
                     stop_saber_after=False,
+                    max_concurrent_episodes=3,
+                    run_preflight=False,
                 )
 
             assert "Health check timeout" in str(exc_info.value)
@@ -360,6 +369,8 @@ class TestPreflightCheck:
                 rebuild=None,
                 compose_template_path=None,
                 stop_saber_after=False,
+                max_concurrent_episodes=3,
+                run_preflight=False,
             )
 
             # Verify controller was started
@@ -415,9 +426,9 @@ class TestWaitForServerHealth:
 class TestApplyTaskFilter:
     """Test _apply_task_filter with exact and glob matching."""
 
-    def test_exact_match(self, mock_task_info):
+    def test_exact_match(self, mock_task):
         """Test exact task ID match."""
-        tasks = [mock_task_info]
+        tasks = [mock_task]
 
         result = _apply_task_filter(tasks, "test_task", "test_domain")
 
@@ -427,34 +438,37 @@ class TestApplyTaskFilter:
     def test_glob_pattern_prefix(self):
         """Test glob pattern with prefix match."""
         tasks = [
-            TaskInfo(
+            SingleEpisodeTask(
+                benchmark_task_id="labyrinth_easy",
                 task_id="labyrinth_easy",
+                domain="test_domain",
                 title="Easy",
                 description="Easy task",
                 episode_attempts=1,
-                subtask_count=0,
                 max_steps=10,
                 instruction_prompt="",
                 assistant_prompt="",
                 submit_prompt="",
             ),
-            TaskInfo(
+            SingleEpisodeTask(
+                benchmark_task_id="labyrinth_hard",
                 task_id="labyrinth_hard",
+                domain="test_domain",
                 title="Hard",
                 description="Hard task",
                 episode_attempts=1,
-                subtask_count=0,
                 max_steps=10,
                 instruction_prompt="",
                 assistant_prompt="",
                 submit_prompt="",
             ),
-            TaskInfo(
+            SingleEpisodeTask(
+                benchmark_task_id="other_task",
                 task_id="other_task",
+                domain="test_domain",
                 title="Other",
                 description="Other task",
                 episode_attempts=1,
-                subtask_count=0,
                 max_steps=10,
                 instruction_prompt="",
                 assistant_prompt="",
@@ -470,23 +484,25 @@ class TestApplyTaskFilter:
     def test_glob_pattern_suffix(self):
         """Test glob pattern with suffix match."""
         tasks = [
-            TaskInfo(
+            SingleEpisodeTask(
+                benchmark_task_id="task_easy",
                 task_id="task_easy",
+                domain="test_domain",
                 title="Easy",
                 description="Easy task",
                 episode_attempts=1,
-                subtask_count=0,
                 max_steps=10,
                 instruction_prompt="",
                 assistant_prompt="",
                 submit_prompt="",
             ),
-            TaskInfo(
+            SingleEpisodeTask(
+                benchmark_task_id="task_hard",
                 task_id="task_hard",
+                domain="test_domain",
                 title="Hard",
                 description="Hard task",
                 episode_attempts=1,
-                subtask_count=0,
                 max_steps=10,
                 instruction_prompt="",
                 assistant_prompt="",
@@ -499,9 +515,9 @@ class TestApplyTaskFilter:
         assert len(result) == 1
         assert result[0].task_id == "task_hard"
 
-    def test_no_match_raises_error(self, mock_task_info):
+    def test_no_match_raises_error(self, mock_task):
         """Test that no match raises helpful error with available tasks."""
-        tasks = [mock_task_info]
+        tasks = [mock_task]
 
         with pytest.raises(PrerequisiteError) as exc_info:
             _apply_task_filter(tasks, "nonexistent", "test_domain")

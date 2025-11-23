@@ -1,0 +1,91 @@
+@startuml Semaphore Management Strategy
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam handwritten false
+skinparam defaultFontName Arial
+
+title Semaphore Management: Orchestration vs Individual Episodes
+
+package "Semaphore Pool (max=8 concurrent tasks)" {
+  rectangle "Slot 1" as S1 #LightGreen
+  rectangle "Slot 2" as S2 #LightGreen
+  rectangle "Slot 3" as S3 #LightGreen
+  rectangle "Slot 4" as S4 #LightGreen
+  rectangle "Slot 5" as S5 #LightGreen
+  rectangle "Slot 6" as S6 #LightGreen
+  rectangle "Slot 7" as S7 #LightGreen
+  rectangle "Slot 8" as S8 #LightGreen
+}
+
+package "Scenario 1: Single Episode Tasks" {
+  rectangle "Task A\n(Single)" as TA #SkyBlue
+  rectangle "Task B\n(Single)" as TB #SkyBlue
+  rectangle "Task C\n(Single)" as TC #SkyBlue
+  
+  TA -> S1 : holds
+  TB -> S2 : holds
+  TC -> S3 : holds
+  
+  note right of TC
+    Each single-episode task
+    consumes **1 semaphore slot**
+    
+    Result: 3 tasks = 3 slots
+    Remaining: 5/8 slots free
+  end note
+}
+
+package "Scenario 2: Orchestrated Task (2 Episodes)" {
+  rectangle "CTI Task\n(Orchestrated)" as CTI #LightCoral {
+    rectangle "Red Episode" as Red #Pink
+    rectangle "Blue Episode" as Blue #Pink
+  }
+  
+  CTI -> S4 : holds ONE slot
+  
+  note right of CTI
+    Orchestrated task with 2 episodes
+    consumes **1 semaphore slot**
+    (not 2 slots)
+    
+    Reasoning:
+    - Both episodes are part of
+      same logical unit
+    - They execute sequentially
+    - Prevents semaphore exhaustion
+    
+    Result: 1 orchestration = 1 slot
+  end note
+}
+
+package "Scenario 3: Mixed Workload" {
+  rectangle "CyBench\n(Single)" as CB #SkyBlue
+  rectangle "ExCyTin\n(Single)" as EX #SkyBlue
+  rectangle "CTI-REALM\n(Orchestrated)" as CTI2 #LightCoral {
+    rectangle "Red Episode" as Red2 #Pink
+    rectangle "Blue Episode" as Blue2 #Pink
+  }
+  rectangle "SABER Dual\n(Orchestrated)" as SD #LightCoral {
+    rectangle "Client Episode" as Client #Pink
+    rectangle "Server Episode" as Server #Pink
+  }
+  
+  CB -> S5 : holds
+  EX -> S6 : holds
+  CTI2 -> S7 : holds ONE slot
+  SD -> S8 : holds ONE slot
+  
+  note bottom of SD
+    **Workload Breakdown:**
+    - 2 single tasks = 2 slots
+    - 2 orchestrations (4 episodes total) = 2 slots
+    
+    **Total:** 4 slots used, 4 free
+    
+    Without this design:
+    - Would consume 6 slots (2 + 2 + 2)
+    - 33% less capacity
+  end note
+}
+
+@enduml

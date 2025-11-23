@@ -1,0 +1,117 @@
+@startuml Orchestrated Multi-Episode Task Workflow
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam handwritten false
+skinparam defaultFontName Arial
+
+title Orchestrated Multi-Episode Task Workflow\n(CTI-REALM Dual-Role Example)
+
+actor "Inspect AI\neval_async" as Eval
+participant "saber_dataset()" as Dataset
+participant "OrchestratedTaskHandler" as Handler
+participant "Semaphore\n(max=8)" as Sem
+participant "ClientSessionManager" as Session
+participant "SABER Server" as Server
+participant "Red Container\n(Attacker)" as RedContainer
+participant "Blue Container\n(Defender)" as BlueContainer
+
+== Task Creation ==
+Eval -> Dataset: Load tasks with dependencies
+Dataset -> Dataset: Create OrchestratedTask
+note right
+  **OrchestratedTask:**
+  - strategy: SEQUENTIAL_PAIRED
+  - sub_tasks: [
+      {role: "red", task_id: "cti_red_001", depends_on: null},
+      {role: "blue", task_id: "cti_blue_001", depends_on: "red"}
+    ]
+end note
+
+== Episode Initialization ==
+Eval -> Handler: initialize(task, session_id, semaphore)
+activate Handler
+
+Handler -> Sem: acquire() [async]
+note right: ONE slot for ENTIRE orchestration
+Sem --> Handler: ✓ Acquired (7/8 slots free)
+Handler -> Handler: _semaphore_acquired = True
+
+group Sequential Episode Creation (Dependency Order)
+  Handler -> Handler: Validate strategy == SEQUENTIAL_PAIRED
+  note right: Other strategies raise NotImplementedError
+  
+  Handler -> Handler: Sort sub_tasks by dependency\n(root first, then dependents)
+  
+  == Create Red Episode (Root) ==
+  Handler -> Session: create_episode(session_id, "cti_red_001")
+  Session -> Server: POST /episodes/create\n(task_id="cti_red_001", role="red")
+  Server -> RedContainer: docker run --name cti_red_001
+  RedContainer --> Server: Container ID
+  Server --> Session: EpisodeCreateResponse(episode_id="ep_red_123")
+  Session --> Handler: episode_id="ep_red_123"
+  
+  Handler -> Session: wait_for_episode_ready(session_id, "ep_red_123")
+  Session -> Server: GET /episodes/ep_red_123/status [poll]
+  Server --> Session: state="ready"
+  Session --> Handler: ✓ Red episode ready
+  
+  == Create Blue Episode (Dependent) ==
+  Handler -> Session: create_episode(session_id, "cti_blue_001")
+  note right: Blue can access Red's artifacts\nvia shared session context
+  Session -> Server: POST /episodes/create\n(task_id="cti_blue_001", role="blue")
+  Server -> BlueContainer: docker run --name cti_blue_001\n--link cti_red_001
+  BlueContainer --> Server: Container ID
+  Server --> Session: EpisodeCreateResponse(episode_id="ep_blue_123")
+  Session --> Handler: episode_id="ep_blue_123"
+  
+  Handler -> Session: wait_for_episode_ready(session_id, "ep_blue_123")
+  Session -> Server: GET /episodes/ep_blue_123/status [poll]
+  Server --> Session: state="ready"
+  Session --> Handler: ✓ Blue episode ready
+end
+
+Handler --> Eval: state = {\n  episode_ids: ["ep_red_123", "ep_blue_123"],\n  primary_episode_id: "ep_red_123",\n  semaphore_acquired: True\n}
+deactivate Handler
+
+== Agent Execution (External - Role-Based) ==
+note over Eval, BlueContainer
+  **Red Agent (Attacker):**
+  - episode_id="ep_red_123"
+  - Writes exploit code
+  - Stores artifacts in session
+  
+  **Blue Agent (Defender):**
+  - episode_id="ep_blue_123"
+  - Reads Red's artifacts
+  - Analyzes and mitigates threat
+  
+  Both episodes contribute to final score
+end note
+
+== Episode Cleanup ==
+Eval -> Handler: cleanup(state, session_id, semaphore)
+activate Handler
+
+group End All Episodes
+  Handler -> Session: end_episode(session_id, "ep_red_123")
+  Session -> Server: POST /episodes/ep_red_123/end
+  Server -> RedContainer: docker stop cti_red_001
+  RedContainer --> Server: Stopped
+  Server --> Session: ✓ Red ended
+  
+  Handler -> Session: end_episode(session_id, "ep_blue_123")
+  Session -> Server: POST /episodes/ep_blue_123/end
+  Server -> BlueContainer: docker stop cti_blue_001
+  BlueContainer --> Server: Stopped
+  Server --> Session: ✓ Blue ended
+end
+
+Handler -> Sem: release()
+note right: Free ONE semaphore slot\n(not 2 slots)
+Sem --> Handler: ✓ Released (8/8 slots free)
+Handler -> Handler: _semaphore_acquired = False
+
+Handler --> Eval: CleanupResult(\n  success=True,\n  semaphore_released=True\n)
+deactivate Handler
+
+@enduml

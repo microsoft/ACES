@@ -1,0 +1,137 @@
+@startuml Dependency Graph Validation
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam handwritten false
+skinparam defaultFontName Arial
+
+title Dependency Graph Validation\n(Prevents Deadlocks and Circular Dependencies)
+
+package "Valid Orchestration Patterns" {
+  rectangle "Pattern 1: Simple Pair" #LightGreen {
+    rectangle "Task A\n(Root)" as A1
+    rectangle "Task B\n(depends_on: A)" as B1
+    A1 --> B1 : dependency
+    
+    note bottom
+      **Valid:**
+      - 1 root (A)
+      - 1 dependent (B)
+      - No cycles
+    end note
+  }
+  
+  rectangle "Pattern 2: One-to-Many" #LightGreen {
+    rectangle "Red\n(Root)" as R2
+    rectangle "Blue1\n(depends_on: Red)" as B2
+    rectangle "Blue2\n(depends_on: Red)" as B3
+    R2 --> B2
+    R2 --> B3
+    
+    note bottom
+      **Valid:**
+      - 1 root (Red)
+      - 2 dependents (Blue1, Blue2)
+      - Both can run after Red ready
+    end note
+  }
+  
+  rectangle "Pattern 3: Independent Orchestrations" #LightGreen {
+    rectangle "Group 1" {
+      rectangle "A" as A3
+      rectangle "B" as B3
+      A3 --> B3
+    }
+    
+    rectangle "Group 2" {
+      rectangle "C" as C3
+      rectangle "D" as D3
+      C3 --> D3
+    }
+    
+    note bottom
+      **Valid:**
+      - 2 separate orchestrations
+      - No cross-dependencies
+      - Each is independent
+    end note
+  }
+}
+
+package "Invalid Orchestration Patterns" {
+  rectangle "Anti-Pattern 1: Circular Dependency" #LightCoral {
+    rectangle "Task X" as X1
+    rectangle "Task Y" as Y1
+    rectangle "Task Z" as Z1
+    X1 --> Y1 : depends_on
+    Y1 --> Z1 : depends_on
+    Z1 --> X1 : depends_on (CYCLE!)
+    
+    note bottom
+      **Invalid: Circular Dependency**
+      Error: "Circular dependency detected"
+      
+      Validation: graphlib.TopologicalSorter
+      prevents cycles during task creation
+    end note
+  }
+  
+  rectangle "Anti-Pattern 2: Nested Orchestration" #LightCoral {
+    rectangle "Root A" as A2 {
+      rectangle "Task 1" as T1
+      rectangle "Task 2" as T2
+      T1 --> T2
+    }
+    rectangle "Root B\n(depends_on: Root A)" as B2 {
+      rectangle "Task 3" as T3
+      rectangle "Task 4" as T4
+      T3 --> T4
+    }
+    A2 --> B2 : NESTED!
+    
+    note bottom
+      **Invalid: Nested Orchestration**
+      Error: "Nested orchestrations not supported"
+      
+      Reason: Complex semaphore accounting
+      A root cannot also be a dependent
+    end note
+  }
+  
+  rectangle "Anti-Pattern 3: Orphan Dependent" #LightCoral {
+    rectangle "Task M\n(depends_on: 'unknown')" as M1
+    
+    note bottom
+      **Invalid: Missing Dependency Target**
+      Error: "Dependency target 'unknown' not found"
+      
+      All depends_on references must
+      point to existing task IDs
+    end note
+  }
+}
+
+note as ValidationSteps
+  **DependencyGraph Class**
+  
+  **Purpose:** Analyzes task dependency relationships
+  and validates orchestration structure
+  
+  **Key Methods:**
+  • add_task(task_id: str)
+  • add_dependency(dependent: str, target: str)
+  • is_root(task_id: str): bool
+  • is_dependent(task_id: str): bool
+  • validate_acyclic()
+  • validate_no_nested_orchestrations()
+  • get_orchestrated_groups(): List[List[str]]
+  • get_independent_tasks(): List[str]
+  
+  **Validation Steps:**
+  1. Build dependency graph from sub_tasks
+  2. validate_acyclic() - Check for cycles using graphlib.TopologicalSorter
+  3. validate_no_nested_orchestrations() - Ensure no root is also a dependent
+  4. Group tasks by dependency root
+  5. Create one OrchestratedTask per group
+end note
+
+@enduml

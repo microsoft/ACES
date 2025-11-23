@@ -6,10 +6,122 @@ solver execution, agent configuration, and client configuration, replacing
 raw dictionaries with proper Pydantic models.
 """
 
+import hashlib
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, root_validator, validator
+
+
+@dataclass(frozen=True)
+class AgentCompositeKey:
+    """Type-safe composite key for agent datasets.
+
+    Composite keys uniquely identify agent-task assignments, optionally including
+    role information for orchestrated tasks. Uses '|' separator to avoid conflicts
+    with agent IDs that may contain underscores.
+
+    Attributes:
+        agent_id: Agent identifier (e.g., 'react', 'custom_react')
+        tasks_hash: SHA256 hash of sorted task patterns (8 chars)
+        role: Optional role name for orchestrated tasks (e.g., 'red', 'blue')
+
+    Examples:
+        >>> key = AgentCompositeKey(agent_id="react", tasks_hash="a1b2c3d4")
+        >>> key.to_string()
+        'react|a1b2c3d4'
+
+        >>> key_with_role = AgentCompositeKey(
+        ...     agent_id="react", tasks_hash="a1b2c3d4", role="red"
+        ... )
+        >>> key_with_role.to_string()
+        'react|red|a1b2c3d4'
+    """
+
+    agent_id: str
+    tasks_hash: str
+    role: Optional[str] = None
+
+    def to_string(self) -> str:
+        """Convert composite key to string representation.
+
+        Returns:
+            String format: 'agent_id|tasks_hash' or 'agent_id|role|tasks_hash'
+        """
+        if self.role:
+            return f"{self.agent_id}|{self.role}|{self.tasks_hash}"
+        return f"{self.agent_id}|{self.tasks_hash}"
+
+    @classmethod
+    def from_string(cls, key: str) -> "AgentCompositeKey":
+        """Parse composite key from string representation.
+
+        Args:
+            key: String in format 'agent_id|tasks_hash' or 'agent_id|role|tasks_hash'
+
+        Returns:
+            AgentCompositeKey instance
+
+        Raises:
+            ValueError: If key format is invalid
+
+        Examples:
+            >>> key = AgentCompositeKey.from_string("react|a1b2c3d4")
+            >>> key.agent_id
+            'react'
+            >>> key.role is None
+            True
+
+            >>> key = AgentCompositeKey.from_string("react|red|a1b2c3d4")
+            >>> key.role
+            'red'
+        """
+        parts = key.split("|")
+
+        if len(parts) == 2:
+            return cls(agent_id=parts[0], tasks_hash=parts[1])
+        elif len(parts) == 3:
+            return cls(agent_id=parts[0], role=parts[1], tasks_hash=parts[2])
+        else:
+            raise ValueError(
+                f"Invalid composite key format: '{key}'. "
+                f"Expected 'agent_id|tasks_hash' or 'agent_id|role|tasks_hash'"
+            )
+
+    @staticmethod
+    def create_hash(tasks: List[str]) -> str:
+        """Create consistent hash from task list.
+
+        Args:
+            tasks: List of task patterns
+
+        Returns:
+            8-character hex hash
+        """
+        tasks_sorted = sorted(tasks)
+        tasks_str = "+".join(tasks_sorted)
+        return hashlib.sha256(tasks_str.encode()).hexdigest()[:8]
+
+    @classmethod
+    def create(cls, agent_id: str, tasks: List[str], role: Optional[str] = None) -> "AgentCompositeKey":
+        """Factory method to create composite key from agent assignment.
+
+        Args:
+            agent_id: Agent identifier
+            tasks: List of task patterns (will be sorted and hashed)
+            role: Optional role name
+
+        Returns:
+            AgentCompositeKey instance
+
+        Examples:
+            >>> AgentCompositeKey.create("react", ["task1", "task2"])
+            AgentCompositeKey(agent_id='react', tasks_hash='...', role=None)
+        """
+        tasks_sorted = sorted(tasks)
+        tasks_str = "+".join(tasks_sorted)
+        tasks_hash = hashlib.sha256(tasks_str.encode()).hexdigest()[:8]
+        return cls(agent_id=agent_id, tasks_hash=tasks_hash, role=role)
 
 
 class SessionManagerConfig(BaseModel):
@@ -51,20 +163,20 @@ class SessionManagerConfig(BaseModel):
         """
         return cls(base_url=rest_url, mcp_server_url=mcp_url, client_id=client_id, **kwargs)
 
-    class Config:
-        extra = "forbid"  # Don't allow extra fields for strict typing
+    model_config = ConfigDict(extra="forbid")  # Don't allow extra fields for strict typing
 
 
 class AgentAssignment(BaseModel):
-    """Agent assignment with kwargs support for task-specific agent assignment."""
+    """Agent assignment with role and advanced configuration support."""
 
     id: str = Field(..., description="Agent identifier from registry")
     model: Optional[str] = Field(default=None, description="Model to use for this agent (overrides global model)")
     tasks: List[str] = Field(..., description="Task IDs or '*' for wildcard assignment")
+    role: Optional[str] = Field(default=None, description="Role this agent handles in orchestrated tasks")
+    attempts: Optional[int] = Field(default=None, description="Episode attempts override for this agent")
     kwargs: Dict[str, Any] = Field(default_factory=dict, description="Agent-specific parameters")
 
-    class Config:
-        extra = "forbid"  # Fail fast on unknown fields
+    model_config = ConfigDict(extra="forbid")  # Fail fast on unknown fields
 
     def model_post_init(self, __context: Any) -> None:
         """Validate assignment after creation."""
@@ -74,6 +186,127 @@ class AgentAssignment(BaseModel):
             raise ValueError("Tasks list cannot be empty")
         if "*" in self.tasks and len(self.tasks) > 1:
             raise ValueError("Wildcard '*' cannot be combined with specific task IDs")
+
+
+class RoleAgentConfig(BaseModel):
+    """Configuration for a specific role in orchestrated tasks.
+
+    Defines agent, model, and behavior for one role (e.g., 'blue', 'red').
+    """
+
+    agent: str = Field(default="react", description="Agent implementation to use for this role")
+
+    model: Optional[str] = Field(default=None, description="Model to use for this role (overrides global --model)")
+
+    attempts: Optional[int] = Field(default=None, description="Episode attempts for this role (overrides task default)")
+
+    kwargs: Dict[str, Any] = Field(default_factory=dict, description="Additional agent-specific parameters")
+
+    # Future extensions
+    tools: Optional[List[str]] = Field(default=None, description="Role-specific tool restrictions")
+
+    timeout: Optional[int] = Field(default=None, description="Role-specific timeout in seconds")
+
+    model_config = ConfigDict(extra="forbid")  # Fail on unknown fields
+
+
+class RoleBasedConfig(BaseModel):
+    """Complete role-based configuration for orchestrated tasks.
+
+    Supports both per-role settings and defaults.
+    """
+
+    roles: Dict[str, RoleAgentConfig] = Field(
+        default_factory=dict, description="Configuration for each role (key = role name)"
+    )
+
+    defaults: Optional[RoleAgentConfig] = Field(
+        default=None, description="Default configuration for roles not explicitly defined"
+    )
+
+    @validator("roles")
+    def validate_role_names(cls, v: Dict[str, RoleAgentConfig]) -> Dict[str, RoleAgentConfig]:
+        """Validate role names are non-empty strings."""
+        for role_name in v.keys():
+            if not role_name or not isinstance(role_name, str):
+                raise ValueError(f"Invalid role name: {role_name}")
+        return v
+
+    @root_validator(skip_on_failure=True)
+    def validate_has_configuration(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+        """Ensure at least one role or defaults is configured."""
+        roles = values.get("roles", {})
+        defaults = values.get("defaults")
+
+        if not roles and not defaults:
+            raise ValueError(
+                "RoleBasedConfig must have at least one role defined or defaults. "
+                "Got empty roles dict and no defaults."
+            )
+
+        return values
+
+    def get_config_for_role(self, role: str) -> RoleAgentConfig:
+        """Get configuration for a specific role with defaults fallback.
+
+        Args:
+            role: Role name (e.g., 'blue', 'red')
+
+        Returns:
+            RoleAgentConfig for this role, merged with defaults
+
+        Raises:
+            ValueError: If role not found and no defaults configured
+        """
+        # Validate role exists or defaults are available
+        if role not in self.roles and not self.defaults:
+            available_roles = list(self.roles.keys())
+            raise ValueError(
+                f"Role '{role}' not found in configuration and no defaults provided. "
+                f"Available roles: {available_roles}"
+            )
+
+        # Get role-specific config or empty config
+        role_config = self.roles.get(role, RoleAgentConfig())
+
+        # If we have defaults, merge them
+        if self.defaults:
+            # Create merged config: defaults + role-specific overrides
+            merged_data = self.defaults.dict(exclude_unset=True)
+            merged_data.update(role_config.dict(exclude_unset=True))
+
+            # Merge kwargs separately (dict merge, not replace)
+            if self.defaults.kwargs or role_config.kwargs:
+                merged_kwargs = {**self.defaults.kwargs}
+                merged_kwargs.update(role_config.kwargs)
+                merged_data["kwargs"] = merged_kwargs
+
+            return RoleAgentConfig(**merged_data)
+
+        return role_config
+
+    def to_agent_assignments(self) -> List[AgentAssignment]:
+        """Convert role-based config to AgentAssignment list.
+
+        Creates one AgentAssignment per role with appropriate settings.
+
+        Returns:
+            List of AgentAssignment objects
+        """
+        assignments = []
+
+        for role_name, role_config in self.roles.items():
+            assignment = AgentAssignment(
+                id=role_config.agent,
+                model=role_config.model,
+                role=role_name,
+                tasks=["*"],  # Role assignments apply to all tasks
+                attempts=role_config.attempts,
+                kwargs=role_config.kwargs,
+            )
+            assignments.append(assignment)
+
+        return assignments
 
 
 class AgentInfo(BaseModel):
@@ -148,6 +381,9 @@ class SABERConfig:
 
     # Multi-agent configuration (required - new format only)
     agents: List[AgentAssignment] = field(default_factory=list)
+
+    # Role-based configuration for orchestrated tasks
+    role_config: Optional["RoleBasedConfig"] = field(default=None)
 
     # Domain configuration (optional - for logging organization)
     domain: Optional[str] = field(default=None)
@@ -322,6 +558,25 @@ class SABERConfig:
                     if task in explicit_tasks:
                         raise ValueError(f"Task '{task}' assigned to multiple agents")
                     explicit_tasks.add(task)
+
+    def get_agent_assignments(self) -> List[AgentAssignment]:
+        """Get all agent assignments including role-based ones.
+
+        Combines:
+        1. Explicit agent assignments (self.agents)
+        2. Role-based assignments (from role_config)
+
+        Returns:
+            Complete list of agent assignments
+        """
+        assignments = list(self.agents)
+
+        # Add role-based assignments if configured
+        if self.role_config:
+            role_assignments = self.role_config.to_agent_assignments()
+            assignments.extend(role_assignments)
+
+        return assignments
 
     # Legacy property accessor with deprecation warning
     @property

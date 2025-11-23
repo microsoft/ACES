@@ -13,6 +13,17 @@ from .admin import (
     SessionCleanupHistoryResponse,
 )
 
+# Benchmark task models
+from .benchmark_task import (
+    BenchmarkTask,
+    DependencyGraph,
+    OrchestratedTask,
+    OrchestrationStrategy,
+    SingleEpisodeTask,
+    SubTaskDefinition,
+    TaskExecutionMode,
+)
+
 # Constants and enumerations
 from .constants import (
     EVAL_STRATEGY_LLM_JUDGE,
@@ -22,10 +33,10 @@ from .constants import (
     VALID_STEP_EVAL_STRATEGIES,
     VALID_SUBMISSION_EVAL_STRATEGIES,
     EvaluationStrategy,
+    MetadataKeys,
     StepEvaluationStrategy,
     SubmissionEvaluationStrategy,
 )
-
 # Core domain models
 from .core import BenchmarkInfo, EvalSubmission, PolicyInfo, TaskInfo
 
@@ -75,6 +86,14 @@ from .rest import (
 )
 
 __all__ = [
+    # Benchmark task models
+    "BenchmarkTask",
+    "SingleEpisodeTask",
+    "OrchestratedTask",
+    "OrchestrationStrategy",
+    "SubTaskDefinition",
+    "TaskExecutionMode",
+    "DependencyGraph",
     # Constants and enumerations
     "EvaluationStrategy",
     "SubmissionEvaluationStrategy",
@@ -135,4 +154,9 @@ __all__ = [
     # Orchestration models
     "OrchestrationEnvironment",
     "RequestHeaders",
+    # Constants
+    "MetadataKeys",
 ]
+
+# Rebuild models with forward references after all imports are complete
+BenchmarkInfo.model_rebuild()

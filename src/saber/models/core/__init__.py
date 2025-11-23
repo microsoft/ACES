@@ -4,9 +4,12 @@ SABER Core Models - Core business domain models.
 These models represent the core business entities and their relationships.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Discriminator, Field
+
+# Import concrete BenchmarkTask types for discriminated union
+from ..benchmark_task import OrchestratedTask, SingleEpisodeTask
 
 
 class TaskInfo(BaseModel):
@@ -40,32 +43,58 @@ class BenchmarkInfo(BaseModel):
 
     This replaces the old server-side task queue management with a clean
     data structure that clients can use for their own orchestration.
+
+    API Version 2.0: Polymorphic BenchmarkTask types only (SingleEpisodeTask, OrchestratedTask).
+    Legacy TaskInfo support has been removed.
     """
 
+    api_version: str = Field(default="2.0", description="API version for compatibility checks")
     domain: str = Field(..., description="Security domain name")
-    tasks: List[TaskInfo] = Field(..., description="Available tasks in the benchmark")
+    tasks: List[Annotated[Union[SingleEpisodeTask, OrchestratedTask], Discriminator("task_type")]] = Field(
+        ..., description="Available tasks in the benchmark (polymorphic BenchmarkTask)"
+    )
     total_tasks: int = Field(..., description="Total number of unique tasks")
     total_episodes: int = Field(..., description="Total number of episodes across all tasks")
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API serialization."""
         return {
+            "api_version": self.api_version,
             "domain": self.domain,
             "tasks": [task.model_dump() for task in self.tasks],
             "total_tasks": self.total_tasks,
             "total_episodes": self.total_episodes,
         }
 
-    def get_task_by_id(self, task_id: str) -> TaskInfo | None:
-        """Get task info by ID."""
+    def get_task_by_id(self, task_id: str) -> Union[SingleEpisodeTask, OrchestratedTask, None]:
+        """Get task info by ID.
+
+        Args:
+            task_id: Task ID to search for
+
+        Returns:
+            SingleEpisodeTask or OrchestratedTask if found, None otherwise
+        """
         for task in self.tasks:
-            if task.task_id == task_id:
+            # Check direct task_id for SingleEpisodeTask
+            if hasattr(task, "task_id") and task.task_id == task_id:
+                return task
+            # For OrchestratedTask, check sub-tasks as well
+            if task_id in task.get_task_ids():
                 return task
         return None
 
     def get_task_ids(self) -> List[str]:
-        """Get list of all task IDs."""
-        return [task.task_id for task in self.tasks]
+        """Get list of all task IDs.
+
+        Returns:
+            List of all task IDs (includes sub-task IDs for orchestrated tasks)
+        """
+        task_ids = []
+        for task in self.tasks:
+            # All tasks are now BenchmarkTask with polymorphic get_task_ids()
+            task_ids.extend(task.get_task_ids())
+        return task_ids
 
 
 class EvalSubmission(BaseModel):

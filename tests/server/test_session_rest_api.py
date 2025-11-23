@@ -168,9 +168,9 @@ class TestSessionRestAPI:
         create_response = client.post("/api/v1/session?client_id=test_client")
         session_id = create_response.json()["session_id"]
 
-        # Mock the initiate_episode method (async pattern)
+        # Mock the start_episode method (async pattern)
         from unittest.mock import AsyncMock
-        with patch.object(manager, 'initiate_episode', new_callable=AsyncMock, return_value=mock_episode):
+        with patch.object(manager, 'start_episode', new_callable=AsyncMock, return_value=mock_episode):
             # Start individual episode
             response = client.post(f"/api/v1/session/{session_id}/episodes?task_id=task_456")
 
@@ -180,19 +180,20 @@ class TestSessionRestAPI:
             assert data["task_id"] == "task_456"
             assert data["session_id"] == session_id
             assert data["state"] == "creating"  # Verify async state
-            assert "initiated" in data["message"].lower()  # Changed message expectation
+            assert "created" in data["message"].lower()  # Changed message expectation
 
     def test_get_benchmark_endpoint(self, session_manager_app):
         """Test get benchmark endpoint for client orchestration."""
         manager, client = session_manager_app
 
-        # Import the BenchmarkInfo and TaskInfo classes from the correct location
-        from saber.models.core import BenchmarkInfo, TaskInfo
+        # Import the BenchmarkInfo and SingleEpisodeTask classes from the correct location
+        from saber.models.core import BenchmarkInfo, SingleEpisodeTask
 
         # Create mock BenchmarkInfo object
         mock_tasks = [
-            TaskInfo(
+            SingleEpisodeTask(
                 task_id="task_1",
+                domain="test_domain",
                 title="Test Task 1",
                 description="First test task",
                 episode_attempts=2,
@@ -202,8 +203,9 @@ class TestSessionRestAPI:
                 assistant_prompt="Test assistant prompt 1",
                 submit_prompt="Test submit prompt 1"
             ),
-            TaskInfo(
+            SingleEpisodeTask(
                 task_id="task_2",
+                domain="test_domain",
                 title="Test Task 2",
                 description="Second test task",
                 episode_attempts=1,

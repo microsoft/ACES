@@ -116,6 +116,7 @@ class TestEvalRetrySupport:
     @pytest.mark.asyncio
     async def test_sample_init_stores_metadata_for_retry(self, mock_config):
         """Test that sample_init stores session/episode IDs in metadata."""
+        from saber.models import SingleEpisodeTask, MetadataKeys
 
         # Setup: Domain initialized
         SABERSandboxEnvironment._registry["test_domain"] = {
@@ -131,13 +132,35 @@ class TestEvalRetrySupport:
             "session_id": "session_789",
         }
 
-        metadata = {"task_id": "task_001"}
+        # Create proper benchmark task
+        task = SingleEpisodeTask(
+            benchmark_task_id="task_001",
+            task_id="task_001",
+            domain="test_domain",
+            title="Test Task",
+            description="Test task for metadata",
+            episode_attempts=1,
+            max_steps=10,
+            instruction_prompt="test",
+            assistant_prompt="test",
+            submit_prompt="test",
+        )
 
-        with patch.object(
-            SABERSandboxEnvironment, '_create_episode',
-            new_callable=AsyncMock
-        ) as mock_create_episode:
-            mock_create_episode.return_value = "episode_abc"
+        metadata = {
+            MetadataKeys.BENCHMARK_TASK: task.model_dump(),
+            MetadataKeys.SAMPLE_ID: "task_001__attempt_1",
+        }
+
+        # Mock the handler's initialize method to return expected state
+        with patch('saber.inspect_ai.saber.get_benchmark_task_handler') as mock_get_handler:
+            mock_handler = MagicMock()
+            mock_handler.initialize = AsyncMock(return_value={
+                "episode_ids": ["episode_abc"],
+                "primary_episode_id": "episode_abc",
+                "semaphore_acquired": True,
+            })
+            mock_handler.cleanup = AsyncMock()
+            mock_get_handler.return_value = mock_handler
 
             with patch('saber.inspect_ai.saber.mcp_server_http'):
                 with patch('saber.inspect_ai.saber.store'):
@@ -334,6 +357,7 @@ class TestEvalRetryIntegration:
     @pytest.mark.asyncio
     async def test_full_retry_workflow(self, mock_config):
         """Test complete eval-retry workflow from init to cleanup."""
+        from saber.models import SingleEpisodeTask, MetadataKeys
 
         with patch('saber.inspect_ai.tasks.get_active_domain') as mock_get_active:
             mock_get_active.return_value = None
@@ -350,67 +374,111 @@ class TestEvalRetryIntegration:
                 ) as mock_create_episode:
                     mock_create_episode.return_value = "episode_001"
 
-                    with patch('saber.inspect_ai.saber.mcp_server_http'):
-                        with patch('saber.inspect_ai.saber.store'):
-                            with patch('saber.inspect_ai.tasks.remove_active_domain'):
-                                # 1. First run: Initialize task
-                                SABERSandboxEnvironment._registry["test_domain"] = {
-                                    "owner": "test_task",
-                                    "domain_slug": "test_domain",
-                                    "controller": MagicMock(),
-                                    "context": MagicMock(),
-                                    "ownership": True,
-                                    "rest_port": 8000,
-                                    "mcp_port": 8001,
-                                    "rest_url": "http://localhost:8000",
-                                    "mcp_url": "http://localhost:8001",
-                                    "session_id": "session_001",
-                                }
+                    with patch('saber.inspect_ai.saber.get_benchmark_task_handler') as mock_get_handler:
+                        mock_handler = MagicMock()
+                        mock_handler.initialize = AsyncMock(return_value={
+                            "episode_ids": ["episode_001"],
+                            "primary_episode_id": "episode_001",
+                            "semaphore_acquired": True,
+                        })
+                        mock_handler.cleanup = AsyncMock()
+                        mock_get_handler.return_value = mock_handler
 
-                                # 2. First run: Initialize sample
-                                metadata1 = {"task_id": "task_001"}
-                                await SABERSandboxEnvironment.sample_init(
-                                    "test_task", mock_config, metadata1
-                                )
+                        with patch('saber.inspect_ai.saber.mcp_server_http'):
+                            with patch('saber.inspect_ai.saber.store'):
+                                with patch('saber.inspect_ai.tasks.remove_active_domain'):
+                                    # 1. First run: Initialize task
+                                    SABERSandboxEnvironment._registry["test_domain"] = {
+                                        "owner": "test_task",
+                                        "domain_slug": "test_domain",
+                                        "controller": MagicMock(),
+                                        "context": MagicMock(),
+                                        "ownership": True,
+                                        "rest_port": 8000,
+                                        "mcp_port": 8001,
+                                        "rest_url": "http://localhost:8000",
+                                        "mcp_url": "http://localhost:8001",
+                                        "session_id": "session_001",
+                                    }
 
-                                # Verify metadata stored
-                                assert "saber_session_id" in metadata1
-                                assert "saber_episode_id" in metadata1
-
-                                # 3. Simulate failure and cleanup (preserve domain)
-                                with patch.object(
-                                    SABERSandboxEnvironment, '_terminate_session_sync'
-                                ):
-                                    await SABERSandboxEnvironment.task_cleanup(
-                                        "test_task", mock_config, cleanup=False
+                                    # Create proper benchmark task
+                                    task1 = SingleEpisodeTask(
+                                        benchmark_task_id="task_001",
+                                        task_id="task_001",
+                                        domain="test_domain",
+                                        title="Test Task 1",
+                                        description="First test task",
+                                        episode_attempts=1,
+                                        max_steps=10,
+                                        instruction_prompt="test",
+                                        assistant_prompt="test",
+                                        submit_prompt="test",
                                     )
 
-                                # Domain preserved
-                                assert "test_domain" in SABERSandboxEnvironment._registry
+                                    # 2. First run: Initialize sample
+                                    metadata1 = {
+                                        MetadataKeys.BENCHMARK_TASK: task1.model_dump(),
+                                        MetadataKeys.SAMPLE_ID: "task_001__attempt_1",
+                                        MetadataKeys.TASK_ID: "task_001",
+                                    }
+                                    await SABERSandboxEnvironment.sample_init(
+                                        "test_task", mock_config, metadata1
+                                    )
 
-                                # 4. Retry: Re-initialize task (should reuse)
-                                await SABERSandboxEnvironment.task_init(
-                                    "test_task", mock_config
-                                )
+                                    # Verify metadata stored
+                                    assert "saber_session_id" in metadata1
+                                    assert "saber_episode_id" in metadata1
 
-                                # Should still be in registry
-                                assert "test_domain" in SABERSandboxEnvironment._registry
+                                    # 3. Simulate failure and cleanup (preserve domain)
+                                    with patch.object(
+                                        SABERSandboxEnvironment, '_terminate_session_sync'
+                                    ):
+                                        await SABERSandboxEnvironment.task_cleanup(
+                                            "test_task", mock_config, cleanup=False
+                                        )
 
-                                # 5. Retry: Skip completed sample
-                                result = await SABERSandboxEnvironment.sample_init(
-                                    "test_task", mock_config, metadata1
-                                )
+                                    # Domain preserved
+                                    assert "test_domain" in SABERSandboxEnvironment._registry
 
-                                # Should create minimal instance
-                                instance = result["default"]
-                                assert instance._mcp_client is None
+                                    # 4. Retry: Re-initialize task (should reuse)
+                                    await SABERSandboxEnvironment.task_init(
+                                        "test_task", mock_config
+                                    )
 
-                                # 6. Retry: Process new sample
-                                metadata2 = {"task_id": "task_002"}
-                                result2 = await SABERSandboxEnvironment.sample_init(
-                                    "test_task", mock_config, metadata2
-                                )
+                                    # Should still be in registry
+                                    assert "test_domain" in SABERSandboxEnvironment._registry
 
-                                # Should create full instance
-                                instance2 = result2["default"]
-                                assert "saber_episode_id" in metadata2
+                                    # 5. Retry: Skip completed sample
+                                    result = await SABERSandboxEnvironment.sample_init(
+                                        "test_task", mock_config, metadata1
+                                    )
+
+                                    # Should create minimal instance
+                                    instance = result["default"]
+                                    assert instance._mcp_client is None
+
+                                    # 6. Retry: Process new sample
+                                    task2 = SingleEpisodeTask(
+                                        benchmark_task_id="task_002",
+                                        task_id="task_002",
+                                        domain="test_domain",
+                                        title="Test Task 2",
+                                        description="Second test task",
+                                        episode_attempts=1,
+                                        max_steps=10,
+                                        instruction_prompt="test",
+                                        assistant_prompt="test",
+                                        submit_prompt="test",
+                                    )
+                                    metadata2 = {
+                                        MetadataKeys.BENCHMARK_TASK: task2.model_dump(),
+                                        MetadataKeys.SAMPLE_ID: "task_002__attempt_1",
+                                        MetadataKeys.TASK_ID: "task_002",
+                                    }
+                                    result2 = await SABERSandboxEnvironment.sample_init(
+                                        "test_task", mock_config, metadata2
+                                    )
+
+                                    # Should create full instance
+                                    instance2 = result2["default"]
+                                    assert "saber_episode_id" in metadata2

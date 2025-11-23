@@ -579,7 +579,7 @@ class ClientSessionManager:
                             "task_count": len(benchmark_info.tasks),
                         },
                     )
-                    return benchmark_info.tasks
+                    return benchmark_info.tasks  # type: ignore[return-value]
                 else:
                     error_text = await response.text()
                     logger.error(

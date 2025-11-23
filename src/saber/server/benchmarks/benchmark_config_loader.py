@@ -55,6 +55,7 @@ FIELD_INITIAL_CONTEXT = "initial_context"
 FIELD_ENVIRONMENT = "environment"
 FIELD_SANDBOX_ENVIRONMENT = "sandbox_environment"
 FIELD_DEPENDS_ON_TASK_ID = "depends_on_task_id"
+FIELD_ROLE = "role"
 FIELD_INITIAL_FILES = "initial_files"
 FIELD_SUBTASKS = "subtasks"
 FIELD_INHERIT_SHARED = "inherit_shared"
@@ -259,6 +260,9 @@ class BenchmarkConfigLoader:
 
                 all_tasks.update(file_tasks)
 
+            # Validate role configuration for orchestrated tasks
+            self._validate_dependency_roles(all_tasks)
+
             log_operation_success(
                 logger,
                 "benchmark_tasks_directory_load",
@@ -386,6 +390,9 @@ class BenchmarkConfigLoader:
                 )
                 task = self._parse_task(task_data)
                 tasks[task.task_id] = task
+
+            # Validate dependency role configuration
+            self._validate_dependency_roles(tasks)
 
             log_operation_success(
                 logger,
@@ -953,6 +960,49 @@ class BenchmarkConfigLoader:
             },
         )
 
+    def _validate_dependency_roles(self, tasks: Dict[str, Task]) -> None:
+        """
+        Validate role configuration for orchestrated tasks with dependencies.
+
+        Enforces:
+        1. Root tasks (tasks with dependents) must have a role defined
+        2. Dependent tasks must have a role defined
+        3. Role references in dependency chains are valid
+
+        Args:
+            tasks: Dictionary mapping task_id to Task objects
+
+        Raises:
+            InvalidTaskDefinitionException: If role configuration is invalid
+        """
+        # Build dependency graph
+        task_dependents: Dict[str, List[str]] = {}  # Maps task_id -> list of dependent task_ids
+
+        for task_id, task in tasks.items():
+            if task.depends_on_task_id:
+                if task.depends_on_task_id not in task_dependents:
+                    task_dependents[task.depends_on_task_id] = []
+                task_dependents[task.depends_on_task_id].append(task_id)
+
+        # Validate root tasks have roles
+        for root_task_id, dependent_task_ids in task_dependents.items():
+            root_task = tasks.get(root_task_id)
+            if not root_task:
+                raise InvalidTaskDefinitionException(
+                    f"Task '{dependent_task_ids[0]}' depends on non-existent task '{root_task_id}'"
+                )
+
+            if not root_task.role:
+                raise InvalidTaskDefinitionException(
+                    f"Root task '{root_task_id}' must have a 'role' defined "
+                    f"(has {len(dependent_task_ids)} dependent tasks)"
+                )
+
+        # Validate dependent tasks have roles (enforced by Task.__init__ but double-check)
+        for task_id, task in tasks.items():
+            if task.depends_on_task_id and not task.role:
+                raise InvalidTaskDefinitionException(f"Dependent task '{task_id}' must have a 'role' defined")
+
     def _parse_task(self, task_data: Dict[str, Any]) -> Task:
         """
         Parse a single task from YAML data.
@@ -1235,6 +1285,10 @@ class BenchmarkConfigLoader:
                 list(execution_config[FIELD_EXECUTORS].keys()) if FIELD_EXECUTORS in execution_config else None
             )
 
+            # Read role from YAML (optional, required for orchestrated tasks)
+            role = task_data.get(FIELD_ROLE)
+            depends_on_task_id = task_data.get(FIELD_DEPENDS_ON_TASK_ID)
+
             task = Task(
                 task_id=task_id,
                 domain=self.domain,
@@ -1250,7 +1304,8 @@ class BenchmarkConfigLoader:
                 benchmark_config=merged_benchmark_config,
                 submission_evaluation_config=submission_evaluation_config,
                 step_evaluation_config=step_evaluation_config,
-                depends_on_task_id=task_data.get(FIELD_DEPENDS_ON_TASK_ID),
+                depends_on_task_id=depends_on_task_id,
+                role=role,
                 initial_files=initial_files,
             )
 
@@ -1317,13 +1372,24 @@ class BenchmarkConfigLoader:
                 subtask_criteria = {}
                 subtask_scoring = {}
 
+        # Support direct scoring field in subtask (merge/override with step_evaluation_config scoring)
+        direct_scoring = subtask_data.get(FIELD_SCORING)
+        if direct_scoring:
+            if not isinstance(direct_scoring, dict):
+                raise InvalidTaskDefinitionException(
+                    f"Task '{task_id}': subtask '{subtask_data.get(FIELD_SUBTASK_ID)}' "
+                    f"{FIELD_SCORING} must be a dictionary"
+                )
+            # Merge direct scoring with config-based scoring (direct takes precedence)
+            subtask_scoring = {**subtask_scoring, **direct_scoring}
+
         return SubTask(
             subtask_id=subtask_data[FIELD_SUBTASK_ID],
             task_id=task_id,
             title=subtask_data[FIELD_TITLE],
             description=subtask_data[FIELD_DESCRIPTION],
             objective=subtask_data[FIELD_OBJECTIVE],
-            hint=subtask_data.get(FIELD_HINTS),
+            hints=subtask_data.get(FIELD_HINTS),
             subtask_strategy=subtask_strategy,  # Use validated strategy
             subtask_criteria=subtask_criteria,  # Use validated criteria
             subtask_weight=subtask_scoring.get(FIELD_WEIGHT, DEFAULT_WEIGHT),

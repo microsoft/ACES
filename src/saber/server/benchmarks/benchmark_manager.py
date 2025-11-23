@@ -4,7 +4,7 @@ Logging category: TASK_MANAGER.
 """
 
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from ...logging_config import (
     LogCategory,
@@ -13,7 +13,16 @@ from ...logging_config import (
     log_operation_start,
     log_operation_success,
 )
-from ...models import BenchmarkInfo, TaskInfo
+from ...models import (
+    BenchmarkInfo,
+    BenchmarkTask,
+    DependencyGraph,
+    OrchestratedTask,
+    OrchestrationStrategy,
+    SingleEpisodeTask,
+    SubTaskDefinition,
+    TaskInfo,
+)
 from ...models.constants import StepEvaluationStrategy, SubmissionEvaluationStrategy
 from ..base import Episode
 from .benchmark_config_loader import BenchmarkConfigLoader
@@ -46,6 +55,7 @@ class BenchmarkManager:
         self.tasks_dir_path = self.config_dir / "tasks"
         self.tasks: Dict[str, Task] = {}
         self.benchmark_config: Dict[str, Any] = {}
+        self._dependency_graph: Optional[DependencyGraph] = None  # Cached dependency graph
 
         # Initialize specialized components
         self.config_loader = BenchmarkConfigLoader(domain)
@@ -90,11 +100,15 @@ class BenchmarkManager:
             # Inject judge prompt renderer functions for llm_judge tasks
             self._inject_judge_prompt_renderers()
 
+            # Build dependency graph once after all tasks loaded
+            self._dependency_graph = self._build_dependency_graph()
+
             log_operation_success(
                 logger,
                 "benchmark_manager_load_tasks",
                 task_count=len(self.tasks),
                 benchmark_config_keys=list(self.benchmark_config.keys()),
+                dependency_roots=len(self._dependency_graph.dependency_roots),
                 **operation_context,
             )
         except Exception as exc:  # pragma: no cover - fail fast on loader errors
@@ -116,37 +130,231 @@ class BenchmarkManager:
         """
         Get complete benchmark information for client-side orchestration.
 
+        Classifies tasks into SingleEpisodeTask or OrchestratedTask based on
+        dependency relationships. Uses cached dependency graph for efficiency.
+
         Returns:
-            BenchmarkInfo object with all tasks and their episode attempt configurations
+            BenchmarkInfo object with polymorphic BenchmarkTask list
         """
-        task_infos = []
-        total_episodes = 0
-
-        for task in self.tasks.values():
-            episode_attempts = task.get_episode_attempts()
-            episode_config = task.episode_config or {}
-            max_steps = episode_config.get("max_steps", 100)
-
-            # Render all three prompts for this task
-            rendered_prompts = self.prompt_generator.render_agent_prompts_for_task(task)
-
-            task_info = TaskInfo(
-                task_id=task.task_id,
-                title=task.title,
-                description=task.description,
-                episode_attempts=episode_attempts,
-                subtask_count=len(task.subtasks),
-                max_steps=max_steps,
-                # NEW: Three distinct prompts (replaces initial_prompt)
-                instruction_prompt=rendered_prompts["instruction"],
-                assistant_prompt=rendered_prompts["assistant"],
-                submit_prompt=rendered_prompts["submit"],
-            )
-            task_infos.append(task_info)
-            total_episodes += episode_attempts
+        # Use cached dependency graph to assemble benchmark tasks
+        benchmark_tasks = self._assemble_benchmark_tasks()
+        total_episodes = sum(bt.get_total_episodes() for bt in benchmark_tasks)
 
         return BenchmarkInfo(
-            domain=self.domain, tasks=task_infos, total_tasks=len(task_infos), total_episodes=total_episodes
+            domain=self.domain,
+            tasks=benchmark_tasks,  # type: ignore[arg-type]
+            total_tasks=len(benchmark_tasks),
+            total_episodes=total_episodes,
+        )
+
+    def _build_dependency_graph(self) -> DependencyGraph:
+        """Build dependency graph from loaded tasks (called once at init).
+
+        Returns:
+            DependencyGraph with all task relationships mapped
+
+        Raises:
+            ValueError: If circular dependencies or nested orchestrations detected
+        """
+        graph = DependencyGraph()
+
+        # Add all tasks to graph
+        for task_id in self.tasks:
+            graph.add_task(task_id)
+
+        # Add dependency relationships
+        for task in self.tasks.values():
+            if task.depends_on_task_id:
+                graph.add_dependency(task.task_id, task.depends_on_task_id)
+                logger.debug(
+                    f"Task dependency registered: {task.task_id} -> {task.depends_on_task_id}",
+                    extra={
+                        "dependent": task.task_id,
+                        "target": task.depends_on_task_id,
+                    },
+                )
+
+        # Validate graph structure
+        try:
+            graph.validate_acyclic()
+            graph.validate_no_nested_orchestrations()
+        except ValueError as e:
+            logger.error(
+                f"Invalid task dependency graph: {e}",
+                extra={"error": str(e)},
+            )
+            raise
+
+        logger.info(
+            "Dependency graph built successfully",
+            extra={
+                "total_tasks": len(graph.all_tasks),
+                "dependency_roots": len(graph.dependency_roots),
+                "dependent_tasks": len(graph.dependencies),
+            },
+        )
+
+        return graph
+
+    def _assemble_benchmark_tasks(self) -> List[BenchmarkTask]:
+        """Classify and assemble tasks into BenchmarkTask objects.
+
+        Uses the cached dependency graph to identify orchestrations and
+        create appropriate SingleEpisodeTask or OrchestratedTask instances.
+
+        Returns:
+            List of BenchmarkTask objects (polymorphic)
+        """
+        benchmark_tasks: List[BenchmarkTask] = []
+        processed: set[str] = set()
+
+        # Create orchestrated tasks for dependency groups
+        if self._dependency_graph is None:
+            return benchmark_tasks
+        for group in self._dependency_graph.get_orchestrated_groups():
+            orchestrated = self._create_orchestrated_task(group)
+            benchmark_tasks.append(orchestrated)
+            processed.update(orchestrated.get_task_ids())
+
+            logger.debug(
+                f"Created orchestrated task: {orchestrated.benchmark_task_id}",
+                extra={
+                    "orchestration_id": orchestrated.benchmark_task_id,
+                    "sub_task_count": len(orchestrated.sub_tasks),
+                    "task_ids": orchestrated.get_task_ids(),
+                },
+            )
+
+        # Create single-episode tasks for independent tasks
+        for task_id in self._dependency_graph.get_independent_tasks():
+            if task_id not in processed:
+                single = self._create_single_episode_task(self.tasks[task_id])
+                benchmark_tasks.append(single)
+                processed.add(task_id)
+
+                logger.debug(
+                    f"Created single-episode task: {task_id}",
+                    extra={"task_id": task_id},
+                )
+
+        # Warn about any orphaned dependents
+        for task_id in self.tasks:
+            if task_id not in processed:
+                logger.warning(
+                    f"Orphaned dependent task: {task_id} (dependency target not found)",
+                    extra={"task_id": task_id},
+                )
+
+        return benchmark_tasks
+
+    def _create_orchestrated_task(self, group: List[str]) -> OrchestratedTask:
+        """Create OrchestratedTask from a group of task IDs.
+
+        Args:
+            group: List of task IDs where first task is the dependency target
+                   and remaining tasks depend on it. Roles are user-defined.
+
+        Returns:
+            OrchestratedTask with all sub-tasks configured
+        """
+        root_id = group[0]
+        root_task = self.tasks[root_id]
+
+        # Validate first task (dependency target) has a role
+        if not root_task.role:
+            raise ValueError(
+                f"Task '{root_id}' must have a 'role' defined for orchestration. "
+                f"Add 'role: <role_name>' to the task YAML file (e.g., role: blue)."
+            )
+
+        # Build sub-task definitions
+        sub_tasks: List[SubTaskDefinition] = []
+
+        # Add root task
+        root_prompts = self.prompt_generator.render_agent_prompts_for_task(root_task)
+        root_episode_config = root_task.episode_config or {}
+
+        sub_tasks.append(
+            SubTaskDefinition(
+                task_id=root_id,
+                role=root_task.role,
+                order=0,
+                depends_on_role=None,
+                domain=root_task.domain,
+                title=root_task.title,
+                description=root_task.description,
+                episode_attempts=root_task.get_episode_attempts(),
+                subtask_count=len(root_task.subtasks),
+                max_steps=root_episode_config.get("max_steps", 100),
+                instruction_prompt=root_prompts["instruction"],
+                assistant_prompt=root_prompts["assistant"],
+                submit_prompt=root_prompts["submit"],
+            )
+        )
+
+        # Add dependent tasks
+        for idx, dependent_id in enumerate(group[1:], start=1):
+            dependent_task = self.tasks[dependent_id]
+            dependent_prompts = self.prompt_generator.render_agent_prompts_for_task(dependent_task)
+            dependent_episode_config = dependent_task.episode_config or {}
+
+            sub_tasks.append(
+                SubTaskDefinition(
+                    task_id=dependent_id,
+                    role=dependent_task.role,
+                    order=idx,
+                    depends_on_role=root_task.role,
+                    domain=dependent_task.domain,
+                    title=dependent_task.title,
+                    description=dependent_task.description,
+                    episode_attempts=dependent_task.get_episode_attempts(),
+                    subtask_count=len(dependent_task.subtasks),
+                    max_steps=dependent_episode_config.get("max_steps", 100),
+                    instruction_prompt=dependent_prompts["instruction"],
+                    assistant_prompt=dependent_prompts["assistant"],
+                    submit_prompt=dependent_prompts["submit"],
+                )
+            )
+
+        # Use minimum episode_attempts across all sub-tasks
+        min_attempts = min(st.episode_attempts for st in sub_tasks)
+
+        return OrchestratedTask(
+            benchmark_task_id=f"{root_id}_orchestrated",
+            episode_attempts=min_attempts,
+            orchestration_strategy=OrchestrationStrategy.SEQUENTIAL_PAIRED,
+            sub_tasks=sub_tasks,
+            orchestration_config={
+                "root_task_id": root_id,
+                "creation_order": "root_first",
+                "shared_semaphore_slot": True,
+            },
+        )
+
+    def _create_single_episode_task(self, task: Task) -> SingleEpisodeTask:
+        """Create SingleEpisodeTask from a Task definition.
+
+        Args:
+            task: Task definition
+
+        Returns:
+            SingleEpisodeTask with all configuration
+        """
+        episode_config = task.episode_config or {}
+        rendered_prompts = self.prompt_generator.render_agent_prompts_for_task(task)
+
+        return SingleEpisodeTask(
+            benchmark_task_id=task.task_id,
+            episode_attempts=task.get_episode_attempts(),
+            task_id=task.task_id,
+            domain=task.domain,
+            title=task.title,
+            description=task.description,
+            subtask_count=len(task.subtasks),
+            max_steps=episode_config.get("max_steps", 100),
+            instruction_prompt=rendered_prompts["instruction"],
+            assistant_prompt=rendered_prompts["assistant"],
+            submit_prompt=rendered_prompts["submit"],
         )
 
     def get_task(self, task_id: str) -> Task:

@@ -144,6 +144,9 @@ class EpisodeManager:
         """
         Find an available running episode with the target_task_id that can be attached to.
 
+        Searches for episodes in READY, ACTIVE, or recently CREATING states.
+        This supports orchestrated tasks where dependencies may attach during initialization.
+
         Args:
             session_id: Session ID to search within
             target_task_id: Task ID we need to find a running episode for
@@ -161,30 +164,48 @@ class EpisodeManager:
 
         session_episodes = self.get_active_episodes_for_session(session_id)
 
+        # Search for episodes in READY or ACTIVE states (stable states for attachment)
         for episode in session_episodes:
-            if episode.task_id == target_task_id and episode.state == EpisodeState.ACTIVE:
-                if not episode.has_attached_episode_with_task(dependent_task_id, self.episodes):
-                    logger.info(
-                        "Dependency episode available",
+            if episode.task_id == target_task_id:
+                # Accept READY or ACTIVE episodes
+                if episode.state in (EpisodeState.READY, EpisodeState.ACTIVE):
+                    if not episode.has_attached_episode_with_task(dependent_task_id, self.episodes):
+                        logger.info(
+                            "Dependency episode available",
+                            extra={
+                                "event": "episode_dependency_available",
+                                "session_id": session_id,
+                                "episode_id": episode.episode_id,
+                                "target_task_id": target_task_id,
+                                "dependent_task_id": dependent_task_id,
+                                "episode_state": episode.state.value,
+                            },
+                        )
+                        return episode.episode_id
+                    logger.debug(
+                        "Dependency already attached",
                         extra={
-                            "event": "episode_dependency_available",
+                            "event": "episode_dependency_already_attached",
                             "session_id": session_id,
                             "episode_id": episode.episode_id,
                             "target_task_id": target_task_id,
                             "dependent_task_id": dependent_task_id,
+                            "episode_state": episode.state.value,
                         },
                     )
-                    return episode.episode_id
-                logger.debug(
-                    "Dependency already attached",
-                    extra={
-                        "event": "episode_dependency_already_attached",
-                        "session_id": session_id,
-                        "episode_id": episode.episode_id,
-                        "target_task_id": target_task_id,
-                        "dependent_task_id": dependent_task_id,
-                    },
-                )
+                elif episode.state == EpisodeState.CREATING:
+                    # CREATING episodes might become available soon - log for debugging
+                    logger.debug(
+                        "Episode still creating (not yet available for dependency)",
+                        extra={
+                            "event": "episode_dependency_creating",
+                            "session_id": session_id,
+                            "episode_id": episode.episode_id,
+                            "target_task_id": target_task_id,
+                            "dependent_task_id": dependent_task_id,
+                            "episode_state": episode.state.value,
+                        },
+                    )
 
         logger.warning(
             "Dependency episode unavailable",
@@ -193,6 +214,15 @@ class EpisodeManager:
                 "session_id": session_id,
                 "target_task_id": target_task_id,
                 "dependent_task_id": dependent_task_id,
+                "available_episodes": [
+                    {
+                        "episode_id": ep.episode_id,
+                        "task_id": ep.task_id,
+                        "state": ep.state.value,
+                    }
+                    for ep in session_episodes
+                    if ep.task_id == target_task_id
+                ],
             },
         )
         return None

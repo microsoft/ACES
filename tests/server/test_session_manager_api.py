@@ -133,9 +133,9 @@ class TestSessionManagerAPI:
         create_response = client.post("/api/v1/session?client_id=test_client")
         session_id = create_response.json()["session_id"]
 
-        # Mock the initiate_episode method (async pattern)
+        # Mock the start_episode method (async pattern)
         from unittest.mock import AsyncMock
-        with patch.object(manager, 'initiate_episode', new_callable=AsyncMock, return_value=mock_episode):
+        with patch.object(manager, 'start_episode', new_callable=AsyncMock, return_value=mock_episode):
             # Start individual episode using correct endpoint
             response = client.post(f"/api/v1/session/{session_id}/episodes?task_id=task_456")
 
@@ -145,7 +145,7 @@ class TestSessionManagerAPI:
             assert data["task_id"] == "task_456"
             assert data["session_id"] == session_id
             assert data["state"] == "creating"  # Verify async state
-            assert "initiated" in data["message"].lower()  # Changed message expectation
+            assert "created" in data["message"].lower()  # Changed message expectation
 
     def test_get_current_task_endpoint(self, session_manager_app):
         """Test get current task endpoint."""

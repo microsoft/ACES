@@ -112,8 +112,11 @@ tasks:
         prompt_template_file: timeout_task_template.md
         environment: test_env
         execution_config:
-          allowed_executors: ["bash", "python"]
-          timeout: 180
+          executors:
+            bash:
+              timeout: 180
+            python:
+              timeout: 180
         episode_config:
           max_steps: 25
 
@@ -2818,7 +2821,7 @@ class TestBenchmarkConfigLoaderValidation:
             }
         }
 
-        with pytest.raises(InvalidTaskDefinitionException, match="Invalid step evaluation strategy.*Must be 'static', 'tool_call' or 'llm_judge'"):
+        with pytest.raises(InvalidTaskDefinitionException, match="Invalid step evaluation strategy"):
             loader._validate_step_evaluation_config(invalid_strategy_config, "test_task")
 
     def test_validate_step_evaluation_config_scoring_validation(self):
@@ -2921,3 +2924,378 @@ class TestBenchmarkConfigLoaderValidation:
 
         with pytest.raises(InvalidTaskDefinitionException, match="Missing or invalid criteria in step_evaluation_config"):
             loader._validate_step_evaluation_config(config_non_dict_criteria, "test_task")
+
+
+class TestBenchmarkConfigLoaderRoleValidation:
+    """Test cases for role configuration validation in orchestrated tasks."""
+
+    def test_root_task_requires_role_when_depended_upon(self):
+        """Test that root tasks must have role when other tasks depend on them."""
+        yaml_content = """
+domain: test_domain
+
+global_defaults:
+  execution_config:
+    executors:
+      bash:
+        timeout: 30
+  episode_config:
+    max_steps: 5
+  prompts:
+    instruction: "instruction.md"
+    assistant: "assistant.md"
+    submit: "submit.md"
+
+benchmark_config:
+  episode_attempts: 1
+
+tasks:
+  - task_id: root_task
+    # MISSING role field - should fail validation
+    title: Root Task
+    description: Root task without role
+    submission_evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers:
+          - "test"
+      scoring:
+        max_score: 1.0
+    subtasks: []
+
+  - task_id: dependent_task
+    role: dependent  # Has role but depends on task without role
+    depends_on_task_id: root_task
+    title: Dependent Task
+    description: Depends on root
+    submission_evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers:
+          - "test"
+      scoring:
+        max_score: 1.0
+    subtasks: []
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml_content)
+            temp_path = f.name
+
+        try:
+            loader = BenchmarkConfigLoader("test_domain")
+            with pytest.raises(InvalidTaskDefinitionException, match="Root task 'root_task' must have a 'role' defined"):
+                loader.load_tasks_from_file(temp_path)
+        finally:
+            os.unlink(temp_path)
+
+    def test_dependent_task_requires_role(self):
+        """Test that dependent tasks must have role field."""
+        yaml_content = """
+domain: test_domain
+
+global_defaults:
+  execution_config:
+    executors:
+      bash:
+        timeout: 30
+  episode_config:
+    max_steps: 5
+  prompts:
+    instruction: "instruction.md"
+    assistant: "assistant.md"
+    submit: "submit.md"
+
+benchmark_config:
+  episode_attempts: 1
+
+tasks:
+  - task_id: root_task
+    role: blue
+    title: Root Task
+    description: Root with role
+    submission_evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers:
+          - "test"
+      scoring:
+        max_score: 1.0
+    subtasks: []
+
+  - task_id: dependent_task
+    # MISSING role field - should fail at Task creation
+    depends_on_task_id: root_task
+    title: Dependent Task
+    description: Depends on root
+    submission_evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers:
+          - "test"
+      scoring:
+        max_score: 1.0
+    subtasks: []
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml_content)
+            temp_path = f.name
+
+        try:
+            loader = BenchmarkConfigLoader("test_domain")
+            with pytest.raises(InvalidTaskDefinitionException, match="'role' is required when 'depends_on_task_id' is set"):
+                loader.load_tasks_from_file(temp_path)
+        finally:
+            os.unlink(temp_path)
+
+    def test_valid_orchestrated_tasks_with_custom_roles(self):
+        """Test successful loading of orchestrated tasks with custom semantic roles."""
+        yaml_content = """
+domain: test_domain
+
+global_defaults:
+  execution_config:
+    executors:
+      bash:
+        timeout: 30
+  episode_config:
+    max_steps: 5
+  prompts:
+    instruction: "instruction.md"
+    assistant: "assistant.md"
+    submit: "submit.md"
+
+benchmark_config:
+  episode_attempts: 1
+
+tasks:
+  - task_id: blue_team_task
+    role: blue
+    title: Blue Team Defense
+    description: Defender task
+    submission_evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers:
+          - "test"
+      scoring:
+        max_score: 1.0
+    subtasks: []
+
+  - task_id: red_team_task
+    role: red
+    depends_on_task_id: blue_team_task
+    title: Red Team Attack
+    description: Attacker task
+    submission_evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers:
+          - "test"
+      scoring:
+        max_score: 1.0
+    subtasks: []
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml_content)
+            temp_path = f.name
+
+        try:
+            loader = BenchmarkConfigLoader("test_domain")
+            tasks = loader.load_tasks_from_file(temp_path)
+
+            assert len(tasks) == 2
+            assert "blue_team_task" in tasks
+            assert "red_team_task" in tasks
+
+            blue_task = tasks["blue_team_task"]
+            assert blue_task.role == "blue"
+            assert blue_task.depends_on_task_id is None
+
+            red_task = tasks["red_team_task"]
+            assert red_task.role == "red"
+            assert red_task.depends_on_task_id == "blue_team_task"
+        finally:
+            os.unlink(temp_path)
+
+    def test_single_task_without_role_is_valid(self):
+        """Test that single episode tasks don't require role field."""
+        yaml_content = """
+domain: test_domain
+
+global_defaults:
+  execution_config:
+    executors:
+      bash:
+        timeout: 30
+  episode_config:
+    max_steps: 5
+  prompts:
+    instruction: "instruction.md"
+    assistant: "assistant.md"
+    submit: "submit.md"
+
+benchmark_config:
+  episode_attempts: 1
+
+tasks:
+  - task_id: single_task
+    # No role field - valid for single episode task
+    title: Single Task
+    description: Standalone task
+    submission_evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers:
+          - "test"
+      scoring:
+        max_score: 1.0
+    subtasks: []
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml_content)
+            temp_path = f.name
+
+        try:
+            loader = BenchmarkConfigLoader("test_domain")
+            tasks = loader.load_tasks_from_file(temp_path)
+
+            assert len(tasks) == 1
+            assert "single_task" in tasks
+            task = tasks["single_task"]
+            assert task.role is None
+            assert task.depends_on_task_id is None
+        finally:
+            os.unlink(temp_path)
+
+    def test_dependency_chain_with_roles(self):
+        """Test multi-level dependency chain with roles."""
+        yaml_content = """
+domain: test_domain
+
+global_defaults:
+  execution_config:
+    executors:
+      bash:
+        timeout: 30
+  episode_config:
+    max_steps: 5
+  prompts:
+    instruction: "instruction.md"
+    assistant: "assistant.md"
+    submit: "submit.md"
+
+benchmark_config:
+  episode_attempts: 1
+
+tasks:
+  - task_id: recon_task
+    role: reconnaissance
+    title: Reconnaissance
+    description: Initial recon
+    submission_evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers:
+          - "test"
+      scoring:
+        max_score: 1.0
+    subtasks: []
+
+  - task_id: exploit_task
+    role: exploitation
+    depends_on_task_id: recon_task
+    title: Exploitation
+    description: Exploit phase
+    submission_evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers:
+          - "test"
+      scoring:
+        max_score: 1.0
+    subtasks: []
+
+  - task_id: persist_task
+    role: persistence
+    depends_on_task_id: exploit_task
+    title: Persistence
+    description: Maintain access
+    submission_evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers:
+          - "test"
+      scoring:
+        max_score: 1.0
+    subtasks: []
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml_content)
+            temp_path = f.name
+
+        try:
+            loader = BenchmarkConfigLoader("test_domain")
+            tasks = loader.load_tasks_from_file(temp_path)
+
+            assert len(tasks) == 3
+
+            recon = tasks["recon_task"]
+            assert recon.role == "reconnaissance"
+            assert recon.depends_on_task_id is None
+
+            exploit = tasks["exploit_task"]
+            assert exploit.role == "exploitation"
+            assert exploit.depends_on_task_id == "recon_task"
+
+            persist = tasks["persist_task"]
+            assert persist.role == "persistence"
+            assert persist.depends_on_task_id == "exploit_task"
+        finally:
+            os.unlink(temp_path)
+
+    def test_nonexistent_dependency_fails(self):
+        """Test that depending on non-existent task fails validation."""
+        yaml_content = """
+domain: test_domain
+
+global_defaults:
+  execution_config:
+    executors:
+      bash:
+        timeout: 30
+  episode_config:
+    max_steps: 5
+  prompts:
+    instruction: "instruction.md"
+    assistant: "assistant.md"
+    submit: "submit.md"
+
+benchmark_config:
+  episode_attempts: 1
+
+tasks:
+  - task_id: dependent_task
+    role: red
+    depends_on_task_id: nonexistent_task  # Task doesn't exist
+    title: Dependent Task
+    description: Depends on missing task
+    submission_evaluation_config:
+      strategy: "static"
+      criteria:
+        expected_answers:
+          - "test"
+      scoring:
+        max_score: 1.0
+    subtasks: []
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml_content)
+            temp_path = f.name
+
+        try:
+            loader = BenchmarkConfigLoader("test_domain")
+            with pytest.raises(InvalidTaskDefinitionException, match="depends on non-existent task 'nonexistent_task'"):
+                loader.load_tasks_from_file(temp_path)
+        finally:
+            os.unlink(temp_path)
+
