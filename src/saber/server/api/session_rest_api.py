@@ -20,6 +20,7 @@ from ...models import (
     EpisodeContext,
     EpisodeCreateResponse,
     EpisodeEndResponse,
+    EpisodeStatusResponse,
     EpisodeTaskResponse,
     EvalSubmission,
     SubmissionEvaluationStrategy,
@@ -228,6 +229,67 @@ class SessionRestAPI:
                     task_id=task_id,
                 )
                 raise HTTPException(status_code=500, detail=f"Failed to create episode: {exc}") from exc
+
+        @self.app.get("/api/v1/session/{session_id}/episodes/{episode_id}/status", response_model=EpisodeStatusResponse)
+        async def get_episode_status_endpoint(session_id: str, episode_id: str) -> EpisodeStatusResponse:
+            """Get episode status for readiness polling."""
+            log_operation_start(logger, "get_episode_status", session_id=session_id, episode_id=episode_id)
+            try:
+                episode = self.session_manager.get_episode_status(episode_id)
+                if not episode:
+                    raise HTTPException(status_code=404, detail="Episode not found")
+
+                # Build episode context if episode is ready
+                episode_context = None
+                if episode.is_ready:
+                    episode_config = self.session_manager.benchmark_manager.get_episode_config(episode.task_id)
+                    episode_context = EpisodeContext(
+                        session_id=session_id,
+                        task_timeout=episode_config.get("task_timeout") if episode_config else None,
+                        max_steps=episode.max_steps,
+                        metadata=episode.metadata,
+                    )
+
+                # Determine readiness
+                is_ready = episode.is_ready
+
+                # Build status message
+                if is_ready:
+                    message = "Episode is ready for execution"
+                elif episode.state.value == "creating":
+                    message = "Episode is being created"
+                elif episode.state.value == "failed_creation":
+                    message = "Episode creation failed"
+                else:
+                    message = f"Episode is in {episode.state.value} state"
+
+                response = EpisodeStatusResponse(
+                    episode_id=episode.episode_id,
+                    task_id=episode.task_id,
+                    session_id=session_id,
+                    state=episode.state.value,
+                    is_ready=is_ready,
+                    message=message,
+                    creation_error=getattr(episode, "creation_error", None),
+                    episode_context=episode_context,
+                    attached_to_episode_id=episode.attached_to_episode_id,
+                )
+
+                log_operation_success(
+                    logger,
+                    "get_episode_status",
+                    session_id=session_id,
+                    episode_id=episode_id,
+                    state=episode.state.value,
+                    is_ready=is_ready,
+                )
+                return response
+
+            except HTTPException:
+                raise
+            except Exception as exc:
+                log_operation_failure(logger, "get_episode_status", exc, session_id=session_id, episode_id=episode_id)
+                raise HTTPException(status_code=500, detail=f"Failed to get episode status: {exc}") from exc
 
         @self.app.delete("/api/v1/session/{session_id}/episodes/{episode_id}", response_model=EpisodeEndResponse)
         async def end_episode_endpoint(
@@ -547,6 +609,39 @@ class SessionRestAPI:
                     logger, "get_episode_submission", exc, session_id=session_id, episode_id=episode_id
                 )
                 raise HTTPException(status_code=500, detail=f"Failed to get episode submission: {exc}") from exc
+
+        @self.app.post("/api/v1/session/{session_id}/episodes/{episode_id}/submission")
+        async def post_episode_submission_endpoint(
+            session_id: str, episode_id: str, submission: EvalSubmission
+        ) -> dict:
+            """Store episode submission without ending the episode."""
+            log_operation_start(logger, "post_episode_submission", session_id=session_id, episode_id=episode_id)
+            try:
+                episode = self.session_manager.get_episode_by_id(episode_id)
+                if not episode:
+                    raise HTTPException(status_code=404, detail="Episode not found")
+
+                # Store the submission data on the episode
+                episode.eval_submission = submission
+                episode.submission = submission.submission
+
+                log_operation_success(
+                    logger,
+                    "post_episode_submission",
+                    session_id=session_id,
+                    episode_id=episode_id,
+                    submission_length=len(submission.submission) if submission.submission else 0,
+                )
+
+                return {"message": "Submission stored successfully"}
+
+            except HTTPException:
+                raise
+            except Exception as exc:
+                log_operation_failure(
+                    logger, "post_episode_submission", exc, session_id=session_id, episode_id=episode_id
+                )
+                raise HTTPException(status_code=500, detail=f"Failed to store episode submission: {exc}") from exc
 
         @self.app.get("/api/v1/session/{session_id}/episodes/{episode_id}/steps")
         async def get_episode_steps_endpoint(session_id: str, episode_id: str) -> EpisodeStepsResponse:
