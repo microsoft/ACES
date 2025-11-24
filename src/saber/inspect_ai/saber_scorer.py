@@ -30,14 +30,13 @@ from jinja2 import BaseLoader, Environment, TemplateError
 from ..logging_config import LogCategory, get_saber_logger
 from ..models.constants import MetadataKeys, StepEvaluationStrategy, SubmissionEvaluationStrategy
 from ..models.core import EvalSubmission
-from ..models.evaluation_utils import parse_step_evaluations
 from ..models.rest.evaluation import (
     EpisodeStepsResponse,
     EpisodeSubmissionResponse,
     EvaluationResultSubmission,
     StepEvaluation,
-    SubtaskEvaluationCriteriaResponse,
     SubmissionEvaluationCriteriaResponse,
+    SubtaskEvaluationCriteriaResponse,
 )
 
 logger = get_saber_logger(LogCategory.EVALUATION, __name__)
@@ -565,8 +564,14 @@ def saber_scorer() -> Scorer:
             step_evaluations: List[List[StepEvaluation]] = []
             subtask_scores_weighted: Dict[str, float] = {}  # Track weighted subtask scores for total
             subtask_scores_unweighted: Dict[str, float] = {}  # Track unweighted scores for individual metrics
+            has_scorable_subtasks = False  # Track if any subtask has a valid evaluation strategy
 
             if subtasks_criteria_list is not None and subtasks_criteria_list != []:
+                # Check if any subtask has a valid strategy (not empty/None)
+                has_scorable_subtasks = any(
+                    criteria.strategy and criteria.strategy != "" for criteria in subtasks_criteria_list
+                )
+
                 total_subtask_score, subtask_scores_raw_results, step_evaluations = await _score_all_subtasks(
                     steps_data, subtasks_criteria_list, submission_criteria.task_context, session_manager, state
                 )
@@ -592,9 +597,13 @@ def saber_scorer() -> Scorer:
             # Calculate totals
             total_score = submission_score + total_subtask_score
             max_possible = submission_criteria.scoring.get("max_score", 1.0)
-            if subtasks_criteria_list:
-                # Calculate max possible with weights applied
-                weighted_max_possible = sum(criteria.max_score * criteria.weight for criteria in subtasks_criteria_list)
+            if has_scorable_subtasks:
+                # Calculate max possible with weights applied - only for subtasks with strategies
+                weighted_max_possible = sum(
+                    criteria.max_score * criteria.weight
+                    for criteria in subtasks_criteria_list
+                    if criteria.strategy and criteria.strategy != ""
+                )
                 max_possible += weighted_max_possible
 
             # Step 8: Submit evaluation result
@@ -626,10 +635,15 @@ def saber_scorer() -> Scorer:
 
             await session_manager.submit_evaluation_result(session_id, episode_id, evaluation_result)
 
-            eval_complete_msg = (
-                f"Client-side evaluation completed: score={total_score:.2f} "
-                f"(submission={submission_score:.2f}, weighted_steps={total_subtask_score:.2f})"
-            )
+            if has_scorable_subtasks:
+                eval_complete_msg = (
+                    f"Client-side evaluation completed: score={total_score:.2f} "
+                    f"(submission={submission_score:.2f}, weighted_steps={total_subtask_score:.2f})"
+                )
+            else:
+                eval_complete_msg = (
+                    f"Client-side evaluation completed: score={total_score:.2f} " f"(submission={submission_score:.2f})"
+                )
             logger.info(
                 "Client-side evaluation completed",
                 extra={
@@ -671,8 +685,8 @@ def saber_scorer() -> Scorer:
                 "scoring_method": "sum",
             }
 
-            # Only add subtask-related metadata when subtasks are being scored
-            if subtasks_criteria_list is not None and subtasks_criteria_list != []:
+            # Only add subtask-related metadata when subtasks are actually being scored
+            if has_scorable_subtasks:
                 metadata[MetadataKeys.SUBTASK_SCORE] = total_subtask_score
                 metadata[MetadataKeys.WEIGHTED_SUBTASK_SCORE] = total_subtask_score
                 metadata[MetadataKeys.STEP_EVALUATIONS] = [se.model_dump() for se in sum(step_evaluations, [])]
@@ -688,8 +702,8 @@ def saber_scorer() -> Scorer:
                     metric_key = f"{sanitized_task}_{sanitized_subtask}_score"
                     metadata[metric_key] = subtask_score_value
 
-            # Build explanation based on whether subtasks were scored
-            if subtasks_criteria_list is not None and subtasks_criteria_list != []:
+            # Build explanation based on whether subtasks were actually scored
+            if has_scorable_subtasks:
                 explanation = (
                     f"{submission_explanation}, "
                     f"weighted_subtasks={total_subtask_score:.2f}, "
@@ -935,6 +949,20 @@ async def _score_all_subtasks(
     tasks = []
 
     for criteria in list_of_all_subtask_criteria:
+        # Skip subtasks without a configured strategy (informational checkpoints only)
+        if not criteria.strategy or criteria.strategy == "":
+            logger.info(
+                "Skipping subtask without evaluation strategy (informational checkpoint only)",
+                extra={
+                    "subtask_id": criteria.subtask_id,
+                    "strategy": criteria.strategy,
+                    "event": "subtask_skip_no_strategy",
+                },
+            )
+            # Add a placeholder result with 0 score for this subtask
+            tasks.append(_score_subtask_skip(steps_data, criteria))
+            continue
+
         logger.info(
             "Evaluating subtask with strategy",
             extra={
@@ -983,6 +1011,30 @@ async def _score_all_subtasks(
     )
 
     return total_subtask_score, all_scores, all_step_evaluations
+
+
+async def _score_subtask_skip(
+    steps_data: EpisodeStepsResponse,
+    criteria: SubtaskEvaluationCriteriaResponse,
+) -> Tuple[float, List[StepEvaluation]]:
+    """
+    Skip scoring for subtasks without step_evaluation_config (informational checkpoints only).
+
+    Args:
+        steps_data: Episode steps data
+        criteria: Subtask criteria (without strategy)
+
+    Returns:
+        Tuple of (0.0, empty_list) - no score for informational subtasks
+    """
+    logger.info(
+        "Subtask skipped - no evaluation strategy configured (informational only)",
+        extra={
+            "subtask_id": criteria.subtask_id,
+            "event": "subtask_skip_complete",
+        },
+    )
+    return 0.0, []
 
 
 async def _score_subtask_static(
