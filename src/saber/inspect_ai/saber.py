@@ -916,7 +916,7 @@ class SABERSandboxEnvironment:
         role = metadata[MetadataKeys.SUB_TASK_ROLE]
         task_id = metadata[MetadataKeys.TASK_ID]
         depends_on_role = metadata.get(MetadataKeys.DEPENDS_ON_ROLE)
-        order = metadata[MetadataKeys.ORDER]
+        order = int(metadata[MetadataKeys.ORDER])
 
         # Debug logging
         debug_logger = EpisodeDebugLogger("orchestrated_init")
@@ -950,6 +950,8 @@ class SABERSandboxEnvironment:
                     )
 
                 # Register root sample with coordinator
+                if self._sample_id is None:
+                    raise SandboxError("Sample ID not initialized")
                 success = coordinator.register_root_sample(
                     orchestration_id=orchestration_id,
                     role=role,
@@ -961,6 +963,8 @@ class SABERSandboxEnvironment:
                     raise SandboxError(f"Failed to register root sample for orchestration {orchestration_id}")
             else:
                 # Dependent sample - register and wait for dependency
+                if self._sample_id is None:
+                    raise SandboxError("Sample ID not initialized")
                 success = await coordinator.register_dependent_sample(
                     orchestration_id=orchestration_id,
                     role=role,
@@ -985,6 +989,8 @@ class SABERSandboxEnvironment:
                     },
                 )
 
+                if self._session_id is None:
+                    raise SandboxError("Session ID not initialized")
                 dependency_episode_id = await coordinator.wait_for_dependency_ready(
                     orchestration_id=orchestration_id,
                     role=role,

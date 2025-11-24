@@ -1,0 +1,426 @@
+"""Orchestration coordinator for managing multi-sample orchestrated tasks.
+
+This module provides a singleton coordinator that manages the lifecycle of orchestrated
+sub-tasks where multiple samples (e.g., blue team, red team) need to be coordinated
+and executed in a specific order with dependency management.
+
+The coordinator handles:
+- Registration of root and dependent samples
+- Dependency tracking and signaling
+- Episode ID coordination across samples
+- Cascade termination of entire orchestration groups
+- Semaphore management for cleanup
+"""
+
+import asyncio
+from dataclasses import dataclass, field
+from threading import Lock
+from typing import Any, Optional
+
+from ..logging_config import LogCategory, get_saber_logger
+
+logger = get_saber_logger(LogCategory.HARNESS, __name__)
+
+
+@dataclass
+class SampleRegistration:
+    """Registration info for a sample in an orchestration."""
+
+    sample_id: str
+    role: str
+    depends_on_role: Optional[str]
+    order: int
+    episode_id: Optional[str] = None
+    ready_event: asyncio.Event = field(default_factory=asyncio.Event)
+    termination_requested: bool = False
+
+
+@dataclass
+class OrchestrationGroup:
+    """Group of samples that are orchestrated together."""
+
+    orchestration_id: str
+    samples: dict[str, SampleRegistration] = field(default_factory=dict)
+    root_role: Optional[str] = None
+    semaphore: Optional[asyncio.Semaphore] = None
+    terminated: bool = False
+
+
+class OrchestrationCoordinator:
+    """Singleton coordinator for orchestrated multi-sample tasks.
+
+    This coordinator manages groups of samples that need to be executed in a coordinated
+    manner with dependency tracking. It uses a singleton pattern to ensure all samples
+    within an orchestration can communicate through the same coordinator instance.
+
+    Thread-safe for registration operations.
+    """
+
+    _instance: Optional["OrchestrationCoordinator"] = None
+    _lock = Lock()
+
+    def __init__(self) -> None:
+        """Initialize orchestration coordinator (singleton pattern)."""
+        # Only initialize once
+        if not hasattr(self, "_initialized"):
+            self._orchestrations: dict[str, OrchestrationGroup] = {}
+            self._init_lock = Lock()
+            self._initialized = True
+
+    def __new__(cls) -> "OrchestrationCoordinator":
+        """Ensure singleton instance."""
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def register_root_sample(
+        self,
+        orchestration_id: str,
+        role: str,
+        sample_id: str,
+        semaphore: Optional[asyncio.Semaphore] = None,
+    ) -> bool:
+        """Register a root sample (no dependency).
+
+        Args:
+            orchestration_id: Unique ID for this orchestration group
+            role: Role of this sample (e.g., "blue", "red")
+            sample_id: Unique sample ID
+            semaphore: Optional semaphore for concurrency control
+
+        Returns:
+            True if registration succeeded, False otherwise
+        """
+        with self._init_lock:
+            if orchestration_id not in self._orchestrations:
+                self._orchestrations[orchestration_id] = OrchestrationGroup(
+                    orchestration_id=orchestration_id,
+                    root_role=role,
+                    semaphore=semaphore,
+                )
+
+            group = self._orchestrations[orchestration_id]
+
+            # Check if already registered
+            if role in group.samples:
+                logger.warning(
+                    f"Sample {role} already registered in orchestration {orchestration_id}",
+                    extra={"orchestration_id": orchestration_id, "role": role},
+                )
+                return False
+
+            # Register root sample
+            registration = SampleRegistration(
+                sample_id=sample_id,
+                role=role,
+                depends_on_role=None,
+                order=1,
+            )
+            group.samples[role] = registration
+
+            logger.info(
+                f"Registered root sample {role} in orchestration {orchestration_id}",
+                extra={
+                    "orchestration_id": orchestration_id,
+                    "role": role,
+                    "sample_id": sample_id,
+                },
+            )
+            return True
+
+    async def register_dependent_sample(
+        self,
+        orchestration_id: str,
+        role: str,
+        sample_id: str,
+        depends_on_role: str,
+        order: int,
+        timeout: float = 60.0,
+    ) -> bool:
+        """Register a dependent sample that waits for another sample.
+
+        Args:
+            orchestration_id: Unique ID for this orchestration group
+            role: Role of this sample
+            sample_id: Unique sample ID
+            depends_on_role: Role this sample depends on
+            order: Execution order
+            timeout: Timeout for registration (not used currently)
+
+        Returns:
+            True if registration succeeded, False otherwise
+        """
+        with self._init_lock:
+            if orchestration_id not in self._orchestrations:
+                logger.error(
+                    f"Orchestration {orchestration_id} not found for dependent sample {role}",
+                    extra={"orchestration_id": orchestration_id, "role": role},
+                )
+                return False
+
+            group = self._orchestrations[orchestration_id]
+
+            # Check if already registered
+            if role in group.samples:
+                logger.warning(
+                    f"Sample {role} already registered in orchestration {orchestration_id}",
+                    extra={"orchestration_id": orchestration_id, "role": role},
+                )
+                return False
+
+            # Verify dependency exists
+            if depends_on_role not in group.samples:
+                logger.error(
+                    f"Dependency {depends_on_role} not found for sample {role}",
+                    extra={
+                        "orchestration_id": orchestration_id,
+                        "role": role,
+                        "depends_on_role": depends_on_role,
+                    },
+                )
+                return False
+
+            # Register dependent sample
+            registration = SampleRegistration(
+                sample_id=sample_id,
+                role=role,
+                depends_on_role=depends_on_role,
+                order=order,
+            )
+            group.samples[role] = registration
+
+            logger.info(
+                f"Registered dependent sample {role} in orchestration {orchestration_id}",
+                extra={
+                    "orchestration_id": orchestration_id,
+                    "role": role,
+                    "sample_id": sample_id,
+                    "depends_on_role": depends_on_role,
+                    "order": order,
+                },
+            )
+            return True
+
+    async def wait_for_dependency_ready(
+        self,
+        orchestration_id: str,
+        role: str,
+        session_manager: Any,
+        session_id: str,
+        timeout: float = 300.0,
+    ) -> str:
+        """Wait for dependency to be ready and return its episode ID.
+
+        Args:
+            orchestration_id: Orchestration ID
+            role: This sample's role
+            session_manager: Session manager (unused, for compatibility)
+            session_id: Session ID (unused, for compatibility)
+            timeout: Maximum time to wait
+
+        Returns:
+            Episode ID of the dependency
+
+        Raises:
+            TimeoutError: If dependency doesn't become ready in time
+            ValueError: If dependency not found or no episode ID
+        """
+        group = self._orchestrations.get(orchestration_id)
+        if not group:
+            raise ValueError(f"Orchestration {orchestration_id} not found")
+
+        sample = group.samples.get(role)
+        if not sample or not sample.depends_on_role:
+            raise ValueError(f"Sample {role} has no dependency")
+
+        dependency = group.samples.get(sample.depends_on_role)
+        if not dependency:
+            raise ValueError(f"Dependency {sample.depends_on_role} not found")
+
+        # Wait for dependency to signal ready
+        logger.info(
+            f"Sample {role} waiting for dependency {sample.depends_on_role}",
+            extra={
+                "orchestration_id": orchestration_id,
+                "role": role,
+                "depends_on_role": sample.depends_on_role,
+            },
+        )
+
+        try:
+            await asyncio.wait_for(dependency.ready_event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.error(
+                f"Timeout waiting for dependency {sample.depends_on_role}",
+                extra={
+                    "orchestration_id": orchestration_id,
+                    "role": role,
+                    "depends_on_role": sample.depends_on_role,
+                    "timeout": timeout,
+                },
+            )
+            raise TimeoutError(f"Dependency {sample.depends_on_role} did not become ready within {timeout}s")
+
+        # Check if termination was requested
+        if dependency.termination_requested or group.terminated:
+            raise RuntimeError(f"Orchestration {orchestration_id} was terminated before dependency became ready")
+
+        # Return dependency's episode ID
+        if not dependency.episode_id:
+            raise ValueError(f"Dependency {sample.depends_on_role} has no episode ID")
+
+        logger.info(
+            f"Dependency {sample.depends_on_role} is ready with episode {dependency.episode_id}",
+            extra={
+                "orchestration_id": orchestration_id,
+                "role": role,
+                "depends_on_role": sample.depends_on_role,
+                "dependency_episode_id": dependency.episode_id,
+            },
+        )
+
+        return dependency.episode_id
+
+    def set_episode_id(
+        self,
+        orchestration_id: str,
+        role: str,
+        episode_id: str,
+    ) -> None:
+        """Set episode ID for a sample and signal dependents.
+
+        Args:
+            orchestration_id: Orchestration ID
+            role: Sample's role
+            episode_id: Episode ID to set
+        """
+        group = self._orchestrations.get(orchestration_id)
+        if not group:
+            logger.warning(
+                f"Orchestration {orchestration_id} not found when setting episode ID",
+                extra={"orchestration_id": orchestration_id, "role": role},
+            )
+            return
+
+        sample = group.samples.get(role)
+        if not sample:
+            logger.warning(
+                f"Sample {role} not found in orchestration {orchestration_id}",
+                extra={"orchestration_id": orchestration_id, "role": role},
+            )
+            return
+
+        sample.episode_id = episode_id
+        sample.ready_event.set()
+
+        logger.info(
+            f"Set episode ID for {role} and signaled dependents",
+            extra={
+                "orchestration_id": orchestration_id,
+                "role": role,
+                "episode_id": episode_id,
+            },
+        )
+
+    def trigger_termination(self, orchestration_id: str) -> list[tuple[str, str]]:
+        """Trigger cascade termination for entire orchestration.
+
+        Marks all samples in the orchestration for termination and returns
+        episode IDs that need cleanup.
+
+        Args:
+            orchestration_id: Orchestration ID to terminate
+
+        Returns:
+            List of (role, episode_id) tuples for cleanup
+        """
+        group = self._orchestrations.get(orchestration_id)
+        if not group:
+            logger.warning(
+                f"Orchestration {orchestration_id} not found for termination",
+                extra={"orchestration_id": orchestration_id},
+            )
+            return []
+
+        group.terminated = True
+        episodes_to_cleanup = []
+
+        for role, sample in group.samples.items():
+            sample.termination_requested = True
+            # Signal any waiting dependents
+            sample.ready_event.set()
+
+            if sample.episode_id:
+                episodes_to_cleanup.append((role, sample.episode_id))
+
+        logger.info(
+            f"Triggered termination for orchestration {orchestration_id}",
+            extra={
+                "orchestration_id": orchestration_id,
+                "episodes_to_cleanup": len(episodes_to_cleanup),
+            },
+        )
+
+        return episodes_to_cleanup
+
+    def cleanup_sample(
+        self,
+        orchestration_id: str,
+        role: str,
+        semaphore: Optional[asyncio.Semaphore] = None,
+    ) -> bool:
+        """Cleanup a sample from orchestration.
+
+        Args:
+            orchestration_id: Orchestration ID
+            role: Sample's role
+            semaphore: Semaphore (unused, for compatibility)
+
+        Returns:
+            True if this is the last sample and semaphore should be released
+        """
+        group = self._orchestrations.get(orchestration_id)
+        if not group:
+            logger.warning(
+                f"Orchestration {orchestration_id} not found for cleanup",
+                extra={"orchestration_id": orchestration_id, "role": role},
+            )
+            return False
+
+        # Remove sample
+        if role in group.samples:
+            del group.samples[role]
+
+        # Check if this is the last sample
+        is_last = len(group.samples) == 0
+
+        if is_last:
+            # Remove orchestration group
+            del self._orchestrations[orchestration_id]
+            logger.info(
+                f"Cleaned up last sample in orchestration {orchestration_id}",
+                extra={"orchestration_id": orchestration_id, "role": role},
+            )
+            return True
+        else:
+            logger.info(
+                f"Cleaned up sample {role} in orchestration {orchestration_id}",
+                extra={
+                    "orchestration_id": orchestration_id,
+                    "role": role,
+                    "remaining_samples": len(group.samples),
+                },
+            )
+            return False
+
+    def reset(self) -> None:
+        """Reset coordinator state (for testing)."""
+        with self._init_lock:
+            self._orchestrations.clear()
+            logger.debug("Reset orchestration coordinator")
+
+
+# Expose singleton instance
+__all__ = ["OrchestrationCoordinator"]
