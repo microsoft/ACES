@@ -71,7 +71,7 @@ def mock_domain_context():
 def clear_all_registries():
     """Clear all registries before/after tests."""
     from saber.inspect_ai.saber import SABERSandboxEnvironment
-    from saber.inspect_ai.tasks import _active_domains, _active_domains_lock
+    from saber.inspect_ai.server.domain_manager import _active_domains, _active_domains_lock
 
     SABERSandboxEnvironment._registry.clear()
     with _active_domains_lock:
@@ -89,7 +89,7 @@ class TestDomainTaskImport:
 
     def test_import_excytin_demo_no_side_effects(self):
         """Test importing domains/excytin_demo doesn't start server."""
-        from saber.inspect_ai.tasks import _active_domains
+        from saber.inspect_ai.server.domain_manager import _active_domains
 
         # Import should succeed
         from domains.excytin_demo.excytin_demo import excytin_demo
@@ -110,14 +110,14 @@ class TestTaskCallableExecution:
         mock_benchmark_info,
     ):
         """Test that task callable creates proper Task object."""
-        from saber.inspect_ai.tasks import create_domain_task
+        from saber.inspect_ai.core.tasks import create_domain_task
 
-        with patch('saber.inspect_ai.tasks._get_or_create_portal') as mock_portal_func, \
-             patch('saber.inspect_ai.tasks.DomainController') as mock_controller_class, \
-             patch('saber.inspect_ai.tasks._wait_for_server_health') as mock_health, \
-             patch('saber.inspect_ai.tasks.SABERRestClient') as mock_client_class, \
-             patch('saber.inspect_ai.tasks.create_saber_dataset') as mock_create_dataset, \
-             patch('saber.inspect_ai.tasks._resolve_agent_implementation') as mock_resolve_agent:
+        with patch('saber.inspect_ai.core.tasks._get_or_create_portal') as mock_portal_func, \
+             patch('saber.inspect_ai.core.tasks.DomainController') as mock_controller_class, \
+             patch('saber.inspect_ai.core.tasks.wait_for_server_health') as mock_health, \
+             patch('saber.inspect_ai.core.tasks.SABERRestClient') as mock_client_class, \
+             patch('saber.inspect_ai.core.tasks.create_saber_dataset') as mock_create_dataset, \
+             patch('saber.inspect_ai.core.tasks.resolve_agent_implementation') as mock_resolve_agent:
 
             # Setup mocks
             mock_controller = AsyncMock()
@@ -174,7 +174,7 @@ class TestTaskCallableExecution:
         mock_domain_context,
     ):
         """Test task callable with task_filter parameter."""
-        from saber.inspect_ai.tasks import create_domain_task
+        from saber.inspect_ai.core.tasks import create_domain_task
 
         # Create multiple tasks
         tasks = [
@@ -211,12 +211,12 @@ class TestTaskCallableExecution:
             total_episodes=2,
         )
 
-        with patch('saber.inspect_ai.tasks._get_or_create_portal') as mock_portal_func, \
-             patch('saber.inspect_ai.tasks.DomainController') as mock_controller_class, \
-             patch('saber.inspect_ai.tasks._wait_for_server_health'), \
-             patch('saber.inspect_ai.tasks.SABERRestClient') as mock_client_class, \
-             patch('saber.inspect_ai.tasks.create_saber_dataset') as mock_create_dataset, \
-             patch('saber.inspect_ai.tasks._resolve_agent_implementation') as mock_resolve_agent:
+        with patch('saber.inspect_ai.core.tasks._get_or_create_portal') as mock_portal_func, \
+             patch('saber.inspect_ai.core.tasks.DomainController') as mock_controller_class, \
+             patch('saber.inspect_ai.core.tasks.wait_for_server_health'), \
+             patch('saber.inspect_ai.core.tasks.SABERRestClient') as mock_client_class, \
+             patch('saber.inspect_ai.core.tasks.create_saber_dataset') as mock_create_dataset, \
+             patch('saber.inspect_ai.core.tasks.resolve_agent_implementation') as mock_resolve_agent:
 
             mock_controller = AsyncMock()
             mock_controller.start = AsyncMock(return_value=mock_domain_context)
@@ -264,7 +264,7 @@ class TestTaskCallableExecution:
         mock_domain_context,
     ):
         """Test task callable with multiple comma-separated filters."""
-        from saber.inspect_ai.tasks import create_domain_task
+        from saber.inspect_ai.core.tasks import create_domain_task
 
         # Create multiple tasks with different prefixes
         tasks = [
@@ -325,12 +325,12 @@ class TestTaskCallableExecution:
             total_episodes=4,
         )
 
-        with patch('saber.inspect_ai.tasks._get_or_create_portal') as mock_portal_func, \
-             patch('saber.inspect_ai.tasks.DomainController') as mock_controller_class, \
-             patch('saber.inspect_ai.tasks._wait_for_server_health'), \
-             patch('saber.inspect_ai.tasks.SABERRestClient') as mock_client_class, \
-             patch('saber.inspect_ai.tasks.create_saber_dataset') as mock_create_dataset, \
-             patch('saber.inspect_ai.tasks._resolve_agent_implementation') as mock_resolve_agent:
+        with patch('saber.inspect_ai.core.tasks._get_or_create_portal') as mock_portal_func, \
+             patch('saber.inspect_ai.core.tasks.DomainController') as mock_controller_class, \
+             patch('saber.inspect_ai.core.tasks.wait_for_server_health'), \
+             patch('saber.inspect_ai.core.tasks.SABERRestClient') as mock_client_class, \
+             patch('saber.inspect_ai.core.tasks.create_saber_dataset') as mock_create_dataset, \
+             patch('saber.inspect_ai.core.tasks.resolve_agent_implementation') as mock_resolve_agent:
 
             mock_controller = AsyncMock()
             mock_controller.start = AsyncMock(return_value=mock_domain_context)
@@ -395,7 +395,7 @@ class TestTaskCallableExecution:
         mock_domain_context,
     ):
         """Test task callable with mix of exact and glob filters."""
-        from saber.inspect_ai.tasks import create_domain_task
+        from saber.inspect_ai.core.tasks import create_domain_task
 
         tasks = [
             SingleEpisodeTask(
@@ -443,12 +443,12 @@ class TestTaskCallableExecution:
             total_episodes=3,
         )
 
-        with patch('saber.inspect_ai.tasks._get_or_create_portal') as mock_portal_func, \
-             patch('saber.inspect_ai.tasks.DomainController') as mock_controller_class, \
-             patch('saber.inspect_ai.tasks._wait_for_server_health'), \
-             patch('saber.inspect_ai.tasks.SABERRestClient') as mock_client_class, \
-             patch('saber.inspect_ai.tasks.create_saber_dataset') as mock_create_dataset, \
-             patch('saber.inspect_ai.tasks._resolve_agent_implementation') as mock_resolve_agent:
+        with patch('saber.inspect_ai.core.tasks._get_or_create_portal') as mock_portal_func, \
+             patch('saber.inspect_ai.core.tasks.DomainController') as mock_controller_class, \
+             patch('saber.inspect_ai.core.tasks.wait_for_server_health'), \
+             patch('saber.inspect_ai.core.tasks.SABERRestClient') as mock_client_class, \
+             patch('saber.inspect_ai.core.tasks.create_saber_dataset') as mock_create_dataset, \
+             patch('saber.inspect_ai.core.tasks.resolve_agent_implementation') as mock_resolve_agent:
 
             mock_controller = AsyncMock()
             mock_controller.start = AsyncMock(return_value=mock_domain_context)
@@ -506,12 +506,13 @@ class TestCleanupOnFailure:
 
     def test_cleanup_on_task_callable_failure(self, mock_domain_context):
         """Test that failure during task callable execution cleans up."""
-        from saber.inspect_ai.tasks import _active_domains, create_domain_task
+        from saber.inspect_ai.core.tasks import create_domain_task
+        from saber.inspect_ai.server.domain_manager import _active_domains
 
-        with patch('saber.inspect_ai.tasks._get_or_create_portal') as mock_portal_func, \
-             patch('saber.inspect_ai.tasks.DomainController') as mock_controller_class, \
-             patch('saber.inspect_ai.tasks._wait_for_server_health') as mock_health, \
-             patch('saber.inspect_ai.tasks._resolve_agent_implementation') as mock_resolve_agent:
+        with patch('saber.inspect_ai.core.tasks._get_or_create_portal') as mock_portal_func, \
+             patch('saber.inspect_ai.core.tasks.DomainController') as mock_controller_class, \
+             patch('saber.inspect_ai.core.tasks.wait_for_server_health') as mock_health, \
+             patch('saber.inspect_ai.core.tasks.resolve_agent_implementation') as mock_resolve_agent:
 
             mock_controller = AsyncMock()
             mock_controller.start = AsyncMock(return_value=mock_domain_context)
@@ -568,5 +569,5 @@ class TestInspectListTasks:
         assert callable(excytin_demo)
 
         # And that importing didn't start servers
-        from saber.inspect_ai.tasks import _active_domains
+        from saber.inspect_ai.server.domain_manager import _active_domains
         assert len(_active_domains) == 0

@@ -95,7 +95,8 @@ class TestAgentAutoDiscovery:
         SABERAgentRegistry._agents.clear()
 
         with patch('saber.inspect_ai.agents.Path') as mock_path_class:
-            mock_agents_dir = Mock()
+            mock_registry_dir = Mock()
+            mock_registry_dir.exists.return_value = True
 
             # Create mock files including private ones
             private_file = Mock()
@@ -106,8 +107,14 @@ class TestAgentAutoDiscovery:
             public_file.name = "react.py"
             public_file.stem = "react"
 
-            mock_agents_dir.glob.return_value = [private_file, public_file]
-            mock_path_class.return_value.parent = mock_agents_dir
+            mock_registry_dir.glob.return_value = [private_file, public_file]
+
+            # Mock Path(__file__).parent / "registry"
+            mock_parent = Mock()
+            mock_parent.__truediv__ = Mock(return_value=mock_registry_dir)
+            mock_path_instance = Mock()
+            mock_path_instance.parent = mock_parent
+            mock_path_class.return_value = mock_path_instance
 
             with patch.object(importlib, 'import_module') as mock_import:
                 mock_module = Mock()
@@ -129,14 +136,21 @@ class TestAgentAutoDiscovery:
         SABERAgentRegistry._agents.clear()
 
         with patch('saber.inspect_ai.agents.Path') as mock_path_class:
-            mock_agents_dir = Mock()
+            mock_registry_dir = Mock()
+            mock_registry_dir.exists.return_value = True
 
             mock_file = Mock()
             mock_file.name = "invalid_agent.py"
             mock_file.stem = "invalid_agent"
 
-            mock_agents_dir.glob.return_value = [mock_file]
-            mock_path_class.return_value.parent = mock_agents_dir
+            mock_registry_dir.glob.return_value = [mock_file]
+
+            # Mock Path(__file__).parent / "registry"
+            mock_parent = Mock()
+            mock_parent.__truediv__ = Mock(return_value=mock_registry_dir)
+            mock_path_instance = Mock()
+            mock_path_instance.parent = mock_parent
+            mock_path_class.return_value = mock_path_instance
 
             with patch.object(importlib, 'import_module') as mock_import:
                 # Module without create_agent function
@@ -157,14 +171,21 @@ class TestAgentAutoDiscovery:
         SABERAgentRegistry._agents.clear()
 
         with patch('saber.inspect_ai.agents.Path') as mock_path_class:
-            mock_agents_dir = Mock()
+            mock_registry_dir = Mock()
+            mock_registry_dir.exists.return_value = True
 
             mock_file = Mock()
             mock_file.name = "broken_agent.py"
             mock_file.stem = "broken_agent"
 
-            mock_agents_dir.glob.return_value = [mock_file]
-            mock_path_class.return_value.parent = mock_agents_dir
+            mock_registry_dir.glob.return_value = [mock_file]
+
+            # Mock Path(__file__).parent / "registry"
+            mock_parent = Mock()
+            mock_parent.__truediv__ = Mock(return_value=mock_registry_dir)
+            mock_path_instance = Mock()
+            mock_path_instance.parent = mock_parent
+            mock_path_class.return_value = mock_path_instance
 
             with patch.object(importlib, 'import_module') as mock_import:
                 mock_import.side_effect = ImportError("Module broken")

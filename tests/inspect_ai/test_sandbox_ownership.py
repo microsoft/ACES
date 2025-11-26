@@ -33,7 +33,7 @@ def clear_registries():
     SABERSandboxEnvironment._registry.clear()
 
     # Clear active domains registry
-    from saber.inspect_ai.tasks import _active_domains, _active_domains_lock
+    from saber.inspect_ai.server.domain_manager import _active_domains, _active_domains_lock
     with _active_domains_lock:
         _active_domains.clear()
 
@@ -76,7 +76,7 @@ class TestOwnershipTransfer:
     async def test_ownership_transfer_from_factory(self, mock_controller, mock_domain_context):
         """Test that sandbox reuses server started by factory."""
         # Simulate factory having started the domain
-        from saber.inspect_ai.tasks import _active_domains, _active_domains_lock
+        from saber.inspect_ai.server.domain_manager import _active_domains, _active_domains_lock
 
         with _active_domains_lock:
             _active_domains["test_domain"] = {
@@ -122,7 +122,7 @@ class TestOwnershipTransfer:
     async def test_fresh_start_when_no_factory_server(self, mock_controller, mock_domain_context):
         """Test backward compatibility: sandbox starts server if factory didn't."""
         # No active domain from factory
-        from saber.inspect_ai.tasks import _active_domains
+        from saber.inspect_ai.server.domain_manager import _active_domains
         assert "test_domain" not in _active_domains
 
         # Sandbox task_init should start server
@@ -190,7 +190,7 @@ class TestTaskCleanup:
     @pytest.mark.asyncio
     async def test_cleanup_removes_from_both_registries(self, mock_controller, mock_domain_context):
         """Test that cleanup removes from both sandbox and active_domains registries."""
-        from saber.inspect_ai.tasks import _active_domains, _active_domains_lock
+        from saber.inspect_ai.server.domain_manager import _active_domains, _active_domains_lock
 
         # Populate sandbox registry
         SABERSandboxEnvironment._registry["test_domain"] = {
@@ -233,7 +233,7 @@ class TestTaskCleanup:
     @pytest.mark.asyncio
     async def test_cleanup_handles_missing_sandbox_entry(self, mock_controller):
         """Test cleanup handles missing sandbox registry entry gracefully."""
-        from saber.inspect_ai.tasks import _active_domains, _active_domains_lock
+        from saber.inspect_ai.server.domain_manager import _active_domains, _active_domains_lock
 
         # Only populate active_domains (simulate partial failure)
         with _active_domains_lock:

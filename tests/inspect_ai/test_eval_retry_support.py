@@ -55,7 +55,7 @@ class TestEvalRetrySupport:
         """Test that task_init reuses existing domain if same task (eval-retry scenario)."""
 
         # Setup: Simulate domain already initialized by same task
-        with patch('saber.inspect_ai.tasks.get_active_domain') as mock_get_active:
+        with patch('saber.inspect_ai.server.domain_manager.get_active_domain') as mock_get_active:
             mock_get_active.return_value = None  # Not from factory
 
             with patch.object(
@@ -252,7 +252,7 @@ class TestEvalRetrySupport:
             "session_id": "session_789",
         }
 
-        with patch('saber.inspect_ai.tasks.remove_active_domain'):
+        with patch('saber.inspect_ai.server.domain_manager.remove_active_domain'):
             with patch.object(
                 SABERSandboxEnvironment, '_terminate_session_sync'
             ) as mock_terminate:
@@ -308,7 +308,7 @@ class TestEvalRetrySupport:
             "session_id": "session_789",
         }
 
-        with patch('saber.inspect_ai.tasks.remove_active_domain'):
+        with patch('saber.inspect_ai.server.domain_manager.remove_active_domain'):
             with patch.object(
                 SABERSandboxEnvironment, '_terminate_session_sync'
             ):
@@ -359,7 +359,7 @@ class TestEvalRetryIntegration:
         """Test complete eval-retry workflow from init to cleanup."""
         from saber.models import SingleEpisodeTask, MetadataKeys
 
-        with patch('saber.inspect_ai.tasks.get_active_domain') as mock_get_active:
+        with patch('saber.inspect_ai.server.domain_manager.get_active_domain') as mock_get_active:
             mock_get_active.return_value = None
 
             with patch.object(
@@ -386,7 +386,7 @@ class TestEvalRetryIntegration:
 
                         with patch('saber.inspect_ai.saber.mcp_server_http'):
                             with patch('saber.inspect_ai.saber.store'):
-                                with patch('saber.inspect_ai.tasks.remove_active_domain'):
+                                with patch('saber.inspect_ai.server.domain_manager.remove_active_domain'):
                                     # 1. First run: Initialize task
                                     SABERSandboxEnvironment._registry["test_domain"] = {
                                         "owner": "test_task",

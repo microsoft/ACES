@@ -19,16 +19,18 @@ import pytest
 from inspect_ai._util.error import PrerequisiteError
 from inspect_ai.dataset import Sample
 
-from saber.inspect_ai.tasks import (
+from saber.inspect_ai.core.tasks import (
+    _start_and_load_tasks,
+    create_domain_task,
+)
+from saber.inspect_ai.server.domain_manager import (
     _active_domains,
     _active_domains_lock,
-    _apply_task_filter,
-    _start_and_load_tasks,
-    _wait_for_server_health,
-    create_domain_task,
     get_active_domain,
     remove_active_domain,
 )
+from saber.inspect_ai.core.task_filter import apply_task_filter as _apply_task_filter
+from saber.inspect_ai.server.health_check import wait_for_server_health as wait_for_server_health
 from saber.models import BenchmarkInfo, SingleEpisodeTask
 
 
@@ -94,7 +96,7 @@ class TestCreateDomainTask:
         task_callable = create_domain_task("test_domain", Path("/test/domains"))
         assert callable(task_callable)
 
-    @patch('saber.inspect_ai.tasks._get_or_create_portal')
+    @patch('saber.inspect_ai.core.tasks._get_or_create_portal')
     def test_task_callable_uses_portal(self, mock_get_portal):
         """Test that task callable uses BlockingPortal to run async code."""
         mock_portal = MagicMock()
@@ -119,11 +121,11 @@ class TestStartAndLoadTasks:
         mock_benchmark_info,
     ):
         """Test successful task construction with dataset population."""
-        with patch('saber.inspect_ai.tasks.DomainController') as mock_controller_class, \
-             patch('saber.inspect_ai.tasks._wait_for_server_health') as mock_health, \
-             patch('saber.inspect_ai.tasks.SABERRestClient') as mock_client_class, \
-             patch('saber.inspect_ai.tasks.create_saber_dataset') as mock_create_dataset, \
-             patch('saber.inspect_ai.tasks._resolve_agent_implementation') as mock_resolve_agent:
+        with patch('saber.inspect_ai.core.tasks.DomainController') as mock_controller_class, \
+             patch('saber.inspect_ai.core.tasks.wait_for_server_health') as mock_health, \
+             patch('saber.inspect_ai.core.tasks.SABERRestClient') as mock_client_class, \
+             patch('saber.inspect_ai.core.tasks.create_saber_dataset') as mock_create_dataset, \
+             patch('saber.inspect_ai.core.tasks.resolve_agent_implementation') as mock_resolve_agent:
 
             # Setup mocks
             mock_controller = AsyncMock()
@@ -178,11 +180,11 @@ class TestStartAndLoadTasks:
     @pytest.mark.asyncio
     async def test_concurrent_domain_reuse(self, mock_domain_context, mock_benchmark_info):
         """Test that existing active domains are reused (not blocked)."""
-        with patch('saber.inspect_ai.tasks.DomainController') as mock_controller_class, \
-             patch('saber.inspect_ai.tasks._wait_for_server_health') as mock_health, \
-             patch('saber.inspect_ai.tasks.SABERRestClient') as mock_client_class, \
-             patch('saber.inspect_ai.tasks.create_saber_dataset') as mock_create_dataset, \
-             patch('saber.inspect_ai.tasks._resolve_agent_implementation') as mock_resolve_agent:
+        with patch('saber.inspect_ai.core.tasks.DomainController') as mock_controller_class, \
+             patch('saber.inspect_ai.core.tasks.wait_for_server_health') as mock_health, \
+             patch('saber.inspect_ai.core.tasks.SABERRestClient') as mock_client_class, \
+             patch('saber.inspect_ai.core.tasks.create_saber_dataset') as mock_create_dataset, \
+             patch('saber.inspect_ai.core.tasks.resolve_agent_implementation') as mock_resolve_agent:
 
             # Populate active domains with all required keys
             mock_controller = AsyncMock()
@@ -239,8 +241,8 @@ class TestStartAndLoadTasks:
     @pytest.mark.asyncio
     async def test_cleanup_on_controller_start_failure(self, mock_domain_context):
         """Test cleanup when controller.start() fails."""
-        with patch('saber.inspect_ai.tasks.DomainController') as mock_controller_class, \
-             patch('saber.inspect_ai.tasks._resolve_agent_implementation') as mock_resolve_agent:
+        with patch('saber.inspect_ai.core.tasks.DomainController') as mock_controller_class, \
+             patch('saber.inspect_ai.core.tasks.resolve_agent_implementation') as mock_resolve_agent:
 
             mock_controller = AsyncMock()
             mock_controller.start = AsyncMock(side_effect=Exception("Docker error"))
@@ -278,9 +280,9 @@ class TestStartAndLoadTasks:
     @pytest.mark.asyncio
     async def test_cleanup_on_health_check_failure(self, mock_domain_context):
         """Test cleanup when health check fails."""
-        with patch('saber.inspect_ai.tasks.DomainController') as mock_controller_class, \
-             patch('saber.inspect_ai.tasks._wait_for_server_health') as mock_health, \
-             patch('saber.inspect_ai.tasks._resolve_agent_implementation') as mock_resolve_agent:
+        with patch('saber.inspect_ai.core.tasks.DomainController') as mock_controller_class, \
+             patch('saber.inspect_ai.core.tasks.wait_for_server_health') as mock_health, \
+             patch('saber.inspect_ai.core.tasks.resolve_agent_implementation') as mock_resolve_agent:
 
             mock_controller = AsyncMock()
             mock_controller.start = AsyncMock(return_value=mock_domain_context)
@@ -322,11 +324,11 @@ class TestPreflightCheck:
     @pytest.mark.asyncio
     async def test_preflight_passes_when_no_server_running(self, mock_domain_context):
         """Test preflight check passes when no server running."""
-        with patch('saber.inspect_ai.tasks.DomainController') as mock_controller_class, \
-             patch('saber.inspect_ai.tasks._wait_for_server_health') as mock_health, \
-             patch('saber.inspect_ai.tasks.SABERRestClient') as mock_client_class, \
-             patch('saber.inspect_ai.tasks.create_saber_dataset') as mock_create_dataset, \
-             patch('saber.inspect_ai.tasks._resolve_agent_implementation') as mock_resolve_agent:
+        with patch('saber.inspect_ai.core.tasks.DomainController') as mock_controller_class, \
+             patch('saber.inspect_ai.core.tasks.wait_for_server_health') as mock_health, \
+             patch('saber.inspect_ai.core.tasks.SABERRestClient') as mock_client_class, \
+             patch('saber.inspect_ai.core.tasks.create_saber_dataset') as mock_create_dataset, \
+             patch('saber.inspect_ai.core.tasks.resolve_agent_implementation') as mock_resolve_agent:
 
             # Setup mocks
             mock_controller = AsyncMock()
@@ -378,7 +380,7 @@ class TestPreflightCheck:
 
 
 class TestWaitForServerHealth:
-    """Test _wait_for_server_health retry logic."""
+    """Test wait_for_server_health retry logic."""
 
     @pytest.mark.asyncio
     async def test_health_check_succeeds_first_attempt(self):
@@ -396,11 +398,11 @@ class TestWaitForServerHealth:
 
         mock_client_session = Mock(return_value=mock_session)
 
-        with patch('saber.inspect_ai.tasks.aiohttp.ClientSession', mock_client_session), \
-             patch('saber.inspect_ai.tasks.aiohttp.ClientTimeout'), \
-             patch('saber.inspect_ai.tasks.aiohttp.ClientError', Exception):
+        with patch('saber.inspect_ai.server.health_check.aiohttp.ClientSession', mock_client_session), \
+             patch('saber.inspect_ai.server.health_check.aiohttp.ClientTimeout'), \
+             patch('saber.inspect_ai.server.health_check.aiohttp.ClientError', Exception):
             # Should not raise
-            await _wait_for_server_health("http://localhost:8000", max_retries=3, backoff=0.1)
+            await wait_for_server_health("http://localhost:8000", max_retries=3, backoff=0.1)
 
     @pytest.mark.asyncio
     async def test_health_check_fails_after_max_retries(self):
@@ -414,11 +416,11 @@ class TestWaitForServerHealth:
 
         mock_client_session = Mock(return_value=mock_session)
 
-        with patch('saber.inspect_ai.tasks.aiohttp.ClientSession', mock_client_session), \
-             patch('saber.inspect_ai.tasks.aiohttp.ClientTimeout'), \
-             patch('saber.inspect_ai.tasks.aiohttp.ClientError', Exception):
+        with patch('saber.inspect_ai.server.health_check.aiohttp.ClientSession', mock_client_session), \
+             patch('saber.inspect_ai.server.health_check.aiohttp.ClientTimeout'), \
+             patch('saber.inspect_ai.server.health_check.aiohttp.ClientError', Exception):
             with pytest.raises(PrerequisiteError) as exc_info:
-                await _wait_for_server_health("http://localhost:8000", max_retries=3, backoff=0.01)
+                await wait_for_server_health("http://localhost:8000", max_retries=3, backoff=0.01)
 
             assert "failed after 3 attempts" in str(exc_info.value)
 
@@ -565,8 +567,8 @@ class TestRoleBasedConfiguration:
 
     @pytest.mark.asyncio
     async def test_all_roles_have_models_check(self):
-        """Test the _all_roles_have_models validation function."""
-        from saber.inspect_ai.tasks import _all_roles_have_models
+        """Test the all_roles_have_models validation function."""
+        from saber.inspect_ai.agents.role_config_processor import all_roles_have_models
         from saber.client.models import RoleBasedConfig, RoleAgentConfig
 
         # Case 1: All roles have models
@@ -576,7 +578,7 @@ class TestRoleBasedConfiguration:
                 "blue": RoleAgentConfig(agent="react", model="gpt-3.5"),
             }
         )
-        assert _all_roles_have_models(config1) is True
+        assert all_roles_have_models(config1) is True
 
         # Case 2: Defaults has model (all roles inherit)
         config2 = RoleBasedConfig(
@@ -586,7 +588,7 @@ class TestRoleBasedConfiguration:
                 "blue": RoleAgentConfig(agent="custom"),
             }
         )
-        assert _all_roles_have_models(config2) is True
+        assert all_roles_have_models(config2) is True
 
         # Case 3: Missing model in one role, no defaults
         config3 = RoleBasedConfig(
@@ -595,14 +597,14 @@ class TestRoleBasedConfiguration:
                 "blue": RoleAgentConfig(agent="react"),  # No model
             }
         )
-        assert _all_roles_have_models(config3) is False
+        assert all_roles_have_models(config3) is False
 
         # Case 4: Empty config with defaults should work if defaults has model
         config4 = RoleBasedConfig(
             defaults=RoleAgentConfig(agent="react", model="gpt-4"),
             roles={"red": RoleAgentConfig(agent="react")}
         )
-        assert _all_roles_have_models(config4) is True
+        assert all_roles_have_models(config4) is True
 
     @pytest.mark.asyncio
     async def test_task_with_role_config_file(self, mock_domain_context, mock_benchmark_info, tmp_path):
@@ -623,11 +625,11 @@ roles:
     model: gpt-3.5-turbo
 """)
 
-        with patch('saber.inspect_ai.tasks.DomainController') as mock_controller_class, \
-             patch('saber.inspect_ai.tasks._wait_for_server_health') as mock_health, \
-             patch('saber.inspect_ai.tasks.SABERRestClient') as mock_client_class, \
-             patch('saber.inspect_ai.tasks.create_saber_dataset') as mock_create_dataset, \
-             patch('saber.inspect_ai.tasks._resolve_agent_implementation') as mock_resolve_agent:
+        with patch('saber.inspect_ai.core.tasks.DomainController') as mock_controller_class, \
+             patch('saber.inspect_ai.core.tasks.wait_for_server_health') as mock_health, \
+             patch('saber.inspect_ai.core.tasks.SABERRestClient') as mock_client_class, \
+             patch('saber.inspect_ai.core.tasks.create_saber_dataset') as mock_create_dataset, \
+             patch('saber.inspect_ai.core.tasks.resolve_agent_implementation') as mock_resolve_agent:
 
             mock_controller = AsyncMock()
             mock_controller.start = AsyncMock(return_value=mock_domain_context)
@@ -683,7 +685,7 @@ class TestAgentResolution:
     @pytest.mark.asyncio
     async def test_resolve_domain_local_agent(self, tmp_path):
         """Test resolving agent from domain's client folder."""
-        from saber.inspect_ai.tasks import _load_domain_agent
+        from saber.inspect_ai.agents.agent_resolver import load_domain_agent
 
         # Create a domain client directory with a custom agent
         domain_dir = tmp_path / "test_domain" / "client"
@@ -697,7 +699,7 @@ def create_agent():
 """)
 
         # Test loading domain-local agent
-        agent_factory = _load_domain_agent("test_domain", tmp_path, "custom_agent")
+        agent_factory = load_domain_agent("test_domain", tmp_path, "custom_agent")
 
         assert agent_factory is not None
         assert callable(agent_factory)
@@ -705,7 +707,7 @@ def create_agent():
     @pytest.mark.asyncio
     async def test_resolve_domain_local_agent_missing_create_agent(self, tmp_path):
         """Test domain agent file without create_agent function."""
-        from saber.inspect_ai.tasks import _load_domain_agent
+        from saber.inspect_ai.agents.agent_resolver import load_domain_agent
 
         # Create a domain client directory with an invalid agent
         domain_dir = tmp_path / "test_domain" / "client"
@@ -719,18 +721,18 @@ def some_other_function():
 """)
 
         # Should return None when create_agent is missing
-        agent_factory = _load_domain_agent("test_domain", tmp_path, "invalid_agent")
+        agent_factory = load_domain_agent("test_domain", tmp_path, "invalid_agent")
 
         assert agent_factory is None
 
     @pytest.mark.asyncio
     async def test_resolve_agent_not_found(self):
         """Test agent resolution when agent doesn't exist."""
-        from saber.inspect_ai.tasks import _resolve_agent_implementation
+        from saber.inspect_ai.agents.agent_resolver import resolve_agent_implementation
         from saber.inspect_ai.agents import AgentNotFoundError
 
         with pytest.raises(AgentNotFoundError) as exc_info:
-            _resolve_agent_implementation("nonexistent_domain", Path("/tmp"), "nonexistent_agent")
+            resolve_agent_implementation("nonexistent_domain", Path("/tmp"), "nonexistent_agent")
 
         error_msg = str(exc_info.value)
         assert "not found" in error_msg.lower()
@@ -743,15 +745,15 @@ class TestPreflightExecution:
     @pytest.mark.asyncio
     async def test_run_preflight_check_success(self):
         """Test successful preflight check execution."""
-        from saber.inspect_ai.tasks import _run_preflight_check
+        from saber.inspect_ai.server.preflight import run_preflight_check
 
         mock_process = AsyncMock()
         mock_process.returncode = 0
         mock_process.wait = AsyncMock(return_value=0)
 
-        with patch('saber.inspect_ai.tasks.asyncio.create_subprocess_exec', return_value=mock_process) as mock_create:
+        with patch('saber.inspect_ai.server.preflight.asyncio.create_subprocess_exec', return_value=mock_process) as mock_create:
             # Should not raise
-            await _run_preflight_check("test_domain", Path("/test/domains"))
+            await run_preflight_check("test_domain", Path("/test/domains"))
 
             # Verify command was called
             mock_create.assert_called_once()
@@ -759,15 +761,15 @@ class TestPreflightExecution:
     @pytest.mark.asyncio
     async def test_run_preflight_check_failure(self):
         """Test preflight check failure handling."""
-        from saber.inspect_ai.tasks import _run_preflight_check
+        from saber.inspect_ai.server.preflight import run_preflight_check
 
         mock_process = AsyncMock()
         mock_process.returncode = 1
         mock_process.wait = AsyncMock(return_value=1)
 
-        with patch('saber.inspect_ai.tasks.asyncio.create_subprocess_exec', return_value=mock_process):
+        with patch('saber.inspect_ai.server.preflight.asyncio.create_subprocess_exec', return_value=mock_process):
             with pytest.raises(PrerequisiteError) as exc_info:
-                await _run_preflight_check("test_domain", Path("/test/domains"))
+                await run_preflight_check("test_domain", Path("/test/domains"))
 
             assert "preflight check failed" in str(exc_info.value).lower()
 
@@ -777,7 +779,7 @@ class TestTaskFilterAdvanced:
 
     def test_apply_task_filter_list_input(self):
         """Test task filter with list input (from Inspect AI CLI parsing)."""
-        from saber.inspect_ai.tasks import _apply_task_filter
+        from saber.inspect_ai.core.task_filter import apply_task_filter as _apply_task_filter
 
         tasks = [
             SingleEpisodeTask(
@@ -813,7 +815,7 @@ class TestTaskFilterAdvanced:
 
     def test_apply_task_filter_empty_pattern(self):
         """Test task filter with empty patterns in list."""
-        from saber.inspect_ai.tasks import _apply_task_filter
+        from saber.inspect_ai.core.task_filter import apply_task_filter as _apply_task_filter
 
         tasks = [
             SingleEpisodeTask(
@@ -841,14 +843,14 @@ class TestPortalManagement:
 
     def test_get_or_create_portal_creates_once(self):
         """Test that portal is created once and reused."""
-        from saber.inspect_ai.tasks import _get_or_create_portal, _portal
+        from saber.inspect_ai.core.tasks import _get_or_create_portal, _portal
 
         # Reset portal state
-        import saber.inspect_ai.tasks as tasks_module
+        import saber.inspect_ai.core.tasks as tasks_module
         tasks_module._portal = None
         tasks_module._portal_cm = None
 
-        with patch('saber.inspect_ai.tasks.anyio.from_thread.start_blocking_portal') as mock_portal:
+        with patch('saber.inspect_ai.core.tasks.anyio.from_thread.start_blocking_portal') as mock_portal:
             mock_cm = MagicMock()
             mock_portal_instance = MagicMock()
             mock_cm.__enter__ = MagicMock(return_value=mock_portal_instance)

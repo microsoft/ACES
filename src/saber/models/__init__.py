@@ -75,6 +75,9 @@ from .rest import (
     EpisodeStatusResponse,
     EpisodeTaskResponse,
     HealthResponse,
+    MessageInjectRequest,
+    MessageInjectResponse,
+    PendingMessagesResponse,
     PolicyResponse,
     SessionCreateResponse,
     SessionInfo,
@@ -138,6 +141,10 @@ __all__ = [
     "TranscriptPushRequest",
     "TranscriptPushResponse",
     "TranscriptGetResponse",
+    # Message injection models
+    "MessageInjectRequest",
+    "MessageInjectResponse",
+    "PendingMessagesResponse",
     # MCP protocol models
     "MCPToolSchema",
     "MCPInputSchema",

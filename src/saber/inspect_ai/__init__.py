@@ -25,12 +25,12 @@ from ..logging_config import LogCategory, get_saber_logger
 
 # Import context injection - patches applied at import time for backward compatibility
 # TODO: Migrate to scoped patching using saber_context_injection_patch() context manager
-from .context_injection import saber_execute_tools, saber_tool_params
+from .core.context_injection import saber_execute_tools, saber_tool_params
+from .core.saber_dataset import create_saber_dataset
+from .core.saber_scorer import saber_scorer
+from .core.tasks import create_domain_task
+from .integration.tools import SABERToolSource, saber_tools
 from .saber import SABERSandboxEnvironment, SandboxError
-from .saber_dataset import create_saber_dataset
-from .saber_scorer import saber_scorer
-from .tasks import create_domain_task
-from .tools import SABERToolSource, saber_tools
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
 logger.info("Initializing SABER sandbox integration for Inspect AI")

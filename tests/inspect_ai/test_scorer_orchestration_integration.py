@@ -10,8 +10,8 @@ import pytest
 from inspect_ai.scorer import Target
 from inspect_ai.solver import TaskState
 
-from saber.inspect_ai.orchestration_coordinator import OrchestrationCoordinator
-from saber.inspect_ai.saber_scorer import saber_scorer
+from saber.inspect_ai.core.orchestration_coordinator import OrchestrationCoordinator
+from saber.inspect_ai.core.saber_scorer import saber_scorer
 from saber.models.constants import MetadataKeys
 
 
@@ -96,7 +96,7 @@ class TestScorerOrchestrationIntegration:
         state.messages = []
 
         # Mock dependencies
-        with patch("saber.inspect_ai.saber_scorer.store") as mock_store:
+        with patch("saber.inspect_ai.core.saber_scorer.store") as mock_store:
             mock_store.return_value = {
                 "saber_session_manager": mock_session_manager,
                 "saber_session_id": "test-session",
@@ -126,7 +126,7 @@ class TestScorerOrchestrationIntegration:
         scorer_fn = saber_scorer()
 
         # Mock dependencies for both states
-        with patch("saber.inspect_ai.saber_scorer.store") as mock_store:
+        with patch("saber.inspect_ai.core.saber_scorer.store") as mock_store:
             mock_store.return_value = {
                 "saber_session_manager": mock_session_manager,
                 "saber_session_id": "test-session",
@@ -165,7 +165,7 @@ class TestScorerOrchestrationIntegration:
 
         scorer_fn = saber_scorer()
 
-        with patch("saber.inspect_ai.saber_scorer.store") as mock_store:
+        with patch("saber.inspect_ai.core.saber_scorer.store") as mock_store:
             mock_store.return_value = {
                 "saber_session_manager": mock_session_manager,
                 "saber_session_id": "test-session",
@@ -235,7 +235,7 @@ class TestScorerOrchestrationIntegration:
         state_defender = create_state("defender", "sample-2")
         state_monitor = create_state("monitor", "sample-3")
 
-        with patch("saber.inspect_ai.saber_scorer.store") as mock_store:
+        with patch("saber.inspect_ai.core.saber_scorer.store") as mock_store:
             mock_store.return_value = {
                 "saber_session_manager": mock_session_manager,
                 "saber_session_id": "test-session",

@@ -274,4 +274,31 @@ class TranscriptGetResponse(BaseModel):
     metadata: Optional[Dict[str, Any]] = Field(None, description="Transcript metadata if available")
 
 
+# Message injection models (Phase 4: Red Team message injection)
+class MessageInjectRequest(BaseModel):
+    """Request model for red team message injection."""
+
+    role: str = Field(description="Message role (typically 'user' for red team injections)")
+    content: str = Field(description="Message content to inject")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Optional metadata (injected_by, reason, etc.)")
+
+
+class MessageInjectResponse(BaseModel):
+    """Response model for message injection operation."""
+
+    success: bool = Field(description="Whether message was queued successfully")
+    episode_id: str = Field(description="Episode identifier")
+    injection_id: str = Field(description="Unique injection identifier")
+    injected_at: str = Field(description="Timestamp when message was queued (ISO format)")
+
+
+class PendingMessagesResponse(BaseModel):
+    """Response model for retrieving pending injections."""
+
+    episode_id: str = Field(description="Episode identifier")
+    messages: List[ChatMessage] = Field(description="List of pending messages to inject")
+    pending_count: int = Field(description="Number of pending messages")
+    retrieved_at: str = Field(description="Timestamp when messages were retrieved (ISO format)")
+
+
 # Import evaluation models

@@ -41,9 +41,9 @@ from saber.logging_config import LogCategory, get_saber_logger
 from saber.models import BenchmarkTask, MetadataKeys, OrchestratedTask, SingleEpisodeTask, TaskExecutionMode
 from saber.models.mcp import OrchestrationEnvironment
 
-from .server import DomainContext, DomainController
-from .task_handlers import get_benchmark_task_handler
-from .tasks import get_active_domain, remove_active_domain
+from .core.task_handlers import get_benchmark_task_handler
+from .server.domain_manager import get_active_domain, remove_active_domain
+from .server.server import DomainContext, DomainController
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
 
@@ -910,7 +910,7 @@ class SABERSandboxEnvironment:
         Args:
             metadata: Sample metadata with orchestration info
         """
-        from .orchestration_coordinator import OrchestrationCoordinator
+        from .core.orchestration_coordinator import OrchestrationCoordinator
 
         orchestration_id = metadata[MetadataKeys.ORCHESTRATION_ID]
         role = metadata[MetadataKeys.SUB_TASK_ROLE]
@@ -1095,7 +1095,7 @@ class SABERSandboxEnvironment:
         3. Cleans up this sample
         4. Releases semaphore if this is the last sample
         """
-        from .orchestration_coordinator import OrchestrationCoordinator
+        from .core.orchestration_coordinator import OrchestrationCoordinator
 
         if self._handler_state is None:
             raise SandboxError("Handler state not initialized")

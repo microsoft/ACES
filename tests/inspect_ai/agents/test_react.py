@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import Mock, patch, ANY
 
-from saber.inspect_ai.agents.react import create_agent, MODIFIED_CONTINUE_PROMPT
+from saber.inspect_ai.agents.registry.react import create_agent, MODIFIED_CONTINUE_PROMPT
 
 
 class TestCreateAgent:
@@ -19,8 +19,8 @@ class TestCreateAgent:
         agent_factory = create_agent(max_iterations=10, verbose=True)
         assert callable(agent_factory)
 
-    @patch("saber.inspect_ai.agents.react.react")
-    @patch("saber.inspect_ai.agents.react.saber_tools")
+    @patch("saber.inspect_ai.agents.registry.react.react")
+    @patch("saber.inspect_ai.agents.registry.react.saber_tools")
     def test_create_agent_calls_react_with_prompts(self, mock_saber_tools, mock_react):
         """Test that the returned factory calls react with prompts."""
         # Setup mocks
@@ -65,8 +65,8 @@ class TestCreateAgent:
         # Verify result is the react agent
         assert result == mock_react_agent
 
-    @patch("saber.inspect_ai.agents.react.react")
-    @patch("saber.inspect_ai.agents.react.saber_tools")
+    @patch("saber.inspect_ai.agents.registry.react.react")
+    @patch("saber.inspect_ai.agents.registry.react.saber_tools")
     def test_create_agent_passes_kwargs_to_react(self, mock_saber_tools, mock_react):
         """Test that create_agent passes kwargs to react."""
         mock_saber_tools.return_value = Mock()
@@ -85,8 +85,8 @@ class TestCreateAgent:
         assert "temperature" in call_kwargs
         assert call_kwargs["temperature"] == 0.5
 
-    @patch("saber.inspect_ai.agents.react.react")
-    @patch("saber.inspect_ai.agents.react.saber_tools")
+    @patch("saber.inspect_ai.agents.registry.react.react")
+    @patch("saber.inspect_ai.agents.registry.react.saber_tools")
     def test_create_agent_with_different_prompts(self, mock_saber_tools, mock_react):
         """Test that different prompts are correctly passed."""
         mock_saber_tools.return_value = Mock()

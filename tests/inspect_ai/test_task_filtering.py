@@ -7,7 +7,7 @@ Tests the _apply_task_filter function with BenchmarkTask types.
 import pytest
 from inspect_ai._util.error import PrerequisiteError
 
-from saber.inspect_ai.tasks import _apply_task_filter
+from saber.inspect_ai.core.task_filter import apply_task_filter as _apply_task_filter
 from saber.models import OrchestratedTask, OrchestrationStrategy, SingleEpisodeTask, SubTaskDefinition
 
 

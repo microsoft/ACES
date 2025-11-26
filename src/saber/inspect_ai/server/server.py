@@ -17,7 +17,7 @@ from typing import Any, Optional
 
 from inspect_ai._util.error import PrerequisiteError
 
-from ..logging_config import LogCategory, get_saber_logger
+from ...logging_config import LogCategory, get_saber_logger
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
 

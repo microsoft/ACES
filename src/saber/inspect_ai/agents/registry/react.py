@@ -9,8 +9,8 @@ from typing import Any, Callable
 from inspect_ai.agent import react
 from inspect_ai.agent._types import AgentPrompt
 
-from ...logging_config import LogCategory, get_saber_logger
-from ..tools import saber_tools
+from ....logging_config import LogCategory, get_saber_logger
+from ...integration.tools import saber_tools
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
 

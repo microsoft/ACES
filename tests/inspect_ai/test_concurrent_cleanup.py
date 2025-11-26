@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from saber.inspect_ai.task_handlers import SingleEpisodeTaskHandler, OrchestratedTaskHandler
+from saber.inspect_ai.core.task_handlers import SingleEpisodeTaskHandler, OrchestratedTaskHandler
 from saber.models import (
     SingleEpisodeTask,
     OrchestratedTask,

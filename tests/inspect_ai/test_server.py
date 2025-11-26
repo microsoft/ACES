@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import Mock, AsyncMock, patch
 from inspect_ai._util.error import PrerequisiteError
 
-from saber.inspect_ai.server import (
+from saber.inspect_ai.server.server import (
     DomainContext,
     DomainController,
 )
@@ -46,7 +46,7 @@ class TestDomainController:
     @pytest.fixture
     def controller(self, mock_orchestrator):
         """Create a DomainController with mocked orchestrator."""
-        with patch("saber.inspect_ai.server._create_orchestrator", return_value=mock_orchestrator):
+        with patch("saber.inspect_ai.server.server._create_orchestrator", return_value=mock_orchestrator):
             return DomainController(Path("/test/domains"))
 
     @pytest.mark.asyncio
@@ -209,7 +209,7 @@ class TestDomainController:
 
     def test_controller_initialization(self, mock_orchestrator):
         """Test DomainController initialization."""
-        with patch("saber.inspect_ai.server._create_orchestrator", return_value=mock_orchestrator) as mock_create:
+        with patch("saber.inspect_ai.server.server._create_orchestrator", return_value=mock_orchestrator) as mock_create:
             domains_root = Path("/test/domains")
             controller = DomainController(domains_root)
 
@@ -223,7 +223,7 @@ class TestCreateOrchestrator:
 
     def test_create_orchestrator_success(self):
         """Test successful orchestrator creation."""
-        from saber.inspect_ai.server import _create_orchestrator
+        from saber.inspect_ai.server.server import _create_orchestrator
 
         # Mock the imports inside _create_orchestrator using sys.modules
         with patch.dict('sys.modules', {
@@ -249,7 +249,7 @@ class TestCreateOrchestrator:
 
     def test_create_orchestrator_creation_error(self):
         """Test orchestrator creation with other errors."""
-        from saber.inspect_ai.server import _create_orchestrator
+        from saber.inspect_ai.server.server import _create_orchestrator
 
         with patch.dict('sys.modules', {
             'saber.domain.orchestrator': Mock(DomainOrchestrator=Mock()),
@@ -275,9 +275,9 @@ class TestConvenienceFunctions:
     @pytest.mark.asyncio
     async def test_start_domain_convenience(self):
         """Test start_domain convenience function."""
-        from saber.inspect_ai.server import start_domain
+        from saber.inspect_ai.server.server import start_domain
 
-        with patch("saber.inspect_ai.server.DomainController") as mock_controller_class:
+        with patch("saber.inspect_ai.server.server.DomainController") as mock_controller_class:
             mock_controller = AsyncMock()
             mock_context = DomainContext(
                 domain="test_domain",
@@ -314,9 +314,9 @@ class TestConvenienceFunctions:
     @pytest.mark.asyncio
     async def test_stop_domain_convenience(self):
         """Test stop_domain convenience function."""
-        from saber.inspect_ai.server import stop_domain
+        from saber.inspect_ai.server.server import stop_domain
 
-        with patch("saber.inspect_ai.server.DomainController") as mock_controller_class:
+        with patch("saber.inspect_ai.server.server.DomainController") as mock_controller_class:
             mock_controller = AsyncMock()
             mock_controller.stop = AsyncMock()
             mock_controller_class.return_value = mock_controller

@@ -111,7 +111,7 @@ async def test_solver_wraps_generate_with_saber_metadata(
 ):
     """Test that solver wraps generate to push transcript when SABER metadata present."""
 
-    with patch("saber.inspect_ai.tasks._push_transcript", new_callable=AsyncMock) as mock_push, \
+    with patch("saber.inspect_ai.integration.transcript_sync._push_transcript", new_callable=AsyncMock) as mock_push, \
          patch("saber.inspect_ai.tasks.get_active_domain") as mock_get_domain:
 
         # Mock get_active_domain to return REST URL
@@ -151,7 +151,7 @@ async def test_solver_skips_transcript_push_without_saber_metadata(
 ):
     """Test that solver runs normally without SABER metadata (no transcript push)."""
 
-    with patch("saber.inspect_ai.tasks._push_transcript", new_callable=AsyncMock) as mock_push:
+    with patch("saber.inspect_ai.integration.transcript_sync._push_transcript", new_callable=AsyncMock) as mock_push:
         # Create solver
         solver = _create_saber_solver(
             agent_name="test_agent",
@@ -174,7 +174,7 @@ async def test_solver_continues_on_push_failure(
 ):
     """Test that solver continues agent execution even if transcript push fails."""
 
-    with patch("saber.inspect_ai.tasks._push_transcript", new_callable=AsyncMock) as mock_push, \
+    with patch("saber.inspect_ai.integration.transcript_sync._push_transcript", new_callable=AsyncMock) as mock_push, \
          patch("saber.inspect_ai.tasks.get_active_domain") as mock_get_domain:
 
         # Mock get_active_domain to return REST URL
@@ -219,7 +219,7 @@ async def test_solver_handles_partial_metadata(
         MetadataKeys.SUBMIT_PROMPT: "Submit your answer",
     }
 
-    with patch("saber.inspect_ai.tasks._push_transcript", new_callable=AsyncMock) as mock_push:
+    with patch("saber.inspect_ai.integration.transcript_sync._push_transcript", new_callable=AsyncMock) as mock_push:
         # Create solver
         solver = _create_saber_solver(
             agent_name="test_agent",
@@ -265,7 +265,7 @@ async def test_multiple_generate_calls_push_multiple_times(
     def factory():
         return create_with_prompts
 
-    with patch("saber.inspect_ai.tasks._push_transcript", new_callable=AsyncMock) as mock_push, \
+    with patch("saber.inspect_ai.integration.transcript_sync._push_transcript", new_callable=AsyncMock) as mock_push, \
          patch("saber.inspect_ai.tasks.get_active_domain") as mock_get_domain:
 
         # Mock get_active_domain to return REST URL
@@ -307,7 +307,7 @@ async def test_wrapper_preserves_generate_return_value(
     async def custom_generate(state: TaskState) -> TaskState:
         return expected_state
 
-    with patch("saber.inspect_ai.tasks._push_transcript", new_callable=AsyncMock), \
+    with patch("saber.inspect_ai.integration.transcript_sync._push_transcript", new_callable=AsyncMock), \
          patch("saber.inspect_ai.tasks.get_active_domain") as mock_get_domain:
 
         # Mock get_active_domain to return REST URL
@@ -347,7 +347,7 @@ async def test_solver_with_none_metadata(
     state.messages = [ChatMessageUser(content="Test")]
     state.metadata = {}
 
-    with patch("saber.inspect_ai.tasks._push_transcript", new_callable=AsyncMock) as mock_push:
+    with patch("saber.inspect_ai.integration.transcript_sync._push_transcript", new_callable=AsyncMock) as mock_push:
         # Should raise ValueError for missing prompts, not crash on metadata access
         solver = _create_saber_solver(
             agent_name="test_agent",
@@ -377,7 +377,7 @@ async def test_solver_with_empty_rest_url(
         MetadataKeys.SUBMIT_PROMPT: "Submit your answer",
     }
 
-    with patch("saber.inspect_ai.tasks._push_transcript", new_callable=AsyncMock) as mock_push, \
+    with patch("saber.inspect_ai.integration.transcript_sync._push_transcript", new_callable=AsyncMock) as mock_push, \
          patch("saber.inspect_ai.tasks.get_active_domain") as mock_get_domain:
 
         # Mock get_active_domain to return None (domain not active)

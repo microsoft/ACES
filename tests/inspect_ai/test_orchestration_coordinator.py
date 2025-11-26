@@ -8,7 +8,7 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock
 
-from saber.inspect_ai.orchestration_coordinator import OrchestrationCoordinator
+from saber.inspect_ai.core.orchestration_coordinator import OrchestrationCoordinator
 
 
 @pytest.fixture(autouse=True)

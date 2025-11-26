@@ -129,6 +129,10 @@ class MetadataKeys(str, Enum):
     TRANSCRIPT_UPDATED_AT = "_transcript_updated_at"
     TRANSCRIPT_METADATA = "_transcript_metadata"
 
+    # Message injection context keys (Phase 4: Red team message injection)
+    PENDING_INJECTIONS = "_pending_injections"
+    INJECTION_HISTORY = "_injection_history"
+
 
 __all__ = [
     "EvaluationStrategy",

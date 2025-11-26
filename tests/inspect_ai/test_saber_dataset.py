@@ -14,7 +14,7 @@ from unittest.mock import Mock, patch
 
 from inspect_ai.dataset import Sample
 
-from saber.inspect_ai.saber_dataset import (
+from saber.inspect_ai.core.saber_dataset import (
     SABERDataset,
     create_saber_dataset,
     _convert_task_to_sample,

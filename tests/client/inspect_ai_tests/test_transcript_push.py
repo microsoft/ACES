@@ -31,7 +31,7 @@ from inspect_ai.model._chat_message import (
 from inspect_ai.solver import TaskState
 from inspect_ai.tool import ToolCall
 
-from saber.inspect_ai.tasks import _push_transcript, _serialize_message
+from saber.inspect_ai.integration.transcript_sync import _push_transcript, serialize_message
 
 
 # ============================================================================
@@ -111,14 +111,14 @@ def mock_task_state_with_images():
 
 
 # ============================================================================
-# Test: _serialize_message() - System Messages
+# Test: serialize_message() - System Messages
 # ============================================================================
 
 
-def test_serialize_message_system():
+def testserialize_message_system():
     """Test serialization of system messages."""
     msg = ChatMessageSystem(content="You are a helpful assistant")
-    result = _serialize_message(msg)
+    result = serialize_message(msg)
 
     assert result["role"] == "system"
     assert result["content"] == "You are a helpful assistant"
@@ -126,24 +126,24 @@ def test_serialize_message_system():
     assert "tool_call_id" not in result
 
 
-def test_serialize_message_system_empty():
+def testserialize_message_system_empty():
     """Test serialization of system messages with empty content."""
     msg = ChatMessageSystem(content="")
-    result = _serialize_message(msg)
+    result = serialize_message(msg)
 
     assert result["role"] == "system"
     assert result["content"] == ""
 
 
 # ============================================================================
-# Test: _serialize_message() - User Messages
+# Test: serialize_message() - User Messages
 # ============================================================================
 
 
-def test_serialize_message_user_simple():
+def testserialize_message_user_simple():
     """Test serialization of simple user messages."""
     msg = ChatMessageUser(content="What is 2+2?")
-    result = _serialize_message(msg)
+    result = serialize_message(msg)
 
     assert result["role"] == "user"
     assert result["content"] == "What is 2+2?"
@@ -151,46 +151,46 @@ def test_serialize_message_user_simple():
     assert "tool_call_id" not in result
 
 
-def test_serialize_message_user_with_text_content():
+def testserialize_message_user_with_text_content():
     """Test serialization of user messages with ContentText."""
     text_content = ContentText(text="What is the capital of France?")
     msg = ChatMessageUser(content=[text_content])
-    result = _serialize_message(msg)
+    result = serialize_message(msg)
 
     assert result["role"] == "user"
     assert result["content"] == "What is the capital of France?"
 
 
-def test_serialize_message_user_with_multiple_text():
+def testserialize_message_user_with_multiple_text():
     """Test serialization of user messages with multiple text content parts."""
     content_parts = [
         ContentText(text="First part. "),
         ContentText(text="Second part."),
     ]
     msg = ChatMessageUser(content=content_parts)
-    result = _serialize_message(msg)
+    result = serialize_message(msg)
 
     assert result["role"] == "user"
     assert result["content"] == "First part. Second part."
 
 
-def test_serialize_message_user_with_image():
+def testserialize_message_user_with_image():
     """Test serialization of user messages with image content."""
     text_content = ContentText(text="What's in this image?")
     image_content = ContentImage(image="data:image/png;base64,ABC123", detail="auto")
     msg = ChatMessageUser(content=[text_content, image_content])
-    result = _serialize_message(msg)
+    result = serialize_message(msg)
 
     assert result["role"] == "user"
     # Should extract only text content
     assert result["content"] == "What's in this image?"
 
 
-def test_serialize_message_user_image_only():
+def testserialize_message_user_image_only():
     """Test serialization of user messages with only image content."""
     image_content = ContentImage(image="data:image/png;base64,ABC123", detail="auto")
     msg = ChatMessageUser(content=[image_content])
-    result = _serialize_message(msg)
+    result = serialize_message(msg)
 
     assert result["role"] == "user"
     # Should have empty string for image-only content
@@ -198,14 +198,14 @@ def test_serialize_message_user_image_only():
 
 
 # ============================================================================
-# Test: _serialize_message() - Assistant Messages
+# Test: serialize_message() - Assistant Messages
 # ============================================================================
 
 
-def test_serialize_message_assistant_simple():
+def testserialize_message_assistant_simple():
     """Test serialization of simple assistant messages."""
     msg = ChatMessageAssistant(content="The answer is 4")
-    result = _serialize_message(msg)
+    result = serialize_message(msg)
 
     assert result["role"] == "assistant"
     assert result["content"] == "The answer is 4"
@@ -213,30 +213,30 @@ def test_serialize_message_assistant_simple():
     assert "reasoning" not in result or result.get("reasoning") is None
 
 
-def test_serialize_message_assistant_with_reasoning():
+def testserialize_message_assistant_with_reasoning():
     """Test serialization of assistant messages with reasoning content."""
     reasoning_content = ContentReasoning(reasoning="Let me think step by step...")
     text_content = ContentText(text="The answer is 42")
     msg = ChatMessageAssistant(content=[reasoning_content, text_content])
-    result = _serialize_message(msg)
+    result = serialize_message(msg)
 
     assert result["role"] == "assistant"
     assert result["content"] == "The answer is 42"
     assert result["reasoning"] == "Let me think step by step..."
 
 
-def test_serialize_message_assistant_reasoning_only():
+def testserialize_message_assistant_reasoning_only():
     """Test serialization of assistant messages with only reasoning."""
     reasoning_content = ContentReasoning(reasoning="Thinking...")
     msg = ChatMessageAssistant(content=[reasoning_content])
-    result = _serialize_message(msg)
+    result = serialize_message(msg)
 
     assert result["role"] == "assistant"
     assert result["content"] == ""
     assert result["reasoning"] == "Thinking..."
 
 
-def test_serialize_message_assistant_with_tool_calls():
+def testserialize_message_assistant_with_tool_calls():
     """Test serialization of assistant messages with tool calls."""
     tool_call = ToolCall(
         id="call_abc123",
@@ -245,7 +245,7 @@ def test_serialize_message_assistant_with_tool_calls():
         type="function",
     )
     msg = ChatMessageAssistant(content="Let me calculate that", tool_calls=[tool_call])
-    result = _serialize_message(msg)
+    result = serialize_message(msg)
 
     assert result["role"] == "assistant"
     assert result["content"] == "Let me calculate that"
@@ -256,7 +256,7 @@ def test_serialize_message_assistant_with_tool_calls():
     assert result["tool_calls"][0]["arguments"] == {"expression": "2+2"}
 
 
-def test_serialize_message_assistant_multiple_tool_calls():
+def testserialize_message_assistant_multiple_tool_calls():
     """Test serialization of assistant messages with multiple tool calls."""
     tool_calls = [
         ToolCall(
@@ -267,7 +267,7 @@ def test_serialize_message_assistant_multiple_tool_calls():
         ),
     ]
     msg = ChatMessageAssistant(content="Using multiple tools", tool_calls=tool_calls)
-    result = _serialize_message(msg)
+    result = serialize_message(msg)
 
     assert result["role"] == "assistant"
     assert len(result["tool_calls"]) == 2
@@ -275,7 +275,7 @@ def test_serialize_message_assistant_multiple_tool_calls():
     assert result["tool_calls"][1]["id"] == "call_2"
 
 
-def test_serialize_message_assistant_tool_calls_and_reasoning():
+def testserialize_message_assistant_tool_calls_and_reasoning():
     """Test serialization of assistant messages with both tool calls and reasoning."""
     reasoning_content = ContentReasoning(reasoning="I need to use tools...")
     text_content = ContentText(text="Let me search")
@@ -285,7 +285,7 @@ def test_serialize_message_assistant_tool_calls_and_reasoning():
     msg = ChatMessageAssistant(
         content=[reasoning_content, text_content], tool_calls=[tool_call]
     )
-    result = _serialize_message(msg)
+    result = serialize_message(msg)
 
     assert result["role"] == "assistant"
     assert result["content"] == "Let me search"
@@ -294,18 +294,18 @@ def test_serialize_message_assistant_tool_calls_and_reasoning():
 
 
 # ============================================================================
-# Test: _serialize_message() - Tool Messages
+# Test: serialize_message() - Tool Messages
 # ============================================================================
 
 
-def test_serialize_message_tool():
+def testserialize_message_tool():
     """Test serialization of tool messages."""
     msg = ChatMessageTool(
         content="The calculation result is 4",
         tool_call_id="call_123",
         function="calculator",
     )
-    result = _serialize_message(msg)
+    result = serialize_message(msg)
 
     assert result["role"] == "tool"
     assert result["content"] == "The calculation result is 4"
@@ -313,10 +313,10 @@ def test_serialize_message_tool():
     assert result["name"] == "calculator"
 
 
-def test_serialize_message_tool_no_function():
+def testserialize_message_tool_no_function():
     """Test serialization of tool messages without function name."""
     msg = ChatMessageTool(content="Result", tool_call_id="call_456")
-    result = _serialize_message(msg)
+    result = serialize_message(msg)
 
     assert result["role"] == "tool"
     assert result["content"] == "Result"
@@ -325,13 +325,13 @@ def test_serialize_message_tool_no_function():
     assert result.get("name") is None
 
 
-def test_serialize_message_tool_with_text_content():
+def testserialize_message_tool_with_text_content():
     """Test serialization of tool messages with ContentText."""
     text_content = ContentText(text="Tool output here")
     msg = ChatMessageTool(
         content=[text_content], tool_call_id="call_789", function="my_tool"
     )
-    result = _serialize_message(msg)
+    result = serialize_message(msg)
 
     assert result["role"] == "tool"
     assert result["content"] == "Tool output here"
@@ -340,11 +340,11 @@ def test_serialize_message_tool_with_text_content():
 
 
 # ============================================================================
-# Test: _serialize_message() - Edge Cases
+# Test: serialize_message() - Edge Cases
 # ============================================================================
 
 
-def test_serialize_message_with_mixed_content():
+def testserialize_message_with_mixed_content():
     """Test serialization with mixed content types (text, images, etc.)."""
     content_parts = [
         ContentText(text="Part 1. "),
@@ -352,13 +352,13 @@ def test_serialize_message_with_mixed_content():
         ContentText(text="Part 2."),
     ]
     msg = ChatMessageUser(content=content_parts)
-    result = _serialize_message(msg)
+    result = serialize_message(msg)
 
     # Should extract and concatenate text parts only
     assert result["content"] == "Part 1. Part 2."
 
 
-def test_serialize_message_unknown_type():
+def testserialize_message_unknown_type():
     """Test serialization raises ValueError for unknown message type."""
     # Create a mock object that doesn't match any known message type
     mock_msg = MagicMock()
@@ -366,7 +366,7 @@ def test_serialize_message_unknown_type():
     mock_msg.content = "test"
 
     with pytest.raises(ValueError, match="Unknown message type"):
-        _serialize_message(mock_msg)
+        serialize_message(mock_msg)
 
 
 # ============================================================================
@@ -381,7 +381,7 @@ async def test_push_transcript_success(mock_task_state):
     episode_id = "episode_456"
     rest_url = "http://localhost:8000"
 
-    with patch("saber.inspect_ai.tasks.aiohttp.ClientSession") as mock_session_class:
+    with patch("saber.inspect_ai.integration.transcript_sync.aiohttp.ClientSession") as mock_session_class:
         # Setup mock response
         mock_response = create_mock_response(
             status=200,
@@ -424,7 +424,7 @@ async def test_push_transcript_with_tool_calls(mock_task_state_with_tools):
     episode_id = "episode_456"
     rest_url = "http://localhost:8000"
 
-    with patch("saber.inspect_ai.tasks.aiohttp.ClientSession") as mock_session_class:
+    with patch("saber.inspect_ai.integration.transcript_sync.aiohttp.ClientSession") as mock_session_class:
         mock_response = create_mock_response(status=200, json_data={"success": True})
 
         mock_session = MagicMock()
@@ -459,7 +459,7 @@ async def test_push_transcript_with_reasoning(mock_task_state_with_reasoning):
     episode_id = "episode_456"
     rest_url = "http://localhost:8000"
 
-    with patch("saber.inspect_ai.tasks.aiohttp.ClientSession") as mock_session_class:
+    with patch("saber.inspect_ai.integration.transcript_sync.aiohttp.ClientSession") as mock_session_class:
         mock_response = create_mock_response(status=200, json_data={"success": True})
 
         mock_session = MagicMock()
@@ -492,7 +492,7 @@ async def test_push_transcript_network_error(mock_task_state):
     episode_id = "episode_456"
     rest_url = "http://localhost:8000"
 
-    with patch("saber.inspect_ai.tasks.aiohttp.ClientSession") as mock_session_class:
+    with patch("saber.inspect_ai.integration.transcript_sync.aiohttp.ClientSession") as mock_session_class:
         mock_session = MagicMock()
         # Simulate network error
         mock_session.post = MagicMock(side_effect=aiohttp.ClientError("Network error"))
@@ -514,7 +514,7 @@ async def test_push_transcript_server_error(mock_task_state):
     episode_id = "episode_456"
     rest_url = "http://localhost:8000"
 
-    with patch("saber.inspect_ai.tasks.aiohttp.ClientSession") as mock_session_class:
+    with patch("saber.inspect_ai.integration.transcript_sync.aiohttp.ClientSession") as mock_session_class:
         mock_response = create_mock_response(status=500, text_data="Internal Server Error")
 
         mock_session = MagicMock()
@@ -537,7 +537,7 @@ async def test_push_transcript_validation_error(mock_task_state):
     episode_id = "episode_456"
     rest_url = "http://localhost:8000"
 
-    with patch("saber.inspect_ai.tasks.aiohttp.ClientSession") as mock_session_class:
+    with patch("saber.inspect_ai.integration.transcript_sync.aiohttp.ClientSession") as mock_session_class:
         mock_response = create_mock_response(
             status=422,
             json_data={"detail": "Invalid message format"}
@@ -563,7 +563,7 @@ async def test_push_transcript_timeout(mock_task_state):
     episode_id = "episode_456"
     rest_url = "http://localhost:8000"
 
-    with patch("saber.inspect_ai.tasks.aiohttp.ClientSession") as mock_session_class:
+    with patch("saber.inspect_ai.integration.transcript_sync.aiohttp.ClientSession") as mock_session_class:
         mock_session = MagicMock()
         # Simulate timeout
         mock_session.post = MagicMock(side_effect=asyncio.TimeoutError())
@@ -590,7 +590,7 @@ async def test_push_transcript_retry_on_failure_then_success(mock_task_state):
     episode_id = "episode_456"
     rest_url = "http://localhost:8000"
 
-    with patch("saber.inspect_ai.tasks.aiohttp.ClientSession") as mock_session_class:
+    with patch("saber.inspect_ai.integration.transcript_sync.aiohttp.ClientSession") as mock_session_class:
         # First two calls fail, third succeeds
         mock_response_fail = create_mock_response(status=500, text_data="Server error")
         mock_response_success = create_mock_response(status=200, json_data={"success": True})
@@ -617,7 +617,7 @@ async def test_push_transcript_retry_exhaustion(mock_task_state):
     episode_id = "episode_456"
     rest_url = "http://localhost:8000"
 
-    with patch("saber.inspect_ai.tasks.aiohttp.ClientSession") as mock_session_class:
+    with patch("saber.inspect_ai.integration.transcript_sync.aiohttp.ClientSession") as mock_session_class:
         # All calls fail
         mock_response = create_mock_response(status=500, text_data="Server error")
 
@@ -641,7 +641,7 @@ async def test_push_transcript_no_retry_on_validation_error(mock_task_state):
     episode_id = "episode_456"
     rest_url = "http://localhost:8000"
 
-    with patch("saber.inspect_ai.tasks.aiohttp.ClientSession") as mock_session_class:
+    with patch("saber.inspect_ai.integration.transcript_sync.aiohttp.ClientSession") as mock_session_class:
         mock_response = create_mock_response(
             status=422,
             json_data={"detail": "Invalid format"}
@@ -672,7 +672,7 @@ async def test_push_transcript_disabled_via_feature_flag(mock_task_state):
     rest_url = "http://localhost:8000"
 
     with patch.dict("os.environ", {"SABER_ENABLE_TRANSCRIPT_SYNC": "false"}):
-        with patch("saber.inspect_ai.tasks.aiohttp.ClientSession") as mock_session_class:
+        with patch("saber.inspect_ai.integration.transcript_sync.aiohttp.ClientSession") as mock_session_class:
             mock_session = MagicMock()
             mock_session.post = MagicMock()
             mock_session.__aenter__ = AsyncMock(return_value=mock_session)
@@ -695,7 +695,7 @@ async def test_push_transcript_enabled_by_default(mock_task_state):
 
     # Set env var to explicitly enable (simulating default behavior)
     with patch.dict("os.environ", {"SABER_ENABLE_TRANSCRIPT_SYNC": "true"}):
-        with patch("saber.inspect_ai.tasks.aiohttp.ClientSession") as mock_session_class:
+        with patch("saber.inspect_ai.integration.transcript_sync.aiohttp.ClientSession") as mock_session_class:
             mock_response = create_mock_response(status=200, json_data={"success": True})
 
             mock_session = MagicMock()
@@ -722,7 +722,7 @@ async def test_push_transcript_includes_metadata(mock_task_state):
     episode_id = "episode_456"
     rest_url = "http://localhost:8000"
 
-    with patch("saber.inspect_ai.tasks.aiohttp.ClientSession") as mock_session_class:
+    with patch("saber.inspect_ai.integration.transcript_sync.aiohttp.ClientSession") as mock_session_class:
         mock_response = create_mock_response(status=200, json_data={"success": True})
 
         mock_session = MagicMock()
@@ -754,7 +754,7 @@ async def test_push_transcript_empty_messages(mock_task_state):
     # Empty messages
     mock_task_state.messages = []
 
-    with patch("saber.inspect_ai.tasks.aiohttp.ClientSession") as mock_session_class:
+    with patch("saber.inspect_ai.integration.transcript_sync.aiohttp.ClientSession") as mock_session_class:
         mock_response = create_mock_response(status=200, json_data={"success": True})
 
         mock_session = MagicMock()
@@ -780,7 +780,7 @@ async def test_push_transcript_invalid_url_format(mock_task_state):
     episode_id = "episode_456"
     rest_url = "ftp://malicious-site.com"  # Invalid protocol
 
-    with patch("saber.inspect_ai.tasks.aiohttp.ClientSession") as mock_session_class:
+    with patch("saber.inspect_ai.integration.transcript_sync.aiohttp.ClientSession") as mock_session_class:
         mock_session = MagicMock()
         mock_session.post = MagicMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
@@ -805,7 +805,7 @@ async def test_push_transcript_large_payload_rejected(mock_task_state):
     large_content = "X" * (11 * 1024 * 1024)  # 11 MB of text
     mock_task_state.messages = [ChatMessageSystem(content=large_content)]
 
-    with patch("saber.inspect_ai.tasks.aiohttp.ClientSession") as mock_session_class:
+    with patch("saber.inspect_ai.integration.transcript_sync.aiohttp.ClientSession") as mock_session_class:
         mock_session = MagicMock()
         mock_session.post = MagicMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)

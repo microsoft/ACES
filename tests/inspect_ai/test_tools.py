@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import AsyncMock, Mock, patch
 
-from saber.inspect_ai.tools import SABERToolSource, saber_tools
+from saber.inspect_ai.integration.tools import SABERToolSource, saber_tools
 
 
 class TestSABERToolSource:
@@ -27,7 +27,7 @@ class TestSABERToolSource:
         mock_sandbox._task_id = "test_task"
 
         # Mock the sandbox() function to return our mock
-        with patch("saber.inspect_ai.tools.sandbox", return_value=mock_sandbox):
+        with patch("saber.inspect_ai.integration.tools.sandbox", return_value=mock_sandbox):
             tool_source = SABERToolSource(sandbox_name="saber")
             tools = await tool_source.tools()
 
@@ -54,12 +54,12 @@ class TestSABERToolSource:
         mock_proxy = Mock()
         mock_proxy._sandbox = mock_actual_sandbox
 
-        with patch("saber.inspect_ai.tools.sandbox", return_value=mock_proxy):
+        with patch("saber.inspect_ai.integration.tools.sandbox", return_value=mock_proxy):
             # Mock isinstance to return True for the actual sandbox
             def mock_isinstance(obj, cls):
                 return obj == mock_actual_sandbox
 
-            with patch("saber.inspect_ai.tools.isinstance", side_effect=mock_isinstance):
+            with patch("saber.inspect_ai.integration.tools.isinstance", side_effect=mock_isinstance):
                 tool_source = SABERToolSource(sandbox_name="saber")
                 tools = await tool_source.tools()
 
@@ -72,8 +72,8 @@ class TestSABERToolSource:
         # Create mock non-SABER sandbox
         mock_sandbox = Mock()
 
-        with patch("saber.inspect_ai.tools.sandbox", return_value=mock_sandbox):
-            with patch("saber.inspect_ai.tools.isinstance", return_value=False):
+        with patch("saber.inspect_ai.integration.tools.sandbox", return_value=mock_sandbox):
+            with patch("saber.inspect_ai.integration.tools.isinstance", return_value=False):
                 tool_source = SABERToolSource(sandbox_name="saber")
 
                 with pytest.raises(
@@ -89,7 +89,7 @@ class TestSABERToolSource:
         mock_sandbox = Mock(spec=SABERSandboxEnvironment)
         mock_sandbox._mcp_client = None
 
-        with patch("saber.inspect_ai.tools.sandbox", return_value=mock_sandbox):
+        with patch("saber.inspect_ai.integration.tools.sandbox", return_value=mock_sandbox):
             tool_source = SABERToolSource(sandbox_name="saber")
 
             with pytest.raises(
@@ -101,7 +101,7 @@ class TestSABERToolSource:
     async def test_tools_propagates_sandbox_retrieval_error(self):
         """Test that tools() propagates errors from sandbox() retrieval."""
         with patch(
-            "saber.inspect_ai.tools.sandbox",
+            "saber.inspect_ai.integration.tools.sandbox",
             side_effect=ProcessLookupError("No sandbox available"),
         ):
             tool_source = SABERToolSource(sandbox_name="saber")
@@ -124,7 +124,7 @@ class TestSABERToolSource:
         mock_sandbox._episode_id = "test_episode"
         mock_sandbox._task_id = "test_task"
 
-        with patch("saber.inspect_ai.tools.sandbox", return_value=mock_sandbox):
+        with patch("saber.inspect_ai.integration.tools.sandbox", return_value=mock_sandbox):
             tool_source = SABERToolSource(sandbox_name="saber")
 
             with pytest.raises(Exception, match="MCP server error"):
@@ -143,7 +143,7 @@ class TestSABERToolSource:
         mock_sandbox._episode_id = "test_episode"
         mock_sandbox._task_id = "test_task"
 
-        with patch("saber.inspect_ai.tools.sandbox", return_value=mock_sandbox) as mock_sb:
+        with patch("saber.inspect_ai.integration.tools.sandbox", return_value=mock_sandbox) as mock_sb:
             tool_source = SABERToolSource(sandbox_name="custom_saber")
             tools = await tool_source.tools()
 

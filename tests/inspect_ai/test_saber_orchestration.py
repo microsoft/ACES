@@ -102,7 +102,7 @@ class TestInitOrchestratedSubTask:
         mock_coordinator.register_root_sample = MagicMock(return_value=True)
         mock_coordinator.set_episode_id = MagicMock()
 
-        with patch('saber.inspect_ai.orchestration_coordinator.OrchestrationCoordinator', return_value=mock_coordinator):
+        with patch('saber.inspect_ai.core.orchestration_coordinator.OrchestrationCoordinator', return_value=mock_coordinator):
             await instance._init_orchestrated_sub_task(orchestrated_metadata_root)
 
         # Verify coordinator was called correctly
@@ -155,7 +155,7 @@ class TestInitOrchestratedSubTask:
         mock_coordinator.wait_for_dependency_ready = AsyncMock(return_value="episode_blue_1")
         mock_coordinator.set_episode_id = MagicMock()
 
-        with patch('saber.inspect_ai.orchestration_coordinator.OrchestrationCoordinator', return_value=mock_coordinator):
+        with patch('saber.inspect_ai.core.orchestration_coordinator.OrchestrationCoordinator', return_value=mock_coordinator):
             await instance._init_orchestrated_sub_task(orchestrated_metadata_dependent)
 
         # Verify dependent registration
@@ -196,7 +196,7 @@ class TestInitOrchestratedSubTask:
         mock_coordinator.register_root_sample = MagicMock(return_value=False)
         mock_coordinator.trigger_termination = MagicMock()
 
-        with patch('saber.inspect_ai.orchestration_coordinator.OrchestrationCoordinator', return_value=mock_coordinator):
+        with patch('saber.inspect_ai.core.orchestration_coordinator.OrchestrationCoordinator', return_value=mock_coordinator):
             with pytest.raises(SandboxError, match="Failed to register root sample"):
                 await instance._init_orchestrated_sub_task(orchestrated_metadata_root)
 
@@ -218,7 +218,7 @@ class TestInitOrchestratedSubTask:
         mock_coordinator.register_dependent_sample = AsyncMock(return_value=False)
         mock_coordinator.trigger_termination = MagicMock()
 
-        with patch('saber.inspect_ai.orchestration_coordinator.OrchestrationCoordinator', return_value=mock_coordinator):
+        with patch('saber.inspect_ai.core.orchestration_coordinator.OrchestrationCoordinator', return_value=mock_coordinator):
             with pytest.raises(SandboxError, match="Failed to register dependent sample"):
                 await instance._init_orchestrated_sub_task(orchestrated_metadata_dependent)
 
@@ -248,7 +248,7 @@ class TestInitOrchestratedSubTask:
         semaphore = instance._get_episode_semaphore()
         initial_value = semaphore._value
 
-        with patch('saber.inspect_ai.orchestration_coordinator.OrchestrationCoordinator', return_value=mock_coordinator):
+        with patch('saber.inspect_ai.core.orchestration_coordinator.OrchestrationCoordinator', return_value=mock_coordinator):
             with pytest.raises(SandboxError, match="Failed to initialize orchestrated sub-task"):
                 await instance._init_orchestrated_sub_task(orchestrated_metadata_root)
 
@@ -289,7 +289,7 @@ class TestCleanupOrchestratedSubTask:
         semaphore = instance._get_episode_semaphore()
         initial_value = semaphore._value
 
-        with patch('saber.inspect_ai.orchestration_coordinator.OrchestrationCoordinator', return_value=mock_coordinator):
+        with patch('saber.inspect_ai.core.orchestration_coordinator.OrchestrationCoordinator', return_value=mock_coordinator):
             await instance._cleanup_orchestrated_sub_task()
 
         # Verify trigger_termination was called
@@ -350,7 +350,7 @@ class TestCleanupOrchestratedSubTask:
         ])
         mock_coordinator.cleanup_sample = MagicMock(return_value=False)  # Don't release
 
-        with patch('saber.inspect_ai.orchestration_coordinator.OrchestrationCoordinator', return_value=mock_coordinator):
+        with patch('saber.inspect_ai.core.orchestration_coordinator.OrchestrationCoordinator', return_value=mock_coordinator):
             # Should not raise despite episode end failure
             await instance._cleanup_orchestrated_sub_task()
 
@@ -382,7 +382,7 @@ class TestCleanupOrchestratedSubTask:
         semaphore = instance._get_episode_semaphore()
         initial_value = semaphore._value
 
-        with patch('saber.inspect_ai.orchestration_coordinator.OrchestrationCoordinator', return_value=mock_coordinator):
+        with patch('saber.inspect_ai.core.orchestration_coordinator.OrchestrationCoordinator', return_value=mock_coordinator):
             await instance._cleanup_orchestrated_sub_task()
 
         # Verify semaphore was NOT released (should_release=False)
@@ -415,7 +415,7 @@ class TestCleanupSampleOrchestrated:
         mock_coordinator.trigger_termination = MagicMock(return_value=[])
         mock_coordinator.cleanup_sample = MagicMock(return_value=True)
 
-        with patch('saber.inspect_ai.orchestration_coordinator.OrchestrationCoordinator', return_value=mock_coordinator):
+        with patch('saber.inspect_ai.core.orchestration_coordinator.OrchestrationCoordinator', return_value=mock_coordinator):
             with patch.object(instance, '_remove_episode_mapping'):
                 await instance._cleanup_sample(interrupted=False)
 

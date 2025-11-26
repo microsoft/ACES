@@ -1,7 +1,7 @@
 """
 Tests for Phase 3: Integration in Solver Wrapper
 
-Tests that _create_saber_solver() properly wraps the generate() function to push
+Tests that create_saber_solver() properly wraps the generate() function to push
 transcripts to the server after each agent iteration.
 """
 
@@ -17,7 +17,8 @@ from inspect_ai.model import (
 )
 from inspect_ai.solver import TaskState, Generate
 
-from saber.inspect_ai.tasks import _create_saber_solver
+from saber.inspect_ai.agents.solver_factory import create_saber_solver
+from saber.inspect_ai.integration.transcript_sync import _push_transcript
 from saber.models.constants import MetadataKeys
 
 
@@ -76,8 +77,8 @@ async def test_solver_wraps_generate_and_pushes_transcript(
     3. Verify that _push_transcript was called with correct parameters
     4. Verify the generate function was still executed
     """
-    with patch("saber.inspect_ai.tasks._push_transcript") as mock_push, \
-         patch("saber.inspect_ai.tasks.get_active_domain") as mock_get_domain:
+    with patch("saber.inspect_ai.integration.transcript_sync._push_transcript") as mock_push, \
+         patch("saber.inspect_ai.agents.solver_factory.get_active_domain") as mock_get_domain:
 
         mock_push.return_value = None  # async function returns None
 
@@ -97,7 +98,7 @@ async def test_solver_wraps_generate_and_pushes_transcript(
             return create_with_prompts
 
         # Create the solver
-        solver = _create_saber_solver(
+        solver = create_saber_solver(
             agent_name="test_agent",
             agent_factory=agent_factory,
             role_config=None,
@@ -142,7 +143,7 @@ async def test_solver_handles_push_failure_gracefully(
     3. Continue with agent execution
     4. Return the result successfully
     """
-    with patch("saber.inspect_ai.tasks._push_transcript") as mock_push:
+    with patch("saber.inspect_ai.integration.transcript_sync._push_transcript") as mock_push:
         # Simulate push failure
         mock_push.side_effect = Exception("Network error")
 
@@ -153,7 +154,7 @@ async def test_solver_handles_push_failure_gracefully(
                 return agent
             return create_with_prompts
 
-        solver = _create_saber_solver(
+        solver = create_saber_solver(
             agent_name="test_agent",
             agent_factory=agent_factory,
             role_config=None,
@@ -186,7 +187,7 @@ async def test_solver_skips_push_when_no_episode_metadata(
         MetadataKeys.SUBMIT_PROMPT: "Test submit",
     }
 
-    with patch("saber.inspect_ai.tasks._push_transcript") as mock_push:
+    with patch("saber.inspect_ai.integration.transcript_sync._push_transcript") as mock_push:
         def agent_factory():
             def create_with_prompts(**prompts):
                 async def agent(state: TaskState) -> TaskState:
@@ -194,7 +195,7 @@ async def test_solver_skips_push_when_no_episode_metadata(
                 return agent
             return create_with_prompts
 
-        solver = _create_saber_solver(
+        solver = create_saber_solver(
             agent_name="test_agent",
             agent_factory=agent_factory,
             role_config=None,
@@ -252,8 +253,8 @@ async def test_solver_pushes_transcript_with_all_message_types(
     state.output.completion = "Test"
     state.store = {}
 
-    with patch("saber.inspect_ai.tasks._push_transcript") as mock_push, \
-         patch("saber.inspect_ai.tasks.get_active_domain") as mock_get_domain:
+    with patch("saber.inspect_ai.integration.transcript_sync._push_transcript") as mock_push, \
+         patch("saber.inspect_ai.agents.solver_factory.get_active_domain") as mock_get_domain:
 
         mock_push.return_value = None
 
@@ -270,7 +271,7 @@ async def test_solver_pushes_transcript_with_all_message_types(
                 return agent
             return create_with_prompts
 
-        solver = _create_saber_solver(
+        solver = create_saber_solver(
             agent_name="test_agent",
             agent_factory=agent_factory,
             role_config=None,
@@ -290,3 +291,92 @@ async def test_solver_pushes_transcript_with_all_message_types(
 
         # Verify message types are preserved in serialization
         # (The actual serialization is tested in test_transcript_push.py)
+
+
+@pytest.mark.asyncio
+async def test_solver_pulls_injections_before_agent_execution(mock_task_state, mock_generate):
+    """
+    Test that the solver pulls injected messages before executing the agent (Phase 4).
+
+    This test verifies:
+    1. Solver calls pull_injected_messages() before agent execution
+    2. Injected messages are added to state.messages
+    3. Agent receives the injected messages
+    """
+    injected_message = ChatMessageUser(content="[RED TEAM] Injected command")
+
+    async def mock_pull_injections(state, session_id, episode_id, rest_url):
+        """Mock pull that injects a message."""
+        state.messages.append(injected_message)
+
+    with patch("saber.inspect_ai.agents.solver_factory.pull_injected_messages", new=mock_pull_injections) as mock_pull, \
+         patch("saber.inspect_ai.agents.solver_factory.get_active_domain") as mock_get_domain:
+
+        # Mock the active domain to return REST URL
+        mock_domain = Mock()
+        mock_domain.rest_url = "http://localhost:8000"
+        mock_get_domain.return_value = mock_domain
+
+        # Track agent input
+        agent_received_messages = []
+
+        def agent_factory():
+            def create_with_prompts(**prompts):
+                async def agent(state: TaskState) -> TaskState:
+                    # Capture messages the agent sees
+                    agent_received_messages.extend(state.messages)
+                    return await mock_generate(state)
+                return agent
+            return create_with_prompts
+
+        solver = create_saber_solver(
+            agent_name="test_agent",
+            agent_factory=agent_factory,
+            role_config=None,
+        )
+
+        # Initial state has 2 messages
+        assert len(mock_task_state.messages) == 2
+
+        result = await solver(mock_task_state, mock_generate)
+
+        # Verify injection was added before agent execution
+        assert len(agent_received_messages) == 3  # Original 2 + injected 1
+        assert injected_message in agent_received_messages
+        assert "[RED TEAM]" in agent_received_messages[2].content
+
+
+@pytest.mark.asyncio
+async def test_solver_skips_pull_when_no_episode_context(mock_generate):
+    """Test that pull is skipped for non-SABER tasks (no episode context)."""
+    # State without episode metadata
+    state = Mock(spec=TaskState)
+    state.metadata = {
+        # Missing SESSION_ID, EPISODE_ID, DOMAIN_SLUG
+        MetadataKeys.INSTRUCTION_PROMPT: "Test instruction",
+        MetadataKeys.ASSISTANT_PROMPT: "Test assistant",
+        MetadataKeys.SUBMIT_PROMPT: "Test submit",
+    }
+    state.messages = [ChatMessageUser(content="User message")]
+    state.output = Mock()
+    state.output.completion = "Test completion"
+    state.store = {}
+
+    with patch("saber.inspect_ai.agents.solver_factory.pull_injected_messages") as mock_pull:
+        def agent_factory():
+            def create_with_prompts(**prompts):
+                async def agent(s: TaskState) -> TaskState:
+                    return await mock_generate(s)
+                return agent
+            return create_with_prompts
+
+        solver = create_saber_solver(
+            agent_name="test_agent",
+            agent_factory=agent_factory,
+            role_config=None,
+        )
+
+        await solver(state, mock_generate)
+
+        # Verify pull was NOT called (no episode context)
+        mock_pull.assert_not_called()

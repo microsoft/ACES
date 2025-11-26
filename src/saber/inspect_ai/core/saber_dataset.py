@@ -24,14 +24,14 @@ from typing import List, Union
 
 from inspect_ai.dataset import MemoryDataset, Sample
 
-from ..logging_config import (
+from ...logging_config import (
     LogCategory,
     get_saber_logger,
     log_operation_failure,
     log_operation_start,
     log_operation_success,
 )
-from ..models import (
+from ...models import (
     BenchmarkTask,
     MetadataKeys,
     OrchestratedTask,

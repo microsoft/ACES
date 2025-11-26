@@ -1,4 +1,4 @@
-"""SABER core agent registry.
+"""SABER core agent registry and agent-related components.
 
 This module provides the core registry of agent implementations available
 across all SABER domains. Domain-specific agents can be defined in each
@@ -16,6 +16,11 @@ from pathlib import Path
 from typing import Callable, Dict, Optional
 
 from ...logging_config import LogCategory, get_saber_logger
+
+# Import and re-export agent-related components
+from .agent_resolver import resolve_agent_implementation
+from .role_config_processor import all_roles_have_models, process_role_configuration
+from .solver_factory import create_saber_solver
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
 
@@ -78,9 +83,13 @@ class SABERAgentRegistry:
 # Auto-discover and register core agents from this directory
 def _register_core_agents() -> None:
     """Auto-discover and register core agent implementations."""
-    agents_dir = Path(__file__).parent
+    agents_dir = Path(__file__).parent / "registry"
 
-    # Look for Python files in this directory (excluding __init__.py)
+    if not agents_dir.exists():
+        logger.debug("No registry directory found, skipping agent auto-registration")
+        return
+
+    # Look for Python files in the registry directory (excluding __init__.py)
     for agent_file in agents_dir.glob("*.py"):
         if agent_file.name.startswith("_"):
             continue
@@ -89,7 +98,7 @@ def _register_core_agents() -> None:
 
         try:
             # Dynamically import the module
-            module_name = f"saber.inspect_ai.agents.{agent_name}"
+            module_name = f"saber.inspect_ai.agents.registry.{agent_name}"
             import importlib
 
             module = importlib.import_module(module_name)
@@ -116,4 +125,8 @@ _register_core_agents()
 __all__ = [
     "SABERAgentRegistry",
     "AgentNotFoundError",
+    "resolve_agent_implementation",
+    "create_saber_solver",
+    "all_roles_have_models",
+    "process_role_configuration",
 ]

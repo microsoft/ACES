@@ -24,7 +24,10 @@ from ...models import (
     EpisodeTaskResponse,
     EvalSubmission,
     HealthResponse,
+    MessageInjectRequest,
+    MessageInjectResponse,
     MetadataKeys,
+    PendingMessagesResponse,
     PolicyResponse,
     SessionCreateResponse,
     SessionTerminateResponse,
@@ -795,6 +798,142 @@ class SessionRestAPI:
             except Exception as exc:
                 log_operation_failure(logger, "get_transcript", exc, session_id=session_id, episode_id=episode_id)
                 raise HTTPException(status_code=500, detail=f"Failed to get transcript: {exc}") from exc
+
+        @self.app.post("/api/v1/session/{session_id}/episodes/{episode_id}/messages/inject")
+        async def inject_message_endpoint(
+            session_id: str, episode_id: str, inject_request: "MessageInjectRequest"
+        ) -> "MessageInjectResponse":
+            """Inject a red team message into the episode conversation.
+
+            The message is queued in pending_injections and will be retrieved by the client
+            on the next pull. This enables server-side message injection for adversarial testing.
+            """
+            import uuid
+            from datetime import datetime
+
+            log_operation_start(logger, "inject_message", session_id=session_id, episode_id=episode_id)
+            try:
+                # Get episode
+                episode = self.session_manager.get_episode_by_id(episode_id)
+                if not episode:
+                    raise HTTPException(status_code=404, detail=f"Episode {episode_id} not found")
+
+                # Create injection record
+                injection_id = str(uuid.uuid4())
+                injected_at = datetime.utcnow().isoformat()
+
+                injection_record = {
+                    "injection_id": injection_id,
+                    "role": inject_request.role,
+                    "content": inject_request.content,
+                    "metadata": inject_request.metadata,
+                    "injected_at": injected_at,
+                }
+
+                # Append to pending injections list atomically
+                pending_injections = episode.context.get(MetadataKeys.PENDING_INJECTIONS, [])
+                pending_injections.append(injection_record)
+
+                context_updates: Dict[str, Any] = {
+                    MetadataKeys.PENDING_INJECTIONS.value: pending_injections,
+                }
+
+                await episode.update_context_atomic(context_updates)
+
+                log_operation_success(
+                    logger,
+                    "inject_message",
+                    session_id=session_id,
+                    episode_id=episode_id,
+                    injection_id=injection_id,
+                    role=inject_request.role,
+                )
+
+                from ...models.rest import MessageInjectResponse
+
+                return MessageInjectResponse(
+                    success=True,
+                    episode_id=episode_id,
+                    injection_id=injection_id,
+                    injected_at=injected_at,
+                )
+
+            except HTTPException:
+                raise
+            except Exception as exc:
+                log_operation_failure(logger, "inject_message", exc, session_id=session_id, episode_id=episode_id)
+                raise HTTPException(status_code=500, detail=f"Failed to inject message: {exc}") from exc
+
+        @self.app.get("/api/v1/session/{session_id}/episodes/{episode_id}/messages/inject")
+        async def get_pending_messages_endpoint(session_id: str, episode_id: str) -> "PendingMessagesResponse":
+            """Retrieve and clear pending injected messages for the episode.
+
+            This endpoint returns all pending messages and atomically clears the pending list,
+            moving the messages to injection history for audit purposes.
+            """
+            from datetime import datetime
+
+            log_operation_start(logger, "get_pending_messages", session_id=session_id, episode_id=episode_id)
+            try:
+                # Get episode
+                episode = self.session_manager.get_episode_by_id(episode_id)
+                if not episode:
+                    raise HTTPException(status_code=404, detail=f"Episode {episode_id} not found")
+
+                # Retrieve pending injections atomically
+                pending_injections = episode.context.get(MetadataKeys.PENDING_INJECTIONS, [])
+                injection_history = episode.context.get(MetadataKeys.INJECTION_HISTORY, [])
+
+                # Convert to ChatMessage format
+                from ...models.rest import ChatMessage
+
+                messages = [
+                    ChatMessage(
+                        role=record["role"],
+                        content=record["content"],
+                        tool_calls=None,
+                        tool_call_id=None,
+                        name=None,
+                        # Store injection metadata in a way that client can identify injected messages
+                    )
+                    for record in pending_injections
+                ]
+
+                # Move pending to history and clear pending list
+                retrieved_at = datetime.utcnow().isoformat()
+                for record in pending_injections:
+                    record["retrieved_at"] = retrieved_at
+                    injection_history.append(record)
+
+                context_updates: Dict[str, Any] = {
+                    MetadataKeys.PENDING_INJECTIONS.value: [],  # Clear pending
+                    MetadataKeys.INJECTION_HISTORY.value: injection_history,  # Update history
+                }
+
+                await episode.update_context_atomic(context_updates)
+
+                log_operation_success(
+                    logger,
+                    "get_pending_messages",
+                    session_id=session_id,
+                    episode_id=episode_id,
+                    pending_count=len(messages),
+                )
+
+                from ...models.rest import PendingMessagesResponse
+
+                return PendingMessagesResponse(
+                    episode_id=episode_id,
+                    messages=messages,
+                    pending_count=len(messages),
+                    retrieved_at=retrieved_at,
+                )
+
+            except HTTPException:
+                raise
+            except Exception as exc:
+                log_operation_failure(logger, "get_pending_messages", exc, session_id=session_id, episode_id=episode_id)
+                raise HTTPException(status_code=500, detail=f"Failed to get pending messages: {exc}") from exc
 
         @self.app.get("/api/v1/session/{session_id}/episodes/{episode_id}/submission-evaluation-criteria")
         async def get_submission_evaluation_criteria_endpoint(

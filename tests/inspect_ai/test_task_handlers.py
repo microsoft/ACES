@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-from saber.inspect_ai.task_handlers import (
+from saber.inspect_ai.core.task_handlers import (
     CleanupResult,
     OrchestratedTaskHandler,
     SingleEpisodeTaskHandler,

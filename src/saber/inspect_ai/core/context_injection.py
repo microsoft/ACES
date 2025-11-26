@@ -34,7 +34,7 @@ from inspect_ai.model._call_tools import execute_tools as original_execute_tools
 from inspect_ai.model._call_tools import tool_params as original_tool_params
 from inspect_ai.model._chat_message import ChatMessage, ChatMessageAssistant
 
-from ..logging_config import LogCategory, get_saber_logger
+from ...logging_config import LogCategory, get_saber_logger
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
 

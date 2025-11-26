@@ -9,7 +9,7 @@ import logging
 
 import pytest
 
-from saber.inspect_ai.orchestration_coordinator import OrchestrationCoordinator
+from saber.inspect_ai.core.orchestration_coordinator import OrchestrationCoordinator
 
 
 class TestScoreCoordination:

@@ -21,7 +21,7 @@ from inspect_ai.solver import TaskState
 from inspect_ai.util import Store
 from jinja2 import TemplateError
 
-from saber.inspect_ai.saber_scorer import (
+from saber.inspect_ai.core.saber_scorer import (
     EpisodeContextForTemplate,
     StepContextForTemplate,
     TemplateStringLoader,
@@ -783,7 +783,7 @@ class TestScoreSubmissionLLM:
         mock_model = AsyncMock()
         mock_model.generate = AsyncMock(return_value=mock_output)
 
-        with patch("saber.inspect_ai.saber_scorer.get_model", return_value=mock_model):
+        with patch("saber.inspect_ai.core.saber_scorer.get_model", return_value=mock_model):
             score, explanation = await _score_submission_llm(submission_data, criteria, Mock(), state)
 
         assert score == 1.0
@@ -825,7 +825,7 @@ class TestScoreSubmissionLLM:
         mock_model = AsyncMock()
         mock_model.generate = AsyncMock(return_value=mock_output)
 
-        with patch("saber.inspect_ai.saber_scorer.get_model", return_value=mock_model):
+        with patch("saber.inspect_ai.core.saber_scorer.get_model", return_value=mock_model):
             score, explanation = await _score_submission_llm(submission_data, criteria, Mock(), state)
 
         assert score == 0.0
@@ -865,7 +865,7 @@ class TestScoreSubmissionLLM:
         mock_model = AsyncMock()
         mock_model.generate = AsyncMock(return_value=mock_output)
 
-        with patch("saber.inspect_ai.saber_scorer.get_model", return_value=mock_model):
+        with patch("saber.inspect_ai.core.saber_scorer.get_model", return_value=mock_model):
             score, explanation = await _score_submission_llm(submission_data, criteria, Mock(), state)
 
         assert score == 0.0
@@ -1284,7 +1284,7 @@ class TestScoreSubtaskLLM:
         mock_model = AsyncMock()
         mock_model.generate = AsyncMock(return_value=mock_output)
 
-        with patch("saber.inspect_ai.saber_scorer.get_model", return_value=mock_model):
+        with patch("saber.inspect_ai.core.saber_scorer.get_model", return_value=mock_model):
             score, evaluations = await _score_subtask_llm(steps_data, criteria, task_context, Mock(), state)
 
         assert score == 1.0
@@ -1338,7 +1338,7 @@ class TestScoreSubtaskLLM:
         mock_model = AsyncMock()
         mock_model.generate = AsyncMock(return_value=mock_output)
 
-        with patch("saber.inspect_ai.saber_scorer.get_model", return_value=mock_model):
+        with patch("saber.inspect_ai.core.saber_scorer.get_model", return_value=mock_model):
             score, evaluations = await _score_subtask_llm(steps_data, criteria, task_context, Mock(), state)
 
         assert score == 0.0
@@ -1442,7 +1442,7 @@ class TestScoreSubmission:
         mock_model = AsyncMock()
         mock_model.generate = AsyncMock(return_value=mock_output)
 
-        with patch("saber.inspect_ai.saber_scorer.get_model", return_value=mock_model):
+        with patch("saber.inspect_ai.core.saber_scorer.get_model", return_value=mock_model):
             score, explanation = await _score_submission(submission_data, criteria, Mock(), state)
 
         assert score == 1.0
