@@ -17,14 +17,18 @@ Key features:
 
 import asyncio
 import fnmatch
+import os
 import threading
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union
 
 import aiohttp
 import anyio
 from inspect_ai import Task
+from inspect_ai._util.content import ContentReasoning, ContentText
 from inspect_ai._util.error import PrerequisiteError
+from inspect_ai.model import ChatMessage, ChatMessageAssistant, ChatMessageSystem, ChatMessageTool, ChatMessageUser
 from inspect_ai.solver import Generate, Solver, TaskState, solver
 
 from ..client.api.rest_client import SABERRestClient
@@ -1286,3 +1290,270 @@ def remove_active_domain(domain_slug: str) -> None:
         if domain_slug in _active_domains:
             del _active_domains[domain_slug]
             logger.debug(f"Removed '{domain_slug}' from active domains registry")
+
+
+# ============================================================================
+# Transcript Synchronization Functions
+# ============================================================================
+
+
+def _serialize_message(msg: ChatMessage) -> Dict[str, Any]:
+    """Convert ChatMessage to JSON-safe dict.
+
+    Args:
+        msg: Inspect AI ChatMessage object (ChatMessageSystem, ChatMessageUser,
+             ChatMessageAssistant, or ChatMessageTool)
+
+    Returns:
+        Dictionary with keys: role, content, tool_calls (optional),
+        tool_call_id (optional), name (optional), reasoning (optional)
+
+    Raises:
+        ValueError: If message type is unknown or unsupported
+    """
+    result: Dict[str, Any] = {}
+
+    # Extract role
+    if isinstance(msg, ChatMessageSystem):
+        result["role"] = "system"
+    elif isinstance(msg, ChatMessageUser):
+        result["role"] = "user"
+    elif isinstance(msg, ChatMessageAssistant):
+        result["role"] = "assistant"
+    elif isinstance(msg, ChatMessageTool):
+        result["role"] = "tool"
+    else:
+        raise ValueError(f"Unknown message type: {type(msg)}")
+
+    # Extract content - handle both string and list of Content objects
+    if isinstance(msg.content, str):
+        result["content"] = msg.content
+    elif isinstance(msg.content, list):
+        # Extract text content parts and concatenate
+        text_parts = []
+        reasoning_text = None
+
+        for content_item in msg.content:
+            if isinstance(content_item, ContentText):
+                text_parts.append(content_item.text)
+            elif isinstance(content_item, ContentReasoning):
+                reasoning_text = content_item.reasoning
+
+        result["content"] = "".join(text_parts)
+
+        # Add reasoning if present (for assistant messages)
+        if reasoning_text:
+            result["reasoning"] = reasoning_text
+    else:
+        result["content"] = ""
+
+    # Handle assistant-specific fields
+    if isinstance(msg, ChatMessageAssistant):
+        if msg.tool_calls:
+            result["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "function": tc.function,
+                    "arguments": tc.arguments,
+                }
+                for tc in msg.tool_calls
+            ]
+
+    # Handle tool message-specific fields
+    if isinstance(msg, ChatMessageTool):
+        if msg.tool_call_id:
+            result["tool_call_id"] = msg.tool_call_id
+        if msg.function:
+            result["name"] = msg.function
+
+    return result
+
+
+async def _push_transcript(
+    state: TaskState,
+    session_id: str,
+    episode_id: str,
+    rest_url: str,
+) -> None:
+    """Push current transcript to SABER server.
+
+    Args:
+        state: Current TaskState with messages
+        session_id: SABER session identifier
+        episode_id: SABER episode identifier
+        rest_url: Base URL of SABER REST API (e.g., "http://localhost:8000")
+
+    Returns:
+        None (logs errors but doesn't raise exceptions)
+
+    Side Effects:
+        - Logs success/failure
+        - Makes HTTP POST request to server
+        - Retries on transient failures (max 3 attempts)
+    """
+    # Constants
+    MAX_PAYLOAD_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB (matches server limit)
+    REQUEST_TIMEOUT_SECONDS = 5.0
+    MAX_RETRIES = 3
+    RETRY_DELAYS_SECONDS = [0.5, 1.0, 2.0]
+    FEATURE_FLAG_ENV_VAR = "SABER_ENABLE_TRANSCRIPT_SYNC"
+    FEATURE_FLAG_DEFAULT = "true"
+
+    # Check feature flag (evaluate at runtime, not module load time)
+    if os.getenv(FEATURE_FLAG_ENV_VAR, FEATURE_FLAG_DEFAULT).lower() != "true":
+        return
+
+    # Validate rest_url format (defense against SSRF)
+    if not rest_url.startswith(("http://", "https://")):
+        logger.warning(
+            "Invalid rest_url format - must start with http:// or https://",
+            extra={
+                "episode_id": episode_id,
+                "rest_url": rest_url,
+            },
+        )
+        return
+
+    # Serialize all messages
+    try:
+        messages = [_serialize_message(msg) for msg in state.messages]
+    except Exception as e:
+        logger.warning(
+            "Failed to serialize transcript messages",
+            extra={
+                "episode_id": episode_id,
+                "error": str(e),
+            },
+        )
+        return
+
+    # Prepare metadata
+    metadata = {
+        "step_number": len(state.messages),
+        "timestamp": datetime.utcnow().isoformat(),
+        "source": "inspect_ai",
+    }
+
+    # Prepare payload
+    payload = {
+        "messages": messages,
+        "metadata": metadata,
+    }
+
+    # Check payload size before sending (client-side validation)
+    import json
+
+    try:
+        payload_json = json.dumps(payload)
+        payload_size = len(payload_json.encode("utf-8"))
+
+        if payload_size > MAX_PAYLOAD_SIZE_BYTES:
+            logger.warning(
+                "Transcript payload too large, skipping push",
+                extra={
+                    "episode_id": episode_id,
+                    "payload_size_bytes": payload_size,
+                    "max_size_bytes": MAX_PAYLOAD_SIZE_BYTES,
+                    "message_count": len(messages),
+                },
+            )
+            return
+    except Exception as e:
+        logger.warning(
+            "Failed to validate payload size",
+            extra={
+                "episode_id": episode_id,
+                "error": str(e),
+            },
+        )
+        return
+
+    # Construct URL
+    url = f"{rest_url}/api/v1/session/{session_id}/episodes/{episode_id}/transcript"
+
+    # Retry configuration
+    max_retries = MAX_RETRIES
+    retry_delays = RETRY_DELAYS_SECONDS
+
+    for attempt in range(max_retries):
+        try:
+            timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT_SECONDS)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(url, json=payload) as resp:
+                    if resp.status == 200:
+                        logger.info(
+                            "Transcript pushed successfully",
+                            extra={
+                                "episode_id": episode_id,
+                                "message_count": len(messages),
+                                "response_status": resp.status,
+                            },
+                        )
+                        return
+                    elif resp.status == 422:
+                        # Validation error - don't retry
+                        error_text = await resp.json()
+                        logger.warning(
+                            "Failed to push transcript - validation error",
+                            extra={
+                                "episode_id": episode_id,
+                                "status_code": resp.status,
+                                "error": error_text,
+                            },
+                        )
+                        return
+                    else:
+                        # Server error - retry
+                        error_text = await resp.text()
+                        logger.warning(
+                            f"Failed to push transcript (attempt {attempt + 1}/{max_retries})",
+                            extra={
+                                "episode_id": episode_id,
+                                "status_code": resp.status,
+                                "error": error_text,
+                            },
+                        )
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(retry_delays[attempt])
+
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"Timeout pushing transcript (attempt {attempt + 1}/{max_retries})",
+                extra={
+                    "episode_id": episode_id,
+                    "error": "Request timeout",
+                },
+            )
+            if attempt < max_retries - 1:
+                await asyncio.sleep(retry_delays[attempt])
+
+        except aiohttp.ClientError as e:
+            logger.warning(
+                f"Network error pushing transcript (attempt {attempt + 1}/{max_retries})",
+                extra={
+                    "episode_id": episode_id,
+                    "error": str(e),
+                },
+            )
+            if attempt < max_retries - 1:
+                await asyncio.sleep(retry_delays[attempt])
+
+        except Exception as e:
+            logger.warning(
+                f"Unexpected error pushing transcript (attempt {attempt + 1}/{max_retries})",
+                extra={
+                    "episode_id": episode_id,
+                    "error": str(e),
+                },
+            )
+            if attempt < max_retries - 1:
+                await asyncio.sleep(retry_delays[attempt])
+
+    # If we get here, all retries failed
+    logger.error(
+        "Failed to push transcript after all retry attempts",
+        extra={
+            "episode_id": episode_id,
+            "max_retries": max_retries,
+        },
+    )
