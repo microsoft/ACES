@@ -712,6 +712,55 @@ def saber_scorer() -> Scorer:
             else:
                 explanation = f"{submission_explanation}"
 
+            # === ORCHESTRATION COORDINATION ===
+            # Wait for all orchestrated samples to complete scoring before returning Score
+            orchestration_id = state.metadata.get(MetadataKeys.ORCHESTRATION_ID)
+            role = state.metadata.get(MetadataKeys.SUB_TASK_ROLE)
+
+            if orchestration_id and role:
+                from .orchestration_coordinator import OrchestrationCoordinator
+
+                coordinator = OrchestrationCoordinator()
+
+                logger.info(
+                    f"Orchestrated sample {role} starting score coordination",
+                    extra={
+                        "orchestration_id": orchestration_id,
+                        "role": role,
+                        "score": total_score,
+                        "event": "scorer_coordination_start",
+                    },
+                )
+
+                try:
+                    # Wait for all siblings to finish scoring
+                    # This blocks until all samples in orchestration reach this point
+                    await coordinator.wait_for_all_scored(
+                        orchestration_id=orchestration_id,
+                        role=role,
+                        score=total_score,
+                        timeout=300.0,  # 5 minute timeout
+                    )
+
+                    logger.info(
+                        f"Score coordination complete for {role}",
+                        extra={
+                            "orchestration_id": orchestration_id,
+                            "role": role,
+                            "event": "scorer_coordination_complete",
+                        },
+                    )
+                except asyncio.TimeoutError:
+                    logger.error(
+                        f"Score coordination timeout for {role} - proceeding anyway",
+                        extra={
+                            "orchestration_id": orchestration_id,
+                            "role": role,
+                            "event": "scorer_coordination_timeout",
+                        },
+                    )
+                    # Proceed with partial results rather than failing
+
             return Score(
                 value=total_score,
                 answer=agent_answer,  # Use the agent answer we extracted earlier

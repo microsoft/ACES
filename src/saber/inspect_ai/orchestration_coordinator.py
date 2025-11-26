@@ -45,6 +45,11 @@ class OrchestrationGroup:
     semaphore: Optional[asyncio.Semaphore] = None
     terminated: bool = False
 
+    # Score coordination fields
+    all_scored_event: Optional[asyncio.Event] = None
+    scored_samples: set[str] = field(default_factory=set)
+    sample_scores: dict[str, float] = field(default_factory=dict)  # Track scores for logging
+
 
 class OrchestrationCoordinator:
     """Singleton coordinator for orchestrated multi-sample tasks.
@@ -414,6 +419,127 @@ class OrchestrationCoordinator:
                 },
             )
             return False
+
+    async def wait_for_all_scored(
+        self,
+        orchestration_id: str,
+        role: str,
+        score: float,
+        timeout: float = 300.0,
+    ) -> None:
+        """Wait for all samples in orchestration to complete scoring.
+
+        This method should be called in the scorer BEFORE returning Score to Inspect AI.
+        It blocks until all sibling samples have also reached this point.
+
+        Args:
+            orchestration_id: Unique orchestration identifier
+            role: This sample's role (e.g., "blue", "red")
+            score: This sample's calculated score (for logging)
+            timeout: Maximum time to wait for siblings (default 300s = 5min)
+
+        Raises:
+            asyncio.TimeoutError: If siblings don't complete within timeout
+
+        Example:
+            >>> coordinator = OrchestrationCoordinator()
+            >>> # In scorer, after calculating score:
+            >>> if orchestration_id:
+            >>>     await coordinator.wait_for_all_scored(orchestration_id, role, total_score)
+            >>> return Score(value=total_score, ...)  # Now all siblings ready
+        """
+        # Get orchestration group
+        group = self._orchestrations.get(orchestration_id)
+        if not group:
+            # Not an orchestrated sample, return immediately
+            logger.debug(
+                f"No orchestration found for {orchestration_id}, skipping coordination",
+                extra={"orchestration_id": orchestration_id, "role": role},
+            )
+            return
+
+        sample = group.samples.get(role)
+        if not sample:
+            logger.warning(
+                f"Sample {role} not registered in orchestration {orchestration_id}",
+                extra={"orchestration_id": orchestration_id, "role": role},
+            )
+            return
+
+        # Initialize coordination primitives if first sample
+        with self._init_lock:
+            if group.all_scored_event is None:
+                group.all_scored_event = asyncio.Event()
+                group.scored_samples = set()
+                group.sample_scores = {}
+
+        # Mark this sample as scored
+        group.scored_samples.add(role)
+        group.sample_scores[role] = score
+
+        logger.info(
+            f"Sample {role} completed scoring with score {score} ({len(group.scored_samples)}/{len(group.samples)})",
+            extra={
+                "orchestration_id": orchestration_id,
+                "role": role,
+                "score": score,
+                "completed_samples": list(group.scored_samples),
+                "total_samples": len(group.samples),
+                "event": "orchestration_sample_scored",
+            },
+        )
+
+        # Check if all samples have scored
+        if len(group.scored_samples) == len(group.samples):
+            logger.info(
+                f"All {len(group.samples)} samples scored in orchestration {orchestration_id}, releasing",
+                extra={
+                    "orchestration_id": orchestration_id,
+                    "sample_scores": group.sample_scores,
+                    "event": "orchestration_all_scored",
+                },
+            )
+            group.all_scored_event.set()
+            return  # Last sample, no need to wait
+
+        # Wait for all siblings to complete scoring
+        logger.info(
+            f"Sample {role} waiting for {len(group.samples) - len(group.scored_samples)} siblings to complete scoring",
+            extra={
+                "orchestration_id": orchestration_id,
+                "role": role,
+                "waiting_for": list(set(group.samples.keys()) - group.scored_samples),
+                "timeout": timeout,
+                "event": "orchestration_waiting_for_siblings",
+            },
+        )
+
+        try:
+            await asyncio.wait_for(group.all_scored_event.wait(), timeout=timeout)
+            logger.info(
+                f"Sample {role} proceeding after all siblings scored",
+                extra={
+                    "orchestration_id": orchestration_id,
+                    "role": role,
+                    "event": "orchestration_coordination_complete",
+                },
+            )
+        except asyncio.TimeoutError:
+            missing_roles = set(group.samples.keys()) - group.scored_samples
+            logger.error(
+                f"Orchestration timeout after {timeout}s - proceeding with partial results",
+                extra={
+                    "orchestration_id": orchestration_id,
+                    "role": role,
+                    "completed_samples": list(group.scored_samples),
+                    "missing_samples": list(missing_roles),
+                    "timeout": timeout,
+                    "event": "orchestration_timeout",
+                },
+            )
+            # Set event to release other waiting samples
+            group.all_scored_event.set()
+            raise
 
     def reset(self) -> None:
         """Reset coordinator state (for testing)."""
