@@ -422,6 +422,9 @@ def _create_saber_solver(agent_name: str, agent_factory: Callable, role_config: 
 
                             # Execute agent with role-specific model context
                             result = await agent(state)
+
+                            # Push transcript to server after agent execution
+                            await _push_transcript_if_enabled(result, metadata)
                         finally:
                             # Restore previous model
                             if previous_model:
@@ -457,6 +460,9 @@ def _create_saber_solver(agent_name: str, agent_factory: Callable, role_config: 
                 extra={"agent": agent_name, "task_id": metadata.get(MetadataKeys.TASK_ID)},
             )
             result = await agent(state)
+
+            # Push transcript to server after agent execution
+            await _push_transcript_if_enabled(result, metadata)
 
             logger.info(
                 f"SABER agent '{agent_name}' execution complete",
@@ -1295,6 +1301,58 @@ def remove_active_domain(domain_slug: str) -> None:
 # ============================================================================
 # Transcript Synchronization Functions
 # ============================================================================
+
+
+async def _push_transcript_if_enabled(
+    state: TaskState,
+    metadata: Dict[str, Any],
+) -> None:
+    """Helper to push transcript if episode context is available.
+
+    This function extracts episode context from metadata and active domain
+    registry, then delegates to _push_transcript() if all required data is present.
+
+    Args:
+        state: TaskState after agent execution
+        metadata: Sample metadata containing episode/session IDs and domain slug
+
+    Returns:
+        None (gracefully handles missing context and errors)
+    """
+    try:
+        # Extract episode context from metadata
+        session_id = metadata.get(MetadataKeys.SESSION_ID)
+        episode_id = metadata.get(MetadataKeys.EPISODE_ID)
+        domain_slug = metadata.get(MetadataKeys.SABER_DOMAIN_SLUG)
+
+        # Skip if episode context is missing
+        if not session_id or not episode_id:
+            return
+
+        # Get REST URL from active domain registry
+        if domain_slug:
+            domain_context = get_active_domain(domain_slug)
+            if domain_context:
+                rest_url = domain_context.get("rest_url")
+                if rest_url:
+                    # Push transcript using extracted context
+                    await _push_transcript(
+                        state=state,
+                        session_id=session_id,
+                        episode_id=episode_id,
+                        rest_url=rest_url,
+                    )
+    except Exception as e:
+        # Log error but don't raise - transcript sync failures should not crash agent execution
+        logger.warning(
+            "Failed to push transcript, continuing with agent execution",
+            extra={
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "episode_id": metadata.get(MetadataKeys.EPISODE_ID),
+                "session_id": metadata.get(MetadataKeys.SESSION_ID),
+            },
+        )
 
 
 def _serialize_message(msg: ChatMessage) -> Dict[str, Any]:
