@@ -17,12 +17,14 @@ package "saber.models" {
     {abstract} +get_total_episodes(): int
     {abstract} +matches_filter(pattern: str): bool
   }
-  
+
   class SingleEpisodeTask {
     +task_type: "single"
     +task_id: str
     +domain: str
     +title: str
+    +description: str
+    +subtask_count: int
     +max_steps: int
     +instruction_prompt: str
     +assistant_prompt: str
@@ -32,7 +34,7 @@ package "saber.models" {
     +get_total_episodes(): int
     +matches_filter(pattern): bool
   }
-  
+
   class OrchestratedTask {
     +task_type: "orchestrated"
     +orchestration_strategy: OrchestrationStrategy
@@ -43,24 +45,28 @@ package "saber.models" {
     +get_total_episodes(): int
     +matches_filter(pattern): bool
   }
-  
+
   class SubTaskDefinition {
     +task_id: str
-    +role: str
+    +role: str | None
     +order: int
     +depends_on_role: str | None
     +domain: str
+    +title: str
+    +description: str
+    +episode_attempts: int
+    +subtask_count: int
+    +max_steps: int
     +instruction_prompt: str
     +assistant_prompt: str
     +submit_prompt: str
-    +max_steps: int
   }
-  
+
   enum TaskExecutionMode {
     SINGLE
     ORCHESTRATED
   }
-  
+
   enum OrchestrationStrategy {
     SEQUENTIAL_PAIRED
     PARALLEL
@@ -79,19 +85,19 @@ package "saber.inspect_ai.task_handlers" {
     {abstract} +initialize(): Dict[str, Any]
     {abstract} +cleanup(): CleanupResult
   }
-  
+
   class SingleEpisodeTaskHandler {
     --
     +initialize(task, session_id, session_manager, semaphore): Dict
     +cleanup(state, session_id, session_manager, semaphore): CleanupResult
   }
-  
+
   class OrchestratedTaskHandler {
     --
     +initialize(task, session_id, session_manager, semaphore): Dict
     +cleanup(state, session_id, session_manager, semaphore): CleanupResult
   }
-  
+
   class CleanupResult <<dataclass>> {
     +success: bool
     +error_count: int
@@ -101,7 +107,7 @@ package "saber.inspect_ai.task_handlers" {
     --
     +has_errors: bool @property
   }
-  
+
   class "get_benchmark_task_handler()" as Factory {
     +get_benchmark_task_handler(task: BenchmarkTask): BenchmarkTaskHandler
   }

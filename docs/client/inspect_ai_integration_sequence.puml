@@ -115,16 +115,16 @@ end note
 
 loop For each sample
 
-    InspectCLI -> Sandbox: setup(sample)
+    InspectCLI -> Sandbox: sample_init(sample)
     Sandbox -> SessionMgr: create_episode(task_id)
-    SessionMgr -> Server: POST /api/v1/session/{id}/episode
+    SessionMgr -> Server: POST /api/v1/session/{id}/episodes
     Server --> SessionMgr: episode_id, environment_spec
     SessionMgr --> Sandbox: episode_id
 
-    Sandbox -> Sandbox: Store episode_id in store
+    Sandbox -> Sandbox: Store episode_id and metadata
     note right of Sandbox
-    episode_id stored in Inspect AI's
-    global store for scorer access
+    Stores episode_id, task_id,
+    and MCP context for tool calls
     end note
 
     Sandbox --> InspectCLI: SandboxEnvironmentSpec
@@ -137,19 +137,23 @@ loop For each sample
 
     loop Agent Steps
         InspectCLI -> InspectCLI: Agent generates tool call
-        InspectCLI -> Sandbox: exec(command)
-
-        Sandbox -> SessionMgr: Get MCP client
-        SessionMgr -> MCP: Execute tool via MCP
+        InspectCLI -> MCP: Execute SABER MCP tool
         activate MCP
 
-        MCP -> Server: MCP tool call with session context
-        Server -> Server: Execute command in sandbox
+        note right of MCP
+        Inspect AI uses mcp_server_http()
+        with headers containing:
+        - X-SABER-Session-ID
+        - X-SABER-Episode-ID
+        - X-SABER-Orchestration-Env
+        end note
+
+        MCP -> Server: MCP tool call with context headers
+        Server -> Server: Execute command in episode sandbox
         Server --> MCP: Command result
         deactivate MCP
 
-        MCP --> Sandbox: Tool result
-        Sandbox --> InspectCLI: ExecResult
+        MCP --> InspectCLI: Tool result
     end
 
     note over InspectCLI, Scorer
@@ -171,9 +175,9 @@ loop For each sample
     **Episode Cleanup**
     end note
 
-    InspectCLI -> Sandbox: cleanup()
+    InspectCLI -> Sandbox: sample_cleanup()
     Sandbox -> SessionMgr: end_episode(episode_id)
-    SessionMgr -> Server: POST /api/v1/session/{id}/episode/{eid}/end
+    SessionMgr -> Server: POST /api/v1/session/{id}/episodes/{eid}/end
     Server -> Server: Cleanup episode resources
     Server --> SessionMgr: Success
     SessionMgr --> Sandbox: Success
@@ -185,12 +189,12 @@ note over InspectCLI
 All samples processed
 end note
 
-InspectCLI -> Sandbox: Final cleanup
+InspectCLI -> Sandbox: task_cleanup()
 Sandbox -> SessionMgr: terminate_session()
 SessionMgr -> Server: DELETE /api/v1/session/{id}
 Server --> SessionMgr: Success
 
-Sandbox -> DomainCtrl: Stop server (if stop_saber_after=true)
+Sandbox -> DomainCtrl: stop_domain() (if stop_saber_after=true)
 DomainCtrl -> Server: saber-domain stop cybench
 deactivate Server
 deactivate DomainCtrl

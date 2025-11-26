@@ -61,21 +61,23 @@ package "SABER Inspect AI Integration (saber/inspect_ai/)" {
     }
 
     class SABERSandboxEnvironment {
-        +domain: str
+        +domain_slug: str
+        +domains_root: Path
         +rest_port: int = 8000
         +mcp_port: int = 8001
-        +session_manager: ClientSessionManager
-        +episode_id: Optional[str]
+        +_session_manager: ClientSessionManager
+        +_session_id: Optional[str]
+        +_episode_id: Optional[str]
         --
-        +setup(): SandboxEnvironmentSpec
-        +exec(): ExecResult
-        +__call__(): tuple[str, SandboxEnvironmentSpec]
+        +task_init(): void
+        +sample_init(): SandboxEnvironmentSpec
+        +sample_cleanup(): void
+        +task_cleanup(): void
         --
-        **Sandbox Lifecycle**
-        +_start_domain_server(): void
-        +_stop_domain_server(): void
-        +_create_episode(): str
-        +_cleanup_episode(): void
+        **Sandbox Lifecycle Hooks**
+        - Implements Inspect AI protocol
+        - Per-task session management
+        - Per-sample episode management
     }
 
     class create_saber_dataset {
@@ -160,21 +162,21 @@ package "Client Session Layer (saber/client/)" {
     }
 }
 
-package "Domain Server Layer (saber/domain/)" {
+package "Domain Server Layer (saber/inspect_ai/)" {
     class DomainController {
-        +domain_slug: str
         +domains_root: Path
-        +process: Optional[subprocess.Popen]
+        +active_domains: Dict
         --
-        +start_server(): void
-        +stop_server(): void
-        +is_running(): bool
+        +start_domain(): DomainContext
+        +stop_domain(): void
+        +check_running_domain(): Optional[Dict]
         +health_check(): bool
         --
         **Server Lifecycle Management**
         - Launches saber-domain start
         - Health monitoring
         - Graceful shutdown
+        - Multi-domain support
     }
 }
 

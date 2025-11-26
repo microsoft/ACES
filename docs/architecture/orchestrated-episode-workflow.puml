@@ -39,9 +39,9 @@ Handler -> Handler: _semaphore_acquired = True
 group Sequential Episode Creation (Dependency Order)
   Handler -> Handler: Validate strategy == SEQUENTIAL_PAIRED
   note right: Other strategies raise NotImplementedError
-  
+
   Handler -> Handler: Sort sub_tasks by dependency\n(root first, then dependents)
-  
+
   == Create Red Episode (Root) ==
   Handler -> Session: create_episode(session_id, "cti_red_001")
   Session -> Server: POST /episodes/create\n(task_id="cti_red_001", role="red")
@@ -49,21 +49,21 @@ group Sequential Episode Creation (Dependency Order)
   RedContainer --> Server: Container ID
   Server --> Session: EpisodeCreateResponse(episode_id="ep_red_123")
   Session --> Handler: episode_id="ep_red_123"
-  
+
   Handler -> Session: wait_for_episode_ready(session_id, "ep_red_123")
   Session -> Server: GET /episodes/ep_red_123/status [poll]
   Server --> Session: state="ready"
   Session --> Handler: ✓ Red episode ready
-  
+
   == Create Blue Episode (Dependent) ==
   Handler -> Session: create_episode(session_id, "cti_blue_001")
   note right: Blue can access Red's artifacts\nvia shared session context
   Session -> Server: POST /episodes/create\n(task_id="cti_blue_001", role="blue")
-  Server -> BlueContainer: docker run --name cti_blue_001\n--link cti_red_001
+  Server -> BlueContainer: docker run --name cti_blue_001\n(attached to Red's network)
   BlueContainer --> Server: Container ID
   Server --> Session: EpisodeCreateResponse(episode_id="ep_blue_123")
   Session --> Handler: episode_id="ep_blue_123"
-  
+
   Handler -> Session: wait_for_episode_ready(session_id, "ep_blue_123")
   Session -> Server: GET /episodes/ep_blue_123/status [poll]
   Server --> Session: state="ready"
@@ -79,12 +79,12 @@ note over Eval, BlueContainer
   - episode_id="ep_red_123"
   - Writes exploit code
   - Stores artifacts in session
-  
+
   **Blue Agent (Defender):**
   - episode_id="ep_blue_123"
   - Reads Red's artifacts
   - Analyzes and mitigates threat
-  
+
   Both episodes contribute to final score
 end note
 
@@ -98,7 +98,7 @@ group End All Episodes
   Server -> RedContainer: docker stop cti_red_001
   RedContainer --> Server: Stopped
   Server --> Session: ✓ Red ended
-  
+
   Handler -> Session: end_episode(session_id, "ep_blue_123")
   Session -> Server: POST /episodes/ep_blue_123/end
   Server -> BlueContainer: docker stop cti_blue_001

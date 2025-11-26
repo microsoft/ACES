@@ -26,6 +26,7 @@ package "SABER Server Side" {
     class ClientSession {
         +session_id: str
         +client_id: str
+        +creating_episode_ids: List[str]
         +active_episode_ids: List[str]
         +episode_history: List[str]
         +task_queue: List[str]
@@ -35,8 +36,11 @@ package "SABER Server Side" {
         +context: Dict[str, Any]
         --
         +update_activity(): void
+        +add_creating_episode(episode_id: str): void
+        +move_to_active_episode(episode_id: str): void
         +add_active_episode(episode_id: str): void
         +remove_active_episode(episode_id: str): void
+        +remove_creating_episode(episode_id: str): void
         +complete_episode(episode_id: str): void
         +add_task_to_queue(task_id: str): void
         +get_next_task(): Optional[str]
@@ -67,16 +71,18 @@ package "SABER Server Side" {
         +manifest: Optional[Dict[str, Any]]
         +manifest_path: Optional[str]
         --
-        +create_session(client_id: str): ClientSession
-        +terminate_session(session_id: str): void
-        +create_episode(session_id: str, task_id: str): EpisodeCreateResponse
-        +end_episode(session_id: str, episode_id: str, reason: str): EpisodeEndResponse
+        +async create_session(client_id: str): ClientSession
+        +async terminate_session(session_id: str, reason?: str): void
+        +async initiate_episode(session_id: str, task_id: str): Episode
+        +async start_episode(session_id: str, task_id: str): Episode
+        +async end_episode(episode_id: str, session_id: str, reason?: str, submission?: EvalSubmission): EpisodeEndResponse
+        +async execute_action(session_id: str, episode_id: str, action: Action): CommandResult
+        +async get_current_task(session_id: str, episode_id: str): Task
+        +get_policy(session_id: str, episode_id: str): PolicyDocument
         +get_benchmark_info(): BenchmarkInfo
-        +get_task_info(session_id: str): TaskInfo
-        +get_policy(session_id: str): PolicyResponse
-        +get_evaluation_criteria(session_id: str, episode_id: str): EvaluationCriteriaResponse
+        +get_evaluation_service(): SessionEvaluationService
         +get_health_metadata(): Dict[str, Any]
-        +_cleanup_expired_sessions(): void
+        +async _cleanup_inactive_sessions(): void
         +_check_permanent_environment_health(): Dict[str, Any]
     }
 
@@ -98,36 +104,57 @@ package "SABER Server Side" {
     }
 
     class EpisodeManager {
-        +active_episodes: Dict[str, Episode]
-        +episode_dependencies: Dict[str, Set[str]]
+        +episodes: Dict[str, Episode]
+        +session_episodes: Dict[str, List[str]]
+        +completed_episodes: Dict[str, Episode]
+        +episode_configs: Dict[str, Dict[str, Any]]
         --
-        +start_episode(session_id: str, task_id: str, task: Task): Episode
-        +end_episode(session_id: str, episode_id: str, reason: EpisodeTerminationReason): Episode
-        +get_episode(session_id: str, episode_id: str): Optional[Episode]
-        +get_session_episodes(session_id: str): List[Episode]
-        +list_active_episodes(): List[str]
-        +cascade_terminate_dependent_episodes(episode_id: str): List[str]
-        +_generate_episode_id(session_id: str, task_id: str): str
-        +_create_episode_context(task: Task): EpisodeContext
+        +get_episode_by_id(episode_id: str): Optional[Episode]
+        +get_session_episodes(session_id: str, include_completed: bool): List[Episode]
+        +get_active_episodes_for_session(session_id: str): List[Episode]
+        +add_episode_to_session(session_id: str, episode: Episode): void
+        +complete_episode(episode_id: str): Optional[Episode]
+        +mark_episode_ready(episode_id: str): void
+        +mark_episode_failed_creation(episode_id: str, error_message: str): void
+        +find_available_episode_for_dependency(session_id: str, target_task_id: str, dependent_task_id: str): Optional[str]
+        +async find_available_episode_for_dependency_with_retry(session_id: str, target_task_id: str, dependent_task_id: str, max_wait_seconds: float, retry_interval: float, max_retry_interval: float): Optional[str]
+        +attach_episode_to_episode(dependent_episode_id: str, target_episode_id: str): void
+        +async configure_for_task(episode_id: str, task: Task): void
+        +start_episode(session_id: str, task_id: str, initial_context: Optional[Dict], task: Optional[Task]): Episode
+        +step(episode_id: str, action: Action, command_result: CommandResult): StepResult
+        +end_episode(episode_id: str, reason: str, result: Optional[str]): Episode
+        +cleanup_session(session_id: str): void
     }
 
     class ExecutionManager {
-        +config_dir: str
-        +executor_factory: ExecutorFactory
-        +sandbox_manager: SandboxEnvironmentManager
-        +permanent_manager: Optional[PermanentEnvironmentManager]
-        +environment_loader: EnvironmentLoader
+        +_config_dir: str
+        +_configuration: Dict[str, Any]
+        +_executor_factory: Optional[ExecutorFactory]
+        +_sandbox_environment_manager: Optional[SandboxEnvironmentManager]
+        +_permanent_environment_manager: Optional[PermanentEnvironmentManager]
+        +_file_copier: Optional[Any]
+        +_active_executions: Dict[str, int]
+        +_max_concurrent_per_episode: int
+        +_debug_mode: bool
         --
-        +initialize_permanent_environment_manager(config: Dict): void
-        +step(action: Action, headers: RequestHeaders): CommandResult
-        +configure_for_task(session_id: str, episode_id: str, task: Task): void
-        +cleanup_episode(session_id: str, episode_id: str): bool
-        +cleanup_session(session_id: str): bool
-        +cleanup_all_sessions(): bool
-        +list_commands(): List[Dict[str, Any]]
-        +get_security_info(): Dict[str, Any]
-        +to_mcp_tools(): List[Dict[str, Any]]
-        +health_check(): Dict[str, Any]
+        +async step(action: Action, context?: Dict): CommandResult
+        +configure_for_task_async(episode_id: str, task: Task, session_id?: str, target_episode_id?: str): void
+        +async wait_for_episode_healthy(episode_id: str, timeout_seconds?: int): void
+        +get_execution_container_name(episode_id: str): Optional[str]
+        +async copy_initial_files_to_episode(episode_id: str, task: Task): void
+        +initialize_permanent_environment_manager(config: Dict[str, Any]): void
+        +start_permanent_environment(environment_spec: Any): void
+        +stop_permanent_environment(): void
+        +is_permanent_environment_running(): bool
+        +cleanup_episode(episode_id: str, context?: Dict): bool
+        +cleanup_session(session_id: str, context?: Dict): bool
+        +cleanup_all_containers(context?: Dict): Dict[str, Any]
+        +is_sandbox_ready(): bool
+        +to_mcp_tools(episode_id?: str): List[mcp_types.Tool]
+        +get_executor(executor_type: str, episode_id?: str): DockerExecutor
+        +get_available_executors(episode_id?: str): List[str]
+        +list_commands(episode_id?: str): List[Dict[str, Any]]
+        +debug_mode(): bool
     }
 
     class PolicyManager {

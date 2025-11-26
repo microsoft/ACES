@@ -24,23 +24,36 @@ package "Execution Management" {
         +_config_dir: str
         +_configuration: Dict[str, Any]
         +_executor_factory: Optional[ExecutorFactory]
-        +_sandbox_manager: Optional[SandboxEnvironmentManager]
+        +_sandbox_environment_manager: Optional[SandboxEnvironmentManager]
         +_permanent_environment_manager: Optional[PermanentEnvironmentManager]
+        +_file_copier: Optional[Any]
         +_active_executions: Dict[str, int]
         +_max_concurrent_per_episode: int
         +_debug_mode: bool
         --
-        +step(action: Action, context?: Dict): CommandResult
-        +configure_for_task(episode_id: str, task: Task, session_id?: str, target_episode_id?: str): void
-        +initialize_permanent_environment(permanent_manager: PermanentEnvironmentManager): void
+        +async step(action: Action, context?: Dict): CommandResult
+        +configure_for_task_async(episode_id: str, task: Task, session_id?: str, target_episode_id?: str): void
+        +async wait_for_episode_healthy(episode_id: str, timeout_seconds?: int): void
+        +get_execution_container_name(episode_id: str): Optional[str]
+        +async copy_initial_files_to_episode(episode_id: str, task: Task): void
+        +initialize_permanent_environment_manager(config: Dict[str, Any]): void
+        +start_permanent_environment(environment_spec: Any): void
+        +stop_permanent_environment(): void
+        +is_permanent_environment_running(): bool
         +cleanup_episode(episode_id: str, context?: Dict): bool
+        +cleanup_session(session_id: str, context?: Dict): bool
+        +cleanup_all_containers(context?: Dict): Dict[str, Any]
         +is_sandbox_ready(): bool
-        +to_mcp_tools(episode_id?: str): List[Dict[str, Any]]
+        +to_mcp_tools(episode_id?: str): List[mcp_types.Tool]
         +get_executor(executor_type: str, episode_id?: str): DockerExecutor
         +get_available_executors(episode_id?: str): List[str]
+        +get_configuration(): Dict[str, Any]
         +get_execution_stats(): Dict[str, Any]
         +list_commands(episode_id?: str): List[Dict[str, Any]]
+        +debug_mode(): bool
         +_load_custom_executors(config_dir: str): void
+        +_get_episode_executor_factory(episode_id?: str): ExecutorFactory
+        +_initialize_file_copier(): void
     }
 
     class ExecutorFactory {

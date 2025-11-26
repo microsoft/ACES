@@ -30,6 +30,9 @@ package "SABER Server Core - Current Implementation" {
         +active_sessions: Dict[str, ClientSession]
         +cleanup_task: Optional[asyncio.Task]
         +shutdown_event: asyncio.Event
+        +_episode_creation_lock: asyncio.Semaphore
+        +_episode_finalization_tasks: Dict[str, asyncio.Task]
+        +_finalization_semaphore: asyncio.Semaphore
         +manifest: Dict[str, Any]
         +manifest_path: Optional[str]
         +benchmark_manager: BenchmarkManager
@@ -44,24 +47,38 @@ package "SABER Server Core - Current Implementation" {
         +async start_server(): void
         +async shutdown(): void
         +async create_session(client_id: str): ClientSession
-        +async terminate_session(session_id: str): void
+        +async terminate_session(session_id: str, reason?: str): void
+        +async initiate_episode(session_id: str, task_id: str): Episode
         +async start_episode(session_id: str, task_id: str): Episode
+        +async end_episode(episode_id: str, session_id: str, reason?: str, submission?: EvalSubmission): EpisodeEndResponse
         +async execute_action(session_id: str, episode_id: str, action: Action): CommandResult
+        +async execute_episode_action(session_id: str, episode_id: str, action: Action): CommandResult
         +async get_current_task(session_id: str, episode_id: str): Task
         +get_policy(session_id: str, episode_id: str): PolicyDocument
         +get_benchmark_info(): BenchmarkInfo
         +get_session_stats(): Dict[str, Any]
         +get_health_metadata(): Dict[str, Any]
         +get_evaluation_service(): SessionEvaluationService
+        +get_episode_status(episode_id: str): Optional[Episode]
+        +get_episode_by_id(episode_id: str): Optional[Episode]
+        +async save_evaluation_file(session_id: str, file: UploadFile): int
         +async list_session_episodes(session_id: str, status_filter?: str): List[Episode]
         +async get_episode_details(session_id: str, episode_id: str): Episode
+        +async _session_cleanup_loop(): void
         +async _cleanup_inactive_sessions(): void
         +async _start_permanent_environment(): void
+        +async _finalize_episode_creation(episode_id: str, session_id: str, environment_spec: Any): void
+        +async _cleanup_failed_episode_environment(episode_id: str): void
+        +async _cleanup_episode_network(episode_id: str): void
+        +async _cleanup_episode_network_with_retry(episode_id: str, max_retries?: int, base_delay?: float): bool
+        +async _cleanup_saber_episode_networks(): void
+        +_check_permanent_environment_health(): Dict[str, Any]
     }
 
     class ClientSession {
         +session_id: str
         +client_id: str
+        +creating_episode_ids: List[str]
         +active_episode_ids: List[str]
         +episode_history: List[str]
         +task_queue: List[str]
@@ -71,8 +88,11 @@ package "SABER Server Core - Current Implementation" {
         +context: Dict[str, Any]
         --
         +update_activity(): void
+        +add_creating_episode(episode_id: str): void
+        +move_to_active_episode(episode_id: str): void
         +add_active_episode(episode_id: str): void
         +remove_active_episode(episode_id: str): void
+        +remove_creating_episode(episode_id: str): void
         +complete_episode(episode_id: str): void
         +add_task_to_queue(task_id: str): void
         +get_next_task(): Optional[str]
