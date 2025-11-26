@@ -223,4 +223,55 @@ class SessionInfo(BaseModel):
     message: str
 
 
+# Transcript synchronization models
+class ToolCall(BaseModel):
+    """Tool call structure in chat messages."""
+
+    id: str = Field(description="Tool call identifier")
+    function: str = Field(description="Tool/function name")
+    arguments: Dict[str, Any] = Field(description="Tool arguments")
+
+
+class ChatMessage(BaseModel):
+    """Structured chat message format (compatible with Inspect AI).
+
+    This schema validates conversation messages to ensure consistency
+    and prevent malformed data from breaking downstream consumers.
+    """
+
+    role: str = Field(description="Message role (user, assistant, system, tool)")
+    content: str = Field(default="", description="Message text content")
+    tool_calls: Optional[List[ToolCall]] = Field(None, description="Tool calls (for assistant messages)")
+    tool_call_id: Optional[str] = Field(None, description="Tool call ID (for tool response messages)")
+    name: Optional[str] = Field(None, description="Tool name (for tool response messages)")
+
+
+class TranscriptPushRequest(BaseModel):
+    """Request model for pushing transcript to server."""
+
+    messages: List[ChatMessage] = Field(description="List of conversation messages")
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict, description="Transcript metadata (step_number, timestamp, source)"
+    )
+
+
+class TranscriptPushResponse(BaseModel):
+    """Response model for transcript push operation."""
+
+    success: bool = Field(description="Whether transcript was stored successfully")
+    episode_id: str = Field(description="Episode identifier")
+    message_count: int = Field(description="Number of messages stored")
+    stored_at: str = Field(description="Timestamp when transcript was stored (ISO format)")
+
+
+class TranscriptGetResponse(BaseModel):
+    """Response model for transcript retrieval."""
+
+    episode_id: str = Field(description="Episode identifier")
+    messages: List[ChatMessage] = Field(description="List of conversation messages")
+    message_count: int = Field(description="Number of messages in transcript")
+    last_updated: Optional[str] = Field(None, description="Last update timestamp (ISO format)")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Transcript metadata if available")
+
+
 # Import evaluation models

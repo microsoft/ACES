@@ -9,7 +9,7 @@ Logging category: REST_API.
 
 # Forward declaration to avoid circular imports
 from pathlib import Path
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
@@ -24,11 +24,15 @@ from ...models import (
     EpisodeTaskResponse,
     EvalSubmission,
     HealthResponse,
+    MetadataKeys,
     PolicyResponse,
     SessionCreateResponse,
     SessionTerminateResponse,
     StepEvaluationStrategy,
     SubmissionEvaluationStrategy,
+    TranscriptGetResponse,
+    TranscriptPushRequest,
+    TranscriptPushResponse,
 )
 from ...models.rest.evaluation import (
     EpisodeStepData,
@@ -677,6 +681,120 @@ class SessionRestAPI:
             except Exception as exc:
                 log_operation_failure(logger, "get_episode_steps", exc, session_id=session_id, episode_id=episode_id)
                 raise HTTPException(status_code=500, detail=f"Failed to get episode steps: {exc}") from exc
+
+        @self.app.post("/api/v1/session/{session_id}/episodes/{episode_id}/transcript")
+        async def push_transcript_endpoint(
+            session_id: str, episode_id: str, transcript_request: TranscriptPushRequest
+        ) -> TranscriptPushResponse:
+            """Push conversation transcript from client to server.
+
+            Stores the full conversation history in episode context for real-time visibility.
+            This endpoint is idempotent (last write wins) and allows post-completion pushes
+            for audit trail and debugging purposes.
+            """
+            import json
+            from datetime import datetime
+
+            from pydantic import ValidationError
+
+            log_operation_start(logger, "push_transcript", session_id=session_id, episode_id=episode_id)
+            try:
+                # Get episode
+                episode = self.session_manager.get_episode_by_id(episode_id)
+                if not episode:
+                    raise HTTPException(status_code=404, detail=f"Episode {episode_id} not found")
+
+                # Note: Removed is_complete check to allow post-completion pushes
+                # Rationale: Transcript is audit/debugging data, clients may push after task completion
+
+                # Check payload size using actual JSON byte length (not sys.getsizeof)
+                messages_json = json.dumps([msg.dict() for msg in transcript_request.messages])
+                payload_size = len(messages_json.encode("utf-8"))
+                MAX_PAYLOAD_SIZE = 10 * 1024 * 1024  # 10 MB
+                if payload_size > MAX_PAYLOAD_SIZE:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Transcript payload too large: {payload_size} bytes (max: {MAX_PAYLOAD_SIZE} bytes)",
+                    )
+
+                # Store transcript in episode context atomically (thread-safe)
+                timestamp = datetime.utcnow().isoformat()
+                context_updates: Dict[str, Any] = {
+                    MetadataKeys.CLIENT_TRANSCRIPT.value: [msg.dict() for msg in transcript_request.messages],
+                    MetadataKeys.TRANSCRIPT_UPDATED_AT.value: timestamp,
+                }
+                if transcript_request.metadata:
+                    context_updates[MetadataKeys.TRANSCRIPT_METADATA.value] = transcript_request.metadata
+
+                await episode.update_context_atomic(context_updates)
+
+                log_operation_success(
+                    logger,
+                    "push_transcript",
+                    session_id=session_id,
+                    episode_id=episode_id,
+                    message_count=len(transcript_request.messages),
+                )
+
+                return TranscriptPushResponse(
+                    success=True,
+                    episode_id=episode_id,
+                    message_count=len(transcript_request.messages),
+                    stored_at=timestamp,
+                )
+
+            except HTTPException:
+                raise
+            except ValidationError as exc:
+                # Return 422 for validation errors (not 500)
+                log_operation_failure(
+                    logger,
+                    "push_transcript",
+                    exc,
+                    session_id=session_id,
+                    episode_id=episode_id,
+                    error_type="validation_error",
+                )
+                raise HTTPException(
+                    status_code=422,
+                    detail={"message": "Validation failed", "errors": exc.errors()},
+                )
+            except Exception as exc:
+                log_operation_failure(logger, "push_transcript", exc, session_id=session_id, episode_id=episode_id)
+                raise HTTPException(status_code=500, detail=f"Failed to push transcript: {exc}") from exc
+
+        @self.app.get("/api/v1/session/{session_id}/episodes/{episode_id}/transcript")
+        async def get_transcript_endpoint(session_id: str, episode_id: str) -> TranscriptGetResponse:
+            """Get conversation transcript for episode (for red team access)."""
+            log_operation_start(logger, "get_transcript", session_id=session_id, episode_id=episode_id)
+            try:
+                # Get episode
+                episode = self.session_manager.get_episode_by_id(episode_id)
+                if not episode:
+                    raise HTTPException(status_code=404, detail=f"Episode {episode_id} not found")
+
+                # Retrieve transcript from episode context
+                messages = episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT, [])
+                last_updated = episode.context.get(MetadataKeys.TRANSCRIPT_UPDATED_AT)
+                metadata = episode.context.get(MetadataKeys.TRANSCRIPT_METADATA)
+
+                log_operation_success(
+                    logger, "get_transcript", session_id=session_id, episode_id=episode_id, message_count=len(messages)
+                )
+
+                return TranscriptGetResponse(
+                    episode_id=episode_id,
+                    messages=messages,
+                    message_count=len(messages),
+                    last_updated=last_updated,
+                    metadata=metadata,
+                )
+
+            except HTTPException:
+                raise
+            except Exception as exc:
+                log_operation_failure(logger, "get_transcript", exc, session_id=session_id, episode_id=episode_id)
+                raise HTTPException(status_code=500, detail=f"Failed to get transcript: {exc}") from exc
 
         @self.app.get("/api/v1/session/{session_id}/episodes/{episode_id}/submission-evaluation-criteria")
         async def get_submission_evaluation_criteria_endpoint(

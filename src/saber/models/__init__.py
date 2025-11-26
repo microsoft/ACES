@@ -37,6 +37,7 @@ from .constants import (
     StepEvaluationStrategy,
     SubmissionEvaluationStrategy,
 )
+
 # Core domain models
 from .core import BenchmarkInfo, EvalSubmission, PolicyInfo, TaskInfo
 
@@ -83,6 +84,9 @@ from .rest import (
     SessionTerminateResponse,
     StepResponse,
     TaskOrchestrationResponse,
+    TranscriptGetResponse,
+    TranscriptPushRequest,
+    TranscriptPushResponse,
 )
 
 __all__ = [
@@ -130,6 +134,10 @@ __all__ = [
     "SessionStatsResponse",
     "EpisodeEndResponse",
     "SessionInfo",
+    # Transcript synchronization models
+    "TranscriptPushRequest",
+    "TranscriptPushResponse",
+    "TranscriptGetResponse",
     # MCP protocol models
     "MCPToolSchema",
     "MCPInputSchema",

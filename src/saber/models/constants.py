@@ -124,6 +124,11 @@ class MetadataKeys(str, Enum):
     STEP_EVALUATIONS = "step_evaluations"
     SUBTASK_SCORES = "subtask_scores"
 
+    # Transcript synchronization context keys
+    CLIENT_TRANSCRIPT = "_client_transcript"
+    TRANSCRIPT_UPDATED_AT = "_transcript_updated_at"
+    TRANSCRIPT_METADATA = "_transcript_metadata"
+
 
 __all__ = [
     "EvaluationStrategy",

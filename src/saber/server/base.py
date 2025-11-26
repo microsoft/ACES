@@ -6,6 +6,7 @@ They should be used by both client and server implementations to ensure
 consistent data structures.
 """
 
+import asyncio
 import copy
 import uuid
 from dataclasses import dataclass, field
@@ -155,6 +156,16 @@ class Episode(BaseModel):
     attached_to_episode_id: Optional[str] = Field(None, description="Episode ID this episode is attached to")
     attached_episode_ids: List[str] = Field(default_factory=list, description="Episode IDs attached to this episode")
 
+    model_config = {"arbitrary_types_allowed": True}
+
+    def __init__(self, **data: Any) -> None:
+        super().__init__(**data)
+        # Initialize lock as private attribute after model construction
+        object.__setattr__(self, "_context_lock", asyncio.Lock())
+
+    # Type annotation for private attribute (used in update_context_atomic)
+    _context_lock: asyncio.Lock
+
     @property
     def is_complete(self) -> bool:
         """Check if the episode is complete."""
@@ -180,6 +191,18 @@ class Episode(BaseModel):
     def add_step(self, step: Step) -> None:
         """Add a step to the episode history."""
         self.steps.append(step)
+
+    async def update_context_atomic(self, updates: Dict[str, Any]) -> None:
+        """Atomically update multiple context keys (async-safe).
+
+        This method ensures thread-safe updates to the episode context dictionary
+        when multiple concurrent requests may modify the same episode.
+
+        Args:
+            updates: Dictionary of key-value pairs to update in context
+        """
+        async with self._context_lock:
+            self.context.update(updates)
 
     def get_executed_commands(self) -> List[str]:
         """Get all arguments executed during this episode."""
