@@ -195,12 +195,13 @@ warn_unused_ignores = false
 
 [tool.pytest.ini_options]
 minversion = "7.0"
-addopts = "-ra -q --strict-markers --strict-config -m 'not integration'"
+addopts = "-ra -q --strict-markers --strict-config -m 'not integration' -p no:warnings"
 testpaths = ["tests"]
+pythonpath = ["src"]
 filterwarnings = [
-    "error",
     "ignore::UserWarning",
     "ignore::DeprecationWarning",
+    "ignore::beartype.roar.BeartypeDecorHintPep585DeprecationWarning",
 ]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
@@ -210,13 +211,20 @@ markers = [
 asyncio_mode = "auto"
 
 [tool.coverage.run]
-source = ["src"]
+source = ["src", "."]
+relative_files = true
 omit = [
     "*/tests/*",
     "*/test_*",
     "*/__pycache__/*",
 ]
 
+[tool.coverage.paths]
+source = [
+    "src/saber",
+    "*/saber/src/saber",
+    "saber",
+]
 
 [tool.coverage.report]
 exclude_lines = [

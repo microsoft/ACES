@@ -216,3 +216,114 @@ class TestDomainController:
             assert controller._domains_root == domains_root
             assert controller._orchestrator == mock_orchestrator
             mock_create.assert_called_once_with(domains_root)
+
+
+class TestCreateOrchestrator:
+    """Test cases for _create_orchestrator helper function."""
+
+    def test_create_orchestrator_success(self):
+        """Test successful orchestrator creation."""
+        from saber.inspect_ai.server import _create_orchestrator
+
+        # Mock the imports inside _create_orchestrator using sys.modules
+        with patch.dict('sys.modules', {
+            'saber.domain.orchestrator': Mock(DomainOrchestrator=Mock()),
+            'saber.domain.resources': Mock(resolve_compose_file=Mock()),
+        }):
+            from saber.domain.orchestrator import DomainOrchestrator
+            from saber.domain.resources import resolve_compose_file
+
+            # Mock the context manager for resolve_compose_file
+            mock_cm = Mock()
+            mock_cm.__enter__ = Mock(return_value=Path("/test/compose.yml"))
+            mock_cm.__exit__ = Mock(return_value=False)
+            resolve_compose_file.return_value = mock_cm
+
+            mock_orchestrator = Mock()
+            DomainOrchestrator.return_value = mock_orchestrator
+
+            result = _create_orchestrator(Path("/test/domains"))
+
+            assert result == mock_orchestrator
+            DomainOrchestrator.assert_called_once_with(Path("/test/domains"), Path("/test/compose.yml"))
+
+    def test_create_orchestrator_creation_error(self):
+        """Test orchestrator creation with other errors."""
+        from saber.inspect_ai.server import _create_orchestrator
+
+        with patch.dict('sys.modules', {
+            'saber.domain.orchestrator': Mock(DomainOrchestrator=Mock()),
+            'saber.domain.resources': Mock(resolve_compose_file=Mock()),
+        }):
+            from saber.domain.orchestrator import DomainOrchestrator
+            from saber.domain.resources import resolve_compose_file
+
+            mock_cm = Mock()
+            mock_cm.__enter__ = Mock(return_value=Path("/test/compose.yml"))
+            mock_cm.__exit__ = Mock(return_value=False)
+            resolve_compose_file.return_value = mock_cm
+
+            DomainOrchestrator.side_effect = Exception("Configuration error")
+
+            with pytest.raises(PrerequisiteError, match="Failed to create SABER DomainOrchestrator"):
+                _create_orchestrator(Path("/test/domains"))
+
+
+class TestConvenienceFunctions:
+    """Test convenience functions for domain operations."""
+
+    @pytest.mark.asyncio
+    async def test_start_domain_convenience(self):
+        """Test start_domain convenience function."""
+        from saber.inspect_ai.server import start_domain
+
+        with patch("saber.inspect_ai.server.DomainController") as mock_controller_class:
+            mock_controller = AsyncMock()
+            mock_context = DomainContext(
+                domain="test_domain",
+                rest_url="http://localhost:8000",
+                mcp_url="http://localhost:8001",
+                rest_port=8000,
+                mcp_port=8001,
+                project_slug="test-project",
+                domains_root=Path("/test/domains"),
+            )
+            mock_controller.start = AsyncMock(return_value=mock_context)
+            mock_controller_class.return_value = mock_controller
+
+            result = await start_domain(
+                domain="test_domain",
+                domains_root=Path("/test/domains"),
+                rest_port=8000,
+                mcp_port=8001,
+                log_level="DEBUG",
+                build="server",
+                rebuild="client",
+            )
+
+            assert result == mock_context
+            mock_controller.start.assert_called_once_with(
+                domain="test_domain",
+                rest_port=8000,
+                mcp_port=8001,
+                log_level="DEBUG",
+                build="server",
+                rebuild="client",
+            )
+
+    @pytest.mark.asyncio
+    async def test_stop_domain_convenience(self):
+        """Test stop_domain convenience function."""
+        from saber.inspect_ai.server import stop_domain
+
+        with patch("saber.inspect_ai.server.DomainController") as mock_controller_class:
+            mock_controller = AsyncMock()
+            mock_controller.stop = AsyncMock()
+            mock_controller_class.return_value = mock_controller
+
+            await stop_domain(
+                domain="test_domain",
+                domains_root=Path("/test/domains"),
+            )
+
+            mock_controller.stop.assert_called_once_with("test_domain")

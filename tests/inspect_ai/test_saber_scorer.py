@@ -1,0 +1,1655 @@
+"""
+Unit tests for SABER scorer module.
+
+Tests the client-side evaluation logic including:
+- Utility functions
+- Template rendering
+- Metrics calculation
+- Submission scoring (static and LLM)
+- Subtask scoring (static, tool_call, and LLM)
+"""
+
+import asyncio
+from datetime import datetime, timezone
+from typing import Any, Dict, List
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+import pytest
+from inspect_ai.model import ChatMessage, ChatMessageAssistant, ChatMessageUser, ModelOutput
+from inspect_ai.scorer import Score, SampleScore
+from inspect_ai.solver import TaskState
+from inspect_ai.util import Store
+from jinja2 import TemplateError
+
+from saber.inspect_ai.saber_scorer import (
+    EpisodeContextForTemplate,
+    StepContextForTemplate,
+    TemplateStringLoader,
+    _score_all_subtasks,
+    _score_submission,
+    _score_submission_llm,
+    _score_submission_static,
+    _score_subtask_llm,
+    _score_subtask_skip,
+    _score_subtask_static,
+    _score_subtask_tool_call,
+    clean_dict,
+    per_task_submission_scores,
+    per_task_subtask_scores,
+    saber_score,
+    saber_scorer,
+    submission_score,
+    subtask_score,
+    subtask_score_metrics,
+)
+from saber.models.constants import MetadataKeys, StepEvaluationStrategy, SubmissionEvaluationStrategy
+from saber.models.rest.evaluation import (
+    EpisodeStepData,
+    EpisodeStepsResponse,
+    EpisodeSubmissionResponse,
+    StepEvaluation,
+    SubmissionEvaluationCriteriaResponse,
+    SubtaskEvaluationCriteriaResponse,
+    TaskEvaluationContext,
+)
+
+
+# ============================================================================
+# Test Fixtures
+# ============================================================================
+
+
+@pytest.fixture
+def task_context():
+    """Create a sample TaskEvaluationContext for tests."""
+    return TaskEvaluationContext(
+        task_id="task1",
+        title="Test Task",
+        description="Test task description",
+        domain="test",
+    )
+
+
+@pytest.fixture
+def submission_criteria_static(task_context):
+    """Create SubmissionEvaluationCriteriaResponse with static strategy."""
+    return SubmissionEvaluationCriteriaResponse(
+        session_id="session1",
+        episode_id="ep1",
+        task_id="task1",
+        strategy=SubmissionEvaluationStrategy.STATIC,
+        criteria={"expected_answers": ["42"]},
+        scoring={"max_score": 1.0},
+        task_context=task_context,
+    )
+
+
+@pytest.fixture
+def submission_criteria_llm(task_context):
+    """Create SubmissionEvaluationCriteriaResponse with LLM strategy."""
+    return SubmissionEvaluationCriteriaResponse(
+        session_id="session1",
+        episode_id="ep1",
+        task_id="task1",
+        strategy=SubmissionEvaluationStrategy.LLM_JUDGE,
+        criteria={
+            "judge_system_template": "You are a judge",
+            "judge_user_template": "Is {{ submission }} correct?",
+            "model": "openai/gpt-4",
+            "golden_answer": "Paris",
+        },
+        scoring={"max_score": 1.0},
+        task_context=task_context,
+    )
+
+
+@pytest.fixture
+def subtask_criteria_static(task_context):
+    """Create SubtaskEvaluationCriteriaResponse with static strategy."""
+    return SubtaskEvaluationCriteriaResponse(
+        session_id="session1",
+        episode_id="ep1",
+        task_id="task1",
+        subtask_id="subtask1",
+        title="Test Subtask",
+        description="Test subtask description",
+        objective="Test objective",
+        strategy=StepEvaluationStrategy.STATIC,
+        criteria={"expected_outputs": ["config.yaml"]},
+        max_score=1.0,
+        weight=1.0,
+        task_context=task_context,
+    )
+
+
+@pytest.fixture
+def subtask_criteria_tool_call(task_context):
+    """Create SubtaskEvaluationCriteriaResponse with tool_call strategy."""
+    return SubtaskEvaluationCriteriaResponse(
+        session_id="session1",
+        episode_id="ep1",
+        task_id="task1",
+        subtask_id="subtask1",
+        title="Test Subtask",
+        description="Test subtask description",
+        objective="Test objective",
+        strategy=StepEvaluationStrategy.TOOL_CALL,
+        criteria={"expected_tools": ["python"]},
+        max_score=1.0,
+        weight=1.0,
+        task_context=task_context,
+    )
+
+
+@pytest.fixture
+def subtask_criteria_llm(task_context):
+    """Create SubtaskEvaluationCriteriaResponse with LLM strategy."""
+    return SubtaskEvaluationCriteriaResponse(
+        session_id="session1",
+        episode_id="ep1",
+        task_id="task1",
+        subtask_id="subtask1",
+        title="Test Subtask",
+        description="Test subtask description",
+        objective="Test objective",
+        strategy=StepEvaluationStrategy.LLM_JUDGE,
+        criteria={
+            "judge_system_template": "Evaluate steps",
+            "judge_user_template": "Check if objective completed: {{ subtask.objective }}",
+            "model": "openai/gpt-4",
+        },
+        max_score=1.0,
+        weight=1.0,
+        task_context=task_context,
+    )
+
+
+# ============================================================================
+# Test Utility Functions
+# ============================================================================
+
+
+class TestCleanDict:
+    """Test cases for clean_dict utility function."""
+
+    def test_clean_dict_removes_none_values(self):
+        """Test that None values are removed from dict."""
+        payload = {"key1": "value1", "key2": None, "key3": "value3"}
+        result = clean_dict(payload)
+        assert result == {"key1": "value1", "key3": "value3"}
+
+    def test_clean_dict_removes_false_values(self):
+        """Test that False values are removed from dict."""
+        payload = {"key1": True, "key2": False, "key3": "value"}
+        result = clean_dict(payload)
+        assert result == {"key1": True, "key3": "value"}
+
+    def test_clean_dict_nested_dicts(self):
+        """Test that nested dicts are cleaned recursively."""
+        payload = {"outer": {"inner1": "value", "inner2": None}, "key": False}
+        result = clean_dict(payload)
+        assert result == {"outer": {"inner1": "value"}}
+
+    def test_clean_dict_with_lists(self):
+        """Test that lists are cleaned recursively."""
+        payload = {"list": [1, None, 3, False, 5]}
+        result = clean_dict(payload)
+        assert result == {"list": [1, 3, 5]}
+
+    def test_clean_dict_non_dict_returns_unchanged(self):
+        """Test that non-dict values are returned unchanged."""
+        assert clean_dict("string") == "string"
+        assert clean_dict(42) == 42
+        assert clean_dict(True) is True
+
+
+# ============================================================================
+# Test Template Context Helpers
+# ============================================================================
+
+
+class TestEpisodeContextForTemplate:
+    """Test cases for EpisodeContextForTemplate."""
+
+    def test_episode_context_get_step_count(self):
+        """Test get_step_count returns correct count."""
+        steps = [{"step": 1}, {"step": 2}, {"step": 3}]
+        episode = EpisodeContextForTemplate(steps)
+        assert episode.get_step_count() == 3
+
+    def test_episode_context_empty_steps(self):
+        """Test episode context with empty steps."""
+        episode = EpisodeContextForTemplate([])
+        assert episode.get_step_count() == 0
+
+
+class TestStepContextForTemplate:
+    """Test cases for StepContextForTemplate."""
+
+    def test_step_context_basic_fields(self):
+        """Test step context creates correct fields."""
+        step_data = {
+            "step_number": 1,
+            "tool_name": "bash",
+            "tool_input": {"command": "ls"},
+            "tool_output": "file1.txt file2.txt",
+            "done": False,
+        }
+        step = StepContextForTemplate(step_data)
+        assert step.step_number == 1
+        assert step.done is False
+        assert step.action.tool_name == "bash"
+        assert step.action.parameters == {"command": "ls"}
+        assert step.response == "file1.txt file2.txt"
+
+    def test_step_context_with_optional_fields(self):
+        """Test step context with assistant_message and reasoning."""
+        step_data = {
+            "step_number": 2,
+            "tool_name": "python",
+            "tool_input": {"code": "print('hello')"},
+            "tool_output": "hello",
+            "assistant_message": "Running code",
+            "reasoning": "Need to test output",
+        }
+        step = StepContextForTemplate(step_data)
+        assert step.action.assistant_message == "Running code"
+        assert step.action.reasoning == "Need to test output"
+
+    def test_step_context_minimal_data(self):
+        """Test step context with minimal required data."""
+        step_data = {"step_number": 1, "tool_name": "test", "tool_input": {}, "tool_output": ""}
+        step = StepContextForTemplate(step_data)
+        assert step.step_number == 1
+        assert step.action.tool_name == "test"
+        assert step.response == ""
+
+
+# ============================================================================
+# Test Template Loader
+# ============================================================================
+
+
+class TestTemplateStringLoader:
+    """Test cases for TemplateStringLoader."""
+
+    def test_template_loader_get_existing_template(self):
+        """Test getting an existing template."""
+        templates = {"test_template": "Hello {{ name }}"}
+        loader = TemplateStringLoader(templates)
+        source, filename, uptodate = loader.get_source(None, "test_template")
+        assert source == "Hello {{ name }}"
+        assert filename is None
+        assert uptodate() is True
+
+    def test_template_loader_missing_template_raises_error(self):
+        """Test that missing template raises TemplateError."""
+        loader = TemplateStringLoader({})
+        with pytest.raises(TemplateError, match="Template not found: missing"):
+            loader.get_source(None, "missing")
+
+    def test_template_loader_multiple_templates(self):
+        """Test loader with multiple templates."""
+        templates = {"template1": "Content 1", "template2": "Content 2"}
+        loader = TemplateStringLoader(templates)
+        source1, _, _ = loader.get_source(None, "template1")
+        source2, _, _ = loader.get_source(None, "template2")
+        assert source1 == "Content 1"
+        assert source2 == "Content 2"
+
+
+# ============================================================================
+# Test Metrics
+# ============================================================================
+
+
+class TestSaberScoreMetric:
+    """Test cases for saber_score metric."""
+
+    def test_saber_score_single_sample(self):
+        """Test saber_score with a single sample."""
+        metric_fn = saber_score()
+        sample_scores = [
+            SampleScore(
+                sample_id="1",
+                score=Score(value=0.75, answer="test"),
+                sample_metadata={},
+            )
+        ]
+        result = metric_fn(sample_scores)
+        assert result == 0.75
+
+    def test_saber_score_multiple_samples(self):
+        """Test saber_score averages across multiple samples."""
+        metric_fn = saber_score()
+        sample_scores = [
+            SampleScore(sample_id="1", score=Score(value=0.5, answer=""), sample_metadata={}),
+            SampleScore(sample_id="2", score=Score(value=1.0, answer=""), sample_metadata={}),
+            SampleScore(sample_id="3", score=Score(value=0.75, answer=""), sample_metadata={}),
+        ]
+        result = metric_fn(sample_scores)
+        assert result == pytest.approx(0.75)
+
+    def test_saber_score_empty_list(self):
+        """Test saber_score returns 0.0 for empty list."""
+        metric_fn = saber_score()
+        result = metric_fn([])
+        assert result == 0.0
+
+
+class TestSubmissionScoreMetric:
+    """Test cases for submission_score metric."""
+
+    def test_submission_score_from_metadata(self):
+        """Test submission_score extracts from metadata."""
+        metric_fn = submission_score()
+        sample_scores = [
+            SampleScore(
+                sample_id="1",
+                score=Score(value=1.0, answer="", metadata={MetadataKeys.SUBMISSION_SCORE: 0.8}),
+                sample_metadata={},
+            )
+        ]
+        result = metric_fn(sample_scores)
+        assert result == 0.8
+
+    def test_submission_score_multiple_samples(self):
+        """Test submission_score averages across samples."""
+        metric_fn = submission_score()
+        sample_scores = [
+            SampleScore(
+                sample_id="1",
+                score=Score(value=1.0, answer="", metadata={MetadataKeys.SUBMISSION_SCORE: 1.0}),
+                sample_metadata={},
+            ),
+            SampleScore(
+                sample_id="2",
+                score=Score(value=0.5, answer="", metadata={MetadataKeys.SUBMISSION_SCORE: 0.5}),
+                sample_metadata={},
+            ),
+        ]
+        result = metric_fn(sample_scores)
+        assert result == 0.75
+
+    def test_submission_score_missing_metadata(self):
+        """Test submission_score with missing metadata defaults to 0.0."""
+        metric_fn = submission_score()
+        sample_scores = [
+            SampleScore(sample_id="1", score=Score(value=1.0, answer="", metadata={}), sample_metadata={})
+        ]
+        result = metric_fn(sample_scores)
+        assert result == 0.0
+
+    def test_submission_score_empty_list(self):
+        """Test submission_score returns 0.0 for empty list."""
+        metric_fn = submission_score()
+        result = metric_fn([])
+        assert result == 0.0
+
+
+class TestSubtaskScoreMetric:
+    """Test cases for subtask_score metric."""
+
+    def test_subtask_score_from_metadata(self):
+        """Test subtask_score extracts from metadata."""
+        metric_fn = subtask_score()
+        sample_scores = [
+            SampleScore(
+                sample_id="1",
+                score=Score(value=1.5, answer="", metadata={MetadataKeys.SUBTASK_SCORE: 0.5}),
+                sample_metadata={},
+            )
+        ]
+        result = metric_fn(sample_scores)
+        assert result == {"subtask_score": 0.5}
+
+    def test_subtask_score_averages_multiple(self):
+        """Test subtask_score averages across samples."""
+        metric_fn = subtask_score()
+        sample_scores = [
+            SampleScore(
+                sample_id="1",
+                score=Score(value=1.0, answer="", metadata={MetadataKeys.SUBTASK_SCORE: 0.6}),
+                sample_metadata={},
+            ),
+            SampleScore(
+                sample_id="2",
+                score=Score(value=1.0, answer="", metadata={MetadataKeys.SUBTASK_SCORE: 0.4}),
+                sample_metadata={},
+            ),
+        ]
+        result = metric_fn(sample_scores)
+        assert result == {"subtask_score": 0.5}
+
+    def test_subtask_score_missing_returns_empty_dict(self):
+        """Test subtask_score returns empty dict when not present."""
+        metric_fn = subtask_score()
+        sample_scores = [
+            SampleScore(sample_id="1", score=Score(value=1.0, answer="", metadata={}), sample_metadata={})
+        ]
+        result = metric_fn(sample_scores)
+        assert result == {}
+
+    def test_subtask_score_empty_list_returns_empty_dict(self):
+        """Test subtask_score returns empty dict for empty list."""
+        metric_fn = subtask_score()
+        result = metric_fn([])
+        assert result == {}
+
+
+class TestPerTaskSubmissionScores:
+    """Test cases for per_task_submission_scores metric."""
+
+    def test_per_task_submission_scores_single_task(self):
+        """Test per-task submission scores for single task."""
+        metric_fn = per_task_submission_scores()
+        sample_scores = [
+            SampleScore(
+                sample_id="1",
+                score=Score(value=1.0, answer="", metadata={MetadataKeys.SUBMISSION_SCORE: 0.8}),
+                sample_metadata={MetadataKeys.TASK_ID: "task-1"},
+            )
+        ]
+        result = metric_fn(sample_scores)
+        assert result == {"task_1_submission_score": 0.8}
+
+    def test_per_task_submission_scores_multiple_tasks(self):
+        """Test per-task submission scores for multiple tasks."""
+        metric_fn = per_task_submission_scores()
+        sample_scores = [
+            SampleScore(
+                sample_id="1",
+                score=Score(value=1.0, answer="", metadata={MetadataKeys.SUBMISSION_SCORE: 0.8}),
+                sample_metadata={MetadataKeys.TASK_ID: "task-1"},
+            ),
+            SampleScore(
+                sample_id="2",
+                score=Score(value=0.5, answer="", metadata={MetadataKeys.SUBMISSION_SCORE: 0.5}),
+                sample_metadata={MetadataKeys.TASK_ID: "task-2"},
+            ),
+        ]
+        result = metric_fn(sample_scores)
+        assert result == {"task_1_submission_score": 0.8, "task_2_submission_score": 0.5}
+
+    def test_per_task_submission_scores_averages_same_task(self):
+        """Test per-task submission scores averages samples from same task."""
+        metric_fn = per_task_submission_scores()
+        sample_scores = [
+            SampleScore(
+                sample_id="1",
+                score=Score(value=1.0, answer="", metadata={MetadataKeys.SUBMISSION_SCORE: 1.0}),
+                sample_metadata={MetadataKeys.TASK_ID: "task-1"},
+            ),
+            SampleScore(
+                sample_id="2",
+                score=Score(value=0.5, answer="", metadata={MetadataKeys.SUBMISSION_SCORE: 0.5}),
+                sample_metadata={MetadataKeys.TASK_ID: "task-1"},
+            ),
+        ]
+        result = metric_fn(sample_scores)
+        assert result == {"task_1_submission_score": 0.75}
+
+    def test_per_task_submission_scores_sanitizes_task_ids(self):
+        """Test that task IDs with hyphens and spaces are sanitized."""
+        metric_fn = per_task_submission_scores()
+        sample_scores = [
+            SampleScore(
+                sample_id="1",
+                score=Score(value=1.0, answer="", metadata={MetadataKeys.SUBMISSION_SCORE: 0.9}),
+                sample_metadata={MetadataKeys.TASK_ID: "my-task with-spaces"},
+            )
+        ]
+        result = metric_fn(sample_scores)
+        assert result == {"my_task_with_spaces_submission_score": 0.9}
+
+
+class TestPerTaskSubtaskScores:
+    """Test cases for per_task_subtask_scores metric."""
+
+    def test_per_task_subtask_scores_single_task(self):
+        """Test per-task subtask scores for single task."""
+        metric_fn = per_task_subtask_scores()
+        sample_scores = [
+            SampleScore(
+                sample_id="1",
+                score=Score(value=1.5, answer="", metadata={MetadataKeys.SUBTASK_SCORE: 0.5}),
+                sample_metadata={MetadataKeys.TASK_ID: "task-1"},
+            )
+        ]
+        result = metric_fn(sample_scores)
+        assert result == {"task_1_subtask_score": 0.5}
+
+    def test_per_task_subtask_scores_skips_missing(self):
+        """Test per-task subtask scores skips samples without subtask scores."""
+        metric_fn = per_task_subtask_scores()
+        sample_scores = [
+            SampleScore(
+                sample_id="1",
+                score=Score(value=1.0, answer="", metadata={MetadataKeys.SUBMISSION_SCORE: 1.0}),
+                sample_metadata={MetadataKeys.TASK_ID: "task-1"},
+            )
+        ]
+        result = metric_fn(sample_scores)
+        assert result == {}
+
+    def test_per_task_subtask_scores_multiple_tasks(self):
+        """Test per-task subtask scores for multiple tasks."""
+        metric_fn = per_task_subtask_scores()
+        sample_scores = [
+            SampleScore(
+                sample_id="1",
+                score=Score(value=1.5, answer="", metadata={MetadataKeys.SUBTASK_SCORE: 0.6}),
+                sample_metadata={MetadataKeys.TASK_ID: "task-1"},
+            ),
+            SampleScore(
+                sample_id="2",
+                score=Score(value=1.3, answer="", metadata={MetadataKeys.SUBTASK_SCORE: 0.3}),
+                sample_metadata={MetadataKeys.TASK_ID: "task-2"},
+            ),
+        ]
+        result = metric_fn(sample_scores)
+        assert result == {"task_1_subtask_score": 0.6, "task_2_subtask_score": 0.3}
+
+
+class TestSubtaskScoreMetrics:
+    """Test cases for subtask_score_metrics metric."""
+
+    def test_subtask_score_metrics_single_subtask(self):
+        """Test subtask score metrics for single subtask."""
+        metric_fn = subtask_score_metrics()
+        sample_scores = [
+            SampleScore(
+                sample_id="1",
+                score=Score(value=1.0, answer="", metadata={MetadataKeys.SUBTASK_SCORES: {"subtask-1": 0.8}}),
+                sample_metadata={MetadataKeys.TASK_ID: "task-1"},
+            )
+        ]
+        result = metric_fn(sample_scores)
+        assert result == {"task_1_subtask_1_score": 0.8}
+
+    def test_subtask_score_metrics_multiple_subtasks(self):
+        """Test subtask score metrics for multiple subtasks."""
+        metric_fn = subtask_score_metrics()
+        sample_scores = [
+            SampleScore(
+                sample_id="1",
+                score=Score(
+                    value=1.5,
+                    answer="",
+                    metadata={MetadataKeys.SUBTASK_SCORES: {"subtask-1": 0.8, "subtask-2": 0.7}},
+                ),
+                sample_metadata={MetadataKeys.TASK_ID: "task-1"},
+            )
+        ]
+        result = metric_fn(sample_scores)
+        assert result == {"task_1_subtask_1_score": 0.8, "task_1_subtask_2_score": 0.7}
+
+    def test_subtask_score_metrics_averages_across_samples(self):
+        """Test subtask score metrics averages across samples."""
+        metric_fn = subtask_score_metrics()
+        sample_scores = [
+            SampleScore(
+                sample_id="1",
+                score=Score(value=1.0, answer="", metadata={MetadataKeys.SUBTASK_SCORES: {"subtask-1": 1.0}}),
+                sample_metadata={MetadataKeys.TASK_ID: "task-1"},
+            ),
+            SampleScore(
+                sample_id="2",
+                score=Score(value=0.5, answer="", metadata={MetadataKeys.SUBTASK_SCORES: {"subtask-1": 0.5}}),
+                sample_metadata={MetadataKeys.TASK_ID: "task-1"},
+            ),
+        ]
+        result = metric_fn(sample_scores)
+        assert result == {"task_1_subtask_1_score": 0.75}
+
+    def test_subtask_score_metrics_skips_missing_metadata(self):
+        """Test subtask score metrics skips samples without subtask scores."""
+        metric_fn = subtask_score_metrics()
+        sample_scores = [
+            SampleScore(sample_id="1", score=Score(value=1.0, answer="", metadata={}), sample_metadata={})
+        ]
+        result = metric_fn(sample_scores)
+        assert result == {}
+
+
+# ============================================================================
+# Test Submission Scoring
+# ============================================================================
+
+
+class TestScoreSubmissionStatic:
+    """Test cases for _score_submission_static."""
+
+    @pytest.mark.asyncio
+    async def test_static_submission_exact_match(self, task_context):
+        """Test static submission scoring with exact match."""
+        submission_data = EpisodeSubmissionResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            submission="The answer is 42",
+            model="test",
+            tokens={},
+        )
+        criteria = SubmissionEvaluationCriteriaResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            strategy=SubmissionEvaluationStrategy.STATIC,
+            criteria={"expected_answers": ["42"]},
+            scoring={"max_score": 1.0},
+            task_context=task_context,
+        )
+
+        score, explanation = await _score_submission_static(submission_data, criteria)
+        assert score == 1.0
+        assert "42" in explanation
+
+    @pytest.mark.asyncio
+    async def test_static_submission_no_match(self, task_context):
+        """Test static submission scoring with no match."""
+        submission_data = EpisodeSubmissionResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            submission="The answer is 99",
+            model="test",
+            tokens={},
+        )
+        criteria = SubmissionEvaluationCriteriaResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            strategy=SubmissionEvaluationStrategy.STATIC,
+            criteria={"expected_answers": ["42"]},
+            scoring={"max_score": 1.0},
+            task_context=task_context,
+        )
+
+        score, explanation = await _score_submission_static(submission_data, criteria)
+        assert score == 0.0
+        assert "Expected" in explanation
+
+    @pytest.mark.asyncio
+    async def test_static_submission_case_insensitive(self, task_context):
+        """Test static submission scoring is case-insensitive."""
+        submission_data = EpisodeSubmissionResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            submission="The answer is CORRECT",
+            model="test",
+            tokens={},
+        )
+        criteria = SubmissionEvaluationCriteriaResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            strategy=SubmissionEvaluationStrategy.STATIC,
+            criteria={"expected_answers": ["correct"]},
+            scoring={"max_score": 1.0},
+            task_context=task_context,
+        )
+
+        score, explanation = await _score_submission_static(submission_data, criteria)
+        assert score == 1.0
+
+    @pytest.mark.asyncio
+    async def test_static_submission_multiple_expected_answers(self, task_context):
+        """Test static submission with multiple expected answers."""
+        submission_data = EpisodeSubmissionResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            submission="blue",
+            model="test",
+            tokens={},
+        )
+        criteria = SubmissionEvaluationCriteriaResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            strategy=SubmissionEvaluationStrategy.STATIC,
+            criteria={"expected_answers": ["red", "blue", "green"]},
+            scoring={"max_score": 1.0},
+            task_context=task_context,
+        )
+
+        score, explanation = await _score_submission_static(submission_data, criteria)
+        assert score == 1.0
+
+    @pytest.mark.asyncio
+    async def test_static_submission_string_to_list_conversion(self, task_context):
+        """Test static submission converts string expected_answers to list."""
+        submission_data = EpisodeSubmissionResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            submission="answer",
+            model="test",
+            tokens={},
+        )
+        criteria = SubmissionEvaluationCriteriaResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            strategy=SubmissionEvaluationStrategy.STATIC,
+            criteria={"expected_answers": "answer"},  # String instead of list
+            scoring={"max_score": 1.0},
+            task_context=task_context,
+        )
+
+        score, explanation = await _score_submission_static(submission_data, criteria)
+        assert score == 1.0
+
+
+class TestScoreSubmissionLLM:
+    """Test cases for _score_submission_llm."""
+
+    @pytest.mark.asyncio
+    async def test_llm_submission_correct_response(self, task_context):
+        """Test LLM submission scoring with CORRECT response."""
+        submission_data = EpisodeSubmissionResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            submission="Paris",
+            model="test",
+            tokens={},
+        )
+        criteria = SubmissionEvaluationCriteriaResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            strategy=SubmissionEvaluationStrategy.LLM_JUDGE,
+            criteria={
+                "judge_system_template": "You are a judge",
+                "judge_user_template": "Is {{ submission }} correct?",
+                "model": "openai/gpt-4",
+                "golden_answer": "Paris",
+            },
+            scoring={"max_score": 1.0},
+            task_context=task_context,
+        )
+
+        # Mock state and model
+        state = Mock(spec=TaskState)
+        state.messages = []
+        mock_output = Mock(spec=ModelOutput)
+        mock_output.completion = "CORRECT"
+        state.output = mock_output
+
+        # Mock get_model
+        mock_model = AsyncMock()
+        mock_model.generate = AsyncMock(return_value=mock_output)
+
+        with patch("saber.inspect_ai.saber_scorer.get_model", return_value=mock_model):
+            score, explanation = await _score_submission_llm(submission_data, criteria, Mock(), state)
+
+        assert score == 1.0
+        assert "Paris" in explanation
+        assert mock_model.generate.called
+
+    @pytest.mark.asyncio
+    async def test_llm_submission_incorrect_response(self, task_context):
+        """Test LLM submission scoring with INCORRECT response."""
+        submission_data = EpisodeSubmissionResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            submission="London",
+            model="test",
+            tokens={},
+        )
+        criteria = SubmissionEvaluationCriteriaResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            strategy=SubmissionEvaluationStrategy.LLM_JUDGE,
+            criteria={
+                "judge_system_template": "You are a judge",
+                "judge_user_template": "Is {{ submission }} correct?",
+                "model": "openai/gpt-4",
+                "golden_answer": "Paris",
+            },
+            scoring={"max_score": 1.0},
+            task_context=task_context,
+        )
+
+        state = Mock(spec=TaskState)
+        state.messages = []
+        mock_output = Mock(spec=ModelOutput)
+        mock_output.completion = "INCORRECT"
+        state.output = mock_output
+
+        mock_model = AsyncMock()
+        mock_model.generate = AsyncMock(return_value=mock_output)
+
+        with patch("saber.inspect_ai.saber_scorer.get_model", return_value=mock_model):
+            score, explanation = await _score_submission_llm(submission_data, criteria, Mock(), state)
+
+        assert score == 0.0
+        assert "0.0" in explanation
+
+    @pytest.mark.asyncio
+    async def test_llm_submission_unclear_response(self, task_context):
+        """Test LLM submission scoring with unclear response defaults to 0.0."""
+        submission_data = EpisodeSubmissionResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            submission="Maybe",
+            model="test",
+            tokens={},
+        )
+        criteria = SubmissionEvaluationCriteriaResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            strategy=SubmissionEvaluationStrategy.LLM_JUDGE,
+            criteria={
+                "judge_system_template": "You are a judge",
+                "judge_user_template": "Evaluate {{ submission }}",
+                "model": "openai/gpt-4",
+            },
+            scoring={"max_score": 1.0},
+            task_context=task_context,
+        )
+
+        state = Mock(spec=TaskState)
+        state.messages = []
+        mock_output = Mock(spec=ModelOutput)
+        mock_output.completion = "I'm not sure about this"
+        state.output = mock_output
+
+        mock_model = AsyncMock()
+        mock_model.generate = AsyncMock(return_value=mock_output)
+
+        with patch("saber.inspect_ai.saber_scorer.get_model", return_value=mock_model):
+            score, explanation = await _score_submission_llm(submission_data, criteria, Mock(), state)
+
+        assert score == 0.0
+        assert "unclear" in explanation
+
+    @pytest.mark.asyncio
+    async def test_llm_submission_missing_templates_raises_error(self, task_context):
+        """Test LLM submission raises error when templates are missing."""
+        submission_data = EpisodeSubmissionResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            submission="test",
+            model="test",
+            tokens={},
+        )
+        criteria = SubmissionEvaluationCriteriaResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            strategy=SubmissionEvaluationStrategy.LLM_JUDGE,
+            criteria={"model": "openai/gpt-4"},  # Missing templates
+            scoring={"max_score": 1.0},
+            task_context=task_context,
+        )
+
+        state = Mock(spec=TaskState)
+        state.messages = []
+
+        with pytest.raises(RuntimeError, match="Missing required template"):
+            await _score_submission_llm(submission_data, criteria, Mock(), state)
+
+
+# ============================================================================
+# Test Subtask Scoring
+# ============================================================================
+
+
+class TestScoreSubtaskSkip:
+    """Test cases for _score_subtask_skip."""
+
+    @pytest.mark.asyncio
+    async def test_score_subtask_skip_returns_zero(self, task_context):
+        """Test that skip scoring returns 0.0 and empty list."""
+        steps_data = EpisodeStepsResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            steps=[],
+            total_steps=0,
+        )
+        criteria = SubtaskEvaluationCriteriaResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            subtask_id="subtask1",
+            title="Test",
+            description="Test subtask",
+            objective="Test objective",
+            strategy="",  # No strategy
+            criteria={},
+            max_score=1.0,
+            weight=1.0,
+            task_context=task_context,
+        )
+
+        score, evaluations = await _score_subtask_skip(steps_data, criteria)
+        assert score == 0.0
+        assert evaluations == []
+
+
+class TestScoreSubtaskStatic:
+    """Test cases for _score_subtask_static."""
+
+    @pytest.mark.asyncio
+    async def test_static_subtask_finds_match_in_output(self, task_context):
+        """Test static subtask scoring finds expected output."""
+        steps_data = EpisodeStepsResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            steps=[
+                EpisodeStepData(
+                    step_number=1,
+                    tool_name="bash",
+                    tool_input={"command": "ls"},
+                    tool_output="file1.txt\nfile2.txt\nconfig.yaml",
+                    timestamp=datetime.now(timezone.utc),
+                )
+            ],
+            total_steps=1,
+        )
+        criteria = SubtaskEvaluationCriteriaResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            subtask_id="subtask1",
+            title="Find config",
+            description="Locate config file",
+            objective="Find config.yaml",
+            strategy=StepEvaluationStrategy.STATIC,
+            criteria={"expected_outputs": ["config.yaml"]},
+            max_score=1.0,
+            weight=1.0,
+            task_context=task_context,
+        )
+
+        score, evaluations = await _score_subtask_static(steps_data, criteria)
+        assert score == 1.0
+        # Note: Current implementation breaks before appending the matching step
+        # so evaluations list is empty when match is found
+        assert len(evaluations) == 0
+
+    @pytest.mark.asyncio
+    async def test_static_subtask_no_match(self, task_context):
+        """Test static subtask scoring with no match."""
+        steps_data = EpisodeStepsResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            steps=[
+                EpisodeStepData(
+                    step_number=1,
+                    tool_name="bash",
+                    tool_input={},
+                    tool_output="nothing here",
+                    timestamp=datetime.now(timezone.utc),
+                )
+            ],
+            total_steps=1,
+        )
+        criteria = SubtaskEvaluationCriteriaResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            subtask_id="subtask1",
+            title="Test",
+            description="Test",
+            objective="Test",
+            strategy=StepEvaluationStrategy.STATIC,
+            criteria={"expected_outputs": ["config.yaml"]},
+            max_score=1.0,
+            weight=1.0,
+            task_context=task_context,
+        )
+
+        score, evaluations = await _score_subtask_static(steps_data, criteria)
+        assert score == 0.0
+        assert all(not e.completed for e in evaluations)
+
+    @pytest.mark.asyncio
+    async def test_static_subtask_multiple_expected_outputs(self, task_context):
+        """Test static subtask with multiple expected outputs."""
+        steps_data = EpisodeStepsResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            steps=[
+                EpisodeStepData(
+                    step_number=1,
+                    tool_name="bash",
+                    tool_input={},
+                    tool_output="found secret.key",
+                    timestamp=datetime.now(timezone.utc),
+                )
+            ],
+            total_steps=1,
+        )
+        criteria = SubtaskEvaluationCriteriaResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            subtask_id="subtask1",
+            title="Test",
+            description="Test",
+            objective="Test",
+            strategy=StepEvaluationStrategy.STATIC,
+            criteria={"expected_outputs": ["config.yaml", "secret.key", "data.json"]},
+            max_score=1.0,
+            weight=1.0,
+            task_context=task_context,
+        )
+
+        score, evaluations = await _score_subtask_static(steps_data, criteria)
+        assert score == 1.0
+
+    @pytest.mark.asyncio
+    async def test_static_subtask_empty_expected_outputs(self, task_context):
+        """Test static subtask with empty expected_outputs returns 0."""
+        steps_data = EpisodeStepsResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            steps=[],
+            total_steps=0,
+        )
+        criteria = SubtaskEvaluationCriteriaResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            subtask_id="subtask1",
+            title="Test",
+            description="Test",
+            objective="Test",
+            strategy=StepEvaluationStrategy.STATIC,
+            criteria={"expected_outputs": []},
+            max_score=1.0,
+            weight=1.0,
+            task_context=task_context,
+        )
+
+        score, evaluations = await _score_subtask_static(steps_data, criteria)
+        assert score == 0.0
+        assert evaluations == []
+
+
+class TestScoreSubtaskToolCall:
+    """Test cases for _score_subtask_tool_call."""
+
+    @pytest.mark.asyncio
+    async def test_tool_call_subtask_finds_expected_tool(self, task_context):
+        """Test tool call subtask scoring finds expected tool."""
+        steps_data = EpisodeStepsResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            steps=[
+                EpisodeStepData(
+                    step_number=1,
+                    tool_name="bash",
+                    tool_input={"command": "ls"},
+                    tool_output="files",
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                EpisodeStepData(
+                    step_number=2,
+                    tool_name="python",
+                    tool_input={"code": "print('hi')"},
+                    tool_output="hi",
+                    timestamp=datetime.now(timezone.utc),
+                ),
+            ],
+            total_steps=2,
+        )
+        criteria = SubtaskEvaluationCriteriaResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            subtask_id="subtask1",
+            title="Use Python",
+            description="Execute Python code",
+            objective="Call python tool",
+            strategy=StepEvaluationStrategy.TOOL_CALL,
+            criteria={"expected_tools": ["python"]},
+            max_score=1.0,
+            weight=1.0,
+            task_context=task_context,
+        )
+
+        score, evaluations = await _score_subtask_tool_call(steps_data, criteria)
+        assert score == 1.0
+        assert len(evaluations) == 2
+        assert evaluations[1].completed is True
+
+    @pytest.mark.asyncio
+    async def test_tool_call_subtask_no_match(self, task_context):
+        """Test tool call subtask with no matching tool."""
+        steps_data = EpisodeStepsResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            steps=[
+                EpisodeStepData(
+                    step_number=1,
+                    tool_name="bash",
+                    tool_input={},
+                    tool_output="",
+                    timestamp=datetime.now(timezone.utc),
+                )
+            ],
+            total_steps=1,
+        )
+        criteria = SubtaskEvaluationCriteriaResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            subtask_id="subtask1",
+            title="Test",
+            description="Test",
+            objective="Test",
+            strategy=StepEvaluationStrategy.TOOL_CALL,
+            criteria={"expected_tools": ["python"]},
+            max_score=1.0,
+            weight=1.0,
+            task_context=task_context,
+        )
+
+        score, evaluations = await _score_subtask_tool_call(steps_data, criteria)
+        assert score == 0.0
+        assert all(not e.completed for e in evaluations)
+
+    @pytest.mark.asyncio
+    async def test_tool_call_subtask_multiple_expected_tools(self, task_context):
+        """Test tool call subtask with multiple expected tools."""
+        steps_data = EpisodeStepsResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            steps=[
+                EpisodeStepData(
+                    step_number=1,
+                    tool_name="docker",
+                    tool_input={},
+                    tool_output="",
+                    timestamp=datetime.now(timezone.utc),
+                )
+            ],
+            total_steps=1,
+        )
+        criteria = SubtaskEvaluationCriteriaResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            subtask_id="subtask1",
+            title="Test",
+            description="Test",
+            objective="Test",
+            strategy=StepEvaluationStrategy.TOOL_CALL,
+            criteria={"expected_tools": ["docker", "kubectl", "helm"]},
+            max_score=1.0,
+            weight=1.0,
+            task_context=task_context,
+        )
+
+        score, evaluations = await _score_subtask_tool_call(steps_data, criteria)
+        assert score == 1.0
+
+    @pytest.mark.asyncio
+    async def test_tool_call_subtask_empty_expected_tools(self, task_context):
+        """Test tool call subtask with empty expected_tools returns 0."""
+        steps_data = EpisodeStepsResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            steps=[],
+            total_steps=0,
+        )
+        criteria = SubtaskEvaluationCriteriaResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            subtask_id="subtask1",
+            title="Test",
+            description="Test",
+            objective="Test",
+            strategy=StepEvaluationStrategy.TOOL_CALL,
+            criteria={"expected_tools": []},
+            max_score=1.0,
+            weight=1.0,
+            task_context=task_context,
+        )
+
+        score, evaluations = await _score_subtask_tool_call(steps_data, criteria)
+        assert score == 0.0
+        assert evaluations == []
+
+
+class TestScoreSubtaskLLM:
+    """Test cases for _score_subtask_llm."""
+
+    @pytest.mark.asyncio
+    async def test_llm_subtask_completed(self, task_context):
+        """Test LLM subtask scoring when subtask is completed."""
+        steps_data = EpisodeStepsResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            steps=[
+                EpisodeStepData(
+                    step_number=1,
+                    tool_name="bash",
+                    tool_input={},
+                    tool_output="success",
+                    timestamp=datetime.now(timezone.utc),
+                )
+            ],
+            total_steps=1,
+        )
+        criteria = SubtaskEvaluationCriteriaResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            subtask_id="subtask1",
+            title="Test Task",
+            description="Test Description",
+            objective="Test Objective",
+            strategy=StepEvaluationStrategy.LLM_JUDGE,
+            criteria={
+                "judge_system_template": "Evaluate steps",
+                "judge_user_template": "Check if objective completed: {{ subtask.objective }}",
+                "model": "openai/gpt-4",
+                "steps_per_message": 10,
+            },
+            max_score=1.0,
+            weight=1.0,
+            task_context=task_context,
+        )
+
+        task_context = Mock(description="Task description", domain="test")
+        state = Mock(spec=TaskState)
+        state.messages = []
+        mock_output = Mock(spec=ModelOutput)
+        mock_output.completion = "COMPLETED"
+        state.output = mock_output
+
+        mock_model = AsyncMock()
+        mock_model.generate = AsyncMock(return_value=mock_output)
+
+        with patch("saber.inspect_ai.saber_scorer.get_model", return_value=mock_model):
+            score, evaluations = await _score_subtask_llm(steps_data, criteria, task_context, Mock(), state)
+
+        assert score == 1.0
+        assert len(evaluations) == 1
+        assert all(e.completed for e in evaluations)
+
+    @pytest.mark.asyncio
+    async def test_llm_subtask_not_completed(self, task_context):
+        """Test LLM subtask scoring when subtask is not completed."""
+        steps_data = EpisodeStepsResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            steps=[
+                EpisodeStepData(
+                    step_number=1,
+                    tool_name="bash",
+                    tool_input={},
+                    tool_output="failed",
+                    timestamp=datetime.now(timezone.utc),
+                )
+            ],
+            total_steps=1,
+        )
+        criteria = SubtaskEvaluationCriteriaResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            subtask_id="subtask1",
+            title="Test",
+            description="Test",
+            objective="Test",
+            strategy=StepEvaluationStrategy.LLM_JUDGE,
+            criteria={
+                "judge_system_template": "Evaluate",
+                "judge_user_template": "Check {{ subtask.objective }}",
+                "model": "openai/gpt-4",
+            },
+            max_score=1.0,
+            weight=1.0,
+            task_context=task_context,
+        )
+
+        task_context = Mock(description="Task", domain="test")
+        state = Mock(spec=TaskState)
+        state.messages = []
+        mock_output = Mock(spec=ModelOutput)
+        mock_output.completion = "NO_COMPLETIONS"
+        state.output = mock_output
+
+        mock_model = AsyncMock()
+        mock_model.generate = AsyncMock(return_value=mock_output)
+
+        with patch("saber.inspect_ai.saber_scorer.get_model", return_value=mock_model):
+            score, evaluations = await _score_subtask_llm(steps_data, criteria, task_context, Mock(), state)
+
+        assert score == 0.0
+        assert all(not e.completed for e in evaluations)
+
+    @pytest.mark.asyncio
+    async def test_llm_subtask_missing_templates_raises_error(self, task_context):
+        """Test LLM subtask raises error when templates are missing."""
+        steps_data = EpisodeStepsResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            steps=[],
+            total_steps=0,
+        )
+        criteria = SubtaskEvaluationCriteriaResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            subtask_id="subtask1",
+            title="Test",
+            description="Test",
+            objective="Test",
+            strategy=StepEvaluationStrategy.LLM_JUDGE,
+            criteria={"model": "openai/gpt-4"},  # Missing templates
+            max_score=1.0,
+            weight=1.0,
+            task_context=task_context,
+        )
+
+        state = Mock(spec=TaskState)
+        state.messages = []
+
+        with pytest.raises(RuntimeError, match="Missing required template"):
+            await _score_subtask_llm(steps_data, criteria, Mock(), Mock(), state)
+
+
+# ============================================================================
+# Test Score Submission Dispatcher
+# ============================================================================
+
+
+class TestScoreSubmission:
+    """Test cases for _score_submission dispatcher."""
+
+    @pytest.mark.asyncio
+    async def test_score_submission_dispatches_to_static(self, task_context):
+        """Test _score_submission dispatches to static strategy."""
+        submission_data = EpisodeSubmissionResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            submission="42",
+            model="test",
+            tokens={},
+        )
+        criteria = SubmissionEvaluationCriteriaResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            strategy=SubmissionEvaluationStrategy.STATIC,
+            criteria={"expected_answers": ["42"]},
+            scoring={"max_score": 1.0},
+            task_context=task_context,
+        )
+
+        score, explanation = await _score_submission(submission_data, criteria, Mock(), Mock())
+        assert score == 1.0
+
+    @pytest.mark.asyncio
+    async def test_score_submission_dispatches_to_llm(self, task_context):
+        """Test _score_submission dispatches to LLM strategy."""
+        submission_data = EpisodeSubmissionResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            submission="Paris",
+            model="test",
+            tokens={},
+        )
+        criteria = SubmissionEvaluationCriteriaResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            strategy=SubmissionEvaluationStrategy.LLM_JUDGE,
+            criteria={
+                "judge_system_template": "Judge",
+                "judge_user_template": "{{ submission }}",
+                "model": "openai/gpt-4",
+            },
+            scoring={"max_score": 1.0},
+            task_context=task_context,
+        )
+
+        state = Mock(spec=TaskState)
+        state.messages = []
+        mock_output = Mock(spec=ModelOutput)
+        mock_output.completion = "CORRECT"
+        state.output = mock_output
+
+        mock_model = AsyncMock()
+        mock_model.generate = AsyncMock(return_value=mock_output)
+
+        with patch("saber.inspect_ai.saber_scorer.get_model", return_value=mock_model):
+            score, explanation = await _score_submission(submission_data, criteria, Mock(), state)
+
+        assert score == 1.0
+
+    @pytest.mark.asyncio
+    async def test_score_submission_unknown_strategy_raises_error(self, task_context):
+        """Test _score_submission raises error for unknown strategy."""
+        submission_data = EpisodeSubmissionResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            submission="test",
+            model="test",
+            tokens={},
+        )
+        criteria = SubmissionEvaluationCriteriaResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            strategy="UNKNOWN_STRATEGY",  # Invalid strategy
+            criteria={},
+            scoring={"max_score": 1.0},
+            task_context=task_context,
+        )
+
+        with pytest.raises(RuntimeError, match="Unknown submission strategy"):
+            await _score_submission(submission_data, criteria, Mock(), Mock())
+
+
+# ============================================================================
+# Test Score All Subtasks
+# ============================================================================
+
+
+class TestScoreAllSubtasks:
+    """Test cases for _score_all_subtasks."""
+
+    @pytest.mark.asyncio
+    async def test_score_all_subtasks_single_subtask(self, task_context):
+        """Test scoring all subtasks with single subtask."""
+        steps_data = EpisodeStepsResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            steps=[
+                EpisodeStepData(
+                    step_number=1,
+                    tool_name="bash",
+                    tool_input={},
+                    tool_output="config.yaml",
+                    timestamp=datetime.now(timezone.utc),
+                )
+            ],
+            total_steps=1,
+        )
+        criteria_list = [
+            SubtaskEvaluationCriteriaResponse(
+                session_id="session1",
+                episode_id="ep1",
+                task_id="task1",
+                subtask_id="subtask1",
+                title="Find config",
+                description="Locate config",
+                objective="Find config.yaml",
+                strategy=StepEvaluationStrategy.STATIC,
+                criteria={"expected_outputs": ["config.yaml"]},
+                max_score=1.0,
+                weight=1.0,
+                task_context=task_context,
+            )
+        ]
+
+        total_score, individual_scores, evaluations = await _score_all_subtasks(
+            steps_data, criteria_list, Mock(description="Test", domain="test"), Mock(), Mock()
+        )
+
+        assert total_score == 1.0
+        assert individual_scores == [1.0]
+        assert len(evaluations) == 1
+
+    @pytest.mark.asyncio
+    async def test_score_all_subtasks_multiple_subtasks(self, task_context):
+        """Test scoring all subtasks with multiple subtasks."""
+        steps_data = EpisodeStepsResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            steps=[
+                EpisodeStepData(
+                    step_number=1,
+                    tool_name="bash",
+                    tool_input={},
+                    tool_output="config.yaml",
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                EpisodeStepData(
+                    step_number=2,
+                    tool_name="python",
+                    tool_input={},
+                    tool_output="success",
+                    timestamp=datetime.now(timezone.utc),
+                ),
+            ],
+            total_steps=2,
+        )
+        criteria_list = [
+            SubtaskEvaluationCriteriaResponse(
+                session_id="session1",
+                episode_id="ep1",
+                task_id="task1",
+                subtask_id="subtask1",
+                title="Config",
+                description="Find config",
+                objective="Find config",
+                strategy=StepEvaluationStrategy.STATIC,
+                criteria={"expected_outputs": ["config.yaml"]},
+                max_score=1.0,
+                weight=1.0,
+                task_context=task_context,
+            ),
+            SubtaskEvaluationCriteriaResponse(
+                session_id="session1",
+                episode_id="ep1",
+                task_id="task1",
+                subtask_id="subtask2",
+                title="Python",
+                description="Use Python",
+                objective="Call Python",
+                strategy=StepEvaluationStrategy.TOOL_CALL,
+                criteria={"expected_tools": ["python"]},
+                max_score=1.0,
+                weight=1.0,
+                task_context=task_context,
+            ),
+        ]
+
+        total_score, individual_scores, evaluations = await _score_all_subtasks(
+            steps_data, criteria_list, Mock(description="Test", domain="test"), Mock(), Mock()
+        )
+
+        assert total_score == 2.0
+        assert individual_scores == [1.0, 1.0]
+        assert len(evaluations) == 2
+
+    @pytest.mark.asyncio
+    async def test_score_all_subtasks_skips_empty_strategy(self, task_context):
+        """Test scoring all subtasks skips subtasks without strategy."""
+        steps_data = EpisodeStepsResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            steps=[],
+            total_steps=0,
+        )
+        criteria_list = [
+            SubtaskEvaluationCriteriaResponse(
+                session_id="session1",
+                episode_id="ep1",
+                task_id="task1",
+                subtask_id="subtask1",
+                title="Info only",
+                description="Informational checkpoint",
+                objective="Info",
+                strategy="",  # Empty strategy
+                criteria={},
+                max_score=1.0,
+                weight=1.0,
+                task_context=task_context,
+            )
+        ]
+
+        total_score, individual_scores, evaluations = await _score_all_subtasks(
+            steps_data, criteria_list, Mock(description="Test"), Mock(), Mock()
+        )
+
+        assert total_score == 0.0
+        assert individual_scores == [0.0]
+        assert evaluations == [[]]
+
+    @pytest.mark.asyncio
+    async def test_score_all_subtasks_unknown_strategy_raises_error(self, task_context):
+        """Test scoring all subtasks raises error for unknown strategy."""
+        steps_data = EpisodeStepsResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            steps=[],
+            total_steps=0,
+        )
+        criteria_list = [
+            SubtaskEvaluationCriteriaResponse(
+                session_id="session1",
+                episode_id="ep1",
+                task_id="task1",
+                subtask_id="subtask1",
+                title="Test",
+                description="Test",
+                objective="Test",
+                strategy="UNKNOWN",  # Invalid strategy
+                criteria={},
+                max_score=1.0,
+                weight=1.0,
+                task_context=task_context,
+            )
+        ]
+
+        with pytest.raises(RuntimeError, match="Unknown subtask strategy"):
+            await _score_all_subtasks(
+                steps_data, criteria_list, Mock(description="Test"), Mock(), Mock()
+            )
