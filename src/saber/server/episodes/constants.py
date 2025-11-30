@@ -17,6 +17,7 @@ class EpisodeTerminationReason(str, Enum):
     # Termination reasons
     TERMINATED = "terminated"
     SESSION_TERMINATED = "session_terminated"
+    INTERRUPTED = "interrupted"
     TIMEOUT = "timeout"
     MAX_STEPS_REACHED = "max_steps_reached"
     ERROR = "error"

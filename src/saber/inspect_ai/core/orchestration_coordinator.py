@@ -18,6 +18,7 @@ from threading import Lock
 from typing import Any, Optional
 
 from ...logging_config import LogCategory, get_saber_logger
+from ..constants import SandboxTimeouts
 
 logger = get_saber_logger(LogCategory.HARNESS, __name__)
 
@@ -142,7 +143,7 @@ class OrchestrationCoordinator:
         sample_id: str,
         depends_on_role: str,
         order: int,
-        timeout: float = 60.0,
+        timeout: float = SandboxTimeouts.ORCHESTRATION_REGISTRATION_SECONDS,
     ) -> bool:
         """Register a dependent sample that waits for another sample.
 
@@ -214,7 +215,7 @@ class OrchestrationCoordinator:
         role: str,
         session_manager: Any,
         session_id: str,
-        timeout: float = 300.0,
+        timeout: float = SandboxTimeouts.ORCHESTRATION_DEPENDENCY_WAIT_SECONDS,
     ) -> str:
         """Wait for dependency to be ready and return its episode ID.
 
@@ -425,7 +426,7 @@ class OrchestrationCoordinator:
         orchestration_id: str,
         role: str,
         score: float,
-        timeout: float = 300.0,
+        timeout: float = SandboxTimeouts.ORCHESTRATION_SCORE_SYNC_SECONDS,
     ) -> None:
         """Wait for all samples in orchestration to complete scoring.
 

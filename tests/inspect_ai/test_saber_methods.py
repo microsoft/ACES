@@ -391,12 +391,14 @@ class TestCleanupPartialState:
         )
         instance._episode_id = "episode_123"
         instance._session_id = "session_456"
-        instance._session_manager = AsyncMock()
-        instance._session_manager.end_episode_with_retry = AsyncMock(return_value=True)
+
+        # Mock the episode manager (new refactored code uses this)
+        instance._episode_manager = AsyncMock()
+        instance._episode_manager.cleanup_episode = AsyncMock()
 
         await instance._cleanup_partial_state(interrupted=False)
 
-        instance._session_manager.end_episode_with_retry.assert_called_once()
+        instance._episode_manager.cleanup_episode.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_cleanup_partial_state_with_episode_failure_logged(self):
@@ -407,8 +409,10 @@ class TestCleanupPartialState:
         )
         instance._episode_id = "episode_123"
         instance._session_id = "session_456"
-        instance._session_manager = AsyncMock()
-        instance._session_manager.end_episode_with_retry = AsyncMock(side_effect=Exception("End failed"))
 
-        # Should not raise
+        # Mock the episode manager to raise an exception
+        instance._episode_manager = AsyncMock()
+        instance._episode_manager.cleanup_episode = AsyncMock(side_effect=Exception("End failed"))
+
+        # Should not raise (wrapped in anyio.CancelScope)
         await instance._cleanup_partial_state(interrupted=True)

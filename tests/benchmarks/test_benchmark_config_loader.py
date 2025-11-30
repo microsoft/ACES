@@ -3298,4 +3298,3 @@ tasks:
                 loader.load_tasks_from_file(temp_path)
         finally:
             os.unlink(temp_path)
-

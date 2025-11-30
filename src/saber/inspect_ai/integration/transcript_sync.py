@@ -23,7 +23,8 @@ from inspect_ai.model import ChatMessage, ChatMessageAssistant, ChatMessageSyste
 from inspect_ai.solver import Generate, TaskState
 
 from ...logging_config import LogCategory, get_saber_logger
-from ...models.constants import MetadataKeys, TranscriptSyncConfig
+from ...models.constants import MetadataKeys
+from ...models.rest.config import TranscriptSyncConfig
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
 

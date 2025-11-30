@@ -21,15 +21,15 @@ package "Scenario 1: Single Episode Tasks" {
   rectangle "Task A\n(Single)" as TA #SkyBlue
   rectangle "Task B\n(Single)" as TB #SkyBlue
   rectangle "Task C\n(Single)" as TC #SkyBlue
-  
+
   TA -> S1 : holds
   TB -> S2 : holds
   TC -> S3 : holds
-  
+
   note right of TC
     Each single-episode task
     consumes **1 semaphore slot**
-    
+
     Result: 3 tasks = 3 slots
     Remaining: 5/8 slots free
   end note
@@ -40,20 +40,20 @@ package "Scenario 2: Orchestrated Task (2 Episodes)" {
     rectangle "Red Episode" as Red #Pink
     rectangle "Blue Episode" as Blue #Pink
   }
-  
+
   CTI -> S4 : holds ONE slot
-  
+
   note right of CTI
     Orchestrated task with 2 episodes
     consumes **1 semaphore slot**
     (not 2 slots)
-    
+
     Reasoning:
     - Both episodes are part of
       same logical unit
     - They execute sequentially
     - Prevents semaphore exhaustion
-    
+
     Result: 1 orchestration = 1 slot
   end note
 }
@@ -69,19 +69,19 @@ package "Scenario 3: Mixed Workload" {
     rectangle "Client Episode" as Client #Pink
     rectangle "Server Episode" as Server #Pink
   }
-  
+
   CB -> S5 : holds
   EX -> S6 : holds
   CTI2 -> S7 : holds ONE slot
   SD -> S8 : holds ONE slot
-  
+
   note bottom of SD
     **Workload Breakdown:**
     - 2 single tasks = 2 slots
     - 2 orchestrations (4 episodes total) = 2 slots
-    
+
     **Total:** 4 slots used, 4 free
-    
+
     Without this design:
     - Would consume 6 slots (2 + 2 + 2)
     - 33% less capacity

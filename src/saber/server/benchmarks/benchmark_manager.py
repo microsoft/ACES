@@ -21,7 +21,6 @@ from ...models import (
     OrchestrationStrategy,
     SingleEpisodeTask,
     SubTaskDefinition,
-    TaskInfo,
 )
 from ...models.constants import StepEvaluationStrategy, SubmissionEvaluationStrategy
 from ..base import Episode

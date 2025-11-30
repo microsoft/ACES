@@ -11,6 +11,9 @@ from pydantic import BaseModel, Discriminator, Field
 # Import concrete BenchmarkTask types for discriminated union
 from ..benchmark_task import OrchestratedTask, SingleEpisodeTask
 
+# Import core execution constants
+from .execution import CleanupReason, ClientIdentifiers, ExecutionMode, TaskInitMode
+
 
 class TaskInfo(BaseModel):
     """Information about a single task in the benchmark."""
@@ -110,4 +113,13 @@ class EvalSubmission(BaseModel):
 
 
 # Export all core models
-__all__ = ["TaskInfo", "PolicyInfo", "BenchmarkInfo", "EvalSubmission"]
+__all__ = [
+    "TaskInfo",
+    "PolicyInfo",
+    "BenchmarkInfo",
+    "EvalSubmission",
+    "ExecutionMode",
+    "TaskInitMode",
+    "ClientIdentifiers",
+    "CleanupReason",
+]

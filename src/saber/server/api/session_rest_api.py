@@ -16,6 +16,7 @@ from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 
 from ...logging_config import get_api_logger, log_operation_failure, log_operation_start, log_operation_success
 from ...models import (
+    APIEndpoints,
     BenchmarkInfo,
     EpisodeContext,
     EpisodeCreateResponse,
@@ -104,13 +105,13 @@ class SessionRestAPI:
     def _setup_routes(self) -> None:
         """Setup FastAPI routes for the session management API."""
 
-        @self.app.post("/api/v1/session", response_model=SessionCreateResponse)
+        @self.app.post(APIEndpoints.SESSION, response_model=SessionCreateResponse)
         async def create_session_endpoint(client_id: str) -> SessionCreateResponse:
             """Create a new client session."""
             session = await self.session_manager.create_session(client_id)
             return SessionCreateResponse(session_id=session.session_id, message="Session created successfully")
 
-        @self.app.delete("/api/v1/session/{session_id}", response_model=SessionTerminateResponse)
+        @self.app.delete(APIEndpoints.SESSION_BY_ID, response_model=SessionTerminateResponse)
         async def terminate_session_endpoint(session_id: str) -> SessionTerminateResponse:
             """Terminate a client session."""
             logger.warning(
@@ -125,7 +126,7 @@ class SessionRestAPI:
             await self.session_manager.terminate_session(session_id)
             return SessionTerminateResponse(message="Session terminated successfully")
 
-        @self.app.get("/api/v1/session/{session_id}/episodes/{episode_id}/task", response_model=EpisodeTaskResponse)
+        @self.app.get(APIEndpoints.EPISODE_TASK, response_model=EpisodeTaskResponse)
         async def get_episode_task_endpoint(session_id: str, episode_id: str) -> EpisodeTaskResponse:
             """Get task information for a specific episode."""
             task = await self.session_manager.get_current_task(session_id, episode_id)
@@ -163,7 +164,7 @@ class SessionRestAPI:
                 initial_context=task_dict.get("initial_context"),
             )
 
-        @self.app.get("/api/v1/session/{session_id}/episodes/{episode_id}/policy", response_model=PolicyResponse)
+        @self.app.get(APIEndpoints.EPISODE_POLICY, response_model=PolicyResponse)
         async def get_policy_endpoint(session_id: str, episode_id: str) -> PolicyResponse:
             """Get policy information for a specific episode."""
             episode = self.session_manager.get_episode_by_id(episode_id)
@@ -175,7 +176,7 @@ class SessionRestAPI:
 
             return PolicyResponse(prompt=policy_dict.get("prompt", ""), domain=policy_dict.get("domain"))
 
-        @self.app.post("/api/v1/session/{session_id}/episodes", response_model=EpisodeCreateResponse)
+        @self.app.post(APIEndpoints.EPISODES, response_model=EpisodeCreateResponse)
         async def create_episode_endpoint(session_id: str, task_id: str) -> EpisodeCreateResponse:
             """Create a new episode for a specific task with automatic dependency resolution."""
             try:
@@ -238,7 +239,7 @@ class SessionRestAPI:
                 )
                 raise HTTPException(status_code=500, detail=f"Failed to create episode: {exc}") from exc
 
-        @self.app.get("/api/v1/session/{session_id}/episodes/{episode_id}/status", response_model=EpisodeStatusResponse)
+        @self.app.get(APIEndpoints.EPISODE_STATUS, response_model=EpisodeStatusResponse)
         async def get_episode_status_endpoint(session_id: str, episode_id: str) -> EpisodeStatusResponse:
             """Get episode status for readiness polling."""
             log_operation_start(logger, "get_episode_status", session_id=session_id, episode_id=episode_id)
@@ -299,7 +300,7 @@ class SessionRestAPI:
                 log_operation_failure(logger, "get_episode_status", exc, session_id=session_id, episode_id=episode_id)
                 raise HTTPException(status_code=500, detail=f"Failed to get episode status: {exc}") from exc
 
-        @self.app.delete("/api/v1/session/{session_id}/episodes/{episode_id}", response_model=EpisodeEndResponse)
+        @self.app.delete(APIEndpoints.EPISODE_BY_ID, response_model=EpisodeEndResponse)
         async def end_episode_endpoint(
             session_id: str,
             episode_id: str,
@@ -361,7 +362,7 @@ class SessionRestAPI:
             )
             return response
 
-        @self.app.get("/api/v1/tasks", response_model=BenchmarkInfo)
+        @self.app.get(APIEndpoints.TASKS, response_model=BenchmarkInfo)
         async def get_tasks_endpoint() -> BenchmarkInfo:
             """
             Get task list with episode attempts for client orchestration.
@@ -404,7 +405,7 @@ class SessionRestAPI:
                 logger.exception("Failed to retrieve tasks", extra={"event": "tasks_retrieval_failed"})
                 raise HTTPException(status_code=500, detail=f"Failed to get tasks: {exc}") from exc
 
-        @self.app.get("/api/v1/health", response_model=HealthResponse)
+        @self.app.get(APIEndpoints.HEALTH, response_model=HealthResponse)
         async def health_check() -> HealthResponse:
             """Enhanced health check endpoint with manifest metadata and dependency validation."""
             health_data = self.session_manager.get_health_metadata()
@@ -424,7 +425,7 @@ class SessionRestAPI:
             return HealthResponse(**health_data)
 
         # Evaluation endpoints
-        @self.app.get("/api/v1/session/{session_id}/evaluations/{episode_id}", response_model=EvaluationResponse)
+        @self.app.get(APIEndpoints.EVALUATION_BY_EPISODE, response_model=EvaluationResponse)
         async def get_evaluation_endpoint(session_id: str, episode_id: str) -> EvaluationResponse:
             """Get evaluation result for specific episode."""
             try:
@@ -460,7 +461,7 @@ class SessionRestAPI:
             except SessionEvaluationError as e:
                 raise HTTPException(status_code=500, detail=str(e))
 
-        @self.app.get("/api/v1/session/{session_id}/evaluations", response_model=EvaluationListResponse)
+        @self.app.get(APIEndpoints.EVALUATIONS_LIST, response_model=EvaluationListResponse)
         async def list_evaluations_endpoint(session_id: str, task_id: Optional[str] = None) -> EvaluationListResponse:
             """List evaluation results for session."""
             try:
@@ -502,7 +503,7 @@ class SessionRestAPI:
             except SessionEvaluationError as e:
                 raise HTTPException(status_code=500, detail=str(e))
 
-        @self.app.get("/api/v1/session/{session_id}/evaluations/summary", response_model=EvaluationSummaryResponse)
+        @self.app.get(APIEndpoints.EVALUATIONS_SUMMARY, response_model=EvaluationSummaryResponse)
         async def get_evaluation_summary_endpoint(session_id: str) -> EvaluationSummaryResponse:
             """Get aggregate evaluation summary for session."""
             try:
@@ -521,7 +522,7 @@ class SessionRestAPI:
                 raise HTTPException(status_code=500, detail=str(e))
 
         # Evaluation file upload endpoint
-        @self.app.post("/api/v1/session/{session_id}/evaluations/upload", response_model=EvaluationFileUploadResponse)
+        @self.app.post(APIEndpoints.EVALUATIONS_UPLOAD, response_model=EvaluationFileUploadResponse)
         async def upload_evaluation_file_endpoint(
             session_id: str, file: UploadFile = File(...)
         ) -> EvaluationFileUploadResponse:
@@ -592,7 +593,7 @@ class SessionRestAPI:
         # NEW CLIENT-SIDE EVALUATION ENDPOINTS (Breaking Change Migration)
         # ============================================================================
 
-        @self.app.get("/api/v1/session/{session_id}/episodes/{episode_id}/submission")
+        @self.app.get(APIEndpoints.EPISODE_SUBMISSION)
         async def get_episode_submission_endpoint(session_id: str, episode_id: str) -> EpisodeSubmissionResponse:
             """Get episode submission data for client-side evaluation."""
             log_operation_start(logger, "get_episode_submission", session_id=session_id, episode_id=episode_id)
@@ -618,7 +619,7 @@ class SessionRestAPI:
                 )
                 raise HTTPException(status_code=500, detail=f"Failed to get episode submission: {exc}") from exc
 
-        @self.app.post("/api/v1/session/{session_id}/episodes/{episode_id}/submission")
+        @self.app.post(APIEndpoints.EPISODE_SUBMISSION)
         async def post_episode_submission_endpoint(
             session_id: str, episode_id: str, submission: EvalSubmission
         ) -> dict:
@@ -651,7 +652,7 @@ class SessionRestAPI:
                 )
                 raise HTTPException(status_code=500, detail=f"Failed to store episode submission: {exc}") from exc
 
-        @self.app.get("/api/v1/session/{session_id}/episodes/{episode_id}/steps")
+        @self.app.get(APIEndpoints.EPISODE_STEPS)
         async def get_episode_steps_endpoint(session_id: str, episode_id: str) -> EpisodeStepsResponse:
             """Get episode step history for client-side evaluation."""
             log_operation_start(logger, "get_episode_steps", session_id=session_id, episode_id=episode_id)
@@ -686,7 +687,7 @@ class SessionRestAPI:
                 log_operation_failure(logger, "get_episode_steps", exc, session_id=session_id, episode_id=episode_id)
                 raise HTTPException(status_code=500, detail=f"Failed to get episode steps: {exc}") from exc
 
-        @self.app.post("/api/v1/session/{session_id}/episodes/{episode_id}/transcript")
+        @self.app.post(APIEndpoints.EPISODE_TRANSCRIPT)
         async def push_transcript_endpoint(
             session_id: str, episode_id: str, transcript_request: TranscriptPushRequest
         ) -> TranscriptPushResponse:
@@ -793,7 +794,7 @@ class SessionRestAPI:
                 log_operation_failure(logger, "push_transcript", exc, session_id=session_id, episode_id=episode_id)
                 raise HTTPException(status_code=500, detail=f"Failed to push transcript: {exc}") from exc
 
-        @self.app.get("/api/v1/session/{session_id}/episodes/{episode_id}/transcript")
+        @self.app.get(APIEndpoints.EPISODE_TRANSCRIPT)
         async def get_transcript_endpoint(session_id: str, episode_id: str) -> TranscriptGetResponse:
             """Get conversation transcript for episode (for red team access)."""
             log_operation_start(logger, "get_transcript", session_id=session_id, episode_id=episode_id)
@@ -826,7 +827,7 @@ class SessionRestAPI:
                 log_operation_failure(logger, "get_transcript", exc, session_id=session_id, episode_id=episode_id)
                 raise HTTPException(status_code=500, detail=f"Failed to get transcript: {exc}") from exc
 
-        @self.app.post("/api/v1/session/{session_id}/episodes/{episode_id}/messages/inject")
+        @self.app.post(APIEndpoints.EPISODE_MESSAGES_INJECT)
         async def inject_message_endpoint(
             session_id: str, episode_id: str, inject_request: "MessageInjectRequest"
         ) -> "MessageInjectResponse":
@@ -891,7 +892,7 @@ class SessionRestAPI:
                 log_operation_failure(logger, "inject_message", exc, session_id=session_id, episode_id=episode_id)
                 raise HTTPException(status_code=500, detail=f"Failed to inject message: {exc}") from exc
 
-        @self.app.get("/api/v1/session/{session_id}/episodes/{episode_id}/messages/inject")
+        @self.app.get(APIEndpoints.EPISODE_MESSAGES_INJECT)
         async def get_pending_messages_endpoint(session_id: str, episode_id: str) -> "PendingMessagesResponse":
             """Retrieve and clear pending injected messages for the episode.
 
@@ -963,7 +964,7 @@ class SessionRestAPI:
                 log_operation_failure(logger, "get_pending_messages", exc, session_id=session_id, episode_id=episode_id)
                 raise HTTPException(status_code=500, detail=f"Failed to get pending messages: {exc}") from exc
 
-        @self.app.get("/api/v1/session/{session_id}/episodes/{episode_id}/submission-evaluation-criteria")
+        @self.app.get(APIEndpoints.EPISODE_SUBMISSION_EVALUATION_CRITERIA)
         async def get_submission_evaluation_criteria_endpoint(
             session_id: str, episode_id: str
         ) -> SubmissionEvaluationCriteriaResponse:
@@ -1036,7 +1037,7 @@ class SessionRestAPI:
                     status_code=500, detail=f"Failed to get submission evaluation criteria: {exc}"
                 ) from exc
 
-        @self.app.get("/api/v1/session/{session_id}/episodes/{episode_id}/subtask-evaluation-criteria")
+        @self.app.get(APIEndpoints.EPISODE_SUBTASK_EVALUATION_CRITERIA)
         async def get_subtask_evaluation_criteria_endpoint(
             session_id: str, episode_id: str
         ) -> List[SubtaskEvaluationCriteriaResponse]:
@@ -1131,7 +1132,7 @@ class SessionRestAPI:
                     status_code=500, detail=f"Failed to get subtask evaluation criteria: {exc}"
                 ) from exc
 
-        @self.app.get("/api/v1/templates/{template_path:path}")
+        @self.app.get(APIEndpoints.TEMPLATE_CONTENT)
         async def get_template_content_endpoint(template_path: str) -> TemplateContentResponse:
             """Get raw template content by path."""
             log_operation_start(logger, "get_template_content", template_path=template_path)
@@ -1160,7 +1161,7 @@ class SessionRestAPI:
                 log_operation_failure(logger, "get_template_content", exc, template_path=template_path)
                 raise HTTPException(status_code=500, detail=f"Failed to get template content: {exc}") from exc
 
-        @self.app.post("/api/v1/session/{session_id}/episodes/{episode_id}/evaluation")
+        @self.app.post(APIEndpoints.EPISODE_EVALUATION)
         async def submit_evaluation_endpoint(
             session_id: str, episode_id: str, request: EvaluationResultSubmission
         ) -> EvaluationResponse:

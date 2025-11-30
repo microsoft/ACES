@@ -38,6 +38,7 @@ from ...models.rest.evaluation import (
     SubmissionEvaluationCriteriaResponse,
     SubtaskEvaluationCriteriaResponse,
 )
+from ..constants import SandboxTimeouts
 
 logger = get_saber_logger(LogCategory.EVALUATION, __name__)
 
@@ -739,7 +740,7 @@ def saber_scorer() -> Scorer:
                         orchestration_id=orchestration_id,
                         role=role,
                         score=total_score,
-                        timeout=300.0,  # 5 minute timeout
+                        timeout=SandboxTimeouts.ORCHESTRATION_SCORE_SYNC_SECONDS,
                     )
 
                     logger.info(

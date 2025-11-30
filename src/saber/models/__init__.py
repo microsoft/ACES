@@ -36,11 +36,19 @@ from .constants import (
     MetadataKeys,
     StepEvaluationStrategy,
     SubmissionEvaluationStrategy,
-    TranscriptSyncConfig,
 )
 
-# Core domain models
-from .core import BenchmarkInfo, EvalSubmission, PolicyInfo, TaskInfo
+# Core domain models (includes execution constants)
+from .core import (
+    BenchmarkInfo,
+    CleanupReason,
+    ClientIdentifiers,
+    EvalSubmission,
+    ExecutionMode,
+    PolicyInfo,
+    TaskInfo,
+    TaskInitMode,
+)
 
 # HTTP headers
 from .headers import HTTPHeaders
@@ -63,11 +71,12 @@ from .mcp import (
     SessionContext,
 )
 
-# REST API models
+# REST API models (includes endpoints and config)
 from .rest import (
     ActionExecutionResponse,
     ActiveEpisodeInfo,
     ActiveEpisodesResponse,
+    APIEndpoints,
     EpisodeContext,
     EpisodeCreateResponse,
     EpisodeDetailResponse,
@@ -91,6 +100,7 @@ from .rest import (
     TranscriptGetResponse,
     TranscriptPushRequest,
     TranscriptPushResponse,
+    TranscriptSyncConfig,
 )
 
 __all__ = [
@@ -173,6 +183,11 @@ __all__ = [
     # Constants
     "MetadataKeys",
     "TranscriptSyncConfig",
+    "APIEndpoints",
+    "ExecutionMode",
+    "TaskInitMode",
+    "ClientIdentifiers",
+    "CleanupReason",
 ]
 
 # Rebuild models with forward references after all imports are complete

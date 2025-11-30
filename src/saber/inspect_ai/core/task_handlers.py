@@ -21,11 +21,12 @@ from saber.client.client_session import ClientSessionManager
 from saber.logging_config import LogCategory, get_saber_logger
 from saber.models import BenchmarkTask, OrchestratedTask, OrchestrationStrategy, SingleEpisodeTask
 
+from ..constants import SandboxTimeouts
+
 logger = get_saber_logger(LogCategory.AGENT, __name__)
 
 # Configuration constants
 CLEANUP_ERROR_THRESHOLD = 5  # Maximum cleanup errors before critical alert
-EPISODE_CREATE_TIMEOUT = 300  # Seconds to wait for episode creation (5 minutes)
 
 
 @dataclass
@@ -59,10 +60,42 @@ class BenchmarkTaskHandler(ABC):
     - Initialization: Create episodes and acquire resources
     - Cleanup: End episodes and release resources
 
-    Semaphore management follows current SABER semantics:
-    - Acquire during initialization (tracked in instance)
-    - Hold throughout episode execution
-    - Release during cleanup (guaranteed via instance tracking)
+    Semaphore Architecture:
+    -----------------------
+    SABER uses a class-level semaphore (_episode_semaphore in SABERSandboxEnvironment)
+    to limit concurrent episode creation across all samples. The semaphore lifecycle
+    is managed differently based on task type:
+
+    1. Single Episode Tasks (SingleEpisodeTaskHandler):
+       - Acquires semaphore during initialize()
+       - Holds semaphore throughout episode execution
+       - Releases semaphore in cleanup()
+       - Ensures: 1 semaphore slot = 1 episode
+
+    2. Orchestrated Tasks - Old Handler Pattern (OrchestratedTaskHandler):
+       - Acquires ONE semaphore slot for entire orchestration
+       - Creates multiple episodes (e.g., blue + red) sequentially
+       - Holds semaphore until all episodes cleaned up
+       - Releases semaphore in cleanup()
+       - Ensures: 1 semaphore slot = 1 orchestration (multiple episodes)
+
+    3. Orchestrated Tasks - New Multi-Sample Pattern (OrchestrationCoordinator):
+       - Root sample acquires semaphore before registration
+       - Coordinator stores semaphore reference in OrchestrationGroup
+       - All dependent samples share this semaphore slot
+       - Last sample to cleanup releases semaphore
+       - Ensures: 1 semaphore slot = 1 orchestration (across multiple samples)
+
+    Handler Pattern Responsibilities:
+    - Track semaphore acquisition state in instance (_semaphore_acquired)
+    - Store semaphore reference to prevent double-release (_acquired_semaphore_ref)
+    - Use async lock in cleanup() to prevent race conditions
+    - Detect leaks via __del__() destructor
+    - Clear state flag after release to prevent double-release on retry
+
+    CRITICAL: Callers MUST call cleanup() to release semaphore. The cleanup()
+    method is designed for best-effort execution and will log errors without
+    re-raising. Semaphore leaks are tracked via _cleanup_error_count counter.
     """
 
     def __init__(self) -> None:
@@ -191,13 +224,14 @@ class SingleEpisodeTaskHandler(BenchmarkTaskHandler):
             # Create episode with timeout
             try:
                 episode_response = await asyncio.wait_for(
-                    session_manager.create_episode(session_id, benchmark_task.task_id), timeout=EPISODE_CREATE_TIMEOUT
+                    session_manager.create_episode(session_id, benchmark_task.task_id),
+                    timeout=SandboxTimeouts.EPISODE_CREATE_SECONDS,
                 )
                 episode_id = episode_response.episode_id
             except asyncio.TimeoutError:
                 logger.error(
-                    f"Episode creation timed out after {EPISODE_CREATE_TIMEOUT}s",
-                    extra={"task_id": benchmark_task.task_id, "timeout": EPISODE_CREATE_TIMEOUT},
+                    f"Episode creation timed out after {SandboxTimeouts.EPISODE_CREATE_SECONDS}s",
+                    extra={"task_id": benchmark_task.task_id, "timeout": SandboxTimeouts.EPISODE_CREATE_SECONDS},
                 )
                 raise
             logger.debug(
@@ -441,16 +475,17 @@ class OrchestratedTaskHandler(BenchmarkTaskHandler):
             for sub_task in sorted(benchmark_task.sub_tasks, key=lambda x: x.order):
                 try:
                     episode_response = await asyncio.wait_for(
-                        session_manager.create_episode(session_id, sub_task.task_id), timeout=EPISODE_CREATE_TIMEOUT
+                        session_manager.create_episode(session_id, sub_task.task_id),
+                        timeout=SandboxTimeouts.EPISODE_CREATE_SECONDS,
                     )
                     episode_id = episode_response.episode_id
                 except asyncio.TimeoutError:
                     logger.error(
-                        f"Episode creation timed out after {EPISODE_CREATE_TIMEOUT}s for sub-task",
+                        f"Episode creation timed out after {SandboxTimeouts.EPISODE_CREATE_SECONDS}s for sub-task",
                         extra={
                             "task_id": sub_task.task_id,
                             "orchestration_id": benchmark_task.benchmark_task_id,
-                            "timeout": EPISODE_CREATE_TIMEOUT,
+                            "timeout": SandboxTimeouts.EPISODE_CREATE_SECONDS,
                         },
                     )
                     raise

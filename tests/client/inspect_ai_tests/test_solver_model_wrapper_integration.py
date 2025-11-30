@@ -17,7 +17,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 from inspect_ai.solver import TaskState
-from inspect_ai.model import ChatMessageUser, ModelOutput, ChatMessageAssistant
+from inspect_ai.model import ChatCompletionChoice, ChatMessageUser, ModelOutput, ChatMessageAssistant, Model
 
 from saber.inspect_ai.agents.solver_factory import create_saber_solver
 from saber.models.constants import MetadataKeys
@@ -120,6 +120,8 @@ async def test_solver_wraps_model_with_complete_context(
         # Execute solver
         mock_generate = AsyncMock()
         mock_task_state.metadata = mock_metadata
+        # Mock store.get() to return session_id from metadata
+        mock_task_state.store.get.return_value = "session_123"
         await solver(mock_task_state, mock_generate)
 
         # Verify wrapper was created

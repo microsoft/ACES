@@ -9,10 +9,12 @@ import pytest
 from unittest.mock import AsyncMock, Mock, patch, MagicMock
 from inspect_ai import Task
 from inspect_ai.model import (
+    ChatCompletionChoice,
     ChatMessage,
     ChatMessageAssistant,
     ChatMessageSystem,
     ChatMessageUser,
+    Model,
     ModelOutput,
 )
 from inspect_ai.solver import TaskState, Generate
@@ -94,7 +96,7 @@ async def test_solver_wraps_generate_and_pushes_transcript(
         mock_model = Mock(spec=Model)
         mock_model.generate = AsyncMock(return_value=ModelOutput(
             model="test-model",
-            choices=[Mock(message=ChatMessageAssistant(content="Agent response"))]
+            choices=[ChatCompletionChoice(message=ChatMessageAssistant(content="Agent response"))]
         ))
         mock_active_model.return_value = mock_model
         mock_get_model.return_value = mock_model

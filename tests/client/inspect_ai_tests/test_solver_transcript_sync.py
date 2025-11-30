@@ -20,7 +20,7 @@ from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, Mock, patch, call
 
 import pytest
-from inspect_ai.model import ChatMessageAssistant, ChatMessageUser, ChatMessageSystem
+from inspect_ai.model import ChatCompletionChoice, ChatMessageAssistant, ChatMessageUser, ChatMessageSystem, Model
 from inspect_ai.solver import Generate, TaskState
 
 from saber.inspect_ai.agents.solver_factory import create_saber_solver
@@ -138,6 +138,8 @@ async def test_solver_wraps_generate_with_saber_metadata(
         )
 
         # Execute solver
+        # Mock store.get() to return session_id from metadata
+        mock_state_with_saber_metadata.store.get.return_value = "session_test456"
         result = await solver(mock_state_with_saber_metadata, mock_generate_function)
 
         # Verify TranscriptSyncingModelWrapper was created with correct parameters

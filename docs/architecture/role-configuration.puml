@@ -15,7 +15,7 @@ package "Configuration Models" {
     +tools: List[str] | None
     +timeout: int | None
   }
-  
+
   class RoleBasedConfig {
     +roles: Dict[str, RoleAgentConfig]
     +defaults: RoleAgentConfig | None
@@ -23,7 +23,7 @@ package "Configuration Models" {
     +get_config_for_role(role: str): RoleAgentConfig
     +to_agent_assignments(): List[AgentAssignment]
   }
-  
+
   RoleBasedConfig *-- "0..*" RoleAgentConfig : roles
   RoleBasedConfig *-- "0..1" RoleAgentConfig : defaults
 }
@@ -39,18 +39,18 @@ package "Example 1: CTI-REALM Dual-Role Configuration" {
         agent: "cot"
         model: "claude-3-opus"
         attempts: 2
-    
+
     **defaults:**
       agent: "react"
       model: "gpt-4o-mini"
       attempts: 1
   }
-  
+
   note bottom of Config1
     **Usage:**
     inspect eval saber_task \\
       --roles roles.yaml
-    
+
     **Result:**
     - Red episodes use GPT-4 (3 attempts)
     - Blue episodes use Claude-3 (2 attempts)
@@ -68,13 +68,13 @@ package "Example 2: Override via CLI" {
         agent: "react"
         model: "gpt-4"
   }
-  
+
   object "CLI Override" as CLI {
     --model "gpt-4-turbo"
     --attacker_model "claude-3-opus"
     --attacker_attempts 5
   }
-  
+
   object "Merged Config" as Merged {
     **roles:**
       attacker:
@@ -86,10 +86,10 @@ package "Example 2: Override via CLI" {
         model: "gpt-4-turbo"  ← global override
         attempts: 1  ← default
   }
-  
+
   Base --> Merged : +
   CLI --> Merged : =
-  
+
   note bottom of Merged
     **Merge Priority:**
     1. Role-specific CLI args (highest)
@@ -101,23 +101,23 @@ package "Example 2: Override via CLI" {
 
 note as ConfigFlow
   **Configuration Loading Flow**
-  
+
   1. User loads configuration:
      RoleConfigLoader.load("roles.yaml")
-     
+
   2. Parse YAML/JSON and create RoleBasedConfig
      - Validate role names
      - Ensure roles or defaults exist
-     
+
   3. User creates dataset with overrides:
      saber_dataset(roles=config, red_model="override")
-     
+
   4. Merge overrides:
      - Parse override keys (role_field pattern)
      - Update role configs
-     
+
   5. Convert to AgentAssignment list
-     
+
   6. Return Dataset with role assignments
 end note
 

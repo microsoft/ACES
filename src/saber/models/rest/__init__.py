@@ -8,6 +8,43 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+# Import REST configuration and endpoints
+from .config import TranscriptSyncConfig
+from .endpoints import APIEndpoints
+
+__all__ = [
+    "APIEndpoints",
+    "TranscriptSyncConfig",
+    "StepResponse",
+    "SessionCreateResponse",
+    "SessionTerminateResponse",
+    "EpisodeContext",
+    "EpisodeTaskResponse",
+    "PolicyResponse",
+    "EpisodeCreateResponse",
+    "EpisodeStatusResponse",
+    "EpisodeListResponse",
+    "ActiveEpisodeInfo",
+    "ActiveEpisodesResponse",
+    "EpisodeDetailResponse",
+    "ActionExecutionResponse",
+    "TaskOrchestrationResponse",
+    "HealthResponse",
+    "SessionSummary",
+    "SessionListResponse",
+    "SessionStatsResponse",
+    "EpisodeEndResponse",
+    "SessionInfo",
+    "ToolCall",
+    "ChatMessage",
+    "TranscriptPushRequest",
+    "TranscriptPushResponse",
+    "TranscriptGetResponse",
+    "MessageInjectRequest",
+    "MessageInjectResponse",
+    "PendingMessagesResponse",
+]
+
 
 class StepResponse(BaseModel):
     """Response from server step execution."""

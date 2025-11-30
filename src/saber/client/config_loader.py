@@ -17,10 +17,7 @@ from typing import Any, Dict, Union
 
 import yaml
 
-from ..logging_config import (
-    LogCategory,
-    get_saber_logger,
-)
+from ..logging_config import LogCategory, get_saber_logger
 from .exceptions import InvalidRoleOverrideError, RoleConfigLoadError
 from .models import RoleAgentConfig, RoleBasedConfig
 

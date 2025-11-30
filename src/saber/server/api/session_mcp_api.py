@@ -21,8 +21,7 @@ from ...logging_config import get_api_logger, log_operation_failure, log_operati
 from ...models import EvalSubmission, HTTPHeaders, OrchestrationEnvironment, RequestHeaders
 from ...models.constants import MetadataKeys
 from ...models.mcp import MCPToolCallResponse, MCPToolListResponse, MCPToolSchema
-from ..base import Action, CommandResult
-from ..episodes.episode import Episode
+from ..base import Action, CommandResult, Episode
 from .mcp_tool_generator import MCPToolGenerator
 
 if TYPE_CHECKING:

@@ -30,6 +30,7 @@ from ...models.constants import MetadataKeys
 from ..agents.agent_resolver import resolve_agent_implementation
 from ..agents.role_config_processor import all_roles_have_models, process_role_configuration
 from ..agents.solver_factory import create_saber_solver
+from ..constants import SandboxTimeouts
 from ..server.domain_manager import get_active_domain, register_domain, unregister_domain_on_failure
 from ..server.health_check import wait_for_server_health
 from ..server.preflight import run_preflight_check
@@ -269,10 +270,9 @@ async def _start_and_load_tasks(
     controller: Optional[DomainController] = None
     context: Optional[DomainContext] = None
 
-    # Resolve agent implementation before starting domain
-    agent_factory = resolve_agent_implementation(domain_slug, domains_root, agent_name)
-
     try:
+        # Resolve agent implementation before starting domain
+        agent_factory = resolve_agent_implementation(domain_slug, domains_root, agent_name)
         # Check if domain already active in this process (reuse scenario)
         existing = get_active_domain(domain_slug)
         if existing:
@@ -394,7 +394,7 @@ async def _start_and_load_tasks(
         logger.info(f"SABER domain '{domain_slug}' is healthy, querying tasks")
 
         # Query REST API for benchmark info
-        rest_client = SABERRestClient(context.rest_url, request_timeout=60.0)
+        rest_client = SABERRestClient(context.rest_url, request_timeout=SandboxTimeouts.REST_API_SECONDS)
         benchmark_info: BenchmarkInfo = await rest_client.get_benchmark_info()
 
         logger.info(
