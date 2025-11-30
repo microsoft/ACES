@@ -27,7 +27,6 @@ from pydantic import BaseModel, ConfigDict, create_model
 from saber.client.client_session import ClientSessionManager
 from saber.client.models import SessionManagerConfig
 from saber.debug_logging import (
-    EpisodeDebugLogger,
     clear_episode_context,
     enable_debug_logging,
     log_episode_end_complete,
@@ -39,8 +38,17 @@ from saber.debug_logging import (
 )
 from saber.logging_config import LogCategory, get_saber_logger
 from saber.models import BenchmarkTask, MetadataKeys, OrchestratedTask, SingleEpisodeTask, TaskExecutionMode
+from saber.models.constants import (
+    APIEndpoints,
+    CleanupReason,
+    ClientIdentifiers,
+    EpisodeTerminationReason,
+    ExecutionMode,
+    TaskInitMode,
+)
 from saber.models.mcp import OrchestrationEnvironment
 
+from .constants import InspectStoreKeys
 from .core.task_handlers import get_benchmark_task_handler
 from .server.domain_manager import get_active_domain, remove_active_domain
 from .server.server import DomainContext, DomainController
@@ -252,7 +260,7 @@ class SABERSandboxEnvironment:
                     "domain": domain_slug,
                     "owner": entry.get("owner"),
                     "force": force,
-                    "reason": "manual_cleanup",
+                    "reason": CleanupReason.MANUAL_CLEANUP,
                 },
             )
             del cls._registry[domain_slug]
@@ -357,7 +365,7 @@ class SABERSandboxEnvironment:
                         extra={
                             "domain": domain_slug,
                             "task": task_name,
-                            "mode": "eval_retry_reuse",
+                            "mode": TaskInitMode.EVAL_RETRY_REUSE,
                         },
                     )
                     # Session already exists, just return
@@ -378,7 +386,7 @@ class SABERSandboxEnvironment:
                     extra={
                         "domain": domain_slug,
                         "task": task_name,
-                        "mode": "ownership_transfer",
+                        "mode": TaskInitMode.OWNERSHIP_TRANSFER,
                     },
                 )
 
@@ -531,21 +539,8 @@ class SABERSandboxEnvironment:
                 "These identifiers are required to start a SABER episode for this sample."
             )
 
-        # Debug logging to track sample initialization
-        debug_logger = EpisodeDebugLogger("sample_init")
-        debug_logger.info(
-            "sample_init called",
-            task_name=task_name,
-            execution_mode=metadata.get(MetadataKeys.EXECUTION_MODE),
-            sample_id=metadata.get(MetadataKeys.SAMPLE_ID),
-            orchestration_id=metadata.get(MetadataKeys.ORCHESTRATION_ID),
-            sub_task_role=metadata.get(MetadataKeys.SUB_TASK_ROLE),
-            task_id=metadata.get(MetadataKeys.TASK_ID),
-        )
-
-        # PROMINENT logging for orchestrated samples
         logger.info(
-            f">>> sample_init ENTRY: role={metadata.get(MetadataKeys.SUB_TASK_ROLE)}, "
+            f"Sample_init ENTRY: role={metadata.get(MetadataKeys.SUB_TASK_ROLE)}, "
             f"depends_on={metadata.get(MetadataKeys.DEPENDS_ON_ROLE)}, "
             f"orchestration={metadata.get(MetadataKeys.ORCHESTRATION_ID)}",
             extra={
@@ -574,7 +569,7 @@ class SABERSandboxEnvironment:
                     "task_id": metadata[MetadataKeys.TASK_ID],
                     "session_id": metadata[MetadataKeys.SABER_SESSION_ID],
                     "episode_id": metadata[MetadataKeys.SABER_EPISODE_ID],
-                    "mode": "eval_retry_completed_sample",
+                    "mode": TaskInitMode.EVAL_RETRY_COMPLETED_SAMPLE,
                 },
             )
             # Set IDs from metadata but don't create new episode
@@ -632,7 +627,7 @@ class SABERSandboxEnvironment:
             config = SessionManagerConfig(
                 base_url=rest_base_url,
                 mcp_server_url=mcp_url_base,
-                client_id="inspect_ai_sandbox",
+                client_id=ClientIdentifiers.INSPECT_AI_SANDBOX,
                 rest_timeout=180.0,  # Increased to 3 minutes for episode creation with queueing
             )
             self._session_manager = ClientSessionManager(config=config)
@@ -642,7 +637,7 @@ class SABERSandboxEnvironment:
             # Check execution mode to determine how to handle episode creation
             execution_mode = metadata.get(MetadataKeys.EXECUTION_MODE)
 
-            if execution_mode == "orchestrated_sub_task":
+            if execution_mode == ExecutionMode.ORCHESTRATED_SUB_TASK:
                 # NEW: Multi-sample orchestration approach
                 # Each sub-task is a separate sample coordinated via OrchestrationCoordinator
                 await self._init_orchestrated_sub_task(metadata)
@@ -688,28 +683,16 @@ class SABERSandboxEnvironment:
                 domain_slug=self._domain_slug,
             )
 
-            # Store session and episode IDs in sample metadata for eval-retry support
-            primary_episode_id_str = self._primary_episode_id or "unknown"
-            metadata[MetadataKeys.SABER_SESSION_ID] = self._session_id
-            metadata[MetadataKeys.SABER_EPISODE_ID] = primary_episode_id_str
-            metadata[MetadataKeys.SABER_DOMAIN_SLUG] = self._domain_slug
-
-            # Log metadata configuration
-            debug_logger = EpisodeDebugLogger("metadata")
-            debug_logger.info(
-                "Sample metadata configured with SABER IDs",
-                sample_id=metadata.get(MetadataKeys.SAMPLE_ID),
-                saber_episode_id_set=metadata.get(MetadataKeys.SABER_EPISODE_ID),
-                saber_session_id_set=metadata.get(MetadataKeys.SABER_SESSION_ID),
-                episode_id_instance_var=self._episode_id,
-                session_id_instance_var=self._session_id,
-            )
-
-            # Store session manager and context in inspect_ai store for scorer
+            # Store session manager and context in inspect_ai store for scorer and solver
+            # Note: We store to task_store instead of metadata because inspect_ai creates
+            # state.metadata as a deepcopy of sample.metadata BEFORE calling sample_init,
+            # so any updates to the metadata parameter here are lost. The solver retrieves
+            # SABER context from state.store instead.
             task_store = store()
-            task_store.set("saber_session_manager", self._session_manager)
-            task_store.set("saber_session_id", self._session_id)
-            task_store.set("saber_task_id", self._task_id)
+            task_store.set(InspectStoreKeys.SESSION_MANAGER, self._session_manager)
+            task_store.set(InspectStoreKeys.SESSION_ID, self._session_id)
+            task_store.set(InspectStoreKeys.TASK_ID, self._task_id)
+            task_store.set(InspectStoreKeys.DOMAIN_SLUG, self._domain_slug)
 
             # Store episode mapping
             sample_id = metadata.get(MetadataKeys.SAMPLE_ID, self._task_id)
@@ -748,16 +731,6 @@ class SABERSandboxEnvironment:
                 HEADER_TASK_ID: self._task_id,
                 HEADER_ORCHESTRATION_ENV: OrchestrationEnvironment.INSPECT.value,
             }
-
-            # Log MCP headers for debugging
-            debug_logger = EpisodeDebugLogger("mcp_client")
-            debug_logger.info(
-                "MCP client headers configured",
-                sample_id=sample_id,
-                episode_id_in_headers=mcp_headers[HEADER_EPISODE_ID],
-                episode_id_instance_var=self._primary_episode_id,
-                task_id=self._task_id,
-            )
 
             mcp_url = f"{mcp_url_base}/mcp"
             logger.debug(
@@ -917,18 +890,6 @@ class SABERSandboxEnvironment:
         task_id = metadata[MetadataKeys.TASK_ID]
         depends_on_role = metadata.get(MetadataKeys.DEPENDS_ON_ROLE)
         order = int(metadata[MetadataKeys.ORDER])
-
-        # Debug logging
-        debug_logger = EpisodeDebugLogger("orchestrated_init")
-        debug_logger.info(
-            "Initializing orchestrated sub-task",
-            orchestration_id=orchestration_id,
-            role=role,
-            task_id=task_id,
-            depends_on_role=depends_on_role,
-            order=order,
-            sample_id=self._sample_id,
-        )
 
         coordinator = OrchestrationCoordinator()
         semaphore = self._get_episode_semaphore()
@@ -1495,7 +1456,7 @@ class SABERSandboxEnvironment:
         """
         task_store = store()
         with cls._episode_mapping_lock:
-            episode_mapping = task_store.get("saber_episode_mapping", {})
+            episode_mapping = task_store.get(InspectStoreKeys.EPISODE_MAPPING, {})
             episode_mapping[sample_id] = type(
                 "Episode",
                 (),
@@ -1507,7 +1468,7 @@ class SABERSandboxEnvironment:
                     "sample_id": sample_id,
                 },
             )()
-            task_store.set("saber_episode_mapping", episode_mapping)
+            task_store.set(InspectStoreKeys.EPISODE_MAPPING, episode_mapping)
 
             logger.debug(
                 f"Stored episode mapping for sample {sample_id}",
@@ -1532,10 +1493,10 @@ class SABERSandboxEnvironment:
         """
         task_store = store()
         with cls._episode_mapping_lock:
-            episode_mapping = task_store.get("saber_episode_mapping", {})
+            episode_mapping = task_store.get(InspectStoreKeys.EPISODE_MAPPING, {})
             if sample_id in episode_mapping:
                 del episode_mapping[sample_id]
-                task_store.set("saber_episode_mapping", episode_mapping)
+                task_store.set(InspectStoreKeys.EPISODE_MAPPING, episode_mapping)
                 logger.debug(
                     f"Removed episode mapping for sample {sample_id}",
                     extra={
@@ -1557,8 +1518,8 @@ class SABERSandboxEnvironment:
         Returns:
             Session ID
         """
-        url = f"{rest_base_url}/api/v1/session"
-        params = {"client_id": f"inspect_ai_{task_name}"}
+        url = f"{rest_base_url}{APIEndpoints.SESSION}"
+        params = {"client_id": f"{ClientIdentifiers.INSPECT_AI_PREFIX}{task_name}"}
 
         async with aiohttp.ClientSession() as session:
             async with session.post(url, params=params, timeout=aiohttp.ClientTimeout(total=30)) as response:
@@ -1580,7 +1541,7 @@ class SABERSandboxEnvironment:
             rest_base_url: Base URL for REST API
             session_id: Session ID to terminate
         """
-        url = f"{rest_base_url}/api/v1/session/{session_id}"
+        url = f"{rest_base_url}{APIEndpoints.SESSION_BY_ID.format(session_id=session_id)}"
 
         def send_delete_request() -> None:
             """Send DELETE request in background thread."""
@@ -1692,7 +1653,7 @@ class SABERSandboxEnvironment:
         if self._episode_id and self._session_manager:
             try:
                 # Determine reason based on interrupted flag
-                reason = "interrupted" if interrupted else "completed"
+                reason = EpisodeTerminationReason.INTERRUPTED if interrupted else EpisodeTerminationReason.COMPLETED
 
                 logger.info(
                     f"Ending episode (reason={reason})",
@@ -1717,8 +1678,10 @@ class SABERSandboxEnvironment:
                     base_url = self._session_manager.base_url
                     session_id = self._session_id
                     episode_id = self._episode_id
-                    url = f"{base_url}/api/v1/session/{session_id}/episodes/{episode_id}"
-                    verify_url = f"{base_url}/api/v1/session/{session_id}/episodes/{episode_id}/status"
+                    url = f"{base_url}{APIEndpoints.EPISODE_BY_ID.format(session_id=session_id, episode_id=episode_id)}"
+                    verify_url = (
+                        f"{base_url}{APIEndpoints.EPISODE_STATUS.format(session_id=session_id, episode_id=episode_id)}"
+                    )
                     params = {
                         "reason": reason,
                         "cascade_end_attached_episodes": "false",
@@ -1830,7 +1793,7 @@ class SABERSandboxEnvironment:
                     try:
                         task_store = store()
                         # Scorer may have stored the submission for us
-                        submission = task_store.get("saber_episode_submission")
+                        submission = task_store.get(InspectStoreKeys.EPISODE_SUBMISSION)
                     except Exception:
                         # Store might not be available or submission not set - that's ok
                         pass

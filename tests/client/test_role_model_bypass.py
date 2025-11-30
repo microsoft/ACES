@@ -2,7 +2,7 @@
 
 import pytest
 from saber.client.models import RoleAgentConfig, RoleBasedConfig
-from saber.inspect_ai.tasks import _all_roles_have_models
+from saber.inspect_ai.agents.role_config_processor import all_roles_have_models
 
 
 class TestRoleModelBypass:
@@ -17,7 +17,7 @@ class TestRoleModelBypass:
             }
         )
 
-        assert _all_roles_have_models(config) is True
+        assert all_roles_have_models(config) is True
 
     def test_all_roles_have_models_via_defaults(self):
         """Test when default provides model for all roles."""
@@ -29,7 +29,7 @@ class TestRoleModelBypass:
             defaults=RoleAgentConfig(agent="react", model="gpt-4o-mini")
         )
 
-        assert _all_roles_have_models(config) is True
+        assert all_roles_have_models(config) is True
 
     def test_some_roles_missing_models(self):
         """Test when some roles don't have models."""
@@ -40,7 +40,7 @@ class TestRoleModelBypass:
             }
         )
 
-        assert _all_roles_have_models(config) is False
+        assert all_roles_have_models(config) is False
 
     def test_no_roles_defined(self):
         """Test when no roles are defined."""
@@ -50,7 +50,7 @@ class TestRoleModelBypass:
         )
 
         # No roles means nothing to validate - should return False
-        assert _all_roles_have_models(config) is False
+        assert all_roles_have_models(config) is False
 
     def test_mixed_explicit_and_default_models(self):
         """Test when some roles have models and defaults provide fallback."""
@@ -63,7 +63,7 @@ class TestRoleModelBypass:
             defaults=RoleAgentConfig(agent="react", model="claude-3")
         )
 
-        assert _all_roles_have_models(config) is True
+        assert all_roles_have_models(config) is True
 
     def test_no_models_anywhere(self):
         """Test when no models are defined anywhere."""
@@ -74,4 +74,4 @@ class TestRoleModelBypass:
             }
         )
 
-        assert _all_roles_have_models(config) is False
+        assert all_roles_have_models(config) is False

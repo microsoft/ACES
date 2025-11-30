@@ -36,6 +36,7 @@ from .constants import (
     MetadataKeys,
     StepEvaluationStrategy,
     SubmissionEvaluationStrategy,
+    TranscriptSyncConfig,
 )
 
 # Core domain models
@@ -171,6 +172,7 @@ __all__ = [
     "RequestHeaders",
     # Constants
     "MetadataKeys",
+    "TranscriptSyncConfig",
 ]
 
 # Rebuild models with forward references after all imports are complete

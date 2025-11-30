@@ -36,6 +36,7 @@ from ...models import (
     TranscriptGetResponse,
     TranscriptPushRequest,
     TranscriptPushResponse,
+    TranscriptSyncConfig,
 )
 from ...models.rest.evaluation import (
     EpisodeStepData,
@@ -691,16 +692,30 @@ class SessionRestAPI:
         ) -> TranscriptPushResponse:
             """Push conversation transcript from client to server.
 
-            Stores the full conversation history in episode context for real-time visibility.
-            This endpoint is idempotent (last write wins) and allows post-completion pushes
-            for audit trail and debugging purposes.
+            Supports two modes:
+            - 'replace': Replace entire transcript (default, for backward compatibility)
+            - 'append': Append new messages to existing transcript (differential sync)
+
+            This endpoint allows post-completion pushes for audit trail and debugging.
             """
             import json
             from datetime import datetime
 
             from pydantic import ValidationError
 
-            log_operation_start(logger, "push_transcript", session_id=session_id, episode_id=episode_id)
+            # Validate mode parameter
+            mode = transcript_request.mode
+            if mode not in ["replace", "append"]:
+                raise HTTPException(status_code=422, detail=f"Invalid mode '{mode}'. Must be 'replace' or 'append'.")
+
+            log_operation_start(
+                logger,
+                "push_transcript",
+                session_id=session_id,
+                episode_id=episode_id,
+                mode=mode,
+                message_count=len(transcript_request.messages),
+            )
             try:
                 # Get episode
                 episode = self.session_manager.get_episode_by_id(episode_id)
@@ -713,17 +728,27 @@ class SessionRestAPI:
                 # Check payload size using actual JSON byte length (not sys.getsizeof)
                 messages_json = json.dumps([msg.dict() for msg in transcript_request.messages])
                 payload_size = len(messages_json.encode("utf-8"))
-                MAX_PAYLOAD_SIZE = 10 * 1024 * 1024  # 10 MB
-                if payload_size > MAX_PAYLOAD_SIZE:
+                if payload_size > TranscriptSyncConfig.MAX_PAYLOAD_SIZE_BYTES:
+                    max_size = TranscriptSyncConfig.MAX_PAYLOAD_SIZE_BYTES
                     raise HTTPException(
                         status_code=413,
-                        detail=f"Transcript payload too large: {payload_size} bytes (max: {MAX_PAYLOAD_SIZE} bytes)",
+                        detail=f"Transcript payload too large: {payload_size} bytes (max: {max_size} bytes)",
                     )
 
                 # Store transcript in episode context atomically (thread-safe)
                 timestamp = datetime.utcnow().isoformat()
+
+                # Handle append vs replace mode
+                if mode == "append":
+                    # Append new messages to existing transcript
+                    existing_messages = episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT, [])
+                    updated_messages = existing_messages + [msg.dict() for msg in transcript_request.messages]
+                else:
+                    # Replace entire transcript
+                    updated_messages = [msg.dict() for msg in transcript_request.messages]
+
                 context_updates: Dict[str, Any] = {
-                    MetadataKeys.CLIENT_TRANSCRIPT.value: [msg.dict() for msg in transcript_request.messages],
+                    MetadataKeys.CLIENT_TRANSCRIPT.value: updated_messages,
                     MetadataKeys.TRANSCRIPT_UPDATED_AT.value: timestamp,
                 }
                 if transcript_request.metadata:
@@ -736,7 +761,9 @@ class SessionRestAPI:
                     "push_transcript",
                     session_id=session_id,
                     episode_id=episode_id,
+                    mode=mode,
                     message_count=len(transcript_request.messages),
+                    total_messages=len(updated_messages),
                 )
 
                 return TranscriptPushResponse(
@@ -894,6 +921,7 @@ class SessionRestAPI:
                         tool_calls=None,
                         tool_call_id=None,
                         name=None,
+                        reasoning=None,
                         # Store injection metadata in a way that client can identify injected messages
                     )
                     for record in pending_injections

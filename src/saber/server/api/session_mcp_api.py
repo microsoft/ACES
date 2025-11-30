@@ -19,8 +19,10 @@ from fastmcp.server.dependencies import get_http_headers
 
 from ...logging_config import get_api_logger, log_operation_failure, log_operation_start, log_operation_success
 from ...models import EvalSubmission, HTTPHeaders, OrchestrationEnvironment, RequestHeaders
+from ...models.constants import MetadataKeys
 from ...models.mcp import MCPToolCallResponse, MCPToolListResponse, MCPToolSchema
 from ..base import Action, CommandResult
+from ..episodes.episode import Episode
 from .mcp_tool_generator import MCPToolGenerator
 
 if TYPE_CHECKING:
@@ -265,8 +267,6 @@ class SessionMCPAPI:
         @self.mcp_server.tool  # type: ignore[misc]
         async def end_episode(
             submission: str = "",
-            __saber_assistant_message__: str | None = None,
-            __saber_reasoning__: str | None = None,
         ) -> str:
             """End the current episode and optionally record a discovered flag/target/objective."""
             try:
@@ -345,24 +345,6 @@ class SessionMCPAPI:
             executor_instance = self.session_manager.execution_manager.get_executor(executor_name, episode_id=None)
             input_schema = executor_instance.to_mcp_schema()
             metadata = getattr(executor_instance, "_executor_metadata", {})
-
-            # Add SABER context parameters to the schema
-            # These are optional parameters that the client can inject with assistant messages and reasoning
-            from saber.models.mcp import MCPPropertySchema
-
-            # Create new properties dict with existing properties plus our context parameters
-            updated_properties = dict(input_schema.properties or {})
-            updated_properties["__saber_assistant_message__"] = MCPPropertySchema(
-                type="string",
-                description="Optional: Agent's assistant message for context",
-            )
-            updated_properties["__saber_reasoning__"] = MCPPropertySchema(
-                type="string",
-                description="Optional: Agent's reasoning content for context",
-            )
-
-            # Create a new schema with updated properties
-            input_schema = input_schema.model_copy(update={"properties": updated_properties})
 
             # Build the typed MCP tool schema
             mcp_tool_schema = MCPToolSchema(
@@ -484,16 +466,11 @@ class SessionMCPAPI:
         Returns:
             MCPToolCallResponse with execution result
         """
-        # DEBUG: Log incoming MCP call
-        logger.info(
-            f"🔍 SERVER: MCP tool call received: {name}",
+        logger.debug(
+            f"MCP tool call received: {name}",
             extra={
-                "event": "mcp_tool_call_received",
                 "tool_name": name,
                 "argument_keys": list(arguments.keys()),
-                "has_saber_assistant": "__saber_assistant_message__" in arguments,
-                "has_saber_reasoning": "__saber_reasoning__" in arguments,
-                "full_arguments": arguments,
             },
         )
 
@@ -574,7 +551,7 @@ class SessionMCPAPI:
 
         try:
             # Execute action through SessionManager with explicit episode_id
-            action = self._convert_to_action(name, arguments)
+            action = self._convert_to_action(name, arguments, episode)
             command_result = await self.session_manager.execute_action(headers.session_id, headers.episode_id, action)
 
             # Convert result to MCP format using typed response
@@ -744,65 +721,93 @@ class SessionMCPAPI:
                 content=[{"type": "text", "text": f"Error: Failed to end episode: {exc}"}], isError=True
             )
 
-    def _convert_to_action(self, tool_name: str, arguments: Dict[str, Any]) -> Action:
+    def _extract_context_from_transcript(self, episode: "Episode") -> tuple[str | None, str | None]:
+        """
+        Extract assistant message and reasoning from the episode's client transcript.
+
+        Looks for the most recent assistant message in the transcript to extract
+        the content and reasoning that would have previously been injected via
+        monkey-patching.
+
+        Args:
+            episode: Episode object containing the client transcript
+
+        Returns:
+            Tuple of (assistant_message, reasoning), either can be None
+        """
+        try:
+            # Get transcript from episode context
+            transcript = episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT, [])
+            if not transcript:
+                return None, None
+
+            # Search backwards for the most recent assistant message
+            for msg in reversed(transcript):
+                if msg.get("role") == "assistant":
+                    assistant_message = msg.get("content")
+                    reasoning = msg.get("reasoning")
+                    return assistant_message, reasoning
+
+            return None, None
+
+        except Exception as e:
+            logger.warning(
+                f"Failed to extract context from transcript: {e}",
+                extra={
+                    "event": "transcript_context_extraction_failed",
+                    "episode_id": episode.episode_id,
+                    "error": str(e),
+                },
+            )
+            return None, None
+
+    def _convert_to_action(self, tool_name: str, arguments: Dict[str, Any], episode: "Episode") -> Action:
         """
         Convert MCP tool call to Action object.
 
-        Extracts both assistant message and reasoning from special parameters and stores them
-        separately in the Action fields. These parameters are stripped from the tool
-        parameters to keep execution clean.
+        Extracts assistant message and reasoning from the episode's client transcript.
+        The monkey-patch approach has been completely deprecated in favor of
+        transcript-based context extraction.
 
         Args:
             tool_name: Name of the tool being called
-            arguments: Tool arguments (may include __saber_assistant_message__ and __saber_reasoning__)
+            arguments: Tool arguments
+            episode: Episode object containing the client transcript
 
         Returns:
-            Action object for execution with context extracted
+            Action object for execution with context extracted from transcript
         """
-        # DEBUG: Log incoming arguments
-        logger.info(
-            f"🔍 SERVER: _convert_to_action called for {tool_name}",
-            extra={
-                "event": "convert_to_action_called",
-                "tool_name": tool_name,
-                "argument_keys": list(arguments.keys()),
-                "has_saber_assistant": "__saber_assistant_message__" in arguments,
-                "has_saber_reasoning": "__saber_reasoning__" in arguments,
-            },
-        )
+        # Validate episode is not None
+        if not episode:
+            logger.warning(
+                "convert_to_action called with None episode, creating action without context",
+                extra={"tool_name": tool_name},
+            )
+            return Action(tool_name=tool_name, parameters=arguments, reasoning=None, assistant_message=None)
 
-        # Extract context if present (injected by context injection)
-        assistant_message = arguments.get("__saber_assistant_message__")
-        reasoning = arguments.get("__saber_reasoning__")
+        # Extract context from transcript
+        assistant_message, reasoning = self._extract_context_from_transcript(episode)
 
-        # DEBUG: Log extraction results
-        logger.info(
-            f"🔍 SERVER: Extracted context - assistant_msg={len(assistant_message) if assistant_message else 0} chars, "
-            f"reasoning={len(reasoning) if reasoning else 0} chars",
+        logger.debug(
+            "Extracted context from transcript",
             extra={
-                "event": "context_extracted",
                 "has_assistant_message": assistant_message is not None,
                 "has_reasoning": reasoning is not None,
-                "assistant_preview": assistant_message[:100] if assistant_message else None,
-                "reasoning_preview": reasoning[:100] if reasoning else None,
             },
         )
 
-        # Filter out session_id and saber context parameters from arguments
-        filtered_arguments = {
-            k: v
-            for k, v in arguments.items()
-            if k not in ("session_id", "__saber_assistant_message__", "__saber_reasoning__")
-        }
+        # Filter out session_id from arguments (no more monkey-patch parameters to filter)
+        filtered_arguments = {k: v for k, v in arguments.items() if k != "session_id"}
 
         action = Action(
             tool_name=tool_name, parameters=filtered_arguments, assistant_message=assistant_message, reasoning=reasoning
         )
 
         if assistant_message or reasoning:
-            logger.info(
-                f"✅ SERVER: Action created WITH context for {tool_name}",
+            logger.debug(
+                "Action created with context",
                 extra={
+                    "tool_name": tool_name,
                     "event": "action_with_context",
                     "tool_name": tool_name,
                     "has_assistant_message": assistant_message is not None,

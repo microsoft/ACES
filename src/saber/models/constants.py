@@ -133,6 +133,95 @@ class MetadataKeys(str, Enum):
     PENDING_INJECTIONS = "_pending_injections"
     INJECTION_HISTORY = "_injection_history"
 
+    # Transcript metadata keys
+    TRANSCRIPT_STEP_NUMBER = "step_number"
+    TRANSCRIPT_TIMESTAMP = "timestamp"
+    TRANSCRIPT_SOURCE = "source"
+
+
+# Transcript synchronization configuration constants
+class TranscriptSyncConfig:
+    """Configuration constants for transcript synchronization between client and server."""
+
+    # Payload size limits
+    MAX_PAYLOAD_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
+
+    # Network timeouts
+    REQUEST_TIMEOUT_SECONDS = 5.0
+
+    # Retry configuration
+    MAX_RETRIES = 3
+    RETRY_DELAYS_SECONDS = [0.5, 1.0, 2.0]
+
+    # Default transcript source identifier
+    DEFAULT_SOURCE = "inspect_ai"
+
+
+# API endpoint paths
+class APIEndpoints:
+    """REST API endpoint path constants."""
+
+    # Session endpoints
+    SESSION = "/api/v1/session"
+    SESSION_BY_ID = "/api/v1/session/{session_id}"
+
+    # Episode endpoints
+    EPISODES = "/api/v1/session/{session_id}/episodes"
+    EPISODE_BY_ID = "/api/v1/session/{session_id}/episodes/{episode_id}"
+    EPISODE_STATUS = "/api/v1/session/{session_id}/episodes/{episode_id}/status"
+    EPISODE_TRANSCRIPT = "/api/v1/session/{session_id}/episodes/{episode_id}/transcript"
+    EPISODE_SUBMISSION = "/api/v1/session/{session_id}/episodes/{episode_id}/submission"
+    EPISODE_MESSAGES_INJECT = "/api/v1/session/{session_id}/episodes/{episode_id}/messages/inject"
+
+    # Health endpoint
+    HEALTH = "/api/v1/health"
+
+
+# Execution mode constants
+class ExecutionMode:
+    """Execution mode identifiers for task execution."""
+
+    SINGLE = "single"
+    ORCHESTRATED = "orchestrated"
+    ORCHESTRATED_SUB_TASK = "orchestrated_sub_task"
+
+
+# Task initialization mode constants
+class TaskInitMode:
+    """Task initialization mode identifiers."""
+
+    OWNERSHIP_TRANSFER = "ownership_transfer"
+    FRESH_START = "fresh_start"
+    EVAL_RETRY_REUSE = "eval_retry_reuse"
+    EVAL_RETRY_COMPLETED_SAMPLE = "eval_retry_completed_sample"
+
+
+# Episode termination reason constants
+class EpisodeTerminationReason:
+    """Episode termination reason identifiers."""
+
+    COMPLETED = "completed"
+    INTERRUPTED = "interrupted"
+    ERROR = "error"
+    TIMEOUT = "timeout"
+
+
+# Client identifier constants
+class ClientIdentifiers:
+    """Client identifier prefixes and names."""
+
+    INSPECT_AI_PREFIX = "inspect_ai_"
+    INSPECT_AI_SANDBOX = "inspect_ai_sandbox"
+
+
+# Cleanup reason constants
+class CleanupReason:
+    """Cleanup operation reason identifiers."""
+
+    MANUAL_CLEANUP = "manual_cleanup"
+    TASK_COMPLETE = "task_complete"
+    TASK_INTERRUPTED = "task_interrupted"
+
 
 __all__ = [
     "EvaluationStrategy",
@@ -145,4 +234,11 @@ __all__ = [
     "VALID_STEP_EVAL_STRATEGIES",
     "VALID_EVAL_STRATEGIES",
     "MetadataKeys",
+    "TranscriptSyncConfig",
+    "APIEndpoints",
+    "ExecutionMode",
+    "TaskInitMode",
+    "EpisodeTerminationReason",
+    "ClientIdentifiers",
+    "CleanupReason",
 ]

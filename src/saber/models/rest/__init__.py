@@ -244,12 +244,14 @@ class ChatMessage(BaseModel):
     tool_calls: Optional[List[ToolCall]] = Field(None, description="Tool calls (for assistant messages)")
     tool_call_id: Optional[str] = Field(None, description="Tool call ID (for tool response messages)")
     name: Optional[str] = Field(None, description="Tool name (for tool response messages)")
+    reasoning: Optional[str] = Field(None, description="Reasoning/chain-of-thought (for assistant messages)")
 
 
 class TranscriptPushRequest(BaseModel):
     """Request model for pushing transcript to server."""
 
     messages: List[ChatMessage] = Field(description="List of conversation messages")
+    mode: str = Field(default="replace", description="Push mode: 'replace' (full) or 'append' (differential)")
     metadata: Dict[str, Any] = Field(
         default_factory=dict, description="Transcript metadata (step_number, timestamp, source)"
     )

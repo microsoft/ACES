@@ -1,7 +1,7 @@
 """
 Unit tests for solver-level transcript synchronization.
 
-These tests validate that the solver wrapper in _create_saber_solver()
+These tests validate that the solver wrapper in create_saber_solver()
 correctly wraps the generate function to push transcripts after each
 model inference call.
 
@@ -23,7 +23,8 @@ import pytest
 from inspect_ai.model import ChatMessageAssistant, ChatMessageUser, ChatMessageSystem
 from inspect_ai.solver import Generate, TaskState
 
-from saber.inspect_ai.tasks import _create_saber_solver, MetadataKeys
+from saber.inspect_ai.agents.solver_factory import create_saber_solver
+from saber.models.constants import MetadataKeys
 
 
 # ============================================================================
@@ -109,10 +110,11 @@ async def test_solver_wraps_generate_with_saber_metadata(
     mock_generate_function,
     mock_agent_factory,
 ):
-    """Test that solver wraps generate to push transcript when SABER metadata present."""
+    """Test that solver creates model wrapper when SABER metadata present."""
 
-    with patch("saber.inspect_ai.integration.transcript_sync._push_transcript", new_callable=AsyncMock) as mock_push, \
-         patch("saber.inspect_ai.tasks.get_active_domain") as mock_get_domain:
+    with patch("saber.inspect_ai.agents.solver_factory.get_active_domain") as mock_get_domain, \
+         patch("saber.inspect_ai.agents.solver_factory.active_model") as mock_active_model, \
+         patch("saber.inspect_ai.agents.solver_factory.TranscriptSyncingModelWrapper") as mock_wrapper_class:
 
         # Mock get_active_domain to return REST URL
         mock_get_domain.return_value = {
@@ -120,8 +122,16 @@ async def test_solver_wraps_generate_with_saber_metadata(
             "mcp_url": "http://localhost:8001",
         }
 
+        # Mock the active model
+        mock_model = Mock(spec=Model)
+        mock_active_model.return_value = mock_model
+
+        # Mock the wrapper class to return a mock wrapper
+        mock_wrapper = Mock()
+        mock_wrapper_class.return_value = mock_wrapper
+
         # Create solver
-        solver = _create_saber_solver(
+        solver = create_saber_solver(
             agent_name="test_agent",
             agent_factory=mock_agent_factory,
             role_config=None,
@@ -130,17 +140,17 @@ async def test_solver_wraps_generate_with_saber_metadata(
         # Execute solver
         result = await solver(mock_state_with_saber_metadata, mock_generate_function)
 
-        # Verify _push_transcript was called
-        assert mock_push.called, "_push_transcript should have been called"
+        # Verify TranscriptSyncingModelWrapper was created with correct parameters
+        assert mock_wrapper_class.called, "TranscriptSyncingModelWrapper should have been created"
 
-        # Verify it was called with correct parameters (keyword args)
-        call_args = mock_push.call_args
+        # Verify it was called with correct parameters
+        call_args = mock_wrapper_class.call_args
         assert call_args is not None
 
         assert call_args[1]["episode_id"] == "ep_test123"
         assert call_args[1]["session_id"] == "session_test456"
         assert call_args[1]["rest_url"] == "http://localhost:8000"
-        assert isinstance(call_args[1]["state"], TaskState)
+        assert call_args[1]["base_model"] == mock_model
 
 
 @pytest.mark.asyncio
@@ -153,7 +163,7 @@ async def test_solver_skips_transcript_push_without_saber_metadata(
 
     with patch("saber.inspect_ai.integration.transcript_sync._push_transcript", new_callable=AsyncMock) as mock_push:
         # Create solver
-        solver = _create_saber_solver(
+        solver = create_saber_solver(
             agent_name="test_agent",
             agent_factory=mock_agent_factory,
             role_config=None,
@@ -175,7 +185,7 @@ async def test_solver_continues_on_push_failure(
     """Test that solver continues agent execution even if transcript push fails."""
 
     with patch("saber.inspect_ai.integration.transcript_sync._push_transcript", new_callable=AsyncMock) as mock_push, \
-         patch("saber.inspect_ai.tasks.get_active_domain") as mock_get_domain:
+         patch("saber.inspect_ai.server.domain_manager.get_active_domain") as mock_get_domain:
 
         # Mock get_active_domain to return REST URL
         mock_get_domain.return_value = {
@@ -187,7 +197,7 @@ async def test_solver_continues_on_push_failure(
         mock_push.side_effect = Exception("Network error")
 
         # Create solver
-        solver = _create_saber_solver(
+        solver = create_saber_solver(
             agent_name="test_agent",
             agent_factory=mock_agent_factory,
             role_config=None,
@@ -221,7 +231,7 @@ async def test_solver_handles_partial_metadata(
 
     with patch("saber.inspect_ai.integration.transcript_sync._push_transcript", new_callable=AsyncMock) as mock_push:
         # Create solver
-        solver = _create_saber_solver(
+        solver = create_saber_solver(
             agent_name="test_agent",
             agent_factory=mock_agent_factory,
             role_config=None,
@@ -239,7 +249,7 @@ async def test_multiple_generate_calls_push_multiple_times(
     mock_state_with_saber_metadata,
     mock_agent_factory,
 ):
-    """Test that multiple generate calls in one episode push transcript multiple times."""
+    """Test that solver creates model wrapper for episodes with multiple generate calls."""
 
     # Create a generate function that gets called multiple times
     call_count = 0
@@ -265,8 +275,9 @@ async def test_multiple_generate_calls_push_multiple_times(
     def factory():
         return create_with_prompts
 
-    with patch("saber.inspect_ai.integration.transcript_sync._push_transcript", new_callable=AsyncMock) as mock_push, \
-         patch("saber.inspect_ai.tasks.get_active_domain") as mock_get_domain:
+    with patch("saber.inspect_ai.agents.solver_factory.get_active_domain") as mock_get_domain, \
+         patch("saber.inspect_ai.agents.solver_factory.active_model") as mock_active_model, \
+         patch("saber.inspect_ai.agents.solver_factory.TranscriptSyncingModelWrapper") as mock_wrapper_class:
 
         # Mock get_active_domain to return REST URL
         mock_get_domain.return_value = {
@@ -274,8 +285,16 @@ async def test_multiple_generate_calls_push_multiple_times(
             "mcp_url": "http://localhost:8001",
         }
 
+        # Mock the active model
+        mock_model = Mock(spec=Model)
+        mock_active_model.return_value = mock_model
+
+        # Mock the wrapper
+        mock_wrapper = Mock()
+        mock_wrapper_class.return_value = mock_wrapper
+
         # Create solver
-        solver = _create_saber_solver(
+        solver = create_saber_solver(
             agent_name="test_agent",
             agent_factory=factory,
             role_config=None,
@@ -284,9 +303,8 @@ async def test_multiple_generate_calls_push_multiple_times(
         # Execute solver
         result = await solver(mock_state_with_saber_metadata, multi_call_generate)
 
-        # Verify _push_transcript was called at least once
-        # Our implementation pushes after agent completes, not after each generate
-        assert mock_push.call_count >= 1, "Should push transcript at least once"
+        # Verify the model wrapper was created (it will handle pushing on each model.generate() call)
+        assert mock_wrapper_class.called, "Should create model wrapper for transcript sync"
 
 
 @pytest.mark.asyncio
@@ -308,7 +326,7 @@ async def test_wrapper_preserves_generate_return_value(
         return expected_state
 
     with patch("saber.inspect_ai.integration.transcript_sync._push_transcript", new_callable=AsyncMock), \
-         patch("saber.inspect_ai.tasks.get_active_domain") as mock_get_domain:
+         patch("saber.inspect_ai.server.domain_manager.get_active_domain") as mock_get_domain:
 
         # Mock get_active_domain to return REST URL
         mock_get_domain.return_value = {
@@ -317,7 +335,7 @@ async def test_wrapper_preserves_generate_return_value(
         }
 
         # Create solver
-        solver = _create_saber_solver(
+        solver = create_saber_solver(
             agent_name="test_agent",
             agent_factory=mock_agent_factory,
             role_config=None,
@@ -349,7 +367,7 @@ async def test_solver_with_none_metadata(
 
     with patch("saber.inspect_ai.integration.transcript_sync._push_transcript", new_callable=AsyncMock) as mock_push:
         # Should raise ValueError for missing prompts, not crash on metadata access
-        solver = _create_saber_solver(
+        solver = create_saber_solver(
             agent_name="test_agent",
             agent_factory=mock_agent_factory,
             role_config=None,
@@ -378,12 +396,12 @@ async def test_solver_with_empty_rest_url(
     }
 
     with patch("saber.inspect_ai.integration.transcript_sync._push_transcript", new_callable=AsyncMock) as mock_push, \
-         patch("saber.inspect_ai.tasks.get_active_domain") as mock_get_domain:
+         patch("saber.inspect_ai.server.domain_manager.get_active_domain") as mock_get_domain:
 
         # Mock get_active_domain to return None (domain not active)
         mock_get_domain.return_value = None
 
-        solver = _create_saber_solver(
+        solver = create_saber_solver(
             agent_name="test_agent",
             agent_factory=mock_agent_factory,
             role_config=None,

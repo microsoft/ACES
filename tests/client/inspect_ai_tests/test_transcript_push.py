@@ -660,30 +660,31 @@ async def test_push_transcript_no_retry_on_validation_error(mock_task_state):
 
 
 # ============================================================================
-# Test: _push_transcript() - Feature Flag
+# Test: _push_transcript() - Graceful Degradation
 # ============================================================================
 
 
 @pytest.mark.asyncio
-async def test_push_transcript_disabled_via_feature_flag(mock_task_state):
-    """Test that transcript push can be disabled via environment variable."""
+async def test_push_transcript_degrades_gracefully_on_all_failures(mock_task_state):
+    """Test that transcript push failures are logged but don't raise exceptions."""
     session_id = "session_123"
     episode_id = "episode_456"
     rest_url = "http://localhost:8000"
 
-    with patch.dict("os.environ", {"SABER_ENABLE_TRANSCRIPT_SYNC": "false"}):
-        with patch("saber.inspect_ai.integration.transcript_sync.aiohttp.ClientSession") as mock_session_class:
-            mock_session = MagicMock()
-            mock_session.post = MagicMock()
-            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-            mock_session.__aexit__ = AsyncMock(return_value=None)
-            mock_session_class.return_value = mock_session
+    with patch("saber.inspect_ai.integration.transcript_sync.aiohttp.ClientSession") as mock_session_class:
+        # Create a session that always returns 500 errors
+        mock_response = create_mock_response(500, text_data="Server error")
+        mock_session = MagicMock()
+        mock_session.post = MagicMock(return_value=mock_response)
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
+        mock_session_class.return_value = mock_session
 
-            # Execute
-            await _push_transcript(mock_task_state, session_id, episode_id, rest_url)
+        # Execute - should NOT raise exception despite all retries failing
+        await _push_transcript(mock_task_state, session_id, episode_id, rest_url)
 
-            # Verify no HTTP request was made
-            mock_session.post.assert_not_called()
+        # Verify retries occurred (3 attempts)
+        assert mock_session.post.call_count == 3
 
 
 @pytest.mark.asyncio

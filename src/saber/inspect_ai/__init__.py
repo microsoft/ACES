@@ -22,10 +22,6 @@ Public API:
 """
 
 from ..logging_config import LogCategory, get_saber_logger
-
-# Import context injection - patches applied at import time for backward compatibility
-# TODO: Migrate to scoped patching using saber_context_injection_patch() context manager
-from .core.context_injection import saber_execute_tools, saber_tool_params
 from .core.saber_dataset import create_saber_dataset
 from .core.saber_scorer import saber_scorer
 from .core.tasks import create_domain_task
@@ -35,18 +31,10 @@ from .saber import SABERSandboxEnvironment, SandboxError
 logger = get_saber_logger(LogCategory.AGENT, __name__)
 logger.info("Initializing SABER sandbox integration for Inspect AI")
 
-# Monkey-patch execute_tools AND tool_params for context injection
-# Note: This is applied at import time for backward compatibility.
-# For better test isolation and explicit scope control, use the
-# saber_context_injection_patch() context manager instead.
-import inspect_ai.agent._react
-import inspect_ai.model._call_tools
+# Monkey-patching has been completely removed - context extraction now uses
+# transcript-based approach via transcript_sync.py
 
-inspect_ai.agent._react.execute_tools = saber_execute_tools
-inspect_ai.model._call_tools.execute_tools = saber_execute_tools
-inspect_ai.model._call_tools.tool_params = saber_tool_params
-
-logger.info("Monkey-patched execute_tools + tool_params with SABER context injection")
+logger.info("SABER transcript-based context extraction enabled")
 
 __all__ = [
     "SABERSandboxEnvironment",

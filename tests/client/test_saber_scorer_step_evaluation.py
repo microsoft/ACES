@@ -34,7 +34,7 @@ from inspect_ai.scorer import Score, Target
 from inspect_ai.solver import TaskState
 from inspect_ai.util import store
 
-from saber.inspect_ai.saber_scorer import saber_scorer
+from saber.inspect_ai import saber_scorer
 from saber.models.rest.evaluation import (
     SubmissionEvaluationCriteriaResponse,
     SubtaskEvaluationCriteriaResponse,
@@ -371,7 +371,7 @@ class TestSaberScorerStepEvaluation:
         The agent completed some steps but did not reach the final objective.
         """
 
-        with patch('saber.inspect_ai.saber_scorer.get_model') as mock_get_model:
+        with patch('saber.inspect_ai.core.saber_scorer.get_model') as mock_get_model:
             # Mock the judge model and its response
             mock_model = AsyncMock()
             mock_response = Mock()
@@ -493,7 +493,7 @@ class TestSaberScorerStepEvaluation:
         The agent did not complete any objectives.
         """
 
-        with patch('saber.inspect_ai.saber_scorer.get_model') as mock_get_model:
+        with patch('saber.inspect_ai.core.saber_scorer.get_model') as mock_get_model:
             # Mock the judge model and its response
             mock_model = AsyncMock()
             mock_response = Mock()
@@ -612,7 +612,7 @@ class TestSaberScorerStepEvaluation:
         The agent did some work but the format is incorrect.
         """
 
-        with patch('saber.inspect_ai.saber_scorer.get_model') as mock_get_model:
+        with patch('saber.inspect_ai.core.saber_scorer.get_model') as mock_get_model:
             # Mock the judge model and its response
             mock_model = AsyncMock()
             mock_response = Mock()
@@ -783,7 +783,7 @@ class TestSaberScorerStepEvaluation:
         [8: main_task_id] - Main task completed successfully
         """
 
-        with patch('saber.inspect_ai.saber_scorer.get_model') as mock_get_model:
+        with patch('saber.inspect_ai.core.saber_scorer.get_model') as mock_get_model:
             mock_model = AsyncMock()
             mock_response = Mock()
             mock_response.completion = mock_judge_response
@@ -969,7 +969,7 @@ class TestSaberScorerStepEvaluation:
                 execution_time=10.5
             )
 
-        with patch('saber.inspect_ai.saber_scorer.get_model') as mock_get_model:
+        with patch('saber.inspect_ai.core.saber_scorer.get_model') as mock_get_model:
             # Mock the judge model for all evaluations
             mock_model = AsyncMock()
             mock_get_model.return_value = mock_model

@@ -309,6 +309,10 @@ class TestSessionMCPAPI:
 
     def test_convert_to_action(self, mcp_api):
         """Test conversion from MCP tool call to Action."""
+        # Create a mock episode
+        mock_episode = MagicMock()
+        mock_episode.id = "episode_123"
+
         action = mcp_api._convert_to_action(
             tool_name="bash",
             arguments={
@@ -316,6 +320,7 @@ class TestSessionMCPAPI:
                 "parameters": {"arguments": "ls -la", "flag": "-l"},
                 "context": {"extra": "data"},
             },
+            episode=mock_episode,
         )
 
         assert action.tool_name == "bash"
