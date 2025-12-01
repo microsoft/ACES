@@ -96,53 +96,7 @@ class TestSessionManagerEpisodes:
             manager = SessionManager(domain_name="test_domain", config_dir="/tmp", host="127.0.0.1", port=8002)
             return manager
 
-    @pytest.mark.asyncio
-    async def test_start_episode(self, session_manager_with_session, mock_episode):
-        """Test starting an episode."""
-        manager = session_manager_with_session
-
-        # Create a session first
-        session = await manager.create_session("test_client")
-        session_id = session.session_id
-        task_id = "task_456"
-
-        # Mock task with proper initial_context
-        mock_task = MagicMock()
-        mock_task.initial_context = {"initial_data": "test"}
-        mock_task.depends_on_task_id = None  # No dependencies
-        manager.benchmark_manager.get_task.return_value = mock_task
-
-        # Mock prompt generator to return expected prompts
-        mock_prompts = {"instruction": "test_prompt", "assistant": "test_assistant", "submit": "test_submit"}
-        manager.benchmark_manager.prompt_generator.render_agent_prompts_for_task.return_value = mock_prompts
-
-        # Mock episode manager to return episode
-        manager.episode_manager.start_episode.return_value = mock_episode
-
-        # Start episode
-        episode = await manager.start_episode(session_id, task_id)
-
-        assert episode == mock_episode
-        assert mock_episode.episode_id in session.active_episode_ids  # New multi-episode model
-
-        # Verify task manager was called to get task
-        manager.benchmark_manager.get_task.assert_called_once_with(task_id)
-
-        # Verify episode manager was called
-        manager.episode_manager.start_episode.assert_called_once_with(
-            session_id=session_id, task_id=task_id, initial_context={"initial_data": "test"}, task=mock_task
-        )
-
-        # Verify evaluation manager was called
-        manager.evaluation_manager.log_episode_start.assert_called_once_with(
-            session_id, mock_episode.episode_id, task_id
-        )
-
-        # Verify PolicyManager set_episode_policy was called (episode-first architecture)
-        manager.policy_manager.set_episode_policy.assert_called_once_with(mock_episode.episode_id, session_id, "test_prompt")
-
-        # Verify EpisodeManager configure_for_task was called
-        manager.episode_manager.configure_for_task.assert_called_once_with(mock_episode.episode_id, mock_task)
+    # test_start_episode removed - comprehensive async episode creation tests in test_session_manager_async.py
 
     @pytest.mark.asyncio
     async def test_start_episode_invalid_session(self, session_manager_with_session):

@@ -352,22 +352,35 @@ class TestPushTranscriptDelta:
 
     @pytest.mark.asyncio
     async def test_push_delta_retry_on_server_error(self):
-        """Test retry logic on 500 server errors."""
+        """Test retry logic on 500 server errors with exponential backoff."""
         messages = [ChatMessageUser(content="Test")]
 
         with patch("aiohttp.ClientSession") as mock_session_class:
-            mock_response = AsyncMock()
-            mock_response.status = 500
-            mock_response.text = AsyncMock(return_value="Server error")
-            mock_response.__aenter__.return_value = mock_response
+            # Create responses that eventually succeed after a few retries
+            responses = []
+            for _ in range(3):
+                mock_response = AsyncMock()
+                mock_response.status = 500
+                mock_response.text = AsyncMock(return_value="Server error")
+                mock_response.__aenter__.return_value = mock_response
+                mock_response.__aexit__.return_value = AsyncMock()
+                responses.append(mock_response)
+
+            # Final success response
+            success_response = AsyncMock()
+            success_response.status = 200
+            success_response.__aenter__.return_value = success_response
+            success_response.__aexit__.return_value = AsyncMock()
+            responses.append(success_response)
 
             mock_session = AsyncMock()
-            mock_session.post.return_value = mock_response
+            mock_session.post = MagicMock(side_effect=responses)
             mock_session.__aenter__.return_value = mock_session
+            mock_session.__aexit__.return_value = AsyncMock()
 
             mock_session_class.return_value = mock_session
 
-            with patch("asyncio.sleep", new_callable=AsyncMock):
+            with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
                 await _push_transcript_delta(
                     messages=messages,
                     session_id="session_123",
@@ -375,60 +388,94 @@ class TestPushTranscriptDelta:
                     rest_url="http://localhost:8000",
                 )
 
-                # Should retry (3 attempts total)
-                assert mock_session.post.call_count == TranscriptSyncConfig.MAX_RETRIES
+                # Should retry 3 times then succeed (4 attempts total)
+                assert mock_session.post.call_count == 4
+                # Should sleep 3 times with exponential backoff
+                assert mock_sleep.call_count == 3
 
     @pytest.mark.asyncio
     async def test_push_delta_timeout_retry(self):
-        """Test retry logic on timeout errors."""
+        """Test retry logic on timeout errors with exponential backoff (retries until success)."""
         messages = [ChatMessageUser(content="Test")]
 
-        with patch("aiohttp.ClientSession") as mock_session_class:
-            mock_response = AsyncMock()
-            mock_response.__aenter__.side_effect = asyncio.TimeoutError()
+        with patch("aiohttp.ClientSession") as mock_session_class, \
+             patch("saber.inspect_ai.integration.transcript_sync.asyncio.sleep", new_callable=AsyncMock):
+            # Make the post().__aenter__() raise TimeoutError then succeed
+            call_count = 0
+            def create_response():
+                nonlocal call_count
+                call_count += 1
+                mock_response = AsyncMock()
+                if call_count <= 3:
+                    # First 3 attempts timeout
+                    async def timeout_enter():
+                        raise asyncio.TimeoutError()
+                    mock_response.__aenter__ = timeout_enter
+                else:
+                    # 4th attempt succeeds
+                    mock_response.status = 200
+                    mock_response.__aenter__.return_value = mock_response
+                    mock_response.__aexit__.return_value = AsyncMock()
+                return mock_response
 
             mock_session = AsyncMock()
-            mock_session.post.return_value = mock_response
+            mock_session.post = MagicMock(side_effect=lambda *args, **kwargs: create_response())
             mock_session.__aenter__.return_value = mock_session
+            mock_session.__aexit__.return_value = AsyncMock()
 
             mock_session_class.return_value = mock_session
 
-            with patch("asyncio.sleep", new_callable=AsyncMock):
-                await _push_transcript_delta(
-                    messages=messages,
-                    session_id="session_123",
-                    episode_id="episode_456",
-                    rest_url="http://localhost:8000",
-                )
+            await _push_transcript_delta(
+                messages=messages,
+                session_id="session_123",
+                episode_id="episode_456",
+                rest_url="http://localhost:8000",
+            )
 
-                # Should retry on timeout
-                assert mock_session.post.call_count == TranscriptSyncConfig.MAX_RETRIES
+            # Should retry 3 times then succeed (4 attempts total)
+            assert mock_session.post.call_count == 4
 
     @pytest.mark.asyncio
     async def test_push_delta_network_error_retry(self):
-        """Test retry logic on network errors."""
+        """Test retry logic on network errors with exponential backoff (retries until success)."""
         messages = [ChatMessageUser(content="Test")]
 
-        with patch("aiohttp.ClientSession") as mock_session_class:
-            mock_response = AsyncMock()
-            mock_response.__aenter__.side_effect = aiohttp.ClientError("Connection failed")
+        with patch("aiohttp.ClientSession") as mock_session_class, \
+             patch("saber.inspect_ai.integration.transcript_sync.asyncio.sleep", new_callable=AsyncMock):
+            # Make the post().__aenter__() raise ClientError then succeed
+            call_count = 0
+            def create_response():
+                nonlocal call_count
+                call_count += 1
+                mock_response = AsyncMock()
+                if call_count <= 3:
+                    # First 3 attempts fail with network error
+                    async def error_enter():
+                        raise aiohttp.ClientError("Connection failed")
+                    mock_response.__aenter__ = error_enter
+                else:
+                    # 4th attempt succeeds
+                    mock_response.status = 200
+                    mock_response.__aenter__.return_value = mock_response
+                    mock_response.__aexit__.return_value = AsyncMock()
+                return mock_response
 
             mock_session = AsyncMock()
-            mock_session.post.return_value = mock_response
+            mock_session.post = MagicMock(side_effect=lambda *args, **kwargs: create_response())
             mock_session.__aenter__.return_value = mock_session
+            mock_session.__aexit__.return_value = AsyncMock()
 
             mock_session_class.return_value = mock_session
 
-            with patch("asyncio.sleep", new_callable=AsyncMock):
-                await _push_transcript_delta(
-                    messages=messages,
-                    session_id="session_123",
-                    episode_id="episode_456",
-                    rest_url="http://localhost:8000",
-                )
+            await _push_transcript_delta(
+                messages=messages,
+                session_id="session_123",
+                episode_id="episode_456",
+                rest_url="http://localhost:8000",
+            )
 
-                # Should retry on network error
-                assert mock_session.post.call_count == TranscriptSyncConfig.MAX_RETRIES
+            # Should retry 3 times then succeed (4 attempts total)
+            assert mock_session.post.call_count == 4
 
 
 class TestPushTranscript:
@@ -941,25 +988,36 @@ class TestAdditionalEdgeCases:
                 assert mock_sleep.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_push_delta_all_retries_exhausted(self):
-        """Test logging when all retries are exhausted."""
+    async def test_push_delta_exponential_backoff_pattern(self):
+        """Test exponential backoff pattern with capped retry delays."""
         messages = [ChatMessageUser(content="Test")]
 
         with patch("aiohttp.ClientSession") as mock_session_class:
-            mock_response = AsyncMock()
-            mock_response.status = 500
-            mock_response.text = AsyncMock(return_value="Server error")
-            mock_response.__aenter__.return_value = mock_response
-            mock_response.__aexit__.return_value = AsyncMock()
+            # Fail multiple times then succeed to test backoff pattern
+            responses = []
+            for _ in range(5):
+                mock_response = AsyncMock()
+                mock_response.status = 500
+                mock_response.text = AsyncMock(return_value="Server error")
+                mock_response.__aenter__.return_value = mock_response
+                mock_response.__aexit__.return_value = AsyncMock()
+                responses.append(mock_response)
+
+            # Success on 6th attempt
+            success_response = AsyncMock()
+            success_response.status = 200
+            success_response.__aenter__.return_value = success_response
+            success_response.__aexit__.return_value = AsyncMock()
+            responses.append(success_response)
 
             mock_session = AsyncMock()
-            mock_session.post = MagicMock(return_value=mock_response)
+            mock_session.post = MagicMock(side_effect=responses)
             mock_session.__aenter__.return_value = mock_session
             mock_session.__aexit__.return_value = AsyncMock()
 
             mock_session_class.return_value = mock_session
 
-            with patch("asyncio.sleep", new_callable=AsyncMock):
+            with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
                 await _push_transcript_delta(
                     messages=messages,
                     session_id="session_123",
@@ -967,8 +1025,14 @@ class TestAdditionalEdgeCases:
                     rest_url="http://localhost:8000",
                 )
 
-                # All retries should be exhausted
-                assert mock_session.post.call_count == TranscriptSyncConfig.MAX_RETRIES
+                # Verify exponential backoff delays: 1.0, 2.0, 4.0, 8.0, 16.0
+                assert mock_sleep.call_count == 5
+                sleep_delays = [call.args[0] for call in mock_sleep.call_args_list]
+                assert sleep_delays[0] == 1.0  # Initial delay
+                assert sleep_delays[1] == 2.0  # 1.0 * 2.0
+                assert sleep_delays[2] == 4.0  # 2.0 * 2.0
+                assert sleep_delays[3] == 8.0  # 4.0 * 2.0
+                assert sleep_delays[4] == 16.0  # 8.0 * 2.0
 
     @pytest.mark.asyncio
     async def test_push_transcript_retry_with_sleep(self):
@@ -1010,87 +1074,132 @@ class TestAdditionalEdgeCases:
 
     @pytest.mark.asyncio
     async def test_push_transcript_timeout_error(self):
-        """Test _push_transcript handling of timeout errors."""
+        """Test _push_transcript handling of timeout errors with exponential backoff (retries until success)."""
         state = Mock(spec=TaskState)
         state.messages = [ChatMessageUser(content="Test")]
 
-        with patch("aiohttp.ClientSession") as mock_session_class:
-            mock_response = AsyncMock()
-            mock_response.__aenter__.side_effect = asyncio.TimeoutError()
+        with patch("aiohttp.ClientSession") as mock_session_class, \
+             patch("saber.inspect_ai.integration.transcript_sync.asyncio.sleep", new_callable=AsyncMock):
+            # Make the post().__aenter__() raise TimeoutError then succeed
+            call_count = 0
+            def create_response():
+                nonlocal call_count
+                call_count += 1
+                mock_response = AsyncMock()
+                if call_count <= 3:
+                    # First 3 attempts timeout
+                    async def timeout_enter():
+                        raise asyncio.TimeoutError()
+                    mock_response.__aenter__ = timeout_enter
+                else:
+                    # 4th attempt succeeds
+                    mock_response.status = 200
+                    mock_response.__aenter__.return_value = mock_response
+                    mock_response.__aexit__.return_value = AsyncMock()
+                return mock_response
 
             mock_session = AsyncMock()
-            mock_session.post = MagicMock(return_value=mock_response)
+            mock_session.post = MagicMock(side_effect=lambda *args, **kwargs: create_response())
             mock_session.__aenter__.return_value = mock_session
             mock_session.__aexit__.return_value = AsyncMock()
 
             mock_session_class.return_value = mock_session
 
-            with patch("asyncio.sleep", new_callable=AsyncMock):
-                await _push_transcript(
-                    state=state,
-                    session_id="session_123",
-                    episode_id="episode_456",
-                    rest_url="http://localhost:8000",
-                )
+            await _push_transcript(
+                state=state,
+                session_id="session_123",
+                episode_id="episode_456",
+                rest_url="http://localhost:8000",
+            )
 
-                # Should retry on timeout
-                assert mock_session.post.call_count == TranscriptSyncConfig.MAX_RETRIES
+            # Should retry 3 times then succeed (4 attempts total)
+            assert mock_session.post.call_count == 4
 
     @pytest.mark.asyncio
     async def test_push_transcript_network_error(self):
-        """Test _push_transcript handling of network errors."""
+        """Test _push_transcript handling of network errors with exponential backoff (retries until success)."""
         state = Mock(spec=TaskState)
         state.messages = [ChatMessageUser(content="Test")]
 
-        with patch("aiohttp.ClientSession") as mock_session_class:
-            mock_response = AsyncMock()
-            mock_response.__aenter__.side_effect = aiohttp.ClientError("Connection reset")
+        with patch("aiohttp.ClientSession") as mock_session_class, \
+             patch("saber.inspect_ai.integration.transcript_sync.asyncio.sleep", new_callable=AsyncMock):
+            # Make the post().__aenter__() raise ClientError then succeed
+            call_count = 0
+            def create_response():
+                nonlocal call_count
+                call_count += 1
+                mock_response = AsyncMock()
+                if call_count <= 3:
+                    # First 3 attempts fail with network error
+                    async def error_enter():
+                        raise aiohttp.ClientError("Connection reset")
+                    mock_response.__aenter__ = error_enter
+                else:
+                    # 4th attempt succeeds
+                    mock_response.status = 200
+                    mock_response.__aenter__.return_value = mock_response
+                    mock_response.__aexit__.return_value = AsyncMock()
+                return mock_response
 
             mock_session = AsyncMock()
-            mock_session.post = MagicMock(return_value=mock_response)
+            mock_session.post = MagicMock(side_effect=lambda *args, **kwargs: create_response())
             mock_session.__aenter__.return_value = mock_session
             mock_session.__aexit__.return_value = AsyncMock()
 
             mock_session_class.return_value = mock_session
 
-            with patch("asyncio.sleep", new_callable=AsyncMock):
-                await _push_transcript(
-                    state=state,
-                    session_id="session_123",
-                    episode_id="episode_456",
-                    rest_url="http://localhost:8000",
-                )
+            await _push_transcript(
+                state=state,
+                session_id="session_123",
+                episode_id="episode_456",
+                rest_url="http://localhost:8000",
+            )
 
-                # Should retry on network error
-                assert mock_session.post.call_count == TranscriptSyncConfig.MAX_RETRIES
+            # Should retry 3 times then succeed (4 attempts total)
+            assert mock_session.post.call_count == 4
 
     @pytest.mark.asyncio
     async def test_push_transcript_generic_exception(self):
-        """Test _push_transcript handling of unexpected exceptions."""
+        """Test _push_transcript handling of unexpected exceptions with exponential backoff (retries until success)."""
         state = Mock(spec=TaskState)
         state.messages = [ChatMessageUser(content="Test")]
 
-        with patch("aiohttp.ClientSession") as mock_session_class:
-            mock_response = AsyncMock()
-            mock_response.__aenter__.side_effect = RuntimeError("Unexpected error")
+        with patch("aiohttp.ClientSession") as mock_session_class, \
+             patch("saber.inspect_ai.integration.transcript_sync.asyncio.sleep", new_callable=AsyncMock):
+            # Make the post().__aenter__() raise RuntimeError then succeed
+            call_count = 0
+            def create_response():
+                nonlocal call_count
+                call_count += 1
+                mock_response = AsyncMock()
+                if call_count <= 3:
+                    # First 3 attempts fail with unexpected error
+                    async def error_enter():
+                        raise RuntimeError("Unexpected error")
+                    mock_response.__aenter__ = error_enter
+                else:
+                    # 4th attempt succeeds
+                    mock_response.status = 200
+                    mock_response.__aenter__.return_value = mock_response
+                    mock_response.__aexit__.return_value = AsyncMock()
+                return mock_response
 
             mock_session = AsyncMock()
-            mock_session.post = MagicMock(return_value=mock_response)
+            mock_session.post = MagicMock(side_effect=lambda *args, **kwargs: create_response())
             mock_session.__aenter__.return_value = mock_session
             mock_session.__aexit__.return_value = AsyncMock()
 
             mock_session_class.return_value = mock_session
 
-            with patch("asyncio.sleep", new_callable=AsyncMock):
-                await _push_transcript(
-                    state=state,
-                    session_id="session_123",
-                    episode_id="episode_456",
-                    rest_url="http://localhost:8000",
-                )
+            await _push_transcript(
+                state=state,
+                session_id="session_123",
+                episode_id="episode_456",
+                rest_url="http://localhost:8000",
+            )
 
-                # Should retry on unexpected errors
-                assert mock_session.post.call_count == TranscriptSyncConfig.MAX_RETRIES
+            # Should retry 3 times then succeed (4 attempts total)
+            assert mock_session.post.call_count == 4
 
     @pytest.mark.asyncio
     async def test_push_transcript_validation_error_no_retry(self):

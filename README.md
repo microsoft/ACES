@@ -293,28 +293,85 @@ uv run pytest
 uv run pre-commit install
 ```
 
+### Testing and Coverage
+
+**Run unit tests:**
+
+```bash
+# Run all tests
+uv run pytest
+
+# Run specific test file
+uv run pytest tests/server/test_session_manager.py -v
+
+# Run specific test class or function
+uv run pytest tests/server/test_session_manager.py::TestSessionManagerBasics::test_create_session -v
+
+# Run tests quietly (less verbose)
+uv run pytest tests/server/ -q
+```
+
+**Measure code coverage:**
+
+```bash
+# Run tests with coverage collection
+uv run coverage run -m pytest tests/server/ -q
+
+# View coverage report in terminal
+uv run coverage report
+
+# View coverage for specific file
+uv run coverage report --include="src/saber/server/session_manager.py"
+
+# Generate detailed HTML coverage report
+uv run coverage html
+# Open htmlcov/index.html in browser to view line-by-line coverage
+```
+
+**Analyze coverage gaps:**
+
+```bash
+# Generate JSON coverage data for programmatic analysis
+uv run coverage json
+
+# View missing lines as annotated source
+uv run coverage annotate src/saber/server/session_manager.py
+# Creates session_manager.py,cover with ! marking uncovered lines
+
+# Quick coverage summary with line numbers
+uv run coverage report --show-missing --include="src/saber/server/session_manager.py"
+```
+
+**Coverage targets:**
+
+- Overall project: Aim for >80% coverage
+- Core modules (session_manager, execution_manager): Aim for >85% coverage
+- Critical paths (security, evaluation): Aim for >90% coverage
+
+**Example workflow:**
+
+```bash
+# 1. Run tests with coverage
+uv run coverage run -m pytest tests/server/ -q
+
+# 2. Check overall coverage
+uv run coverage report
+
+# 3. Identify gaps in specific module
+uv run coverage report --show-missing --include="src/saber/server/session_manager.py"
+
+# 4. Generate HTML report for detailed analysis
+uv run coverage html
+
+# 5. Open htmlcov/index.html to see which lines need tests
+```
+
 ### Code Quality
 
 ```bash
 # Run all quality checks
 uv run pre-commit run --all-files
 ```
-
-
-### Example: Type-Safe Configuration
-
-```python
-from pydantic import BaseModel, Field
-
-class AgentConfig(BaseModel):
-    """Fail-fast configuration with strict validation."""
-    name: str = Field(..., description="Agent identifier")
-    timeout: int = Field(default=300, ge=1)
-    
-    class Config:
-        extra = "forbid"  # Fail on unknown fields
-```
-
 
 1. Create feature branch: `git checkout -b feature/your-feature`
 2. Make changes with type hints and validation

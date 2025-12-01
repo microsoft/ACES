@@ -375,11 +375,11 @@ async def _push_transcript_delta(
     # Construct URL
     url = f"{rest_url}/api/v1/session/{session_id}/episodes/{episode_id}/transcript"
 
-    # Retry configuration
-    max_retries = TranscriptSyncConfig.MAX_RETRIES
-    retry_delays = TranscriptSyncConfig.RETRY_DELAYS_SECONDS
+    # Retry configuration - exponential backoff with unlimited retries
+    attempt = 0
+    retry_delay = TranscriptSyncConfig.INITIAL_RETRY_DELAY_SECONDS
 
-    for attempt in range(max_retries):
+    while True:
         try:
             timeout = aiohttp.ClientTimeout(total=TranscriptSyncConfig.REQUEST_TIMEOUT_SECONDS)
             async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -390,6 +390,7 @@ async def _push_transcript_delta(
                             extra={
                                 "episode_id": episode_id,
                                 "message_count": len(messages),
+                                "attempts": attempt + 1,
                             },
                         )
                         return
@@ -406,60 +407,71 @@ async def _push_transcript_delta(
                         )
                         return
                     else:
-                        # Server error - retry
+                        # Server error - retry with exponential backoff
                         error_text = await resp.text()
                         logger.warning(
-                            f"Failed to push transcript delta (attempt {attempt + 1}/{max_retries})",
+                            f"Failed to push transcript delta (attempt {attempt + 1}), retrying in {retry_delay:.1f}s",
                             extra={
                                 "episode_id": episode_id,
                                 "status_code": resp.status,
                                 "error": error_text,
+                                "retry_delay": retry_delay,
                             },
                         )
-                        if attempt < max_retries - 1:
-                            await asyncio.sleep(retry_delays[attempt])
+                        await asyncio.sleep(retry_delay)
+                        attempt += 1
+                        retry_delay = min(
+                            retry_delay * TranscriptSyncConfig.BACKOFF_MULTIPLIER,
+                            TranscriptSyncConfig.MAX_RETRY_DELAY_SECONDS,
+                        )
 
         except asyncio.TimeoutError:
             logger.warning(
-                f"Timeout pushing transcript delta (attempt {attempt + 1}/{max_retries})",
+                f"Timeout pushing transcript delta (attempt {attempt + 1}), retrying in {retry_delay:.1f}s",
                 extra={
                     "episode_id": episode_id,
                     "error": "Request timeout",
+                    "retry_delay": retry_delay,
                 },
             )
-            if attempt < max_retries - 1:
-                await asyncio.sleep(retry_delays[attempt])
+            await asyncio.sleep(retry_delay)
+            attempt += 1
+            retry_delay = min(
+                retry_delay * TranscriptSyncConfig.BACKOFF_MULTIPLIER,
+                TranscriptSyncConfig.MAX_RETRY_DELAY_SECONDS,
+            )
 
         except aiohttp.ClientError as e:
             logger.warning(
-                f"Network error pushing transcript delta (attempt {attempt + 1}/{max_retries})",
+                f"Network error pushing transcript delta (attempt {attempt + 1}), retrying in {retry_delay:.1f}s",
                 extra={
                     "episode_id": episode_id,
                     "error": str(e),
+                    "retry_delay": retry_delay,
                 },
             )
-            if attempt < max_retries - 1:
-                await asyncio.sleep(retry_delays[attempt])
+            await asyncio.sleep(retry_delay)
+            attempt += 1
+            retry_delay = min(
+                retry_delay * TranscriptSyncConfig.BACKOFF_MULTIPLIER,
+                TranscriptSyncConfig.MAX_RETRY_DELAY_SECONDS,
+            )
 
         except Exception as e:
             logger.warning(
-                f"Unexpected error pushing transcript delta (attempt {attempt + 1}/{max_retries})",
+                f"Unexpected error pushing transcript delta (attempt {attempt + 1}), retrying in {retry_delay:.1f}s",
                 extra={
                     "episode_id": episode_id,
                     "error": str(e),
+                    "retry_delay": retry_delay,
                 },
             )
-            if attempt < max_retries - 1:
-                await asyncio.sleep(retry_delays[attempt])
-
-    # If we get here, all retries failed
-    logger.error(
-        "Failed to push transcript delta after all retry attempts",
-        extra={
-            "episode_id": episode_id,
-            "max_retries": max_retries,
-        },
-    )
+            await asyncio.sleep(retry_delay)
+            attempt += 1
+            retry_delay = min(
+                retry_delay * TranscriptSyncConfig.BACKOFF_MULTIPLIER,
+                TranscriptSyncConfig.MAX_RETRY_DELAY_SECONDS,
+            )
 
 
 async def _push_transcript(
@@ -553,11 +565,11 @@ async def _push_transcript(
     # Construct URL
     url = f"{rest_url}/api/v1/session/{session_id}/episodes/{episode_id}/transcript"
 
-    # Retry configuration
-    max_retries = TranscriptSyncConfig.MAX_RETRIES
-    retry_delays = TranscriptSyncConfig.RETRY_DELAYS_SECONDS
+    # Retry configuration - exponential backoff with unlimited retries
+    attempt = 0
+    retry_delay = TranscriptSyncConfig.INITIAL_RETRY_DELAY_SECONDS
 
-    for attempt in range(max_retries):
+    while True:
         try:
             timeout = aiohttp.ClientTimeout(total=TranscriptSyncConfig.REQUEST_TIMEOUT_SECONDS)
             async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -568,6 +580,7 @@ async def _push_transcript(
                             extra={
                                 "episode_id": episode_id,
                                 "message_count": len(messages),
+                                "attempts": attempt + 1,
                             },
                         )
                         return
@@ -584,60 +597,71 @@ async def _push_transcript(
                         )
                         return
                     else:
-                        # Server error - retry
+                        # Server error - retry with exponential backoff
                         error_text = await resp.text()
                         logger.warning(
-                            f"Failed to push transcript (attempt {attempt + 1}/{max_retries})",
+                            f"Failed to push transcript (attempt {attempt + 1}), retrying in {retry_delay:.1f}s",
                             extra={
                                 "episode_id": episode_id,
                                 "status_code": resp.status,
                                 "error": error_text,
+                                "retry_delay": retry_delay,
                             },
                         )
-                        if attempt < max_retries - 1:
-                            await asyncio.sleep(retry_delays[attempt])
+                        await asyncio.sleep(retry_delay)
+                        attempt += 1
+                        retry_delay = min(
+                            retry_delay * TranscriptSyncConfig.BACKOFF_MULTIPLIER,
+                            TranscriptSyncConfig.MAX_RETRY_DELAY_SECONDS,
+                        )
 
         except asyncio.TimeoutError:
             logger.warning(
-                f"Timeout pushing transcript (attempt {attempt + 1}/{max_retries})",
+                f"Timeout pushing transcript (attempt {attempt + 1}), retrying in {retry_delay:.1f}s",
                 extra={
                     "episode_id": episode_id,
                     "error": "Request timeout",
+                    "retry_delay": retry_delay,
                 },
             )
-            if attempt < max_retries - 1:
-                await asyncio.sleep(retry_delays[attempt])
+            await asyncio.sleep(retry_delay)
+            attempt += 1
+            retry_delay = min(
+                retry_delay * TranscriptSyncConfig.BACKOFF_MULTIPLIER,
+                TranscriptSyncConfig.MAX_RETRY_DELAY_SECONDS,
+            )
 
         except aiohttp.ClientError as e:
             logger.warning(
-                f"Network error pushing transcript (attempt {attempt + 1}/{max_retries})",
+                f"Network error pushing transcript (attempt {attempt + 1}), retrying in {retry_delay:.1f}s",
                 extra={
                     "episode_id": episode_id,
                     "error": str(e),
+                    "retry_delay": retry_delay,
                 },
             )
-            if attempt < max_retries - 1:
-                await asyncio.sleep(retry_delays[attempt])
+            await asyncio.sleep(retry_delay)
+            attempt += 1
+            retry_delay = min(
+                retry_delay * TranscriptSyncConfig.BACKOFF_MULTIPLIER,
+                TranscriptSyncConfig.MAX_RETRY_DELAY_SECONDS,
+            )
 
         except Exception as e:
             logger.warning(
-                f"Unexpected error pushing transcript (attempt {attempt + 1}/{max_retries})",
+                f"Unexpected error pushing transcript (attempt {attempt + 1}), retrying in {retry_delay:.1f}s",
                 extra={
                     "episode_id": episode_id,
                     "error": str(e),
+                    "retry_delay": retry_delay,
                 },
             )
-            if attempt < max_retries - 1:
-                await asyncio.sleep(retry_delays[attempt])
-
-    # If we get here, all retries failed
-    logger.error(
-        "Failed to push transcript after all retry attempts",
-        extra={
-            "episode_id": episode_id,
-            "max_retries": max_retries,
-        },
-    )
+            await asyncio.sleep(retry_delay)
+            attempt += 1
+            retry_delay = min(
+                retry_delay * TranscriptSyncConfig.BACKOFF_MULTIPLIER,
+                TranscriptSyncConfig.MAX_RETRY_DELAY_SECONDS,
+            )
 
 
 async def pull_injected_messages(

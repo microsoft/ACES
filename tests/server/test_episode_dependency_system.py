@@ -144,17 +144,37 @@ class TestEpisodeDependencySystem:
             manager.episode_manager = episode_manager
             manager.execution_manager = MagicMock()
             manager.execution_manager.configure_for_task = MagicMock()
+            manager.execution_manager.configure_for_task_async = AsyncMock(return_value=("orchestrator", "compose_path"))
+            manager.execution_manager.wait_for_episode_healthy = AsyncMock()
+            manager.execution_manager.copy_initial_files_to_episode = AsyncMock()
             manager.policy_manager = MagicMock()
             manager.policy_manager.set_episode_policy = MagicMock()
             manager.evaluation_manager = MagicMock()
             manager.evaluation_manager.configure_for_task = MagicMock()
             manager.evaluation_manager.log_episode_start = AsyncMock()
 
+            # Mock prompt generator
+            mock_benchmark_manager.prompt_generator.render_agent_prompts_for_task.return_value = {
+                "instruction": "test",
+                "assistant": "test",
+                "submit": "test"
+            }
+
             # Mock _get_session method
             mock_session = MagicMock()
             mock_session.session_id = "test_session"
             mock_session.active_episode_ids = []
-            mock_session.add_active_episode = MagicMock()
+
+            def mock_add_active_episode(episode_id):
+                if episode_id not in mock_session.active_episode_ids:
+                    mock_session.active_episode_ids.append(episode_id)
+
+            def mock_move_to_active_episode(episode_id):
+                if episode_id not in mock_session.active_episode_ids:
+                    mock_session.active_episode_ids.append(episode_id)
+
+            mock_session.add_active_episode = mock_add_active_episode
+            mock_session.move_to_active_episode = mock_move_to_active_episode
             mock_session.update_activity = MagicMock()
             manager._get_session = MagicMock(return_value=mock_session)
 
@@ -166,12 +186,19 @@ class TestEpisodeDependencySystem:
         # Create episode for independent task
         episode = await session_manager.start_episode("test_session", "independent_task")
 
+        # Episode starts in CREATING state
+        assert episode.state == EpisodeState.CREATING
+
+        # Simulate finalization by moving to READY then ACTIVE
+        session_manager.episode_manager.mark_episode_ready(episode.episode_id)
+        session = session_manager._get_session("test_session")
+        session.move_to_active_episode(episode.episode_id)
+
         # Verify episode created successfully
         assert episode.task_id == "independent_task"
         assert episode.depends_on_task_id is None
         assert episode.attached_to_episode_id is None
         assert len(episode.attached_episode_ids) == 0
-        assert episode.state == EpisodeState.ACTIVE
 
     @pytest.mark.asyncio
     async def test_dependent_task_attaches_to_running_episode(self, session_manager):
@@ -179,8 +206,17 @@ class TestEpisodeDependencySystem:
         # First, create an independent episode
         independent_episode = await session_manager.start_episode("test_session", "independent_task")
 
+        # Move independent episode to ACTIVE state
+        session_manager.episode_manager.mark_episode_ready(independent_episode.episode_id)
+        session = session_manager._get_session("test_session")
+        session.move_to_active_episode(independent_episode.episode_id)
+
         # Now create a dependent episode - should auto-attach
         dependent_episode = await session_manager.start_episode("test_session", "dependent_task")
+
+        # Move dependent episode to ACTIVE state
+        session_manager.episode_manager.mark_episode_ready(dependent_episode.episode_id)
+        session.move_to_active_episode(dependent_episode.episode_id)
 
         # Verify dependency attachment
         assert dependent_episode.task_id == "dependent_task"
@@ -207,11 +243,20 @@ class TestEpisodeDependencySystem:
         # Create an independent episode
         independent_episode = await session_manager.start_episode("test_session", "independent_task")
 
+        # Move independent episode to ACTIVE state
+        session_manager.episode_manager.mark_episode_ready(independent_episode.episode_id)
+        session = session_manager._get_session("test_session")
+        session.move_to_active_episode(independent_episode.episode_id)
+
         # Create first dependent episode
         dependent_episode_1 = await session_manager.start_episode("test_session", "dependent_task")
+        session_manager.episode_manager.mark_episode_ready(dependent_episode_1.episode_id)
+        session.move_to_active_episode(dependent_episode_1.episode_id)
 
         # Create second dependent episode with different task_id - should still be able to attach
         dependent_episode_2 = await session_manager.start_episode("test_session", "another_dependent_task")
+        session_manager.episode_manager.mark_episode_ready(dependent_episode_2.episode_id)
+        session.move_to_active_episode(dependent_episode_2.episode_id)
 
         # Both should attach to the same independent episode
         assert dependent_episode_1.attached_to_episode_id == independent_episode.episode_id
@@ -237,11 +282,18 @@ class TestEpisodeDependencySystem:
     @pytest.mark.asyncio
     async def test_dependency_only_attaches_to_active_episodes(self, session_manager, episode_manager):
         """Test that dependencies only attach to ACTIVE episodes, not completed ones."""
-        # Create an independent episode and manually mark it as completed
+        # Create an independent episode
         independent_episode = await session_manager.start_episode("test_session", "independent_task")
-        independent_episode.state = EpisodeState.COMPLETED
 
-        # Try to create dependent episode - should fail since target is not ACTIVE
+        # Move to ACTIVE first
+        session_manager.episode_manager.mark_episode_ready(independent_episode.episode_id)
+        session = session_manager._get_session("test_session")
+        session.move_to_active_episode(independent_episode.episode_id)
+
+        # Then complete the episode (moves it from active to completed)
+        session_manager.episode_manager.complete_episode(independent_episode.episode_id)
+
+        # Try to create dependent episode - should fail since target is completed
         with pytest.raises(ValueError) as exc_info:
             await session_manager.start_episode("test_session", "dependent_task")
 
@@ -340,8 +392,17 @@ class TestEpisodeDependencySystem:
         # Create an independent episode
         independent_episode = await session_manager.start_episode("test_session", "independent_task")
 
+        # Move independent episode to ACTIVE state
+        session_manager.episode_manager.mark_episode_ready(independent_episode.episode_id)
+        session = session_manager._get_session("test_session")
+        session.move_to_active_episode(independent_episode.episode_id)
+
         # Create first dependent episode
         dependent_episode_1 = await session_manager.start_episode("test_session", "dependent_task")
+
+        # Move dependent episode to ACTIVE state
+        session_manager.episode_manager.mark_episode_ready(dependent_episode_1.episode_id)
+        session.move_to_active_episode(dependent_episode_1.episode_id)
 
         # Verify first episode attached successfully
         assert dependent_episode_1.attached_to_episode_id == independent_episode.episode_id
@@ -358,8 +419,17 @@ class TestEpisodeDependencySystem:
         # First create the independent episode
         independent_episode = await session_manager.start_episode("test_session", "independent_task")
 
+        # Move independent episode to ACTIVE state
+        session_manager.episode_manager.mark_episode_ready(independent_episode.episode_id)
+        session = session_manager._get_session("test_session")
+        session.move_to_active_episode(independent_episode.episode_id)
+
         # The dependent episode should now find the independent episode
         dependent_episode = await session_manager.start_episode("test_session", "dependent_task")
+
+        # Move dependent episode to ACTIVE state
+        session_manager.episode_manager.mark_episode_ready(dependent_episode.episode_id)
+        session.move_to_active_episode(dependent_episode.episode_id)
 
         # Verify the dependency attachment worked
         assert dependent_episode.attached_to_episode_id == independent_episode.episode_id

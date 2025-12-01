@@ -4,6 +4,7 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
+from fastapi import HTTPException
 
 from saber.server.base import EpisodeState
 from saber.server.session_manager import SessionManager
@@ -87,16 +88,16 @@ class TestSessionManagerAsync:
     """Test async session manager episode creation."""
 
     @pytest.mark.asyncio
-    async def test_initiate_episode_returns_immediately_with_creating_state(
+    async def test_start_episode_returns_immediately_with_creating_state(
         self, session_manager, mock_episode_manager
     ):
-        """Test that initiate_episode returns immediately with CREATING state."""
+        """Test that start_episode returns immediately with CREATING state."""
         # Create a session first
         session = await session_manager.create_session("test-client")
         session_id = session.session_id
         task_id = "test-task"
 
-        response = await session_manager.initiate_episode(session_id, task_id)
+        response = await session_manager.start_episode(session_id, task_id)
 
         # Verify episode is in CREATING state
         assert response.state == EpisodeState.CREATING
@@ -117,7 +118,7 @@ class TestSessionManagerAsync:
         task_id = "test-task"
 
         # Initiate episode
-        response = await session_manager.initiate_episode(session_id, task_id)
+        response = await session_manager.start_episode(session_id, task_id)
         episode_id = response.episode_id
 
         # Wait for background task to complete
@@ -137,28 +138,30 @@ class TestSessionManagerAsync:
     async def test_failed_health_check_marks_episode_failed_creation(
         self, session_manager, mock_episode_manager, mock_execution_manager
     ):
-        """Test that failed health checks mark episode FAILED_CREATION."""
+        """Test that failed health checks mark episode FAILED_CREATION and raise HTTPException."""
         # Create a session first
         session = await session_manager.create_session("test-client")
         session_id = session.session_id
         task_id = "test-task"
 
-        # Make health check fail
-        mock_execution_manager.wait_for_episode_healthy.side_effect = Exception("Health check timeout")
+        # Make health check fail with async function
+        async def fail_health(*args, **kwargs):
+            raise Exception("Health check timeout")
 
-        # Initiate episode
-        response = await session_manager.initiate_episode(session_id, task_id)
-        episode_id = response.episode_id
+        mock_execution_manager.wait_for_episode_healthy = fail_health
 
-        # Wait for background task to complete
-        await asyncio.sleep(0.1)
+        # start_episode succeeds (kicks off background task)
+        episode = await session_manager.start_episode(session_id, task_id)
+        episode_id = episode.episode_id
 
-        # Allow pending tasks to run
-        for _ in range(5):
-            await asyncio.sleep(0.01)
+        # Wait for background finalization to complete
+        await asyncio.sleep(0.2)
 
-        # Verify episode was marked failed
+        # Episode should be marked as failed
         mock_episode_manager.mark_episode_failed_creation.assert_called()
+        call_args = mock_episode_manager.mark_episode_failed_creation.call_args
+        assert call_args[0][0] == episode_id
+        assert "Health check failed" in call_args[0][1]
 
     @pytest.mark.asyncio
     async def test_get_episode_status_returns_correct_episode(
@@ -193,7 +196,7 @@ class TestSessionManagerAsync:
         # Create multiple episodes concurrently
         tasks = []
         for i in range(10):
-            task = session_manager.initiate_episode(sessions[i].session_id, f"task-{i}")
+            task = session_manager.start_episode(sessions[i].session_id, f"task-{i}")
             tasks.append(task)
 
         # All should return immediately
@@ -214,7 +217,7 @@ class TestSessionManagerAsync:
         task_id = "test-task"
 
         # Initiate episode
-        response = await session_manager.initiate_episode(session_id, task_id)
+        response = await session_manager.start_episode(session_id, task_id)
 
         # Task should be tracked
         assert response.episode_id in session_manager._episode_finalization_tasks

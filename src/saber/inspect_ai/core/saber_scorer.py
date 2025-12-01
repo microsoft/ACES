@@ -1028,7 +1028,11 @@ async def _score_all_subtasks(
         elif criteria.strategy == StepEvaluationStrategy.TOOL_CALL:
             tasks.append(_score_subtask_tool_call(steps_data, criteria))
         elif criteria.strategy == StepEvaluationStrategy.LLM_JUDGE:
-            tasks.append(_score_subtask_llm(steps_data, criteria, task_context, session_manager, state))
+            tasks.append(
+                _score_subtask_llm(
+                    steps_data, criteria, task_context, session_manager, state, list_of_all_subtask_criteria
+                )
+            )
         else:
             raise RuntimeError(f"Unknown subtask strategy: {criteria.strategy}")
 
@@ -1246,6 +1250,7 @@ async def _score_subtask_llm(
     task_context: Any,
     session_manager: Any,
     state: TaskState,
+    all_subtask_criteria: Optional[List[SubtaskEvaluationCriteriaResponse]] = None,
 ) -> Tuple[float, List[StepEvaluation]]:
     """
     Score steps using LLM evaluation.
@@ -1256,6 +1261,7 @@ async def _score_subtask_llm(
         task_context: Task context
         session_manager: Client session manager
         state: Task state
+        all_subtask_criteria: Optional list of all subtask criteria for context
 
     Returns:
         Tuple of (total_step_score, list_of_step_evaluations)
@@ -1321,6 +1327,21 @@ async def _score_subtask_llm(
 
         # Build simplified context for subtask evaluation
         # Use information directly from criteria instead of searching task_context
+        # Build subtasks list from all_subtask_criteria if available
+        subtasks_for_template = []
+        if all_subtask_criteria:
+            for subtask in all_subtask_criteria:
+                subtasks_for_template.append(
+                    {
+                        "subtask_id": subtask.subtask_id,
+                        "title": subtask.title,
+                        "description": subtask.description,
+                        "objective": subtask.objective,
+                    }
+                )
+        elif hasattr(task_context, "subtasks"):
+            subtasks_for_template = task_context.subtasks
+
         context = {
             "question": task_context.description,
             "episode": episode,  # Steps to evaluate
@@ -1334,6 +1355,14 @@ async def _score_subtask_llm(
             "model": criteria.criteria.get("model", ""),
             "domain": task_context.domain if hasattr(task_context, "domain") else None,
             "task_id": criteria.task_id,
+            # Add task object with subtasks for template compatibility
+            "task": {
+                "task_id": task_context.task_id,
+                "title": task_context.title,
+                "description": task_context.description,
+                "domain": task_context.domain if hasattr(task_context, "domain") else None,
+                "subtasks": subtasks_for_template,
+            },
         }
 
         # Render templates

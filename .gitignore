@@ -5,6 +5,10 @@
 **/__pycache__/
 *.py[cod]
 *$py.class
+
+# Pytest coverage files
+coverage.json
+coverage_output.txt
 .coverage
 
 # Ignore pytest cache and result files

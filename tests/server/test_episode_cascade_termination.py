@@ -100,6 +100,9 @@ class TestCascadeTermination:
             manager.episode_manager = episode_manager
             manager.execution_manager = MagicMock()
             manager.execution_manager.configure_for_task = MagicMock()
+            manager.execution_manager.configure_for_task_async = AsyncMock(return_value=("orchestrator", "compose_path"))
+            manager.execution_manager.wait_for_episode_healthy = AsyncMock()
+            manager.execution_manager.copy_initial_files_to_episode = AsyncMock()
             manager.execution_manager.cleanup_episode = MagicMock(return_value=True)
             manager.policy_manager = MagicMock()
             manager.policy_manager.set_episode_policy = MagicMock()
@@ -107,6 +110,13 @@ class TestCascadeTermination:
             manager.evaluation_manager.configure_for_task = MagicMock()
             manager.evaluation_manager.log_episode_start = AsyncMock()
             manager.evaluation_manager.evaluate_episode = AsyncMock()
+
+            # Mock prompt generator
+            mock_benchmark_manager.prompt_generator.render_agent_prompts_for_task.return_value = {
+                "instruction": "test",
+                "assistant": "test",
+                "submit": "test"
+            }
 
             # Mock evaluation result
             mock_eval_result = MagicMock()
@@ -130,8 +140,13 @@ class TestCascadeTermination:
                 if episode_id in mock_session.active_episode_ids:
                     mock_session.active_episode_ids.remove(episode_id)
 
+            def mock_move_to_active_episode(episode_id):
+                if episode_id not in mock_session.active_episode_ids:
+                    mock_session.active_episode_ids.append(episode_id)
+
             mock_session.add_active_episode = mock_add_active_episode
             mock_session.complete_episode = mock_complete_episode
+            mock_session.move_to_active_episode = mock_move_to_active_episode
             mock_session.update_activity = MagicMock()
             manager._get_session = MagicMock(return_value=mock_session)
 
@@ -144,8 +159,17 @@ class TestCascadeTermination:
         # Start independent task first
         parent_episode = await session_manager.start_episode(session_id, "independent_task")
 
+        # Move parent episode to ACTIVE state
+        session_manager.episode_manager.mark_episode_ready(parent_episode.episode_id)
+        session = session_manager._get_session(session_id)
+        session.move_to_active_episode(parent_episode.episode_id)
+
         # Start dependent task (should attach to parent)
         dependent_episode = await session_manager.start_episode(session_id, "dependent_task")
+
+        # Move dependent episode to ACTIVE state
+        session_manager.episode_manager.mark_episode_ready(dependent_episode.episode_id)
+        session.move_to_active_episode(dependent_episode.episode_id)
 
         # Verify attachment
         assert dependent_episode.attached_to_episode_id == parent_episode.episode_id
@@ -185,8 +209,17 @@ class TestCascadeTermination:
         # Start independent task first
         parent_episode = await session_manager.start_episode(session_id, "independent_task")
 
+        # Move parent episode to ACTIVE state
+        session_manager.episode_manager.mark_episode_ready(parent_episode.episode_id)
+        session = session_manager._get_session(session_id)
+        session.move_to_active_episode(parent_episode.episode_id)
+
         # Start dependent task (should attach to parent)
         dependent_episode = await session_manager.start_episode(session_id, "dependent_task")
+
+        # Move dependent episode to ACTIVE state
+        session_manager.episode_manager.mark_episode_ready(dependent_episode.episode_id)
+        session.move_to_active_episode(dependent_episode.episode_id)
 
         # Manually complete the parent episode first
         parent_submission = EvalSubmission(
@@ -237,6 +270,11 @@ class TestCascadeTermination:
 
         # Start independent task (no attachment)
         episode = await session_manager.start_episode(session_id, "independent_task")
+
+        # Move episode to ACTIVE state
+        session_manager.episode_manager.mark_episode_ready(episode.episode_id)
+        session = session_manager._get_session(session_id)
+        session.move_to_active_episode(episode.episode_id)
 
         # Verify no attachment
         assert episode.attached_to_episode_id is None
