@@ -105,7 +105,7 @@ async def test_generate_calls_base_model(mock_base_model, mock_model_output, wra
     messages = [ChatMessageUser(content="Hello")]
     tools = []
 
-    with patch("saber.inspect_ai.integration.model_wrapper._push_single_message", new_callable=AsyncMock):
+    with patch.object(wrapper, '_push_single_message', new_callable=AsyncMock):
         result = await wrapper.generate(messages, tools)
 
     # Verify base model was called
@@ -119,16 +119,11 @@ async def test_generate_pushes_assistant_message(mock_base_model, mock_model_out
     mock_base_model.generate.return_value = mock_model_output
     messages = [ChatMessageUser(content="Hello")]
 
-    with patch("saber.inspect_ai.integration.model_wrapper._push_single_message", new_callable=AsyncMock) as mock_push:
+    with patch.object(wrapper, '_push_single_message', new_callable=AsyncMock) as mock_push:
         await wrapper.generate(messages, tools=[])
 
-    # Verify message was pushed
-    mock_push.assert_called_once_with(
-        message=mock_model_output.message,
-        session_id="session_123",
-        episode_id="episode_456",
-        rest_url="http://localhost:8000",
-    )
+    # Verify message was pushed (called as positional argument)
+    mock_push.assert_called_once_with(mock_model_output.message)
 
 
 @pytest.mark.asyncio
@@ -138,7 +133,7 @@ async def test_generate_with_kwargs(mock_base_model, mock_model_output, wrapper)
     messages = [ChatMessageUser(content="Hello")]
     tools = []
 
-    with patch("saber.inspect_ai.integration.model_wrapper._push_single_message", new_callable=AsyncMock):
+    with patch.object(wrapper, '_push_single_message', new_callable=AsyncMock):
         await wrapper.generate(messages, tools, temperature=0.7, max_tokens=100)
 
     # Verify kwargs were passed
@@ -159,7 +154,7 @@ async def test_generate_continues_on_push_failure(mock_base_model, mock_model_ou
     messages = [ChatMessageUser(content="Hello")]
 
     # Make push raise an exception
-    with patch("saber.inspect_ai.integration.model_wrapper._push_single_message", new_callable=AsyncMock) as mock_push:
+    with patch.object(wrapper, '_push_single_message', new_callable=AsyncMock) as mock_push:
         mock_push.side_effect = Exception("Network error")
 
         # Should not raise, should return output
@@ -178,7 +173,7 @@ async def test_generate_continues_on_timeout(mock_base_model, mock_model_output,
     messages = [ChatMessageUser(content="Hello")]
 
     # Make push timeout
-    with patch("saber.inspect_ai.integration.model_wrapper._push_single_message", new_callable=AsyncMock) as mock_push:
+    with patch.object(wrapper, '_push_single_message', new_callable=AsyncMock) as mock_push:
         mock_push.side_effect = asyncio.TimeoutError("Request timeout")
 
         # Should not raise, should return output
@@ -254,7 +249,7 @@ async def test_multiple_generate_calls(mock_base_model, wrapper):
 
     mock_base_model.generate.side_effect = [output1, output2]
 
-    with patch("saber.inspect_ai.integration.model_wrapper._push_single_message", new_callable=AsyncMock) as mock_push:
+    with patch.object(wrapper, '_push_single_message', new_callable=AsyncMock) as mock_push:
         # First call
         result1 = await wrapper.generate([ChatMessageUser(content="Hello")], tools=[])
         assert result1 == output1
@@ -265,8 +260,8 @@ async def test_multiple_generate_calls(mock_base_model, wrapper):
 
     # Verify both messages were pushed
     assert mock_push.call_count == 2
-    assert mock_push.call_args_list[0][1]["message"] == output1.message
-    assert mock_push.call_args_list[1][1]["message"] == output2.message
+    assert mock_push.call_args_list[0].args[0] == output1.message
+    assert mock_push.call_args_list[1].args[0] == output2.message
 
 
 # ============================================================================
@@ -279,7 +274,7 @@ async def test_generate_with_string_input(mock_base_model, mock_model_output, wr
     """Test that wrapper handles string input (not just message list)."""
     mock_base_model.generate.return_value = mock_model_output
 
-    with patch("saber.inspect_ai.integration.model_wrapper._push_single_message", new_callable=AsyncMock):
+    with patch.object(wrapper, '_push_single_message', new_callable=AsyncMock):
         result = await wrapper.generate("Hello, world!", tools=[])
 
     # Verify base model was called with string
@@ -306,7 +301,7 @@ async def test_wrapper_in_agent_loop_simulation(mock_base_model, wrapper):
 
     mock_base_model.generate.side_effect = outputs
 
-    with patch("saber.inspect_ai.integration.model_wrapper._push_single_message", new_callable=AsyncMock) as mock_push:
+    with patch.object(wrapper, '_push_single_message', new_callable=AsyncMock) as mock_push:
         for i in range(3):
             messages = [ChatMessageUser(content=f"Input {i}")]
             result = await wrapper.generate(messages, tools=[])
@@ -315,9 +310,7 @@ async def test_wrapper_in_agent_loop_simulation(mock_base_model, wrapper):
     # Verify all messages were pushed
     assert mock_push.call_count == 3
     for i, call in enumerate(mock_push.call_args_list):
-        assert call[1]["message"].content == f"Response {i}"
-        assert call[1]["session_id"] == "session_123"
-        assert call[1]["episode_id"] == "episode_456"
+        assert call.args[0].content == f"Response {i}"
 
 
 # ============================================================================
@@ -346,7 +339,7 @@ async def test_concurrent_generate_calls(mock_base_model, wrapper):
 
     mock_base_model.generate = AsyncMock(side_effect=generate_side_effect)
 
-    with patch("saber.inspect_ai.integration.model_wrapper._push_single_message", new_callable=AsyncMock):
+    with patch.object(wrapper, '_push_single_message', new_callable=AsyncMock):
         # Run 5 concurrent generate calls
         tasks = [
             wrapper.generate([ChatMessageUser(content=f"Input {i}")], tools=[])

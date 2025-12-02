@@ -288,6 +288,7 @@ class BenchmarkManager:
                 instruction_prompt=root_prompts["instruction"],
                 assistant_prompt=root_prompts["assistant"],
                 submit_prompt=root_prompts["submit"],
+                blocking_config=root_episode_config.get("blocking_config"),
             )
         )
 
@@ -312,6 +313,7 @@ class BenchmarkManager:
                     instruction_prompt=dependent_prompts["instruction"],
                     assistant_prompt=dependent_prompts["assistant"],
                     submit_prompt=dependent_prompts["submit"],
+                    blocking_config=dependent_episode_config.get("blocking_config"),
                 )
             )
 

@@ -62,18 +62,18 @@ class TestAutomaticTargetResolution:
     @pytest.fixture
     def mock_session_manager(self, blue_episode: Episode, red_episode_with_orchestration: Episode, red_episode_without_orchestration: Episode):
         """Create a mock session manager with episode lookup capability."""
-        
+
         class MockEpisodeManager:
             def __init__(self, *episodes):
                 self.episodes = {ep.episode_id: ep for ep in episodes}
-            
+
             def get_episode_by_id(self, episode_id: str):
                 return self.episodes.get(episode_id)
-        
+
         class MockSessionManager:
             def __init__(self, *episodes):
                 self.episode_manager = MockEpisodeManager(*episodes)
-        
+
         return MockSessionManager(blue_episode, red_episode_with_orchestration, red_episode_without_orchestration)
 
     @pytest.mark.asyncio
@@ -90,7 +90,7 @@ class TestAutomaticTargetResolution:
             config={"max_injections_per_episode": 20}
         )
         executor._session_manager = mock_session_manager
-        
+
         # No explicit target_episode_id - should be auto-resolved
         parameters = {
             "message": "Test injection",
@@ -101,10 +101,10 @@ class TestAutomaticTargetResolution:
             "episode_id": red_episode_with_orchestration.episode_id,
             # NO target_episode_id parameter!
         }
-        
+
         # Act
         result = await executor.execute(parameters, context)
-        
+
         # Assert
         assert result.success is True
         assert result.metadata["target_episode_id"] == blue_episode.episode_id
@@ -124,7 +124,7 @@ class TestAutomaticTargetResolution:
             config={"max_injections_per_episode": 20}
         )
         executor._session_manager = mock_session_manager
-        
+
         # Explicit target should take precedence
         parameters = {
             "message": "Test injection",
@@ -135,10 +135,10 @@ class TestAutomaticTargetResolution:
             "session_id": "session-789",
             "episode_id": red_episode_with_orchestration.episode_id,
         }
-        
+
         # Act
         result = await executor.execute(parameters, context)
-        
+
         # Assert
         assert result.success is True
         assert result.metadata["target_episode_id"] == blue_episode.episode_id
@@ -156,7 +156,7 @@ class TestAutomaticTargetResolution:
             config={"max_injections_per_episode": 20}
         )
         executor._session_manager = mock_session_manager
-        
+
         # No explicit target, no orchestration metadata
         parameters = {
             "message": "Test injection",
@@ -166,10 +166,10 @@ class TestAutomaticTargetResolution:
             "session_id": "session-789",
             "episode_id": red_episode_without_orchestration.episode_id,
         }
-        
+
         # Act
         result = await executor.execute(parameters, context)
-        
+
         # Assert
         assert result.success is False
         assert "Could not resolve target_episode_id" in result.error
@@ -195,25 +195,25 @@ class TestAutomaticTargetResolution:
                 MetadataKeys.ORCHESTRATION_ROLE: "red_team",
             },
         )
-        
+
         # Add to mock session manager
         mock_session_manager.episode_manager.episodes[red_episode.episode_id] = red_episode
-        
+
         executor = InjectPromptExecutor(
             sandbox_manager=None,
             config={"max_injections_per_episode": 20}
         )
         executor._session_manager = mock_session_manager
-        
+
         parameters = {"message": "Test", "injection_type": "system"}
         context = {
             "session_id": "session-789",
             "episode_id": red_episode.episode_id,
         }
-        
+
         # Act
         result = await executor.execute(parameters, context)
-        
+
         # Assert
         assert result.success is True
         assert result.metadata["target_episode_id"] == blue_episode.episode_id  # First target
@@ -258,18 +258,18 @@ class TestInjectionStrategies:
     @pytest.fixture
     def mock_session_manager(self, blue_episode_with_messages: Episode, red_episode_with_target: Episode):
         """Create a mock session manager."""
-        
+
         class MockEpisodeManager:
             def __init__(self, *episodes):
                 self.episodes = {ep.episode_id: ep for ep in episodes}
-            
+
             def get_episode_by_id(self, episode_id: str):
                 return self.episodes.get(episode_id)
-        
+
         class MockSessionManager:
             def __init__(self, *episodes):
                 self.episode_manager = MockEpisodeManager(*episodes)
-        
+
         return MockSessionManager(blue_episode_with_messages, red_episode_with_target)
 
     @pytest.mark.asyncio
@@ -283,9 +283,9 @@ class TestInjectionStrategies:
         # Arrange
         executor = InjectPromptExecutor(sandbox_manager=None)
         executor._session_manager = mock_session_manager
-        
+
         original_length = len(blue_episode_with_messages.context[MetadataKeys.CLIENT_TRANSCRIPT])
-        
+
         parameters = {
             "message": "Injected message",
             "strategy": "append"
@@ -294,10 +294,10 @@ class TestInjectionStrategies:
             "session_id": "session-xyz",
             "episode_id": red_episode_with_target.episode_id,
         }
-        
+
         # Act
         result = await executor.execute(parameters, context)
-        
+
         # Assert
         assert result.success is True
         transcript = blue_episode_with_messages.context[MetadataKeys.CLIENT_TRANSCRIPT]
@@ -316,10 +316,10 @@ class TestInjectionStrategies:
         # Arrange
         executor = InjectPromptExecutor(sandbox_manager=None)
         executor._session_manager = mock_session_manager
-        
+
         original_length = len(blue_episode_with_messages.context[MetadataKeys.CLIENT_TRANSCRIPT])
         assert original_length == 4
-        
+
         parameters = {
             "message": "Injected after rewind",
             "strategy": "rewind",
@@ -329,10 +329,10 @@ class TestInjectionStrategies:
             "session_id": "session-xyz",
             "episode_id": red_episode_with_target.episode_id,
         }
-        
+
         # Act
         result = await executor.execute(parameters, context)
-        
+
         # Assert
         assert result.success is True
         transcript = blue_episode_with_messages.context[MetadataKeys.CLIENT_TRANSCRIPT]
@@ -354,7 +354,7 @@ class TestInjectionStrategies:
         # Arrange
         executor = InjectPromptExecutor(sandbox_manager=None)
         executor._session_manager = mock_session_manager
-        
+
         parameters = {
             "message": "New transcript content",
             "strategy": "rewrite"
@@ -363,10 +363,10 @@ class TestInjectionStrategies:
             "session_id": "session-xyz",
             "episode_id": red_episode_with_target.episode_id,
         }
-        
+
         # Act
         result = await executor.execute(parameters, context)
-        
+
         # Assert
         assert result.success is True
         transcript = blue_episode_with_messages.context[MetadataKeys.CLIENT_TRANSCRIPT]
@@ -384,9 +384,9 @@ class TestInjectionStrategies:
         # Arrange
         executor = InjectPromptExecutor(sandbox_manager=None)
         executor._session_manager = mock_session_manager
-        
+
         original_length = len(blue_episode_with_messages.context[MetadataKeys.CLIENT_TRANSCRIPT])
-        
+
         parameters = {
             "message": "Inserted at position 2",
             "strategy": "insert",
@@ -396,10 +396,10 @@ class TestInjectionStrategies:
             "session_id": "session-xyz",
             "episode_id": red_episode_with_target.episode_id,
         }
-        
+
         # Act
         result = await executor.execute(parameters, context)
-        
+
         # Assert
         assert result.success is True
         transcript = blue_episode_with_messages.context[MetadataKeys.CLIENT_TRANSCRIPT]
@@ -420,7 +420,7 @@ class TestInjectionStrategies:
         # Arrange
         executor = InjectPromptExecutor(sandbox_manager=None)
         executor._session_manager = mock_session_manager
-        
+
         parameters = {
             "message": "Test",
             "strategy": "invalid_strategy"
@@ -429,10 +429,10 @@ class TestInjectionStrategies:
             "session_id": "session-xyz",
             "episode_id": red_episode_with_target.episode_id,
         }
-        
+
         # Act
         result = await executor.execute(parameters, context)
-        
+
         # Assert
         assert result.success is False
         assert "Invalid strategy" in result.error
@@ -448,9 +448,9 @@ class TestInjectionStrategies:
         # Arrange
         executor = InjectPromptExecutor(sandbox_manager=None)
         executor._session_manager = mock_session_manager
-        
+
         original_length = len(blue_episode_with_messages.context[MetadataKeys.CLIENT_TRANSCRIPT])
-        
+
         # Try to rewind more messages than exist
         parameters = {
             "message": "Test",
@@ -461,10 +461,10 @@ class TestInjectionStrategies:
             "session_id": "session-xyz",
             "episode_id": red_episode_with_target.episode_id,
         }
-        
+
         # Act
         result = await executor.execute(parameters, context)
-        
+
         # Assert
         assert result.success is True
         transcript = blue_episode_with_messages.context[MetadataKeys.CLIENT_TRANSCRIPT]
@@ -482,9 +482,9 @@ class TestInjectionStrategies:
         # Arrange
         executor = InjectPromptExecutor(sandbox_manager=None)
         executor._session_manager = mock_session_manager
-        
+
         original_length = len(blue_episode_with_messages.context[MetadataKeys.CLIENT_TRANSCRIPT])
-        
+
         # Try to insert beyond end
         parameters = {
             "message": "Test",
@@ -495,10 +495,10 @@ class TestInjectionStrategies:
             "session_id": "session-xyz",
             "episode_id": red_episode_with_target.episode_id,
         }
-        
+
         # Act
         result = await executor.execute(parameters, context)
-        
+
         # Assert
         assert result.success is True
         transcript = blue_episode_with_messages.context[MetadataKeys.CLIENT_TRANSCRIPT]
@@ -513,7 +513,7 @@ class TestParameterSchemaUpdates:
     def test_parameter_schema_includes_strategy(self):
         """Test that strategy parameter is in schema."""
         schema = InjectPromptExecutor.get_parameter_schema()
-        
+
         assert "strategy" in schema
         assert schema["strategy"].required is False
         assert schema["strategy"].default == "append"
@@ -521,7 +521,7 @@ class TestParameterSchemaUpdates:
     def test_parameter_schema_includes_rewind_count(self):
         """Test that rewind_count parameter is in schema."""
         schema = InjectPromptExecutor.get_parameter_schema()
-        
+
         assert "rewind_count" in schema
         assert schema["rewind_count"].required is False
         assert schema["rewind_count"].default == 1
@@ -529,18 +529,12 @@ class TestParameterSchemaUpdates:
     def test_parameter_schema_includes_insert_position(self):
         """Test that insert_position parameter is in schema."""
         schema = InjectPromptExecutor.get_parameter_schema()
-        
+
         assert "insert_position" in schema
         assert schema["insert_position"].required is False
         assert schema["insert_position"].default == 0
 
-    def test_parameter_schema_includes_optional_target(self):
-        """Test that target_episode_id is optional in schema."""
-        schema = InjectPromptExecutor.get_parameter_schema()
-        
-        assert "target_episode_id" in schema
-        assert schema["target_episode_id"].required is False
-        assert schema["target_episode_id"].default is None
+
 
 
 class TestBackwardCompatibility:
@@ -564,91 +558,65 @@ class TestBackwardCompatibility:
 
     @pytest.fixture
     def red_episode(self) -> Episode:
-        """Create a red team episode without orchestration."""
+        """Create a red team episode with orchestration metadata."""
         return Episode(
             episode_id="ep-red-legacy",
             task_id="red-task",
             session_id="session-legacy",
             state=EpisodeState.ACTIVE,
-            context={},
+            context={
+                MetadataKeys.ORCHESTRATION_TARGET_EPISODES: ["ep-blue-legacy"],
+            },
         )
 
     @pytest.fixture
     def mock_session_manager(self, blue_episode: Episode, red_episode: Episode):
         """Create a mock session manager."""
-        
+
         class MockEpisodeManager:
             def __init__(self, *episodes):
                 self.episodes = {ep.episode_id: ep for ep in episodes}
-            
+
             def get_episode_by_id(self, episode_id: str):
                 return self.episodes.get(episode_id)
-        
+
         class MockSessionManager:
             def __init__(self, *episodes):
                 self.episode_manager = MockEpisodeManager(*episodes)
-        
+
         return MockSessionManager(blue_episode, red_episode)
 
     @pytest.mark.asyncio
-    async def test_legacy_explicit_target_still_works(
+    async def test_orchestration_auto_resolution(
         self,
         blue_episode: Episode,
         red_episode: Episode,
         mock_session_manager
     ):
-        """Test that old code using explicit target_episode_id still works."""
+        """Test that orchestration metadata auto-resolves target."""
         # Arrange
-        executor = InjectPromptExecutor(sandbox_manager=None)
-        executor._session_manager = mock_session_manager
-        
-        # Old-style parameters with explicit target
+        executor = InjectPromptExecutor(
+            sandbox_manager=None,
+            session_manager=mock_session_manager
+        )
+
+        # No explicit target - resolved from ORCHESTRATION_TARGET_EPISODES
         parameters = {
-            "message": "Legacy injection",
-            "injection_type": "system",
-            "target_episode_id": blue_episode.episode_id  # Explicit parameter
+            "message": "Auto-resolved injection",
         }
         context = {
             "session_id": "session-legacy",
             "episode_id": red_episode.episode_id,
         }
-        
+
         # Act
         result = await executor.execute(parameters, context)
-        
+
         # Assert
         assert result.success is True
         assert len(blue_episode.context[MetadataKeys.CLIENT_TRANSCRIPT]) == 2
 
-    @pytest.mark.asyncio
-    async def test_legacy_context_target_still_works(
-        self,
-        blue_episode: Episode,
-        red_episode: Episode,
-        mock_session_manager
-    ):
-        """Test that old code using context target_episode_id still works (deprecated)."""
-        # Arrange
-        executor = InjectPromptExecutor(sandbox_manager=None)
-        executor._session_manager = mock_session_manager
-        
-        # Old-style context with target
-        parameters = {
-            "message": "Legacy injection",
-            "injection_type": "system"
-        }
-        context = {
-            "session_id": "session-legacy",
-            "episode_id": red_episode.episode_id,
-            "target_episode_id": blue_episode.episode_id  # In context
-        }
-        
-        # Act
-        result = await executor.execute(parameters, context)
-        
-        # Assert
-        assert result.success is True
-        assert len(blue_episode.context[MetadataKeys.CLIENT_TRANSCRIPT]) == 2
+
 
     @pytest.mark.asyncio
     async def test_default_strategy_is_append(
@@ -659,22 +627,23 @@ class TestBackwardCompatibility:
     ):
         """Test that omitting strategy defaults to append (backward compatible)."""
         # Arrange
-        executor = InjectPromptExecutor(sandbox_manager=None)
-        executor._session_manager = mock_session_manager
-        
+        executor = InjectPromptExecutor(
+            sandbox_manager=None,
+            session_manager=mock_session_manager
+        )
+
         # No strategy parameter - should default to append
         parameters = {
             "message": "Default strategy test",
-            "target_episode_id": blue_episode.episode_id
         }
         context = {
             "session_id": "session-legacy",
             "episode_id": red_episode.episode_id,
         }
-        
+
         # Act
         result = await executor.execute(parameters, context)
-        
+
         # Assert
         assert result.success is True
         transcript = blue_episode.context[MetadataKeys.CLIENT_TRANSCRIPT]

@@ -91,7 +91,7 @@ class TestExecutorRegistry:
         class InvalidExecutor:
             pass
 
-        with pytest.raises(ValueError, match="must inherit from DockerExecutor"):
+        with pytest.raises(ValueError, match="must inherit from CommandExecutor"):
             registry.register_executor_class("invalid", InvalidExecutor)
 
     def test_register_executor_class_duplicate(self, registry, cleanup_factory):

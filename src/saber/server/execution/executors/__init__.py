@@ -4,7 +4,6 @@ Executor implementations for command execution.
 
 # Import standard registry to ensure executors are registered
 from . import standard_registry  # noqa: F401
-
 from .base_executors import CommandExecutor
 from .docker_executor import DockerExecutor
 from .executor_factory import ExecutorFactory

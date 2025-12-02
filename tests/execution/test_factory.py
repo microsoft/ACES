@@ -29,16 +29,21 @@ class TestExecutorFactory:
         # Clear registry and re-register only standard executors to ensure clean state
         executor_registry.clear_all_executors()
 
-        # Re-register standard executors
+        # Re-register standard executors (including inject_prompt)
         from saber.server.execution.executors.executor_registry import register_executor
+        from saber.server.execution.executors.standard_registry.inject_prompt_executor import InjectPromptExecutor
+
         register_executor("bash", BashExecutor, "standard")
         register_executor("python", PythonExecutor, "standard")
+        register_executor("inject_prompt", InjectPromptExecutor, "standard")
 
         yield
 
-        # Cleanup after test - restore to original state if needed
-        # Note: We don't restore the initial state as that would re-introduce the pollution
-        # Instead, we leave it clean for subsequent tests
+        # Cleanup after test - restore standard executors
+        executor_registry.clear_all_executors()
+        register_executor("bash", BashExecutor, "standard")
+        register_executor("python", PythonExecutor, "standard")
+        register_executor("inject_prompt", InjectPromptExecutor, "standard")
 
     @pytest.fixture
     def mock_sandbox_manager(self):
@@ -104,7 +109,7 @@ class TestExecutorFactory:
         class InvalidExecutor:
             pass
 
-        with pytest.raises(ValueError, match="must inherit from DockerExecutor"):
+        with pytest.raises(ValueError, match="must inherit from CommandExecutor"):
             register_executor("invalid", InvalidExecutor, "test")
 
     def test_unregister_executor(self):
@@ -380,7 +385,9 @@ class TestExecutorFactory:
 
         # Test that unregistered episodes fall back to all executors with warning
         fallback_executors = executor_factory.get_available_executors("pentest-episode-1")
-        assert set(fallback_executors) == {"bash", "python"}  # Should return all available
+        # Should return all available executors (at least bash and python)
+        assert "bash" in fallback_executors
+        assert "python" in fallback_executors
 
     def test_episode_executor_isolation_and_mcp_tools(self, executor_factory):
         """Test episode isolation for executor management and MCP tool generation."""
@@ -454,7 +461,9 @@ class TestExecutorFactory:
         # Test executor info aggregation across episodes
         executor_info = executor_factory.get_executor_info()
         assert "available_types" in executor_info
-        assert set(executor_info["available_types"]) == {"bash", "python"}  # All registered types
+        # Verify core executors are available (registry may have additional executors)
+        assert "bash" in executor_info["available_types"]
+        assert "python" in executor_info["available_types"]
         assert "configurations" in executor_info
 
         # Cleanup all episode configurations

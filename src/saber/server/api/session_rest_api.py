@@ -970,10 +970,10 @@ class SessionRestAPI:
         @self.app.get("/api/v1/session/{session_id}/episodes/{episode_id}/transcript/metadata")
         async def get_transcript_metadata_endpoint(session_id: str, episode_id: str) -> Dict[str, Any]:
             """Get transcript metadata including timestamps for change detection.
-            
+
             This endpoint is lightweight and designed for frequent polling by blue team.
             Blue team compares last_modified_at with its own last_pull timestamp to detect changes.
-            
+
             Returns:
                 last_pushed_at: ISO timestamp of last blue team push
                 last_modified_at: ISO timestamp of last red team modification (or None)
@@ -986,9 +986,9 @@ class SessionRestAPI:
                 episode = self.session_manager.get_episode_by_id(episode_id)
                 if not episode:
                     raise HTTPException(status_code=404, detail=f"Episode {episode_id} not found")
-                
+
                 transcript = episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT, [])
-                
+
                 metadata = {
                     "last_pushed_at": episode.context.get(MetadataKeys.TRANSCRIPT_LAST_PUSHED_AT),
                     "last_modified_at": episode.context.get(MetadataKeys.TRANSCRIPT_LAST_MODIFIED_AT),
@@ -996,7 +996,7 @@ class SessionRestAPI:
                     "message_count": len(transcript),
                     "last_updated": episode.context.get(MetadataKeys.TRANSCRIPT_UPDATED_AT),
                 }
-                
+
                 log_operation_success(
                     logger,
                     "get_transcript_metadata",
@@ -1004,13 +1004,15 @@ class SessionRestAPI:
                     episode_id=episode_id,
                     modification_count=metadata["modification_count"],
                 )
-                
+
                 return metadata
-                
+
             except HTTPException:
                 raise
             except Exception as exc:
-                log_operation_failure(logger, "get_transcript_metadata", exc, session_id=session_id, episode_id=episode_id)
+                log_operation_failure(
+                    logger, "get_transcript_metadata", exc, session_id=session_id, episode_id=episode_id
+                )
                 raise HTTPException(status_code=500, detail=f"Failed to get transcript metadata: {exc}") from exc
 
         # ===== End Blocking Transcript Solver Endpoints =====

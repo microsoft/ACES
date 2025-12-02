@@ -18,6 +18,7 @@ from ...logging_config import (
     log_operation_success,
 )
 from ...models import BenchmarkInfo
+from ...models.rest.endpoints import APIEndpoints
 from ...models.rest.evaluation import EvaluationListResponse, EvaluationResponse, EvaluationSummaryResponse
 from ..exceptions import (
     EvaluationNotFoundError,
@@ -55,7 +56,7 @@ class SABERRestClient:
         Raises:
             Exception: If request fails or server returns error
         """
-        url = f"{self.saber_server_url}/api/v1/tasks"
+        url = f"{self.saber_server_url}{APIEndpoints.TASKS}"
 
         operation = "fetch_benchmark_info"
         log_operation_start(logger, operation, url=url)
@@ -94,7 +95,7 @@ class SABERRestClient:
         Raises:
             Exception: If health check fails
         """
-        url = f"{self.saber_server_url}/api/v1/health"
+        url = f"{self.saber_server_url}{APIEndpoints.HEALTH}"
 
         operation = "client_health_check"
 
@@ -130,7 +131,10 @@ class SABERRestClient:
             SessionEvaluationError: Session-level access error (500)
             EvaluationRetrievalError: Other retrieval errors
         """
-        url = f"{self.saber_server_url}/api/v1/session/{session_id}/evaluations/{episode_id}"
+        url = (
+            f"{self.saber_server_url}"
+            f"{APIEndpoints.EVALUATION_BY_EPISODE.format(session_id=session_id, episode_id=episode_id)}"
+        )
 
         operation = "fetch_evaluation"
         log_operation_start(
@@ -207,7 +211,7 @@ class SABERRestClient:
             SessionEvaluationError: Session-level access error (500)
             EvaluationRetrievalError: Other retrieval errors
         """
-        url = f"{self.saber_server_url}/api/v1/session/{session_id}/evaluations"
+        url = f"{self.saber_server_url}{APIEndpoints.EVALUATIONS_LIST.format(session_id=session_id)}"
         params = {}
         if task_id:
             params["task_id"] = task_id
@@ -281,7 +285,7 @@ class SABERRestClient:
             SessionEvaluationError: Session-level access error (500)
             EvaluationRetrievalError: Other retrieval errors
         """
-        url = f"{self.saber_server_url}/api/v1/session/{session_id}/evaluations/summary"
+        url = f"{self.saber_server_url}{APIEndpoints.EVALUATIONS_SUMMARY.format(session_id=session_id)}"
 
         operation = "fetch_evaluation_summary"
         log_operation_start(logger, operation, session_id=session_id, url=url)
@@ -328,3 +332,195 @@ class SABERRestClient:
                     f"Failed to get evaluation summary: HTTP {response.status} - {response_text}",
                     details={"session_id": session_id, "status_code": response.status},
                 )
+
+    async def get_episode_metadata(
+        self,
+        session_id: str,
+        episode_id: str,
+    ) -> Dict[str, Any]:
+        """
+        Get episode metadata including transcript timestamps.
+
+        Retrieves episode context metadata including transcript timestamps and
+        modification counts used for blocking coordination.
+
+        Args:
+            session_id: SABER session identifier
+            episode_id: SABER episode identifier
+
+        Returns:
+            Dictionary containing episode metadata/context
+
+        Raises:
+            aiohttp.ClientError: If HTTP request fails
+            Exception: If response parsing fails
+        """
+        url = (
+            f"{self.saber_server_url}{APIEndpoints.EPISODE_STATUS.format(session_id=session_id, episode_id=episode_id)}"
+        )
+
+        operation = "get_episode_metadata"
+        log_operation_start(
+            logger,
+            operation,
+            session_id=session_id,
+            episode_id=episode_id,
+            url=url,
+        )
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=self.request_timeout) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    context = data.get("context", {})
+                    log_operation_success(
+                        logger,
+                        operation,
+                        session_id=session_id,
+                        episode_id=episode_id,
+                        context_keys=list(context.keys()),
+                    )
+                    return cast(Dict[str, Any], context)
+
+                error_text = await response.text()
+                log_operation_failure(
+                    logger,
+                    operation,
+                    f"HTTP {response.status}",
+                    url=url,
+                    status_code=response.status,
+                    response_text=error_text,
+                )
+                raise Exception(f"Failed to get episode metadata: {response.status} - {error_text}")
+
+    async def pull_episode_transcript(
+        self,
+        session_id: str,
+        episode_id: str,
+    ) -> Dict[str, Any]:
+        """
+        Pull complete conversation transcript from SABER server.
+
+        Retrieves the full transcript including all messages, timestamps, and metadata.
+        Used by BlockingTranscriptSyncingModelWrapper after detecting transcript modifications.
+
+        Args:
+            session_id: SABER session identifier
+            episode_id: SABER episode identifier
+
+        Returns:
+            Dictionary containing:
+                - messages: List of {role: str, content: str} messages
+                - message_count: int
+                - last_updated: Optional[str] ISO timestamp
+                - metadata: Optional[Dict] transcript metadata
+
+        Raises:
+            aiohttp.ClientError: If HTTP request fails
+            Exception: If response parsing fails
+        """
+        url = (
+            f"{self.saber_server_url}"
+            f"{APIEndpoints.EPISODE_TRANSCRIPT.format(session_id=session_id, episode_id=episode_id)}"
+        )
+
+        operation = "pull_episode_transcript"
+        log_operation_start(
+            logger,
+            operation,
+            session_id=session_id,
+            episode_id=episode_id,
+            url=url,
+        )
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=self.request_timeout) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    log_operation_success(
+                        logger,
+                        operation,
+                        session_id=session_id,
+                        episode_id=episode_id,
+                        message_count=data.get("message_count", 0),
+                    )
+                    return cast(Dict[str, Any], data)
+
+                error_text = await response.text()
+                log_operation_failure(
+                    logger,
+                    operation,
+                    f"HTTP {response.status}",
+                    url=url,
+                    status_code=response.status,
+                    response_text=error_text,
+                )
+                raise Exception(f"Failed to pull episode transcript: {response.status} - {error_text}")
+
+    async def push_episode_transcript(
+        self,
+        session_id: str,
+        episode_id: str,
+        messages: list[Dict[str, Any]],
+        mode: str = "append",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Push transcript messages to SABER server.
+
+        Used for transcript synchronization during agent execution.
+
+        Args:
+            session_id: SABER session identifier
+            episode_id: SABER episode identifier
+            messages: List of message dictionaries with role, content, etc.
+            mode: Push mode - 'append' for differential sync, 'replace' for full transcript
+            metadata: Optional metadata dict with timestamp, step number, source, etc.
+
+        Raises:
+            Exception: If HTTP request fails
+        """
+        url = (
+            f"{self.saber_server_url}"
+            f"{APIEndpoints.EPISODE_TRANSCRIPT.format(session_id=session_id, episode_id=episode_id)}"
+        )
+
+        payload: Dict[str, Any] = {
+            "messages": messages,
+            "mode": mode,
+        }
+        if metadata:
+            payload["metadata"] = metadata
+
+        operation = "push_episode_transcript"
+        log_operation_start(
+            logger,
+            operation,
+            session_id=session_id,
+            episode_id=episode_id,
+            message_count=len(messages),
+            mode=mode,
+        )
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, timeout=self.request_timeout) as response:
+                if response.status == 200:
+                    log_operation_success(
+                        logger,
+                        operation,
+                        session_id=session_id,
+                        episode_id=episode_id,
+                        message_count=len(messages),
+                    )
+                    return
+
+                error_text = await response.text()
+                log_operation_failure(
+                    logger,
+                    operation,
+                    f"HTTP {response.status}",
+                    url=url,
+                    status_code=response.status,
+                    response_text=error_text,
+                )
+                raise Exception(f"Failed to push episode transcript: {response.status} - {error_text}")

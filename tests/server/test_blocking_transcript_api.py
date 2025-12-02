@@ -119,11 +119,11 @@ class TestTranscriptModificationTimestamps:
         # Arrange - blue team's last pull time is same as push time
         last_push = blue_episode.context[MetadataKeys.TRANSCRIPT_LAST_PUSHED_AT]
         last_pull = last_push  # Blue team pulled right after push
-        
+
         # Initially no modifications
         last_modified = blue_episode.context.get(MetadataKeys.TRANSCRIPT_LAST_MODIFIED_AT)
         assert last_modified is None
-        
+
         # Blue team should see: no changes (last_modified is None or <= last_pull)
         has_changes = last_modified is not None and last_modified > last_pull
         assert has_changes is False
@@ -446,9 +446,9 @@ class TestEndToEndTimestampBasedFlow:
             "last_modified_at": blue_episode_fresh.context.get(MetadataKeys.TRANSCRIPT_LAST_MODIFIED_AT),
             "modification_count": blue_episode_fresh.context.get(MetadataKeys.TRANSCRIPT_MODIFICATION_COUNT, 0),
         }
-        
+
         # Check: no changes detected
-        has_changes = (metadata_before["last_modified_at"] is not None and 
+        has_changes = (metadata_before["last_modified_at"] is not None and
                       metadata_before["last_modified_at"] > last_pull)
         assert has_changes is False
 
@@ -458,7 +458,7 @@ class TestEndToEndTimestampBasedFlow:
         original_transcript = blue_episode_fresh.context[MetadataKeys.CLIENT_TRANSCRIPT].copy()
         injected = {"role": "system", "content": "Malicious injection", "source": "red_team"}
         modification_time = datetime.utcnow().isoformat()
-        
+
         await blue_episode_fresh.update_context_atomic({
             MetadataKeys.CLIENT_TRANSCRIPT: original_transcript + [injected],
             MetadataKeys.TRANSCRIPT_LAST_MODIFIED_AT: modification_time,
@@ -471,9 +471,9 @@ class TestEndToEndTimestampBasedFlow:
             "last_modified_at": blue_episode_fresh.context.get(MetadataKeys.TRANSCRIPT_LAST_MODIFIED_AT),
             "modification_count": blue_episode_fresh.context.get(MetadataKeys.TRANSCRIPT_MODIFICATION_COUNT, 0),
         }
-        
+
         # Check: changes detected! (last_modified_at > last_pull)
-        has_changes_now = (metadata_after["last_modified_at"] is not None and 
+        has_changes_now = (metadata_after["last_modified_at"] is not None and
                           metadata_after["last_modified_at"] > last_pull)
         assert has_changes_now is True
         assert metadata_after["modification_count"] == 1
@@ -485,11 +485,11 @@ class TestEndToEndTimestampBasedFlow:
 
         # Step 6: Blue team updates its last_pull timestamp (client-side tracking)
         new_last_pull = modification_time
-        
+
         # Step 7: Verify no more changes detected after pull
-        has_more_changes = (metadata_after["last_modified_at"] is not None and 
+        has_more_changes = (metadata_after["last_modified_at"] is not None and
                            metadata_after["last_modified_at"] > new_last_pull)
         assert has_more_changes is False
-        
+
         # Final verification
         assert blue_episode_fresh.context[MetadataKeys.TRANSCRIPT_MODIFICATION_COUNT] == 1  # Monotonic

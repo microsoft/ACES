@@ -14,7 +14,6 @@ from typing import Any, Dict, Type
 from saber.logging_config import LogCategory, get_saber_logger
 
 from .base_executors import CommandExecutor
-from .docker_executor import DockerExecutor
 
 logger = get_saber_logger(LogCategory.EXECUTION, __name__)
 

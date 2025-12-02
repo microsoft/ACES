@@ -68,6 +68,7 @@ class BashExecutor(DockerExecutor):
         sandbox_manager: SandboxEnvironmentManager,
         config: Optional[Dict[str, Any]] = None,
         additional_params: Optional[Dict[str, Any]] = None,
+        session_manager: Optional[Any] = None,
         **kwargs: Any,
     ) -> "BashExecutor":
         """
@@ -77,6 +78,7 @@ class BashExecutor(DockerExecutor):
             sandbox_manager: Required sandbox manager for Docker execution
             config: Bash-specific configuration dictionary
             additional_params: Additional parameters (e.g., allowed_commands)
+            session_manager: Optional session manager for cross-episode operations
             **kwargs: Additional keyword arguments
 
         Returns:

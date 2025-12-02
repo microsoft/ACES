@@ -89,6 +89,11 @@ class SubTaskDefinition(BaseModel):
     assistant_prompt: str = Field(..., description="Agent assistant prompt")
     submit_prompt: str = Field(..., description="Agent submit prompt")
 
+    # Blocking configuration (for orchestrated tasks that need to wait for transcript modifications)
+    blocking_config: Optional[Dict[str, Any]] = Field(
+        default=None, description="Optional blocking configuration for transcript synchronization"
+    )
+
 
 class BenchmarkTask(BaseModel, ABC):
     """Abstract base for all benchmark tasks.

@@ -136,9 +136,9 @@ class TestSessionMCPAPI:
         # Verify result format
         assert result.isError is False
         assert result.content[0]["type"] == "application/json"
-        assert "stdout" in result.content[0]["data"]
-        assert "stderr" in result.content[0]["data"]
-        assert "exit_code" in result.content[0]["data"]
+        # After refactoring, _convert_to_mcp_result returns the full data dict
+        assert "output" in result.content[0]["data"]
+        assert result.content[0]["data"]["output"] == "test output"
 
         # Verify execute_action was called correctly with both session_id and episode_id
         mcp_api.session_manager.execute_action.assert_called_once()
@@ -297,7 +297,9 @@ class TestSessionMCPAPI:
         # Verify it executes without error and calls execute_action
         assert result.isError is False
         assert result.content[0]["type"] == "application/json"
-        assert "stdout" in result.content[0]["data"]
+        # After refactoring, _convert_to_mcp_result returns the full data dict
+        assert "output" in result.content[0]["data"]
+        assert result.content[0]["data"]["output"] == "Episode action completed"
 
         # Verify execute_action was called with end_episode action
         mcp_api.session_manager.execute_action.assert_called_once()
@@ -334,9 +336,9 @@ class TestSessionMCPAPI:
 
         assert mcp_result.isError is False
         assert mcp_result.content[0]["type"] == "application/json"
-        assert "stdout" in mcp_result.content[0]["data"]
-        assert "stderr" in mcp_result.content[0]["data"]
-        assert "exit_code" in mcp_result.content[0]["data"]
+        # After refactoring, returns the full data dict
+        assert "output" in mcp_result.content[0]["data"]
+        assert mcp_result.content[0]["data"]["output"] == "test output"
 
     def test_convert_to_mcp_result_error(self, mcp_api):
         """Test conversion of error CommandResult to MCP format."""
@@ -346,9 +348,10 @@ class TestSessionMCPAPI:
 
         assert mcp_result.isError is True
         assert mcp_result.content[0]["type"] == "application/json"
-        assert "stdout" in mcp_result.content[0]["data"]
-        assert "stderr" in mcp_result.content[0]["data"]
+        # After refactoring, returns the full data dict (error_result creates specific structure)
         assert "exit_code" in mcp_result.content[0]["data"]
+        assert mcp_result.content[0]["data"]["exit_code"] == 1
+        assert "error" in mcp_result.content[0]["data"]
 
     @pytest.mark.asyncio
     async def test_start_and_shutdown_mcp_server(self, mcp_api):
@@ -575,7 +578,8 @@ class TestSessionMCPAPIOrchestration:
         # Verify result format
         assert result.isError is False
         assert result.content[0]["type"] == "application/json"
-        assert "stdout" in result.content[0]["data"]
+        # After refactoring, returns the full data dict
+        assert "output" in result.content[0]["data"]
 
         # Verify execute_action was called correctly
         mcp_api.session_manager.execute_action.assert_called_once()

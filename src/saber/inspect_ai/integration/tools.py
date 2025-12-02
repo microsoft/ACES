@@ -1,11 +1,10 @@
-"""SABER ToolSource implementation for lazy tool provision.
+"""SABER ToolSource implementation.
 
 This module provides the ToolSource implementation that exposes SABER's MCP client
-as tools to Inspect AI solvers. The ToolSource pattern enables lazy evaluation,
-meaning tools are retrieved during solver execution after the sandbox lifecycle
-has completed (task_init and sample_init).
+as tools to Inspect AI solvers.
 
-Phase 4 of the SABER sandbox integration.
+The ToolSource pattern enables lazy evaluation, meaning tools are retrieved during
+solver execution after the sandbox lifecycle has completed (task_init and sample_init).
 """
 
 from typing import TYPE_CHECKING

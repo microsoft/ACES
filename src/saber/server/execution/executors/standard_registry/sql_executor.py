@@ -68,6 +68,7 @@ class SQLExecutor(DockerExecutor):
         sandbox_manager: SandboxEnvironmentManager,
         config: Optional[Dict[str, Any]] = None,
         additional_params: Optional[Dict[str, Any]] = None,
+        session_manager: Optional[Any] = None,
         **kwargs: Any,
     ) -> "SQLExecutor":
         """

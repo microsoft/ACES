@@ -401,3 +401,140 @@ class TestPolymorphicBehavior:
         assert len(restored.sub_tasks) == len(original.sub_tasks)
         assert restored.sub_tasks[0].task_id == original.sub_tasks[0].task_id
         assert restored.sub_tasks[1].depends_on_role == original.sub_tasks[1].depends_on_role
+
+
+class TestSubTaskDefinitionBlockingConfig:
+    """Test SubTaskDefinition with blocking_config field."""
+
+    def test_subtask_without_blocking_config(self):
+        """Test creating SubTaskDefinition without blocking_config."""
+        subtask = SubTaskDefinition(
+            task_id="test_task",
+            role="blue",
+            order=0,
+            domain="test",
+            title="Test Task",
+            description="Test description",
+            episode_attempts=1,
+            max_steps=10,
+            instruction_prompt="test instruction",
+            assistant_prompt="test assistant",
+            submit_prompt="test submit",
+        )
+
+        assert subtask.blocking_config is None
+
+    def test_subtask_with_blocking_config(self):
+        """Test creating SubTaskDefinition with blocking_config."""
+        blocking_config = {
+            "enabled": True,
+            "poll_interval": 2.0,
+            "max_iterations": 50,
+            "timeout": 100.0,
+            "skip_first_iteration": True,
+        }
+
+        subtask = SubTaskDefinition(
+            task_id="test_task",
+            role="blue",
+            order=0,
+            domain="test",
+            title="Test Task",
+            description="Test description",
+            episode_attempts=1,
+            max_steps=10,
+            instruction_prompt="test instruction",
+            assistant_prompt="test assistant",
+            submit_prompt="test submit",
+            blocking_config=blocking_config,
+        )
+
+        assert subtask.blocking_config is not None
+        assert subtask.blocking_config["enabled"] is True
+        assert subtask.blocking_config["poll_interval"] == 2.0
+        assert subtask.blocking_config["max_iterations"] == 50
+        assert subtask.blocking_config["timeout"] == 100.0
+        assert subtask.blocking_config["skip_first_iteration"] is True
+
+    def test_subtask_blocking_config_serialization(self):
+        """Test SubTaskDefinition with blocking_config serializes correctly."""
+        blocking_config = {
+            "enabled": True,
+            "poll_interval": 3.0,
+            "max_iterations": 100,
+        }
+
+        original = SubTaskDefinition(
+            task_id="test_task",
+            role="blue",
+            order=0,
+            domain="test",
+            title="Test Task",
+            description="Test description",
+            episode_attempts=1,
+            max_steps=10,
+            instruction_prompt="test instruction",
+            assistant_prompt="test assistant",
+            submit_prompt="test submit",
+            blocking_config=blocking_config,
+        )
+
+        # Serialize to dict
+        data = original.model_dump()
+
+        # Deserialize back
+        restored = SubTaskDefinition(**data)
+
+        assert restored.blocking_config is not None
+        assert restored.blocking_config["enabled"] is True
+        assert restored.blocking_config["poll_interval"] == 3.0
+        assert restored.blocking_config["max_iterations"] == 100
+
+    def test_orchestrated_task_with_blocking_config_in_subtasks(self):
+        """Test OrchestratedTask with blocking_config in sub-tasks."""
+        blue_blocking_config = {
+            "enabled": True,
+            "poll_interval": 2.0,
+            "skip_first_iteration": True,
+        }
+
+        orchestrated = OrchestratedTask(
+            benchmark_task_id="test_orch",
+            orchestration_strategy=OrchestrationStrategy.SEQUENTIAL_PAIRED,
+            sub_tasks=[
+                SubTaskDefinition(
+                    task_id="red_task",
+                    role="red",
+                    order=0,
+                    domain="test",
+                    title="Red Task",
+                    description="Red team task",
+                    episode_attempts=1,
+                    max_steps=10,
+                    instruction_prompt="red instruction",
+                    assistant_prompt="red assistant",
+                    submit_prompt="red submit",
+                    blocking_config=None,  # Red team doesn't block
+                ),
+                SubTaskDefinition(
+                    task_id="blue_task",
+                    role="blue",
+                    order=1,
+                    depends_on_role="red",
+                    domain="test",
+                    title="Blue Task",
+                    description="Blue team task",
+                    episode_attempts=1,
+                    max_steps=10,
+                    instruction_prompt="blue instruction",
+                    assistant_prompt="blue assistant",
+                    submit_prompt="blue submit",
+                    blocking_config=blue_blocking_config,  # Blue team blocks
+                ),
+            ],
+            episode_attempts=1,
+        )
+
+        assert orchestrated.sub_tasks[0].blocking_config is None
+        assert orchestrated.sub_tasks[1].blocking_config is not None
+        assert orchestrated.sub_tasks[1].blocking_config["enabled"] is True

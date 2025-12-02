@@ -625,3 +625,125 @@ class TestConvertSubTaskToSample:
         benchmark_data = sample.metadata[MetadataKeys.BENCHMARK_TASK]
         assert benchmark_data["benchmark_task_id"] == "orch_preserve"
         assert benchmark_data["episode_attempts"] == 5
+
+    def test_convert_sub_task_with_blocking_config(self):
+        """Test that sub-task with blocking_config includes it in metadata."""
+        blocking_config = {
+            "enabled": True,
+            "poll_interval": 2.0,
+            "max_iterations": 50,
+            "timeout": 100.0,
+            "skip_first_iteration": True,
+        }
+
+        sub_task = SubTaskDefinition(
+            role="blue",
+            task_id="blue_task",
+            domain="test_domain",
+            title="Blue Team Task",
+            description="Blue team with blocking",
+            order=1,
+            depends_on_role=None,
+            episode_attempts=1,
+            max_steps=10,
+            instruction_prompt="Defend",
+            assistant_prompt="I will defend",
+            submit_prompt="Submit",
+            blocking_config=blocking_config,
+        )
+
+        orch_task = OrchestratedTask(
+            benchmark_task_id="red_blue_test",
+            episode_attempts=1,
+            orchestration_strategy=OrchestrationStrategy.SEQUENTIAL_PAIRED,
+            sub_tasks=[sub_task],
+        )
+
+        sample = _convert_sub_task_to_sample(orch_task, sub_task, attempt=1)
+
+        # Verify blocking_config is in metadata
+        assert "blocking_config" in sample.metadata
+        assert sample.metadata["blocking_config"]["enabled"] is True
+        assert sample.metadata["blocking_config"]["poll_interval"] == 2.0
+        assert sample.metadata["blocking_config"]["max_iterations"] == 50
+        assert sample.metadata["blocking_config"]["timeout"] == 100.0
+        assert sample.metadata["blocking_config"]["skip_first_iteration"] is True
+
+    def test_convert_sub_task_without_blocking_config(self):
+        """Test that sub-task without blocking_config doesn't include it in metadata."""
+        sub_task = SubTaskDefinition(
+            role="red",
+            task_id="red_task",
+            domain="test_domain",
+            title="Red Team Task",
+            description="Red team without blocking",
+            order=0,
+            depends_on_role=None,
+            episode_attempts=1,
+            max_steps=10,
+            instruction_prompt="Attack",
+            assistant_prompt="I will attack",
+            submit_prompt="Submit",
+            blocking_config=None,
+        )
+
+        orch_task = OrchestratedTask(
+            benchmark_task_id="red_blue_test",
+            episode_attempts=1,
+            orchestration_strategy=OrchestrationStrategy.SEQUENTIAL_PAIRED,
+            sub_tasks=[sub_task],
+        )
+
+        sample = _convert_sub_task_to_sample(orch_task, sub_task, attempt=1)
+
+        # Verify blocking_config is NOT in metadata
+        assert "blocking_config" not in sample.metadata
+
+    def test_convert_orchestrated_task_with_mixed_blocking_configs(self):
+        """Test orchestrated task where only some sub-tasks have blocking_config."""
+        red_task = SubTaskDefinition(
+            role="red",
+            task_id="red_task",
+            domain="test_domain",
+            title="Red Team",
+            description="Red team",
+            order=0,
+            episode_attempts=1,
+            max_steps=10,
+            instruction_prompt="Attack",
+            assistant_prompt="I will attack",
+            submit_prompt="Submit",
+            blocking_config=None,  # No blocking
+        )
+
+        blue_task = SubTaskDefinition(
+            role="blue",
+            task_id="blue_task",
+            domain="test_domain",
+            title="Blue Team",
+            description="Blue team",
+            order=1,
+            depends_on_role="red",
+            episode_attempts=1,
+            max_steps=10,
+            instruction_prompt="Defend",
+            assistant_prompt="I will defend",
+            submit_prompt="Submit",
+            blocking_config={"enabled": True, "skip_first_iteration": True},  # With blocking
+        )
+
+        orch_task = OrchestratedTask(
+            benchmark_task_id="red_blue",
+            episode_attempts=1,
+            orchestration_strategy=OrchestrationStrategy.SEQUENTIAL_PAIRED,
+            sub_tasks=[red_task, blue_task],
+        )
+
+        # Test red team sample (no blocking)
+        red_sample = _convert_sub_task_to_sample(orch_task, red_task, attempt=1)
+        assert "blocking_config" not in red_sample.metadata
+
+        # Test blue team sample (with blocking)
+        blue_sample = _convert_sub_task_to_sample(orch_task, blue_task, attempt=1)
+        assert "blocking_config" in blue_sample.metadata
+        assert blue_sample.metadata["blocking_config"]["enabled"] is True

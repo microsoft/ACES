@@ -7,7 +7,10 @@ Logging category: ``LogCategory.TASK_EXEC``.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from ..sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 
 from ....logging_config import LogCategory, get_saber_logger
 from ....models import MCPInputSchema, MCPPropertySchema
@@ -22,12 +25,15 @@ class CommandExecutor(ABC):
     Base implementation for command executors with common functionality.
     """
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None, *args: Any, **kwargs: Any) -> None:
+    def __init__(
+        self, config: Optional[Dict[str, Any]] = None, session_manager: Optional[Any] = None, *args: Any, **kwargs: Any
+    ) -> None:
         """
         Initialize command executor.
 
         Args:
             config: Executor configuration dictionary
+            session_manager: Optional session manager for cross-episode operations
             *args: Additional positional arguments
             **kwargs: Additional keyword arguments
         """
@@ -35,6 +41,9 @@ class CommandExecutor(ABC):
         default_config = self.get_default_config()
         self._config = {**default_config, **(config or {})}
         self._parameters: Dict[str, Parameter] = {}
+
+        # Session manager for cross-episode operations
+        self._session_manager: Optional[Any] = session_manager
 
         # Allow subclasses to set up their specific parameters
         self.setup_parameters(self._config)
@@ -52,6 +61,46 @@ class CommandExecutor(ABC):
         return {
             "timeout": 300.0,  # Default 5 minutes
         }
+
+    @classmethod
+    def create_with_config(
+        cls,
+        sandbox_manager: "SandboxEnvironmentManager",
+        config: Optional[Dict[str, Any]] = None,
+        additional_params: Optional[Dict[str, Any]] = None,
+        session_manager: Optional[Any] = None,
+        **kwargs: Any,
+    ) -> "CommandExecutor":
+        """
+        Generic factory method for creating executor instances with standardized configuration.
+
+        This method provides a consistent interface for all executors, allowing
+        the factory to create instances without knowing specific constructor signatures.
+
+        Subclasses can override this method for custom initialization logic.
+
+        Args:
+            sandbox_manager: Sandbox manager for executor operations
+            config: Executor-specific configuration dictionary
+            additional_params: Additional parameters specific to this executor type
+            session_manager: Optional session manager for cross-episode operations
+            **kwargs: Additional keyword arguments
+
+        Returns:
+            Configured executor instance
+        """
+        # Default implementation - subclasses can override for custom initialization
+        merged_kwargs = {**kwargs}
+        if additional_params:
+            merged_kwargs.update(additional_params)
+
+        # Pass all relevant parameters to the constructor
+        return cls(
+            config=config,
+            session_manager=session_manager,
+            sandbox_manager=sandbox_manager,
+            **merged_kwargs,
+        )
 
     @abstractmethod
     def setup_parameters(self, config: Dict[str, Any]) -> None:

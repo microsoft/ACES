@@ -44,8 +44,8 @@ from saber.server.execution.sandbox.sandbox_environment_manager import SandboxEn
 class TestIntegrationExecutor(DockerExecutor):
     """Test executor for integration testing."""
 
-    def __init__(self, sandbox_manager: SandboxEnvironmentManager, docker_config: Optional[Dict[str, Any]] = None):
-        super().__init__(sandbox_manager, docker_config)
+    def __init__(self, sandbox_manager: SandboxEnvironmentManager, docker_config: Optional[Dict[str, Any]] = None, session_manager: Optional[Any] = None):
+        super().__init__(sandbox_manager, docker_config, session_manager=session_manager)
 
     @classmethod
     def get_default_config(cls) -> Dict[str, Any]:
@@ -137,8 +137,8 @@ from saber.server.execution.executors.executor_registry import register_executor
 from saber.server.execution.executors.docker_executor import DockerExecutor
 
 class SchemaTestExecutor(DockerExecutor):
-    def __init__(self, sandbox_manager, docker_config=None):
-        super().__init__(sandbox_manager, docker_config)
+    def __init__(self, sandbox_manager, docker_config=None, session_manager=None):
+        super().__init__(sandbox_manager, docker_config, session_manager=session_manager)
 
     @classmethod
     def get_default_config(cls):

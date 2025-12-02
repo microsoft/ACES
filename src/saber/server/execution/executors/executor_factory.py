@@ -13,7 +13,7 @@ import mcp.types as mcp_types
 from saber.logging_config import LogCategory, get_saber_logger
 
 from ..sandbox.sandbox_environment_manager import SandboxEnvironmentManager
-from .docker_executor import DockerExecutor
+from .base_executors import CommandExecutor
 from .executor_registry import executor_registry
 
 logger = get_saber_logger(LogCategory.EXECUTION, __name__)
@@ -47,7 +47,7 @@ class ExecutorFactory:
         # Store configuration by reference so updates to the dict are reflected
         # This allows ExecutionManager to update config after factory creation
         self._configuration = configuration if configuration is not None else {}
-        self._executor_instances: Dict[str, DockerExecutor] = {}
+        self._executor_instances: Dict[str, CommandExecutor] = {}
 
         # Get all available executors from the global registry
         self._all_available_executors = executor_registry.get_available_executors()
@@ -158,7 +158,7 @@ class ExecutorFactory:
 
     def get_executor(
         self, executor_type: str, episode_id: Optional[str] = None, force_new: bool = False
-    ) -> DockerExecutor:
+    ) -> CommandExecutor:
         """
         Get or create an executor instance, optionally filtered by episode configuration.
 
@@ -223,25 +223,18 @@ class ExecutorFactory:
             if allowed_commands is not None:
                 additional_params["allowed_commands"] = allowed_commands
 
-        # Use the generic creation method
-        executor = executor_class.create_with_config(
-            sandbox_manager=self._sandbox_manager, config=merged_config, additional_params=additional_params
+        # Use the generic creation method with session_manager
+        # All executors must have create_with_config classmethod
+        executor_instance = executor_class.create_with_config(
+            sandbox_manager=self._sandbox_manager,
+            config=merged_config,
+            additional_params=additional_params,
+            session_manager=self._session_manager,
         )
 
-        # Inject session_manager if executor supports it (for cross-episode operations)
-        if self._session_manager is not None and hasattr(executor, "_session_manager"):
-            executor._session_manager = self._session_manager
-            logger.debug(
-                "Session manager injected into executor",
-                extra={
-                    "event": "executor_session_manager_injected",
-                    "executor_type": executor_type,
-                },
-            )
-
         # Cache the instance
-        self._executor_instances[executor_type] = executor
-        return executor
+        self._executor_instances[executor_type] = executor_instance
+        return executor_instance
 
     def get_all_mcp_tools(self, episode_id: Optional[str] = None) -> List[mcp_types.Tool]:
         """

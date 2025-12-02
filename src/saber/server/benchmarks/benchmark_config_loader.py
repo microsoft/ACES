@@ -46,6 +46,7 @@ FIELD_TIMEOUT = "timeout"
 FIELD_MAX_STEPS = "max_steps"
 FIELD_EPISODE_ATTEMPTS = "episode_attempts"
 FIELD_ALLOWED_EXECUTORS = "allowed_executors"
+FIELD_BLOCKING_CONFIG = "blocking_config"
 
 # Task field names
 FIELD_TASK_ID = "task_id"
@@ -1170,6 +1171,63 @@ class BenchmarkConfigLoader:
                     f"got: {episode_config[FIELD_MAX_STEPS]}"
                 )
                 raise InvalidTaskDefinitionException(message)
+
+            # Validate blocking_config if present
+            if FIELD_BLOCKING_CONFIG in episode_config:
+                blocking_config = episode_config[FIELD_BLOCKING_CONFIG]
+
+                if not isinstance(blocking_config, dict):
+                    failure_context = {
+                        "invalid_field": f"{FIELD_EPISODE_CONFIG}.{FIELD_BLOCKING_CONFIG}",
+                        "value": blocking_config,
+                    }
+                    raise InvalidTaskDefinitionException(
+                        f"Task '{task_id}' {FIELD_BLOCKING_CONFIG} must be a dictionary"
+                    )
+
+                # Validate 'enabled' field is required
+                if "enabled" not in blocking_config:
+                    failure_context = {"missing_field": f"{FIELD_EPISODE_CONFIG}.{FIELD_BLOCKING_CONFIG}.enabled"}
+                    raise InvalidTaskDefinitionException(
+                        f"Task '{task_id}' {FIELD_BLOCKING_CONFIG} must have 'enabled' field"
+                    )
+
+                if not isinstance(blocking_config["enabled"], bool):
+                    failure_context = {
+                        "invalid_field": f"{FIELD_EPISODE_CONFIG}.{FIELD_BLOCKING_CONFIG}.enabled",
+                        "value": blocking_config["enabled"],
+                    }
+                    raise InvalidTaskDefinitionException(
+                        f"Task '{task_id}' {FIELD_BLOCKING_CONFIG}.enabled must be boolean"
+                    )
+
+                # Validate optional numeric fields
+                for field_name, field_type in [
+                    ("poll_interval", (int, float)),
+                    ("max_iterations", int),
+                    ("timeout", (int, float)),
+                ]:
+                    if field_name in blocking_config:
+                        value = blocking_config[field_name]
+                        if not isinstance(value, field_type) or value <= 0:  # type: ignore[arg-type]
+                            failure_context = {
+                                "invalid_field": f"{FIELD_EPISODE_CONFIG}.{FIELD_BLOCKING_CONFIG}.{field_name}",
+                                "value": value,
+                            }
+                            raise InvalidTaskDefinitionException(
+                                f"Task '{task_id}' {FIELD_BLOCKING_CONFIG}.{field_name} must be positive number"
+                            )
+
+                # Validate skip_first_iteration if present
+                if "skip_first_iteration" in blocking_config:
+                    if not isinstance(blocking_config["skip_first_iteration"], bool):
+                        failure_context = {
+                            "invalid_field": f"{FIELD_EPISODE_CONFIG}.{FIELD_BLOCKING_CONFIG}.skip_first_iteration",
+                            "value": blocking_config["skip_first_iteration"],
+                        }
+                        raise InvalidTaskDefinitionException(
+                            f"Task '{task_id}' {FIELD_BLOCKING_CONFIG}.skip_first_iteration must be boolean"
+                        )
 
             task_benchmark_config = task_data.get(FIELD_BENCHMARK_CONFIG, {})
             global_benchmark_defaults = self.global_defaults.get(FIELD_BENCHMARK_CONFIG, {})

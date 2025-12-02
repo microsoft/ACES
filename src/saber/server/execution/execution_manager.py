@@ -16,7 +16,7 @@ import mcp.types as mcp_types
 from ...logging_config import get_execution_logger, log_operation_failure, log_operation_start, log_operation_success
 from ..base import Action, CommandResult
 from ..benchmarks.task import Task
-from .executors.docker_executor import DockerExecutor
+from .executors.base_executors import CommandExecutor
 from .executors.executor_factory import ExecutorFactory
 from .sandbox.permanent_environment_manager import PermanentEnvironmentManager
 from .sandbox.sandbox_environment_manager import SandboxEnvironmentManager
@@ -348,7 +348,7 @@ class ExecutionManager:
                     },
                 )
 
-    def get_executor(self, executor_type: str, episode_id: Optional[str] = None) -> DockerExecutor:
+    def get_executor(self, executor_type: str, episode_id: Optional[str] = None) -> "CommandExecutor":
         """
         Get a specific executor by type, optionally for a specific episode.
 
@@ -1176,3 +1176,19 @@ class ExecutionManager:
             True if debug mode is enabled (containers won't be cleaned up)
         """
         return self._debug_mode
+
+    def set_session_manager(self, session_manager: Any) -> None:
+        """
+        Set or update the session manager.
+
+        Args:
+            session_manager: SessionManager instance for cross-episode operations
+        """
+        self._session_manager = session_manager
+        # Update executor factory if it exists
+        if self._executor_factory is not None:
+            self._executor_factory._session_manager = session_manager
+        logger.debug(
+            "Session manager set on execution manager",
+            extra={"event": "session_manager_set"},
+        )

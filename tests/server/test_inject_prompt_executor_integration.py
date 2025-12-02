@@ -44,34 +44,36 @@ class TestSessionManagerInjection:
             task_id="red-task",
             session_id="session-integration",
             state=EpisodeState.ACTIVE,
-            context={},
+            context={
+                MetadataKeys.ORCHESTRATION_TARGET_EPISODES: ["ep-blue-integration"],
+            },
         )
 
     @pytest.fixture
     def mock_session_manager(self, blue_episode: Episode, red_episode: Episode):
         """Create a mock session manager with episode lookup capability."""
-        
+
         class MockEpisodeManager:
             def __init__(self, blue_ep, red_ep):
                 self.episodes = {
                     blue_ep.episode_id: blue_ep,
                     red_ep.episode_id: red_ep,
                 }
-            
+
             def get_episode_by_id(self, episode_id: str):
                 return self.episodes.get(episode_id)
-        
+
         class MockSessionManager:
             def __init__(self, blue_ep, red_ep):
                 self.episode_manager = MockEpisodeManager(blue_ep, red_ep)
-        
+
         return MockSessionManager(blue_episode, red_episode)
 
     def test_executor_class_registered(self):
         """Test that inject_prompt executor is registered."""
         # Act
         executor_class = get_executor_class("inject_prompt")
-        
+
         # Assert
         assert executor_class is not None
         assert executor_class.__name__ == "InjectPromptExecutor"
@@ -82,12 +84,9 @@ class TestSessionManagerInjection:
         executor_class = get_executor_class("inject_prompt")
         executor = executor_class.create_with_config(
             sandbox_manager=None,
-            config={"max_injections_per_episode": 20}
+            session_manager=mock_session_manager
         )
-        
-        # Act
-        executor._session_manager = mock_session_manager
-        
+
         # Assert
         assert executor._session_manager is not None
         assert hasattr(executor._session_manager, "episode_manager")
@@ -104,26 +103,23 @@ class TestSessionManagerInjection:
         executor_class = get_executor_class("inject_prompt")
         executor = executor_class.create_with_config(
             sandbox_manager=None,
-            config={"max_injections_per_episode": 20}
+            session_manager=mock_session_manager
         )
-        executor._session_manager = mock_session_manager
-        
+
         parameters = {
             "message": "Cross-episode test injection",
-            "injection_type": "system"
         }
         context = {
             "session_id": "session-integration",
             "episode_id": "ep-red-integration",
-            "target_episode_id": "ep-blue-integration",
         }
-        
+
         # Act
         result = await executor.execute(parameters, context)
-        
+
         # Assert
         assert result.success is True
-        
+
         # Verify blue team episode was modified
         assert len(blue_episode.context[MetadataKeys.CLIENT_TRANSCRIPT]) == 3
         assert blue_episode.context[MetadataKeys.CLIENT_TRANSCRIPT][-1]["content"] == "Cross-episode test injection"
@@ -137,10 +133,10 @@ class TestExecutorFactorySessionManagerInjection:
     def test_inject_prompt_in_available_executors(self):
         """Test that inject_prompt is in the list of available executors."""
         from saber.server.execution.executors import get_available_executors
-        
+
         # Act
         available = get_available_executors()
-        
+
         # Assert
         assert "inject_prompt" in available
 
@@ -148,10 +144,10 @@ class TestExecutorFactorySessionManagerInjection:
         """Test executor metadata is correctly set."""
         # Arrange
         executor_class = get_executor_class("inject_prompt")
-        
+
         # Act
         metadata = executor_class._executor_metadata
-        
+
         # Assert
         assert metadata["name"] == "inject_prompt"
         assert "inject" in metadata["description"].lower()

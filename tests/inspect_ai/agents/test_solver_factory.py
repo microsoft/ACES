@@ -6,7 +6,7 @@ import pytest
 from inspect_ai.solver import TaskState
 
 from saber.inspect_ai.agents.solver_factory import (
-    _pull_injections_if_enabled,
+    SABERExecutionContext,
     create_saber_solver,
 )
 from saber.inspect_ai.constants import InspectStoreKeys
@@ -47,125 +47,6 @@ def complete_metadata():
     }
 
 
-class TestPullInjectionsIfEnabled:
-    """Test _pull_injections_if_enabled helper."""
-
-    @pytest.mark.asyncio
-    async def test_pull_injections_success(self, mock_state):
-        """Test successful message injection pull."""
-        metadata = {
-            MetadataKeys.SESSION_ID: "session-123",
-            MetadataKeys.EPISODE_ID: "episode-456",
-            MetadataKeys.SABER_DOMAIN_SLUG: "test-domain",
-        }
-
-        mock_domain_func = MagicMock(return_value={"rest_url": "http://localhost:8000"})
-
-        with patch("saber.inspect_ai.agents.solver_factory.pull_injected_messages") as mock_pull:
-            mock_pull.return_value = AsyncMock()()
-
-            await _pull_injections_if_enabled(mock_state, metadata, mock_domain_func)
-
-            mock_pull.assert_called_once_with(
-                state=mock_state,
-                session_id="session-123",
-                episode_id="episode-456",
-                rest_url="http://localhost:8000",
-            )
-
-    @pytest.mark.asyncio
-    async def test_pull_injections_missing_session_id(self, mock_state):
-        """Test skips when session_id is missing."""
-        metadata = {
-            MetadataKeys.EPISODE_ID: "episode-456",
-            MetadataKeys.SABER_DOMAIN_SLUG: "test-domain",
-        }
-
-        mock_domain_func = MagicMock()
-
-        with patch("saber.inspect_ai.agents.solver_factory.pull_injected_messages") as mock_pull:
-            await _pull_injections_if_enabled(mock_state, metadata, mock_domain_func)
-
-            mock_pull.assert_not_called()
-            mock_domain_func.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_pull_injections_missing_episode_id(self, mock_state):
-        """Test skips when episode_id is missing."""
-        metadata = {
-            MetadataKeys.SESSION_ID: "session-123",
-            MetadataKeys.SABER_DOMAIN_SLUG: "test-domain",
-        }
-
-        mock_domain_func = MagicMock()
-
-        with patch("saber.inspect_ai.agents.solver_factory.pull_injected_messages") as mock_pull:
-            await _pull_injections_if_enabled(mock_state, metadata, mock_domain_func)
-
-            mock_pull.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_pull_injections_missing_domain_slug(self, mock_state):
-        """Test skips when domain_slug is missing."""
-        metadata = {
-            MetadataKeys.SESSION_ID: "session-123",
-            MetadataKeys.EPISODE_ID: "episode-456",
-        }
-
-        mock_domain_func = MagicMock()
-
-        with patch("saber.inspect_ai.agents.solver_factory.pull_injected_messages") as mock_pull:
-            await _pull_injections_if_enabled(mock_state, metadata, mock_domain_func)
-
-            mock_pull.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_pull_injections_no_active_domain(self, mock_state):
-        """Test skips when domain is not active."""
-        metadata = {
-            MetadataKeys.SESSION_ID: "session-123",
-            MetadataKeys.EPISODE_ID: "episode-456",
-            MetadataKeys.SABER_DOMAIN_SLUG: "test-domain",
-        }
-
-        mock_domain_func = MagicMock(return_value=None)
-
-        with patch("saber.inspect_ai.agents.solver_factory.pull_injected_messages") as mock_pull:
-            await _pull_injections_if_enabled(mock_state, metadata, mock_domain_func)
-
-            mock_pull.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_pull_injections_no_rest_url(self, mock_state):
-        """Test skips when REST URL is missing."""
-        metadata = {
-            MetadataKeys.SESSION_ID: "session-123",
-            MetadataKeys.EPISODE_ID: "episode-456",
-            MetadataKeys.SABER_DOMAIN_SLUG: "test-domain",
-        }
-
-        mock_domain_func = MagicMock(return_value={})  # No rest_url
-
-        with patch("saber.inspect_ai.agents.solver_factory.pull_injected_messages") as mock_pull:
-            await _pull_injections_if_enabled(mock_state, metadata, mock_domain_func)
-
-            mock_pull.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_pull_injections_error_handling(self, mock_state):
-        """Test graceful error handling."""
-        metadata = {
-            MetadataKeys.SESSION_ID: "session-123",
-            MetadataKeys.EPISODE_ID: "episode-456",
-            MetadataKeys.SABER_DOMAIN_SLUG: "test-domain",
-        }
-
-        mock_domain_func = MagicMock(side_effect=Exception("Domain error"))
-
-        # Should not raise
-        await _pull_injections_if_enabled(mock_state, metadata, mock_domain_func)
-
-
 class TestCreateSaberSolver:
     """Test create_saber_solver function."""
 
@@ -197,11 +78,8 @@ class TestCreateSaberSolver:
                 mock_active_model.return_value = mock_model
 
                 with patch("saber.inspect_ai.agents.solver_factory.active_model_context_var") as mock_context_var:
-                    with patch("saber.inspect_ai.agents.solver_factory._pull_injections_if_enabled") as mock_pull:
-                        mock_pull.return_value = AsyncMock()()
-
-                        solver = create_saber_solver("test-agent", mock_factory)
-                        result = await solver(mock_state, mock_generate)
+                    solver = create_saber_solver("test-agent", mock_factory)
+                    result = await solver(mock_state, mock_generate)
 
         # Verify agent was called
         mock_agent.assert_called_once_with(mock_state)
@@ -285,11 +163,8 @@ class TestCreateSaberSolver:
                 mock_get_domain.return_value = {"rest_url": "http://localhost:8000"}
 
                 with patch("saber.inspect_ai.agents.solver_factory.active_model_context_var"):
-                    with patch("saber.inspect_ai.agents.solver_factory._pull_injections_if_enabled") as mock_pull:
-                        mock_pull.return_value = AsyncMock()()
-
-                        solver = create_saber_solver("test-agent", mock_factory, role_config=mock_role_config)
-                        await solver(mock_state, mock_generate)
+                    solver = create_saber_solver("test-agent", mock_factory, role_config=mock_role_config)
+                    await solver(mock_state, mock_generate)
 
             # Verify role-specific model was requested
             mock_get_model.assert_called_once_with("gpt-4")
@@ -323,11 +198,8 @@ class TestCreateSaberSolver:
                 mock_get_domain.return_value = {"rest_url": "http://localhost:8000"}
 
                 with patch("saber.inspect_ai.agents.solver_factory.active_model_context_var"):
-                    with patch("saber.inspect_ai.agents.solver_factory._pull_injections_if_enabled") as mock_pull:
-                        mock_pull.return_value = AsyncMock()()
-
-                        solver = create_saber_solver("test-agent", mock_factory, role_config=mock_role_config)
-                        await solver(mock_state, mock_generate)
+                    solver = create_saber_solver("test-agent", mock_factory, role_config=mock_role_config)
+                    await solver(mock_state, mock_generate)
 
             # Should have used default model
             mock_active_model.assert_called()
@@ -359,11 +231,8 @@ class TestCreateSaberSolver:
                     mock_get_domain.return_value = {"rest_url": "http://localhost:8000"}
 
                     with patch("saber.inspect_ai.agents.solver_factory.active_model_context_var"):
-                        with patch("saber.inspect_ai.agents.solver_factory._pull_injections_if_enabled") as mock_pull:
-                            mock_pull.return_value = AsyncMock()()
-
-                            solver = create_saber_solver("test-agent", mock_factory)
-                            await solver(mock_state, mock_generate)
+                        solver = create_saber_solver("test-agent", mock_factory)
+                        await solver(mock_state, mock_generate)
 
             # Verify model was wrapped
             mock_wrapper.assert_called_once_with(
@@ -393,11 +262,8 @@ class TestCreateSaberSolver:
                 mock_active_model.return_value = mock_base_model
 
                 with patch("saber.inspect_ai.agents.solver_factory.active_model_context_var"):
-                    with patch("saber.inspect_ai.agents.solver_factory._pull_injections_if_enabled") as mock_pull:
-                        mock_pull.return_value = AsyncMock()()
-
-                        solver = create_saber_solver("test-agent", mock_factory)
-                        await solver(mock_state, mock_generate)
+                    solver = create_saber_solver("test-agent", mock_factory)
+                    await solver(mock_state, mock_generate)
 
             # Verify model was NOT wrapped
             mock_wrapper.assert_not_called()
@@ -425,11 +291,8 @@ class TestCreateSaberSolver:
                 mock_get_domain.return_value = {"rest_url": "http://localhost:8000"}
 
                 with patch("saber.inspect_ai.agents.solver_factory.active_model_context_var") as mock_context_var:
-                    with patch("saber.inspect_ai.agents.solver_factory._pull_injections_if_enabled") as mock_pull:
-                        mock_pull.return_value = AsyncMock()()
-
-                        solver = create_saber_solver("test-agent", mock_factory)
-                        await solver(mock_state, mock_generate)
+                    solver = create_saber_solver("test-agent", mock_factory)
+                    await solver(mock_state, mock_generate)
 
             # Verify model was set and then restored
             assert mock_context_var.set.call_count >= 2  # Set wrapped, then restore
@@ -451,12 +314,9 @@ class TestCreateSaberSolver:
             mock_active_model.return_value = MagicMock()
 
             with patch("saber.inspect_ai.agents.solver_factory.active_model_context_var"):
-                with patch("saber.inspect_ai.agents.solver_factory._pull_injections_if_enabled") as mock_pull:
-                    mock_pull.return_value = AsyncMock()()
-
-                    # Should not raise, just log warning
-                    solver = create_saber_solver("test-agent", mock_factory)
-                    await solver(mock_state, mock_generate)
+                # Should not raise, just log warning
+                solver = create_saber_solver("test-agent", mock_factory)
+                await solver(mock_state, mock_generate)
 
     @pytest.mark.asyncio
     async def test_solver_domain_not_found(self, mock_state, mock_generate, complete_metadata):
@@ -480,9 +340,211 @@ class TestCreateSaberSolver:
                 mock_active_model.return_value = MagicMock()
 
                 with patch("saber.inspect_ai.agents.solver_factory.active_model_context_var"):
-                    with patch("saber.inspect_ai.agents.solver_factory._pull_injections_if_enabled") as mock_pull:
-                        mock_pull.return_value = AsyncMock()()
+                    # Should not raise, just log warning
+                    solver = create_saber_solver("test-agent", mock_factory)
+                    await solver(mock_state, mock_generate)
 
-                        # Should not raise, just log warning
+
+class TestSolverFactoryBlockingWrapper:
+    """Test solver_factory blocking wrapper creation."""
+
+    @pytest.mark.asyncio
+    async def test_creates_blocking_wrapper_when_enabled(self, mock_state, mock_generate):
+        """Test that BlockingTranscriptSyncingModelWrapper is created when blocking_config.enabled=True."""
+        metadata = {
+            MetadataKeys.SESSION_ID: "session-123",
+            MetadataKeys.EPISODE_ID: "episode-456",
+            MetadataKeys.SABER_DOMAIN_SLUG: "test-domain",
+            MetadataKeys.INSTRUCTION_PROMPT: "Test instruction",
+            MetadataKeys.ASSISTANT_PROMPT: "Test assistant",
+            MetadataKeys.SUBMIT_PROMPT: "Test submit",
+            MetadataKeys.SAMPLE_ID: "sample-1",
+            "blocking_config": {
+                "enabled": True,
+                "poll_interval": 2.0,
+                "max_iterations": 50,
+                "timeout": 100.0,
+                "skip_first_iteration": True,
+            }
+        }
+
+        mock_state.metadata = metadata
+        mock_state.store.get.side_effect = lambda key, default=None: {
+            InspectStoreKeys.DOMAIN_SLUG: "test-domain",
+            InspectStoreKeys.SESSION_ID: "session-123",
+            InspectStoreKeys.EPISODE_MAPPING: {
+                "sample-1": MagicMock(episode_id="episode-456")
+            },
+        }.get(key, default)
+
+        mock_agent = AsyncMock(return_value=mock_state)
+        mock_factory = MagicMock(return_value=lambda **kwargs: mock_agent)
+
+        with patch("saber.inspect_ai.agents.solver_factory.get_active_domain") as mock_get_domain:
+            mock_get_domain.return_value = {"rest_url": "http://localhost:8000"}
+
+            with patch("saber.inspect_ai.agents.solver_factory.active_model") as mock_active_model:
+                mock_model = MagicMock()
+                mock_active_model.return_value = mock_model
+
+                with patch("saber.inspect_ai.agents.solver_factory.BlockingTranscriptSyncingModelWrapper") as mock_blocking_wrapper:
+                    mock_blocking_wrapper.return_value = MagicMock()
+
+                    with patch("saber.inspect_ai.agents.solver_factory.active_model_context_var"):
                         solver = create_saber_solver("test-agent", mock_factory)
                         await solver(mock_state, mock_generate)
+
+                        # Verify BlockingTranscriptSyncingModelWrapper was created
+                        mock_blocking_wrapper.assert_called_once()
+                        call_args = mock_blocking_wrapper.call_args
+                        assert call_args[1]["base_model"] == mock_model
+                        assert call_args[1]["session_id"] == "session-123"
+                        assert call_args[1]["episode_id"] == "episode-456"
+                        assert call_args[1]["rest_url"] == "http://localhost:8000"
+                        assert call_args[1]["poll_interval"] == 2.0
+                        assert call_args[1]["max_iterations"] == 50
+                        assert call_args[1]["timeout"] == 100.0
+                        assert call_args[1]["skip_first_iteration"] is True
+
+    @pytest.mark.asyncio
+    async def test_creates_standard_wrapper_when_blocking_disabled(self, mock_state, mock_generate):
+        """Test that TranscriptSyncingModelWrapper is created when blocking_config.enabled=False."""
+        metadata = {
+            MetadataKeys.SESSION_ID: "session-123",
+            MetadataKeys.EPISODE_ID: "episode-456",
+            MetadataKeys.SABER_DOMAIN_SLUG: "test-domain",
+            MetadataKeys.INSTRUCTION_PROMPT: "Test instruction",
+            MetadataKeys.ASSISTANT_PROMPT: "Test assistant",
+            MetadataKeys.SUBMIT_PROMPT: "Test submit",
+            MetadataKeys.SAMPLE_ID: "sample-1",
+            "blocking_config": {
+                "enabled": False,
+            }
+        }
+
+        mock_state.metadata = metadata
+        mock_state.store.get.side_effect = lambda key, default=None: {
+            InspectStoreKeys.DOMAIN_SLUG: "test-domain",
+            InspectStoreKeys.SESSION_ID: "session-123",
+            InspectStoreKeys.EPISODE_MAPPING: {
+                "sample-1": MagicMock(episode_id="episode-456")
+            },
+        }.get(key, default)
+
+        mock_agent = AsyncMock(return_value=mock_state)
+        mock_factory = MagicMock(return_value=lambda **kwargs: mock_agent)
+
+        with patch("saber.inspect_ai.agents.solver_factory.get_active_domain") as mock_get_domain:
+            mock_get_domain.return_value = {"rest_url": "http://localhost:8000"}
+
+            with patch("saber.inspect_ai.agents.solver_factory.active_model") as mock_active_model:
+                mock_model = MagicMock()
+                mock_active_model.return_value = mock_model
+
+                with patch("saber.inspect_ai.agents.solver_factory.TranscriptSyncingModelWrapper") as mock_standard_wrapper:
+                    mock_standard_wrapper.return_value = MagicMock()
+
+                    with patch("saber.inspect_ai.agents.solver_factory.active_model_context_var"):
+                        solver = create_saber_solver("test-agent", mock_factory)
+                        await solver(mock_state, mock_generate)
+
+                        # Verify TranscriptSyncingModelWrapper was created
+                        mock_standard_wrapper.assert_called_once()
+                        call_args = mock_standard_wrapper.call_args
+                        assert call_args[1]["base_model"] == mock_model
+                        assert call_args[1]["session_id"] == "session-123"
+                        assert call_args[1]["episode_id"] == "episode-456"
+                        assert call_args[1]["rest_url"] == "http://localhost:8000"
+
+    @pytest.mark.asyncio
+    async def test_creates_standard_wrapper_when_no_blocking_config(self, mock_state, mock_generate):
+        """Test that TranscriptSyncingModelWrapper is created when blocking_config is absent."""
+        metadata = {
+            MetadataKeys.SESSION_ID: "session-123",
+            MetadataKeys.EPISODE_ID: "episode-456",
+            MetadataKeys.SABER_DOMAIN_SLUG: "test-domain",
+            MetadataKeys.INSTRUCTION_PROMPT: "Test instruction",
+            MetadataKeys.ASSISTANT_PROMPT: "Test assistant",
+            MetadataKeys.SUBMIT_PROMPT: "Test submit",
+            MetadataKeys.SAMPLE_ID: "sample-1",
+            # No blocking_config
+        }
+
+        mock_state.metadata = metadata
+        mock_state.store.get.side_effect = lambda key, default=None: {
+            InspectStoreKeys.DOMAIN_SLUG: "test-domain",
+            InspectStoreKeys.SESSION_ID: "session-123",
+            InspectStoreKeys.EPISODE_MAPPING: {
+                "sample-1": MagicMock(episode_id="episode-456")
+            },
+        }.get(key, default)
+
+        mock_agent = AsyncMock(return_value=mock_state)
+        mock_factory = MagicMock(return_value=lambda **kwargs: mock_agent)
+
+        with patch("saber.inspect_ai.agents.solver_factory.get_active_domain") as mock_get_domain:
+            mock_get_domain.return_value = {"rest_url": "http://localhost:8000"}
+
+            with patch("saber.inspect_ai.agents.solver_factory.active_model") as mock_active_model:
+                mock_model = MagicMock()
+                mock_active_model.return_value = mock_model
+
+                with patch("saber.inspect_ai.agents.solver_factory.TranscriptSyncingModelWrapper") as mock_standard_wrapper:
+                    mock_standard_wrapper.return_value = MagicMock()
+
+                    with patch("saber.inspect_ai.agents.solver_factory.active_model_context_var"):
+                        solver = create_saber_solver("test-agent", mock_factory)
+                        await solver(mock_state, mock_generate)
+
+                        # Verify TranscriptSyncingModelWrapper was created (not blocking)
+                        mock_standard_wrapper.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_blocking_wrapper_uses_default_values(self, mock_state, mock_generate):
+        """Test that blocking wrapper uses default values when not specified."""
+        metadata = {
+            MetadataKeys.SESSION_ID: "session-123",
+            MetadataKeys.EPISODE_ID: "episode-456",
+            MetadataKeys.SABER_DOMAIN_SLUG: "test-domain",
+            MetadataKeys.INSTRUCTION_PROMPT: "Test instruction",
+            MetadataKeys.ASSISTANT_PROMPT: "Test assistant",
+            MetadataKeys.SUBMIT_PROMPT: "Test submit",
+            MetadataKeys.SAMPLE_ID: "sample-1",
+            "blocking_config": {
+                "enabled": True,
+                # No other fields specified - should use defaults
+            }
+        }
+
+        mock_state.metadata = metadata
+        mock_state.store.get.side_effect = lambda key, default=None: {
+            InspectStoreKeys.DOMAIN_SLUG: "test-domain",
+            InspectStoreKeys.SESSION_ID: "session-123",
+            InspectStoreKeys.EPISODE_MAPPING: {
+                "sample-1": MagicMock(episode_id="episode-456")
+            },
+        }.get(key, default)
+
+        mock_agent = AsyncMock(return_value=mock_state)
+        mock_factory = MagicMock(return_value=lambda **kwargs: mock_agent)
+
+        with patch("saber.inspect_ai.agents.solver_factory.get_active_domain") as mock_get_domain:
+            mock_get_domain.return_value = {"rest_url": "http://localhost:8000"}
+
+            with patch("saber.inspect_ai.agents.solver_factory.active_model") as mock_active_model:
+                mock_model = MagicMock()
+                mock_active_model.return_value = mock_model
+
+                with patch("saber.inspect_ai.agents.solver_factory.BlockingTranscriptSyncingModelWrapper") as mock_blocking_wrapper:
+                    mock_blocking_wrapper.return_value = MagicMock()
+
+                    with patch("saber.inspect_ai.agents.solver_factory.active_model_context_var"):
+                        solver = create_saber_solver("test-agent", mock_factory)
+                        await solver(mock_state, mock_generate)
+
+                        # Verify defaults were used
+                        call_args = mock_blocking_wrapper.call_args
+                        assert call_args[1]["poll_interval"] == 2.0  # default
+                        assert call_args[1]["max_iterations"] == 50  # default
+                        assert call_args[1]["timeout"] == 100.0  # default
+                        assert call_args[1]["skip_first_iteration"] is True  # default

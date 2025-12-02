@@ -831,12 +831,12 @@ class SessionMCPAPI:
         Returns:
             MCPToolCallResponse with structured command execution data
         """
-        # Build structured result with direct access to command data
-        result_data = {
-            "stdout": command_result.stdout,
-            "stderr": command_result.stderr,
-            "exit_code": command_result.exit_code,
-        }
+        # Use the .data property to get all result data (includes custom fields from executors)
+        # This supports both standard executors (stdout/stderr/exit_code) and
+        # custom executors (arbitrary data fields)
+        result_data = (
+            command_result.data.copy() if isinstance(command_result.data, dict) else {"output": command_result.data}
+        )
 
         # Add episode termination signal if present
         if command_result.metadata.get("episode_terminated"):
