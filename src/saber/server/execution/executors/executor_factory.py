@@ -32,6 +32,7 @@ class ExecutorFactory:
         self,
         sandbox_manager: SandboxEnvironmentManager,
         configuration: Optional[Dict[str, Any]] = None,
+        session_manager: Optional[Any] = None,
     ):
         """
         Initialize executor factory.
@@ -39,8 +40,10 @@ class ExecutorFactory:
         Args:
             sandbox_manager: Sandbox manager for Docker operations
             configuration: Base execution configuration dictionary (stored by reference, not copied)
+            session_manager: Optional session manager for cross-episode access (injected into executors)
         """
         self._sandbox_manager = sandbox_manager
+        self._session_manager = session_manager
         # Store configuration by reference so updates to the dict are reflected
         # This allows ExecutionManager to update config after factory creation
         self._configuration = configuration if configuration is not None else {}
@@ -224,6 +227,17 @@ class ExecutorFactory:
         executor = executor_class.create_with_config(
             sandbox_manager=self._sandbox_manager, config=merged_config, additional_params=additional_params
         )
+
+        # Inject session_manager if executor supports it (for cross-episode operations)
+        if self._session_manager is not None and hasattr(executor, "_session_manager"):
+            executor._session_manager = self._session_manager
+            logger.debug(
+                "Session manager injected into executor",
+                extra={
+                    "event": "executor_session_manager_injected",
+                    "executor_type": executor_type,
+                },
+            )
 
         # Cache the instance
         self._executor_instances[executor_type] = executor

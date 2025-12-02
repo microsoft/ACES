@@ -220,8 +220,8 @@ class SessionManager:
         self.benchmark_manager = BenchmarkManager(domain_name, config_dir)
         self.episode_manager = EpisodeManager()
 
-        # Initialize execution manager first
-        self.execution_manager = ExecutionManager(config_dir)
+        # Initialize execution manager with self for cross-episode executor operations
+        self.execution_manager = ExecutionManager(config_dir, session_manager=self)
 
         # Initialize permanent environment manager through ExecutionManager for unified container lifecycle
         permanent_config = {

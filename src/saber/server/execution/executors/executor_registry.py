@@ -13,6 +13,7 @@ from typing import Any, Dict, Type
 
 from saber.logging_config import LogCategory, get_saber_logger
 
+from .base_executors import CommandExecutor
 from .docker_executor import DockerExecutor
 
 logger = get_saber_logger(LogCategory.EXECUTION, __name__)
@@ -28,7 +29,7 @@ class ExecutorRegistry:
 
     def __init__(self) -> None:
         """Initialize the executor registry."""
-        self._registered_executors: Dict[str, Type[DockerExecutor]] = {}
+        self._registered_executors: Dict[str, Type[CommandExecutor]] = {}
         self._registration_sources: Dict[str, str] = {}  # Track where each executor came from
         logger.info(
             "Executor registry initialized",
@@ -36,22 +37,22 @@ class ExecutorRegistry:
         )
 
     def register_executor_class(
-        self, executor_type: str, executor_class: Type[DockerExecutor], source: str = "external"
+        self, executor_type: str, executor_class: Type[CommandExecutor], source: str = "external"
     ) -> None:
         """
         Register an executor class.
 
         Args:
             executor_type: String identifier for the executor
-            executor_class: Executor class (must inherit from DockerExecutor)
+            executor_class: Executor class (must inherit from CommandExecutor)
             source: Source description for tracking/debugging
 
         Raises:
-            ValueError: If executor_class doesn't inherit from DockerExecutor
+            ValueError: If executor_class doesn't inherit from CommandExecutor
             RuntimeError: If executor_type is already registered
         """
-        if not issubclass(executor_class, DockerExecutor):
-            raise ValueError(f"Executor class must inherit from DockerExecutor, got: {executor_class}")
+        if not issubclass(executor_class, CommandExecutor):
+            raise ValueError(f"Executor class must inherit from CommandExecutor, got: {executor_class}")
 
         if executor_type in self._registered_executors:
             existing_source = self._registration_sources.get(executor_type, "unknown")
@@ -245,7 +246,7 @@ class ExecutorRegistry:
             }
         return result
 
-    def get_executor_class(self, executor_type: str) -> Type[DockerExecutor]:
+    def get_executor_class(self, executor_type: str) -> Type[CommandExecutor]:
         """
         Get an executor class by type.
 
@@ -290,7 +291,7 @@ class ExecutorRegistry:
             },
         )
 
-    def _validate_executor_class(self, executor_class: Type[DockerExecutor]) -> None:
+    def _validate_executor_class(self, executor_class: Type[CommandExecutor]) -> None:
         """
         Validate that an executor class has the required interface.
 
@@ -315,7 +316,7 @@ class ExecutorRegistry:
 executor_registry = ExecutorRegistry()
 
 
-def register_executor(executor_type: str, executor_class: Type[DockerExecutor], source: str = "external") -> None:
+def register_executor(executor_type: str, executor_class: Type[CommandExecutor], source: str = "external") -> None:
     """
     Hook function for registering executors.
 
@@ -324,7 +325,7 @@ def register_executor(executor_type: str, executor_class: Type[DockerExecutor], 
 
     Args:
         executor_type: String identifier for the executor (e.g., "cli", "python", "java")
-        executor_class: Executor class that inherits from DockerExecutor
+        executor_class: Executor class that inherits from CommandExecutor
         source: Source description for tracking (e.g., "standard", "external", "file:path")
 
     Example:
@@ -381,7 +382,7 @@ def get_executor_info() -> Dict[str, Dict[str, Any]]:
     return executor_registry.list_registered_executors()
 
 
-def get_executor_class(executor_type: str) -> Type[DockerExecutor]:
+def get_executor_class(executor_type: str) -> Type[CommandExecutor]:
     """
     Get an executor class by type.
 

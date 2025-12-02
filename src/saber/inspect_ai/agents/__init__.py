@@ -19,6 +19,7 @@ from ...logging_config import LogCategory, get_saber_logger
 
 # Import and re-export agent-related components
 from .agent_resolver import resolve_agent_implementation
+from .blocking_transcript_solver import blocking_transcript_solver
 from .role_config_processor import all_roles_have_models, process_role_configuration
 from .solver_factory import create_saber_solver
 
@@ -127,6 +128,7 @@ __all__ = [
     "AgentNotFoundError",
     "resolve_agent_implementation",
     "create_saber_solver",
+    "blocking_transcript_solver",
     "all_roles_have_models",
     "process_role_configuration",
 ]

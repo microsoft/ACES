@@ -129,7 +129,12 @@ class MetadataKeys(str, Enum):
     TRANSCRIPT_UPDATED_AT = "_transcript_updated_at"
     TRANSCRIPT_METADATA = "_transcript_metadata"
 
-    # Message injection context keys (Phase 4: Red team message injection)
+    # Blocking transcript solver - Timestamp-driven coordination
+    TRANSCRIPT_LAST_PUSHED_AT = "_transcript_last_pushed_at"  # ISO timestamp of last blue team push
+    TRANSCRIPT_LAST_MODIFIED_AT = "_transcript_last_modified_at"  # ISO timestamp of last red team modification
+    TRANSCRIPT_MODIFICATION_COUNT = "_transcript_modification_count"  # Monotonic counter (1, 2, 3...)
+
+    # Legacy message injection (deprecated - use direct transcript modification)
     PENDING_INJECTIONS = "_pending_injections"
     INJECTION_HISTORY = "_injection_history"
 
@@ -137,6 +142,10 @@ class MetadataKeys(str, Enum):
     TRANSCRIPT_STEP_NUMBER = "step_number"
     TRANSCRIPT_TIMESTAMP = "timestamp"
     TRANSCRIPT_SOURCE = "source"
+
+    # Orchestration cross-episode metadata (Phase 2c: Transparent Agent Interface)
+    ORCHESTRATION_TARGET_EPISODES = "_orchestration_target_episodes"
+    ORCHESTRATION_ROLE = "_orchestration_role"
 
 
 # NOTE: The following constants have been moved to more appropriate locations:

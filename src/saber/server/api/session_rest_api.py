@@ -751,6 +751,7 @@ class SessionRestAPI:
                 context_updates: Dict[str, Any] = {
                     MetadataKeys.CLIENT_TRANSCRIPT.value: updated_messages,
                     MetadataKeys.TRANSCRIPT_UPDATED_AT.value: timestamp,
+                    MetadataKeys.TRANSCRIPT_LAST_PUSHED_AT.value: timestamp,  # Auto-set on push
                 }
                 if transcript_request.metadata:
                     context_updates[MetadataKeys.TRANSCRIPT_METADATA.value] = transcript_request.metadata
@@ -963,6 +964,56 @@ class SessionRestAPI:
             except Exception as exc:
                 log_operation_failure(logger, "get_pending_messages", exc, session_id=session_id, episode_id=episode_id)
                 raise HTTPException(status_code=500, detail=f"Failed to get pending messages: {exc}") from exc
+
+        # ===== Blocking Transcript Solver Endpoints =====
+
+        @self.app.get("/api/v1/session/{session_id}/episodes/{episode_id}/transcript/metadata")
+        async def get_transcript_metadata_endpoint(session_id: str, episode_id: str) -> Dict[str, Any]:
+            """Get transcript metadata including timestamps for change detection.
+            
+            This endpoint is lightweight and designed for frequent polling by blue team.
+            Blue team compares last_modified_at with its own last_pull timestamp to detect changes.
+            
+            Returns:
+                last_pushed_at: ISO timestamp of last blue team push
+                last_modified_at: ISO timestamp of last red team modification (or None)
+                modification_count: Monotonic counter
+                message_count: Number of messages in transcript
+                last_updated: ISO timestamp of last transcript update
+            """
+            log_operation_start(logger, "get_transcript_metadata", session_id=session_id, episode_id=episode_id)
+            try:
+                episode = self.session_manager.get_episode_by_id(episode_id)
+                if not episode:
+                    raise HTTPException(status_code=404, detail=f"Episode {episode_id} not found")
+                
+                transcript = episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT, [])
+                
+                metadata = {
+                    "last_pushed_at": episode.context.get(MetadataKeys.TRANSCRIPT_LAST_PUSHED_AT),
+                    "last_modified_at": episode.context.get(MetadataKeys.TRANSCRIPT_LAST_MODIFIED_AT),
+                    "modification_count": episode.context.get(MetadataKeys.TRANSCRIPT_MODIFICATION_COUNT, 0),
+                    "message_count": len(transcript),
+                    "last_updated": episode.context.get(MetadataKeys.TRANSCRIPT_UPDATED_AT),
+                }
+                
+                log_operation_success(
+                    logger,
+                    "get_transcript_metadata",
+                    session_id=session_id,
+                    episode_id=episode_id,
+                    modification_count=metadata["modification_count"],
+                )
+                
+                return metadata
+                
+            except HTTPException:
+                raise
+            except Exception as exc:
+                log_operation_failure(logger, "get_transcript_metadata", exc, session_id=session_id, episode_id=episode_id)
+                raise HTTPException(status_code=500, detail=f"Failed to get transcript metadata: {exc}") from exc
+
+        # ===== End Blocking Transcript Solver Endpoints =====
 
         @self.app.get(APIEndpoints.EPISODE_SUBMISSION_EVALUATION_CRITERIA)
         async def get_submission_evaluation_criteria_endpoint(

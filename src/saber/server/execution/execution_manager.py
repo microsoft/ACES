@@ -32,16 +32,18 @@ class ExecutionManager:
     with security validation and Docker isolation. Commands are executed sequentially.
     """
 
-    def __init__(self, config_dir: str):
+    def __init__(self, config_dir: str, session_manager: Optional[Any] = None):
         """
         Initialize ExecutionManager with executor factory and configuration.
 
         Args:
             config_dir: Path to configuration directory for environment resolution
+            session_manager: Optional SessionManager for cross-episode operations
 
         Task-specific configuration will be provided when sessions are created.
         """
         self._config_dir = config_dir
+        self._session_manager = session_manager
         self._permanent_environment_manager: Optional[PermanentEnvironmentManager] = None
         self._sandbox_environment_manager: Optional[SandboxEnvironmentManager] = None
         self._file_copier: Optional[Any] = None  # SandboxFileCopier instance
@@ -96,6 +98,7 @@ class ExecutionManager:
             self._executor_factory = ExecutorFactory(
                 sandbox_manager=self._sandbox_environment_manager,
                 configuration=self._configuration,
+                session_manager=self._session_manager,
             )
         return self._executor_factory
 
