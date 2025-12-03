@@ -126,11 +126,10 @@ class MetadataKeys(str, Enum):
 
     # Transcript synchronization context keys
     CLIENT_TRANSCRIPT = "_client_transcript"
-    TRANSCRIPT_UPDATED_AT = "_transcript_updated_at"
     TRANSCRIPT_METADATA = "_transcript_metadata"
 
     # Blocking transcript solver - Timestamp-driven coordination
-    TRANSCRIPT_LAST_PUSHED_AT = "_transcript_last_pushed_at"  # ISO timestamp of last blue team push
+    TRANSCRIPT_LAST_PUSHED_AT = "_transcript_last_pushed_at"  # ISO timestamp of last transcript push
     TRANSCRIPT_LAST_MODIFIED_AT = "_transcript_last_modified_at"  # ISO timestamp of last red team modification
     TRANSCRIPT_MODIFICATION_COUNT = "_transcript_modification_count"  # Monotonic counter (1, 2, 3...)
 

@@ -750,7 +750,6 @@ class SessionRestAPI:
 
                 context_updates: Dict[str, Any] = {
                     MetadataKeys.CLIENT_TRANSCRIPT.value: updated_messages,
-                    MetadataKeys.TRANSCRIPT_UPDATED_AT.value: timestamp,
                     MetadataKeys.TRANSCRIPT_LAST_PUSHED_AT.value: timestamp,  # Auto-set on push
                 }
                 if transcript_request.metadata:
@@ -807,7 +806,7 @@ class SessionRestAPI:
 
                 # Retrieve transcript from episode context
                 messages = episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT, [])
-                last_updated = episode.context.get(MetadataKeys.TRANSCRIPT_UPDATED_AT)
+                last_updated = episode.context.get(MetadataKeys.TRANSCRIPT_LAST_PUSHED_AT)
                 metadata = episode.context.get(MetadataKeys.TRANSCRIPT_METADATA)
 
                 log_operation_success(
@@ -994,7 +993,7 @@ class SessionRestAPI:
                     "last_modified_at": episode.context.get(MetadataKeys.TRANSCRIPT_LAST_MODIFIED_AT),
                     "modification_count": episode.context.get(MetadataKeys.TRANSCRIPT_MODIFICATION_COUNT, 0),
                     "message_count": len(transcript),
-                    "last_updated": episode.context.get(MetadataKeys.TRANSCRIPT_UPDATED_AT),
+                    "last_updated": episode.context.get(MetadataKeys.TRANSCRIPT_LAST_PUSHED_AT),
                 }
 
                 log_operation_success(

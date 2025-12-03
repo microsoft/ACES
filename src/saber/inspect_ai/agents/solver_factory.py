@@ -236,9 +236,6 @@ def _wrap_model_for_transcript_sync(
             session_id=context.session_id,  # type: ignore[arg-type]
             episode_id=context.episode_id,  # type: ignore[arg-type]
             rest_url=context.rest_url,  # type: ignore[arg-type]
-            poll_interval=context.blocking_config.get("poll_interval", 2.0),
-            max_iterations=context.blocking_config.get("max_iterations", 50),
-            timeout=context.blocking_config.get("timeout", 100.0),
             skip_first_iteration=context.blocking_config.get("skip_first_iteration", True),
         )
         logger.info(
@@ -248,8 +245,7 @@ def _wrap_model_for_transcript_sync(
                 "session_id": context.session_id,
                 "episode_id": context.episode_id,
                 "model": model_name,
-                "poll_interval": context.blocking_config.get("poll_interval", 2.0),
-                "max_iterations": context.blocking_config.get("max_iterations", 50),
+                "skip_first_iteration": context.blocking_config.get("skip_first_iteration", True),
             },
         )
         return wrapped_model

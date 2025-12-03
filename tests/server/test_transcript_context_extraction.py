@@ -370,7 +370,7 @@ class TestEndToEndTranscriptFlow:
 
         # Manually update episode context (simulating what the endpoint would do)
         episode.context[MetadataKeys.CLIENT_TRANSCRIPT.value] = [msg.model_dump() for msg in transcript_request.messages]
-        episode.context[MetadataKeys.TRANSCRIPT_UPDATED_AT.value] = datetime.utcnow().isoformat()
+        episode.context[MetadataKeys.TRANSCRIPT_LAST_PUSHED_AT.value] = datetime.utcnow().isoformat()
 
         # Verify transcript was stored in episode context
         assert MetadataKeys.CLIENT_TRANSCRIPT.value in episode.context

@@ -401,9 +401,6 @@ class TestSolverFactoryBlockingWrapper:
                         assert call_args[1]["session_id"] == "session-123"
                         assert call_args[1]["episode_id"] == "episode-456"
                         assert call_args[1]["rest_url"] == "http://localhost:8000"
-                        assert call_args[1]["poll_interval"] == 2.0
-                        assert call_args[1]["max_iterations"] == 50
-                        assert call_args[1]["timeout"] == 100.0
                         assert call_args[1]["skip_first_iteration"] is True
 
     @pytest.mark.asyncio
@@ -544,7 +541,4 @@ class TestSolverFactoryBlockingWrapper:
 
                         # Verify defaults were used
                         call_args = mock_blocking_wrapper.call_args
-                        assert call_args[1]["poll_interval"] == 2.0  # default
-                        assert call_args[1]["max_iterations"] == 50  # default
-                        assert call_args[1]["timeout"] == 100.0  # default
                         assert call_args[1]["skip_first_iteration"] is True  # default

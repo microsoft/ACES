@@ -46,14 +46,12 @@ class TestTranscriptPushAutoPopulatesMetadata:
                 {"role": "system", "content": "You are helpful..."},
                 {"role": "assistant", "content": "Hello!"},
             ],
-            MetadataKeys.TRANSCRIPT_UPDATED_AT: timestamp,
             MetadataKeys.TRANSCRIPT_LAST_PUSHED_AT: timestamp,  # Auto-set
         }
         await sample_episode.update_context_atomic(context_updates)
 
         # Assert
         assert sample_episode.context[MetadataKeys.TRANSCRIPT_LAST_PUSHED_AT] == timestamp
-        assert sample_episode.context[MetadataKeys.TRANSCRIPT_UPDATED_AT] == timestamp
 
 
 class TestTranscriptModificationTimestamps:

@@ -439,16 +439,16 @@ class TestBlockingTranscriptSyncingModelWrapper:
         """Create BlockingTranscriptSyncingModelWrapper instance for testing."""
         from saber.inspect_ai.integration.model_wrapper import BlockingTranscriptSyncingModelWrapper
 
-        return BlockingTranscriptSyncingModelWrapper(
+        wrapper = BlockingTranscriptSyncingModelWrapper(
             base_model=mock_base_model,
             session_id="session_123",
             episode_id="episode_456",
             rest_url="http://localhost:8000",
-            poll_interval=0.1,  # Fast polling for tests
-            max_iterations=5,
-            timeout=10.0,
             skip_first_iteration=True,
         )
+        # Override POLL_INTERVAL for faster testing
+        wrapper.POLL_INTERVAL = 0.01
+        return wrapper
 
     @pytest.mark.asyncio
     async def test_blocking_wrapper_init(self, mock_base_model):
@@ -460,15 +460,11 @@ class TestBlockingTranscriptSyncingModelWrapper:
             session_id="session_123",
             episode_id="episode_456",
             rest_url="http://localhost:8000",
-            poll_interval=2.0,
-            max_iterations=50,
-            timeout=100.0,
             skip_first_iteration=True,
         )
 
-        assert wrapper._poll_interval == 2.0
-        assert wrapper._max_iterations == 50
-        assert wrapper._timeout == 100.0
+        assert wrapper.POLL_INTERVAL == 2.0
+        assert wrapper.HTTP_TIMEOUT == 60.0
         assert wrapper._skip_first_iteration is True
         assert wrapper._first_call is True
 
@@ -535,38 +531,30 @@ class TestBlockingTranscriptSyncingModelWrapper:
                 mock_pull.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_blocking_wrapper_timeout_error(self, blocking_wrapper):
-        """Test that blocking raises RuntimeError on timeout."""
-        from saber.inspect_ai.integration.model_wrapper import BlockingTranscriptSyncingModelWrapper
-
-        # Mock to always return same timestamp (never changes)
-        with patch.object(BlockingTranscriptSyncingModelWrapper, "_get_transcript_timestamp", new_callable=AsyncMock) as mock_get_ts:
-            mock_get_ts.return_value = "2025-12-01T10:00:00Z"
-
-            # Set very short timeout and high max_iterations so timeout triggers first
-            blocking_wrapper._timeout = 0.5
-            blocking_wrapper._poll_interval = 0.1
-            blocking_wrapper._max_iterations = 100
-
-            with pytest.raises(RuntimeError, match="Blocking timeout exceeded"):
-                await blocking_wrapper._block_and_pull_transcript([])
-
     @pytest.mark.asyncio
-    async def test_blocking_wrapper_max_iterations_error(self, blocking_wrapper):
-        """Test that blocking raises RuntimeError on max iterations."""
+    async def test_blocking_wrapper_polls_indefinitely(self, blocking_wrapper):
+        """Test that blocking polls indefinitely when timestamp doesn't change."""
         from saber.inspect_ai.integration.model_wrapper import BlockingTranscriptSyncingModelWrapper
 
-        # Mock to always return same timestamp
+        # Mock to always return same timestamp for first few calls, then change
+        call_count = 0
+        async def mock_timestamp():
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                return "2025-12-01T10:00:00Z"
+            return "2025-12-01T10:00:01Z"  # Changed timestamp
+
         with patch.object(BlockingTranscriptSyncingModelWrapper, "_get_transcript_timestamp", new_callable=AsyncMock) as mock_get_ts:
-            mock_get_ts.return_value = "2025-12-01T10:00:00Z"
+            mock_get_ts.side_effect = mock_timestamp
+            with patch.object(BlockingTranscriptSyncingModelWrapper, "_pull_transcript", new_callable=AsyncMock) as mock_pull:
+                mock_pull.return_value = [ChatMessageUser(content="Modified")]
 
-            # Set very short timeout to not interfere with max_iterations test
-            blocking_wrapper._timeout = 100.0
-            blocking_wrapper._max_iterations = 3
-            blocking_wrapper._poll_interval = 0.01
-
-            with pytest.raises(RuntimeError, match="Blocking max iterations exceeded"):
-                await blocking_wrapper._block_and_pull_transcript([])
+                # Should poll a few times then succeed when timestamp changes
+                result = await blocking_wrapper._block_and_pull_transcript([])
+                assert len(result) == 1
+                assert result[0].content == "Modified"
+                assert call_count == 3  # Called 3 times before detecting change
 
     @pytest.mark.asyncio
     async def test_blocking_wrapper_get_transcript_timestamp(self, blocking_wrapper):

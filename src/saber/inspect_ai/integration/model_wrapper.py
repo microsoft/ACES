@@ -474,12 +474,16 @@ class BlockingTranscriptSyncingModelWrapper(TranscriptSyncingModelWrapper):
     3. Push assistant message to transcript (inherited from parent)
 
     Attributes:
-        _poll_interval: Seconds to wait between timestamp polls
-        _max_iterations: Maximum number of poll iterations before timeout
-        _timeout: Total blocking timeout in seconds
         _skip_first_iteration: Skip blocking on first generate() call
         _first_call: Tracks if this is the first generate() call
+
+    Note:
+        Polls indefinitely until episode ends with hardcoded 2-second intervals
+        and 60-second HTTP timeouts for REST calls.
     """
+
+    POLL_INTERVAL = 2.0  # Hardcoded: poll every 2 seconds
+    HTTP_TIMEOUT = 60.0  # Hardcoded: 60 second timeout for REST calls
 
     def __init__(
         self,
@@ -487,9 +491,6 @@ class BlockingTranscriptSyncingModelWrapper(TranscriptSyncingModelWrapper):
         session_id: str,
         episode_id: str,
         rest_url: str,
-        poll_interval: float = 2.0,
-        max_iterations: int = 50,
-        timeout: float = 100.0,
         skip_first_iteration: bool = True,
     ):
         """Initialize blocking transcript syncing wrapper.
@@ -499,15 +500,9 @@ class BlockingTranscriptSyncingModelWrapper(TranscriptSyncingModelWrapper):
             session_id: SABER session ID
             episode_id: SABER episode ID
             rest_url: Base URL of SABER REST API
-            poll_interval: Seconds to wait between timestamp polls
-            max_iterations: Maximum number of poll iterations before timeout
-            timeout: Total blocking timeout in seconds
             skip_first_iteration: Skip blocking on first generate() call
         """
         super().__init__(base_model, session_id, episode_id, rest_url)
-        self._poll_interval = poll_interval
-        self._max_iterations = max_iterations
-        self._timeout = timeout
         self._skip_first_iteration = skip_first_iteration
         self._first_call = True
         self._client = SABERRestClient(saber_server_url=rest_url)
@@ -518,9 +513,8 @@ class BlockingTranscriptSyncingModelWrapper(TranscriptSyncingModelWrapper):
                 "event": "blocking_wrapper_created",
                 "session_id": session_id,
                 "episode_id": episode_id,
-                "poll_interval": poll_interval,
-                "max_iterations": max_iterations,
-                "timeout": timeout,
+                "poll_interval": self.POLL_INTERVAL,
+                "http_timeout": self.HTTP_TIMEOUT,
                 "skip_first_iteration": skip_first_iteration,
             },
         )
@@ -610,37 +604,21 @@ class BlockingTranscriptSyncingModelWrapper(TranscriptSyncingModelWrapper):
             return current_input
 
         logger.info(
-            "Blocking for transcript modification",
+            "Blocking for transcript modification (indefinite polling)",
             extra={
                 "event": "blocking_wrapper_started",
                 "session_id": self._session_id,
                 "episode_id": self._episode_id,
                 "initial_timestamp": initial_timestamp,
-                "poll_interval": self._poll_interval,
-                "max_iterations": self._max_iterations,
+                "poll_interval": self.POLL_INTERVAL,
             },
         )
 
-        # Poll for timestamp change
-        for iteration in range(self._max_iterations):
-            elapsed = time.time() - start_time
-            if elapsed >= self._timeout:
-                error = RuntimeError(f"Blocking timeout exceeded: {elapsed:.1f}s >= {self._timeout}s")
-                logger.error(
-                    "Blocking timeout exceeded",
-                    extra={
-                        "event": "blocking_wrapper_timeout",
-                        "session_id": self._session_id,
-                        "episode_id": self._episode_id,
-                        "elapsed_seconds": elapsed,
-                        "timeout_seconds": self._timeout,
-                        "iterations": iteration,
-                    },
-                )
-                raise error
-
-            await asyncio.sleep(self._poll_interval)
-
+        # Poll indefinitely for timestamp change
+        iteration = 0
+        while True:
+            await asyncio.sleep(self.POLL_INTERVAL)
+            iteration += 1
             try:
                 current_timestamp = await self._get_transcript_timestamp()
 
@@ -673,34 +651,20 @@ class BlockingTranscriptSyncingModelWrapper(TranscriptSyncingModelWrapper):
                         "episode_id": self._episode_id,
                     },
                 )
+                # Continue polling on error
 
-        # Max iterations reached without detecting change
-        error = RuntimeError(f"Blocking max iterations exceeded: {self._max_iterations} iterations")
-        logger.error(
-            "Blocking max iterations exceeded",
-            extra={
-                "event": "blocking_wrapper_max_iterations",
-                "session_id": self._session_id,
-                "episode_id": self._episode_id,
-                "max_iterations": self._max_iterations,
-                "elapsed_seconds": time.time() - start_time,
-            },
-        )
-        raise error
-
-    async def _get_transcript_timestamp(self) -> Optional[str]:
-        """Get TRANSCRIPT_LAST_MODIFIED_AT timestamp from episode metadata.
+    async def _get_transcript_timestamp(self) -> Any:
+        """Get the last modification timestamp of the episode transcript.
 
         Returns:
-            ISO timestamp string or None
+            ISO format timestamp string
 
         Raises:
-            Exception: If metadata fetch fails
+            Exception: If metadata retrieval fails
         """
         try:
-            # Call module-level function for easier mocking in tests
             metadata = await get_episode_metadata(self._client, self._session_id, self._episode_id)
-            return metadata.get(MetadataKeys.TRANSCRIPT_LAST_MODIFIED_AT)
+            return metadata.get(MetadataKeys.TRANSCRIPT_LAST_MODIFIED_AT, "")
         except Exception as exc:
             logger.error(
                 "Failed to get episode metadata for timestamp",

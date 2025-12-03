@@ -20,6 +20,7 @@ from ....base import CommandResult
 from ...base import Parameter, ParameterType
 from ...sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 from ..base_executors import CommandExecutor
+from ..orchestration_utils import resolve_target_episode_id
 
 logger = get_saber_logger(LogCategory.TASK_EXEC, __name__)
 
@@ -334,24 +335,12 @@ class InjectPromptExecutor(CommandExecutor):
         Returns:
             Target episode ID or None if not resolvable
         """
-        # Auto-resolve from orchestration metadata
-        if self._session_manager:
-            red_episode = self._session_manager.episode_manager.get_episode_by_id(red_episode_id)
-            if red_episode:
-                target_episodes = red_episode.context.get(MetadataKeys.ORCHESTRATION_TARGET_EPISODES)
-                if target_episodes and isinstance(target_episodes, list) and len(target_episodes) > 0:
-                    target_id: str = str(target_episodes[0])  # Use first target
-                    logger.debug(
-                        "Auto-resolved target from orchestration metadata",
-                        extra={
-                            "red_episode_id": red_episode_id,
-                            "target_episode_id": target_id,
-                            "total_targets": len(target_episodes),
-                        },
-                    )
-                    return target_id
-
-        return None
+        return await resolve_target_episode_id(
+            session_manager=self._session_manager,
+            red_episode_id=red_episode_id,
+            parameters=parameters,
+            context=context,
+        )
 
     def _apply_injection_strategy(
         self,

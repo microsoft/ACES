@@ -298,7 +298,7 @@ class TestTranscriptAPI:
 
         # Setup: Episode with stored transcript
         sample_episode.context[MetadataKeys.CLIENT_TRANSCRIPT] = sample_transcript["messages"]
-        sample_episode.context[MetadataKeys.TRANSCRIPT_UPDATED_AT] = "2025-11-26T10:30:00Z"
+        sample_episode.context[MetadataKeys.TRANSCRIPT_LAST_PUSHED_AT] = "2025-11-26T10:30:00Z"
         manager.get_episode_by_id = MagicMock(return_value=sample_episode)
         manager.active_sessions[sample_episode.session_id] = {
             "episodes": {sample_episode.episode_id: sample_episode}
@@ -365,7 +365,7 @@ class TestTranscriptAPI:
 
         # Setup: Episode with transcript and metadata
         sample_episode.context[MetadataKeys.CLIENT_TRANSCRIPT] = sample_transcript["messages"]
-        sample_episode.context[MetadataKeys.TRANSCRIPT_UPDATED_AT] = "2025-11-26T10:30:00Z"
+        sample_episode.context[MetadataKeys.TRANSCRIPT_LAST_PUSHED_AT] = "2025-11-26T10:30:00Z"
         sample_episode.context[MetadataKeys.TRANSCRIPT_METADATA] = sample_transcript["metadata"]
         manager.get_episode_by_id = MagicMock(return_value=sample_episode)
         manager.active_sessions[sample_episode.session_id] = {
