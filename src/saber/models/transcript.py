@@ -1,0 +1,147 @@
+"""Transcript coordination models for WebSocket-based sync.
+
+This module provides data models for the transcript coordination service
+implementing differential sync with version tracking and checksum validation.
+"""
+
+import hashlib
+import json
+from dataclasses import dataclass
+from enum import Enum
+from typing import Any, Dict, List, Optional
+
+
+def compute_checksum(messages: List[Dict[str, Any]]) -> str:
+    """
+    Compute stable SHA256 checksum of transcript for rewrite detection.
+
+    Uses full SHA256 hash (64 hex chars = 32 bytes).
+    Collision probability with 10K transcripts: ~2.7 × 10^-12 (acceptable).
+
+    Args:
+        messages: List of message dictionaries
+
+    Returns:
+        SHA256 checksum as 64-character hex string
+    """
+    stable_json = json.dumps(messages, sort_keys=True)
+    return hashlib.sha256(stable_json.encode()).hexdigest()
+
+
+class SyncStrategy(str, Enum):
+    """Coordination strategies for transcript synchronization."""
+
+    IMMEDIATE = "immediate"  # No blocking, return immediately
+    WAIT_FOR_CHANGE = "wait_for_change"  # Block until WebSocket event (deprecated - WebSocket handles this)
+
+
+@dataclass
+class TranscriptVersion:
+    """
+    Version with rewrite detection via checksum.
+
+    Combines monotonic sequence number with SHA256 checksum to detect
+    both incremental changes and full rewrites.
+
+    Attributes:
+        sequence: Monotonic version counter (0, 1, 2, 3...)
+        checksum: Full SHA256 hash (64 hex chars) of entire transcript
+        message_count: Total number of messages in transcript
+        last_operation: Type of last operation ("append", "rewrite", "insert", "rewind")
+    """
+
+    sequence: int
+    checksum: str
+    message_count: int
+    last_operation: str
+
+    def __post_init__(self) -> None:
+        """Validate fields after initialization."""
+        if self.sequence < 0:
+            raise ValueError(f"Version sequence must be non-negative, got {self.sequence}")
+        if not self.checksum or len(self.checksum) != 64:
+            raise ValueError(
+                f"Checksum must be 64 hex chars (SHA256), got {len(self.checksum) if self.checksum else 0}"
+            )
+        if self.message_count < 0:
+            raise ValueError(f"Message count must be non-negative, got {self.message_count}")
+
+
+@dataclass
+class TranscriptSyncRequest:
+    """
+    Request for transcript synchronization.
+
+    Supports both push (client sends new messages) and pull (client requests updates).
+
+    Attributes:
+        episode_id: Target episode identifier
+        since_version: Client's current version (for delta sync)
+        client_checksum: SHA256 checksum of client's transcript at since_version (for validation)
+        messages_to_push: New messages to append (optional)
+        strategy: Sync strategy (immediate or wait_for_change)
+    """
+
+    episode_id: str
+    since_version: int = 0
+    client_checksum: Optional[str] = None
+    messages_to_push: Optional[List[Dict[str, Any]]] = None
+    strategy: str = SyncStrategy.IMMEDIATE.value
+
+    def __post_init__(self) -> None:
+        """Validate fields and set defaults."""
+        if self.since_version < 0:
+            raise ValueError(f"since_version must be non-negative, got {self.since_version}")
+        if self.client_checksum and len(self.client_checksum) != 64:
+            raise ValueError(f"client_checksum must be 64 hex chars if provided, got {len(self.client_checksum)}")
+        if self.messages_to_push is None:
+            self.messages_to_push = []
+
+
+@dataclass
+class TranscriptSyncResponse:
+    """
+    Response from transcript synchronization.
+
+    Provides either delta (new messages only) or full transcript depending on sync mode.
+
+    Attributes:
+        current_version: Server's current version info
+        delta: New messages since client's version (None if full sync or no changes)
+        full_transcript: Complete transcript (None if delta sync or no changes)
+        sync_mode: Mode used ("delta", "full", "no_change")
+        modified: Whether transcript was modified
+        blocked: Whether request blocked waiting for changes (deprecated)
+        wait_time_seconds: Time spent waiting (0 for immediate)
+    """
+
+    current_version: TranscriptVersion
+    delta: Optional[List[Dict[str, Any]]] = None
+    full_transcript: Optional[List[Dict[str, Any]]] = None
+    sync_mode: str = "no_change"
+    modified: bool = False
+    blocked: bool = False
+    wait_time_seconds: float = 0.0
+
+    def __post_init__(self) -> None:
+        """Validate sync mode consistency."""
+        valid_modes = ["delta", "full", "no_change"]
+        if self.sync_mode not in valid_modes:
+            raise ValueError(f"sync_mode must be one of {valid_modes}, got {self.sync_mode}")
+
+        # Validate consistency
+        if self.sync_mode == "delta" and self.delta is None:
+            raise ValueError("sync_mode='delta' requires delta to be set")
+        if self.sync_mode == "full" and self.full_transcript is None:
+            raise ValueError("sync_mode='full' requires full_transcript to be set")
+        if self.sync_mode == "no_change" and (self.delta or self.full_transcript):
+            raise ValueError("sync_mode='no_change' should not have delta or full_transcript")
+
+
+__all__ = [
+    "compute_checksum",
+    "SyncStrategy",
+    "TranscriptVersion",
+    "TranscriptSyncRequest",
+    "TranscriptSyncResponse",
+]

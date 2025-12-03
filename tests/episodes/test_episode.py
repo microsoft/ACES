@@ -4,7 +4,7 @@ Unit tests for Episode class.
 Tests meaningful episode functionality - pruned basic data structure tests.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 
@@ -70,7 +70,7 @@ class TestEpisode:
 
         # Manually transition to completed for testing
         episode.state = EpisodeState.COMPLETED
-        episode.end_time = datetime.utcnow()
+        episode.end_time = datetime.now(timezone.utc)
         assert episode.state == EpisodeState.COMPLETED
         assert episode.end_time is not None
         assert episode.is_complete

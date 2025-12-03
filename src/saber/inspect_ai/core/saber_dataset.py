@@ -419,6 +419,10 @@ def _convert_benchmark_task_to_sample(benchmark_task: BenchmarkTask, attempt: in
 
     task_metadata[MetadataKeys.SAMPLE_ID] = sample_id
 
+    # Add transcript_config if present in benchmark_task
+    if hasattr(benchmark_task, "transcript_config") and benchmark_task.transcript_config is not None:
+        task_metadata["transcript_config"] = benchmark_task.transcript_config
+
     logger.debug(
         "Benchmark task metadata prepared",
         extra={
@@ -482,9 +486,9 @@ def _convert_sub_task_to_sample(
         MetadataKeys.SAMPLE_ID: sample_id,
     }
 
-    # Add blocking_config if present in sub_task
-    if sub_task.blocking_config is not None:
-        task_metadata["blocking_config"] = sub_task.blocking_config
+    # Add transcript_config if present in sub_task
+    if sub_task.transcript_config is not None:
+        task_metadata["transcript_config"] = sub_task.transcript_config
 
     logger.debug(
         "Orchestrated sub-task sample created",

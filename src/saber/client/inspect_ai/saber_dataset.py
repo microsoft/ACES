@@ -482,9 +482,9 @@ def _convert_sub_task_to_sample(
         MetadataKeys.SAMPLE_ID: sample_id,
     }
 
-    # Add blocking_config if present in sub-task
-    if sub_task.blocking_config:
-        task_metadata["blocking_config"] = sub_task.blocking_config
+    # Add transcript_config if present in sub-task
+    if sub_task.transcript_config:
+        task_metadata["transcript_config"] = sub_task.transcript_config
 
     logger.debug(
         "Orchestrated sub-task sample created",

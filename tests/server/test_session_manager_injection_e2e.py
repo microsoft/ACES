@@ -26,8 +26,15 @@ class TestSessionManagerInjectionE2E:
     @pytest.fixture
     def mock_session_manager(self):
         """Create a mock session manager with episode_manager."""
+        from unittest.mock import AsyncMock
+
         session_mgr = Mock()
         session_mgr.episode_manager = Mock()
+
+        # Mock transcript coordinator with async notify_modification
+        transcript_coordinator = Mock()
+        transcript_coordinator.notify_modification = AsyncMock()
+        session_mgr.episode_manager.transcript_coordinator = transcript_coordinator
 
         # Create blue and red episodes
         blue_episode = Episode(
@@ -139,11 +146,13 @@ class TestSessionManagerInjectionE2E:
         # Assert - injection succeeded
         assert result.success is True
 
-        # Verify episode_manager.get_episode_by_id was called
-        mock_session_manager.episode_manager.get_episode_by_id.assert_called_with("ep-blue-e2e")
-
-        # Verify blue episode was modified
-        blue_episode = mock_session_manager.episode_manager.get_episode_by_id("ep-blue-e2e")
-        assert len(blue_episode.context[MetadataKeys.CLIENT_TRANSCRIPT]) == 2
-        assert blue_episode.context[MetadataKeys.CLIENT_TRANSCRIPT][-1]["content"] == "E2E test injection"
-        assert blue_episode.context[MetadataKeys.TRANSCRIPT_MODIFICATION_COUNT] == 1
+        # Verify notify_modification was called with correct parameters
+        mock_session_manager.episode_manager.transcript_coordinator.notify_modification.assert_called_once()
+        call_args = mock_session_manager.episode_manager.transcript_coordinator.notify_modification.call_args
+        assert call_args[1]["episode_id"] == "ep-blue-e2e"
+        assert call_args[1]["operation"] == "append"  # default strategy
+        assert call_args[1]["injected_by"] == "ep-red-e2e"
+        # Verify modified transcript has the injected message
+        modified_transcript = call_args[1]["modified_transcript"]
+        assert len(modified_transcript) == 2
+        assert modified_transcript[-1]["content"] == "E2E test injection"

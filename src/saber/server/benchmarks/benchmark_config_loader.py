@@ -46,7 +46,7 @@ FIELD_TIMEOUT = "timeout"
 FIELD_MAX_STEPS = "max_steps"
 FIELD_EPISODE_ATTEMPTS = "episode_attempts"
 FIELD_ALLOWED_EXECUTORS = "allowed_executors"
-FIELD_BLOCKING_CONFIG = "blocking_config"
+FIELD_TRANSCRIPT_CONFIG = "transcript_config"
 
 # Task field names
 FIELD_TASK_ID = "task_id"
@@ -1172,62 +1172,109 @@ class BenchmarkConfigLoader:
                 )
                 raise InvalidTaskDefinitionException(message)
 
-            # Validate blocking_config if present
-            if FIELD_BLOCKING_CONFIG in episode_config:
-                blocking_config = episode_config[FIELD_BLOCKING_CONFIG]
+            # Validate transcript_config if present
+            if FIELD_TRANSCRIPT_CONFIG in episode_config:
+                transcript_config = episode_config[FIELD_TRANSCRIPT_CONFIG]
 
-                if not isinstance(blocking_config, dict):
+                if not isinstance(transcript_config, dict):
                     failure_context = {
-                        "invalid_field": f"{FIELD_EPISODE_CONFIG}.{FIELD_BLOCKING_CONFIG}",
-                        "value": blocking_config,
+                        "invalid_field": f"{FIELD_EPISODE_CONFIG}.{FIELD_TRANSCRIPT_CONFIG}",
+                        "value": transcript_config,
                     }
                     raise InvalidTaskDefinitionException(
-                        f"Task '{task_id}' {FIELD_BLOCKING_CONFIG} must be a dictionary"
+                        f"Task '{task_id}' {FIELD_TRANSCRIPT_CONFIG} must be a dictionary"
                     )
 
-                # Validate 'enabled' field is required
-                if "enabled" not in blocking_config:
-                    failure_context = {"missing_field": f"{FIELD_EPISODE_CONFIG}.{FIELD_BLOCKING_CONFIG}.enabled"}
-                    raise InvalidTaskDefinitionException(
-                        f"Task '{task_id}' {FIELD_BLOCKING_CONFIG} must have 'enabled' field"
-                    )
+                # Validate websocket section if present
+                if "websocket" in transcript_config:
+                    websocket_config = transcript_config["websocket"]
+                    if not isinstance(websocket_config, dict):
+                        raise InvalidTaskDefinitionException(
+                            f"Task '{task_id}' {FIELD_TRANSCRIPT_CONFIG}.websocket must be a dictionary"
+                        )
 
-                if not isinstance(blocking_config["enabled"], bool):
-                    failure_context = {
-                        "invalid_field": f"{FIELD_EPISODE_CONFIG}.{FIELD_BLOCKING_CONFIG}.enabled",
-                        "value": blocking_config["enabled"],
-                    }
-                    raise InvalidTaskDefinitionException(
-                        f"Task '{task_id}' {FIELD_BLOCKING_CONFIG}.enabled must be boolean"
-                    )
+                    # Validate top-level connection fields
+                    for field_name, field_type in [
+                        ("connection_timeout", (int, float)),
+                        ("ping_interval", (int, float)),
+                        ("pong_timeout", (int, float)),
+                        ("initial_reconnect_delay", (int, float)),
+                        ("max_reconnect_delay", (int, float)),
+                        ("reconnect_backoff_multiplier", (int, float)),
+                        ("max_reconnect_attempts", int),
+                    ]:
+                        if field_name in websocket_config:
+                            value = websocket_config[field_name]
+                            if not isinstance(value, field_type) or value <= 0:  # type: ignore[arg-type]
+                                raise InvalidTaskDefinitionException(
+                                    f"Task '{task_id}' {FIELD_TRANSCRIPT_CONFIG}.websocket.{field_name} "
+                                    f"must be positive number"
+                                )
 
-                # Validate optional numeric fields
-                for field_name, field_type in [
-                    ("poll_interval", (int, float)),
-                    ("max_iterations", int),
-                    ("timeout", (int, float)),
-                ]:
-                    if field_name in blocking_config:
-                        value = blocking_config[field_name]
-                        if not isinstance(value, field_type) or value <= 0:  # type: ignore[arg-type]
-                            failure_context = {
-                                "invalid_field": f"{FIELD_EPISODE_CONFIG}.{FIELD_BLOCKING_CONFIG}.{field_name}",
-                                "value": value,
-                            }
+                    if "reconnect_enabled" in websocket_config:
+                        if not isinstance(websocket_config["reconnect_enabled"], bool):
                             raise InvalidTaskDefinitionException(
-                                f"Task '{task_id}' {FIELD_BLOCKING_CONFIG}.{field_name} must be positive number"
+                                f"Task '{task_id}' {FIELD_TRANSCRIPT_CONFIG}.websocket.reconnect_enabled "
+                                f"must be boolean"
                             )
 
-                # Validate skip_first_iteration if present
-                if "skip_first_iteration" in blocking_config:
-                    if not isinstance(blocking_config["skip_first_iteration"], bool):
-                        failure_context = {
-                            "invalid_field": f"{FIELD_EPISODE_CONFIG}.{FIELD_BLOCKING_CONFIG}.skip_first_iteration",
-                            "value": blocking_config["skip_first_iteration"],
-                        }
-                        raise InvalidTaskDefinitionException(
-                            f"Task '{task_id}' {FIELD_BLOCKING_CONFIG}.skip_first_iteration must be boolean"
-                        )
+                    # Validate push configuration if present
+                    if "push" in websocket_config:
+                        push_config = websocket_config["push"]
+                        if not isinstance(push_config, dict):
+                            raise InvalidTaskDefinitionException(
+                                f"Task '{task_id}' {FIELD_TRANSCRIPT_CONFIG}.websocket.push must be a dictionary"
+                            )
+
+                        for field_name, field_type in [
+                            ("confirmation_timeout", (int, float)),
+                            ("max_retry_attempts", int),
+                            ("retry_backoff_multiplier", (int, float)),
+                        ]:
+                            if field_name in push_config:
+                                value = push_config[field_name]
+                                if not isinstance(value, field_type) or value <= 0:  # type: ignore[arg-type]
+                                    raise InvalidTaskDefinitionException(
+                                        f"Task '{task_id}' {FIELD_TRANSCRIPT_CONFIG}.websocket.push.{field_name} "
+                                        f"must be positive number"
+                                    )
+
+                        for bool_field in ["enabled", "retry_enabled"]:
+                            if bool_field in push_config:
+                                if not isinstance(push_config[bool_field], bool):
+                                    raise InvalidTaskDefinitionException(
+                                        f"Task '{task_id}' {FIELD_TRANSCRIPT_CONFIG}.websocket.push.{bool_field} "
+                                        f"must be boolean"
+                                    )
+
+                    # Validate pull configuration if present
+                    if "pull" in websocket_config:
+                        pull_config = websocket_config["pull"]
+                        if not isinstance(pull_config, dict):
+                            raise InvalidTaskDefinitionException(
+                                f"Task '{task_id}' {FIELD_TRANSCRIPT_CONFIG}.websocket.pull must be a dictionary"
+                            )
+
+                        for field_name, field_type in [
+                            ("event_timeout", (int, float)),
+                            ("sync_timeout", (int, float)),
+                            ("event_queue_max_size", int),
+                        ]:
+                            if field_name in pull_config:
+                                value = pull_config[field_name]
+                                if not isinstance(value, field_type) or value <= 0:  # type: ignore[arg-type]
+                                    raise InvalidTaskDefinitionException(
+                                        f"Task '{task_id}' {FIELD_TRANSCRIPT_CONFIG}.websocket.pull.{field_name} "
+                                        f"must be positive number"
+                                    )
+
+                        for bool_field in ["enabled", "blocking"]:
+                            if bool_field in pull_config:
+                                if not isinstance(pull_config[bool_field], bool):
+                                    raise InvalidTaskDefinitionException(
+                                        f"Task '{task_id}' {FIELD_TRANSCRIPT_CONFIG}.websocket.pull.{bool_field} "
+                                        f"must be boolean"
+                                    )
 
             task_benchmark_config = task_data.get(FIELD_BENCHMARK_CONFIG, {})
             global_benchmark_defaults = self.global_defaults.get(FIELD_BENCHMARK_CONFIG, {})

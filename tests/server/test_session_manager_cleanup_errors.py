@@ -54,7 +54,7 @@ class TestEpisodeCleanupErrors:
 
             mock_ep_instance = MagicMock()
             mock_ep_instance.get_episode_by_id = MagicMock(return_value=mock_episode)
-            mock_ep_instance.end_episode = MagicMock(return_value=mock_episode)
+            mock_ep_instance.end_episode = AsyncMock(return_value=mock_episode)
             mock_ep_class.return_value = mock_ep_instance
 
             manager = SessionManager(domain_name="test_domain", config_dir="/tmp", host="127.0.0.1", port=8001)

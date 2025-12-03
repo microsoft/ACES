@@ -132,26 +132,28 @@ class TestEpisodeManagerAdvanced:
         assert should_terminate is True
         assert reason == "episode_not_found"
 
-    def test_should_terminate_episode_completed(self):
+    @pytest.mark.asyncio
+    async def test_should_terminate_episode_completed(self):
         """Test termination check for already completed episode."""
         manager = EpisodeManager()
         episode = manager.start_episode("test_session", "test_task")
 
         # Complete the episode
-        manager.end_episode(episode.episode_id, "test_completion")
+        await manager.end_episode(episode.episode_id, "test_completion")
 
         should_terminate, reason = manager.should_terminate_episode(episode.episode_id)
 
         assert should_terminate is True
         assert reason == "test_completion"
 
-    def test_get_session_episodes_include_completed(self):
+    @pytest.mark.asyncio
+    async def test_get_session_episodes_include_completed(self):
         """Test getting session episodes including completed ones."""
         manager = EpisodeManager()
 
         # Create and complete an episode
         episode1 = manager.start_episode("test_session", "task1")
-        manager.end_episode(episode1.episode_id, "completed")
+        await manager.end_episode(episode1.episode_id, "completed")
 
         # Create an active episode
         episode2 = manager.start_episode("test_session", "task2")
@@ -164,13 +166,14 @@ class TestEpisodeManagerAdvanced:
         assert episode1.episode_id in episode_ids
         assert episode2.episode_id in episode_ids
 
-    def test_get_session_episodes_active_only(self):
+    @pytest.mark.asyncio
+    async def test_get_session_episodes_active_only(self):
         """Test getting only active session episodes."""
         manager = EpisodeManager()
 
         # Create and complete an episode
         episode1 = manager.start_episode("test_session", "task1")
-        manager.end_episode(episode1.episode_id, "completed")
+        await manager.end_episode(episode1.episode_id, "completed")
 
         # Create an active episode
         episode2 = manager.start_episode("test_session", "task2")
@@ -247,14 +250,15 @@ class TestEpisodeManagerAdvanced:
         assert len(manager.episodes) == 0
         assert len(manager.completed_episodes) == 0
 
-    def test_end_episode_with_result_submission(self):
+    @pytest.mark.asyncio
+    async def test_end_episode_with_result_submission(self):
         """Test ending episode with a result creates submission step."""
         manager = EpisodeManager()
         episode = manager.start_episode("test_session", "test_task")
 
         # End with result
         result_data = "flag{test_flag_found}"
-        ended_episode = manager.end_episode(episode.episode_id, "completed", result_data)
+        ended_episode = await manager.end_episode(episode.episode_id, "completed", result_data)
 
         # Check that a submission step was created
         assert len(ended_episode.steps) == 1
@@ -312,7 +316,8 @@ class TestEpisodeManagerAdvanced:
         assert stored_config.get("episode_timeout_minutes") is not None
         assert stored_config.get("allowed_tools") == ["shell", "python"]
 
-    def test_step_with_command_failure(self):
+    @pytest.mark.asyncio
+    async def test_step_with_command_failure(self):
         """Test step execution with command failure."""
         manager = EpisodeManager()
         episode = manager.start_episode("test_session", "test_task")
@@ -320,7 +325,7 @@ class TestEpisodeManagerAdvanced:
         # Configure episode
         mock_task = MagicMock()
         mock_task.episode_config = {"max_steps": 10}
-        manager.configure_for_task(episode.episode_id, mock_task)
+        await manager.configure_for_task(episode.episode_id, mock_task)
 
         action = Action(tool_name="failing_tool", parameters={"will_fail": True})
         command_result = CommandResult(

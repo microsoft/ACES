@@ -403,11 +403,11 @@ class TestPolymorphicBehavior:
         assert restored.sub_tasks[1].depends_on_role == original.sub_tasks[1].depends_on_role
 
 
-class TestSubTaskDefinitionBlockingConfig:
-    """Test SubTaskDefinition with blocking_config field."""
+class TestSubTaskDefinitionTranscriptConfig:
+    """Test SubTaskDefinition with transcript_config field."""
 
-    def test_subtask_without_blocking_config(self):
-        """Test creating SubTaskDefinition without blocking_config."""
+    def test_subtask_without_transcript_config(self):
+        """Test creating SubTaskDefinition without transcript_config."""
         subtask = SubTaskDefinition(
             task_id="test_task",
             role="blue",
@@ -422,16 +422,22 @@ class TestSubTaskDefinitionBlockingConfig:
             submit_prompt="test submit",
         )
 
-        assert subtask.blocking_config is None
+        assert subtask.transcript_config is None
 
-    def test_subtask_with_blocking_config(self):
-        """Test creating SubTaskDefinition with blocking_config."""
-        blocking_config = {
-            "enabled": True,
-            "poll_interval": 2.0,
-            "max_iterations": 50,
-            "timeout": 100.0,
-            "skip_first_iteration": True,
+    def test_subtask_with_transcript_config(self):
+        """Test creating SubTaskDefinition with transcript_config."""
+        transcript_config = {
+            "websocket": {
+                "connection_timeout": 10.0,
+                "pull": {
+                    "enabled": True,
+                    "blocking": True,
+                    "event_timeout": 100.0,
+                },
+                "push": {
+                    "enabled": True,
+                }
+            }
         }
 
         subtask = SubTaskDefinition(
@@ -446,22 +452,25 @@ class TestSubTaskDefinitionBlockingConfig:
             instruction_prompt="test instruction",
             assistant_prompt="test assistant",
             submit_prompt="test submit",
-            blocking_config=blocking_config,
+            transcript_config=transcript_config,
         )
 
-        assert subtask.blocking_config is not None
-        assert subtask.blocking_config["enabled"] is True
-        assert subtask.blocking_config["poll_interval"] == 2.0
-        assert subtask.blocking_config["max_iterations"] == 50
-        assert subtask.blocking_config["timeout"] == 100.0
-        assert subtask.blocking_config["skip_first_iteration"] is True
+        assert subtask.transcript_config is not None
+        assert subtask.transcript_config["websocket"]["connection_timeout"] == 10.0
+        assert subtask.transcript_config["websocket"]["pull"]["enabled"] is True
+        assert subtask.transcript_config["websocket"]["pull"]["blocking"] is True
+        assert subtask.transcript_config["websocket"]["pull"]["event_timeout"] == 100.0
+        assert subtask.transcript_config["websocket"]["push"]["enabled"] is True
 
-    def test_subtask_blocking_config_serialization(self):
-        """Test SubTaskDefinition with blocking_config serializes correctly."""
-        blocking_config = {
-            "enabled": True,
-            "poll_interval": 3.0,
-            "max_iterations": 100,
+    def test_subtask_transcript_config_serialization(self):
+        """Test SubTaskDefinition with transcript_config serializes correctly."""
+        transcript_config = {
+            "websocket": {
+                "pull": {
+                    "enabled": True,
+                    "event_timeout": 300.0,
+                }
+            }
         }
 
         original = SubTaskDefinition(
@@ -476,7 +485,7 @@ class TestSubTaskDefinitionBlockingConfig:
             instruction_prompt="test instruction",
             assistant_prompt="test assistant",
             submit_prompt="test submit",
-            blocking_config=blocking_config,
+            transcript_config=transcript_config,
         )
 
         # Serialize to dict
@@ -485,17 +494,19 @@ class TestSubTaskDefinitionBlockingConfig:
         # Deserialize back
         restored = SubTaskDefinition(**data)
 
-        assert restored.blocking_config is not None
-        assert restored.blocking_config["enabled"] is True
-        assert restored.blocking_config["poll_interval"] == 3.0
-        assert restored.blocking_config["max_iterations"] == 100
+        assert restored.transcript_config is not None
+        assert restored.transcript_config["websocket"]["pull"]["enabled"] is True
+        assert restored.transcript_config["websocket"]["pull"]["event_timeout"] == 300.0
 
-    def test_orchestrated_task_with_blocking_config_in_subtasks(self):
-        """Test OrchestratedTask with blocking_config in sub-tasks."""
-        blue_blocking_config = {
-            "enabled": True,
-            "poll_interval": 2.0,
-            "skip_first_iteration": True,
+    def test_orchestrated_task_with_transcript_config_in_subtasks(self):
+        """Test OrchestratedTask with transcript_config in sub-tasks."""
+        blue_transcript_config = {
+            "websocket": {
+                "pull": {
+                    "enabled": True,
+                    "blocking": True,
+                }
+            }
         }
 
         orchestrated = OrchestratedTask(
@@ -514,7 +525,7 @@ class TestSubTaskDefinitionBlockingConfig:
                     instruction_prompt="red instruction",
                     assistant_prompt="red assistant",
                     submit_prompt="red submit",
-                    blocking_config=None,  # Red team doesn't block
+                    transcript_config=None,  # Red team doesn't use transcript sync
                 ),
                 SubTaskDefinition(
                     task_id="blue_task",
@@ -529,12 +540,13 @@ class TestSubTaskDefinitionBlockingConfig:
                     instruction_prompt="blue instruction",
                     assistant_prompt="blue assistant",
                     submit_prompt="blue submit",
-                    blocking_config=blue_blocking_config,  # Blue team blocks
+                    transcript_config=blue_transcript_config,  # Blue team uses transcript sync
                 ),
             ],
             episode_attempts=1,
         )
 
-        assert orchestrated.sub_tasks[0].blocking_config is None
-        assert orchestrated.sub_tasks[1].blocking_config is not None
-        assert orchestrated.sub_tasks[1].blocking_config["enabled"] is True
+        assert orchestrated.sub_tasks[0].transcript_config is None
+        assert orchestrated.sub_tasks[1].transcript_config is not None
+        assert orchestrated.sub_tasks[1].transcript_config["websocket"]["pull"]["enabled"] is True
+        assert orchestrated.sub_tasks[1].transcript_config["websocket"]["pull"]["blocking"] is True

@@ -225,9 +225,9 @@ class TestSessionManagerCore:
         assert len(session_manager.active_sessions) == 2
 
         # Manually set one session to be inactive beyond timeout
-        from datetime import datetime, timedelta
+        from datetime import datetime, timedelta, timezone
 
-        old_time = datetime.utcnow() - timedelta(minutes=session_manager.session_timeout_minutes + 1)
+        old_time = datetime.now(timezone.utc) - timedelta(minutes=session_manager.session_timeout_minutes + 1)
         session1.last_activity = old_time
 
         # Run cleanup manually (instead of waiting for the periodic task)

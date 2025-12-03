@@ -128,7 +128,11 @@ class MetadataKeys(str, Enum):
     CLIENT_TRANSCRIPT = "_client_transcript"
     TRANSCRIPT_METADATA = "_transcript_metadata"
 
-    # Blocking transcript solver - Timestamp-driven coordination
+    # WebSocket-based transcript coordination (Phase 2)
+    TRANSCRIPT_VERSION = "_transcript_version"  # Monotonic sequence number (0, 1, 2, 3...)
+    TRANSCRIPT_LAST_OPERATION = "_transcript_last_operation"  # Last operation type: append, rewrite, insert, rewind
+
+    # Blocking transcript solver - Timestamp-driven coordination (Legacy - being replaced)
     TRANSCRIPT_LAST_PUSHED_AT = "_transcript_last_pushed_at"  # ISO timestamp of last transcript push
     TRANSCRIPT_LAST_MODIFIED_AT = "_transcript_last_modified_at"  # ISO timestamp of last red team modification
     TRANSCRIPT_MODIFICATION_COUNT = "_transcript_modification_count"  # Monotonic counter (1, 2, 3...)

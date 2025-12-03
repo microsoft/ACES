@@ -10,7 +10,6 @@ through hidden prompt injection attacks in the blocking transcript solver archit
 Logging category: ``LogCategory.TASK_EXEC``.
 """
 
-from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -208,8 +207,8 @@ class InjectPromptExecutor(CommandExecutor):
         1. Auto-resolves target_episode_id from orchestration metadata
         2. Retrieves target episode via session_manager.episode_manager
         3. Applies injection strategy (append/rewind/rewrite/insert)
-        4. Sets TRANSCRIPT_LAST_MODIFIED_AT timestamp atomically
-        5. Increments TRANSCRIPT_MODIFICATION_COUNT
+        4. Calls TranscriptCoordinator.notify_modification() for WebSocket broadcast
+        5. TranscriptCoordinator handles: version increment, checksum, WebSocket event, timestamps
 
         Args:
             parameters: Injection configuration with 'message', 'strategy', etc.
@@ -270,21 +269,20 @@ class InjectPromptExecutor(CommandExecutor):
                 target_transcript, injected_message, strategy, rewind_count, insert_position
             )
 
-            # Increment modification counter
-            modification_count = target_episode.context.get(MetadataKeys.TRANSCRIPT_MODIFICATION_COUNT, 0)
-            modification_count += 1
+            # Phase 2: Call TranscriptCoordinator to notify modification
+            # This handles: version increment, WebSocket broadcast, timestamp, counter
+            await self._session_manager.episode_manager.transcript_coordinator.notify_modification(
+                episode_id=target_episode_id,
+                modified_transcript=modified_transcript,
+                operation=strategy,  # "append", "rewrite", "insert", "rewind"
+                injected_by=red_episode_id,
+            )
 
-            # Update target episode atomically
-            # This sets: transcript, timestamp, and counter in one atomic operation
-            context_updates = {
-                MetadataKeys.CLIENT_TRANSCRIPT: modified_transcript,
-                MetadataKeys.TRANSCRIPT_LAST_MODIFIED_AT: datetime.utcnow().isoformat(),
-                MetadataKeys.TRANSCRIPT_MODIFICATION_COUNT: modification_count,
-            }
-            await target_episode.update_context_atomic(context_updates)
+            # Get updated modification count for result
+            modification_count = target_episode.context.get(MetadataKeys.TRANSCRIPT_MODIFICATION_COUNT, 0)
 
             logger.info(
-                "Red team modified transcript and set timestamp",
+                "Red team modified transcript via TranscriptCoordinator",
                 extra={
                     "event": "injection_created",
                     "red_episode_id": red_episode_id,

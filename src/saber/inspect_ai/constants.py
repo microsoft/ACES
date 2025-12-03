@@ -15,6 +15,7 @@ class InspectStoreKeys:
     DOMAIN_SLUG = "saber_domain_slug"
     EPISODE_MAPPING = "saber_episode_mapping"
     EPISODE_SUBMISSION = "saber_episode_submission"
+    MODEL_WRAPPER = "saber_model_wrapper"  # WebSocketTranscriptSyncingModelWrapper for cleanup
 
 
 # =============================================================================

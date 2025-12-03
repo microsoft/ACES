@@ -32,7 +32,7 @@ class TestAutoTerminate:
             mock_eval.return_value.log_action = AsyncMock()
             mock_eval.return_value.log_episode_end = AsyncMock()
             mock_ep.return_value.start_episode = MagicMock()
-            mock_ep.return_value.end_episode = MagicMock()
+            mock_ep.return_value.end_episode = AsyncMock()
             mock_ep.return_value.step = MagicMock()
 
             manager = SessionManager(domain_name="test_domain", config_dir="/tmp", host="127.0.0.1", port=8001)

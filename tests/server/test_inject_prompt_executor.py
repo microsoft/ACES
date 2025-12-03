@@ -59,6 +59,13 @@ class TestInjectPromptExecutorTimestamps:
     @pytest.fixture
     def mock_session_manager(self, blue_episode: Episode, red_episode: Episode):
         """Create a mock session manager with episode lookup capability."""
+        from unittest.mock import AsyncMock
+
+        class MockConnectionManager:
+            async def broadcast_to_episode(self, episode_id: str, message: dict):
+                pass
+            async def cleanup_episode(self, episode_id: str):
+                pass
 
         class MockEpisodeManager:
             def __init__(self, blue_ep, red_ep):
@@ -66,6 +73,9 @@ class TestInjectPromptExecutorTimestamps:
                     blue_ep.episode_id: blue_ep,
                     red_ep.episode_id: red_ep,
                 }
+                # Add transcript_coordinator with mock connection_manager
+                from saber.server.episodes.transcript_coordinator import TranscriptCoordinator
+                self.transcript_coordinator = TranscriptCoordinator(self, MockConnectionManager())
 
             def get_episode_by_id(self, episode_id: str):
                 return self.episodes.get(episode_id)
@@ -112,8 +122,9 @@ class TestInjectPromptExecutorTimestamps:
         assert blue_episode.context[MetadataKeys.TRANSCRIPT_MODIFICATION_COUNT] == 1
 
         # Verify timestamp is recent (within last few seconds)
+        from datetime import timezone
         modified_at = datetime.fromisoformat(blue_episode.context[MetadataKeys.TRANSCRIPT_LAST_MODIFIED_AT])
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         time_diff = (now - modified_at).total_seconds()
         assert time_diff < 5, "Timestamp should be recent"
 

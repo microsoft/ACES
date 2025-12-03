@@ -402,7 +402,7 @@ class SABERRestClient:
         Pull complete conversation transcript from SABER server.
 
         Retrieves the full transcript including all messages, timestamps, and metadata.
-        Used by BlockingTranscriptSyncingModelWrapper after detecting transcript modifications.
+        Used by WebSocketTranscriptSyncingModelWrapper for differential sync after WebSocket events.
 
         Args:
             session_id: SABER session identifier

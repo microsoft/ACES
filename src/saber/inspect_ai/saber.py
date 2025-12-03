@@ -638,6 +638,34 @@ class SABERSandboxEnvironment:
         """Internal method to cleanup sample state (handlers, episodes, mappings)."""
         with anyio.CancelScope(shield=True):
             try:
+                # Cleanup WebSocket model wrapper if present (before episode cleanup)
+                from .constants import InspectStoreKeys
+
+                wrapper = None
+                try:
+                    # Try to get wrapper from store (might not exist for non-WebSocket cases)
+                    wrapper = getattr(self, "_state", None)
+                    if wrapper and hasattr(wrapper, "store"):
+                        wrapper = wrapper.store.get(InspectStoreKeys.MODEL_WRAPPER)
+                except Exception:
+                    pass  # Wrapper not found or store not accessible
+
+                if wrapper and hasattr(wrapper, "cleanup"):
+                    try:
+                        await wrapper.cleanup()
+                        logger.debug(
+                            "Cleaned up WebSocket model wrapper",
+                            extra={"episode_id": self._episode_id},
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to cleanup WebSocket model wrapper",
+                            extra={
+                                "episode_id": self._episode_id,
+                                "error": str(e),
+                            },
+                        )
+
                 if self._handler_state and "orchestration_id" in self._handler_state:
                     assert (
                         type(self)._orchestration_initializer is not None

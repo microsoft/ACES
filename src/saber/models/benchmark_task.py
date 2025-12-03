@@ -89,9 +89,9 @@ class SubTaskDefinition(BaseModel):
     assistant_prompt: str = Field(..., description="Agent assistant prompt")
     submit_prompt: str = Field(..., description="Agent submit prompt")
 
-    # Blocking configuration (for orchestrated tasks that need to wait for transcript modifications)
-    blocking_config: Optional[Dict[str, Any]] = Field(
-        default=None, description="Optional blocking configuration for transcript synchronization"
+    # Transcript coordination (for orchestrated tasks that need transcript synchronization)
+    transcript_config: Optional[Dict[str, Any]] = Field(
+        default=None, description="Optional transcript coordination configuration"
     )
 
 
@@ -184,6 +184,11 @@ class SingleEpisodeTask(BenchmarkTask):
     instruction_prompt: str = Field(..., description="Agent instruction prompt")
     assistant_prompt: str = Field(..., description="Agent assistant prompt")
     submit_prompt: str = Field(..., description="Agent submit prompt")
+
+    # Transcript coordination (WebSocket coordination for transcript synchronization)
+    transcript_config: Optional[Dict[str, Any]] = Field(
+        default=None, description="Optional transcript coordination configuration"
+    )
 
     @model_validator(mode="after")
     def auto_generate_benchmark_task_id(self) -> "SingleEpisodeTask":

@@ -81,7 +81,7 @@ class TestSessionManagerEpisodes:
 
         mock_episode_manager = MagicMock()
         mock_episode_manager.start_episode = MagicMock()
-        mock_episode_manager.end_episode = MagicMock()
+        mock_episode_manager.end_episode = AsyncMock()
         mock_episode_manager.get_episode = MagicMock()
         mock_episode_manager.configure_for_task = AsyncMock()
 

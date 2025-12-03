@@ -15,8 +15,9 @@ from inspect_ai.solver import Generate, Solver, TaskState, solver
 
 from ...logging_config import LogCategory, get_saber_logger
 from ...models.constants import MetadataKeys
+from ...models.rest.websocket_config import WebSocketConfig
 from ..constants import InspectStoreKeys
-from ..integration.model_wrapper import BlockingTranscriptSyncingModelWrapper, TranscriptSyncingModelWrapper
+from ..integration.model_wrapper import WebSocketTranscriptSyncingModelWrapper
 from ..server.domain_manager import get_active_domain
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
@@ -46,9 +47,9 @@ class SABERExecutionContext:
     task_id: Optional[str]
     sample_id: Optional[str]
 
-    # Role & model configuration
+    # Role & transcript coordination
     role: Optional[str]
-    blocking_config: Optional[dict[str, Any]]
+    transcript_config: Optional[dict[str, Any]]
 
     @classmethod
     def from_task_state(cls, state: TaskState) -> "SABERExecutionContext":
@@ -141,7 +142,7 @@ class SABERExecutionContext:
             task_id=metadata.get(MetadataKeys.TASK_ID),
             sample_id=sample_id,
             role=metadata.get(MetadataKeys.SUB_TASK_ROLE),
-            blocking_config=metadata.get("blocking_config"),
+            transcript_config=metadata.get("transcript_config"),
         )
 
     def has_episode_context(self) -> bool:
@@ -207,6 +208,7 @@ def _wrap_model_for_transcript_sync(
     model: Model,
     model_name: str,
     context: SABERExecutionContext,
+    state: TaskState,
 ) -> Model:
     """Wrap model with transcript synchronization if episode context available.
 
@@ -214,6 +216,7 @@ def _wrap_model_for_transcript_sync(
         model: Base model to wrap
         model_name: Model name for logging
         context: Execution context containing episode info and blocking config
+        state: TaskState for storing wrapper reference
 
     Returns:
         Wrapped model (or original if no episode context)
@@ -229,43 +232,78 @@ def _wrap_model_for_transcript_sync(
         )
         return model
 
-    # Check for blocking configuration
-    if context.blocking_config and context.blocking_config.get("enabled", False):
-        wrapped_model = BlockingTranscriptSyncingModelWrapper(
-            base_model=model,
-            session_id=context.session_id,  # type: ignore[arg-type]
-            episode_id=context.episode_id,  # type: ignore[arg-type]
-            rest_url=context.rest_url,  # type: ignore[arg-type]
-            skip_first_iteration=context.blocking_config.get("skip_first_iteration", True),
+    # ALWAYS use WebSocket wrapper for unified coordination infrastructure
+    # Configuration controls behavior (pull.blocking controls whether to wait)
+    websocket_config = context.transcript_config.get("websocket", {}) if context.transcript_config else {}
+
+    # Build WebSocketConfig from YAML
+    # Handle nested push/pull configuration or flat legacy configuration
+    from ...models.rest.websocket_config import PullConfig, PushConfig
+
+    ws_config_kwargs = {}
+
+    # Extract top-level connection settings
+    for key in [
+        "connection_timeout",
+        "ping_interval",
+        "pong_timeout",
+        "reconnect_enabled",
+        "max_reconnect_attempts",
+        "initial_reconnect_delay",
+        "max_reconnect_delay",
+        "reconnect_backoff_multiplier",
+    ]:
+        if key in websocket_config and websocket_config[key] is not None:
+            ws_config_kwargs[key] = websocket_config[key]
+
+    # Handle push configuration (nested or flat)
+    if "push" in websocket_config:
+        push_dict = websocket_config["push"]
+        ws_config_kwargs["push"] = PushConfig(**{k: v for k, v in push_dict.items() if v is not None})
+
+    # Handle pull configuration (nested or flat)
+    if "pull" in websocket_config:
+        pull_dict = websocket_config["pull"]
+        ws_config_kwargs["pull"] = PullConfig(**{k: v for k, v in pull_dict.items() if v is not None})
+    elif "event_timeout" in websocket_config:
+        # Legacy flat configuration - map to pull config
+        ws_config_kwargs["pull"] = PullConfig(
+            event_timeout=websocket_config.get("event_timeout", 300.0),
+            sync_timeout=websocket_config.get("sync_timeout", 5.0),
         )
-        logger.info(
-            "Created blocking transcript syncing model wrapper",
-            extra={
-                "event": "solver_factory_blocking_wrapper_created",
-                "session_id": context.session_id,
-                "episode_id": context.episode_id,
-                "model": model_name,
-                "skip_first_iteration": context.blocking_config.get("skip_first_iteration", True),
-            },
-        )
-        return wrapped_model
-    else:
-        non_blocking_wrapper: TranscriptSyncingModelWrapper = TranscriptSyncingModelWrapper(
-            base_model=model,
-            session_id=context.session_id,  # type: ignore[arg-type]
-            episode_id=context.episode_id,  # type: ignore[arg-type]
-            rest_url=context.rest_url,  # type: ignore[arg-type]
-        )
-        logger.debug(
-            "Created standard transcript syncing model wrapper",
-            extra={
-                "event": "solver_factory_standard_wrapper_created",
-                "session_id": context.session_id,
-                "episode_id": context.episode_id,
-                "model": model_name,
-            },
-        )
-        return non_blocking_wrapper
+
+    ws_config = WebSocketConfig(**ws_config_kwargs)
+
+    # Determine skip_first_iteration from pull.blocking (skip if not blocking)
+    skip_first_iteration = not ws_config.pull.blocking if ws_config.pull else True
+
+    wrapped_model = WebSocketTranscriptSyncingModelWrapper(
+        base_model=model,
+        session_id=context.session_id,  # type: ignore[arg-type]
+        episode_id=context.episode_id,  # type: ignore[arg-type]
+        rest_url=context.rest_url,  # type: ignore[arg-type]
+        skip_first_iteration=skip_first_iteration,
+        ws_config=ws_config,
+    )
+
+    logger.info(
+        "Created WebSocket transcript syncing model wrapper",
+        extra={
+            "event": "solver_factory_websocket_wrapper_created",
+            "session_id": context.session_id,
+            "episode_id": context.episode_id,
+            "model": model_name,
+            "skip_first_iteration": skip_first_iteration,
+            "pull_blocking": ws_config.pull.blocking,
+            "pull_event_timeout": ws_config.pull.event_timeout,
+            "push_confirmation_timeout": ws_config.push.confirmation_timeout,
+        },
+    )
+
+    # Store wrapper in state for explicit cleanup
+    state.store.set(InspectStoreKeys.MODEL_WRAPPER, wrapped_model)
+
+    return wrapped_model
 
 
 def create_saber_solver(agent_name: str, agent_factory: Callable, role_config: Optional[Any] = None) -> Solver:
@@ -301,7 +339,7 @@ def create_saber_solver(agent_name: str, agent_factory: Callable, role_config: O
             model_to_use, model_name = _select_model(context, role_config)
 
             # Wrap model for transcript synchronization
-            model_to_use = _wrap_model_for_transcript_sync(model_to_use, model_name, context)
+            model_to_use = _wrap_model_for_transcript_sync(model_to_use, model_name, context, state)
 
             # Save current model to restore later
             previous_model = active_model()

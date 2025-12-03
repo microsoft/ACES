@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 
 # Import EvalSubmission for Episode model
 from ..models.core import EvalSubmission
+from .time_source import utc_now as _utc_now
 
 
 @dataclass
@@ -103,14 +104,14 @@ class Action(BaseModel):
     assistant_message: Optional[str] = Field(
         None, description="Agent's full message before taking this action (planning/explanation)"
     )
-    timestamp: datetime = Field(default_factory=datetime.utcnow, description="When the action was initiated")
+    timestamp: datetime = Field(default_factory=_utc_now, description="When the action was initiated")
 
 
 class Step(BaseModel):
     """Represents a complete action-response cycle within an episode."""
 
     step_number: int = Field(..., description="Sequential number of this step in the episode")
-    timestamp: datetime = Field(default_factory=datetime.utcnow, description="When the step was completed")
+    timestamp: datetime = Field(default_factory=_utc_now, description="When the step was completed")
     action: Action = Field(..., description="The action that was taken")
     response: Dict[str, Any] = Field(..., description="Tool execution result")
     context_snapshot: Dict[str, Any] = Field(default_factory=dict, description="Context state at this step")
@@ -137,7 +138,7 @@ class Episode(BaseModel):
     episode_id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="Unique episode identifier")
     task_id: str = Field(..., description="ID of the task being attempted")
     session_id: str = Field(..., description="ID of the session this episode belongs to")
-    start_time: datetime = Field(default_factory=datetime.utcnow, description="When the episode started")
+    start_time: datetime = Field(default_factory=_utc_now, description="When the episode started")
     end_time: Optional[datetime] = Field(None, description="When the episode ended")
     state: EpisodeState = Field(default=EpisodeState.CREATED, description="Current episode state")
     steps: List[Step] = Field(default_factory=list, description="Complete history of all steps taken")

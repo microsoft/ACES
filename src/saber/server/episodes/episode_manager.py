@@ -6,15 +6,17 @@ Logging Category: EPISODE
 import asyncio
 import time
 from dataclasses import asdict
-from datetime import datetime
 from typing import Any, Dict, List, NamedTuple, Optional
 
 from saber.logging_config import LogCategory, get_saber_logger
 
 from ..base import Action, CommandResult, Episode, EpisodeState, Step
 from ..benchmarks.task import Task
+from ..time_source import TimeSource, UTCTimeSource
+from .connection_manager import ConnectionManager
 from .constants import EpisodeTerminationReason
 from .exceptions import EpisodeNotFoundException
+from .transcript_coordinator import TranscriptCoordinator
 
 logger = get_saber_logger(LogCategory.EPISODE, __name__)
 
@@ -36,12 +38,23 @@ class EpisodeManager:
     Supports multiple concurrent episodes per session.
     """
 
-    def __init__(self) -> None:
-        """Initialize the EpisodeManager."""
+    def __init__(self, time_source: TimeSource | None = None) -> None:
+        """Initialize the EpisodeManager.
+
+        Args:
+            time_source: Time source for getting current time (defaults to UTCTimeSource)
+        """
         self.episodes: Dict[str, Episode] = {}  # episode_id -> Episode
         self.session_episodes: Dict[str, List[str]] = {}  # session_id -> [episode_ids]
         self.completed_episodes: Dict[str, Episode] = {}  # episode_id -> completed Episode (for history)
         self.episode_configs: Dict[str, Dict[str, Any]] = {}  # episode_id -> episode config from task
+        self._time_source = time_source or UTCTimeSource()
+        self.connection_manager = ConnectionManager(
+            episode_manager=self, time_source=self._time_source
+        )  # WebSocket connection manager with cleanup support
+        self.transcript_coordinator = TranscriptCoordinator(
+            self, self.connection_manager, time_source=self._time_source
+        )  # Transcript coordination
 
     def get_episode_by_id(self, episode_id: str) -> Optional[Episode]:
         """Get episode by episode ID from active or completed episodes."""
@@ -124,7 +137,7 @@ class EpisodeManager:
 
         episode.state = EpisodeState.FAILED_CREATION
         episode.creation_error = error_message
-        episode.end_time = datetime.utcnow()
+        episode.end_time = self._time_source.now()
         episode.completion_reason = f"creation_failed: {error_message}"
 
         logger.error(
@@ -526,7 +539,7 @@ class EpisodeManager:
             state=EpisodeState.ACTIVE,
             context=initial_context or {},
             creation_error=None,
-            metadata={"created_at": datetime.utcnow().isoformat()},
+            metadata={"created_at": self._time_source.now().isoformat()},
             end_time=None,
             eval_submission=None,
             completion_reason=None,
@@ -619,7 +632,7 @@ class EpisodeManager:
             step=step, should_terminate=will_terminate_after_this_step, termination_reason=termination_reason
         )
 
-    def end_episode(self, episode_id: str, reason: str, result: Optional[str] = None) -> Episode:
+    async def end_episode(self, episode_id: str, reason: str, result: Optional[str] = None) -> Episode:
         """
         End the specified episode.
 
@@ -693,7 +706,7 @@ class EpisodeManager:
             )
 
         # Update episode state
-        episode.end_time = datetime.utcnow()
+        episode.end_time = self._time_source.now()
 
         # Consider episode successful if:
         # 1. Reason contains "success" OR
@@ -724,6 +737,9 @@ class EpisodeManager:
         # Clean up episode configuration
         if episode_id in self.episode_configs:
             del self.episode_configs[episode_id]
+
+        # Clean up WebSocket connections and transcript coordination
+        await self.transcript_coordinator.cleanup_episode(episode_id)
 
         logger.info(
             "Episode completed",
@@ -769,7 +785,7 @@ class EpisodeManager:
         # Create step without adding it to episode yet
         step = Step(
             step_number=len(episode.steps),
-            timestamp=datetime.utcnow(),
+            timestamp=self._time_source.now(),
             action=action,  # Pass Action object directly - it should work with Pydantic
             response=response_dict,
             context_snapshot=episode.context.copy(),
@@ -857,11 +873,28 @@ class EpisodeManager:
                     "episode_id": episode.episode_id,
                 },
             )
-            self.end_episode(episode.episode_id, "session_cleanup")
+            # Note: cleanup_session is synchronous but calls async methods
+            # Create asyncio task to run async cleanup in background
+            loop = None
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                pass
+
+            if loop and loop.is_running():
+                # Running in async context - schedule cleanup task
+                asyncio.create_task(self._async_end_episode_for_cleanup(episode.episode_id))
+            else:
+                # Sync context - run in new event loop
+                asyncio.run(self._async_end_episode_for_cleanup(episode.episode_id))
 
         # Clean up session episode tracking
         if session_id in self.session_episodes:
             del self.session_episodes[session_id]
+
+    async def _async_end_episode_for_cleanup(self, episode_id: str) -> None:
+        """Helper method to end episode asynchronously during cleanup."""
+        await self.end_episode(episode_id, "session_cleanup")
 
     def remove_episode_on_error(self, episode_id: str, error: Exception) -> None:
         """
@@ -884,7 +917,7 @@ class EpisodeManager:
         episode = self.get_episode_by_id(episode_id)
         if episode:
             # Mark episode as failed
-            episode.end_time = datetime.utcnow()
+            episode.end_time = self._time_source.now()
             episode.state = EpisodeState.FAILED
             episode.completion_reason = f"error: {str(error)}"
 

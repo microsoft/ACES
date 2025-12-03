@@ -13,6 +13,39 @@ from saber.server.base import Episode, EpisodeState, CommandResult
 from saber.server.execution.executors.standard_registry.inject_prompt_executor import InjectPromptExecutor
 
 
+def create_mock_session_manager_with_transcript_coordinator(*episodes):
+    """
+    Helper to create a mock session manager with transcript_coordinator.
+    Used across multiple test classes to avoid duplication.
+    """
+
+    class MockTranscriptCoordinator:
+        async def notify_modification(self, episode_id: str, modified_transcript: list, operation: str, injected_by: str):
+            """Mock notify_modification that updates the episode."""
+            # Find the target episode and update it
+            target_episode = [ep for ep in episodes if ep.episode_id == episode_id]
+            if target_episode:
+                ep = target_episode[0]
+                ep.context[MetadataKeys.CLIENT_TRANSCRIPT] = modified_transcript
+                ep.context[MetadataKeys.TRANSCRIPT_MODIFICATION_COUNT] = ep.context.get(MetadataKeys.TRANSCRIPT_MODIFICATION_COUNT, 0) + 1
+                ep.context[MetadataKeys.TRANSCRIPT_LAST_MODIFIED_AT] = datetime.utcnow().isoformat()
+                ep.context[MetadataKeys.TRANSCRIPT_LAST_OPERATION] = operation
+
+    class MockEpisodeManager:
+        def __init__(self, *episodes):
+            self.episodes = {ep.episode_id: ep for ep in episodes}
+            self.transcript_coordinator = MockTranscriptCoordinator()
+
+        def get_episode_by_id(self, episode_id: str):
+            return self.episodes.get(episode_id)
+
+    class MockSessionManager:
+        def __init__(self, *episodes):
+            self.episode_manager = MockEpisodeManager(*episodes)
+
+    return MockSessionManager(*episodes)
+
+
 class TestAutomaticTargetResolution:
     """Test automatic target episode ID resolution from orchestration metadata."""
 
@@ -62,19 +95,9 @@ class TestAutomaticTargetResolution:
     @pytest.fixture
     def mock_session_manager(self, blue_episode: Episode, red_episode_with_orchestration: Episode, red_episode_without_orchestration: Episode):
         """Create a mock session manager with episode lookup capability."""
-
-        class MockEpisodeManager:
-            def __init__(self, *episodes):
-                self.episodes = {ep.episode_id: ep for ep in episodes}
-
-            def get_episode_by_id(self, episode_id: str):
-                return self.episodes.get(episode_id)
-
-        class MockSessionManager:
-            def __init__(self, *episodes):
-                self.episode_manager = MockEpisodeManager(*episodes)
-
-        return MockSessionManager(blue_episode, red_episode_with_orchestration, red_episode_without_orchestration)
+        return create_mock_session_manager_with_transcript_coordinator(
+            blue_episode, red_episode_with_orchestration, red_episode_without_orchestration
+        )
 
     @pytest.mark.asyncio
     async def test_automatic_target_resolution_from_orchestration(
@@ -258,19 +281,9 @@ class TestInjectionStrategies:
     @pytest.fixture
     def mock_session_manager(self, blue_episode_with_messages: Episode, red_episode_with_target: Episode):
         """Create a mock session manager."""
-
-        class MockEpisodeManager:
-            def __init__(self, *episodes):
-                self.episodes = {ep.episode_id: ep for ep in episodes}
-
-            def get_episode_by_id(self, episode_id: str):
-                return self.episodes.get(episode_id)
-
-        class MockSessionManager:
-            def __init__(self, *episodes):
-                self.episode_manager = MockEpisodeManager(*episodes)
-
-        return MockSessionManager(blue_episode_with_messages, red_episode_with_target)
+        return create_mock_session_manager_with_transcript_coordinator(
+            blue_episode_with_messages, red_episode_with_target
+        )
 
     @pytest.mark.asyncio
     async def test_append_strategy_default(
@@ -572,19 +585,9 @@ class TestBackwardCompatibility:
     @pytest.fixture
     def mock_session_manager(self, blue_episode: Episode, red_episode: Episode):
         """Create a mock session manager."""
-
-        class MockEpisodeManager:
-            def __init__(self, *episodes):
-                self.episodes = {ep.episode_id: ep for ep in episodes}
-
-            def get_episode_by_id(self, episode_id: str):
-                return self.episodes.get(episode_id)
-
-        class MockSessionManager:
-            def __init__(self, *episodes):
-                self.episode_manager = MockEpisodeManager(*episodes)
-
-        return MockSessionManager(blue_episode, red_episode)
+        return create_mock_session_manager_with_transcript_coordinator(
+            blue_episode, red_episode
+        )
 
     @pytest.mark.asyncio
     async def test_orchestration_auto_resolution(

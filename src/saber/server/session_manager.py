@@ -36,6 +36,8 @@ from .evaluation.session_evaluation_service import SessionEvaluationService
 # CleanupReason removed - using direct component cleanup
 from .execution.execution_manager import ExecutionManager
 from .policy.policy_manager import PolicyDocument, PolicyManager
+from .time_source import TimeSource, UTCTimeSource
+from .time_source import utc_now as _utc_now
 
 logger = get_session_manager_logger(__name__)
 cleanup_logger = get_cleanup_logger(__name__)
@@ -60,8 +62,8 @@ class ClientSession(BaseModel):
     task_queue: List[str] = Field(default_factory=list, description="Queued tasks for orchestration")
 
     # Session metadata
-    created_at: datetime = Field(default_factory=datetime.utcnow, description="Session creation time")
-    last_activity: datetime = Field(default_factory=datetime.utcnow, description="Last activity timestamp")
+    created_at: datetime = Field(default_factory=_utc_now, description="Session creation time")
+    last_activity: datetime = Field(default_factory=_utc_now, description="Last activity timestamp")
     is_active: bool = Field(default=True, description="Whether session is active")
     context: Dict[str, Any] = Field(default_factory=dict, description="Session context data")
 
@@ -70,9 +72,17 @@ class ClientSession(BaseModel):
         """Serialize datetime fields to ISO format."""
         return value.isoformat()
 
-    def update_activity(self) -> None:
-        """Update the last activity timestamp."""
-        self.last_activity = datetime.utcnow()
+    def update_activity(self, current_time: datetime | None = None) -> None:
+        """Update the last activity timestamp.
+
+        Args:
+            current_time: Current time (defaults to UTC now if None)
+        """
+        if current_time is None:
+            from datetime import timezone
+
+            current_time = datetime.now(timezone.utc)
+        self.last_activity = current_time
 
     def add_creating_episode(self, episode_id: str) -> None:
         """Add an episode to the creating episodes list (while holding creation lock)."""
@@ -162,6 +172,7 @@ class SessionManager:
         cleanup_interval_minutes: int = 5,
         manifest: Optional[Dict[str, Any]] = None,
         manifest_path: Optional[str] = None,
+        time_source: TimeSource | None = None,
     ):
         """
         Initialize the SessionManager.
@@ -177,6 +188,7 @@ class SessionManager:
             cleanup_interval_minutes: Minutes between cleanup checks
             manifest: Domain manifest dictionary (optional)
             manifest_path: Path to domain manifest file (optional)
+            time_source: Time source for getting current time (defaults to UTCTimeSource)
         """
         self.domain_name = domain_name
         self.config_dir = config_dir
@@ -206,6 +218,7 @@ class SessionManager:
         # Manifest information for health endpoints
         self.manifest = manifest or {}
         self.manifest_path = manifest_path
+        self._time_source = time_source or UTCTimeSource()
 
         # Initialize server components
         logger.info(
@@ -218,7 +231,7 @@ class SessionManager:
         )
 
         self.benchmark_manager = BenchmarkManager(domain_name, config_dir)
-        self.episode_manager = EpisodeManager()
+        self.episode_manager = EpisodeManager(time_source=self._time_source)
 
         # Initialize execution manager with self for cross-episode executor operations
         self.execution_manager = ExecutionManager(config_dir, session_manager=self)
@@ -927,7 +940,9 @@ class SessionManager:
                             continue
 
                         # Call episode manager directly for session termination (no submission required)
-                        self.episode_manager.end_episode(episode_id, EpisodeTerminationReason.SESSION_TERMINATED, None)
+                        await self.episode_manager.end_episode(
+                            episode_id, EpisodeTerminationReason.SESSION_TERMINATED, None
+                        )
                         logger.info(
                             "Episode terminated during session shutdown",
                             extra={
@@ -1227,7 +1242,7 @@ class SessionManager:
                 state=EpisodeState.CREATING,  # Changed from ACTIVE
                 context=task.initial_context.copy() if task.initial_context else {},
                 creation_error=None,
-                metadata={"created_at": datetime.utcnow().isoformat()},
+                metadata={"created_at": self._time_source.now().isoformat()},
                 end_time=None,
                 eval_submission=None,
                 completion_reason=None,
@@ -1903,7 +1918,7 @@ class SessionManager:
 
         # End episode through episode manager (pass submission text, not EvalSubmission object)
         submission_text = submission.submission if submission else None
-        completed_episode = self.episode_manager.end_episode(episode_id, reason, submission_text)
+        completed_episode = await self.episode_manager.end_episode(episode_id, reason, submission_text)
 
         # CLIENT-SIDE EVALUATION: Server does not evaluate episodes
         # Evaluation will be submitted separately by the client via:
@@ -2153,7 +2168,7 @@ class SessionManager:
                         "step_number": len(episode.steps),
                     },
                 )
-                self.episode_manager.end_episode(episode_id, EpisodeTerminationReason.COMPLETED)
+                await self.episode_manager.end_episode(episode_id, EpisodeTerminationReason.COMPLETED)
                 session.complete_episode(episode_id)
                 logger.info(
                     "Episode removed from active_episode_ids (step.done)",
@@ -2195,7 +2210,7 @@ class SessionManager:
                         "step_number": len(episode.steps),
                     },
                 )
-                self.episode_manager.end_episode(episode_id, termination_reason)
+                await self.episode_manager.end_episode(episode_id, termination_reason)
                 session.complete_episode(episode_id)
                 logger.info(
                     "Episode removed from active_episode_ids (should_terminate)",
@@ -2591,7 +2606,7 @@ class SessionManager:
 
     async def _cleanup_inactive_sessions(self) -> None:
         """Check for and cleanup inactive sessions."""
-        current_time = datetime.utcnow()
+        current_time = self._time_source.now()
         timeout_threshold = timedelta(minutes=self.session_timeout_minutes)
         sessions_to_cleanup = []
 
@@ -2642,7 +2657,7 @@ class SessionManager:
 
     def get_session_stats(self) -> Dict[str, Any]:
         """Get statistics about active sessions."""
-        current_time = datetime.utcnow()
+        current_time = self._time_source.now()
         stats: Dict[str, Any] = {
             "total_sessions": len(self.active_sessions),
             "timeout_minutes": self.session_timeout_minutes,

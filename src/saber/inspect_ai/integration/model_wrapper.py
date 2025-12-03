@@ -1,7 +1,7 @@
 """Model wrapper for transcript synchronization.
 
 This module provides a transparent wrapper around inspect_ai Model objects that
-automatically pushes transcripts to the SABER server after each generate() call.
+automatically synchronizes transcripts with the SABER server via WebSocket.
 
 The wrapper intercepts model.generate() calls at the lowest level, ensuring that
 transcripts are synchronized BEFORE tools execute, solving the race condition where
@@ -10,15 +10,20 @@ the server needs assistant messages for context extraction.
 Key features:
 - Works with ANY agent type (react, basic_agent, custom agents, etc.)
 - Transparent delegation - behaves exactly like the wrapped model
-- Differential sync - only pushes new messages
+- Bidirectional WebSocket sync - both push and pull over single persistent connection
+- Differential sync - only transfers deltas for bandwidth efficiency
 - Graceful error handling - failures don't crash agent execution
-- BlockingTranscriptSyncingModelWrapper: Blocks and waits for transcript modifications
+- Unified coordination - all agents use WebSocketTranscriptSyncingModelWrapper
+
+DEPRECATED:
+- TranscriptSyncingModelWrapper: Legacy REST-based push-only wrapper (use WebSocket version)
 """
 
 import asyncio
-import time
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+import json
+import uuid
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 from inspect_ai.model import (
     ChatMessage,
@@ -31,149 +36,18 @@ from inspect_ai.model import (
     Model,
     ModelOutput,
 )
-from inspect_ai.solver import TaskState
 from inspect_ai.tool import ToolCall
 
-from ...client.api.rest_client import SABERRestClient
 from ...logging_config import LogCategory, get_saber_logger
-from ...models.constants import MetadataKeys
-from ...models.rest.config import TranscriptSyncConfig
+from ...models.rest.websocket_config import WebSocketConfig
+from ...models.rest.websocket_constants import WebSocketDefaults
+from ...models.transcript import compute_checksum
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
 
 
-class TranscriptSyncingModelWrapper:
-    """Wraps a Model to push transcripts after each generate() call.
-
-    This wrapper intercepts at the model level, making it compatible with all
-    agent implementations without modification. The agent calls get_model().generate(),
-    which now goes through this wrapper, ensuring the server has fresh context
-    before any tool executions occur.
-
-    Attributes:
-        base_model: The original Model being wrapped
-        session_id: SABER session identifier
-        episode_id: SABER episode identifier
-        rest_url: Base URL of SABER REST API
-
-    Example:
-        >>> original_model = get_model()
-        >>> wrapped = TranscriptSyncingModelWrapper(
-        ...     base_model=original_model,
-        ...     session_id="session_123",
-        ...     episode_id="episode_456",
-        ...     rest_url="http://localhost:8000"
-        ... )
-        >>> active_model_context_var.set(wrapped)
-        >>> # Now any agent will use wrapped model automatically
-    """
-
-    def __init__(
-        self,
-        base_model: Model,
-        session_id: str,
-        episode_id: str,
-        rest_url: str,
-    ):
-        """Initialize the model wrapper.
-
-        Args:
-            base_model: The Model to wrap
-            session_id: SABER session identifier
-            episode_id: SABER episode identifier
-            rest_url: Base URL of SABER REST API (e.g., "http://localhost:8000")
-        """
-        self._base_model = base_model
-        self._session_id = session_id
-        self._episode_id = episode_id
-        self._rest_url = rest_url
-        self._client = SABERRestClient(saber_server_url=rest_url)
-
-        logger.debug(
-            "Created TranscriptSyncingModelWrapper",
-            extra={
-                "session_id": session_id,
-                "episode_id": episode_id,
-                "base_model_type": type(base_model).__name__,
-            },
-        )
-
-    async def generate(
-        self,
-        input: str | list[ChatMessage],
-        tools: Optional[list] = None,
-        **kwargs: Any,
-    ) -> ModelOutput:
-        """Generate model output and push transcript.
-
-        This method:
-        1. Calls the base model's generate() method
-        2. Pushes the assistant message to SABER server (append mode)
-        3. Returns the original output
-
-        The transcript push happens AFTER generation but BEFORE the agent
-        processes tool calls, ensuring the server has context.
-
-        Args:
-            input: Messages or text input to the model
-            tools: Optional list of tools available to the model
-            **kwargs: Additional generation parameters
-
-        Returns:
-            ModelOutput from the base model
-
-        Raises:
-            Any exceptions from the base model's generate() method.
-            Transcript push failures are logged but not raised.
-        """
-        # Call original model generate
-        output = await self._base_model.generate(input, tools, **kwargs)
-
-        # Push the assistant message that was just generated
-        # This happens BEFORE tools execute, solving the race condition
-        try:
-            # Call module-level function for easier mocking in tests
-            await _push_single_message(self, output.message)
-
-            logger.debug(
-                "Pushed assistant message after generate",
-                extra={
-                    "episode_id": self._episode_id,
-                    "has_tool_calls": bool(output.message.tool_calls),
-                },
-            )
-
-        except Exception as e:
-            # Log but don't crash - graceful degradation
-            logger.warning(
-                "Failed to push transcript after model.generate(), continuing execution",
-                extra={
-                    "error": str(e),
-                    "error_type": type(e).__name__,
-                    "session_id": self._session_id,
-                    "episode_id": self._episode_id,
-                },
-            )
-
-        return output
-
-    def __getattr__(self, name: str) -> Any:
-        """Delegate all other attribute access to the base model.
-
-        This makes the wrapper transparent - it behaves exactly like the
-        wrapped model for all attributes/methods except generate().
-
-        Args:
-            name: Attribute name being accessed
-
-        Returns:
-            The attribute from the base model
-        """
-        return getattr(self._base_model, name)
-
-    def __repr__(self) -> str:
-        """Return string representation showing wrapped model."""
-        return f"TranscriptSyncingModelWrapper({self._base_model!r})"
+class _MessageSerializationMixin:
+    """Mixin providing message serialization/deserialization utilities."""
 
     @staticmethod
     def _serialize_message(msg: ChatMessage) -> Dict[str, Any]:
@@ -303,187 +177,39 @@ class TranscriptSyncingModelWrapper:
         else:
             raise ValueError(f"Unknown message role: {role}")
 
-    async def _push_single_message(self, message: ChatMessage) -> None:
-        """Push a single message to SABER server.
 
-        This is a convenience wrapper around client.push_episode_transcript for pushing
-        a single message (typically an assistant message right after generation).
+class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
+    """Model wrapper with WebSocket notifications + differential sync.
 
-        Args:
-            message: Single ChatMessage to push
+    Phase 3: WebSocket-based coordination with instant notifications and efficient sync.
 
-        Returns:
-            None (logs errors but doesn't raise exceptions)
-        """
-        try:
-            serialized = self._serialize_message(message)
-            metadata: Dict[str, Any] = {
-                str(MetadataKeys.TRANSCRIPT_TIMESTAMP): datetime.now(timezone.utc).isoformat(),
-                str(MetadataKeys.TRANSCRIPT_SOURCE): TranscriptSyncConfig.DEFAULT_SOURCE,
-            }
+    Features:
+    - Persistent WebSocket connection (established on first generate())
+    - Instant notifications (<100ms when red team injects)
+    - Differential sync (only pull deltas)
+    - Local version tracking (checksum validation)
+    - Automatic reconnection on connection loss
 
-            await self._client.push_episode_transcript(
-                session_id=self._session_id,
-                episode_id=self._episode_id,
-                messages=[serialized],
-                mode="append",
-                metadata=metadata,
-            )
-        except Exception as e:
-            logger.warning(
-                "Failed to push single message",
-                extra={
-                    "error": str(e),
-                    "session_id": self._session_id,
-                    "episode_id": self._episode_id,
-                },
-            )
-
-    @staticmethod
-    async def pull_injected_messages(
-        state: TaskState,
-        session_id: str,
-        episode_id: str,
-        rest_url: str,
-    ) -> None:
-        """Pull and inject pending messages from SABER server (Red team message injection).
-
-        Retrieves pending messages from the server's injection queue and appends them to
-        the agent's conversation state. This enables server-side message injection for
-        adversarial testing and red team operations.
-
-        Args:
-            state: Current TaskState to inject messages into
-            session_id: SABER session identifier
-            episode_id: SABER episode identifier
-            rest_url: Base URL of SABER REST API (e.g., "http://localhost:8000")
-
-        Returns:
-            None (modifies state.messages in-place, logs errors but doesn't raise exceptions)
-
-        Side Effects:
-            - Appends injected messages to state.messages
-            - Logs injection events
-            - Makes HTTP GET request to server via REST client
-        """
-        if not rest_url.startswith(("http://", "https://")):
-            logger.warning(
-                "Invalid rest_url format for message injection - must start with http:// or https://",
-                extra={
-                    "episode_id": episode_id,
-                    "rest_url": rest_url,
-                },
-            )
-            return
-
-        try:
-            # Build URL for message injection endpoint
-            url = f"{rest_url}/api/v1/session/{session_id}/episodes/{episode_id}/messages/inject"
-
-            import aiohttp
-
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    url, timeout=aiohttp.ClientTimeout(total=TranscriptSyncConfig.REQUEST_TIMEOUT_SECONDS)
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        messages = data.get("messages", [])
-
-                        # Deserialize and inject messages
-                        for msg_data in messages:
-                            try:
-                                chat_msg = TranscriptSyncingModelWrapper._deserialize_message(msg_data)
-                                state.messages.append(chat_msg)
-
-                                logger.debug(
-                                    "Injected message from server",
-                                    extra={
-                                        "episode_id": episode_id,
-                                        "role": msg_data.get("role"),
-                                    },
-                                )
-                            except Exception as e:
-                                logger.warning(
-                                    "Failed to deserialize injected message",
-                                    extra={
-                                        "episode_id": episode_id,
-                                        "error": str(e),
-                                        "message_data": msg_data,
-                                    },
-                                )
-
-                        if messages:
-                            logger.debug(
-                                f"Pulled {len(messages)} injected message(s)",
-                                extra={
-                                    "episode_id": episode_id,
-                                    "message_count": len(messages),
-                                },
-                            )
-
-                    elif resp.status == 404:
-                        logger.debug(
-                            "Episode not found when pulling injections (may have ended)",
-                            extra={
-                                "episode_id": episode_id,
-                                "status_code": resp.status,
-                            },
-                        )
-                    else:
-                        logger.warning(
-                            "Failed to pull injected messages",
-                            extra={
-                                "episode_id": episode_id,
-                                "status_code": resp.status,
-                            },
-                        )
-
-        except asyncio.TimeoutError:
-            logger.warning(
-                "Timeout pulling injected messages",
-                extra={
-                    "episode_id": episode_id,
-                    "error": "Request timeout",
-                },
-            )
-
-        except Exception as e:
-            logger.warning(
-                "Unexpected error pulling injected messages",
-                extra={
-                    "episode_id": episode_id,
-                    "error": str(e),
-                },
-            )
-
-
-class BlockingTranscriptSyncingModelWrapper(TranscriptSyncingModelWrapper):
-    """Model wrapper that blocks and waits for transcript modifications before each generate() call.
-
-    Used by blue team agents in orchestrated red/blue scenarios where the blue agent
-    should wait for red team transcript injections between generate() calls.
-
-    Blocking flow:
-    1. Before calling base_model.generate():
-       - Poll TRANSCRIPT_LAST_MODIFIED_AT timestamp
-       - Wait for timestamp to change (indicates red team made modification)
-       - Pull modified transcript
-       - Replace conversation history in input parameter
-    2. Call base_model.generate() with modified input
-    3. Push assistant message to transcript (inherited from parent)
+    Flow:
+    1. First generate() → establish WebSocket connection
+    2. Background listener task receives events
+    3. Events queued for generate() to consume
+    4. generate() pulls delta via REST
+    5. Connection reused for entire episode
 
     Attributes:
         _skip_first_iteration: Skip blocking on first generate() call
         _first_call: Tracks if this is the first generate() call
-
-    Note:
-        Polls indefinitely until episode ends with hardcoded 2-second intervals
-        and 60-second HTTP timeouts for REST calls.
+        _ws_timeout: Timeout for WebSocket event waiting (seconds)
+        _websocket: WebSocket connection object
+        _ws_lock: Lock for WebSocket connection management
+        _event_queue: Queue for WebSocket events
+        _listener_task: Background task listening for events
+        _local_version: Client's current transcript version
+        _local_checksum: SHA256 checksum of local transcript
+        _local_messages: Local copy of transcript messages
+        _ws_url: WebSocket URL constructed from REST URL
     """
-
-    POLL_INTERVAL = 2.0  # Hardcoded: poll every 2 seconds
-    HTTP_TIMEOUT = 60.0  # Hardcoded: 60 second timeout for REST calls
 
     def __init__(
         self,
@@ -492,8 +218,9 @@ class BlockingTranscriptSyncingModelWrapper(TranscriptSyncingModelWrapper):
         episode_id: str,
         rest_url: str,
         skip_first_iteration: bool = True,
+        ws_config: Optional[WebSocketConfig] = None,
     ):
-        """Initialize blocking transcript syncing wrapper.
+        """Initialize WebSocket transcript syncing wrapper.
 
         Args:
             base_model: Underlying Model to wrap
@@ -501,23 +228,305 @@ class BlockingTranscriptSyncingModelWrapper(TranscriptSyncingModelWrapper):
             episode_id: SABER episode ID
             rest_url: Base URL of SABER REST API
             skip_first_iteration: Skip blocking on first generate() call
+            ws_config: WebSocket configuration (uses defaults if None)
         """
-        super().__init__(base_model, session_id, episode_id, rest_url)
+        self._base_model = base_model
+        self._session_id = session_id
+        self._episode_id = episode_id
+        self._rest_url = rest_url
         self._skip_first_iteration = skip_first_iteration
         self._first_call = True
-        self._client = SABERRestClient(saber_server_url=rest_url)
+        self._ws_config = ws_config or WebSocketConfig()
+
+        # WebSocket connection state
+        self._websocket: Optional[Any] = None  # WebSocketClientProtocol
+        self._ws_lock = asyncio.Lock()
+        self._event_queue: asyncio.Queue = asyncio.Queue(maxsize=self._ws_config.pull.event_queue_max_size)
+        self._listener_task: Optional[asyncio.Task] = None
+
+        # Local version tracking
+        self._local_version = 0
+        self._local_checksum = compute_checksum([])
+        self._local_messages: List[ChatMessage] = []
+
+        # Build WebSocket URL from REST URL (with proper parsing)
+        self._ws_url = self._build_websocket_url(rest_url, episode_id)
 
         logger.info(
-            "Created BlockingTranscriptSyncingModelWrapper",
+            "Created WebSocketTranscriptSyncingModelWrapper",
             extra={
-                "event": "blocking_wrapper_created",
                 "session_id": session_id,
                 "episode_id": episode_id,
-                "poll_interval": self.POLL_INTERVAL,
-                "http_timeout": self.HTTP_TIMEOUT,
                 "skip_first_iteration": skip_first_iteration,
+                "ws_config": {
+                    "connection_timeout": self._ws_config.connection_timeout,
+                    "pull_event_timeout": self._ws_config.pull.event_timeout,
+                    "push_confirmation_timeout": self._ws_config.push.confirmation_timeout,
+                    "reconnect_enabled": self._ws_config.reconnect_enabled,
+                },
+                "ws_url": self._ws_url,
             },
         )
+
+    def _build_websocket_url(self, rest_url: str, episode_id: str) -> str:
+        """Build WebSocket URL from REST URL preserving base path.
+
+        Handles URLs with ports, paths, and different schemes correctly.
+        Preserves any base path for proxy/ingress deployments.
+
+        Args:
+            rest_url: Base REST API URL (e.g., "http://localhost:8000" or "http://proxy.com/saber")
+            episode_id: Episode identifier
+
+        Returns:
+            WebSocket URL with preserved path prefix
+
+        Examples:
+            "http://localhost:8000" -> "ws://localhost:8000/api/v1/episodes/{id}/ws"
+            "https://proxy.com/saber" -> "wss://proxy.com/saber/api/v1/episodes/{id}/ws"
+        """
+        from urllib.parse import urlparse, urlunparse
+
+        parsed = urlparse(rest_url)
+
+        # Map HTTP scheme to WebSocket scheme
+        ws_scheme = "wss" if parsed.scheme == "https" else "ws"
+
+        # Preserve existing path (strip trailing slash)
+        base_path = parsed.path.rstrip("/") if parsed.path else ""
+        ws_path = f"{base_path}/api/v1/episodes/{episode_id}/ws"
+
+        # Build WebSocket URL preserving host:port and base path
+        ws_url = urlunparse(
+            (
+                ws_scheme,
+                parsed.netloc,  # Preserves host:port
+                ws_path,  # Preserves base path + adds WebSocket endpoint
+                "",  # params
+                "",  # query
+                "",  # fragment
+            )
+        )
+
+        return ws_url
+
+    async def __aenter__(self) -> "WebSocketTranscriptSyncingModelWrapper":
+        """Context manager entry - establish WebSocket connection."""
+        await self._ensure_connected()
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
+        """Context manager exit - cleanup WebSocket connection."""
+        await self.cleanup()
+        return False  # Don't suppress exceptions
+
+    async def _ensure_connected(self) -> None:
+        """Establish WebSocket connection with reconnection support.
+
+        Implements exponential backoff reconnection and proper resource cleanup.
+        """
+        async with self._ws_lock:
+            if self._websocket is not None and not self._websocket.closed:
+                return  # Already connected
+
+            # Determine number of attempts based on reconnect policy
+            max_attempts = self._ws_config.max_reconnect_attempts if self._ws_config.reconnect_enabled else 1
+
+            for attempt in range(max_attempts):
+                temp_websocket = None
+                temp_listener = None
+
+                try:
+                    import websockets
+
+                    logger.info(
+                        "Establishing WebSocket connection",
+                        extra={
+                            "episode_id": self._episode_id,
+                            "url": self._ws_url,
+                            "attempt": attempt + 1,
+                            "max_attempts": max_attempts,
+                        },
+                    )
+
+                    # Phase 1: Connect with timeout
+                    temp_websocket = await asyncio.wait_for(
+                        websockets.connect(self._ws_url), timeout=self._ws_config.connection_timeout
+                    )
+
+                    # Phase 2: Start background listener
+                    temp_listener = asyncio.create_task(self._listen_for_events_impl(temp_websocket))
+
+                    # Phase 3: Wait for connection confirmation
+                    try:
+                        timeout_seconds = self._ws_config.push.confirmation_timeout
+                        connected = False
+
+                        async def _wait_for_connected() -> bool:
+                            assert temp_websocket is not None  # mypy: temp_websocket is set above
+                            async for message in temp_websocket:
+                                data = json.loads(message)
+                                if data.get("type") == "connected":
+                                    logger.info("WebSocket connected", extra={"episode_id": self._episode_id})
+                                    return True
+                            return False
+
+                        connected = await asyncio.wait_for(_wait_for_connected(), timeout=timeout_seconds)
+                        if connected:
+                            # SUCCESS - commit state
+                            self._websocket = temp_websocket
+                            self._listener_task = temp_listener
+                            temp_websocket = None  # Don't cleanup
+                            temp_listener = None  # Don't cleanup
+                            return
+                    except TimeoutError:
+                        raise ConnectionError(
+                            f"WebSocket confirmation timeout after {self._ws_config.push.confirmation_timeout}s"
+                        )
+
+                except Exception as e:
+                    # Retry logic
+                    is_last_attempt = attempt == max_attempts - 1
+
+                    if not is_last_attempt:
+                        # Calculate exponential backoff delay
+                        delay = min(
+                            self._ws_config.initial_reconnect_delay
+                            * (self._ws_config.reconnect_backoff_multiplier**attempt),
+                            self._ws_config.max_reconnect_delay,
+                        )
+
+                        logger.warning(
+                            f"WebSocket connection failed (attempt {attempt + 1}/{max_attempts}), "
+                            f"retrying in {delay:.1f}s",
+                            extra={
+                                "episode_id": self._episode_id,
+                                "error": str(e),
+                                "delay": delay,
+                            },
+                        )
+
+                        await asyncio.sleep(delay)
+                    else:
+                        logger.error(
+                            "WebSocket connection failed after all attempts",
+                            extra={
+                                "episode_id": self._episode_id,
+                                "error": str(e),
+                                "attempts": max_attempts,
+                            },
+                        )
+                        raise
+
+                finally:
+                    # Cleanup listener task with timeout
+                    if temp_listener and not temp_listener.done():
+                        temp_listener.cancel()
+                        try:
+                            await asyncio.wait_for(
+                                temp_listener, timeout=WebSocketDefaults.LISTENER_TASK_CANCEL_TIMEOUT_SECONDS
+                            )
+                        except (asyncio.CancelledError, asyncio.TimeoutError):
+                            logger.debug("Listener task cancelled during cleanup")
+                        except Exception as e:
+                            logger.warning(f"Error cancelling listener task: {e}")
+
+                    # Cleanup WebSocket with timeout
+                    if temp_websocket and not temp_websocket.closed:
+                        try:
+                            await asyncio.wait_for(
+                                temp_websocket.close(), timeout=WebSocketDefaults.WEBSOCKET_CLOSE_TIMEOUT_SECONDS
+                            )
+                        except asyncio.TimeoutError:
+                            logger.warning("WebSocket close timed out during cleanup")
+                        except Exception as e:
+                            logger.warning(f"Error closing WebSocket during cleanup: {e}")
+
+    async def _listen_for_events_impl(self, websocket: Any) -> None:
+        """Background task that listens for WebSocket events.
+
+        Handles both push (server events) and pull (response to client requests).
+        Server-initiated events are queued for generate() to consume.
+        Client-response messages are consumed directly by awaiting code.
+
+        Args:
+            websocket: WebSocket connection to listen on (passed explicitly for cleanup safety)
+        """
+        import websockets
+
+        try:
+            async for message in websocket:
+                data = json.loads(message)
+                event_type = data.get("type")
+
+                if event_type == "transcript_modified":
+                    # Server-initiated notification - queue for generate()
+                    await self._event_queue.put(data)
+
+                    logger.debug(
+                        "Received transcript modification event",
+                        extra={
+                            "episode_id": self._episode_id,
+                            "version": data.get("data", {}).get("version"),
+                        },
+                    )
+
+                elif event_type in ("sync_response", "push_ack", "pong"):
+                    # Response to client request - also queue these for awaiting code
+                    await self._event_queue.put(data)
+
+                    logger.debug(
+                        "Received WebSocket response",
+                        extra={
+                            "episode_id": self._episode_id,
+                            "type": event_type,
+                        },
+                    )
+
+                else:
+                    logger.warning(
+                        "Received unknown WebSocket message type",
+                        extra={
+                            "episode_id": self._episode_id,
+                            "type": event_type,
+                        },
+                    )
+
+        except websockets.exceptions.ConnectionClosed:
+            logger.info("WebSocket connection closed", extra={"episode_id": self._episode_id})
+        except Exception as e:
+            logger.error("WebSocket listener error", extra={"episode_id": self._episode_id, "error": str(e)})
+
+    async def _listen_for_events(self) -> None:
+        """Background task that listens for WebSocket events (legacy wrapper)."""
+        if self._websocket:
+            await self._listen_for_events_impl(self._websocket)
+
+    async def _wait_for_modification_event(self) -> bool:
+        """Wait for WebSocket event indicating transcript modification.
+
+        Returns:
+            True if event received, False on timeout
+        """
+        try:
+            await self._ensure_connected()
+
+            # Wait for event from queue (populated by background listener)
+            event_data = await asyncio.wait_for(self._event_queue.get(), timeout=self._ws_config.pull.event_timeout)
+
+            logger.info(
+                "Transcript modification detected via WebSocket",
+                extra={
+                    "episode_id": self._episode_id,
+                    "version": event_data.get("data", {}).get("version"),
+                    "latency": "<100ms",
+                },
+            )
+            return True
+
+        except asyncio.TimeoutError:
+            logger.warning("WebSocket timeout", extra={"episode_id": self._episode_id})
+            return False
 
     async def generate(
         self,
@@ -525,10 +534,11 @@ class BlockingTranscriptSyncingModelWrapper(TranscriptSyncingModelWrapper):
         tools: Optional[list] = None,
         **kwargs: Any,
     ) -> ModelOutput:
-        """Generate with blocking for transcript modifications.
+        """Generate with WebSocket-based bidirectional sync.
 
-        Blocks before each generate() call (except optionally the first) to wait
-        for red team transcript modifications.
+        All coordination happens via WebSocket:
+        - Pull: Receive transcript_modified events, request sync
+        - Push: Send push_message with new content
 
         Args:
             input: Messages or text input to the model
@@ -537,202 +547,193 @@ class BlockingTranscriptSyncingModelWrapper(TranscriptSyncingModelWrapper):
 
         Returns:
             ModelOutput from the base model
-
-        Raises:
-            RuntimeError: If blocking timeout or max iterations exceeded
         """
         # Skip blocking on first iteration if configured
         if self._skip_first_iteration and self._first_call:
             self._first_call = False
             logger.debug(
-                "Skipping blocking on first iteration",
-                extra={
-                    "event": "blocking_wrapper_first_iteration_skipped",
-                    "session_id": self._session_id,
-                    "episode_id": self._episode_id,
-                },
+                "Skipping WebSocket blocking on first iteration",
+                extra={"episode_id": self._episode_id},
             )
-        else:
-            # Block and wait for transcript modification
+        elif self._ws_config.pull.enabled:
+            # Only pull if enabled (blue team waits for modifications, red team skips)
+            # Block and wait for WebSocket notification
             if isinstance(input, list):
-                modified_input = await self._block_and_pull_transcript(input)
-                input = modified_input
+                event_received = await self._wait_for_modification_event()
+
+                if event_received:
+                    try:
+                        # Request sync via WebSocket
+                        if self._websocket:
+                            await self._websocket.send_json(
+                                {
+                                    "type": "sync_request",
+                                    "data": {
+                                        "since_version": self._local_version,
+                                        "client_checksum": self._local_checksum,
+                                    },
+                                    "id": str(uuid.uuid4()),
+                                    "timestamp": datetime.utcnow().isoformat(),
+                                }
+                            )
+
+                        # Wait for sync response from queue (listener task queues all messages)
+                        response = await asyncio.wait_for(
+                            self._event_queue.get(),
+                            timeout=self._ws_config.pull.sync_timeout,
+                        )
+
+                        if response.get("type") == "sync_response":
+                            sync_data = response["data"]
+
+                            # Apply delta or full transcript
+                            if sync_data["sync_mode"] == "full":
+                                # Rewrite detected
+                                self._local_messages = [
+                                    self._deserialize_message(m) for m in sync_data["full_transcript"]
+                                ]
+                            elif sync_data["sync_mode"] == "delta" and sync_data.get("delta"):
+                                # Delta sync
+                                new_messages = [self._deserialize_message(m) for m in sync_data["delta"]]
+                                self._local_messages.extend(new_messages)
+
+                            # Update local state
+                            self._local_version = sync_data["current_version"]["sequence"]
+                            self._local_checksum = sync_data["current_version"]["checksum"]
+                            input = self._local_messages.copy()
+
+                            logger.debug(
+                                "Applied transcript sync via WebSocket",
+                                extra={
+                                    "episode_id": self._episode_id,
+                                    "sync_mode": sync_data["sync_mode"],
+                                    "new_version": self._local_version,
+                                },
+                            )
+
+                    except Exception as e:
+                        # Log but continue with original input (graceful degradation)
+                        logger.warning(
+                            "Failed to sync transcript after WebSocket event, continuing with original input",
+                            extra={
+                                "error": str(e),
+                                "error_type": type(e).__name__,
+                                "episode_id": self._episode_id,
+                            },
+                        )
             else:
                 logger.warning(
-                    "Blocking wrapper received non-list input, cannot replace with modified transcript",
+                    "WebSocket wrapper received non-list input, cannot replace with modified transcript",
                     extra={
-                        "event": "blocking_wrapper_non_list_input",
                         "input_type": type(input).__name__,
-                    },
-                )
-
-        # Call parent's generate() which will:
-        # 1. Call base_model.generate() with (possibly modified) input
-        # 2. Push assistant message to transcript
-        return await super().generate(input, tools, **kwargs)
-
-    async def _block_and_pull_transcript(
-        self,
-        current_input: list[ChatMessage],
-    ) -> list[ChatMessage]:
-        """Block and poll for transcript modification, then pull updated transcript.
-
-        Args:
-            current_input: Current conversation history
-
-        Returns:
-            Modified conversation history from transcript (or original if no changes)
-
-        Raises:
-            RuntimeError: If blocking timeout is exceeded
-        """
-        start_time = time.time()
-
-        # Get initial timestamp
-        try:
-            initial_timestamp = await self._get_transcript_timestamp()
-        except Exception as exc:
-            logger.warning(
-                "Failed to get initial transcript timestamp, proceeding without blocking",
-                extra={
-                    "event": "blocking_wrapper_timestamp_error",
-                    "error": str(exc),
-                    "session_id": self._session_id,
-                    "episode_id": self._episode_id,
-                },
-            )
-            return current_input
-
-        logger.info(
-            "Blocking for transcript modification (indefinite polling)",
-            extra={
-                "event": "blocking_wrapper_started",
-                "session_id": self._session_id,
-                "episode_id": self._episode_id,
-                "initial_timestamp": initial_timestamp,
-                "poll_interval": self.POLL_INTERVAL,
-            },
-        )
-
-        # Poll indefinitely for timestamp change
-        iteration = 0
-        while True:
-            await asyncio.sleep(self.POLL_INTERVAL)
-            iteration += 1
-            try:
-                current_timestamp = await self._get_transcript_timestamp()
-
-                if current_timestamp != initial_timestamp:
-                    logger.info(
-                        "Transcript modification detected",
-                        extra={
-                            "event": "blocking_wrapper_modification_detected",
-                            "session_id": self._session_id,
-                            "episode_id": self._episode_id,
-                            "initial_timestamp": initial_timestamp,
-                            "new_timestamp": current_timestamp,
-                            "elapsed_seconds": time.time() - start_time,
-                            "iterations": iteration + 1,
-                        },
-                    )
-
-                    # Pull modified transcript
-                    modified_transcript = await self._pull_transcript()
-                    return modified_transcript
-
-            except Exception as exc:
-                logger.warning(
-                    "Error polling transcript timestamp",
-                    extra={
-                        "event": "blocking_wrapper_poll_error",
-                        "error": str(exc),
-                        "iteration": iteration,
-                        "session_id": self._session_id,
                         "episode_id": self._episode_id,
                     },
                 )
-                # Continue polling on error
+        else:
+            # Pull disabled - skip waiting for modifications (red team mode)
+            logger.debug(
+                "Pull disabled, skipping modification sync",
+                extra={"episode_id": self._episode_id},
+            )
 
-    async def _get_transcript_timestamp(self) -> Any:
-        """Get the last modification timestamp of the episode transcript.
+        # Generate with (possibly modified) input
+        output = await self._base_model.generate(input, tools, **kwargs)
+
+        # Push new message via WebSocket (if push enabled)
+        if self._ws_config.push.enabled:
+            try:
+                await self._ensure_connected()
+
+                if self._websocket:
+                    await self._websocket.send_json(
+                        {
+                            "type": "push_message",
+                            "data": {
+                                "message": self._serialize_message(output.message),
+                                "since_version": self._local_version,
+                                "client_checksum": self._local_checksum,
+                            },
+                            "id": str(uuid.uuid4()),
+                            "timestamp": datetime.utcnow().isoformat(),
+                        }
+                    )
+
+                # Wait for push acknowledgment from queue (listener task queues all messages)
+                response = await asyncio.wait_for(
+                    self._event_queue.get(),
+                    timeout=self._ws_config.push.confirmation_timeout,
+                )
+
+                if response.get("type") == "push_ack":
+                    # Update local state from server response
+                    self._local_messages.append(output.message)
+                    self._local_version = response["data"]["version"]
+                    self._local_checksum = response["data"]["checksum"]
+
+                    logger.debug(
+                        "Pushed message via WebSocket",
+                        extra={
+                            "episode_id": self._episode_id,
+                            "new_version": self._local_version,
+                        },
+                    )
+
+            except Exception as e:
+                # Log but don't crash
+                logger.warning(
+                    "Failed to push message via WebSocket, falling back to local tracking",
+                    extra={
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                        "episode_id": self._episode_id,
+                    },
+                )
+                # Fallback: update local state optimistically
+                self._local_messages.append(output.message)
+                self._local_version += 1
+                self._local_checksum = compute_checksum([self._serialize_message(m) for m in self._local_messages])
+        else:
+            # Push disabled - update local state only (no WebSocket communication)
+            logger.debug(
+                "Push disabled, updating local state only",
+                extra={"episode_id": self._episode_id},
+            )
+            self._local_messages.append(output.message)
+            self._local_version += 1
+            self._local_checksum = compute_checksum([self._serialize_message(m) for m in self._local_messages])
+
+        return output
+
+    async def cleanup(self) -> None:
+        """Close WebSocket connection when episode ends."""
+        if self._listener_task:
+            self._listener_task.cancel()
+            try:
+                await self._listener_task
+            except asyncio.CancelledError:
+                pass
+
+        if self._websocket and not self._websocket.closed:
+            await self._websocket.close()
+            logger.info("WebSocket connection closed", extra={"episode_id": self._episode_id})
+
+    def __getattr__(self, name: str) -> Any:
+        """Delegate all other attribute access to the base model.
+
+        This makes the wrapper transparent - it behaves exactly like the
+        wrapped model for all attributes/methods except generate().
+
+        Args:
+            name: Attribute name being accessed
 
         Returns:
-            ISO format timestamp string
-
-        Raises:
-            Exception: If metadata retrieval fails
+            The attribute from the base model
         """
-        try:
-            metadata = await get_episode_metadata(self._client, self._session_id, self._episode_id)
-            return metadata.get(MetadataKeys.TRANSCRIPT_LAST_MODIFIED_AT, "")
-        except Exception as exc:
-            logger.error(
-                "Failed to get episode metadata for timestamp",
-                extra={
-                    "event": "blocking_wrapper_metadata_error",
-                    "error": str(exc),
-                    "session_id": self._session_id,
-                    "episode_id": self._episode_id,
-                },
-            )
-            raise
+        return getattr(self._base_model, name)
 
-    async def _pull_transcript(self) -> list[ChatMessage]:
-        """Pull complete transcript and convert to ChatMessage list.
-
-        Returns:
-            List of ChatMessage objects from transcript
-
-        Raises:
-            Exception: If transcript pull or conversion fails
-        """
-        try:
-            # Call module-level function for easier mocking in tests
-            transcript_data = await pull_episode_transcript(self._client, self._session_id, self._episode_id)
-
-            # Convert transcript to ChatMessage list
-            # transcript_data["messages"] is list of {"role": str, "content": str}
-            messages = [self._deserialize_message(msg) for msg in transcript_data.get("messages", [])]
-
-            logger.info(
-                "Pulled modified transcript",
-                extra={
-                    "event": "blocking_wrapper_transcript_pulled",
-                    "session_id": self._session_id,
-                    "episode_id": self._episode_id,
-                    "message_count": len(messages),
-                },
-            )
-
-            return messages
-
-        except Exception as exc:
-            logger.error(
-                "Failed to pull transcript",
-                extra={
-                    "event": "blocking_wrapper_pull_error",
-                    "error": str(exc),
-                    "session_id": self._session_id,
-                    "episode_id": self._episode_id,
-                },
-            )
-            raise
+    def __repr__(self) -> str:
+        """Return string representation showing wrapped model."""
+        return f"WebSocketTranscriptSyncingModelWrapper({self._base_model!r})"
 
 
-__all__ = ["TranscriptSyncingModelWrapper", "BlockingTranscriptSyncingModelWrapper"]
-
-
-# Module-level helper functions for easier patching in tests
-async def _push_single_message(wrapper: "TranscriptSyncingModelWrapper", message: ChatMessage) -> None:
-    """Module-level wrapper for pushing a single message (for easier test mocking)."""
-    await wrapper._push_single_message(message)
-
-
-async def get_episode_metadata(client: "SABERRestClient", session_id: str, episode_id: str) -> Dict[str, Any]:
-    """Module-level wrapper for getting episode metadata (for easier test mocking)."""
-    return await client.get_episode_metadata(session_id, episode_id)
-
-
-async def pull_episode_transcript(client: "SABERRestClient", session_id: str, episode_id: str) -> Dict[str, Any]:
-    """Module-level wrapper for pulling episode transcript (for easier test mocking)."""
-    return await client.pull_episode_transcript(session_id, episode_id)
+__all__ = ["WebSocketTranscriptSyncingModelWrapper"]

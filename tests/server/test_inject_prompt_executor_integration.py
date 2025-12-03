@@ -53,12 +53,21 @@ class TestSessionManagerInjection:
     def mock_session_manager(self, blue_episode: Episode, red_episode: Episode):
         """Create a mock session manager with episode lookup capability."""
 
+        class MockConnectionManager:
+            async def broadcast_to_episode(self, episode_id: str, message: dict):
+                pass
+            async def cleanup_episode(self, episode_id: str):
+                pass
+
         class MockEpisodeManager:
             def __init__(self, blue_ep, red_ep):
                 self.episodes = {
                     blue_ep.episode_id: blue_ep,
                     red_ep.episode_id: red_ep,
                 }
+                # Add transcript_coordinator
+                from saber.server.episodes.transcript_coordinator import TranscriptCoordinator
+                self.transcript_coordinator = TranscriptCoordinator(self, MockConnectionManager())
 
             def get_episode_by_id(self, episode_id: str):
                 return self.episodes.get(episode_id)

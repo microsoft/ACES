@@ -36,6 +36,7 @@ class TestSessionManagerEndEpisode:
         ):
             manager = SessionManager(domain_name="test_domain", config_dir="/tmp")
             manager.execution_manager.cleanup_episode = MagicMock(return_value=True)
+            manager.episode_manager.end_episode = AsyncMock()
             return manager
 
     @pytest.mark.asyncio
@@ -156,7 +157,7 @@ class TestSessionManagerEndEpisode:
         episode.task_id = "task1"
         episode.is_complete = False
         session_manager.episode_manager.get_episode_by_id.return_value = episode
-        session_manager.episode_manager.end_episode.return_value = episode
+        session_manager.episode_manager.end_episode = AsyncMock(return_value=episode)
 
         task = MagicMock()
         session_manager.benchmark_manager.get_task.return_value = task

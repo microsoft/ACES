@@ -8,11 +8,12 @@ Logging category: REST_API.
 """
 
 # Forward declaration to avoid circular imports
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import uvicorn
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 
 from ...logging_config import get_api_logger, log_operation_failure, log_operation_start, log_operation_success
 from ...models import (
@@ -38,6 +39,7 @@ from ...models import (
     TranscriptPushRequest,
     TranscriptPushResponse,
     TranscriptSyncConfig,
+    TranscriptSyncRequest,
 )
 from ...models.rest.evaluation import (
     EpisodeStepData,
@@ -53,6 +55,7 @@ from ...models.rest.evaluation import (
     TaskEvaluationContext,
     TemplateContentResponse,
 )
+from ...models.rest.websocket_constants import WebSocketCloseCode
 from ..evaluation.exceptions import EvaluationNotFoundError, InvalidEvaluationRequestError, SessionEvaluationError
 
 if TYPE_CHECKING:
@@ -1275,6 +1278,129 @@ class SessionRestAPI:
             except Exception as exc:
                 log_operation_failure(logger, "submit_evaluation", exc, session_id=session_id, episode_id=episode_id)
                 raise HTTPException(status_code=500, detail=f"Failed to submit evaluation: {exc}") from exc
+
+        # ===== WebSocket Endpoint for Real-Time Transcript Notifications =====
+
+        @self.app.websocket("/api/v1/episodes/{episode_id}/ws")
+        async def websocket_endpoint(websocket: WebSocket, episode_id: str) -> None:
+            """
+            WebSocket endpoint for bidirectional transcript synchronization.
+
+            Protocol (Server → Client):
+            - Client connects → server sends {"type": "connected"}
+            - Red team injects → server broadcasts {"type": "transcript_modified", "data": {...}}
+
+            Protocol (Client → Server):
+            - {"type": "ping"} → server responds {"type": "pong"}
+            - {"type": "sync_request", "data": {version, checksum}} → server responds {"type": "sync_response"}
+            - {"type": "push_message", "data": {message, version, checksum}} → server responds {"type": "push_ack"}
+
+            Flow:
+            1. Agent connects on first generate() call
+            2. Connection persists for entire episode (bidirectional)
+            3. Agent pushes messages via WebSocket (replaces REST sync API)
+            4. Red team injects → server broadcasts event → Blue agent pulls delta via WebSocket
+            """
+            # Validate episode exists
+            episode = self.session_manager.episode_manager.get_episode_by_id(episode_id)
+            if not episode:
+                await websocket.close(code=WebSocketCloseCode.INTERNAL_ERROR, reason=f"Episode {episode_id} not found")
+                return
+
+            # Register connection
+            await self.session_manager.episode_manager.connection_manager.connect(
+                episode_id=episode_id,
+                websocket=websocket,
+                metadata={
+                    "role": episode.context.get(MetadataKeys.ORCHESTRATION_ROLE),
+                    "session_id": episode.session_id,
+                },
+            )
+
+            try:
+                # Handle bidirectional WebSocket messages
+                while True:
+                    data = await websocket.receive_json()
+                    message_type = data.get("type")
+
+                    if message_type == "ping":
+                        # Keepalive
+                        await websocket.send_json(
+                            {
+                                "type": "pong",
+                                "timestamp": datetime.utcnow().isoformat(),
+                            }
+                        )
+
+                    elif message_type == "sync_request":
+                        # Client requesting transcript sync
+                        request_data = data.get("data", {})
+                        sync_request = TranscriptSyncRequest(
+                            episode_id=episode_id,
+                            since_version=request_data.get("since_version", 0),
+                            client_checksum=request_data.get("client_checksum"),
+                        )
+
+                        coordinator = self.session_manager.episode_manager.transcript_coordinator
+                        sync_response = await coordinator.sync(sync_request)
+
+                        await websocket.send_json(
+                            {
+                                "type": "sync_response",
+                                "data": {
+                                    "current_version": {
+                                        "sequence": sync_response.current_version.sequence,
+                                        "checksum": sync_response.current_version.checksum,
+                                        "message_count": sync_response.current_version.message_count,
+                                        "last_operation": sync_response.current_version.last_operation,
+                                    },
+                                    "delta": sync_response.delta,
+                                    "full_transcript": sync_response.full_transcript,
+                                    "sync_mode": sync_response.sync_mode,
+                                    "modified": sync_response.modified,
+                                },
+                                "id": data.get("id"),
+                                "timestamp": datetime.utcnow().isoformat(),
+                            }
+                        )
+
+                    elif message_type == "push_message":
+                        # Client pushing new message
+                        request_data = data.get("data", {})
+                        sync_request = TranscriptSyncRequest(
+                            episode_id=episode_id,
+                            since_version=request_data.get("since_version", 0),
+                            client_checksum=request_data.get("client_checksum"),
+                            messages_to_push=[request_data.get("message")],
+                        )
+
+                        coordinator = self.session_manager.episode_manager.transcript_coordinator
+                        sync_response = await coordinator.sync(sync_request)
+
+                        await websocket.send_json(
+                            {
+                                "type": "push_ack",
+                                "data": {
+                                    "version": sync_response.current_version.sequence,
+                                    "checksum": sync_response.current_version.checksum,
+                                },
+                                "id": data.get("id"),
+                                "timestamp": datetime.utcnow().isoformat(),
+                            }
+                        )
+
+                    else:
+                        logger.warning(
+                            "Unknown WebSocket message type",
+                            extra={"episode_id": episode_id, "type": message_type},
+                        )
+
+            except WebSocketDisconnect:
+                logger.info("WebSocket client disconnected", extra={"episode_id": episode_id})
+            except Exception as e:
+                logger.error("WebSocket error", extra={"episode_id": episode_id, "error": str(e)})
+            finally:
+                await self.session_manager.episode_manager.connection_manager.disconnect(episode_id, websocket)
 
     async def start_server(self) -> None:
         """Start the SessionRestAPI server."""

@@ -148,12 +148,13 @@ class TestEpisodeManager:
         assert step_result2.step.step_number == 1
         assert step_result3.step.step_number == 2
 
-    def test_end_episode_success(self):
+    @pytest.mark.asyncio
+    async def test_end_episode_success(self):
         """Test successfully ending an episode."""
         manager = EpisodeManager()
-        episode = manager.start_episode("test_session", "test_task")
+        episode = manager.start_episode("test_session", "test_task", {"initial": "context"})
 
-        ended_episode = manager.end_episode(episode.episode_id, "task completed successfully")
+        ended_episode = await manager.end_episode(episode.episode_id, "task completed successfully")
 
         assert ended_episode == episode
         assert episode.state == EpisodeState.COMPLETED
@@ -163,12 +164,13 @@ class TestEpisodeManager:
         assert episode.episode_id not in manager.episodes
         assert episode.episode_id in manager.completed_episodes
 
-    def test_end_episode_not_found(self):
+    @pytest.mark.asyncio
+    async def test_end_episode_not_found(self):
         """Test ending a non-existent episode."""
         manager = EpisodeManager()
 
         with pytest.raises(EpisodeNotFoundException):
-            manager.end_episode("nonexistent_session", "reason")
+            await manager.end_episode("nonexistent_session", "reason")
 
     # NOTE: reset_episode method was removed in episode-first refactor
     # Multiple episodes per session makes "reset" concept obsolete
@@ -239,7 +241,8 @@ class TestEpisodeManager:
         # Should not crash and episode should remain active
         assert episode.state == EpisodeState.ACTIVE
 
-    def test_multi_episode_orchestration_single_session(self):
+    @pytest.mark.asyncio
+    async def test_multi_episode_orchestration_single_session(self):
         """Test orchestrating multiple concurrent episodes within a single session."""
         manager = EpisodeManager()
         session_id = "multi_episode_session"
@@ -278,7 +281,7 @@ class TestEpisodeManager:
             mock_task = MagicMock()
             mock_task.task_id = episode.task_id
             mock_task.episode_config = {"max_steps": 10 + i * 5}  # Different limits
-            manager.configure_for_task(episode.episode_id, mock_task)
+            await manager.configure_for_task(episode.episode_id, mock_task)
 
         # Execute steps on multiple episodes simultaneously
         action = Action(tool_name="test_tool", parameters={"episode_specific": True})
@@ -295,7 +298,7 @@ class TestEpisodeManager:
 
         # Test selective episode termination
         episode_to_end = episodes[1]  # End vulnerability scan episode
-        completed_episode = manager.end_episode(episode_to_end.episode_id, "completed", "scan_complete")
+        completed_episode = await manager.end_episode(episode_to_end.episode_id, "completed", "scan_complete")
 
         # Verify termination isolation
         assert completed_episode.state == EpisodeState.COMPLETED
@@ -328,7 +331,8 @@ class TestEpisodeManager:
                 retrieved = manager.completed_episodes.get(episode.episode_id)
                 assert retrieved == episode
 
-    def test_concurrent_multi_session_multi_episode_orchestration(self):
+    @pytest.mark.asyncio
+    async def test_concurrent_multi_session_multi_episode_orchestration(self):
         """Test orchestrating multiple episodes across different sessions simultaneously."""
         manager = EpisodeManager()
 
@@ -395,7 +399,7 @@ class TestEpisodeManager:
                 mock_task = MagicMock()
                 mock_task.task_id = episode.task_id
                 mock_task.episode_config = {"max_steps": 15, f"{session_id}_setting": True}
-                manager.configure_for_task(episode.episode_id, mock_task)
+                await manager.configure_for_task(episode.episode_id, mock_task)
 
                 # Execute step
                 step_result = manager.step(episode.episode_id, action, command_result)
@@ -404,7 +408,7 @@ class TestEpisodeManager:
         # Test selective session cleanup - end all episodes for blue team
         blue_team_episodes = all_episodes["blue_team_session"].copy()
         for episode in blue_team_episodes:
-            completed = manager.end_episode(episode.episode_id, "completed", f"blue_team_{episode.task_id}_done")
+            completed = await manager.end_episode(episode.episode_id, "completed", f"blue_team_{episode.task_id}_done")
             assert completed.state == EpisodeState.COMPLETED
 
         # Verify blue team episodes are completed but still tracked in session
