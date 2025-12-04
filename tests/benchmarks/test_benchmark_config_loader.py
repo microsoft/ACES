@@ -15,6 +15,10 @@ from saber.server.benchmarks.exceptions import InvalidTaskDefinitionException
 from saber.server.benchmarks.subtask import SubTask
 from saber.server.benchmarks.task import Task
 from saber.server.benchmarks.benchmark_config_loader import BenchmarkConfigLoader
+from saber.server.benchmarks._validation import (
+    validate_step_evaluation_config,
+    validate_submission_evaluation_config,
+)
 
 
 class TestBenchmarkConfigLoader:
@@ -2667,7 +2671,7 @@ class TestBenchmarkConfigLoaderValidation:
         }
 
         # Should not raise any exception
-        loader._validate_step_evaluation_config(valid_static_config, "test_task")
+        validate_step_evaluation_config(valid_static_config, "test_task")
 
         # Test missing expected_outputs
         invalid_static_config = {
@@ -2681,8 +2685,8 @@ class TestBenchmarkConfigLoaderValidation:
             }
         }
 
-        with pytest.raises(InvalidTaskDefinitionException, match="must have either 'expected_outputs' in criteria"):
-            loader._validate_step_evaluation_config(invalid_static_config, "test_task")
+        with pytest.raises(InvalidTaskDefinitionException, match="must have 'expected_outputs' in criteria"):
+            validate_step_evaluation_config(invalid_static_config, "test_task")
 
     def test_validate_step_evaluation_config_tool_call_strategy(self):
         """Test validation of step evaluation config with tool_call strategy."""
@@ -2701,7 +2705,7 @@ class TestBenchmarkConfigLoaderValidation:
         }
 
         # Should not raise any exception
-        loader._validate_step_evaluation_config(valid_tool_call_config, "test_task")
+        validate_step_evaluation_config(valid_tool_call_config, "test_task")
 
         # Test missing expected_tools
         invalid_tool_call_config = {
@@ -2716,7 +2720,7 @@ class TestBenchmarkConfigLoaderValidation:
         }
 
         with pytest.raises(InvalidTaskDefinitionException, match="must have 'expected_tools' in criteria"):
-            loader._validate_step_evaluation_config(invalid_tool_call_config, "test_task")
+            validate_step_evaluation_config(invalid_tool_call_config, "test_task")
 
     def test_validate_step_evaluation_config_llm_judge_strategy(self):
         """Test validation of step evaluation config with llm_judge strategy."""
@@ -2738,7 +2742,7 @@ class TestBenchmarkConfigLoaderValidation:
         }
 
         # Should not raise any exception
-        loader._validate_step_evaluation_config(valid_llm_judge_config, "test_task")
+        validate_step_evaluation_config(valid_llm_judge_config, "test_task")
 
         # Test missing model
         invalid_config_no_model = {
@@ -2754,7 +2758,7 @@ class TestBenchmarkConfigLoaderValidation:
         }
 
         with pytest.raises(InvalidTaskDefinitionException, match="step evaluation llm_judge requires 'model'"):
-            loader._validate_step_evaluation_config(invalid_config_no_model, "test_task")
+            validate_step_evaluation_config(invalid_config_no_model, "test_task")
 
         # Test missing judge_system_template
         invalid_config_no_system_template = {
@@ -2770,7 +2774,7 @@ class TestBenchmarkConfigLoaderValidation:
         }
 
         with pytest.raises(InvalidTaskDefinitionException, match="step evaluation requires 'judge_system_template' path"):
-            loader._validate_step_evaluation_config(invalid_config_no_system_template, "test_task")
+            validate_step_evaluation_config(invalid_config_no_system_template, "test_task")
 
         # Test missing judge_user_template
         invalid_config_no_user_template = {
@@ -2786,7 +2790,7 @@ class TestBenchmarkConfigLoaderValidation:
         }
 
         with pytest.raises(InvalidTaskDefinitionException, match="step evaluation requires 'judge_user_template' path"):
-            loader._validate_step_evaluation_config(invalid_config_no_user_template, "test_task")
+            validate_step_evaluation_config(invalid_config_no_user_template, "test_task")
 
         # Test invalid steps_per_message
         invalid_config_bad_steps = {
@@ -2804,7 +2808,7 @@ class TestBenchmarkConfigLoaderValidation:
         }
 
         with pytest.raises(InvalidTaskDefinitionException, match="steps_per_message must be a positive integer"):
-            loader._validate_step_evaluation_config(invalid_config_bad_steps, "test_task")
+            validate_step_evaluation_config(invalid_config_bad_steps, "test_task")
 
     def test_validate_step_evaluation_config_invalid_strategy(self):
         """Test validation with invalid strategy."""
@@ -2822,7 +2826,7 @@ class TestBenchmarkConfigLoaderValidation:
         }
 
         with pytest.raises(InvalidTaskDefinitionException, match="Invalid step evaluation strategy"):
-            loader._validate_step_evaluation_config(invalid_strategy_config, "test_task")
+            validate_step_evaluation_config(invalid_strategy_config, "test_task")
 
     def test_validate_step_evaluation_config_scoring_validation(self):
         """Test validation of scoring section."""
@@ -2837,7 +2841,7 @@ class TestBenchmarkConfigLoaderValidation:
         }
 
         # Should not raise exception (scoring section is optional with defaults)
-        loader._validate_step_evaluation_config(config_no_scoring, "test_task")
+        validate_step_evaluation_config(config_no_scoring, "test_task")
 
         # Test invalid max_score
         config_invalid_max_score = {
@@ -2852,7 +2856,7 @@ class TestBenchmarkConfigLoaderValidation:
         }
 
         with pytest.raises(InvalidTaskDefinitionException, match="max_score must be a non-negative number"):
-            loader._validate_step_evaluation_config(config_invalid_max_score, "test_task")
+            validate_step_evaluation_config(config_invalid_max_score, "test_task")
 
         # Test invalid weight
         config_invalid_weight = {
@@ -2867,7 +2871,7 @@ class TestBenchmarkConfigLoaderValidation:
         }
 
         with pytest.raises(InvalidTaskDefinitionException, match="weight must be a non-negative number"):
-            loader._validate_step_evaluation_config(config_invalid_weight, "test_task")
+            validate_step_evaluation_config(config_invalid_weight, "test_task")
 
         # Test weight exceeding 1.0
         config_weight_too_high = {
@@ -2882,7 +2886,7 @@ class TestBenchmarkConfigLoaderValidation:
         }
 
         with pytest.raises(InvalidTaskDefinitionException, match="weight must not exceed 1.0"):
-            loader._validate_step_evaluation_config(config_weight_too_high, "test_task")
+            validate_step_evaluation_config(config_weight_too_high, "test_task")
 
         # Test non-dict scoring
         config_non_dict_scoring = {
@@ -2894,7 +2898,7 @@ class TestBenchmarkConfigLoaderValidation:
         }
 
         with pytest.raises(InvalidTaskDefinitionException, match="scoring must be a dictionary"):
-            loader._validate_step_evaluation_config(config_non_dict_scoring, "test_task")
+            validate_step_evaluation_config(config_non_dict_scoring, "test_task")
 
     def test_validate_step_evaluation_config_criteria_validation(self):
         """Test validation of criteria section."""
@@ -2910,7 +2914,7 @@ class TestBenchmarkConfigLoaderValidation:
         }
 
         with pytest.raises(InvalidTaskDefinitionException, match="Missing or invalid criteria in step_evaluation_config"):
-            loader._validate_step_evaluation_config(config_no_criteria, "test_task")
+            validate_step_evaluation_config(config_no_criteria, "test_task")
 
         # Test non-dict criteria
         config_non_dict_criteria = {
@@ -2923,7 +2927,7 @@ class TestBenchmarkConfigLoaderValidation:
         }
 
         with pytest.raises(InvalidTaskDefinitionException, match="Missing or invalid criteria in step_evaluation_config"):
-            loader._validate_step_evaluation_config(config_non_dict_criteria, "test_task")
+            validate_step_evaluation_config(config_non_dict_criteria, "test_task")
 
 
 class TestBenchmarkConfigLoaderRoleValidation:
