@@ -97,6 +97,7 @@ tasks:
   - task_id: root_task
     title: Root Task
     description: A root task without role
+    is_template: true
     execution_config:
       executors:
         bash:
@@ -114,7 +115,7 @@ tasks:
   - task_id: dependent_task
     title: Dependent Task
     description: A task that depends on root_task
-    depends_on_task_id: root_task
+    dependency_template: root_task
     role: "dependent_role"
     execution_config:
       executors:
@@ -137,7 +138,7 @@ tasks:
 
         try:
             loader = BenchmarkConfigLoader("test_domain")
-            with pytest.raises(InvalidTaskDefinitionException, match="Root task.*must have a 'role' defined"):
+            with pytest.raises(InvalidTaskDefinitionException, match="Templates must have a 'role' defined"):
                 loader.load_tasks_from_file(temp_path)
         finally:
             Path(temp_path).unlink()
@@ -167,6 +168,7 @@ tasks:
     title: Root Task
     description: A root task with role
     role: "root_role"
+    is_template: true
     execution_config:
       executors:
         bash:
@@ -184,7 +186,7 @@ tasks:
   - task_id: dependent_task
     title: Dependent Task
     description: A task without role
-    depends_on_task_id: root_task
+    dependency_template: root_task
     execution_config:
       executors:
         bash:
@@ -206,7 +208,7 @@ tasks:
 
         try:
             loader = BenchmarkConfigLoader("test_domain")
-            with pytest.raises(InvalidTaskDefinitionException, match="'role' is required when 'depends_on_task_id' is set"):
+            with pytest.raises(InvalidTaskDefinitionException, match="'role' is required when 'dependency_template' is set"):
                 loader.load_tasks_from_file(temp_path)
         finally:
             Path(temp_path).unlink()
@@ -235,7 +237,7 @@ tasks:
   - task_id: dependent_task
     title: Dependent Task
     description: A task that depends on non-existent task
-    depends_on_task_id: nonexistent_task
+    dependency_template: nonexistent_task
     role: "dependent_role"
     execution_config:
       executors:
@@ -258,7 +260,7 @@ tasks:
 
         try:
             loader = BenchmarkConfigLoader("test_domain")
-            with pytest.raises(InvalidTaskDefinitionException, match="depends on non-existent task"):
+            with pytest.raises(InvalidTaskDefinitionException, match="references non-existent template"):
                 loader.load_tasks_from_file(temp_path)
         finally:
             Path(temp_path).unlink()

@@ -47,7 +47,8 @@ class TestBenchmarkManagerCore:
         mock_task.prompts={"instruction": "test_prompt.md", "assistant": "test_prompt.md", "submit": "test_prompt.md"}
         mock_task.task_id = "test_task"
         mock_task.submission_evaluation_config = None  # No LLM judge config
-        mock_task.depends_on_task_id = None  # No dependencies
+        mock_task.depends_on_task_id = None  # No dependencies (set by template expander after expansion)
+        mock_task.dependency_template = None  # No template dependencies
         mock_tasks = {"test_task": mock_task}
         mock_load.return_value = mock_tasks
 
@@ -983,6 +984,7 @@ executors:
 tasks:
   - task_id: "blue_defend"
     role: blue
+    is_template: true
     title: "Blue Team Defense"
     description: "Defender task"
     prompts:
@@ -999,7 +1001,7 @@ tasks:
 
   - task_id: "red_attack"
     role: red
-    depends_on_task_id: "blue_defend"
+    dependency_template: "blue_defend"
     title: "Red Team Attack"
     description: "Attacker task"
     prompts:
@@ -1026,19 +1028,22 @@ tasks:
         manager = BenchmarkManager("test_domain", temp_config_dir)
         tasks = manager.list_benchmark_tasks()
 
-        # With dependencies, we should see both tasks listed
-        # The blue task should have role="blue" and red should have role="red"
+        # With template expansion, we should see:
+        # - blue_defend template removed
+        # - blue_defend_red_attack instance created
+        # - red_attack task created
         assert len(tasks) >= 1
 
-        # Find tasks by ID
-        blue_task = next((t for t in tasks if t.get("task_id") == "blue_defend"), None)
+        # Find tasks by ID (after template expansion)
+        blue_instance = next((t for t in tasks if t.get("task_id") == "blue_defend_red_attack"), None)
         red_task = next((t for t in tasks if t.get("task_id") == "red_attack"), None)
 
-        # At minimum, the blue task should exist
-        assert blue_task is not None
+        # The blue instance and red task should exist
+        assert blue_instance is not None
+        assert red_task is not None
 
         # Check that tasks were loaded with roles from YAML
-        assert manager.tasks["blue_defend"].role == "blue"
+        assert manager.tasks["blue_defend_red_attack"].role == "blue"
         assert manager.tasks["red_attack"].role == "red"
 
     def test_orchestrated_task_root_validation(self, tmp_path, temp_config_dir_helper):
@@ -1066,7 +1071,8 @@ executors:
 
 tasks:
   - task_id: "root_task"
-    # Missing role field - should fail
+    # Missing role field - should fail for templates
+    is_template: true
     title: "Root Task"
     description: "Root without role"
     prompts:
@@ -1083,7 +1089,7 @@ tasks:
 
   - task_id: "dependent_task"
     role: dependent
-    depends_on_task_id: "root_task"
+    dependency_template: "root_task"
     title: "Dependent Task"
     description: "Depends on root"
     prompts:
@@ -1108,7 +1114,7 @@ tasks:
                 (templates_dir / subdir / template).write_text("# Template")
 
         # Should fail during initialization when validating dependencies
-        with pytest.raises(InvalidTaskDefinitionException, match="Root task 'root_task' must have a 'role' defined"):
+        with pytest.raises(InvalidTaskDefinitionException, match="Templates must have a 'role' defined"):
             BenchmarkManager("test_domain", temp_config_dir)
 
     def test_orchestrated_task_custom_semantic_roles(self, tmp_path, temp_config_dir_helper):
@@ -1137,6 +1143,7 @@ executors:
 tasks:
   - task_id: "defender_task"
     role: defender
+    is_template: true
     title: "System Defender"
     description: "Defend the system"
     prompts:
@@ -1153,7 +1160,7 @@ tasks:
 
   - task_id: "attacker_task"
     role: attacker
-    depends_on_task_id: "defender_task"
+    dependency_template: "defender_task"
     title: "System Attacker"
     description: "Attack the system"
     prompts:
@@ -1180,10 +1187,12 @@ tasks:
         manager = BenchmarkManager("test_domain", temp_config_dir)
         tasks = manager.list_benchmark_tasks()
 
-        # Check that tasks were loaded with custom semantic roles
-        assert manager.tasks["defender_task"].role == "defender"
+        # Check that tasks were loaded with custom semantic roles after template expansion
+        assert manager.tasks["defender_task_attacker_task"].role == "defender"
         assert manager.tasks["attacker_task"].role == "attacker"
-        assert manager.tasks["attacker_task"].depends_on_task_id == "defender_task"
+        # After expansion, dependency_template is cleared and depends_on_task_id is set
+        assert manager.tasks["attacker_task"].depends_on_task_id == "defender_task_attacker_task"
+        assert manager.tasks["attacker_task"].dependency_template is None
 
     def test_single_task_without_role_not_orchestrated(self, tmp_path, temp_config_dir_helper):
         """Test that single tasks without roles are not treated as orchestrated."""

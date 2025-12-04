@@ -596,7 +596,7 @@ class TestSessionManagerDependencies:
         # Create task with dependency
         task = MagicMock()
         task.task_id = "dependent-task"
-        task.depends_on_task_id = "parent-task"
+        task.dependency_template = "parent-task"
         task.initial_context = {}
         session_manager.benchmark_manager.get_task.return_value = task
 
@@ -618,7 +618,7 @@ class TestSessionManagerDependencies:
         # Create task with dependency
         task = MagicMock()
         task.task_id = "dependent-task"
-        task.depends_on_task_id = "parent-task"
+        task.dependency_template = "parent-task"
         task.initial_context = {}
         session_manager.benchmark_manager.get_task.return_value = task
 

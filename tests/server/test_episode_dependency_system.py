@@ -34,7 +34,6 @@ class TestEpisodeDependencySystem:
                 "submit": "test_submit.md"
             },
             initial_context={"test": "context"},
-            depends_on_task_id=None,
             episode_config={"max_steps": 10}
         )
 
@@ -49,7 +48,7 @@ class TestEpisodeDependencySystem:
                 "submit": "test_submit.md"
             },
             initial_context={"test": "context"},
-            depends_on_task_id="independent_task",
+            dependency_template="independent_task",
             role="dependent_role",
             episode_config={"max_steps": 10}
         )
@@ -65,7 +64,7 @@ class TestEpisodeDependencySystem:
                 "submit": "test_submit.md"
             },
             initial_context={"test": "context"},
-            depends_on_task_id="independent_task",
+            dependency_template="independent_task",
             role="another_dependent_role",
             episode_config={"max_steps": 10}
         )
@@ -81,7 +80,7 @@ class TestEpisodeDependencySystem:
                 "submit": "test_submit.md"
             },
             initial_context={"test": "context"},
-            depends_on_task_id="circular_task",  # Self-reference
+            dependency_template="circular_task",  # Self-reference
             role="circular_role",
             episode_config={"max_steps": 10}
         )
@@ -196,7 +195,6 @@ class TestEpisodeDependencySystem:
 
         # Verify episode created successfully
         assert episode.task_id == "independent_task"
-        assert episode.depends_on_task_id is None
         assert episode.attached_to_episode_id is None
         assert len(episode.attached_episode_ids) == 0
 
@@ -220,7 +218,6 @@ class TestEpisodeDependencySystem:
 
         # Verify dependency attachment
         assert dependent_episode.task_id == "dependent_task"
-        assert dependent_episode.depends_on_task_id == "independent_task"
         assert dependent_episode.attached_to_episode_id == independent_episode.episode_id
 
         # Verify the independent episode tracks the attachment

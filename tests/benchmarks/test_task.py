@@ -82,7 +82,7 @@ class TestTask:
 
     def test_dependent_task_requires_role(self):
         """Test dependent task fails without role."""
-        with pytest.raises(ValueError, match="'role' is required when 'depends_on_task_id' is set"):
+        with pytest.raises(ValueError, match="'role' is required when 'dependency_template' is set"):
             Task(
                 task_id="red_task",
                 domain="test_domain",
@@ -93,7 +93,7 @@ class TestTask:
                     "assistant": "red_assistant.md",
                     "submit": "red_submit.md",
                 },
-                depends_on_task_id="blue_task",
+                dependency_template="blue_task",
                 role=None,  # Should fail - dependent task needs role
             )
 
@@ -109,11 +109,11 @@ class TestTask:
                 "assistant": "red_assistant.md",
                 "submit": "red_submit.md",
             },
-            depends_on_task_id="blue_task",
+            dependency_template="blue_task",
             role="red",
         )
         assert task.role == "red"
-        assert task.depends_on_task_id == "blue_task"
+        assert task.dependency_template == "blue_task"
 
     def test_task_role_with_custom_semantic_names(self):
         """Test tasks can use custom semantic role names."""
@@ -143,7 +143,7 @@ class TestTask:
                 "assistant": "assistant.md",
                 "submit": "submit.md",
             },
-            depends_on_task_id="defender_task",
+            dependency_template="defender_task",
             role="attacker",
         )
         assert attacker.role == "attacker"

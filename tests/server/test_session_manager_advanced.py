@@ -247,7 +247,7 @@ class TestSessionManagerDockerFailures:
         # Create task
         task = MagicMock()
         task.task_id = "task1"
-        task.depends_on_task_id = None
+        task.dependency_template = None
         task.initial_context = {}
         session_manager.benchmark_manager.get_task.return_value = task
 

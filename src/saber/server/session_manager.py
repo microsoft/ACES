@@ -1247,7 +1247,6 @@ class SessionManager:
                 eval_submission=None,
                 completion_reason=None,
                 submission=None,
-                depends_on_task_id=task.depends_on_task_id if task else None,
                 attached_to_episode_id=None,
             )
 
@@ -1271,7 +1270,7 @@ class SessionManager:
 
             # Handle automatic dependency resolution
             effective_attach_to_episode_id = None
-            if task.depends_on_task_id:
+            if task.dependency_template:
                 logger.info(
                     "Task dependency detected",
                     extra={
@@ -1279,7 +1278,7 @@ class SessionManager:
                         "session_id": session_id,
                         "episode_id": episode.episode_id,
                         "task_id": task_id,
-                        "depends_on_task_id": task.depends_on_task_id,
+                        "dependency_template": task.dependency_template,
                     },
                 )
 
@@ -1290,7 +1289,7 @@ class SessionManager:
                 try:
                     available_episode_id = await self.episode_manager.find_available_episode_for_dependency_with_retry(
                         session_id=session_id,
-                        target_task_id=task.depends_on_task_id,
+                        target_task_id=task.dependency_template,
                         dependent_task_id=task_id,
                         max_wait_seconds=dependency_config["wait_seconds"],
                         retry_interval=dependency_config["retry_interval"],
@@ -1317,7 +1316,7 @@ class SessionManager:
                     )
                 else:
                     dependency_error = ValueError(
-                        f"No available episodes with required dependency task_id {task.depends_on_task_id} "
+                        f"No available episodes with required dependency task_id {task.dependency_template} "
                         f"(waited {dependency_config['wait_seconds']}s)"
                     )
                     self.episode_manager.remove_episode_on_error(episode.episode_id, dependency_error)
@@ -1325,7 +1324,7 @@ class SessionManager:
                     session.remove_creating_episode(episode.episode_id)
                     raise ValueError(
                         f"Cannot create episode for task {task_id}: no available episodes with required dependency "
-                        f"task_id {task.depends_on_task_id} after waiting {dependency_config['wait_seconds']}s"
+                        f"task_id {task.dependency_template} after waiting {dependency_config['wait_seconds']}s"
                     )
 
             # Start Docker environment (WITHOUT health checks) - runs in thread pool

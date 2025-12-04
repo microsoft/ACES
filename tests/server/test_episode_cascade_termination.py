@@ -44,7 +44,6 @@ class TestCascadeTermination:
                 "submit": "test_submit.md"
             },
             initial_context={"test": "context"},
-            depends_on_task_id=None,
             episode_config={"max_steps": 10}
         )
 
@@ -59,7 +58,7 @@ class TestCascadeTermination:
                 "submit": "test_submit.md"
             },
             initial_context={"test": "context"},
-            depends_on_task_id="independent_task",
+            dependency_template="independent_task",
             role="dependent_role",
             episode_config={"max_steps": 10}
         )

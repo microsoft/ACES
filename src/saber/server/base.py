@@ -151,9 +151,6 @@ class Episode(BaseModel):
     eval_submission: Optional[EvalSubmission] = Field(None, description="Rich evaluation submission data")
 
     # Episode dependency tracking fields
-    depends_on_task_id: Optional[str] = Field(
-        None, description="Task ID this episode depends on and needs to connect to"
-    )
     attached_to_episode_id: Optional[str] = Field(None, description="Episode ID this episode is attached to")
     attached_episode_ids: List[str] = Field(default_factory=list, description="Episode IDs attached to this episode")
 

@@ -112,7 +112,7 @@ class TestSessionManagerIntegration:
         mock_task = MagicMock()
         mock_task.initial_context = {"test": "data"}
         mock_task.episode_config = {"max_steps": 20}  # Add episode_config to prevent early termination
-        mock_task.depends_on_task_id = None  # No dependencies
+        mock_task.dependency_template = None  # No dependencies
         manager.benchmark_manager.get_task.return_value = mock_task
 
         # Mock prompts

@@ -36,6 +36,8 @@ class Task:
         depends_on_task_id: Optional[str] = None,
         role: Optional[str] = None,
         initial_files: Optional[Dict[str, str]] = None,
+        is_template: bool = False,
+        dependency_template: Optional[str] = None,
     ):
         """
         Initialize a task.
@@ -59,14 +61,19 @@ class Task:
             benchmark_config: Benchmark-specific configuration (episode_attempts, etc.)
             submission_evaluation_config: Submission-level evaluation config (strategy, criteria, scoring)
             step_evaluation_config: Step-level evaluation config (strategy, criteria, subtasks)
-            depends_on_task_id: Task ID that episodes of this task should connect to when created
+            depends_on_task_id: DEPRECATED - Do not use. Use dependency_template instead.
             role: Role identifier for model/agent assignment in orchestrated tasks. Use domain-
                 appropriate naming (e.g., cyber='blue'/'red', commerce='buyer'/'seller',
-                network='client'/'server'). Required when depends_on_task_id is set. Not
-                needed for standalone tasks.
+                network='client'/'server'). Required when dependency_template is set. Not
+                needed for standalone tasks or templates.
             initial_files: Dictionary mapping destination paths in container to source paths
                 relative to server/data directory. Example:
                 {"/root/pom.xml": "sandbox_files/challenge/pom.xml"}
+            is_template: If True, this task is a template and won't be executed directly.
+                Templates are blueprints for instantiation via dependency_template references.
+            dependency_template: Reference to a template task_id. Creates a fresh instance of
+                the template and establishes a dependency on it. Mutually exclusive with
+                depends_on_task_id.
         """
         # Validate prompts dictionary - fail fast
         if not isinstance(prompts, dict):
@@ -79,11 +86,44 @@ class Task:
             if not isinstance(prompts[prompt_type], str) or not prompts[prompt_type].strip():
                 raise ValueError(f"Task '{task_id}': prompt type '{prompt_type}' must be a non-empty string")
 
-        # Validate role configuration - fail fast
-        if depends_on_task_id and not role:
+        # Validate template constraints - fail fast
+        if is_template and depends_on_task_id:
             raise ValueError(
-                f"Task '{task_id}': 'role' is required when 'depends_on_task_id' is set. "
+                f"Task '{task_id}': Templates cannot have 'depends_on_task_id'. "
+                f"Templates are blueprints and cannot depend on other tasks."
+            )
+
+        if is_template and dependency_template:
+            raise ValueError(
+                f"Task '{task_id}': Templates cannot have 'dependency_template'. "
+                f"Templates cannot depend on other templates."
+            )
+
+        if dependency_template and depends_on_task_id:
+            raise ValueError(
+                f"Task '{task_id}': Cannot specify both 'dependency_template' and 'depends_on_task_id'. "
+                f"Use dependency_template for template-based orchestrations."
+            )
+
+        if depends_on_task_id:
+            raise ValueError(
+                f"Task '{task_id}': 'depends_on_task_id' is deprecated and no longer supported. "
+                f"Use 'dependency_template' instead. Mark the dependency target with 'is_template: true' "
+                f"and reference it via 'dependency_template: {depends_on_task_id}'."
+            )
+
+        # Validate role configuration - fail fast
+        if dependency_template and not role:
+            raise ValueError(
+                f"Task '{task_id}': 'role' is required when 'dependency_template' is set. "
                 f"Add 'role: <role_name>' to the task YAML file."
+            )
+
+        # Validate templates must have role
+        if is_template and not role:
+            raise ValueError(
+                f"Task '{task_id}': Templates must have a 'role' defined. "
+                f"Add 'role: <role_name>' to the template task in the YAML file."
             )
 
         self.task_id = task_id
@@ -101,9 +141,13 @@ class Task:
         # NEW FORMAT ONLY: Client-side evaluation configs
         self.submission_evaluation_config = submission_evaluation_config or {}
         self.step_evaluation_config = step_evaluation_config
+        # Runtime dependency tracking - set by template expander after expansion
+        # Should NOT be set in YAML (validation rejects user-provided values)
         self.depends_on_task_id = depends_on_task_id
         self.role = role
         self.initial_files = initial_files or {}
+        self.is_template = is_template
+        self.dependency_template = dependency_template
 
         # Create lookup map for efficient subtask access
         self._subtask_map = {st.subtask_id: st for st in self.subtasks}

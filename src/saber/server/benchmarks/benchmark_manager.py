@@ -164,7 +164,7 @@ class BenchmarkManager:
         # Add dependency relationships
         for task in self.tasks.values():
             if task.depends_on_task_id:
-                graph.add_dependency(task.task_id, task.depends_on_task_id)
+                graph.add_dependency(task.task_id, task.depends_on_task_id)  # type: ignore
                 logger.debug(
                     f"Task dependency registered: {task.task_id} -> {task.depends_on_task_id}",
                     extra={

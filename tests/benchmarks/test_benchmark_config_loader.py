@@ -2955,6 +2955,7 @@ benchmark_config:
 
 tasks:
   - task_id: root_task
+    is_template: true  # Mark as template
     # MISSING role field - should fail validation
     title: Root Task
     description: Root task without role
@@ -2969,7 +2970,7 @@ tasks:
 
   - task_id: dependent_task
     role: dependent  # Has role but depends on task without role
-    depends_on_task_id: root_task
+    dependency_template: root_task
     title: Dependent Task
     description: Depends on root
     submission_evaluation_config:
@@ -2987,7 +2988,7 @@ tasks:
 
         try:
             loader = BenchmarkConfigLoader("test_domain")
-            with pytest.raises(InvalidTaskDefinitionException, match="Root task 'root_task' must have a 'role' defined"):
+            with pytest.raises(InvalidTaskDefinitionException, match="Templates must have a 'role' defined"):
                 loader.load_tasks_from_file(temp_path)
         finally:
             os.unlink(temp_path)
@@ -3014,6 +3015,7 @@ benchmark_config:
 
 tasks:
   - task_id: root_task
+    is_template: true
     role: blue
     title: Root Task
     description: Root with role
@@ -3028,7 +3030,7 @@ tasks:
 
   - task_id: dependent_task
     # MISSING role field - should fail at Task creation
-    depends_on_task_id: root_task
+    dependency_template: root_task
     title: Dependent Task
     description: Depends on root
     submission_evaluation_config:
@@ -3046,7 +3048,7 @@ tasks:
 
         try:
             loader = BenchmarkConfigLoader("test_domain")
-            with pytest.raises(InvalidTaskDefinitionException, match="'role' is required when 'depends_on_task_id' is set"):
+            with pytest.raises(InvalidTaskDefinitionException, match="'role' is required when 'dependency_template' is set"):
                 loader.load_tasks_from_file(temp_path)
         finally:
             os.unlink(temp_path)
@@ -3073,6 +3075,7 @@ benchmark_config:
 
 tasks:
   - task_id: blue_team_task
+    is_template: true
     role: blue
     title: Blue Team Defense
     description: Defender task
@@ -3087,7 +3090,7 @@ tasks:
 
   - task_id: red_team_task
     role: red
-    depends_on_task_id: blue_team_task
+    dependency_template: blue_team_task
     title: Red Team Attack
     description: Attacker task
     submission_evaluation_config:
@@ -3107,17 +3110,20 @@ tasks:
             loader = BenchmarkConfigLoader("test_domain")
             tasks = loader.load_tasks_from_file(temp_path)
 
+            # After template expansion: template removed, instance created
             assert len(tasks) == 2
-            assert "blue_team_task" in tasks
+            assert "blue_team_task" not in tasks  # Template removed
+            assert "blue_team_task_red_team_task" in tasks  # Instance created
             assert "red_team_task" in tasks
 
-            blue_task = tasks["blue_team_task"]
-            assert blue_task.role == "blue"
-            assert blue_task.depends_on_task_id is None
+            blue_instance = tasks["blue_team_task_red_team_task"]
+            assert blue_instance.role == "blue"
+            assert blue_instance.depends_on_task_id is None
+            assert blue_instance.is_template is False
 
             red_task = tasks["red_team_task"]
             assert red_task.role == "red"
-            assert red_task.depends_on_task_id == "blue_team_task"
+            assert red_task.depends_on_task_id == "blue_team_task_red_team_task"
         finally:
             os.unlink(temp_path)
 
@@ -3172,7 +3178,7 @@ tasks:
             os.unlink(temp_path)
 
     def test_dependency_chain_with_roles(self):
-        """Test multi-level dependency chain with roles."""
+        """Test that dependency chains are not supported (nested templates forbidden)."""
         yaml_content = """
 domain: test_domain
 
@@ -3193,6 +3199,7 @@ benchmark_config:
 
 tasks:
   - task_id: recon_task
+    is_template: true
     role: reconnaissance
     title: Reconnaissance
     description: Initial recon
@@ -3206,8 +3213,9 @@ tasks:
     subtasks: []
 
   - task_id: exploit_task
+    is_template: true  # Template depending on template - NOT ALLOWED
     role: exploitation
-    depends_on_task_id: recon_task
+    dependency_template: recon_task
     title: Exploitation
     description: Exploit phase
     submission_evaluation_config:
@@ -3221,7 +3229,7 @@ tasks:
 
   - task_id: persist_task
     role: persistence
-    depends_on_task_id: exploit_task
+    dependency_template: exploit_task
     title: Persistence
     description: Maintain access
     submission_evaluation_config:
@@ -3239,21 +3247,8 @@ tasks:
 
         try:
             loader = BenchmarkConfigLoader("test_domain")
-            tasks = loader.load_tasks_from_file(temp_path)
-
-            assert len(tasks) == 3
-
-            recon = tasks["recon_task"]
-            assert recon.role == "reconnaissance"
-            assert recon.depends_on_task_id is None
-
-            exploit = tasks["exploit_task"]
-            assert exploit.role == "exploitation"
-            assert exploit.depends_on_task_id == "recon_task"
-
-            persist = tasks["persist_task"]
-            assert persist.role == "persistence"
-            assert persist.depends_on_task_id == "exploit_task"
+            with pytest.raises(InvalidTaskDefinitionException, match="Templates cannot have 'dependency_template'"):
+                loader.load_tasks_from_file(temp_path)
         finally:
             os.unlink(temp_path)
 
@@ -3280,9 +3275,9 @@ benchmark_config:
 tasks:
   - task_id: dependent_task
     role: red
-    depends_on_task_id: nonexistent_task  # Task doesn't exist
+    dependency_template: nonexistent_task  # Template doesn't exist
     title: Dependent Task
-    description: Depends on missing task
+    description: Depends on missing template
     submission_evaluation_config:
       strategy: "static"
       criteria:
@@ -3298,7 +3293,7 @@ tasks:
 
         try:
             loader = BenchmarkConfigLoader("test_domain")
-            with pytest.raises(InvalidTaskDefinitionException, match="depends on non-existent task 'nonexistent_task'"):
+            with pytest.raises(InvalidTaskDefinitionException, match="references non-existent template 'nonexistent_task'"):
                 loader.load_tasks_from_file(temp_path)
         finally:
             os.unlink(temp_path)

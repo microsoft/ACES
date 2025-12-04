@@ -152,7 +152,7 @@ class TestSessionRestAPI:
         # Mock task with proper initial_context
         mock_task = MagicMock()
         mock_task.initial_context = {"initial_data": "test"}
-        mock_task.depends_on_task_id = None  # No dependencies
+        mock_task.dependency_template = None  # No dependencies
         manager.benchmark_manager.get_task.return_value = mock_task
 
         # Mock episode in CREATING state (async pattern)

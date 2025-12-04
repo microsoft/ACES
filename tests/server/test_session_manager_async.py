@@ -45,7 +45,7 @@ def session_manager(mock_execution_manager, mock_episode_manager):
     # Mock task object with proper attributes
     mock_task = Mock()
     mock_task.initial_context = {}
-    mock_task.depends_on_task_id = None
+    mock_task.dependency_template = None
     mock_task_manager.get_task = MagicMock(return_value=mock_task)
 
     # Mock prompt generator

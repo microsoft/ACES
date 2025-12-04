@@ -21,6 +21,7 @@ from ._validation import validate_step_evaluation_config, validate_submission_ev
 from .exceptions import InvalidTaskDefinitionException
 from .subtask import SubTask
 from .task import Task
+from .template_expander import TemplateExpander
 
 logger = get_saber_logger(LogCategory.CONFIG, __name__)
 
@@ -52,6 +53,8 @@ FIELD_SANDBOX_ENVIRONMENT = "sandbox_environment"
 FIELD_DEPENDS_ON_TASK_ID = "depends_on_task_id"
 FIELD_ROLE = "role"
 FIELD_INITIAL_FILES = "initial_files"
+FIELD_IS_TEMPLATE = "is_template"
+FIELD_DEPENDENCY_TEMPLATE = "dependency_template"
 FIELD_SUBTASKS = "subtasks"
 FIELD_INHERIT_SHARED = "inherit_shared"
 
@@ -255,6 +258,11 @@ class BenchmarkConfigLoader:
 
                 all_tasks.update(file_tasks)
 
+            # Expand template references into concrete instances
+            template_expander = TemplateExpander(domain=self.domain)
+            template_expander.validate_templates(all_tasks)
+            all_tasks = template_expander.expand_templates(all_tasks)
+
             # Validate role configuration for orchestrated tasks
             self._validate_dependency_roles(all_tasks)
 
@@ -385,6 +393,11 @@ class BenchmarkConfigLoader:
                 )
                 task = self._parse_task(task_data)
                 tasks[task.task_id] = task
+
+            # Expand template references into concrete instances
+            template_expander = TemplateExpander(domain=self.domain)
+            template_expander.validate_templates(tasks)
+            tasks = template_expander.expand_templates(tasks)
 
             # Validate dependency role configuration
             self._validate_dependency_roles(tasks)
@@ -975,28 +988,22 @@ class BenchmarkConfigLoader:
 
         for task_id, task in tasks.items():
             if task.depends_on_task_id:
-                if task.depends_on_task_id not in task_dependents:
+                if task.depends_on_task_id not in task_dependents:  # type: ignore
                     task_dependents[task.depends_on_task_id] = []
                 task_dependents[task.depends_on_task_id].append(task_id)
 
-        # Validate root tasks have roles
+        # Note: Role validation is now enforced by Task.__init__ (fail-fast)
+        # Templates must have roles (checked when is_template=True)
+        # Dependent tasks must have roles (checked when dependency_template is set)
+        # This validation is redundant but kept for clarity and defensive programming
+
+        # Validate root tasks exist (dependency references)
         for root_task_id, dependent_task_ids in task_dependents.items():
             root_task = tasks.get(root_task_id)
             if not root_task:
                 raise InvalidTaskDefinitionException(
                     f"Task '{dependent_task_ids[0]}' depends on non-existent task '{root_task_id}'"
                 )
-
-            if not root_task.role:
-                raise InvalidTaskDefinitionException(
-                    f"Root task '{root_task_id}' must have a 'role' defined "
-                    f"(has {len(dependent_task_ids)} dependent tasks)"
-                )
-
-        # Validate dependent tasks have roles (enforced by Task.__init__ but double-check)
-        for task_id, task in tasks.items():
-            if task.depends_on_task_id and not task.role:
-                raise InvalidTaskDefinitionException(f"Dependent task '{task_id}' must have a 'role' defined")
 
     def _parse_task(self, task_data: Dict[str, Any]) -> Task:
         """
@@ -1387,6 +1394,8 @@ class BenchmarkConfigLoader:
             # Read role from YAML (optional, required for orchestrated tasks)
             role = task_data.get(FIELD_ROLE)
             depends_on_task_id = task_data.get(FIELD_DEPENDS_ON_TASK_ID)
+            is_template = task_data.get(FIELD_IS_TEMPLATE, False)
+            dependency_template = task_data.get(FIELD_DEPENDENCY_TEMPLATE)
 
             task = Task(
                 task_id=task_id,
@@ -1406,6 +1415,8 @@ class BenchmarkConfigLoader:
                 depends_on_task_id=depends_on_task_id,
                 role=role,
                 initial_files=initial_files,
+                is_template=is_template,
+                dependency_template=dependency_template,
             )
 
             log_operation_success(
