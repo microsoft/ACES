@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from saber.inspect_ai.saber import SABERSandboxEnvironment
+from saber.inspect_ai.core.types import DomainRegistryEntry
 from saber.models import MetadataKeys
 from saber.models import ExecutionMode
 
@@ -59,18 +60,18 @@ class TestOrchestratedInit:
     async def test_orchestrated_init_delegates_to_initializer(self, orchestrated_metadata_root):
         """Test that _init_sample delegates to OrchestrationInitializer for orchestrated tasks."""
         # Setup registry entry first
-        SABERSandboxEnvironment._registry["test_domain"] = {
-            "owner": "test_task",
-            "domain_slug": "test_domain",
-            "controller": MagicMock(),
-            "context": MagicMock(),
-            "ownership": True,
-            "rest_port": 8000,
-            "mcp_port": 8001,
-            "rest_url": "http://localhost:8000",
-            "mcp_url": "http://localhost:8001",
-            "session_id": "session_456",
-        }
+        SABERSandboxEnvironment._registry["test_domain"] = DomainRegistryEntry(
+            domain_slug="test_domain",
+            owner="test_task",
+            controller=MagicMock(),
+            context=MagicMock(),
+            ownership=True,
+            rest_port=8000,
+            mcp_port=8001,
+            rest_url="http://localhost:8000",
+            mcp_url="http://localhost:8001",
+            session_id="session_456",
+        )
 
         instance = SABERSandboxEnvironment(
             domain_slug="test_domain",
@@ -82,13 +83,16 @@ class TestOrchestratedInit:
         instance._episode_manager = AsyncMock()
 
         # Mock OrchestrationInitializer
+        from saber.inspect_ai.core.types import OrchestrationSubTaskState
+
         mock_orch_init = AsyncMock()
-        mock_handler_state = {
-            "episode_ids": ["episode_blue"],
-            "primary_episode_id": "episode_blue",
-            "orchestration_id": "orch_123",
-            "sub_task_role": "blue",
-        }
+        mock_handler_state = OrchestrationSubTaskState(
+            episode_ids=["episode_blue"],
+            primary_episode_id="episode_blue",
+            orchestration_id="orch_123",
+            sub_task_role="blue",
+            semaphore_acquired=True,
+        )
         mock_orch_init.init_orchestrated_sub_task.return_value = mock_handler_state
 
         # Inject mock
@@ -104,6 +108,8 @@ class TestOrchestratedInit:
     @pytest.mark.asyncio
     async def test_orchestrated_cleanup_delegates_to_initializer(self, orchestrated_metadata_root):
         """Test that _cleanup_sample delegates to OrchestrationInitializer for orchestrated tasks."""
+        from saber.inspect_ai.core.types import OrchestrationSubTaskState
+
         instance = SABERSandboxEnvironment(
             domain_slug="test_domain",
             domains_root=Path("/tmp"),
@@ -111,10 +117,13 @@ class TestOrchestratedInit:
         instance._session_id = "session_456"
         instance._session_manager = AsyncMock()
         instance._episode_manager = AsyncMock()
-        instance._handler_state = {
-            "orchestration_id": "orch_123",
-            "sub_task_role": "blue",
-        }
+        instance._handler_state = OrchestrationSubTaskState(
+            episode_ids=["episode_blue"],
+            primary_episode_id="episode_blue",
+            semaphore_acquired=False,
+            orchestration_id="orch_123",
+            sub_task_role="blue",
+        )
 
         # Mock OrchestrationInitializer
         mock_orch_init = AsyncMock()
@@ -134,18 +143,18 @@ class TestOrchestratedIntegration:
     async def test_full_orchestrated_workflow_root_sample(self, orchestrated_metadata_root):
         """Test complete init->cleanup flow for root orchestrated sample."""
         # Setup registry entry
-        SABERSandboxEnvironment._registry["test_domain"] = {
-            "owner": "test_task",
-            "domain_slug": "test_domain",
-            "controller": MagicMock(),
-            "context": MagicMock(),
-            "ownership": True,
-            "rest_port": 8000,
-            "mcp_port": 8001,
-            "rest_url": "http://localhost:8000",
-            "mcp_url": "http://localhost:8001",
-            "session_id": "session_456",
-        }
+        SABERSandboxEnvironment._registry["test_domain"] = DomainRegistryEntry(
+            domain_slug="test_domain",
+            owner="test_task",
+            controller=MagicMock(),
+            context=MagicMock(),
+            ownership=True,
+            rest_port=8000,
+            mcp_port=8001,
+            rest_url="http://localhost:8000",
+            mcp_url="http://localhost:8001",
+            session_id="session_456",
+        )
 
         instance = SABERSandboxEnvironment(
             domain_slug="test_domain",
@@ -157,13 +166,16 @@ class TestOrchestratedIntegration:
         instance._episode_manager = AsyncMock()
 
         # Mock OrchestrationInitializer for both init and cleanup
+        from saber.inspect_ai.core.types import OrchestrationSubTaskState
+
         mock_orch_init = AsyncMock()
-        mock_handler_state = {
-            "episode_ids": ["episode_blue"],
-            "primary_episode_id": "episode_blue",
-            "orchestration_id": "orch_123",
-            "sub_task_role": "blue",
-        }
+        mock_handler_state = OrchestrationSubTaskState(
+            episode_ids=["episode_blue"],
+            primary_episode_id="episode_blue",
+            orchestration_id="orch_123",
+            sub_task_role="blue",
+            semaphore_acquired=True,
+        )
         mock_orch_init.init_orchestrated_sub_task.return_value = mock_handler_state
         mock_orch_init.cleanup_orchestrated_sub_task.return_value = None
 

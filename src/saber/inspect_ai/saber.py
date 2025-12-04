@@ -47,6 +47,7 @@ from saber.models import (
 from .config.env_loader import deserialize_config, get_config_files, get_default_concurrency, load_environment
 from .constants import InspectStoreKeys, SandboxTimeouts
 from .core.task_handlers import get_benchmark_task_handler
+from .core.types import HandlerState
 from .server.domain_manager import get_active_domain, remove_active_domain
 from .server.episode_manager import EpisodeLifecycleManager
 from .server.sandbox_registry import SandboxRegistry
@@ -133,7 +134,7 @@ class SABERSandboxEnvironment:
         self._sample_id: Optional[str] = None
         self._mcp_client: Optional[Tool] = None
         self._handler: Optional[Any] = None
-        self._handler_state: Optional[Dict[str, Any]] = None
+        self._handler_state: Optional[HandlerState] = None
         self._episode_ids: Optional[list[str]] = None
         self._primary_episode_id: Optional[str] = None
         self._session_id: Optional[str] = None
@@ -235,7 +236,7 @@ class SABERSandboxEnvironment:
 
         existing_entry = SandboxRegistry.get_domain_entry(domain_slug)
         if existing_entry:
-            owner = existing_entry["owner"]
+            owner = existing_entry.owner
 
             if owner == task_name:
                 logger.info(
@@ -435,9 +436,9 @@ class SABERSandboxEnvironment:
                 raise SandboxError(
                     f"Domain '{self._domain_slug}' not initialized. " "Call task_init before sample_init."
                 )
-            rest_base_url = entry["rest_url"]
-            mcp_url_base = entry["mcp_url"]
-            self._session_id = entry["session_id"]  # Get shared session from registry
+            rest_base_url = entry.rest_url
+            mcp_url_base = entry.mcp_url
+            self._session_id = entry.session_id  # Get shared session from registry
 
         # Create session manager if not already created
         if self._session_manager is None:
@@ -470,8 +471,8 @@ class SABERSandboxEnvironment:
                     semaphore=self._get_episode_semaphore(),
                 )
                 # Extract episode information from handler state
-                self._episode_ids = self._handler_state["episode_ids"]
-                self._primary_episode_id = self._handler_state["primary_episode_id"]
+                self._episode_ids = self._handler_state.episode_ids
+                self._primary_episode_id = self._handler_state.primary_episode_id
                 self._episode_id = self._primary_episode_id
             elif benchmark_task is not None:
                 # Use task handler pattern for single episode tasks
@@ -491,8 +492,8 @@ class SABERSandboxEnvironment:
                 )
 
                 # Extract episode information from handler state
-                self._episode_ids = self._handler_state["episode_ids"]
-                self._primary_episode_id = self._handler_state["primary_episode_id"]
+                self._episode_ids = self._handler_state.episode_ids
+                self._primary_episode_id = self._handler_state.primary_episode_id
                 self._episode_id = self._primary_episode_id
 
             log_sample_init_start(
@@ -620,7 +621,6 @@ class SABERSandboxEnvironment:
                 task_name=task_name,
                 environment_name=name,
             )
-
             try:
                 await env._cleanup_sample(interrupted=interrupted)
             except Exception as e:
@@ -660,13 +660,31 @@ class SABERSandboxEnvironment:
                     except Exception as e:
                         logger.warning(
                             "Failed to cleanup WebSocket model wrapper",
-                            extra={
-                                "episode_id": self._episode_id,
-                                "error": str(e),
-                            },
+                            extra={"episode_id": self._episode_id, "error": str(e)},
                         )
 
-                if self._handler_state and "orchestration_id" in self._handler_state:
+                # Check if this is an orchestrated sub-task by looking for orchestration_id field
+                if (
+                    self._handler_state
+                    and isinstance(self._handler_state, dict)
+                    and "orchestration_id" in self._handler_state
+                ):
+                    # Old dict-based orchestration (backward compat)
+                    assert (
+                        type(self)._orchestration_initializer is not None
+                    ), "orchestration_initializer must be initialized"
+                    await type(self)._orchestration_initializer.cleanup_orchestrated_sub_task(
+                        handler_state=self._handler_state,
+                        session_id=self._session_id,
+                        session_manager=self._session_manager,
+                        semaphore=self._get_episode_semaphore(),
+                    )
+                elif (
+                    self._handler_state
+                    and hasattr(self._handler_state, "to_dict")
+                    and "orchestration_id" in self._handler_state.to_dict()
+                ):
+                    # New object-based orchestration
                     assert (
                         type(self)._orchestration_initializer is not None
                     ), "orchestration_initializer must be initialized"
@@ -760,11 +778,11 @@ class SABERSandboxEnvironment:
             remove_active_domain(domain_slug)
             return
 
-        controller = entry["controller"]
-        ownership = entry["ownership"]
-        session_id = entry.get("session_id")
-        rest_url = entry.get("rest_url")
-        owner = entry.get("owner")
+        controller = entry.controller
+        ownership = entry.ownership
+        session_id = entry.session_id
+        rest_url = entry.rest_url
+        owner = entry.owner
 
         # Log cleanup decision for debugging eval-retry scenarios
         logger.info(

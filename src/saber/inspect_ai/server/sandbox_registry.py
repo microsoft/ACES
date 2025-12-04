@@ -19,6 +19,7 @@ from saber.logging_config import LogCategory, get_saber_logger
 from saber.models import CleanupReason
 
 from ..constants import InspectStoreKeys
+from ..core.types import DomainRegistryEntry, EpisodeMapping
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
 
@@ -35,8 +36,8 @@ class SandboxRegistry:
     - _episode_mapping_lock: Protects episode_mapping in Inspect AI store
     """
 
-    # Class-level registry: domain_slug -> metadata
-    _registry: Dict[str, Dict[str, Any]] = {}
+    # Class-level registry: domain_slug -> DomainRegistryEntry
+    _registry: Dict[str, DomainRegistryEntry] = {}
     _lock = threading.Lock()
     _episode_mapping_lock = threading.Lock()  # Protects episode_mapping read-modify-write
 
@@ -69,18 +70,19 @@ class SandboxRegistry:
             ownership: True if we started the domain (can stop it)
         """
         with cls._lock:
-            cls._registry[domain_slug] = {
-                "owner": task_name,
-                "domain_slug": domain_slug,
-                "controller": controller,
-                "context": context,
-                "ownership": ownership,
-                "rest_port": rest_port,
-                "mcp_port": mcp_port,
-                "rest_url": rest_url,
-                "mcp_url": mcp_url,
-                "session_id": session_id,
-            }
+            entry = DomainRegistryEntry(
+                domain_slug=domain_slug,
+                owner=task_name,
+                controller=controller,
+                context=context,
+                ownership=ownership,
+                rest_port=rest_port,
+                mcp_port=mcp_port,
+                rest_url=rest_url,
+                mcp_url=mcp_url,
+                session_id=session_id,
+            )
+            cls._registry[domain_slug] = entry
             logger.debug(
                 f"Registered domain '{domain_slug}' in sandbox registry",
                 extra={
@@ -91,33 +93,33 @@ class SandboxRegistry:
             )
 
     @classmethod
-    def unregister_domain(cls, domain_slug: str) -> Optional[Dict[str, Any]]:
+    def unregister_domain(cls, domain_slug: str) -> Optional[DomainRegistryEntry]:
         """Remove domain from sandbox registry and return entry.
 
         Args:
             domain_slug: Domain to unregister
 
         Returns:
-            Registry entry dict or None if not found
+            DomainRegistryEntry or None if not found
         """
         with cls._lock:
             entry = cls._registry.pop(domain_slug, None)
             if entry:
                 logger.debug(
                     f"Unregistered domain '{domain_slug}' from sandbox registry",
-                    extra={"domain": domain_slug, "owner": entry.get("owner")},
+                    extra={"domain": domain_slug, "owner": entry.owner},
                 )
             return entry
 
     @classmethod
-    def get_domain_entry(cls, domain_slug: str) -> Optional[dict]:
+    def get_domain_entry(cls, domain_slug: str) -> Optional[DomainRegistryEntry]:
         """Get domain entry (thread-safe).
 
         Args:
             domain_slug: Domain to lookup
 
         Returns:
-            Registry entry dict or None if not found
+            DomainRegistryEntry or None if not found
         """
         with cls._lock:
             return cls._registry.get(domain_slug)
@@ -131,8 +133,22 @@ class SandboxRegistry:
             session_id: New session ID
         """
         with cls._lock:
-            if domain_slug in cls._registry:
-                cls._registry[domain_slug]["session_id"] = session_id
+            entry = cls._registry.get(domain_slug)
+            if entry:
+                # Create new entry with updated session_id
+                updated_entry = DomainRegistryEntry(
+                    domain_slug=entry.domain_slug,
+                    owner=entry.owner,
+                    controller=entry.controller,
+                    context=entry.context,
+                    ownership=entry.ownership,
+                    rest_port=entry.rest_port,
+                    mcp_port=entry.mcp_port,
+                    rest_url=entry.rest_url,
+                    mcp_url=entry.mcp_url,
+                    session_id=session_id,
+                )
+                cls._registry[domain_slug] = updated_entry
                 logger.debug(
                     f"Updated session_id for domain '{domain_slug}'",
                     extra={"domain": domain_slug, "session_id": session_id},
@@ -160,10 +176,10 @@ class SandboxRegistry:
 
             entry = cls._registry[domain_slug]
             logger.warning(
-                f"Clearing ownership for domain '{domain_slug}' (owner: {entry.get('owner')})",
+                f"Clearing ownership for domain '{domain_slug}' (owner: {entry.owner})",
                 extra={
                     "domain": domain_slug,
-                    "owner": entry.get("owner"),
+                    "owner": entry.owner,
                     "force": force,
                     "reason": CleanupReason.MANUAL_CLEANUP,
                 },
@@ -193,17 +209,13 @@ class SandboxRegistry:
         task_store = store()
         with cls._episode_mapping_lock:
             episode_mapping = task_store.get(InspectStoreKeys.EPISODE_MAPPING, {})
-            episode_mapping[sample_id] = type(
-                "Episode",
-                (),
-                {
-                    "episode_id": episode_id,
-                    "session_id": session_id,
-                    "attached_to_episode_id": None,
-                    "task_id": task_id,
-                    "sample_id": sample_id,
-                },
-            )()
+            episode_mapping[sample_id] = EpisodeMapping(
+                episode_id=episode_id,
+                session_id=session_id,
+                task_id=task_id,
+                sample_id=sample_id,
+                attached_to_episode_id=None,
+            )
             task_store.set(InspectStoreKeys.EPISODE_MAPPING, episode_mapping)
 
             logger.debug(

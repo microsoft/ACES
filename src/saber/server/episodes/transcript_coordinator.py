@@ -12,12 +12,14 @@ Logging category: EPISODE
 
 import asyncio
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from ...logging_config import LogCategory, get_saber_logger
 from ...models.constants import MetadataKeys
 from ...models.transcript import TranscriptSyncRequest, TranscriptSyncResponse, TranscriptVersion, compute_checksum
+from ..base import Episode
 from ..time_source import TimeSource, UTCTimeSource
+from .protocols import ConnectionManagerProtocol, EpisodeManagerProtocol
 
 logger = get_saber_logger(LogCategory.EPISODE, __name__)
 
@@ -35,7 +37,12 @@ class TranscriptCoordinator:
     Thread-safety: All operations are protected by an asyncio.Lock.
     """
 
-    def __init__(self, episode_manager: Any, connection_manager: Any, time_source: TimeSource | None = None) -> None:
+    def __init__(
+        self,
+        episode_manager: EpisodeManagerProtocol,
+        connection_manager: ConnectionManagerProtocol,
+        time_source: TimeSource | None = None,
+    ) -> None:
         """
         Initialize the transcript coordinator.
 
@@ -46,11 +53,11 @@ class TranscriptCoordinator:
         """
         self.episode_manager = episode_manager
         self.connection_manager = connection_manager
-        self._coordination_configs: Dict[str, Dict[str, Any]] = {}
+        self._coordination_configs: Dict[str, Dict[str, str]] = {}
         self._lock = asyncio.Lock()
         self._time_source = time_source or UTCTimeSource()
 
-    def _get_current_version(self, episode: Any) -> TranscriptVersion:
+    def _get_current_version(self, episode: Episode) -> TranscriptVersion:
         """
         Get current version with checksum from episode context.
 
@@ -163,7 +170,12 @@ class TranscriptCoordinator:
             wait_time_seconds=wait_time,
         )
 
-    async def _push_messages(self, episode: Any, messages: List[Dict[str, Any]], operation: str = "append") -> None:
+    async def _push_messages(
+        self,
+        episode: Episode,
+        messages: List[Dict[str, str]],
+        operation: str = "append",
+    ) -> None:
         """
         Push messages with operation type tracking (LAST WRITE WINS).
 
@@ -190,7 +202,7 @@ class TranscriptCoordinator:
     async def notify_modification(
         self,
         episode_id: str,
-        modified_transcript: List[Dict[str, Any]],
+        modified_transcript: List[Dict[str, str]],
         operation: str,
         injected_by: str,
         expected_base_version: Optional[int] = None,

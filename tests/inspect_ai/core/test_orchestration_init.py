@@ -100,11 +100,11 @@ class TestOrchestrationInitializer:
         )
 
         # Verify handler state
-        assert result["episode_ids"] == ["episode-abc"]
-        assert result["primary_episode_id"] == "episode-abc"
-        assert result["semaphore_acquired"] is True
-        assert result["orchestration_id"] == "orch-123"
-        assert result["sub_task_role"] == "blue"
+        assert result.episode_ids == ["episode-abc"]
+        assert result.primary_episode_id == "episode-abc"
+        assert result.semaphore_acquired is True
+        assert result.orchestration_id == "orch-123"
+        assert result.sub_task_role == "blue"
 
         # Verify semaphore was acquired
         assert semaphore._value == 1  # Started at 2, acquired 1
@@ -136,8 +136,8 @@ class TestOrchestrationInitializer:
             )
 
         # Should succeed without semaphore
-        assert result["semaphore_acquired"] is False
-        assert result["orchestration_id"] == "orch-123"
+        assert result.semaphore_acquired is False
+        assert result.orchestration_id == "orch-123"
 
     @pytest.mark.asyncio
     async def test_init_root_sample_registration_failure(
@@ -220,11 +220,11 @@ class TestOrchestrationInitializer:
         session_manager.create_episode.assert_called_once_with(session_id, "task-456")
 
         # Verify handler state
-        assert result["episode_ids"] == ["episode-red-abc"]
-        assert result["primary_episode_id"] == "episode-red-abc"
-        assert result["semaphore_acquired"] is False
-        assert result["orchestration_id"] == "orch-123"
-        assert result["sub_task_role"] == "red"
+        assert result.episode_ids == ["episode-red-abc"]
+        assert result.primary_episode_id == "episode-red-abc"
+        assert result.semaphore_acquired is False
+        assert result.orchestration_id == "orch-123"
+        assert result.sub_task_role == "red"
 
     @pytest.mark.asyncio
     async def test_init_dependent_sample_registration_failure(

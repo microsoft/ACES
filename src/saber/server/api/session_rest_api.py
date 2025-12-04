@@ -1308,11 +1308,12 @@ class SessionRestAPI:
                 return
 
             # Register connection
+            role = episode.context.get(MetadataKeys.ORCHESTRATION_ROLE)
             await self.session_manager.episode_manager.connection_manager.connect(
                 episode_id=episode_id,
                 websocket=websocket,
                 metadata={
-                    "role": episode.context.get(MetadataKeys.ORCHESTRATION_ROLE),
+                    "role": role if role is not None else "",
                     "session_id": episode.session_id,
                 },
             )

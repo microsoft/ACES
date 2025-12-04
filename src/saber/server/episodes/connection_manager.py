@@ -7,13 +7,15 @@ Logging category: EPISODE
 """
 
 import asyncio
-from typing import Any, Dict, Optional, Set
+from typing import Dict, Optional, Set
 
 from fastapi import WebSocket
 
 from ...logging_config import LogCategory, get_saber_logger
 from ...models.rest.websocket_constants import WebSocketCloseCode
+from ...models.rest.websocket_messages import ConnectionMetadata, WebSocketServerMessage
 from ..time_source import TimeSource, UTCTimeSource
+from .protocols import EpisodeManagerProtocol
 
 logger = get_saber_logger(LogCategory.EPISODE, __name__)
 
@@ -34,7 +36,11 @@ class ConnectionManager:
     thread-safe concurrent access from multiple async tasks.
     """
 
-    def __init__(self, episode_manager: Optional[Any] = None, time_source: TimeSource | None = None) -> None:
+    def __init__(
+        self,
+        episode_manager: Optional[EpisodeManagerProtocol] = None,
+        time_source: TimeSource | None = None,
+    ) -> None:
         """Initialize the ConnectionManager with empty state.
 
         Args:
@@ -44,12 +50,17 @@ class ConnectionManager:
         # Map episode_id → set of active WebSocket connections
         # Usually 1 connection per episode
         self._active_connections: Dict[str, Set[WebSocket]] = {}
-        self._connection_metadata: Dict[WebSocket, dict] = {}
+        self._connection_metadata: Dict[WebSocket, ConnectionMetadata] = {}
         self._lock = asyncio.Lock()
         self._episode_manager = episode_manager  # For cleanup notifications
         self._time_source = time_source or UTCTimeSource()
 
-    async def connect(self, episode_id: str, websocket: WebSocket, metadata: Optional[Dict[str, Any]] = None) -> None:
+    async def connect(
+        self,
+        episode_id: str,
+        websocket: WebSocket,
+        metadata: Optional[Dict[str, str]] = None,
+    ) -> None:
         """
         Register new WebSocket connection for episode.
 
@@ -68,11 +79,11 @@ class ConnectionManager:
                 self._active_connections[episode_id] = set()
 
             self._active_connections[episode_id].add(websocket)
-            self._connection_metadata[websocket] = {
-                "episode_id": episode_id,
-                "connected_at": self._time_source.now().isoformat(),
-                "metadata": metadata or {},
-            }
+            self._connection_metadata[websocket] = ConnectionMetadata(
+                episode_id=episode_id,
+                connected_at=self._time_source.now().isoformat(),
+                metadata=metadata or {},
+            )
 
         logger.info(
             "WebSocket connected",
@@ -103,7 +114,7 @@ class ConnectionManager:
             websocket: WebSocket connection to remove
         """
         was_last_connection = False
-        conn_metadata = {}
+        conn_metadata: ConnectionMetadata
 
         async with self._lock:
             # Track if this was the last connection
@@ -115,8 +126,15 @@ class ConnectionManager:
                 if not self._active_connections[episode_id]:
                     del self._active_connections[episode_id]
 
-            # Remove metadata
-            conn_metadata = self._connection_metadata.pop(websocket, {})
+            # Remove metadata (TypedDict is just a dict at runtime)
+            conn_metadata = self._connection_metadata.pop(
+                websocket,
+                ConnectionMetadata(
+                    episode_id=episode_id,
+                    connected_at=self._time_source.now().isoformat(),
+                    metadata={},
+                ),
+            )
 
         logger.info(
             "WebSocket disconnected",
@@ -145,7 +163,11 @@ class ConnectionManager:
                 # TODO: Policy decision - auto-terminate? mark as failed? grace period?
                 # For now, just log warning. Episode will cleanup on timeout/completion.
 
-    async def broadcast_to_episode(self, episode_id: str, message: dict) -> None:
+    async def broadcast_to_episode(
+        self,
+        episode_id: str,
+        message: WebSocketServerMessage,
+    ) -> None:
         """
         Send message to all WebSocket connections for specific episode.
 
@@ -153,7 +175,7 @@ class ConnectionManager:
 
         Args:
             episode_id: Target episode to broadcast to
-            message: JSON-serializable message dictionary
+            message: Typed WebSocket message (TranscriptModifiedMessage, ConnectedMessage, etc.)
         """
         if episode_id not in self._active_connections:
             logger.debug(

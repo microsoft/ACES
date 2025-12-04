@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from pydantic import create_model, ConfigDict
 
 from saber.inspect_ai.saber import SABERSandboxEnvironment, SandboxError
+from saber.inspect_ai.core.types import DomainRegistryEntry
 
 
 @pytest.fixture
@@ -65,18 +66,18 @@ class TestEvalRetrySupport:
                 mock_create_session.return_value = "test_session_123"
 
                 # First init
-                SABERSandboxEnvironment._registry["test_domain"] = {
-                    "owner": "test_task_1",
-                    "domain_slug": "test_domain",
-                    "controller": MagicMock(),
-                    "context": MagicMock(),
-                    "ownership": True,
-                    "rest_port": 8000,
-                    "mcp_port": 8001,
-                    "rest_url": "http://localhost:8000",
-                    "mcp_url": "http://localhost:8001",
-                    "session_id": "test_session_123",
-                }
+                SABERSandboxEnvironment._registry["test_domain"] = DomainRegistryEntry(
+                    domain_slug="test_domain",
+                    owner="test_task_1",
+                    controller=MagicMock(),
+                    context=MagicMock(),
+                    ownership=True,
+                    rest_port=8000,
+                    mcp_port=8001,
+                    rest_url="http://localhost:8000",
+                    mcp_url="http://localhost:8001",
+                    session_id="test_session_123",
+                )
 
                 # Second init with SAME task name (eval-retry)
                 await SABERSandboxEnvironment.task_init("test_task_1", mock_config)
@@ -84,7 +85,7 @@ class TestEvalRetrySupport:
                 # Should succeed without raising error
                 assert "test_domain" in SABERSandboxEnvironment._registry
                 entry = SABERSandboxEnvironment._registry["test_domain"]
-                assert entry["owner"] == "test_task_1"
+                assert entry.owner == "test_task_1"
 
                 # Should not create new session (reusing existing)
                 assert mock_create_session.call_count == 0
@@ -94,18 +95,18 @@ class TestEvalRetrySupport:
         """Test that task_init raises error if domain owned by different task."""
 
         # Setup: Simulate domain already initialized by different task
-        SABERSandboxEnvironment._registry["test_domain"] = {
-            "owner": "other_task",
-            "domain_slug": "test_domain",
-            "controller": MagicMock(),
-            "context": MagicMock(),
-            "ownership": True,
-            "rest_port": 8000,
-            "mcp_port": 8001,
-            "rest_url": "http://localhost:8000",
-            "mcp_url": "http://localhost:8001",
-            "session_id": "other_session_456",
-        }
+        SABERSandboxEnvironment._registry["test_domain"] = DomainRegistryEntry(
+            domain_slug="test_domain",
+            owner="other_task",
+            controller=MagicMock(),
+            context=MagicMock(),
+            ownership=True,
+            rest_port=8000,
+            mcp_port=8001,
+            rest_url="http://localhost:8000",
+            mcp_url="http://localhost:8001",
+            session_id="other_session_456",
+        )
 
         # Try to init with different task
         with pytest.raises(SandboxError) as exc_info:
@@ -119,18 +120,18 @@ class TestEvalRetrySupport:
         from saber.models import SingleEpisodeTask, MetadataKeys
 
         # Setup: Domain initialized
-        SABERSandboxEnvironment._registry["test_domain"] = {
-            "owner": "test_task",
-            "domain_slug": "test_domain",
-            "controller": MagicMock(),
-            "context": MagicMock(),
-            "ownership": True,
-            "rest_port": 8000,
-            "mcp_port": 8001,
-            "rest_url": "http://localhost:8000",
-            "mcp_url": "http://localhost:8001",
-            "session_id": "session_789",
-        }
+        SABERSandboxEnvironment._registry["test_domain"] = DomainRegistryEntry(
+            domain_slug="test_domain",
+            owner="test_task",
+            controller=MagicMock(),
+            context=MagicMock(),
+            ownership=True,
+            rest_port=8000,
+            mcp_port=8001,
+            rest_url="http://localhost:8000",
+            mcp_url="http://localhost:8001",
+            session_id="session_789",
+        )
 
         # Create proper benchmark task
         task = SingleEpisodeTask(
@@ -152,13 +153,15 @@ class TestEvalRetrySupport:
         }
 
         # Mock the handler's initialize method to return expected state
+        from saber.inspect_ai.core.types import HandlerState
+
         with patch('saber.inspect_ai.saber.get_benchmark_task_handler') as mock_get_handler:
             mock_handler = MagicMock()
-            mock_handler.initialize = AsyncMock(return_value={
-                "episode_ids": ["episode_abc"],
-                "primary_episode_id": "episode_abc",
-                "semaphore_acquired": True,
-            })
+            mock_handler.initialize = AsyncMock(return_value=HandlerState(
+                episode_ids=["episode_abc"],
+                primary_episode_id="episode_abc",
+                semaphore_acquired=True,
+            ))
             mock_handler.cleanup = AsyncMock()
             mock_get_handler.return_value = mock_handler
 
@@ -192,18 +195,18 @@ class TestEvalRetrySupport:
         """Test that sample_init creates minimal instance for completed sample (eval-retry)."""
 
         # Setup: Domain initialized
-        SABERSandboxEnvironment._registry["test_domain"] = {
-            "owner": "test_task",
-            "domain_slug": "test_domain",
-            "controller": MagicMock(),
-            "context": MagicMock(),
-            "ownership": True,
-            "rest_port": 8000,
-            "mcp_port": 8001,
-            "rest_url": "http://localhost:8000",
-            "mcp_url": "http://localhost:8001",
-            "session_id": "session_789",
-        }
+        SABERSandboxEnvironment._registry["test_domain"] = DomainRegistryEntry(
+            domain_slug="test_domain",
+            owner="test_task",
+            controller=MagicMock(),
+            context=MagicMock(),
+            ownership=True,
+            rest_port=8000,
+            mcp_port=8001,
+            rest_url="http://localhost:8000",
+            mcp_url="http://localhost:8001",
+            session_id="session_789",
+        )
 
         # Metadata from completed sample (has SABER IDs)
         metadata = {
@@ -243,18 +246,18 @@ class TestEvalRetrySupport:
         mock_controller = MagicMock()
         mock_controller.stop = AsyncMock()
 
-        SABERSandboxEnvironment._registry["test_domain"] = {
-            "owner": "test_task",
-            "domain_slug": "test_domain",
-            "controller": mock_controller,
-            "context": MagicMock(),
-            "ownership": True,
-            "rest_port": 8000,
-            "mcp_port": 8001,
-            "rest_url": "http://localhost:8000",
-            "mcp_url": "http://localhost:8001",
-            "session_id": "session_789",
-        }
+        SABERSandboxEnvironment._registry["test_domain"] = DomainRegistryEntry(
+            domain_slug="test_domain",
+            owner="test_task",
+            controller=mock_controller,
+            context=MagicMock(),
+            ownership=True,
+            rest_port=8000,
+            mcp_port=8001,
+            rest_url="http://localhost:8000",
+            mcp_url="http://localhost:8001",
+            session_id="session_789",
+        )
 
         with patch('saber.inspect_ai.server.domain_manager.remove_active_domain'):
             with patch('saber.inspect_ai.server.session_manager.SessionLifecycleManager.terminate_session_sync'
@@ -298,18 +301,18 @@ class TestEvalRetrySupport:
         mock_controller = MagicMock()
         mock_controller.stop = AsyncMock()
 
-        SABERSandboxEnvironment._registry["test_domain"] = {
-            "owner": "test_task",
-            "domain_slug": "test_domain",
-            "controller": mock_controller,
-            "context": MagicMock(),
-            "ownership": True,
-            "rest_port": 8000,
-            "mcp_port": 8001,
-            "rest_url": "http://localhost:8000",
-            "mcp_url": "http://localhost:8001",
-            "session_id": "session_789",
-        }
+        SABERSandboxEnvironment._registry["test_domain"] = DomainRegistryEntry(
+            domain_slug="test_domain",
+            owner="test_task",
+            controller=mock_controller,
+            context=MagicMock(),
+            ownership=True,
+            rest_port=8000,
+            mcp_port=8001,
+            rest_url="http://localhost:8000",
+            mcp_url="http://localhost:8001",
+            session_id="session_789",
+        )
 
         with patch('saber.inspect_ai.server.domain_manager.remove_active_domain'):
             with patch('saber.inspect_ai.server.session_manager.SessionLifecycleManager.terminate_session_sync'):
@@ -328,18 +331,18 @@ class TestEvalRetrySupport:
         """Test manual cleanup of stale ownership."""
 
         # Setup: Domain with stale ownership
-        SABERSandboxEnvironment._registry["test_domain"] = {
-            "owner": "stale_task",
-            "domain_slug": "test_domain",
-            "controller": MagicMock(),
-            "context": MagicMock(),
-            "ownership": True,
-            "rest_port": 8000,
-            "mcp_port": 8001,
-            "rest_url": "http://localhost:8000",
-            "mcp_url": "http://localhost:8001",
-            "session_id": "stale_session",
-        }
+        SABERSandboxEnvironment._registry["test_domain"] = DomainRegistryEntry(
+            domain_slug="test_domain",
+            owner="stale_task",
+            controller=MagicMock(),
+            context=MagicMock(),
+            ownership=True,
+            rest_port=8000,
+            mcp_port=8001,
+            rest_url="http://localhost:8000",
+            mcp_url="http://localhost:8001",
+            session_id="stale_session",
+        )
 
         # Clear stale ownership
         result = SABERSandboxEnvironment.clear_stale_ownership("test_domain")
@@ -371,12 +374,14 @@ class TestEvalRetryIntegration:
 
                 # No need to patch _create_episode - it's handled by the task handler
                 with patch('saber.inspect_ai.saber.get_benchmark_task_handler') as mock_get_handler:
+                    from saber.inspect_ai.core.types import HandlerState
+
                     mock_handler = MagicMock()
-                    mock_handler.initialize = AsyncMock(return_value={
-                        "episode_ids": ["episode_001"],
-                        "primary_episode_id": "episode_001",
-                        "semaphore_acquired": True,
-                    })
+                    mock_handler.initialize = AsyncMock(return_value=HandlerState(
+                        episode_ids=["episode_001"],
+                        primary_episode_id="episode_001",
+                        semaphore_acquired=True,
+                    ))
                     mock_handler.cleanup = AsyncMock()
                     mock_get_handler.return_value = mock_handler
 
@@ -384,18 +389,18 @@ class TestEvalRetryIntegration:
                         with patch('saber.inspect_ai.saber.store'):
                             with patch('saber.inspect_ai.server.domain_manager.remove_active_domain'):
                                 # 1. First run: Initialize task
-                                SABERSandboxEnvironment._registry["test_domain"] = {
-                                    "owner": "test_task",
-                                    "domain_slug": "test_domain",
-                                    "controller": MagicMock(),
-                                    "context": MagicMock(),
-                                    "ownership": True,
-                                    "rest_port": 8000,
-                                    "mcp_port": 8001,
-                                    "rest_url": "http://localhost:8000",
-                                    "mcp_url": "http://localhost:8001",
-                                    "session_id": "session_001",
-                                }
+                                SABERSandboxEnvironment._registry["test_domain"] = DomainRegistryEntry(
+                                    domain_slug="test_domain",
+                                    owner="test_task",
+                                    controller=MagicMock(),
+                                    context=MagicMock(),
+                                    ownership=True,
+                                    rest_port=8000,
+                                    mcp_port=8001,
+                                    rest_url="http://localhost:8000",
+                                    mcp_url="http://localhost:8001",
+                                    session_id="session_001",
+                                )
 
                                 # Create proper benchmark task
                                 task1 = SingleEpisodeTask(

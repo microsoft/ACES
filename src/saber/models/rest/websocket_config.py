@@ -5,7 +5,7 @@ transcript synchronization with separate push and pull configurations.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Optional
 
 from .websocket_constants import WebSocketDefaults
 
@@ -128,65 +128,6 @@ class WebSocketConfig:
             raise ValueError(f"max_reconnect_attempts must be at least 1, got {self.max_reconnect_attempts}")
         if self.pong_timeout <= 0:
             raise ValueError(f"pong_timeout must be positive, got {self.pong_timeout}")
-
-    @classmethod
-    def from_blocking_config(cls, blocking_config: dict) -> "WebSocketConfig":
-        """Create WebSocketConfig from legacy blocking_config dict.
-
-        Maps old flat configuration to new push/pull structure.
-
-        Args:
-            blocking_config: Dictionary with WebSocket configuration keys
-
-        Returns:
-            WebSocketConfig instance with values from blocking_config
-        """
-
-        # Helper to get value or use default, skipping None values
-        def get_or_default(key: str, default: Any) -> Any:
-            value = blocking_config.get(key)
-            return value if value is not None else default
-
-        # Build push configuration
-        push_config = PushConfig(
-            enabled=get_or_default("ws_push_enabled", True),
-            confirmation_timeout=get_or_default(
-                "ws_confirmation_timeout", WebSocketDefaults.PUSH_CONFIRMATION_TIMEOUT_SECONDS
-            ),
-            retry_enabled=get_or_default("ws_push_retry_enabled", True),
-            max_retry_attempts=get_or_default("ws_push_max_retry_attempts", WebSocketDefaults.PUSH_MAX_RETRY_ATTEMPTS),
-            retry_backoff_multiplier=get_or_default(
-                "ws_push_retry_backoff_multiplier", WebSocketDefaults.PUSH_RETRY_BACKOFF_MULTIPLIER
-            ),
-        )
-
-        # Build pull configuration
-        pull_config = PullConfig(
-            enabled=get_or_default("ws_pull_enabled", True),
-            blocking=get_or_default("ws_pull_blocking", True),
-            event_timeout=get_or_default("ws_event_timeout", WebSocketDefaults.PULL_EVENT_TIMEOUT_SECONDS),
-            sync_timeout=get_or_default("ws_sync_timeout", WebSocketDefaults.PULL_SYNC_TIMEOUT_SECONDS),
-            event_queue_max_size=get_or_default("ws_event_queue_max_size", WebSocketDefaults.PULL_EVENT_QUEUE_MAX_SIZE),
-        )
-
-        return cls(
-            connection_timeout=get_or_default("ws_connection_timeout", WebSocketDefaults.CONNECTION_TIMEOUT_SECONDS),
-            ping_interval=get_or_default("ws_ping_interval", WebSocketDefaults.PING_INTERVAL_SECONDS),
-            pong_timeout=get_or_default("ws_pong_timeout", WebSocketDefaults.PONG_TIMEOUT_SECONDS),
-            reconnect_enabled=get_or_default("ws_reconnect_enabled", True),
-            max_reconnect_attempts=get_or_default(
-                "ws_max_reconnect_attempts", WebSocketDefaults.RECONNECT_MAX_ATTEMPTS
-            ),
-            initial_reconnect_delay=get_or_default(
-                "ws_initial_reconnect_delay", WebSocketDefaults.RECONNECT_INITIAL_DELAY_SECONDS
-            ),
-            max_reconnect_delay=get_or_default("ws_max_reconnect_delay", WebSocketDefaults.RECONNECT_MAX_DELAY_SECONDS),
-            reconnect_backoff_multiplier=get_or_default(
-                "ws_reconnect_backoff_multiplier", WebSocketDefaults.RECONNECT_BACKOFF_MULTIPLIER
-            ),
-            push=push_config,
-            pull=pull_config,
-        )
 
 
 __all__ = ["WebSocketConfig", "PushConfig", "PullConfig"]

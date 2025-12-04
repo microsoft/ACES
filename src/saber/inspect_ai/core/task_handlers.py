@@ -22,6 +22,7 @@ from saber.logging_config import LogCategory, get_saber_logger
 from saber.models import BenchmarkTask, OrchestratedTask, OrchestrationStrategy, SingleEpisodeTask
 
 from ..constants import SandboxTimeouts
+from .types import HandlerState, OrchestratedHandlerState
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
 
@@ -130,7 +131,7 @@ class BenchmarkTaskHandler(ABC):
         session_id: str,
         session_manager: ClientSessionManager,
         semaphore: Optional[asyncio.Semaphore],
-    ) -> Dict[str, Any]:
+    ) -> HandlerState:
         """Initialize episodes for this benchmark task.
 
         Args:
@@ -140,7 +141,7 @@ class BenchmarkTaskHandler(ABC):
             semaphore: Optional semaphore for concurrency control
 
         Returns:
-            State dictionary with episode_ids and other handler-specific data
+            HandlerState or subclass with episode_ids and handler-specific data
 
         Raises:
             Exception: If episode creation fails (partial cleanup performed)
@@ -150,7 +151,7 @@ class BenchmarkTaskHandler(ABC):
     @abstractmethod
     async def cleanup(
         self,
-        state: Dict[str, Any],
+        state: HandlerState,
         session_id: str,
         session_manager: ClientSessionManager,
         semaphore: Optional[asyncio.Semaphore],
@@ -161,7 +162,7 @@ class BenchmarkTaskHandler(ABC):
         Semaphore is released AFTER episode cleanup completes.
 
         Args:
-            state: State dictionary from initialize()
+            state: HandlerState from initialize()
             session_id: SABER session ID
             session_manager: Client session manager for API calls
             semaphore: Optional semaphore to release after cleanup
@@ -190,17 +191,17 @@ class SingleEpisodeTaskHandler(BenchmarkTaskHandler):
         session_id: str,
         session_manager: ClientSessionManager,
         semaphore: Optional[asyncio.Semaphore],
-    ) -> Dict[str, Any]:
-        """Initialize single episode.
+    ) -> OrchestratedHandlerState:
+        """Initialize orchestrated task with multiple episodes.
 
         Args:
-            benchmark_task: SingleEpisodeTask instance
+            benchmark_task: OrchestratedTask instance
             session_id: SABER session ID
             session_manager: Client session manager
             semaphore: Optional concurrency semaphore
 
         Returns:
-            State dict with episode_ids, primary_episode_id
+            OrchestratedHandlerState with episode_ids, primary_episode_id, episodes, semaphore_acquired
         """
         if not isinstance(benchmark_task, SingleEpisodeTask):
             raise TypeError(f"SingleEpisodeTaskHandler requires SingleEpisodeTask, got {type(benchmark_task)}")
@@ -252,11 +253,12 @@ class SingleEpisodeTaskHandler(BenchmarkTaskHandler):
                 },
             )
 
-            return {
-                "episode_ids": [episode_id],
-                "primary_episode_id": episode_id,
-                "semaphore_acquired": self._semaphore_acquired,
-            }
+            state = HandlerState(
+                episode_ids=[episode_id],
+                primary_episode_id=episode_id,
+                semaphore_acquired=self._semaphore_acquired,
+            )
+            return state  # type: ignore[return-value]
 
         except Exception:
             # Cleanup on initialization failure
@@ -292,7 +294,7 @@ class SingleEpisodeTaskHandler(BenchmarkTaskHandler):
 
     async def cleanup(
         self,
-        state: Dict[str, Any],
+        state: HandlerState,
         session_id: str,
         session_manager: ClientSessionManager,
         semaphore: Optional[asyncio.Semaphore],
@@ -303,7 +305,7 @@ class SingleEpisodeTaskHandler(BenchmarkTaskHandler):
         is exceeded, raises RuntimeError after logging critical alert.
 
         Args:
-            state: State from initialize() with episode_ids
+            state: HandlerState from initialize()
             session_id: SABER session ID
             session_manager: Client session manager
             semaphore: Optional semaphore (ignored - uses instance tracking)
@@ -315,7 +317,7 @@ class SingleEpisodeTaskHandler(BenchmarkTaskHandler):
             RuntimeError: If cleanup error threshold exceeded
         """
         errors: List[str] = []
-        episode_id = state.get("primary_episode_id")
+        episode_id = state.primary_episode_id
 
         # End episode
         if episode_id:
@@ -342,31 +344,34 @@ class SingleEpisodeTaskHandler(BenchmarkTaskHandler):
         # Release semaphore AFTER episode cleanup (protected by lock to prevent double-release)
         semaphore_released = False
         async with self._cleanup_lock:
-            should_release = self._semaphore_acquired or state.get("semaphore_acquired", False)
-            sem_to_release = self._acquired_semaphore_ref or semaphore
+            # Check flags inside lock to ensure atomicity
+            should_release = self._semaphore_acquired or state.semaphore_acquired
 
-            if should_release and sem_to_release:
-                try:
-                    sem_to_release.release()
-                    semaphore_released = True
-                    logger.debug(
-                        "Released semaphore slot after single episode cleanup",
-                        extra={
-                            "semaphore_available": sem_to_release._value,
-                            "cleanup_errors": self._cleanup_error_count,
-                        },
-                    )
-                    self._semaphore_acquired = False
-                    self._acquired_semaphore_ref = None
-                    # Clear state flag to prevent double-release on subsequent cleanup calls
-                    state["semaphore_acquired"] = False
-                except Exception as e:
-                    error_msg = f"Failed to release semaphore: {str(e)}"
-                    errors.append(error_msg)
-                    logger.error(
-                        "Failed to release semaphore during cleanup",
-                        extra={"error": str(e)},
-                    )
+            if should_release:
+                # Clear flags BEFORE releasing to prevent double-release
+                self._semaphore_acquired = False
+                state.semaphore_acquired = False
+
+                sem_to_release = self._acquired_semaphore_ref or semaphore
+                if sem_to_release:
+                    try:
+                        sem_to_release.release()
+                        semaphore_released = True
+                        logger.debug(
+                            "Released semaphore slot after single episode cleanup",
+                            extra={
+                                "semaphore_available": sem_to_release._value,
+                                "cleanup_errors": self._cleanup_error_count,
+                            },
+                        )
+                        self._acquired_semaphore_ref = None
+                    except Exception as e:
+                        error_msg = f"Failed to release semaphore: {str(e)}"
+                        errors.append(error_msg)
+                        logger.error(
+                            "Failed to release semaphore during cleanup",
+                            extra={"error": str(e)},
+                        )
 
         # Build result
         threshold_exceeded = self._cleanup_error_count > CLEANUP_ERROR_THRESHOLD
@@ -427,7 +432,7 @@ class OrchestratedTaskHandler(BenchmarkTaskHandler):
         session_id: str,
         session_manager: ClientSessionManager,
         semaphore: Optional[asyncio.Semaphore],
-    ) -> Dict[str, Any]:
+    ) -> OrchestratedHandlerState:
         """Initialize orchestrated task with multiple episodes.
 
         Creates episodes sequentially in dependency order, waiting for
@@ -441,7 +446,7 @@ class OrchestratedTaskHandler(BenchmarkTaskHandler):
             semaphore: Optional concurrency semaphore
 
         Returns:
-            State dict with episode_ids, episodes (with role info), primary_episode_id
+            OrchestratedHandlerState with episode_ids, episodes, primary_episode_id
         """
         if not isinstance(benchmark_task, OrchestratedTask):
             raise TypeError(f"OrchestratedTaskHandler requires OrchestratedTask, got {type(benchmark_task)}")
@@ -529,12 +534,13 @@ class OrchestratedTaskHandler(BenchmarkTaskHandler):
                 },
             )
 
-            return {
-                "episode_ids": [ep["episode_id"] for ep in created_episodes],
-                "episodes": created_episodes,
-                "primary_episode_id": created_episodes[0]["episode_id"],
-                "semaphore_acquired": self._semaphore_acquired,
-            }
+            state = OrchestratedHandlerState(
+                episode_ids=[ep["episode_id"] for ep in created_episodes],
+                primary_episode_id=created_episodes[0]["episode_id"],
+                semaphore_acquired=self._semaphore_acquired,
+                episodes=created_episodes,
+            )
+            return state
 
         except Exception:
             # Best-effort cleanup on initialization failure
@@ -580,7 +586,7 @@ class OrchestratedTaskHandler(BenchmarkTaskHandler):
 
     async def cleanup(
         self,
-        state: Dict[str, Any],
+        state: HandlerState,
         session_id: str,
         session_manager: ClientSessionManager,
         semaphore: Optional[asyncio.Semaphore],
@@ -591,7 +597,7 @@ class OrchestratedTaskHandler(BenchmarkTaskHandler):
         is exceeded, raises RuntimeError after logging critical alert.
 
         Args:
-            state: State from initialize() with episode_ids
+            state: OrchestratedHandlerState from initialize()
             session_id: SABER session ID
             session_manager: Client session manager
             semaphore: Optional semaphore (parameter unused - instance tracking only)
@@ -605,7 +611,7 @@ class OrchestratedTaskHandler(BenchmarkTaskHandler):
         errors: List[str] = []
 
         # End all episodes in orchestration
-        for episode_id in state.get("episode_ids", []):
+        for episode_id in state.episode_ids:
             try:
                 await session_manager.end_episode(session_id, episode_id)
                 logger.debug(
@@ -629,31 +635,34 @@ class OrchestratedTaskHandler(BenchmarkTaskHandler):
         # Release semaphore AFTER all episodes cleaned up (protected by lock to prevent double-release)
         semaphore_released = False
         async with self._cleanup_lock:
-            should_release = self._semaphore_acquired or state.get("semaphore_acquired", False)
-            sem_to_release = self._acquired_semaphore_ref or semaphore
+            # Check flags inside lock to ensure atomicity
+            should_release = self._semaphore_acquired or state.semaphore_acquired
 
-            if should_release and sem_to_release:
-                try:
-                    sem_to_release.release()
-                    semaphore_released = True
-                    logger.debug(
-                        "Released semaphore slot after orchestration cleanup",
-                        extra={
-                            "semaphore_available": sem_to_release._value,
-                            "cleanup_errors": self._cleanup_error_count,
-                        },
-                    )
-                    self._semaphore_acquired = False
-                    self._acquired_semaphore_ref = None
-                    # Clear state flag to prevent double-release on subsequent cleanup calls
-                    state["semaphore_acquired"] = False
-                except Exception as e:
-                    error_msg = f"Failed to release semaphore: {str(e)}"
-                    errors.append(error_msg)
-                    logger.error(
-                        "Failed to release semaphore during cleanup",
-                        extra={"error": str(e)},
-                    )
+            if should_release:
+                # Clear flags BEFORE releasing to prevent double-release
+                self._semaphore_acquired = False
+                state.semaphore_acquired = False
+
+                sem_to_release = self._acquired_semaphore_ref or semaphore
+                if sem_to_release:
+                    try:
+                        sem_to_release.release()
+                        semaphore_released = True
+                        logger.debug(
+                            "Released semaphore slot after orchestration cleanup",
+                            extra={
+                                "semaphore_available": sem_to_release._value,
+                                "cleanup_errors": self._cleanup_error_count,
+                            },
+                        )
+                        self._acquired_semaphore_ref = None
+                    except Exception as e:
+                        error_msg = f"Failed to release semaphore: {str(e)}"
+                        errors.append(error_msg)
+                        logger.error(
+                            "Failed to release semaphore during cleanup",
+                            extra={"error": str(e)},
+                        )
 
         # Build result
         threshold_exceeded = self._cleanup_error_count > CLEANUP_ERROR_THRESHOLD

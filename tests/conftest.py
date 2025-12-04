@@ -25,6 +25,19 @@ from saber.server.execution.utils.security_validator import SecurityValidator
 logger = logging.getLogger(__name__)
 
 
+@pytest.fixture(autouse=True)
+def mock_docker_validation():
+    """
+    Auto-use fixture to mock Docker validation for all tests.
+
+    This prevents tests from failing when Docker is not installed on the system.
+    Tests that specifically need to test Docker functionality should patch
+    subprocess calls directly.
+    """
+    with patch('saber.domain.orchestrator.DockerRunner._validate_docker'):
+        yield
+
+
 # Test fixtures
 @pytest.fixture
 def test_config_path():

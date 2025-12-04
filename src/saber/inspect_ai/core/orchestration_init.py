@@ -12,7 +12,7 @@ Key features:
 """
 
 import asyncio
-from typing import Optional
+from typing import Any, Dict, Optional, Union
 
 from saber.client.client_session import ClientSessionManager
 from saber.logging_config import LogCategory, get_saber_logger
@@ -20,6 +20,7 @@ from saber.models import MetadataKeys
 
 from ..constants import SandboxTimeouts
 from .orchestration_coordinator import OrchestrationCoordinator
+from .types import OrchestrationSubTaskState
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
 
@@ -44,7 +45,7 @@ class OrchestrationInitializer:
         session_manager: ClientSessionManager,
         sample_id: str,
         semaphore: Optional[asyncio.Semaphore],
-    ) -> dict:
+    ) -> OrchestrationSubTaskState:
         """Initialize episode for an orchestrated sub-task sample.
 
         This method handles the new multi-sample orchestration approach where each
@@ -63,7 +64,7 @@ class OrchestrationInitializer:
             semaphore: Optional episode concurrency semaphore
 
         Returns:
-            Handler state dict with orchestration metadata
+            Dict with orchestration metadata (backward compatible)
 
         Raises:
             SandboxError: If initialization fails
@@ -177,13 +178,13 @@ class OrchestrationInitializer:
             )
 
             # Create handler state for cleanup
-            handler_state = {
-                "episode_ids": [episode_id],
-                "primary_episode_id": episode_id,
-                "semaphore_acquired": semaphore_acquired,
-                "orchestration_id": orchestration_id,
-                "sub_task_role": role,
-            }
+            handler_state = OrchestrationSubTaskState(
+                episode_ids=[episode_id],
+                primary_episode_id=episode_id,
+                semaphore_acquired=semaphore_acquired,
+                orchestration_id=orchestration_id,
+                sub_task_role=role,
+            )
 
             logger.info(
                 f"Orchestrated sub-task {role} ready for execution",
@@ -221,7 +222,7 @@ class OrchestrationInitializer:
 
     async def cleanup_orchestrated_sub_task(
         self,
-        handler_state: dict,
+        handler_state: Union[Dict[str, Any], OrchestrationSubTaskState],
         session_id: str,
         session_manager: ClientSessionManager,
         semaphore: Optional[asyncio.Semaphore],
@@ -235,7 +236,7 @@ class OrchestrationInitializer:
         4. Releases semaphore if this is the last sample
 
         Args:
-            handler_state: Handler state dict with orchestration metadata
+            handler_state: Dict or OrchestrationSubTaskState (backward compatible)
             session_id: SABER session ID
             session_manager: Client session manager for API calls
             semaphore: Optional episode concurrency semaphore
@@ -243,8 +244,18 @@ class OrchestrationInitializer:
         Raises:
             SandboxError: If handler state is invalid
         """
-        orchestration_id = handler_state["orchestration_id"]
-        role = handler_state["sub_task_role"]
+        # Convert dict to OrchestrationSubTaskState if needed (backward compatibility)
+        if isinstance(handler_state, dict):
+            handler_state = OrchestrationSubTaskState(
+                episode_ids=handler_state.get("episode_ids", []),
+                primary_episode_id=handler_state.get("primary_episode_id", ""),
+                semaphore_acquired=handler_state.get("semaphore_acquired", False),
+                orchestration_id=handler_state.get("orchestration_id", ""),
+                sub_task_role=handler_state.get("sub_task_role", ""),
+            )
+
+        orchestration_id = handler_state.orchestration_id
+        role = handler_state.sub_task_role
         coordinator = OrchestrationCoordinator()
 
         # Trigger cascade termination for entire orchestration

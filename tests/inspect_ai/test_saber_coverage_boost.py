@@ -155,6 +155,8 @@ class TestHandlerCleanupDuringInitError:
     @pytest.mark.asyncio
     async def test_sample_init_handler_cleanup_on_error(self):
         """Test that handler cleanup is called when init fails."""
+        from saber.inspect_ai.core.types import HandlerState
+
         # Create instance
         env = SABERSandboxEnvironment(
             domain_slug="test_domain",
@@ -163,7 +165,11 @@ class TestHandlerCleanupDuringInitError:
 
         # Setup mock handler directly (bypass BenchmarkTask deserialization)
         mock_handler = Mock()
-        mock_handler_state = {"episode_ids": ["ep1"], "primary_episode_id": "ep1"}
+        mock_handler_state = HandlerState(
+            episode_ids=["ep1"],
+            primary_episode_id="ep1",
+            semaphore_acquired=False,
+        )
         env._session_id = "session_123"
         env._task_id = "task_123"
         env._sample_id = "sample_123"
@@ -229,6 +235,8 @@ class TestHandlerCleanupDuringInitError:
     @pytest.mark.asyncio
     async def test_cleanup_sample_general_error_logged(self):
         """Test that general cleanup errors are logged."""
+        from saber.inspect_ai.core.types import HandlerState
+
         # Create instance
         env = SABERSandboxEnvironment(
             domain_slug="test_domain",
@@ -241,7 +249,11 @@ class TestHandlerCleanupDuringInitError:
 
         # Setup mock handler that raises during cleanup
         mock_handler = Mock()
-        mock_handler_state = {"episode_ids": ["ep1"]}
+        mock_handler_state = HandlerState(
+            episode_ids=["ep1"],
+            primary_episode_id="ep1",
+            semaphore_acquired=False,
+        )
         env._handler = mock_handler
         env._handler_state = mock_handler_state
 
@@ -394,6 +406,8 @@ class TestHandlerCleanupWithErrors:
     @pytest.mark.asyncio
     async def test_cleanup_sample_handler_cleanup_has_errors(self):
         """Test logging when handler cleanup completes with errors."""
+        from saber.inspect_ai.core.types import HandlerState
+
         env = SABERSandboxEnvironment(
             domain_slug="test_domain",
             domains_root=Path("/tmp/domains"),
@@ -405,7 +419,11 @@ class TestHandlerCleanupWithErrors:
 
         # Setup mock handler
         mock_handler = Mock()
-        mock_handler_state = {"episode_ids": ["ep1"]}
+        mock_handler_state = HandlerState(
+            episode_ids=["ep1"],
+            primary_episode_id="ep1",
+            semaphore_acquired=False,
+        )
         env._handler = mock_handler
         env._handler_state = mock_handler_state
 

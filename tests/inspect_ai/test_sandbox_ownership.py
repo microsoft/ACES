@@ -15,6 +15,7 @@ import pytest
 from pydantic import BaseModel
 
 from saber.inspect_ai.saber import SABERSandboxEnvironment, SandboxError
+from saber.inspect_ai.core.types import DomainRegistryEntry
 
 
 class MockSandboxConfig(BaseModel):
@@ -114,9 +115,9 @@ class TestOwnershipTransfer:
         # Verify sandbox registry has entry
         assert "test_domain" in SABERSandboxEnvironment._registry
         entry = SABERSandboxEnvironment._registry["test_domain"]
-        assert entry["owner"] == "test_task"
-        assert entry["ownership"] is True
-        assert entry["controller"] == mock_controller
+        assert entry.owner == "test_task"
+        assert entry.ownership is True
+        assert entry.controller == mock_controller
 
     @pytest.mark.asyncio
     async def test_fresh_start_when_no_factory_server(self, mock_controller, mock_domain_context):
@@ -148,8 +149,8 @@ class TestOwnershipTransfer:
         # Verify sandbox registry has entry
         assert "test_domain" in SABERSandboxEnvironment._registry
         entry = SABERSandboxEnvironment._registry["test_domain"]
-        assert entry["owner"] == "test_task"
-        assert entry["ownership"] is True
+        assert entry.owner == "test_task"
+        assert entry.ownership is True
 
     @pytest.mark.asyncio
     async def test_concurrent_sandbox_init_blocked(self, mock_controller, mock_domain_context):
@@ -193,17 +194,18 @@ class TestTaskCleanup:
         from saber.inspect_ai.server.domain_manager import _active_domains, _active_domains_lock
 
         # Populate sandbox registry
-        SABERSandboxEnvironment._registry["test_domain"] = {
-            "owner": "test_task",
-            "domain_slug": "test_domain",
-            "controller": mock_controller,
-            "context": mock_domain_context,
-            "ownership": True,
-            "rest_port": 8000,
-            "mcp_port": 8001,
-            "rest_url": "http://localhost:8000",
-            "mcp_url": "http://localhost:8001",
-        }
+        SABERSandboxEnvironment._registry["test_domain"] = DomainRegistryEntry(
+            domain_slug="test_domain",
+            owner="test_task",
+            controller=mock_controller,
+            context=mock_domain_context,
+            ownership=True,
+            rest_port=8000,
+            mcp_port=8001,
+            rest_url="http://localhost:8000",
+            mcp_url="http://localhost:8001",
+            session_id="session_123",
+        )
 
         # Populate active_domains registry
         with _active_domains_lock:
@@ -258,17 +260,18 @@ class TestTaskCleanup:
     async def test_cleanup_without_stop(self, mock_controller, mock_domain_context):
         """Test cleanup with cleanup=False doesn't stop server."""
         # Populate sandbox registry
-        SABERSandboxEnvironment._registry["test_domain"] = {
-            "owner": "test_task",
-            "domain_slug": "test_domain",
-            "controller": mock_controller,
-            "context": mock_domain_context,
-            "ownership": True,
-            "rest_port": 8000,
-            "mcp_port": 8001,
-            "rest_url": "http://localhost:8000",
-            "mcp_url": "http://localhost:8001",
-        }
+        SABERSandboxEnvironment._registry["test_domain"] = DomainRegistryEntry(
+            domain_slug="test_domain",
+            owner="test_task",
+            controller=mock_controller,
+            context=mock_domain_context,
+            ownership=True,
+            rest_port=8000,
+            mcp_port=8001,
+            rest_url="http://localhost:8000",
+            mcp_url="http://localhost:8001",
+            session_id="session_123",
+        )
 
         # Cleanup without stopping
         config = MockSandboxConfig(
@@ -291,17 +294,18 @@ class TestTaskCleanup:
         mock_controller.stop = AsyncMock(side_effect=Exception("Stop failed"))
 
         # Populate sandbox registry
-        SABERSandboxEnvironment._registry["test_domain"] = {
-            "owner": "test_task",
-            "domain_slug": "test_domain",
-            "controller": mock_controller,
-            "context": mock_domain_context,
-            "ownership": True,
-            "rest_port": 8000,
-            "mcp_port": 8001,
-            "rest_url": "http://localhost:8000",
-            "mcp_url": "http://localhost:8001",
-        }
+        SABERSandboxEnvironment._registry["test_domain"] = DomainRegistryEntry(
+            domain_slug="test_domain",
+            owner="test_task",
+            controller=mock_controller,
+            context=mock_domain_context,
+            ownership=True,
+            rest_port=8000,
+            mcp_port=8001,
+            rest_url="http://localhost:8000",
+            mcp_url="http://localhost:8001",
+            session_id="session_123",
+        )
 
         # Cleanup should not raise
         config = MockSandboxConfig(

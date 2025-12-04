@@ -6,6 +6,14 @@ from .saber_scorer import saber_scorer
 from .task_filter import apply_task_filter
 from .task_handlers import OrchestratedTaskHandler, SingleEpisodeTaskHandler, get_benchmark_task_handler
 from .tasks import create_domain_task
+from .types import (
+    DomainRegistryEntry,
+    EpisodeMapping,
+    HandlerState,
+    OrchestratedHandlerState,
+    OrchestrationSubTaskState,
+    SessionContext,
+)
 
 __all__ = [
     "create_domain_task",
@@ -16,4 +24,11 @@ __all__ = [
     "get_benchmark_task_handler",
     "SingleEpisodeTaskHandler",
     "OrchestratedTaskHandler",
+    # Type classes
+    "HandlerState",
+    "OrchestratedHandlerState",
+    "OrchestrationSubTaskState",
+    "DomainRegistryEntry",
+    "EpisodeMapping",
+    "SessionContext",
 ]

@@ -13,6 +13,19 @@ from .config import TranscriptSyncConfig
 from .endpoints import APIEndpoints
 from .websocket_config import PullConfig, PushConfig, WebSocketConfig
 from .websocket_constants import WebSocketCloseCode, WebSocketDefaults
+from .websocket_messages import (
+    ConnectedMessage,
+    ConnectionMetadata,
+    PongMessage,
+    PushAckData,
+    PushAckMessage,
+    SyncResponseData,
+    SyncResponseMessage,
+    SyncResponseVersionData,
+    TranscriptModifiedData,
+    TranscriptModifiedMessage,
+    WebSocketServerMessage,
+)
 
 __all__ = [
     "APIEndpoints",
@@ -22,6 +35,19 @@ __all__ = [
     "PullConfig",
     "WebSocketCloseCode",
     "WebSocketDefaults",
+    # WebSocket message types
+    "TranscriptModifiedData",
+    "TranscriptModifiedMessage",
+    "ConnectedMessage",
+    "PongMessage",
+    "SyncResponseVersionData",
+    "SyncResponseData",
+    "SyncResponseMessage",
+    "PushAckData",
+    "PushAckMessage",
+    "ConnectionMetadata",
+    "WebSocketServerMessage",
+    # HTTP REST models
     "StepResponse",
     "SessionCreateResponse",
     "SessionTerminateResponse",

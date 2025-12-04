@@ -25,6 +25,12 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+try:
+    from websockets.client import WebSocketClientProtocol
+except ImportError:
+    # Fallback for type checking when websockets not installed
+    WebSocketClientProtocol = Any
+
 from inspect_ai.model import (
     ChatMessage,
     ChatMessageAssistant,
@@ -239,10 +245,12 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
         self._ws_config = ws_config or WebSocketConfig()
 
         # WebSocket connection state
-        self._websocket: Optional[Any] = None  # WebSocketClientProtocol
+        self._websocket: Optional[WebSocketClientProtocol] = None
         self._ws_lock = asyncio.Lock()
-        self._event_queue: asyncio.Queue = asyncio.Queue(maxsize=self._ws_config.pull.event_queue_max_size)
-        self._listener_task: Optional[asyncio.Task] = None
+        self._event_queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue(
+            maxsize=self._ws_config.pull.event_queue_max_size
+        )
+        self._listener_task: Optional[asyncio.Task[None]] = None
 
         # Local version tracking
         self._local_version = 0
@@ -442,8 +450,10 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
                         except Exception as e:
                             logger.warning(f"Error closing WebSocket during cleanup: {e}")
 
-    async def _listen_for_events_impl(self, websocket: Any) -> None:
+    async def _listen_for_events_impl(self, websocket: WebSocketClientProtocol) -> None:
         """Background task that listens for WebSocket events.
+
+        Receives transcript_modified events and queues them for generate().
 
         Handles both push (server events) and pull (response to client requests).
         Server-initiated events are queued for generate() to consume.

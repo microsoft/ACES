@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch, call
 from pydantic import create_model, ConfigDict
 
 from saber.inspect_ai.saber import SABERSandboxEnvironment, SandboxError
+from saber.inspect_ai.core.types import DomainRegistryEntry
 from saber.models import SingleEpisodeTask, OrchestratedTask, MetadataKeys, TaskExecutionMode
 
 
@@ -98,9 +99,9 @@ class TestTaskInitErrorPaths:
                     # Verify registry entry
                     assert "test_domain" in SABERSandboxEnvironment._registry
                     entry = SABERSandboxEnvironment._registry["test_domain"]
-                    assert entry["owner"] == "test_task"
-                    assert entry["ownership"] is True
-                    assert entry["session_id"] == "fresh_session_123"
+                    assert entry.owner == "test_task"
+                    assert entry.ownership is True
+                    assert entry.session_id == "fresh_session_123"
 
     @pytest.mark.asyncio
     async def test_task_init_fresh_start_failure_cleanup(self, mock_config):
@@ -156,9 +157,9 @@ class TestTaskInitErrorPaths:
                 # Verify registry entry
                 assert "test_domain" in SABERSandboxEnvironment._registry
                 entry = SABERSandboxEnvironment._registry["test_domain"]
-                assert entry["owner"] == "test_task"
-                assert entry["ownership"] is True
-                assert entry["session_id"] == "transfer_session_456"
+                assert entry.owner == "test_task"
+                assert entry.ownership is True
+                assert entry.session_id == "transfer_session_456"
 
     @pytest.mark.asyncio
     async def test_task_init_enables_debug_logging(self):
@@ -217,18 +218,18 @@ class TestSampleInitPaths:
         """Test sample_init for single episode task."""
 
         # Setup registry
-        SABERSandboxEnvironment._registry["test_domain"] = {
-            "owner": "test_task",
-            "domain_slug": "test_domain",
-            "controller": MagicMock(),
-            "context": MagicMock(),
-            "ownership": True,
-            "rest_port": 8000,
-            "mcp_port": 8001,
-            "rest_url": "http://localhost:8000",
-            "mcp_url": "http://localhost:8001",
-            "session_id": "session_123",
-        }
+        SABERSandboxEnvironment._registry["test_domain"] = DomainRegistryEntry(
+            domain_slug="test_domain",
+            owner="test_task",
+            controller=MagicMock(),
+            context=MagicMock(),
+            ownership=True,
+            rest_port=8000,
+            mcp_port=8001,
+            rest_url="http://localhost:8000",
+            mcp_url="http://localhost:8001",
+            session_id="session_123",
+        )
 
         # Create single episode task
         task = SingleEpisodeTask(
@@ -251,12 +252,14 @@ class TestSampleInitPaths:
         }
 
         with patch('saber.inspect_ai.saber.get_benchmark_task_handler') as mock_get_handler:
+            from saber.inspect_ai.core.types import HandlerState
+
             mock_handler = MagicMock()
-            mock_handler.initialize = AsyncMock(return_value={
-                "episode_ids": ["episode_123"],
-                "primary_episode_id": "episode_123",
-                "semaphore_acquired": True,
-            })
+            mock_handler.initialize = AsyncMock(return_value=HandlerState(
+                episode_ids=["episode_123"],
+                primary_episode_id="episode_123",
+                semaphore_acquired=True,
+            ))
             mock_handler.cleanup = AsyncMock()
             mock_get_handler.return_value = mock_handler
 

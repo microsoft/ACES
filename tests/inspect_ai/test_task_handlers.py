@@ -80,9 +80,9 @@ class TestSingleEpisodeTaskHandler:
         mock_session_manager.wait_for_episode_ready.assert_called_once_with("session_123", "episode_123")
 
         # Verify state structure
-        assert state["episode_ids"] == ["episode_123"]
-        assert state["primary_episode_id"] == "episode_123"
-        assert state["semaphore_acquired"] is True
+        assert state.episode_ids == ["episode_123"]
+        assert state.primary_episode_id == "episode_123"
+        assert state.semaphore_acquired is True
 
         # Verify semaphore was acquired
         assert semaphore._value == 7  # Started at 8, now 7
@@ -100,8 +100,8 @@ class TestSingleEpisodeTaskHandler:
         )
 
         # Should still work without semaphore
-        assert state["episode_ids"] == ["episode_123"]
-        assert state["semaphore_acquired"] is False
+        assert state.episode_ids == ["episode_123"]
+        assert state.semaphore_acquired is False
 
     @pytest.mark.asyncio
     async def test_initialize_failure_releases_semaphore(self, sample_single_task, mock_session_manager):
@@ -126,6 +126,8 @@ class TestSingleEpisodeTaskHandler:
     @pytest.mark.asyncio
     async def test_cleanup_single_episode(self, mock_session_manager):
         """Test cleaning up a single episode task."""
+        from saber.inspect_ai.core.types import HandlerState
+
         handler = SingleEpisodeTaskHandler()
         semaphore = asyncio.Semaphore(7)  # Simulate acquired semaphore
 
@@ -133,10 +135,11 @@ class TestSingleEpisodeTaskHandler:
         handler._semaphore_acquired = True
         handler._acquired_semaphore_ref = semaphore
 
-        state = {
-            "episode_ids": ["episode_123"],
-            "primary_episode_id": "episode_123",
-        }
+        state = HandlerState(
+            episode_ids=["episode_123"],
+            primary_episode_id="episode_123",
+            semaphore_acquired=True,
+        )
 
         result = await handler.cleanup(
             state=state,
@@ -171,10 +174,13 @@ class TestSingleEpisodeTaskHandler:
         # Make end_episode fail
         mock_session_manager.end_episode.side_effect = Exception("End failed")
 
-        state = {
-            "episode_ids": ["episode_123"],
-            "primary_episode_id": "episode_123",
-        }
+        from saber.inspect_ai.core.types import HandlerState
+
+        state = HandlerState(
+            episode_ids=["episode_123"],
+            primary_episode_id="episode_123",
+            semaphore_acquired=True,
+        )
 
         # Should not raise exception (errors tracked in result)
         result = await handler.cleanup(
@@ -323,10 +329,10 @@ class TestOrchestratedTaskHandler:
         assert calls[1][0] == ("session_123", "red_task_1")
 
         # Verify state structure
-        assert len(state["episode_ids"]) == 2
-        assert state["episode_ids"] == ["episode_blue", "episode_red"]
-        assert state["primary_episode_id"] == "episode_blue"
-        assert state["semaphore_acquired"] is True
+        assert len(state.episode_ids) == 2
+        assert state.episode_ids == ["episode_blue", "episode_red"]
+        assert state.primary_episode_id == "episode_blue"
+        assert state.semaphore_acquired is True
 
         # Verify only ONE semaphore slot was acquired for entire orchestration
         assert semaphore._value == 7  # Started at 8, now 7
@@ -397,14 +403,17 @@ class TestOrchestratedTaskHandler:
         handler._semaphore_acquired = True
         handler._acquired_semaphore_ref = semaphore
 
-        state = {
-            "episode_ids": ["episode_blue", "episode_red"],
-            "episodes": [
+        from saber.inspect_ai.core.types import OrchestratedHandlerState
+
+        state = OrchestratedHandlerState(
+            episode_ids=["episode_blue", "episode_red"],
+            episodes=[
                 {"episode_id": "episode_blue", "task_id": "blue_task_1", "role": "blue"},
                 {"episode_id": "episode_red", "task_id": "red_task_1", "role": "red"},
             ],
-            "primary_episode_id": "episode_blue",
-        }
+            primary_episode_id="episode_blue",
+            semaphore_acquired=True,
+        )
 
         result = await handler.cleanup(
             state=state,
@@ -444,10 +453,13 @@ class TestOrchestratedTaskHandler:
             side_effect=[Exception("End failed"), None]
         )
 
-        state = {
-            "episode_ids": ["episode_blue", "episode_red"],
-            "primary_episode_id": "episode_blue",
-        }
+        from saber.inspect_ai.core.types import OrchestratedHandlerState
+
+        state = OrchestratedHandlerState(
+            episode_ids=["episode_blue", "episode_red"],
+            primary_episode_id="episode_blue",
+            semaphore_acquired=True,
+        )
 
         # Should not raise exception (errors tracked in result)
         result = await handler.cleanup(
@@ -645,10 +657,13 @@ class TestSemaphoreLifecycle:
         # Set error count above threshold (CLEANUP_ERROR_THRESHOLD = 5)
         handler._cleanup_error_count = 6
 
-        state = {
-            "episode_ids": ["episode_123"],
-            "primary_episode_id": "episode_123",
-        }
+        from saber.inspect_ai.core.types import HandlerState
+
+        state = HandlerState(
+            episode_ids=["episode_123"],
+            primary_episode_id="episode_123",
+            semaphore_acquired=True,
+        )
 
         # Should raise RuntimeError when threshold exceeded
         with pytest.raises(RuntimeError, match="Cleanup error threshold exceeded"):
@@ -912,10 +927,13 @@ class TestSemaphoreLifecycle:
         handler._semaphore_acquired = True
         handler._acquired_semaphore_ref = semaphore
 
-        state = {
-            "episode_ids": ["episode_123"],
-            "primary_episode_id": "episode_123",
-        }
+        from saber.inspect_ai.core.types import HandlerState
+
+        state = HandlerState(
+            episode_ids=["episode_123"],
+            primary_episode_id="episode_123",
+            semaphore_acquired=True,
+        )
 
         result = await handler.cleanup(state, "session_1", manager, semaphore)
 
@@ -939,13 +957,17 @@ class TestSemaphoreLifecycle:
         handler._semaphore_acquired = True
         handler._acquired_semaphore_ref = semaphore
 
-        state = {
-            "episode_ids": ["episode_1", "episode_2"],
-            "episodes": [
+        from saber.inspect_ai.core.types import OrchestratedHandlerState
+
+        state = OrchestratedHandlerState(
+            episode_ids=["episode_1", "episode_2"],
+            episodes=[
                 {"episode_id": "episode_1", "task_id": "task_1", "role": "role1"},
                 {"episode_id": "episode_2", "task_id": "task_2", "role": "role2"},
             ],
-        }
+            primary_episode_id="episode_1",
+            semaphore_acquired=True,
+        )
 
         result = await handler.cleanup(state, "session_1", manager, semaphore)
 
@@ -972,13 +994,17 @@ class TestSemaphoreLifecycle:
         handler._acquired_semaphore_ref = semaphore
         handler._cleanup_error_count = 2  # Below threshold of 5
 
-        state = {
-            "episode_ids": ["episode_1", "episode_2"],
-            "episodes": [
+        from saber.inspect_ai.core.types import OrchestratedHandlerState
+
+        state = OrchestratedHandlerState(
+            episode_ids=["episode_1", "episode_2"],
+            episodes=[
                 {"episode_id": "episode_1", "task_id": "task_1", "role": "role1"},
                 {"episode_id": "episode_2", "task_id": "task_2", "role": "role2"},
             ],
-        }
+            primary_episode_id="episode_1",
+            semaphore_acquired=True,
+        )
 
         # Should not raise, just log warnings
         result = await handler.cleanup(state, "session_1", manager, semaphore)
@@ -1003,13 +1029,17 @@ class TestSemaphoreLifecycle:
         handler._acquired_semaphore_ref = semaphore
         handler._cleanup_error_count = 6  # Above threshold of 5
 
-        state = {
-            "episode_ids": ["episode_1", "episode_2"],
-            "episodes": [
+        from saber.inspect_ai.core.types import OrchestratedHandlerState
+
+        state = OrchestratedHandlerState(
+            episode_ids=["episode_1", "episode_2"],
+            episodes=[
                 {"episode_id": "episode_1", "task_id": "task_1", "role": "role1"},
                 {"episode_id": "episode_2", "task_id": "task_2", "role": "role2"},
             ],
-        }
+            primary_episode_id="episode_1",
+            semaphore_acquired=True,
+        )
 
         # Should raise RuntimeError when threshold exceeded
         with pytest.raises(RuntimeError, match="Cleanup error threshold exceeded"):

@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from saber.inspect_ai.core.task_handlers import SingleEpisodeTaskHandler, OrchestratedTaskHandler
+from saber.inspect_ai.core.types import HandlerState, OrchestratedHandlerState
 from saber.models import (
     SingleEpisodeTask,
     OrchestratedTask,
@@ -209,11 +210,11 @@ class TestCleanupErrorThreshold:
         manager = AsyncMock()
         manager.end_episode = AsyncMock()
 
-        state = {
-            "episode_ids": ["ep_123"],
-            "primary_episode_id": "ep_123",
-            "semaphore_acquired": False,
-        }
+        state = HandlerState(
+            episode_ids=["ep_123"],
+            primary_episode_id="ep_123",
+            semaphore_acquired=False,
+        )
 
         # Call cleanup - should raise RuntimeError when threshold exceeded
         with pytest.raises(RuntimeError, match="Cleanup error threshold exceeded"):
@@ -233,13 +234,13 @@ class TestCleanupErrorThreshold:
         manager = AsyncMock()
         manager.end_episode = AsyncMock()
 
-        state = {
-            "episode_ids": ["ep_123"],
-            "primary_episode_id": "ep_123",
-            "semaphore_acquired": False,
-        }
+        state = HandlerState(
+            episode_ids=["ep_456"],
+            primary_episode_id="ep_456",
+            semaphore_acquired=False,
+        )
 
-        # Call cleanup - should return result with errors but not raise
+        # Call cleanup - should succeed and return result
         result = await handler.cleanup(state, "session_123", manager, None)
 
         assert handler._cleanup_error_count == 2

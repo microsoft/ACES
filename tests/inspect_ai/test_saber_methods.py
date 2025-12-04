@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 from pydantic import create_model, ConfigDict
 
 from saber.inspect_ai.saber import SABERSandboxEnvironment, SandboxError
+from saber.inspect_ai.core.types import DomainRegistryEntry
 from saber.models import (
     BenchmarkTask,
     SingleEpisodeTask,
@@ -303,10 +304,18 @@ class TestClearStaleOwnership:
 
     def test_clear_stale_ownership_removes_entry(self):
         """Test that clear_stale_ownership removes registry entry."""
-        SABERSandboxEnvironment._registry["test_domain"] = {
-            "owner": "test_task",
-            "controller": MagicMock(),
-        }
+        SABERSandboxEnvironment._registry["test_domain"] = DomainRegistryEntry(
+            domain_slug="test_domain",
+            owner="test_task",
+            controller=MagicMock(),
+            context=MagicMock(),
+            ownership=True,
+            rest_port=8000,
+            mcp_port=8001,
+            rest_url="http://localhost:8000",
+            mcp_url="http://localhost:8001",
+            session_id="session_123",
+        )
 
         result = SABERSandboxEnvironment.clear_stale_ownership("test_domain")
 
@@ -315,10 +324,18 @@ class TestClearStaleOwnership:
 
     def test_clear_stale_ownership_force_flag(self):
         """Test that force flag is logged correctly."""
-        SABERSandboxEnvironment._registry["test_domain"] = {
-            "owner": "test_task",
-            "controller": MagicMock(),
-        }
+        SABERSandboxEnvironment._registry["test_domain"] = DomainRegistryEntry(
+            domain_slug="test_domain",
+            owner="test_task",
+            controller=MagicMock(),
+            context=MagicMock(),
+            ownership=True,
+            rest_port=8000,
+            mcp_port=8001,
+            rest_url="http://localhost:8000",
+            mcp_url="http://localhost:8001",
+            session_id="session_123",
+        )
 
         result = SABERSandboxEnvironment.clear_stale_ownership("test_domain", force=True)
 
