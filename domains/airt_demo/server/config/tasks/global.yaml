@@ -1,0 +1,36 @@
+domain: ai_redteam
+
+global_defaults:
+  execution_config:
+    executors:
+      bash:
+        timeout: 60
+      python:
+        timeout: 30
+
+  episode_config:
+    max_steps: 50
+
+    # Default transcript coordination for multi-agent tasks
+    transcript_config:
+      websocket:
+        # Connection settings
+        connection_timeout: 10.0
+        ping_interval: 30.0
+
+        # Pull configuration - receiving transcript modifications from server
+        pull:
+          enabled: false              # Disabled by default (red team doesn't pull)
+          blocking: true              # Wait for transcript_modified events (when enabled)
+          event_timeout: 300.0        # How long to wait for modifications (5 min)
+          sync_timeout: 5.0           # Timeout for sync_request/sync_response
+
+        # Push configuration - sending new messages to server
+        push:
+          enabled: true
+          confirmation_timeout: 5.0   # Timeout for push acknowledgment
+          retry_enabled: true
+          max_retry_attempts: 3
+
+  benchmark_config:
+    episode_attempts: 1

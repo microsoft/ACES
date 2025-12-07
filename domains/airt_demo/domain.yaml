@@ -1,0 +1,34 @@
+schemaVersion: "1.0.0"
+
+domain:
+  slug: "airt_demo"
+  name: "AI Red Team Testing Demo"
+  description: "Demo: AI safety guardrail testing through adversarial prompt injection attacks"
+  version: "1.0.0"
+
+images:
+  server:
+    tag: "saber/airt_demo/server:latest"
+    dockerfile: "server/docker/Dockerfile.server"
+    buildArgs:
+      DOMAIN_NAME: "airt_demo"
+    labels:
+      saber.domain: "airt_demo"
+      saber.component: "server"
+      saber.framework: "dual-agent"
+
+  sandbox:
+    tag: "saber/airt_demo/sandbox:latest"
+    dockerfile: "server/docker/red_team_sandbox/Dockerfile"
+    context: "server/docker/red_team_sandbox"
+    labels:
+      saber.domain: "airt_demo"
+      saber.component: "sandbox"
+
+  incident_db:
+    tag: "saber/airt_demo/incident-db:latest"
+    dockerfile: "server/docker/db/Dockerfile.incident_5"
+    labels:
+      saber.domain: "airt_demo"
+      saber.component: "database"
+      saber.service.type: "mysql"

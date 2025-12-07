@@ -1,0 +1,50 @@
+---
+# AI Red Team Red Attacker Sandbox Environment
+# Adversarial prompt injection attacker with injection capabilities
+# Ephemeral environment created per episode, attached to blue agent's episode network
+#
+# Required Environment Variables:
+# - EPISODE_ID: Unique identifier for episode isolation
+
+services:
+  ai-redteam-red-sandbox:
+    image: saber/ai_redteam/sandbox:latest
+    container_name: ai-redteam-red-sandbox-${EPISODE_ID:-default}
+    working_dir: /workspace
+    user: "0:0"  # Run as root
+    environment:
+      - PYTHONPATH=/workspace
+      - PYTHONUNBUFFERED=1
+      - EPISODE_ID=${EPISODE_ID:-default}
+      - AGENT_ROLE=red_attacker
+      - TARGET_AGENT=blue_agent
+      # WebSocket daemon configuration
+      - SABER_WEBSOCKET_URL=ws://host.docker.internal:8000/api/v1/episodes/${EPISODE_ID:-default}/ws
+      - IPC_PORT=9999
+    networks:
+      - saber-episode-network
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9999/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: '1.0'
+    labels:
+      - "saber.execution.service=true"
+      - "saber.domain=ai_redteam"
+      - "saber.service.type=sandbox"
+      - "saber.service.name=ai-redteam-red-sandbox"
+      - "saber.agent.role=red_attacker"
+      - "saber.injection.source=true"
+      - "saber.episode.id=${EPISODE_ID:-default}"
+
+networks:
+  saber-episode-network:
+    external: true
+    name: saber-episode-network-${EPISODE_ID:-default}

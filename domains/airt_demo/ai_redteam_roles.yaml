@@ -1,0 +1,13 @@
+# AI Red Team Dual-Role Configuration
+# Assigns different models to red and blue team roles
+
+roles:
+  blue:
+    agent: react
+    model: openai/azure/gpt-4o
+    description: "Guardrailed database assistant with safety constraints"
+
+  red:
+    agent: react
+    model: openai/azure/gpt-4.1
+    description: "Adversarial prompt injection attacker"
