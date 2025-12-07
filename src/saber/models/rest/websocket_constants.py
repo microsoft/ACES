@@ -29,6 +29,25 @@ class WebSocketCloseCode:
     TLS_HANDSHAKE_FAILED = 1015  # TLS handshake failed (reserved)
 
 
+class WebSocketMessageType:
+    """WebSocket message type constants.
+
+    Centralized message type strings to avoid magic strings throughout the codebase.
+    """
+
+    # Client → Server messages
+    PING = "ping"
+    SYNC_REQUEST = "sync_request"
+    PUSH_MESSAGE = "push_message"
+
+    # Server → Client messages
+    PONG = "pong"
+    CONNECTED = "connected"
+    SYNC_RESPONSE = "sync_response"
+    PUSH_ACK = "push_ack"
+    TRANSCRIPT_MODIFIED = "transcript_modified"
+
+
 class WebSocketDefaults:
     """Default values for WebSocket configuration.
 
@@ -64,4 +83,4 @@ class WebSocketDefaults:
     WEBSOCKET_CLOSE_TIMEOUT_SECONDS = 2.0  # Timeout when closing WebSocket connection
 
 
-__all__ = ["WebSocketCloseCode", "WebSocketDefaults"]
+__all__ = ["WebSocketCloseCode", "WebSocketMessageType", "WebSocketDefaults"]

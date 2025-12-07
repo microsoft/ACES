@@ -35,6 +35,19 @@ class SyncStrategy(str, Enum):
     WAIT_FOR_CHANGE = "wait_for_change"  # Block until WebSocket event (deprecated - WebSocket handles this)
 
 
+class TranscriptPushOperation(str, Enum):
+    """Operations for modifying transcript when pushing messages.
+
+    Used by both client and server to specify how new messages should be
+    integrated into the existing transcript.
+    """
+
+    APPEND = "append"  # Add messages at end (default)
+    REWIND = "rewind"  # Remove last N messages, then append
+    REWRITE = "rewrite"  # Replace entire transcript
+    INSERT = "insert"  # Insert at specific position
+
+
 @dataclass
 class TranscriptVersion:
     """
@@ -80,6 +93,9 @@ class TranscriptSyncRequest:
         client_checksum: SHA256 checksum of client's transcript at since_version (for validation)
         messages_to_push: New messages to append (optional)
         strategy: Sync strategy (immediate or wait_for_change)
+        operation: Operation type for push ("append", "rewind", "rewrite", "insert")
+        rewind_count: Number of messages to remove before push (for rewind operation)
+        insert_position: Position to insert messages (for insert operation)
     """
 
     episode_id: str
@@ -87,6 +103,9 @@ class TranscriptSyncRequest:
     client_checksum: Optional[str] = None
     messages_to_push: Optional[List[Dict[str, Any]]] = None
     strategy: str = SyncStrategy.IMMEDIATE.value
+    operation: str = "append"
+    rewind_count: int = 1
+    insert_position: int = 0
 
     def __post_init__(self) -> None:
         """Validate fields and set defaults."""
@@ -141,6 +160,7 @@ class TranscriptSyncResponse:
 __all__ = [
     "compute_checksum",
     "SyncStrategy",
+    "TranscriptPushOperation",
     "TranscriptVersion",
     "TranscriptSyncRequest",
     "TranscriptSyncResponse",

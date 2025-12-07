@@ -1,78 +1,66 @@
 """
 Prompt injection executor for AI red team testing.
 
-Allows red team to inject adversarial prompts into blue team's conversation
-context by directly modifying the blue team's CLIENT_TRANSCRIPT.
+Sends injection commands via IPC to the WebSocket daemon running in the red team
+container. The daemon maintains a persistent WebSocket connection to the SABER
+server and forwards injections using the push_message protocol.
 
-This executor provides the key mechanism for testing AI safety guardrails
-through hidden prompt injection attacks in the blocking transcript solver architecture.
+This executor operates through the network boundary and does not require direct
+server-side memory access.
 
 Logging category: ``LogCategory.TASK_EXEC``.
 """
 
-from enum import Enum
-from typing import Any, Dict, List, Optional
+import json
+from typing import Any, Dict, Optional
 
 from .....logging_config import LogCategory, get_saber_logger
-from .....models.constants import MetadataKeys
+from .....models.transcript import TranscriptPushOperation
 from ....base import CommandResult
 from ...base import Parameter, ParameterType
 from ...sandbox.sandbox_environment_manager import SandboxEnvironmentManager
-from ..base_executors import CommandExecutor
+from ..docker_executor import DockerExecutor
 from ..orchestration_utils import resolve_target_episode_id
 
 logger = get_saber_logger(LogCategory.TASK_EXEC, __name__)
 
 
-class InjectionStrategy(str, Enum):
-    """Strategies for injecting messages into target agent's transcript."""
-
-    APPEND = "append"  # Add message at end (default)
-    REWIND = "rewind"  # Remove last N messages, then append
-    REWRITE = "rewrite"  # Replace entire transcript
-    INSERT = "insert"  # Insert at specific position
-
-
-class InjectPromptExecutor(CommandExecutor):
+class InjectPromptExecutor(DockerExecutor):
     """
-    Execute prompt injection attacks by directly modifying target agent's transcript.
+    Execute prompt injection attacks via IPC to WebSocket daemon.
 
     This executor allows red team agents to inject hidden prompts into target
-    agent's conversation context. Features:
+    agent's conversation context through a WebSocket connection. Features:
 
     1. **Automatic Target Resolution**: Target episode ID is automatically resolved
        from orchestration metadata (ORCHESTRATION_TARGET_EPISODES).
 
-    2. **Injection Strategies**: Multiple strategies for modifying transcript:
+    2. **IPC Communication**: Sends injection via HTTP POST to localhost:9999/inject
+       where the WebSocket daemon forwards to SABER server.
+
+    3. **Injection Strategies**: Multiple strategies for modifying transcript:
        - append: Add message at end (default)
        - rewind: Remove last N messages, then append
        - rewrite: Replace entire transcript
        - insert: Insert at specific position
 
-    3. **Timestamp Signaling**: Sets TRANSCRIPT_LAST_MODIFIED_AT to signal
-       target agent that transcript has been modified.
-
-    4. **Audit Trail**: Increments TRANSCRIPT_MODIFICATION_COUNT for tracking.
-
-    The blocking target agent solver polls for timestamp changes to detect modifications.
+    The executor inherits from DockerExecutor to leverage container execution
+    infrastructure for sending curl commands to the daemon.
     """
 
     _executor_metadata = {
         "name": "inject_prompt",
-        "description": "Inject adversarial prompts into target agent context for safety testing.",
+        "description": "Inject adversarial prompts into target agent context via WebSocket daemon.",
     }
 
     def __init__(
         self,
-        sandbox_manager: Optional[SandboxEnvironmentManager] = None,
+        sandbox_manager: SandboxEnvironmentManager,
         config: Optional[Dict[str, Any]] = None,
-        session_manager: Optional[Any] = None,
         **kwargs: Any,
-    ):
+    ) -> None:
         """Initialize the inject_prompt executor."""
-        super().__init__(config=config, session_manager=session_manager, **kwargs)
-
-        self.sandbox_manager = sandbox_manager
+        super().__init__(sandbox_manager=sandbox_manager, config=config, **kwargs)
 
     @classmethod
     def get_default_config(cls) -> Dict[str, Any]:
@@ -85,17 +73,16 @@ class InjectPromptExecutor(CommandExecutor):
         sandbox_manager: SandboxEnvironmentManager,
         config: Optional[Dict[str, Any]] = None,
         additional_params: Optional[Dict[str, Any]] = None,
-        session_manager: Optional[Any] = None,
+        session_manager: Any = None,
         **kwargs: Any,
     ) -> "InjectPromptExecutor":
         """
         Create inject_prompt executor with standardized configuration interface.
 
         Args:
-            sandbox_manager: Sandbox manager (not used but required by interface)
+            sandbox_manager: Sandbox manager for executing commands in container
             config: Injection-specific configuration dictionary
             additional_params: Additional parameters for executor creation
-            session_manager: Optional session manager for cross-episode operations
             **kwargs: Additional keyword arguments
 
         Returns:
@@ -105,7 +92,7 @@ class InjectPromptExecutor(CommandExecutor):
         if additional_params:
             merged_kwargs.update(additional_params)
 
-        return cls(sandbox_manager=sandbox_manager, config=config, session_manager=session_manager, **merged_kwargs)
+        return cls(sandbox_manager=sandbox_manager, config=config, **merged_kwargs)
 
     def setup_parameters(self, config: Dict[str, Any]) -> None:
         """
@@ -129,9 +116,11 @@ class InjectPromptExecutor(CommandExecutor):
             Parameter(
                 name="strategy",
                 type=ParameterType.STRING,
-                description=f"Injection strategy: {', '.join([s.value for s in InjectionStrategy])} (default: append)",
+                description=(
+                    f"Injection strategy: {', '.join([s.value for s in TranscriptPushOperation])} " "(default: append)"
+                ),
                 required=False,
-                default=InjectionStrategy.APPEND.value,
+                default=TranscriptPushOperation.APPEND.value,
             )
         )
 
@@ -175,9 +164,11 @@ class InjectPromptExecutor(CommandExecutor):
             "strategy": Parameter(
                 name="strategy",
                 type=ParameterType.STRING,
-                description=f"Injection strategy: {', '.join([s.value for s in InjectionStrategy])} (default: append)",
+                description=(
+                    f"Injection strategy: {', '.join([s.value for s in TranscriptPushOperation])} " "(default: append)"
+                ),
                 required=False,
-                default=InjectionStrategy.APPEND.value,
+                default=TranscriptPushOperation.APPEND.value,
             ),
             "rewind_count": Parameter(
                 name="rewind_count",
@@ -201,21 +192,23 @@ class InjectPromptExecutor(CommandExecutor):
         context: Dict[str, Any],
     ) -> CommandResult:
         """
-        Inject adversarial prompt into target agent's CLIENT_TRANSCRIPT.
+        Execute prompt injection via WebSocket daemon in red team container.
 
-        This executor:
-        1. Auto-resolves target_episode_id from orchestration metadata
-        2. Retrieves target episode via session_manager.episode_manager
-        3. Applies injection strategy (append/rewind/rewrite/insert)
-        4. Calls TranscriptCoordinator.notify_modification() for WebSocket broadcast
-        5. TranscriptCoordinator handles: version increment, checksum, WebSocket event, timestamps
+        Flow:
+        1. Resolve target episode ID from orchestration metadata
+        2. Build IPC payload with injection parameters
+        3. Send HTTP POST to daemon IPC (localhost:9999) via curl
+        4. Daemon forwards to WebSocket → server processes → sends push_ack
+        5. Return result to agent
+
+        No privileged server access - operates through network boundary.
 
         Args:
-            parameters: Injection configuration with 'message', 'strategy', etc.
-            context: Execution context with episode_id and session_id
+            parameters: Injection config (message, strategy, etc.)
+            context: Execution context (episode_id, session_id)
 
         Returns:
-            CommandResult indicating success/failure of injection
+            CommandResult with injection status
         """
         try:
             # Extract context
@@ -225,18 +218,18 @@ class InjectPromptExecutor(CommandExecutor):
             if not red_episode_id or not session_id:
                 return CommandResult.error_result("Missing episode_id or session_id in execution context")
 
-            # Phase 2c: Automatic target resolution from orchestration metadata
+            # Get Docker environment for episode
+            environment = self.get_episode_environment(red_episode_id)
+
+            # Resolve target episode ID from orchestration metadata
             target_episode_id = await self._resolve_target_episode_id(parameters, context, red_episode_id)
 
             if not target_episode_id:
-                return CommandResult.error_result(
-                    "Could not resolve target_episode_id from orchestration metadata. "
-                    "Episode must have ORCHESTRATION_TARGET_EPISODES in context."
-                )
+                return CommandResult.error_result("Could not resolve target_episode_id from orchestration metadata")
 
             # Get injection parameters
             message = parameters.get("message", "")
-            strategy = parameters.get("strategy", InjectionStrategy.APPEND.value)
+            strategy = parameters.get("strategy", TranscriptPushOperation.APPEND.value)
             rewind_count = parameters.get("rewind_count", 1)
             insert_position = parameters.get("insert_position", 0)
 
@@ -244,72 +237,75 @@ class InjectPromptExecutor(CommandExecutor):
                 return CommandResult.error_result("Missing required field: message")
 
             # Validate strategy
-            valid_strategies = [s.value for s in InjectionStrategy]
+            valid_strategies = [s.value for s in TranscriptPushOperation]
             if strategy not in valid_strategies:
-                return CommandResult.error_result(
-                    f"Invalid strategy: {strategy}. " f"Valid strategies: {', '.join(valid_strategies)}"
+                return CommandResult.error_result(f"Invalid strategy: {strategy}. Valid: {', '.join(valid_strategies)}")
+
+            # Build IPC request payload
+            ipc_payload = {
+                "target_episode_id": target_episode_id,
+                "message": message,
+                "strategy": strategy,
+            }
+
+            if strategy == TranscriptPushOperation.REWIND.value:
+                ipc_payload["rewind_count"] = rewind_count
+            elif strategy == TranscriptPushOperation.INSERT.value:
+                ipc_payload["insert_position"] = insert_position
+
+            # Send to daemon via IPC using curl
+            ipc_url = "http://localhost:9999/inject"
+            timeout = int(self.get_timeout())
+
+            # Execute HTTP POST inside container using curl
+            curl_cmd = [
+                "curl",
+                "-X",
+                "POST",
+                "-H",
+                "Content-Type: application/json",
+                "-d",
+                json.dumps(ipc_payload),
+                "--max-time",
+                "30",
+                "-s",  # Silent mode
+                ipc_url,
+            ]
+
+            exec_result = await environment.execute_command(command=curl_cmd, timeout=timeout)
+
+            # Check if curl command failed
+            if exec_result.exit_code != 0:
+                return CommandResult.error_result(f"Failed to communicate with daemon: {exec_result.stderr}")
+
+            # Parse response
+            try:
+                result_data = json.loads(exec_result.stdout)
+            except json.JSONDecodeError:
+                return CommandResult.error_result(f"Failed to parse daemon response: {exec_result.stdout}")
+
+            # Check success
+            if result_data.get("success"):
+                version = result_data.get("version", 0)
+                return CommandResult.success_result(
+                    {
+                        "message": f"Injected message (version #{version}) using '{strategy}' strategy",
+                        "target_episode_id": target_episode_id,
+                        "strategy": strategy,
+                        "version": version,
+                    },
+                    metadata={
+                        "target_episode_id": target_episode_id,
+                        "version": version,
+                        "strategy": strategy,
+                    },
                 )
-
-            # Get target episode via session manager
-            if not self._session_manager:
-                return CommandResult.error_result("Session manager not available (executor not properly initialized)")
-
-            target_episode = self._session_manager.episode_manager.get_episode_by_id(target_episode_id)
-            if not target_episode:
-                return CommandResult.error_result(f"Target episode {target_episode_id} not found")
-
-            # Create injection message
-            injected_message = {"role": "system", "content": message, "source": "red_team_injection"}
-
-            # Get current target transcript
-            target_transcript = target_episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT, [])
-
-            # Apply injection strategy
-            modified_transcript = self._apply_injection_strategy(
-                target_transcript, injected_message, strategy, rewind_count, insert_position
-            )
-
-            # Phase 2: Call TranscriptCoordinator to notify modification
-            # This handles: version increment, WebSocket broadcast, timestamp, counter
-            await self._session_manager.episode_manager.transcript_coordinator.notify_modification(
-                episode_id=target_episode_id,
-                modified_transcript=modified_transcript,
-                operation=strategy,  # "append", "rewrite", "insert", "rewind"
-                injected_by=red_episode_id,
-            )
-
-            # Get updated modification count for result
-            modification_count = target_episode.context.get(MetadataKeys.TRANSCRIPT_MODIFICATION_COUNT, 0)
-
-            logger.info(
-                "Red team modified transcript via TranscriptCoordinator",
-                extra={
-                    "event": "injection_created",
-                    "red_episode_id": red_episode_id,
-                    "target_episode_id": target_episode_id,
-                    "modification_count": modification_count,
-                    "message_length": len(message),
-                    "strategy": strategy,
-                },
-            )
-
-            return CommandResult.success_result(
-                {
-                    "message": f"Injected message (modification #{modification_count}) using '{strategy}' strategy",
-                    "target_episode_id": target_episode_id,
-                    "strategy": strategy,
-                    "modification_count": modification_count,
-                },
-                metadata={
-                    "target_episode_id": target_episode_id,
-                    "modification_count": modification_count,
-                    "strategy": strategy,
-                },
-            )
+            else:
+                return CommandResult.error_result(f"Injection failed: {result_data.get('error', 'Unknown error')}")
 
         except Exception as e:
             logger.error(
-                "Injection failed",
+                "Injection execution failed",
                 extra={
                     "event": "injection_failed",
                     "episode_id": context.get("episode_id"),
@@ -317,7 +313,7 @@ class InjectPromptExecutor(CommandExecutor):
                     "error_type": type(e).__name__,
                 },
             )
-            return CommandResult.error_result(f"Injection failed: {str(e)}")
+            return CommandResult.error_result(f"Injection execution failed: {str(e)}")
 
     async def _resolve_target_episode_id(
         self, parameters: Dict[str, Any], context: Dict[str, Any], red_episode_id: str
@@ -339,58 +335,6 @@ class InjectPromptExecutor(CommandExecutor):
             parameters=parameters,
             context=context,
         )
-
-    def _apply_injection_strategy(
-        self,
-        target_transcript: List[Dict[str, Any]],
-        injected_message: Dict[str, Any],
-        strategy: str,
-        rewind_count: int,
-        insert_position: int,
-    ) -> List[Dict[str, Any]]:
-        """
-        Apply injection strategy to modify target transcript.
-
-        Strategies:
-        - append: Add message at end (default)
-        - rewind: Remove last N messages, then append
-        - rewrite: Replace entire transcript with injected message
-        - insert: Insert message at specific position
-
-        Args:
-            target_transcript: Current target transcript
-            injected_message: Message to inject
-            strategy: Injection strategy (InjectionStrategy value)
-            rewind_count: Number of messages to remove (rewind only)
-            insert_position: Position to insert at (insert only)
-
-        Returns:
-            Modified transcript
-        """
-        if strategy == InjectionStrategy.APPEND.value:
-            # Simple append at end
-            return target_transcript + [injected_message]
-
-        elif strategy == InjectionStrategy.REWIND.value:
-            # Remove last N messages, then append
-            rewind_count = max(0, rewind_count)  # Ensure non-negative
-            rewind_count = min(rewind_count, len(target_transcript))  # Don't rewind more than exists
-            rewound_transcript = target_transcript[:-rewind_count] if rewind_count > 0 else target_transcript
-            return rewound_transcript + [injected_message]
-
-        elif strategy == InjectionStrategy.REWRITE.value:
-            # Replace entire transcript
-            return [injected_message]
-
-        elif strategy == InjectionStrategy.INSERT.value:
-            # Insert at specific position
-            insert_position = max(0, insert_position)  # Ensure non-negative
-            insert_position = min(insert_position, len(target_transcript))  # Clamp to valid range
-            return target_transcript[:insert_position] + [injected_message] + target_transcript[insert_position:]
-
-        else:
-            # Fallback to append (should never reach here due to validation)
-            return target_transcript + [injected_message]
 
 
 # Register the executor

@@ -1481,3 +1481,251 @@ class TestWebSocketListener:
 
         # Assert - completed without crashing
         assert True
+
+
+class TestStateMachineEventHandling:
+    """Test state machine event types and stuck_state retry logic."""
+
+    @pytest.mark.asyncio
+    async def test_handles_is_waiting_on_user_event(self, mock_base_model):
+        """Test that is_waiting_on_user events are recognized and logged."""
+        wrapper = WebSocketTranscriptSyncingModelWrapper(
+            base_model=mock_base_model,
+            session_id="session-123",
+            episode_id="episode-456",
+            rest_url="http://localhost:8000",
+        )
+
+        # Mock websocket that emits is_waiting_on_user event
+        mock_ws = AsyncMock()
+        events_emitted = [
+            json.dumps({
+                "type": "is_waiting_on_user",
+                "data": {"state": "WAITING_FOR_USER"},
+                "timestamp": datetime.utcnow().isoformat(),
+            })
+        ]
+
+        async def mock_messages():
+            for event in events_emitted:
+                yield event
+
+        mock_ws.__aiter__ = lambda self: mock_messages()
+
+        # Act
+        listener_task = asyncio.create_task(wrapper._listen_for_events_impl(mock_ws))
+        await asyncio.sleep(0.1)  # Let it process
+        listener_task.cancel()
+
+        try:
+            await listener_task
+        except asyncio.CancelledError:
+            pass
+
+        # Assert - event should be in queue
+        assert not wrapper._event_queue.empty()
+        event = await wrapper._event_queue.get()
+        assert event["type"] == "is_waiting_on_user"
+
+    @pytest.mark.asyncio
+    async def test_handles_is_waiting_on_assistant_event(self, mock_base_model):
+        """Test that is_waiting_on_assistant events are recognized and logged."""
+        wrapper = WebSocketTranscriptSyncingModelWrapper(
+            base_model=mock_base_model,
+            session_id="session-123",
+            episode_id="episode-456",
+            rest_url="http://localhost:8000",
+        )
+
+        mock_ws = AsyncMock()
+        events_emitted = [
+            json.dumps({
+                "type": "is_waiting_on_assistant",
+                "data": {"state": "WAITING_FOR_ASSISTANT"},
+                "timestamp": datetime.utcnow().isoformat(),
+            })
+        ]
+
+        async def mock_messages():
+            for event in events_emitted:
+                yield event
+
+        mock_ws.__aiter__ = lambda self: mock_messages()
+
+        listener_task = asyncio.create_task(wrapper._listen_for_events_impl(mock_ws))
+        await asyncio.sleep(0.1)
+        listener_task.cancel()
+
+        try:
+            await listener_task
+        except asyncio.CancelledError:
+            pass
+
+        assert not wrapper._event_queue.empty()
+        event = await wrapper._event_queue.get()
+        assert event["type"] == "is_waiting_on_assistant"
+
+    @pytest.mark.asyncio
+    async def test_handles_is_waiting_on_tools_event(self, mock_base_model):
+        """Test that is_waiting_on_tools events are recognized and logged."""
+        wrapper = WebSocketTranscriptSyncingModelWrapper(
+            base_model=mock_base_model,
+            session_id="session-123",
+            episode_id="episode-456",
+            rest_url="http://localhost:8000",
+        )
+
+        mock_ws = AsyncMock()
+        events_emitted = [
+            json.dumps({
+                "type": "is_waiting_on_tools",
+                "data": {"state": "WAITING_FOR_TOOLS"},
+                "timestamp": datetime.utcnow().isoformat(),
+            })
+        ]
+
+        async def mock_messages():
+            for event in events_emitted:
+                yield event
+
+        mock_ws.__aiter__ = lambda self: mock_messages()
+
+        listener_task = asyncio.create_task(wrapper._listen_for_events_impl(mock_ws))
+        await asyncio.sleep(0.1)
+        listener_task.cancel()
+
+        try:
+            await listener_task
+        except asyncio.CancelledError:
+            pass
+
+        assert not wrapper._event_queue.empty()
+        event = await wrapper._event_queue.get()
+        assert event["type"] == "is_waiting_on_tools"
+
+    @pytest.mark.asyncio
+    async def test_handles_stuck_state_error(self, mock_base_model):
+        """Test that stuck_state errors are recognized and logged."""
+        wrapper = WebSocketTranscriptSyncingModelWrapper(
+            base_model=mock_base_model,
+            session_id="session-123",
+            episode_id="episode-456",
+            rest_url="http://localhost:8000",
+        )
+
+        mock_ws = AsyncMock()
+        events_emitted = [
+            json.dumps({
+                "type": "transcript_error",
+                "data": {
+                    "error": "stuck_state",
+                    "state": "WAITING_FOR_ASSISTANT",
+                    "duration_seconds": 320.5,
+                    "threshold_seconds": 300.0,
+                },
+                "timestamp": datetime.utcnow().isoformat(),
+            })
+        ]
+
+        async def mock_messages():
+            for event in events_emitted:
+                yield event
+
+        mock_ws.__aiter__ = lambda self: mock_messages()
+
+        listener_task = asyncio.create_task(wrapper._listen_for_events_impl(mock_ws))
+        await asyncio.sleep(0.1)
+        listener_task.cancel()
+
+        try:
+            await listener_task
+        except asyncio.CancelledError:
+            pass
+
+        # Assert - stuck_state error should be in queue
+        assert not wrapper._event_queue.empty()
+        event = await wrapper._event_queue.get()
+        assert event["type"] == "transcript_error"
+        assert event["data"]["error"] == "stuck_state"
+
+    @pytest.mark.asyncio
+    async def test_check_for_stuck_state_detection(self, mock_base_model):
+        """Test _check_for_stuck_state detects stuck_state errors in queue."""
+        wrapper = WebSocketTranscriptSyncingModelWrapper(
+            base_model=mock_base_model,
+            session_id="session-123",
+            episode_id="episode-456",
+            rest_url="http://localhost:8000",
+        )
+
+        # Add stuck_state error to queue
+        await wrapper._event_queue.put({
+            "type": "transcript_error",
+            "data": {"error": "stuck_state"},
+        })
+
+        # Check for stuck state
+        is_stuck = await wrapper._check_for_stuck_state()
+
+        assert is_stuck is True
+        # Event should still be in queue (check doesn't consume)
+        assert not wrapper._event_queue.empty()
+
+    @pytest.mark.asyncio
+    async def test_check_for_stuck_state_no_error(self, mock_base_model):
+        """Test _check_for_stuck_state returns False when no stuck_state."""
+        wrapper = WebSocketTranscriptSyncingModelWrapper(
+            base_model=mock_base_model,
+            session_id="session-123",
+            episode_id="episode-456",
+            rest_url="http://localhost:8000",
+        )
+
+        # Add normal event to queue
+        await wrapper._event_queue.put({
+            "type": "transcript_modified",
+            "data": {"version": 2},
+        })
+
+        # Check for stuck state
+        is_stuck = await wrapper._check_for_stuck_state()
+
+        assert is_stuck is False
+
+    @pytest.mark.asyncio
+    async def test_retry_logic_on_stuck_state(self, mock_base_model, mock_websocket):
+        """Test that stuck_state triggers retry with exponential backoff."""
+        config = WebSocketConfig(
+            pull=PullConfig(enabled=True, blocking=True, event_timeout=0.1),
+            push=PushConfig(enabled=False)
+        )
+
+        wrapper = WebSocketTranscriptSyncingModelWrapper(
+            base_model=mock_base_model,
+            session_id="session-123",
+            episode_id="episode-456",
+            rest_url="http://localhost:8000",
+            skip_first_iteration=False,
+            ws_config=config,
+        )
+
+        wrapper._websocket = mock_websocket
+
+        # Simulate stuck state followed by successful event
+        events_to_queue = [
+            {"type": "transcript_error", "data": {"error": "stuck_state"}},
+            {"type": "transcript_modified", "data": {"version": 2}},
+            {"type": "sync_response", "data": {
+                "sync_mode": "no_change",
+                "current_version": {"sequence": 2, "checksum": "abc"},
+            }},
+        ]
+
+        for event in events_to_queue:
+            await wrapper._event_queue.put(event)
+
+        with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
+            # Should retry and eventually succeed
+            result = await wrapper._wait_for_modification_event_with_retry(max_retries=2)
+
+            assert result is True

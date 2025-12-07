@@ -116,6 +116,10 @@ class MetadataKeys(str, Enum):
     INSTRUCTION_PROMPT = "instruction_prompt"
     ASSISTANT_PROMPT = "assistant_prompt"
     SUBMIT_PROMPT = "submit_prompt"
+    AUTO_CONTINUE_ENABLED = "auto_continue_enabled"
+    CONTINUE_PROMPT = "continue_prompt"
+    LAST_AUTO_CONTINUE_VERSION = "last_auto_continue_version"
+    ALLOW_CLIENT_USER_MESSAGES = "allow_client_user_messages"
 
     # Score metadata (used in score.metadata dictionaries)
     SUBMISSION_SCORE = "submission_score"
@@ -131,6 +135,12 @@ class MetadataKeys(str, Enum):
     # WebSocket-based transcript coordination (Phase 2)
     TRANSCRIPT_VERSION = "_transcript_version"  # Monotonic sequence number (0, 1, 2, 3...)
     TRANSCRIPT_LAST_OPERATION = "_transcript_last_operation"  # Last operation type: append, rewrite, insert, rewind
+
+    # Stuck state monitoring (Phase 4)
+    CURRENT_TRANSCRIPT_STATE = "current_transcript_state"  # Current state for comparison
+    STUCK_STATE_THRESHOLD = "stuck_state_threshold"  # Custom threshold per episode (seconds)
+    EPISODE_STUCK = "episode_stuck"  # Flag indicating episode is stuck
+    STUCK_SINCE = "stuck_since"  # Timestamp when stuck was detected
 
     # Blocking transcript solver - Timestamp-driven coordination (Legacy - being replaced)
     TRANSCRIPT_LAST_PUSHED_AT = "_transcript_last_pushed_at"  # ISO timestamp of last transcript push

@@ -7,6 +7,8 @@ policy, status, and events. Tool execution is handled by SessionMCPAPI.
 Logging category: REST_API.
 """
 
+import uuid
+
 # Forward declaration to avoid circular imports
 from datetime import datetime
 from pathlib import Path
@@ -55,7 +57,8 @@ from ...models.rest.evaluation import (
     TaskEvaluationContext,
     TemplateContentResponse,
 )
-from ...models.rest.websocket_constants import WebSocketCloseCode
+from ...models.rest.websocket_constants import WebSocketCloseCode, WebSocketMessageType
+from ...models.rest.websocket_requests import PushMessageRequestData, SyncRequestData
 from ..evaluation.exceptions import EvaluationNotFoundError, InvalidEvaluationRequestError, SessionEvaluationError
 
 if TYPE_CHECKING:
@@ -1324,22 +1327,23 @@ class SessionRestAPI:
                     data = await websocket.receive_json()
                     message_type = data.get("type")
 
-                    if message_type == "ping":
+                    if message_type == WebSocketMessageType.PING:
                         # Keepalive
                         await websocket.send_json(
                             {
-                                "type": "pong",
+                                "type": WebSocketMessageType.PONG,
                                 "timestamp": datetime.utcnow().isoformat(),
                             }
                         )
 
-                    elif message_type == "sync_request":
+                    elif message_type == WebSocketMessageType.SYNC_REQUEST:
                         # Client requesting transcript sync
-                        request_data = data.get("data", {})
+                        request_data = SyncRequestData(**data.get("data", {}))
+
                         sync_request = TranscriptSyncRequest(
                             episode_id=episode_id,
-                            since_version=request_data.get("since_version", 0),
-                            client_checksum=request_data.get("client_checksum"),
+                            since_version=request_data.since_version,
+                            client_checksum=request_data.client_checksum,
                         )
 
                         coordinator = self.session_manager.episode_manager.transcript_coordinator
@@ -1347,7 +1351,7 @@ class SessionRestAPI:
 
                         await websocket.send_json(
                             {
-                                "type": "sync_response",
+                                "type": WebSocketMessageType.SYNC_RESPONSE,
                                 "data": {
                                     "current_version": {
                                         "sequence": sync_response.current_version.sequence,
@@ -1365,26 +1369,67 @@ class SessionRestAPI:
                             }
                         )
 
-                    elif message_type == "push_message":
-                        # Client pushing new message
-                        request_data = data.get("data", {})
+                    elif message_type == WebSocketMessageType.PUSH_MESSAGE:
+                        # Client pushing new message (supports both normal and injection mode)
+                        push_data = PushMessageRequestData(**data.get("data", {}))
+
+                        # Support cross-episode pushes (red team targeting blue team)
+                        target_episode_id = push_data.target_episode_id or episode_id
+
                         sync_request = TranscriptSyncRequest(
-                            episode_id=episode_id,
-                            since_version=request_data.get("since_version", 0),
-                            client_checksum=request_data.get("client_checksum"),
-                            messages_to_push=[request_data.get("message")],
+                            episode_id=target_episode_id,
+                            since_version=push_data.since_version,
+                            client_checksum=push_data.client_checksum,
+                            messages_to_push=[push_data.message],
+                            # "strategy" in client message maps to "operation" in backend
+                            operation=push_data.strategy,
+                            rewind_count=push_data.rewind_count,
+                            insert_position=push_data.insert_position,
                         )
 
                         coordinator = self.session_manager.episode_manager.transcript_coordinator
                         sync_response = await coordinator.sync(sync_request)
 
+                        # Build response with optional injection metadata
+                        response_data = {
+                            "version": sync_response.current_version.sequence,
+                            "checksum": sync_response.current_version.checksum,
+                        }
+
+                        # If cross-episode push (injection), add metadata
+                        if target_episode_id != episode_id:
+                            target_episode = self.session_manager.episode_manager.get_episode_by_id(target_episode_id)
+                            if target_episode:
+                                modification_count = (
+                                    target_episode.context.get(MetadataKeys.TRANSCRIPT_MODIFICATION_COUNT, 0) + 1
+                                )
+                                # Update modification count
+                                await target_episode.update_context_atomic(
+                                    {MetadataKeys.TRANSCRIPT_MODIFICATION_COUNT: modification_count}
+                                )
+                                response_data["modification_count"] = modification_count
+                                response_data["target_episode_id"] = target_episode_id
+
+                                # Broadcast transcript_modified event to target episode
+                                await coordinator.connection_manager.broadcast_to_episode(
+                                    episode_id=target_episode_id,
+                                    message={  # type: ignore[arg-type,misc]
+                                        "type": WebSocketMessageType.TRANSCRIPT_MODIFIED,
+                                        "data": {
+                                            "version": sync_response.current_version.sequence,
+                                            "operation": push_data.strategy,
+                                            "modification_count": modification_count,
+                                            "injected_by": episode_id,
+                                        },
+                                        "id": str(uuid.uuid4()),
+                                        "timestamp": datetime.utcnow().isoformat(),
+                                    },
+                                )
+
                         await websocket.send_json(
                             {
-                                "type": "push_ack",
-                                "data": {
-                                    "version": sync_response.current_version.sequence,
-                                    "checksum": sync_response.current_version.checksum,
-                                },
+                                "type": WebSocketMessageType.PUSH_ACK,
+                                "data": response_data,
                                 "id": data.get("id"),
                                 "timestamp": datetime.utcnow().isoformat(),
                             }

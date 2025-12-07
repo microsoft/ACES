@@ -12,14 +12,23 @@ Logging category: EPISODE
 
 import asyncio
 import uuid
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from ...logging_config import LogCategory, get_saber_logger
 from ...models.constants import MetadataKeys
-from ...models.transcript import TranscriptSyncRequest, TranscriptSyncResponse, TranscriptVersion, compute_checksum
+from ...models.transcript import (
+    TranscriptPushOperation,
+    TranscriptSyncRequest,
+    TranscriptSyncResponse,
+    TranscriptVersion,
+    compute_checksum,
+)
 from ..base import Episode
 from ..time_source import TimeSource, UTCTimeSource
+from .auto_continue_manager import AutoContinueManager
 from .protocols import ConnectionManagerProtocol, EpisodeManagerProtocol
+from .stuck_state_monitor import StuckStateMonitor
+from .transcript_state_machine import TranscriptStateMachine
 
 logger = get_saber_logger(LogCategory.EPISODE, __name__)
 
@@ -42,6 +51,8 @@ class TranscriptCoordinator:
         episode_manager: EpisodeManagerProtocol,
         connection_manager: ConnectionManagerProtocol,
         time_source: TimeSource | None = None,
+        stuck_check_interval: float = 30.0,
+        stuck_threshold: float = 300.0,
     ) -> None:
         """
         Initialize the transcript coordinator.
@@ -50,12 +61,56 @@ class TranscriptCoordinator:
             episode_manager: EpisodeManager instance for episode access
             connection_manager: ConnectionManager instance for WebSocket broadcasting
             time_source: Time source for getting current time (defaults to UTCTimeSource)
+            stuck_check_interval: Seconds between stuck state checks (default 30s)
+            stuck_threshold: Default stuck threshold in seconds (default 5min)
         """
         self.episode_manager = episode_manager
         self.connection_manager = connection_manager
         self._coordination_configs: Dict[str, Dict[str, str]] = {}
         self._lock = asyncio.Lock()
         self._time_source = time_source or UTCTimeSource()
+
+        # Initialize state machine and auto-continue manager
+        self._state_machine = TranscriptStateMachine()
+        self._auto_continue = AutoContinueManager(episode_manager, self)
+
+        # Initialize stuck state monitor
+        self._stuck_monitor = StuckStateMonitor(
+            coordinator=self,
+            episode_manager=episode_manager,
+            check_interval=stuck_check_interval,
+            stuck_threshold=stuck_threshold,
+        )
+
+        # Register lifecycle hooks
+        self._register_lifecycle_hooks()
+
+    def _register_lifecycle_hooks(self) -> None:
+        """Register state machine lifecycle hooks with episode manager."""
+        # Hook into episode creation
+        original_start = self.episode_manager.start_episode  # type: ignore[attr-defined]
+
+        def start_episode_with_hook(session_id: str, task_id: str, *args: Any, **kwargs: Any) -> Any:
+            episode = original_start(session_id, task_id, *args, **kwargs)
+            # Schedule async lifecycle hook if event loop is running
+            try:
+                asyncio.create_task(self._state_machine.on_episode_created(episode.episode_id))
+            except RuntimeError:
+                # No event loop running - skip lifecycle hook (sync tests)
+                pass
+            return episode
+
+        self.episode_manager.start_episode = start_episode_with_hook  # type: ignore[attr-defined]
+
+        # Hook into episode termination
+        original_end = self.episode_manager.end_episode  # type: ignore[attr-defined]
+
+        async def end_episode_with_hook(episode_id: str, *args: Any, **kwargs: Any) -> Any:
+            # Call lifecycle hook before ending
+            await self._state_machine.on_episode_terminated(episode_id)
+            return await original_end(episode_id, *args, **kwargs)
+
+        self.episode_manager.end_episode = end_episode_with_hook  # type: ignore[attr-defined]
 
     def _get_current_version(self, episode: Episode) -> TranscriptVersion:
         """
@@ -109,7 +164,13 @@ class TranscriptCoordinator:
 
         # Step 1: Push new messages if provided (LAST WRITE WINS)
         if request.messages_to_push:
-            await self._push_messages(episode, request.messages_to_push, operation="append")
+            await self._push_messages(
+                episode,
+                request.messages_to_push,
+                operation=request.operation,
+                rewind_count=request.rewind_count,
+                insert_position=request.insert_position,
+            )
 
         # Step 2: Get current server state
         current_version = self._get_current_version(episode)
@@ -175,19 +236,45 @@ class TranscriptCoordinator:
         episode: Episode,
         messages: List[Dict[str, str]],
         operation: str = "append",
+        rewind_count: Optional[int] = 1,
+        insert_position: Optional[int] = 0,
     ) -> None:
         """
-        Push messages with operation type tracking (LAST WRITE WINS).
+        Push messages with operation type (LAST WRITE WINS).
 
         Args:
             episode: Episode instance
-            messages: Messages to append
-            operation: Operation type (append, rewrite, insert, rewind)
+            messages: Messages to add/push
+            operation: "append", "rewind", "rewrite", "insert"
+            rewind_count: Number of messages to remove (rewind only)
+            insert_position: Position to insert at (insert only)
         """
         existing = episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT, [])
         current_version = episode.context.get(MetadataKeys.TRANSCRIPT_VERSION, 0)
 
-        updated_messages = existing + messages
+        # Apply operation to compute new transcript
+        if operation == TranscriptPushOperation.APPEND.value:
+            updated_messages = existing + messages
+
+        elif operation == TranscriptPushOperation.REWIND.value:
+            # Remove last N messages, then append
+            safe_rewind_count = max(0, min(rewind_count if rewind_count is not None else 1, len(existing)))
+            rewound = existing[:-safe_rewind_count] if safe_rewind_count > 0 else existing
+            updated_messages = rewound + messages
+
+        elif operation == TranscriptPushOperation.REWRITE.value:
+            # Replace entire transcript
+            updated_messages = messages
+
+        elif operation == TranscriptPushOperation.INSERT.value:
+            # Insert at specific position
+            safe_insert_position = max(0, min(insert_position if insert_position is not None else 0, len(existing)))
+            updated_messages = existing[:safe_insert_position] + messages + existing[safe_insert_position:]
+
+        else:
+            # Fallback to append for unknown operations
+            updated_messages = existing + messages
+
         new_version = current_version + 1  # Always increment (monotonic)
 
         await episode.update_context_atomic(
@@ -288,16 +375,28 @@ class TranscriptCoordinator:
             }
         )
 
-        # ✨ WEBSOCKET BROADCAST ✨
+        # Detect state after modification
+        new_state = self._state_machine.get_state(episode)
+
+        # Update state timestamp if state changed
+        old_state = episode.context.get(MetadataKeys.CURRENT_TRANSCRIPT_STATE)
+        if old_state != new_state.value:
+            self._state_machine.update_state_timestamp(episode_id)
+            # Store current state for next comparison
+            await episode.update_context_atomic({MetadataKeys.CURRENT_TRANSCRIPT_STATE: new_state.value})
+
+        event_type = TranscriptStateMachine.state_to_event_type(new_state)
+
         await self.connection_manager.broadcast_to_episode(
             episode_id=episode_id,
-            message={
-                "type": "transcript_modified",
+            message={  # type: ignore[arg-type,misc]
+                "type": event_type,
                 "data": {
                     "version": new_version,
                     "operation": operation,
                     "modification_count": modification_count,
                     "injected_by": injected_by,
+                    "state": new_state.value,
                 },
                 "id": str(uuid.uuid4()),
                 "timestamp": self._time_source.now().isoformat(),
@@ -312,8 +411,21 @@ class TranscriptCoordinator:
                 "operation": operation,
                 "modification_count": modification_count,
                 "injected_by": injected_by,
+                "state": new_state.value,
+                "event_type": event_type,
             },
         )
+
+        # Trigger auto-continue asynchronously (don't block)
+        asyncio.create_task(self._auto_continue.handle_auto_continue(episode_id, new_state))
+
+    async def start_monitor(self) -> None:
+        """Start background monitors."""
+        await self._stuck_monitor.start()
+
+    async def stop_monitor(self) -> None:
+        """Stop background monitors."""
+        await self._stuck_monitor.stop()
 
     async def cleanup_episode(self, episode_id: str) -> None:
         """

@@ -481,6 +481,43 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
                         },
                     )
 
+                elif event_type in ("is_waiting_on_user", "is_waiting_on_assistant", "is_waiting_on_tools"):
+                    # Phase 4: State machine events - log and queue
+                    await self._event_queue.put(data)
+
+                    logger.info(
+                        "Received state machine event",
+                        extra={
+                            "episode_id": self._episode_id,
+                            "event_type": event_type,
+                            "state": data.get("data", {}).get("state"),
+                        },
+                    )
+
+                elif event_type == "transcript_error":
+                    # Phase 4: Error events (stuck_state, etc.) - queue for handling
+                    await self._event_queue.put(data)
+
+                    error_type = data.get("data", {}).get("error")
+                    if error_type == "stuck_state":
+                        logger.error(
+                            "Episode stuck in state - retry required",
+                            extra={
+                                "episode_id": self._episode_id,
+                                "state": data.get("data", {}).get("state"),
+                                "duration_seconds": data.get("data", {}).get("duration_seconds"),
+                                "threshold_seconds": data.get("data", {}).get("threshold_seconds"),
+                            },
+                        )
+                    else:
+                        logger.error(
+                            "Received transcript error event",
+                            extra={
+                                "episode_id": self._episode_id,
+                                "error": error_type,
+                            },
+                        )
+
                 elif event_type in ("sync_response", "push_ack", "pong"):
                     # Response to client request - also queue these for awaiting code
                     await self._event_queue.put(data)
@@ -538,6 +575,105 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
             logger.warning("WebSocket timeout", extra={"episode_id": self._episode_id})
             return False
 
+    async def _check_for_stuck_state(self) -> bool:
+        """Check event queue for stuck_state errors without blocking.
+
+        Scans the event queue for transcript_error events with stuck_state.
+        This allows proactive detection of stuck episodes.
+
+        Returns:
+            True if stuck_state error detected, False otherwise
+        """
+        # Non-blocking check of event queue
+        try:
+            # Peek at events in queue without blocking
+            events_to_requeue = []
+            stuck_detected = False
+
+            while not self._event_queue.empty():
+                try:
+                    event = self._event_queue.get_nowait()
+                    events_to_requeue.append(event)
+
+                    if event.get("type") == "transcript_error":
+                        error_type = event.get("data", {}).get("error")
+                        if error_type == "stuck_state":
+                            stuck_detected = True
+                except asyncio.QueueEmpty:
+                    break
+
+            # Re-queue all events
+            for event in events_to_requeue:
+                await self._event_queue.put(event)
+
+            return stuck_detected
+
+        except Exception as e:
+            logger.warning(
+                "Error checking for stuck state",
+                extra={
+                    "episode_id": self._episode_id,
+                    "error": str(e),
+                },
+            )
+            return False
+
+    async def _wait_for_modification_event_with_retry(self, max_retries: int = 3) -> bool:
+        """Wait for modification event with stuck_state retry logic.
+
+        Implements exponential backoff retry when stuck_state errors are detected.
+
+        Args:
+            max_retries: Maximum number of retry attempts (default 3)
+
+        Returns:
+            True if event received, False on timeout or max retries exceeded
+        """
+        retry_delays = [5.0, 10.0, 20.0]  # Exponential backoff in seconds
+
+        for attempt in range(max_retries + 1):
+            # Check for stuck state before waiting
+            if attempt > 0:
+                stuck = await self._check_for_stuck_state()
+                if stuck:
+                    logger.warning(
+                        "Stuck state detected, retrying after delay",
+                        extra={
+                            "episode_id": self._episode_id,
+                            "attempt": attempt,
+                            "max_retries": max_retries,
+                        },
+                    )
+                    # Wait before retry with exponential backoff
+                    delay = retry_delays[min(attempt - 1, len(retry_delays) - 1)]
+                    await asyncio.sleep(delay)
+
+            # Try to get modification event
+            event_received = await self._wait_for_modification_event()
+
+            if event_received:
+                return True
+
+            # On timeout, check if we should retry
+            if attempt < max_retries:
+                logger.info(
+                    "Modification event timeout, retrying",
+                    extra={
+                        "episode_id": self._episode_id,
+                        "attempt": attempt + 1,
+                        "max_retries": max_retries,
+                    },
+                )
+
+        logger.error(
+            "Max retries exceeded waiting for modification event",
+            extra={
+                "episode_id": self._episode_id,
+                "max_retries": max_retries,
+            },
+        )
+        return False
+
     async def generate(
         self,
         input: str | list[ChatMessage],
@@ -567,9 +703,9 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
             )
         elif self._ws_config.pull.enabled:
             # Only pull if enabled (blue team waits for modifications, red team skips)
-            # Block and wait for WebSocket notification
+            # Block and wait for WebSocket notification with stuck_state retry
             if isinstance(input, list):
-                event_received = await self._wait_for_modification_event()
+                event_received = await self._wait_for_modification_event_with_retry()
 
                 if event_received:
                     try:

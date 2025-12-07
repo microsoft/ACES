@@ -7,6 +7,8 @@ for message construction and validation.
 
 from typing import Any, Dict, Literal, TypedDict
 
+from typing_extensions import NotRequired
+
 
 class TranscriptModifiedData(TypedDict):
     """Data payload for transcript_modified events."""
@@ -69,11 +71,38 @@ class SyncResponseMessage(TypedDict):
     timestamp: str
 
 
+class PushMessageData(TypedDict):
+    """Data payload for push_message (both normal and injection)."""
+
+    message: Dict[str, Any]
+    since_version: int
+    client_checksum: NotRequired[str]
+
+    # INJECTION FIELDS (optional - red team only)
+    target_episode_id: NotRequired[str]  # If present → injection mode
+    strategy: NotRequired[str]  # "append", "rewind", "rewrite", "insert"
+    rewind_count: NotRequired[int]  # For rewind strategy
+    insert_position: NotRequired[int]  # For insert strategy
+
+
+class PushMessage(TypedDict):
+    """WebSocket message for client pushing new message (normal or injection)."""
+
+    type: Literal["push_message"]
+    data: PushMessageData
+    id: str
+    timestamp: str
+
+
 class PushAckData(TypedDict):
     """Data payload for push_ack messages."""
 
     version: int
     checksum: str
+
+    # INJECTION RESPONSE FIELDS (optional - present when target_episode_id was in request)
+    modification_count: NotRequired[int]  # Monotonic injection counter
+    target_episode_id: NotRequired[str]  # Echo back target for confirmation
 
 
 class PushAckMessage(TypedDict):
@@ -107,6 +136,8 @@ __all__ = [
     "SyncResponseVersionData",
     "SyncResponseData",
     "SyncResponseMessage",
+    "PushMessageData",
+    "PushMessage",
     "PushAckData",
     "PushAckMessage",
     "ConnectionMetadata",
