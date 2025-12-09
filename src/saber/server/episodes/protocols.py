@@ -7,16 +7,9 @@ Protocols enable duck typing with type checking - any object that implements
 the required methods can be used, without requiring inheritance.
 """
 
-from typing import Optional, Protocol, Union
+from typing import Optional, Protocol
 
-from ...models.rest.websocket_messages import (
-    ConnectedMessage,
-    PongMessage,
-    PushAckMessage,
-    SyncResponseMessage,
-    TranscriptModifiedMessage,
-    WebSocketServerMessage,
-)
+from ...models.rest.websocket_messages import WebSocketServerMessage
 from ..base import Episode
 
 
@@ -51,14 +44,7 @@ class ConnectionManagerProtocol(Protocol):
     async def broadcast_to_episode(
         self,
         episode_id: str,
-        message: Union[
-            TranscriptModifiedMessage,
-            ConnectedMessage,
-            PongMessage,
-            SyncResponseMessage,
-            PushAckMessage,
-            WebSocketServerMessage,
-        ],
+        message: WebSocketServerMessage,
     ) -> None:
         """Broadcast message to all WebSocket connections for an episode.
 

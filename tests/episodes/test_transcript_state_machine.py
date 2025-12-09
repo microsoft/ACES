@@ -333,19 +333,19 @@ class TestEventTypeMapping:
         )
         assert event_type == "is_waiting_on_tools"
 
-    def test_error_stuck_maps_to_transcript_error(self):
-        """ERROR_STUCK → transcript_error."""
+    def test_error_stuck_maps_to_transcript_modified(self):
+        """ERROR_STUCK → transcript_modified (errors use TranscriptErrorMessage separately)."""
         event_type = TranscriptStateMachine.state_to_event_type(
             TranscriptState.ERROR_STUCK
         )
-        assert event_type == "transcript_error"
+        assert event_type == "transcript_modified"
 
-    def test_error_malformed_maps_to_transcript_error(self):
-        """ERROR_MALFORMED → transcript_error."""
+    def test_error_malformed_maps_to_transcript_modified(self):
+        """ERROR_MALFORMED → transcript_modified (errors use TranscriptErrorMessage separately)."""
         event_type = TranscriptStateMachine.state_to_event_type(
             TranscriptState.ERROR_MALFORMED
         )
-        assert event_type == "transcript_error"
+        assert event_type == "transcript_modified"
 
 
 class TestStateTimestampTracking:

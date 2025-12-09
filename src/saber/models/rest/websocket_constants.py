@@ -82,5 +82,10 @@ class WebSocketDefaults:
     LISTENER_TASK_CANCEL_TIMEOUT_SECONDS = 1.0  # Timeout when cancelling listener task
     WEBSOCKET_CLOSE_TIMEOUT_SECONDS = 2.0  # Timeout when closing WebSocket connection
 
+    # Event processing iteration limits
+    MAX_EVENT_DISCARD_ITERATIONS = 20  # Max iterations to discard non-matching events
+    MAX_SYNC_RESPONSE_ITERATIONS = 50  # Max iterations waiting for sync_response (high for concurrent samples)
+    MAX_ACK_WAIT_ITERATIONS = 20  # Max iterations waiting for push_ack
+
 
 __all__ = ["WebSocketCloseCode", "WebSocketMessageType", "WebSocketDefaults"]

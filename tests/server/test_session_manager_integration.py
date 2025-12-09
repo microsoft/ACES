@@ -1,21 +1,5 @@
 """
-Unit tests for SessionManage        with patch('saber.server.session_manager.BenchmarkManager', return_value=mock_task_manager), \
-             patch('saber.server.session_manager.ExecutionManager', return_value=mock_execution_manager), \
-             patch('saber.server.session_manager.PolicyManager', return_value=mock_policy_manager), \
-             patch('saber.server.session_manager.EvaluationManager', return_value=mock_evaluation_manager):
-
-            manager = SessionManager(
-                domain_name="integration_test",
-                config_dir="        # Verify pentest_team_alpha has no active episodes but others are unaffected (real end_episode manages this)
-        assert len(alpha_session.active_episode_ids) == 0
-        # Note: episode_history is managed internally, we can't easily test that in this mock setup
-
-        # Verify other sessions still have their episodes
-        other_active_episodes = 0
-                host="127.0.0.1",
-                port=8004
-            )
-            return manageron and error handling.
+Unit tests for SessionManager error handling and integration.
 
 Tests component integration, error scenarios, and edge cases.
 """
@@ -25,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
+from saber.models.benchmark_task import SingleEpisodeTask
 from saber.server.base import Action, CommandResult, EpisodeState
 from saber.server.session_manager import SessionManager
 
@@ -67,6 +52,7 @@ class TestSessionManagerIntegration:
         mock_episode_manager.end_episode = AsyncMock()
         mock_episode_manager.get_episode = MagicMock()
         mock_episode_manager.configure_for_task = AsyncMock()
+        mock_episode_manager.initialize_episode_context = MagicMock(return_value={})
 
         with (
             patch("saber.server.session_manager.BenchmarkManager", return_value=mock_task_manager),
@@ -114,6 +100,21 @@ class TestSessionManagerIntegration:
         mock_task.episode_config = {"max_steps": 20}  # Add episode_config to prevent early termination
         mock_task.dependency_template = None  # No dependencies
         manager.benchmark_manager.get_task.return_value = mock_task
+
+        # Mock get_single_episode_task to return proper SingleEpisodeTask
+        single_episode_task = SingleEpisodeTask(
+            task_id="task_456",
+            domain="integration_test",
+            title="Test Task",
+            description="Test description",
+            max_steps=20,
+            instruction_prompt="test",
+            assistant_prompt="test",
+            submit_prompt="test",
+            episode_attempts=1,
+            initial_context={"test": "data"},
+        )
+        manager.benchmark_manager.get_single_episode_task.return_value = single_episode_task
 
         # Mock prompts
         manager.benchmark_manager.prompt_generator.render_agent_prompts_for_task.return_value = {
@@ -243,6 +244,7 @@ class TestSessionManagerErrorHandling:
         mock_episode_manager.end_episode = AsyncMock()
         mock_episode_manager.get_episode = MagicMock()
         mock_episode_manager.configure_for_task = AsyncMock()
+        mock_episode_manager.initialize_episode_context = MagicMock(return_value={})
 
         with (
             patch("saber.server.session_manager.BenchmarkManager", return_value=mock_task_manager),

@@ -13,17 +13,26 @@ from .config import TranscriptSyncConfig
 from .endpoints import APIEndpoints
 from .websocket_config import PullConfig, PushConfig, WebSocketConfig
 from .websocket_constants import WebSocketCloseCode, WebSocketDefaults
+
+# Re-export websocket messages
 from .websocket_messages import (
+    ConnectedData,
     ConnectedMessage,
     ConnectionMetadata,
     PongMessage,
     PushAckData,
     PushAckMessage,
+    PushMessageData,
+    StateEventData,
+    StateEventMessage,
+    SyncRequestData,
     SyncResponseData,
     SyncResponseMessage,
-    SyncResponseVersionData,
-    TranscriptModifiedData,
-    TranscriptModifiedMessage,
+    TranscriptErrorData,
+    TranscriptErrorMessage,
+    TranscriptErrorType,
+    TranscriptVersion,
+    WebSocketMessageType,
     WebSocketServerMessage,
 )
 
@@ -35,17 +44,24 @@ __all__ = [
     "PullConfig",
     "WebSocketCloseCode",
     "WebSocketDefaults",
-    # WebSocket message types
-    "TranscriptModifiedData",
-    "TranscriptModifiedMessage",
+    # WebSocket message types and enums
+    "WebSocketMessageType",
+    "TranscriptErrorType",
+    "TranscriptVersion",
+    "SyncRequestData",
+    "SyncResponseData",
+    "PushMessageData",
+    "PushAckData",
+    "StateEventData",
+    "TranscriptErrorData",
+    "ConnectedData",
+    "ConnectionMetadata",
     "ConnectedMessage",
     "PongMessage",
-    "SyncResponseVersionData",
-    "SyncResponseData",
     "SyncResponseMessage",
-    "PushAckData",
     "PushAckMessage",
-    "ConnectionMetadata",
+    "StateEventMessage",
+    "TranscriptErrorMessage",
     "WebSocketServerMessage",
     # HTTP REST models
     "StepResponse",

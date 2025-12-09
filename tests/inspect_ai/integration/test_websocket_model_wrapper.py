@@ -15,7 +15,26 @@ import json
 
 from saber.inspect_ai.integration.model_wrapper import WebSocketTranscriptSyncingModelWrapper
 from saber.models.rest.websocket_config import WebSocketConfig, PushConfig, PullConfig
+from saber.models.rest.websocket_messages import (
+    PushAckData,
+    PushAckMessage,
+    StateEventData,
+    StateEventMessage,
+    SyncMode,
+    SyncResponseData,
+    SyncResponseMessage,
+    TranscriptErrorData,
+    TranscriptErrorMessage,
+    TranscriptErrorType,
+    TranscriptOperation,
+    TranscriptVersion,
+)
 from inspect_ai.model import ChatMessageAssistant, ModelOutput, ChatCompletionChoice
+
+
+def _ts() -> str:
+    """Generate a test timestamp."""
+    return datetime.now().isoformat()
 
 
 @pytest.fixture
@@ -38,7 +57,7 @@ def mock_websocket():
     """Create a mock WebSocket connection."""
     ws = AsyncMock()
     ws.closed = False
-    ws.send_json = AsyncMock()
+    ws.send = AsyncMock()
     ws.close = AsyncMock()
     return ws
 
@@ -60,7 +79,7 @@ class TestPullEnabledBehavior:
             session_id="session-123",
             episode_id="episode-456",
             rest_url="http://localhost:8000",
-            skip_first_iteration=False,  # Don't skip, so it should wait
+            # Don't skip, so it should wait
             ws_config=config,
         )
 
@@ -69,19 +88,29 @@ class TestPullEnabledBehavior:
         wrapper._event_queue = asyncio.Queue()
 
         # Put a mock event in the queue (simulate transcript_modified)
-        await wrapper._event_queue.put({
-            "type": "transcript_modified",
-            "data": {"version": 2, "operation": "append"},
-        })
+        await wrapper._event_queue.put(StateEventMessage(
+            type="transcript_modified",
+            data=StateEventData(
+                version=2,
+                operation=TranscriptOperation.APPEND,
+                modification_count=0,
+                state="WAITING_FOR_USER"
+            ),
+            id="msg-1",
+            timestamp=_ts(),
+        ))
 
         # Put a mock sync_response in the queue
-        await wrapper._event_queue.put({
-            "type": "sync_response",
-            "data": {
-                "sync_mode": "no_change",
-                "current_version": {"sequence": 2, "checksum": "abc123"},
-            },
-        })
+        await wrapper._event_queue.put(SyncResponseMessage(
+            type="sync_response",
+            data=SyncResponseData(
+                sync_mode=SyncMode.FULL,
+                current_version=TranscriptVersion(sequence=2, checksum="abc123"),
+                full_transcript=[{"role": "user", "content": "Test"}],
+            ),
+            id="msg-2",
+            timestamp=_ts(),
+        ))
 
         input_messages = [{"role": "user", "content": "Test"}]
 
@@ -90,10 +119,10 @@ class TestPullEnabledBehavior:
             await wrapper.generate(input_messages)
 
         # Assert - should have sent sync_request because pull is enabled
-        assert mock_websocket.send_json.called
+        assert mock_websocket.send.called
         sync_request_calls = [
-            call for call in mock_websocket.send_json.call_args_list
-            if call[0][0].get("type") == "sync_request"
+            call for call in mock_websocket.send.call_args_list
+            if "sync_request" in str(call)
         ]
         assert len(sync_request_calls) > 0, "Should have sent sync_request when pull.enabled=True"
 
@@ -111,7 +140,7 @@ class TestPullEnabledBehavior:
             session_id="session-123",
             episode_id="episode-456",
             rest_url="http://localhost:8000",
-            skip_first_iteration=False,  # Don't skip first iteration
+            # Don't skip first iteration
             ws_config=config,
         )
 
@@ -125,10 +154,10 @@ class TestPullEnabledBehavior:
             await wrapper.generate(input_messages)
 
         # Assert - should NOT have sent sync_request because pull is disabled
-        if mock_websocket.send_json.called:
+        if mock_websocket.send.called:
             sync_request_calls = [
-                call for call in mock_websocket.send_json.call_args_list
-                if call[0][0].get("type") == "sync_request"
+                call for call in mock_websocket.send.call_args_list
+                if "sync_request" in str(call)
             ]
             assert len(sync_request_calls) == 0, "Should NOT send sync_request when pull.enabled=False"
 
@@ -136,8 +165,8 @@ class TestPullEnabledBehavior:
         assert mock_base_model.generate.called
 
     @pytest.mark.asyncio
-    async def test_pull_disabled_with_skip_first_iteration(self, mock_base_model, mock_websocket):
-        """Test that pull.enabled=False works correctly even with skip_first_iteration=True."""
+    async def test_pull_disabled_no_sync_on_any_call(self, mock_base_model, mock_websocket):
+        """Test that pull.enabled=False prevents sync on all generate() calls."""
         # Arrange
         config = WebSocketConfig(
             pull=PullConfig(enabled=False),
@@ -149,7 +178,7 @@ class TestPullEnabledBehavior:
             session_id="session-123",
             episode_id="episode-456",
             rest_url="http://localhost:8000",
-            skip_first_iteration=True,  # Skip first, but pull is disabled anyway
+            # Skip first, but pull is disabled anyway
             ws_config=config,
         )
 
@@ -161,10 +190,10 @@ class TestPullEnabledBehavior:
             await wrapper.generate([{"role": "user", "content": "Second"}])
 
         # Assert - no sync requests on either call
-        if mock_websocket.send_json.called:
+        if mock_websocket.send.called:
             sync_request_calls = [
-                call for call in mock_websocket.send_json.call_args_list
-                if call[0][0].get("type") == "sync_request"
+                call for call in mock_websocket.send.call_args_list
+                if "sync_request" in str(call)
             ]
             assert len(sync_request_calls) == 0
 
@@ -186,7 +215,7 @@ class TestPushEnabledBehavior:
             session_id="session-123",
             episode_id="episode-456",
             rest_url="http://localhost:8000",
-            skip_first_iteration=True,
+
             ws_config=config,
         )
 
@@ -194,23 +223,22 @@ class TestPushEnabledBehavior:
         wrapper._event_queue = asyncio.Queue()
 
         # Put a mock push_ack in the queue
-        await wrapper._event_queue.put({
-            "type": "push_ack",
-            "data": {
-                "version": 1,
-                "checksum": "abc123",
-            },
-        })
+        await wrapper._event_queue.put(PushAckMessage(
+            type="push_ack",
+            data=PushAckData(version=1, checksum="abc123"),
+            id="msg-1",
+            timestamp=_ts(),
+        ))
 
         # Act
         with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
             await wrapper.generate([{"role": "user", "content": "Test"}])
 
         # Assert - should have sent push_message
-        assert mock_websocket.send_json.called
+        assert mock_websocket.send.called
         push_message_calls = [
-            call for call in mock_websocket.send_json.call_args_list
-            if call[0][0].get("type") == "push_message"
+            call for call in mock_websocket.send.call_args_list
+            if "push_message" in str(call)
         ]
         assert len(push_message_calls) > 0, "Should send push_message when push.enabled=True"
 
@@ -228,7 +256,7 @@ class TestPushEnabledBehavior:
             session_id="session-123",
             episode_id="episode-456",
             rest_url="http://localhost:8000",
-            skip_first_iteration=True,
+
             ws_config=config,
         )
 
@@ -240,10 +268,10 @@ class TestPushEnabledBehavior:
             await wrapper.generate([{"role": "user", "content": "Test"}])
 
         # Assert - should NOT have sent push_message
-        if mock_websocket.send_json.called:
+        if mock_websocket.send.called:
             push_message_calls = [
-                call for call in mock_websocket.send_json.call_args_list
-                if call[0][0].get("type") == "push_message"
+                call for call in mock_websocket.send.call_args_list
+                if "push_message" in str(call)
             ]
             assert len(push_message_calls) == 0, "Should NOT send push_message when push.enabled=False"
 
@@ -264,7 +292,7 @@ class TestPushEnabledBehavior:
             session_id="session-123",
             episode_id="episode-456",
             rest_url="http://localhost:8000",
-            skip_first_iteration=True,
+
             ws_config=config,
         )
 
@@ -297,7 +325,7 @@ class TestRedTeamScenario:
             session_id="session-123",
             episode_id="red-episode-456",
             rest_url="http://localhost:8000",
-            skip_first_iteration=True,
+
             ws_config=config,
         )
 
@@ -305,10 +333,12 @@ class TestRedTeamScenario:
         wrapper._event_queue = asyncio.Queue()
 
         # Mock push_ack
-        await wrapper._event_queue.put({
-            "type": "push_ack",
-            "data": {"version": 1, "checksum": "abc123"},
-        })
+        await wrapper._event_queue.put(PushAckMessage(
+            type="push_ack",
+            data=PushAckData(version=1, checksum="abc123"),
+            id="msg-1",
+            timestamp=_ts(),
+        ))
 
         # Act
         with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
@@ -317,15 +347,15 @@ class TestRedTeamScenario:
         # Assert
         # 1. Should NOT wait for sync (no sync_request)
         sync_request_calls = [
-            call for call in mock_websocket.send_json.call_args_list
-            if call[0][0].get("type") == "sync_request"
+            call for call in mock_websocket.send.call_args_list
+            if "sync_request" in str(call)
         ]
         assert len(sync_request_calls) == 0, "Red team should not send sync_request"
 
         # 2. SHOULD push message (push_message)
         push_message_calls = [
-            call for call in mock_websocket.send_json.call_args_list
-            if call[0][0].get("type") == "push_message"
+            call for call in mock_websocket.send.call_args_list
+            if "push_message" in str(call)
         ]
         assert len(push_message_calls) > 0, "Red team should send push_message"
 
@@ -350,7 +380,7 @@ class TestBlueTeamScenario:
             session_id="session-123",
             episode_id="blue-episode-456",
             rest_url="http://localhost:8000",
-            skip_first_iteration=False,  # Blue team waits from first iteration
+            # Blue team waits from first iteration
             ws_config=config,
         )
 
@@ -358,25 +388,37 @@ class TestBlueTeamScenario:
         wrapper._event_queue = asyncio.Queue()
 
         # Mock transcript_modified event
-        await wrapper._event_queue.put({
-            "type": "transcript_modified",
-            "data": {"version": 2},
-        })
+        await wrapper._event_queue.put(StateEventMessage(
+            type="transcript_modified",
+            data=StateEventData(
+                version=2,
+                operation=TranscriptOperation.APPEND,
+                modification_count=0,
+                state="waiting"
+            ),
+            id="msg-1",
+            timestamp=_ts(),
+        ))
 
-        # Mock sync_response
-        await wrapper._event_queue.put({
-            "type": "sync_response",
-            "data": {
-                "sync_mode": "no_change",
-                "current_version": {"sequence": 2, "checksum": "abc123"},
-            },
-        })
+        # Mock sync_response with actual transcript (not empty)
+        await wrapper._event_queue.put(SyncResponseMessage(
+            type="sync_response",
+            data=SyncResponseData(
+                sync_mode=SyncMode.FULL,
+                current_version=TranscriptVersion(sequence=2, checksum="abc123"),
+                full_transcript=[{"role": "user", "content": "Test message"}],
+            ),
+            id="msg-2",
+            timestamp=_ts(),
+        ))
 
         # Mock push_ack
-        await wrapper._event_queue.put({
-            "type": "push_ack",
-            "data": {"version": 3, "checksum": "def456"},
-        })
+        await wrapper._event_queue.put(PushAckMessage(
+            type="push_ack",
+            data=PushAckData(version=3, checksum="def456"),
+            id="msg-3",
+            timestamp=_ts(),
+        ))
 
         # Act
         with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
@@ -385,15 +427,15 @@ class TestBlueTeamScenario:
         # Assert
         # 1. Should wait for sync (sync_request sent)
         sync_request_calls = [
-            call for call in mock_websocket.send_json.call_args_list
-            if call[0][0].get("type") == "sync_request"
+            call for call in mock_websocket.send.call_args_list
+            if "sync_request" in str(call)
         ]
         assert len(sync_request_calls) > 0, "Blue team should send sync_request"
 
         # 2. Should push response (push_message sent)
         push_message_calls = [
-            call for call in mock_websocket.send_json.call_args_list
-            if call[0][0].get("type") == "push_message"
+            call for call in mock_websocket.send.call_args_list
+            if "push_message" in str(call)
         ]
         assert len(push_message_calls) > 0, "Blue team should send push_message"
 
@@ -415,7 +457,7 @@ class TestBothDisabledScenario:
             session_id="session-123",
             episode_id="episode-456",
             rest_url="http://localhost:8000",
-            skip_first_iteration=True,
+
             ws_config=config,
         )
 
@@ -429,7 +471,7 @@ class TestBothDisabledScenario:
 
         # Assert
         # 1. No WebSocket communication at all
-        assert not mock_websocket.send_json.called, "Should not use WebSocket when both disabled"
+        assert not mock_websocket.send.called, "Should not use WebSocket when both disabled"
 
         # 2. Base model called with original input
         assert mock_base_model.generate.called
@@ -439,12 +481,12 @@ class TestBothDisabledScenario:
         assert result is not None
 
 
-class TestSkipFirstIterationLogic:
-    """Test skip_first_iteration interaction with pull.enabled."""
+class TestPullFirstCallBehavior:
+    """Test pull behavior on first vs subsequent calls."""
 
     @pytest.mark.asyncio
-    async def test_skip_first_iteration_then_pull_enabled(self, mock_base_model, mock_websocket):
-        """Test that skip_first_iteration skips first call, then pull.enabled activates."""
+    async def test_first_call_establishes_connection_then_pulls(self, mock_base_model, mock_websocket):
+        """Test that first call establishes connection, then pull.enabled activates."""
         # Arrange
         config = WebSocketConfig(
             pull=PullConfig(enabled=True, blocking=True, event_timeout=1.0),
@@ -456,7 +498,7 @@ class TestSkipFirstIterationLogic:
             session_id="session-123",
             episode_id="episode-456",
             rest_url="http://localhost:8000",
-            skip_first_iteration=True,  # Skip first
+            # Skip first
             ws_config=config,
         )
 
@@ -467,26 +509,36 @@ class TestSkipFirstIterationLogic:
         with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
             await wrapper.generate([{"role": "user", "content": "First"}])
 
-        first_call_count = mock_websocket.send_json.call_count
+        first_call_count = mock_websocket.send.call_count
 
         # Setup for second call
-        await wrapper._event_queue.put({
-            "type": "transcript_modified",
-            "data": {"version": 2},
-        })
-        await wrapper._event_queue.put({
-            "type": "sync_response",
-            "data": {
-                "sync_mode": "no_change",
-                "current_version": {"sequence": 2, "checksum": "abc123"},
-            },
-        })
+        await wrapper._event_queue.put(StateEventMessage(
+            type="transcript_modified",
+            data=StateEventData(
+                version=2,
+                operation=TranscriptOperation.APPEND,
+                modification_count=0,
+                state="waiting"
+            ),
+            id="msg-1",
+            timestamp=_ts(),
+        ))
+        await wrapper._event_queue.put(SyncResponseMessage(
+            type="sync_response",
+            data=SyncResponseData(
+                sync_mode=SyncMode.FULL,
+                current_version=TranscriptVersion(sequence=2, checksum="abc123"),
+                full_transcript=[{"role": "user", "content": "From server"}],
+            ),
+            id="msg-2",
+            timestamp=_ts(),
+        ))
 
         # Act - Second call (should not skip)
         with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
             await wrapper.generate([{"role": "user", "content": "Second"}])
 
-        second_call_count = mock_websocket.send_json.call_count
+        second_call_count = mock_websocket.send.call_count
 
         # Assert
         # First call should not send sync_request
@@ -496,8 +548,8 @@ class TestSkipFirstIterationLogic:
         assert second_call_count > first_call_count, "Second call should send sync_request"
 
     @pytest.mark.asyncio
-    async def test_skip_first_iteration_with_pull_disabled(self, mock_base_model, mock_websocket):
-        """Test that pull.disabled takes precedence over skip_first_iteration."""
+    async def test_pull_disabled_never_syncs(self, mock_base_model, mock_websocket):
+        """Test that pull.disabled prevents sync on all calls."""
         # Arrange
         config = WebSocketConfig(
             pull=PullConfig(enabled=False),  # Disabled - should never wait
@@ -509,7 +561,7 @@ class TestSkipFirstIterationLogic:
             session_id="session-123",
             episode_id="episode-456",
             rest_url="http://localhost:8000",
-            skip_first_iteration=True,
+
             ws_config=config,
         )
 
@@ -522,10 +574,10 @@ class TestSkipFirstIterationLogic:
             await wrapper.generate([{"role": "user", "content": "Third"}])
 
         # Assert - no sync requests on any call
-        if mock_websocket.send_json.called:
+        if mock_websocket.send.called:
             sync_request_calls = [
-                call for call in mock_websocket.send_json.call_args_list
-                if call[0][0].get("type") == "sync_request"
+                call for call in mock_websocket.send.call_args_list
+                if "sync_request" in str(call)
             ]
             assert len(sync_request_calls) == 0, "Pull disabled should prevent all sync requests"
 
@@ -547,7 +599,7 @@ class TestPerformanceImplications:
             session_id="session-123",
             episode_id="episode-456",
             rest_url="http://localhost:8000",
-            skip_first_iteration=False,
+
             ws_config=config,
         )
 
@@ -579,7 +631,7 @@ class TestPerformanceImplications:
             session_id="session-123",
             episode_id="episode-456",
             rest_url="http://localhost:8000",
-            skip_first_iteration=True,
+
             ws_config=config,
         )
 
@@ -959,7 +1011,7 @@ class TestSyncModes:
             session_id="session-123",
             episode_id="episode-456",
             rest_url="http://localhost:8000",
-            skip_first_iteration=False,
+
             ws_config=config,
         )
 
@@ -968,21 +1020,28 @@ class TestSyncModes:
         wrapper._local_messages = []  # Start with empty transcript
 
         # Simulate WebSocket event + sync response
-        await wrapper._event_queue.put({
-            "type": "transcript_modified",
-            "data": {"version": 1},
-        })
+        await wrapper._event_queue.put(StateEventMessage(
+            type="transcript_modified",
+            data=StateEventData(
+                version=1,
+                operation=TranscriptOperation.APPEND,
+                modification_count=0,
+                state="waiting"
+            ),
+            id="msg-1",
+            timestamp=_ts(),
+        ))
 
-        await wrapper._event_queue.put({
-            "type": "sync_response",
-            "data": {
-                "sync_mode": "delta",
-                "delta": [
-                    {"role": "user", "content": "New message"}
-                ],
-                "current_version": {"sequence": 1, "checksum": "abc123"},
-            },
-        })
+        await wrapper._event_queue.put(SyncResponseMessage(
+            type="sync_response",
+            data=SyncResponseData(
+                sync_mode=SyncMode.DELTA,
+                delta=[{"role": "user", "content": "New message"}],
+                current_version=TranscriptVersion(sequence=1, checksum="abc123"),
+            ),
+            id="msg-2",
+            timestamp=_ts(),
+        ))
 
         # Act
         with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
@@ -1009,7 +1068,7 @@ class TestSyncModes:
             session_id="session-123",
             episode_id="episode-456",
             rest_url="http://localhost:8000",
-            skip_first_iteration=False,
+
             ws_config=config,
         )
 
@@ -1021,22 +1080,31 @@ class TestSyncModes:
         wrapper._local_messages = [ChatMessageUser(content="Old message")]
 
         # Simulate WebSocket event + full sync response
-        await wrapper._event_queue.put({
-            "type": "transcript_modified",
-            "data": {"version": 5},
-        })
+        await wrapper._event_queue.put(StateEventMessage(
+            type="transcript_modified",
+            data=StateEventData(
+                version=5,
+                operation=TranscriptOperation.REWRITE,
+                modification_count=0,
+                state="waiting"
+            ),
+            id="msg-1",
+            timestamp=_ts(),
+        ))
 
-        await wrapper._event_queue.put({
-            "type": "sync_response",
-            "data": {
-                "sync_mode": "full",
-                "full_transcript": [
+        await wrapper._event_queue.put(SyncResponseMessage(
+            type="sync_response",
+            data=SyncResponseData(
+                sync_mode=SyncMode.FULL,
+                full_transcript=[
                     {"role": "system", "content": "System prompt"},
-                    {"role": "user", "content": "Completely new transcript"}
+                    {"role": "user", "content": "Completely new transcript"},
                 ],
-                "current_version": {"sequence": 5, "checksum": "xyz789"},
-            },
-        })
+                current_version=TranscriptVersion(sequence=5, checksum="xyz789"),
+            ),
+            id="msg-2",
+            timestamp=_ts(),
+        ))
 
         # Act
         with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
@@ -1067,7 +1135,7 @@ class TestErrorHandling:
             session_id="session-123",
             episode_id="episode-456",
             rest_url="http://localhost:8000",
-            skip_first_iteration=False,
+
             ws_config=config,
         )
 
@@ -1129,7 +1197,7 @@ class TestErrorHandling:
             session_id="session-123",
             episode_id="episode-456",
             rest_url="http://localhost:8000",
-            skip_first_iteration=False,
+
             ws_config=config,
         )
 
@@ -1161,10 +1229,13 @@ class TestWebSocketConnectionEstablishment:
         mock_ws = AsyncMock()
         mock_ws.closed = False
 
-        # Simulate connection confirmation message
-        async def mock_messages():
-            yield json.dumps({"type": "connected", "data": {}})
+        # Mock recv() to return connection confirmation
+        mock_ws.recv = AsyncMock(return_value=json.dumps({"type": "connected", "episode_id": "episode-456", "timestamp": _ts()}))
 
+        # Mock iteration for listener (empty generator that completes immediately)
+        async def mock_messages():
+            return
+            yield  # Make this an async generator
         mock_ws.__aiter__ = lambda self: mock_messages()
 
         # Use AsyncMock with return_value instead of side_effect
@@ -1265,15 +1336,15 @@ class TestWebSocketConnectionEstablishment:
             ws_config=config,
         )
 
-        # Mock websocket that never sends 'connected'
+        # Mock websocket that takes longer than timeout to send 'connected'
         mock_ws = AsyncMock()
         mock_ws.closed = False
 
-        async def mock_messages():
-            await asyncio.sleep(1)  # Longer than timeout
-            yield json.dumps({"type": "other", "data": {}})
-
-        mock_ws.__aiter__ = lambda self: mock_messages()
+        # Mock recv() to delay longer than confirmation_timeout
+        async def slow_recv():
+            await asyncio.sleep(1)  # Longer than 0.1s timeout
+            return json.dumps({"type": "other", "data": {}})
+        mock_ws.recv = slow_recv
 
         # Use AsyncMock with return_value instead of side_effect
         with patch('websockets.connect', new=AsyncMock(return_value=mock_ws)):
@@ -1294,13 +1365,15 @@ class TestWebSocketListener:
             rest_url="http://localhost:8000",
         )
 
-        # Mock websocket with transcript_modified event
+        # Mock websocket with transcript_modified event (complete message)
         mock_ws = AsyncMock()
 
         async def mock_messages():
             yield json.dumps({
                 "type": "transcript_modified",
-                "data": {"version": 2, "operation": "append"}
+                "data": {"version": 2, "operation": "append", "modification_count": 0, "state": "waiting"},
+                "id": "msg-1",
+                "timestamp": _ts()
             })
 
         mock_ws.__aiter__ = lambda self: mock_messages()
@@ -1315,11 +1388,11 @@ class TestWebSocketListener:
         except asyncio.CancelledError:
             pass
 
-        # Assert - event should be in queue
+        # Assert - event should be in queue (as Pydantic model)
         assert not wrapper._event_queue.empty()
         event = await wrapper._event_queue.get()
-        assert event["type"] == "transcript_modified"
-        assert event["data"]["version"] == 2
+        assert event.type == "transcript_modified"
+        assert event.data.version == 2
 
     @pytest.mark.asyncio
     async def test_listener_sync_response_event(self, mock_base_model):
@@ -1331,13 +1404,18 @@ class TestWebSocketListener:
             rest_url="http://localhost:8000",
         )
 
-        # Mock websocket with sync_response
+        # Mock websocket with sync_response (complete message)
         mock_ws = AsyncMock()
 
         async def mock_messages():
             yield json.dumps({
                 "type": "sync_response",
-                "data": {"sync_mode": "delta", "current_version": {"sequence": 3}}
+                "data": {
+                    "sync_mode": "delta",
+                    "current_version": {"sequence": 3, "checksum": "abc123"},
+                },
+                "id": "msg-1",
+                "timestamp": _ts()
             })
 
         mock_ws.__aiter__ = lambda self: mock_messages()
@@ -1352,9 +1430,10 @@ class TestWebSocketListener:
         except asyncio.CancelledError:
             pass
 
-        # Assert
+        # Assert - event should be in queue (as Pydantic model)
+        assert not wrapper._event_queue.empty()
         event = await wrapper._event_queue.get()
-        assert event["type"] == "sync_response"
+        assert event.type == "sync_response"
 
     @pytest.mark.asyncio
     async def test_listener_push_ack_event(self, mock_base_model):
@@ -1366,13 +1445,15 @@ class TestWebSocketListener:
             rest_url="http://localhost:8000",
         )
 
-        # Mock websocket with push_ack
+        # Mock websocket with push_ack (complete message)
         mock_ws = AsyncMock()
 
         async def mock_messages():
             yield json.dumps({
                 "type": "push_ack",
-                "data": {"version": 4, "checksum": "abc123"}
+                "data": {"version": 4, "checksum": "abc123"},
+                "id": "msg-1",
+                "timestamp": _ts()
             })
 
         mock_ws.__aiter__ = lambda self: mock_messages()
@@ -1387,9 +1468,10 @@ class TestWebSocketListener:
         except asyncio.CancelledError:
             pass
 
-        # Assert
+        # Assert - event should be in queue (as Pydantic model)
+        assert not wrapper._event_queue.empty()
         event = await wrapper._event_queue.get()
-        assert event["type"] == "push_ack"
+        assert event.type == "push_ack"
 
     @pytest.mark.asyncio
     async def test_listener_pong_event(self, mock_base_model):
@@ -1401,11 +1483,11 @@ class TestWebSocketListener:
             rest_url="http://localhost:8000",
         )
 
-        # Mock websocket with pong
+        # Mock websocket with pong (complete message)
         mock_ws = AsyncMock()
 
         async def mock_messages():
-            yield json.dumps({"type": "pong", "data": {}})
+            yield json.dumps({"type": "pong", "timestamp": _ts()})
 
         mock_ws.__aiter__ = lambda self: mock_messages()
 
@@ -1419,9 +1501,10 @@ class TestWebSocketListener:
         except asyncio.CancelledError:
             pass
 
-        # Assert
+        # Assert - event should be in queue (as Pydantic model)
+        assert not wrapper._event_queue.empty()
         event = await wrapper._event_queue.get()
-        assert event["type"] == "pong"
+        assert event.type == "pong"
 
     @pytest.mark.asyncio
     async def test_listener_unknown_event_type(self, mock_base_model):
@@ -1501,7 +1584,8 @@ class TestStateMachineEventHandling:
         events_emitted = [
             json.dumps({
                 "type": "is_waiting_on_user",
-                "data": {"state": "WAITING_FOR_USER"},
+                "data": {"state": "WAITING_FOR_USER", "version": 1, "operation": "append", "modification_count": 0},
+                "id": "msg-1",
                 "timestamp": datetime.utcnow().isoformat(),
             })
         ]
@@ -1525,7 +1609,7 @@ class TestStateMachineEventHandling:
         # Assert - event should be in queue
         assert not wrapper._event_queue.empty()
         event = await wrapper._event_queue.get()
-        assert event["type"] == "is_waiting_on_user"
+        assert event.type == "is_waiting_on_user"
 
     @pytest.mark.asyncio
     async def test_handles_is_waiting_on_assistant_event(self, mock_base_model):
@@ -1541,7 +1625,8 @@ class TestStateMachineEventHandling:
         events_emitted = [
             json.dumps({
                 "type": "is_waiting_on_assistant",
-                "data": {"state": "WAITING_FOR_ASSISTANT"},
+                "data": {"state": "WAITING_FOR_ASSISTANT", "version": 1, "operation": "append", "modification_count": 0},
+                "id": "msg-1",
                 "timestamp": datetime.utcnow().isoformat(),
             })
         ]
@@ -1563,7 +1648,7 @@ class TestStateMachineEventHandling:
 
         assert not wrapper._event_queue.empty()
         event = await wrapper._event_queue.get()
-        assert event["type"] == "is_waiting_on_assistant"
+        assert event.type == "is_waiting_on_assistant"
 
     @pytest.mark.asyncio
     async def test_handles_is_waiting_on_tools_event(self, mock_base_model):
@@ -1579,7 +1664,8 @@ class TestStateMachineEventHandling:
         events_emitted = [
             json.dumps({
                 "type": "is_waiting_on_tools",
-                "data": {"state": "WAITING_FOR_TOOLS"},
+                "data": {"state": "WAITING_FOR_TOOLS", "version": 1, "operation": "append", "modification_count": 0},
+                "id": "msg-1",
                 "timestamp": datetime.utcnow().isoformat(),
             })
         ]
@@ -1601,7 +1687,7 @@ class TestStateMachineEventHandling:
 
         assert not wrapper._event_queue.empty()
         event = await wrapper._event_queue.get()
-        assert event["type"] == "is_waiting_on_tools"
+        assert event.type == "is_waiting_on_tools"
 
     @pytest.mark.asyncio
     async def test_handles_stuck_state_error(self, mock_base_model):
@@ -1645,8 +1731,8 @@ class TestStateMachineEventHandling:
         # Assert - stuck_state error should be in queue
         assert not wrapper._event_queue.empty()
         event = await wrapper._event_queue.get()
-        assert event["type"] == "transcript_error"
-        assert event["data"]["error"] == "stuck_state"
+        assert event.type == "transcript_error"
+        assert event.data.error == TranscriptErrorType.STUCK_STATE
 
     @pytest.mark.asyncio
     async def test_check_for_stuck_state_detection(self, mock_base_model):
@@ -1659,10 +1745,11 @@ class TestStateMachineEventHandling:
         )
 
         # Add stuck_state error to queue
-        await wrapper._event_queue.put({
-            "type": "transcript_error",
-            "data": {"error": "stuck_state"},
-        })
+        await wrapper._event_queue.put(TranscriptErrorMessage(
+            type="transcript_error",
+            data=TranscriptErrorData(error=TranscriptErrorType.STUCK_STATE),
+            timestamp=_ts(),
+        ))
 
         # Check for stuck state
         is_stuck = await wrapper._check_for_stuck_state()
@@ -1682,10 +1769,17 @@ class TestStateMachineEventHandling:
         )
 
         # Add normal event to queue
-        await wrapper._event_queue.put({
-            "type": "transcript_modified",
-            "data": {"version": 2},
-        })
+        await wrapper._event_queue.put(StateEventMessage(
+            type="transcript_modified",
+            data=StateEventData(
+                version=2,
+                operation=TranscriptOperation.APPEND,
+                modification_count=0,
+                state="waiting"
+            ),
+            id="msg-1",
+            timestamp=_ts(),
+        ))
 
         # Check for stuck state
         is_stuck = await wrapper._check_for_stuck_state()
@@ -1705,7 +1799,7 @@ class TestStateMachineEventHandling:
             session_id="session-123",
             episode_id="episode-456",
             rest_url="http://localhost:8000",
-            skip_first_iteration=False,
+
             ws_config=config,
         )
 
@@ -1713,12 +1807,13 @@ class TestStateMachineEventHandling:
 
         # Simulate stuck state followed by successful event
         events_to_queue = [
-            {"type": "transcript_error", "data": {"error": "stuck_state"}},
-            {"type": "transcript_modified", "data": {"version": 2}},
-            {"type": "sync_response", "data": {
-                "sync_mode": "no_change",
-                "current_version": {"sequence": 2, "checksum": "abc"},
-            }},
+            TranscriptErrorMessage(
+                type="transcript_error",
+                data=TranscriptErrorData(error=TranscriptErrorType.STUCK_STATE),
+                timestamp=_ts(),
+            ),
+            {"type": "transcript_modified", "data": {"version": 2, "operation": "append", "modification_count": 0, "state": "waiting"}},
+            {"type": "sync_response", "data": {"sync_mode": "full", "current_version": {"sequence": 2, "checksum": "abc"}, "full_transcript": []}},
         ]
 
         for event in events_to_queue:

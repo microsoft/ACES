@@ -180,6 +180,11 @@ class SingleEpisodeTask(BenchmarkTask):
     subtask_count: int = Field(default=0, description="Number of subtasks")
     max_steps: int = Field(..., description="Maximum steps per episode")
 
+    # Initial context for episode creation
+    initial_context: Optional[Dict[str, Any]] = Field(
+        default=None, description="Initial context provided when the task starts"
+    )
+
     # Prompts
     instruction_prompt: str = Field(..., description="Agent instruction prompt")
     assistant_prompt: str = Field(..., description="Agent assistant prompt")

@@ -23,13 +23,40 @@ import asyncio
 import json
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 try:
     from websockets.client import WebSocketClientProtocol
+    from websockets.protocol import State as WebSocketState
 except ImportError:
     # Fallback for type checking when websockets not installed
     WebSocketClientProtocol = Any
+    WebSocketState = None
+
+
+def _is_websocket_closed(websocket: Any) -> bool:
+    """Check if a WebSocket connection is closed.
+
+    Compatible with both websockets <15.0 (.closed attribute)
+    and websockets >=15.0 (.state attribute with State enum).
+
+    Args:
+        websocket: WebSocket connection object
+
+    Returns:
+        True if the connection is closed or closing, False if open
+    """
+    if websocket is None:
+        return True
+    # websockets >=15.0 uses .state attribute with State enum
+    if hasattr(websocket, "state") and WebSocketState is not None:
+        return websocket.state in (WebSocketState.CLOSED, WebSocketState.CLOSING)
+    # websockets <15.0 uses .closed attribute
+    if hasattr(websocket, "closed"):
+        return bool(websocket.closed)
+    # Default to closed if we can't determine
+    return True
+
 
 from inspect_ai.model import (
     ChatMessage,
@@ -47,9 +74,24 @@ from inspect_ai.tool import ToolCall
 from ...logging_config import LogCategory, get_saber_logger
 from ...models.rest.websocket_config import WebSocketConfig
 from ...models.rest.websocket_constants import WebSocketDefaults
+from ...models.rest.websocket_messages import (
+    PushAckData,
+    PushAckMessage,
+    StateEventMessage,
+    SyncMode,
+    SyncResponseData,
+    SyncResponseMessage,
+    TranscriptErrorMessage,
+    WebSocketMessageType,
+    WebSocketServerMessage,
+    WebSocketServerMessageAdapter,
+)
 from ...models.transcript import compute_checksum
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
+
+# Type alias for messages that can be either Pydantic models or dicts (for test compatibility)
+WebSocketMessageOrDict = Union[WebSocketServerMessage, Dict[str, Any]]
 
 
 class _MessageSerializationMixin:
@@ -198,23 +240,23 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
 
     Flow:
     1. First generate() → establish WebSocket connection
-    2. Background listener task receives events
-    3. Events queued for generate() to consume
-    4. generate() pulls delta via REST
-    5. Connection reused for entire episode
+    2. Server sends initial state event (is_waiting_on_assistant)
+    3. Client waits for state event, then syncs transcript
+    4. Background listener task receives subsequent events
+    5. Events queued for generate() to consume
+    6. Connection reused for entire episode
 
     Attributes:
-        _skip_first_iteration: Skip blocking on first generate() call
         _first_call: Tracks if this is the first generate() call
-        _ws_timeout: Timeout for WebSocket event waiting (seconds)
         _websocket: WebSocket connection object
         _ws_lock: Lock for WebSocket connection management
-        _event_queue: Queue for WebSocket events
+        _event_queue: Queue for WebSocket server messages
         _listener_task: Background task listening for events
         _local_version: Client's current transcript version
         _local_checksum: SHA256 checksum of local transcript
         _local_messages: Local copy of transcript messages
         _ws_url: WebSocket URL constructed from REST URL
+        _ws_config: WebSocket configuration settings
     """
 
     def __init__(
@@ -223,7 +265,6 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
         session_id: str,
         episode_id: str,
         rest_url: str,
-        skip_first_iteration: bool = True,
         ws_config: Optional[WebSocketConfig] = None,
     ):
         """Initialize WebSocket transcript syncing wrapper.
@@ -233,21 +274,19 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
             session_id: SABER session ID
             episode_id: SABER episode ID
             rest_url: Base URL of SABER REST API
-            skip_first_iteration: Skip blocking on first generate() call
             ws_config: WebSocket configuration (uses defaults if None)
         """
         self._base_model = base_model
         self._session_id = session_id
         self._episode_id = episode_id
         self._rest_url = rest_url
-        self._skip_first_iteration = skip_first_iteration
         self._first_call = True
         self._ws_config = ws_config or WebSocketConfig()
 
         # WebSocket connection state
         self._websocket: Optional[WebSocketClientProtocol] = None
         self._ws_lock = asyncio.Lock()
-        self._event_queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue(
+        self._event_queue: asyncio.Queue[WebSocketMessageOrDict] = asyncio.Queue(
             maxsize=self._ws_config.pull.event_queue_max_size
         )
         self._listener_task: Optional[asyncio.Task[None]] = None
@@ -260,12 +299,11 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
         # Build WebSocket URL from REST URL (with proper parsing)
         self._ws_url = self._build_websocket_url(rest_url, episode_id)
 
-        logger.info(
+        logger.debug(
             "Created WebSocketTranscriptSyncingModelWrapper",
             extra={
                 "session_id": session_id,
                 "episode_id": episode_id,
-                "skip_first_iteration": skip_first_iteration,
                 "ws_config": {
                     "connection_timeout": self._ws_config.connection_timeout,
                     "pull_event_timeout": self._ws_config.pull.event_timeout,
@@ -334,7 +372,7 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
         Implements exponential backoff reconnection and proper resource cleanup.
         """
         async with self._ws_lock:
-            if self._websocket is not None and not self._websocket.closed:
+            if self._websocket is not None and not _is_websocket_closed(self._websocket):
                 return  # Already connected
 
             # Determine number of attempts based on reconnect policy
@@ -362,31 +400,39 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
                         websockets.connect(self._ws_url), timeout=self._ws_config.connection_timeout
                     )
 
-                    # Phase 2: Start background listener
-                    temp_listener = asyncio.create_task(self._listen_for_events_impl(temp_websocket))
-
-                    # Phase 3: Wait for connection confirmation
+                    # Phase 2: Wait for connection confirmation FIRST (before starting listener)
+                    # This avoids race condition where listener consumes the "connected" message
                     try:
                         timeout_seconds = self._ws_config.push.confirmation_timeout
-                        connected = False
 
                         async def _wait_for_connected() -> bool:
                             assert temp_websocket is not None  # mypy: temp_websocket is set above
-                            async for message in temp_websocket:
-                                data = json.loads(message)
-                                if data.get("type") == "connected":
-                                    logger.info("WebSocket connected", extra={"episode_id": self._episode_id})
-                                    return True
-                            return False
+                            # Use recv() to get exactly one message (the "connected" handshake)
+                            message = await temp_websocket.recv()
+                            data = json.loads(message)
+                            if data.get("type") == "connected":
+                                logger.info("WebSocket connected", extra={"episode_id": self._episode_id})
+                                return True
+                            else:
+                                logger.warning(
+                                    f"Expected 'connected' message, got '{data.get('type')}'",
+                                    extra={"episode_id": self._episode_id, "message_type": data.get("type")},
+                                )
+                                return False
 
                         connected = await asyncio.wait_for(_wait_for_connected(), timeout=timeout_seconds)
                         if connected:
+                            # Phase 3: Start background listener AFTER connection confirmed
+                            temp_listener = asyncio.create_task(self._listen_for_events_impl(temp_websocket))
+
                             # SUCCESS - commit state
                             self._websocket = temp_websocket
                             self._listener_task = temp_listener
                             temp_websocket = None  # Don't cleanup
                             temp_listener = None  # Don't cleanup
                             return
+                        else:
+                            raise ConnectionError("WebSocket handshake failed - unexpected message type")
                     except TimeoutError:
                         raise ConnectionError(
                             f"WebSocket confirmation timeout after {self._ws_config.push.confirmation_timeout}s"
@@ -440,7 +486,7 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
                             logger.warning(f"Error cancelling listener task: {e}")
 
                     # Cleanup WebSocket with timeout
-                    if temp_websocket and not temp_websocket.closed:
+                    if temp_websocket and not _is_websocket_closed(temp_websocket):
                         try:
                             await asyncio.wait_for(
                                 temp_websocket.close(), timeout=WebSocketDefaults.WEBSOCKET_CLOSE_TIMEOUT_SECONDS
@@ -463,64 +509,87 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
             websocket: WebSocket connection to listen on (passed explicitly for cleanup safety)
         """
         import websockets
+        from pydantic import ValidationError
 
         try:
             async for message in websocket:
-                data = json.loads(message)
-                event_type = data.get("type")
+                # Parse JSON directly into Pydantic model using discriminated union
+                try:
+                    parsed_message = WebSocketServerMessageAdapter.validate_json(message)
+                except ValidationError as e:
+                    logger.warning(
+                        f"Failed to parse WebSocket message: {e}",
+                        extra={"raw_message": message[:200]},
+                    )
+                    continue
 
-                if event_type == "transcript_modified":
+                event_type = parsed_message.type
+
+                if event_type == WebSocketMessageType.TRANSCRIPT_MODIFIED.value:
                     # Server-initiated notification - queue for generate()
-                    await self._event_queue.put(data)
+                    await self._event_queue.put(parsed_message)
 
                     logger.debug(
                         "Received transcript modification event",
                         extra={
                             "episode_id": self._episode_id,
-                            "version": data.get("data", {}).get("version"),
+                            "version": (
+                                parsed_message.data.version if isinstance(parsed_message, StateEventMessage) else None
+                            ),
                         },
                     )
 
-                elif event_type in ("is_waiting_on_user", "is_waiting_on_assistant", "is_waiting_on_tools"):
-                    # Phase 4: State machine events - log and queue
-                    await self._event_queue.put(data)
+                elif event_type in (
+                    WebSocketMessageType.IS_WAITING_ON_USER.value,
+                    WebSocketMessageType.IS_WAITING_ON_ASSISTANT.value,
+                    WebSocketMessageType.IS_WAITING_ON_TOOLS.value,
+                ):
+                    # State machine events - log and queue
+                    await self._event_queue.put(parsed_message)
 
-                    logger.info(
+                    logger.debug(
                         "Received state machine event",
                         extra={
                             "episode_id": self._episode_id,
                             "event_type": event_type,
-                            "state": data.get("data", {}).get("state"),
+                            "state": (
+                                parsed_message.data.state if isinstance(parsed_message, StateEventMessage) else None
+                            ),
                         },
                     )
 
-                elif event_type == "transcript_error":
-                    # Phase 4: Error events (stuck_state, etc.) - queue for handling
-                    await self._event_queue.put(data)
+                elif event_type == WebSocketMessageType.TRANSCRIPT_ERROR.value:
+                    # Error events (stuck_state, etc.) - queue for handling
+                    await self._event_queue.put(parsed_message)
 
-                    error_type = data.get("data", {}).get("error")
-                    if error_type == "stuck_state":
-                        logger.error(
-                            "Episode stuck in state - retry required",
-                            extra={
-                                "episode_id": self._episode_id,
-                                "state": data.get("data", {}).get("state"),
-                                "duration_seconds": data.get("data", {}).get("duration_seconds"),
-                                "threshold_seconds": data.get("data", {}).get("threshold_seconds"),
-                            },
-                        )
-                    else:
-                        logger.error(
-                            "Received transcript error event",
-                            extra={
-                                "episode_id": self._episode_id,
-                                "error": error_type,
-                            },
-                        )
+                    if isinstance(parsed_message, TranscriptErrorMessage):
+                        error_type = parsed_message.data.error
+                        if error_type.value == "stuck_state":
+                            logger.error(
+                                "Episode stuck in state - retry required",
+                                extra={
+                                    "episode_id": self._episode_id,
+                                    "state": parsed_message.data.state,
+                                    "duration_seconds": parsed_message.data.duration_seconds,
+                                    "threshold_seconds": parsed_message.data.threshold_seconds,
+                                },
+                            )
+                        else:
+                            logger.error(
+                                "Received transcript error event",
+                                extra={
+                                    "episode_id": self._episode_id,
+                                    "error": error_type.value,
+                                },
+                            )
 
-                elif event_type in ("sync_response", "push_ack", "pong"):
-                    # Response to client request - also queue these for awaiting code
-                    await self._event_queue.put(data)
+                elif event_type in (
+                    WebSocketMessageType.SYNC_RESPONSE.value,
+                    WebSocketMessageType.PUSH_ACK.value,
+                    WebSocketMessageType.PONG.value,
+                ):
+                    # Response to client request - queue for awaiting code
+                    await self._event_queue.put(parsed_message)
 
                     logger.debug(
                         "Received WebSocket response",
@@ -528,6 +597,14 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
                             "episode_id": self._episode_id,
                             "type": event_type,
                         },
+                    )
+
+                elif event_type == WebSocketMessageType.CONNECTED.value:
+                    # Connection handshake message - should be consumed during _ensure_connected
+                    # but handle it gracefully if it somehow reaches the listener
+                    logger.debug(
+                        "Received 'connected' message in listener (unexpected but harmless)",
+                        extra={"episode_id": self._episode_id},
                     )
 
                 else:
@@ -552,27 +629,74 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
     async def _wait_for_modification_event(self) -> bool:
         """Wait for WebSocket event indicating transcript modification.
 
+        Only accepts state events (is_waiting_on_*, transcript_modified).
+        Other events (push_ack, sync_response) are discarded as they're
+        stale responses from previous operations.
+
         Returns:
-            True if event received, False on timeout
+            True if state event received, False on timeout
         """
         try:
             await self._ensure_connected()
 
-            # Wait for event from queue (populated by background listener)
-            event_data = await asyncio.wait_for(self._event_queue.get(), timeout=self._ws_config.pull.event_timeout)
+            # Loop until we get a state event, discarding other events
+            for iteration in range(WebSocketDefaults.MAX_EVENT_DISCARD_ITERATIONS):
+                # Wait for event from queue (populated by background listener)
+                event_data: WebSocketMessageOrDict = await asyncio.wait_for(
+                    self._event_queue.get(), timeout=self._ws_config.pull.event_timeout
+                )
 
-            logger.info(
-                "Transcript modification detected via WebSocket",
+                # Check event type
+                event_type = event_data.type if hasattr(event_data, "type") else None
+
+                # Accept state events
+                state_event_types = [
+                    WebSocketMessageType.IS_WAITING_ON_USER.value,
+                    WebSocketMessageType.IS_WAITING_ON_ASSISTANT.value,
+                    WebSocketMessageType.IS_WAITING_ON_TOOLS.value,
+                    WebSocketMessageType.TRANSCRIPT_MODIFIED.value,
+                    WebSocketMessageType.TRANSCRIPT_ERROR.value,
+                ]
+
+                if event_type in state_event_types:
+                    # Extract version from Pydantic model (StateEventMessage has .data.version)
+                    version = None
+                    if isinstance(event_data, StateEventMessage):
+                        version = event_data.data.version
+
+                    logger.debug(
+                        "Transcript modification detected via WebSocket",
+                        extra={
+                            "episode_id": self._episode_id,
+                            "version": version,
+                            "event_type": event_type,
+                        },
+                    )
+                    return True
+                else:
+                    # Discard non-state events (push_ack, sync_response from prior operations)
+                    logger.debug(
+                        "Discarding non-state event while waiting for modification",
+                        extra={
+                            "episode_id": self._episode_id,
+                            "event_type": event_type,
+                            "iteration": iteration,
+                        },
+                    )
+                    # Continue to next iteration
+
+            # Exhausted iterations
+            logger.warning(
+                "Exhausted iterations waiting for state event",
                 extra={
                     "episode_id": self._episode_id,
-                    "version": event_data.get("data", {}).get("version"),
-                    "latency": "<100ms",
+                    "max_iterations": WebSocketDefaults.MAX_EVENT_DISCARD_ITERATIONS,
                 },
             )
-            return True
+            return False
 
         except asyncio.TimeoutError:
-            logger.warning("WebSocket timeout", extra={"episode_id": self._episode_id})
+            logger.warning("WebSocket timeout waiting for modification event", extra={"episode_id": self._episode_id})
             return False
 
     async def _check_for_stuck_state(self) -> bool:
@@ -587,17 +711,17 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
         # Non-blocking check of event queue
         try:
             # Peek at events in queue without blocking
-            events_to_requeue = []
+            events_to_requeue: List[WebSocketMessageOrDict] = []
             stuck_detected = False
 
             while not self._event_queue.empty():
                 try:
-                    event = self._event_queue.get_nowait()
+                    event: WebSocketMessageOrDict = self._event_queue.get_nowait()
                     events_to_requeue.append(event)
 
-                    if event.get("type") == "transcript_error":
-                        error_type = event.get("data", {}).get("error")
-                        if error_type == "stuck_state":
+                    # Check for transcript_error with stuck_state using Pydantic model attributes
+                    if isinstance(event, TranscriptErrorMessage):
+                        if event.data.error.value == "stuck_state":
                             stuck_detected = True
                 except asyncio.QueueEmpty:
                     break
@@ -674,6 +798,178 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
         )
         return False
 
+    async def _push_tool_results_if_needed(self, input: list[ChatMessage]) -> bool:
+        """Push tool results to server if Inspect AI added them to input.
+
+        When Inspect AI runs tools, it adds tool result messages to the input
+        list before calling generate() again. These tool results exist only
+        on the client - the server doesn't know about them yet. We need to
+        push them to keep the server transcript in sync.
+
+        Args:
+            input: The input message list from Inspect AI
+
+        Returns:
+            True if tool results were pushed, False otherwise
+        """
+        # Don't push if we haven't synced with server yet
+        # On the first generate() call, _local_messages is empty but input has
+        # the initial messages - these come from the server via sync, not local additions
+        if not self._local_messages:
+            return False
+
+        # Find messages in input that aren't in our local transcript
+        # These are tool results added by Inspect AI's tool execution loop
+        local_len = len(self._local_messages)
+        input_len = len(input)
+
+        if input_len <= local_len:
+            # No new messages to push
+            return False
+
+        # Get the new messages (tool results)
+        new_messages = input[local_len:]
+
+        # Check that these are tool messages (sanity check)
+        tool_messages = [m for m in new_messages if m.role == "tool"]
+        if len(tool_messages) != len(new_messages):
+            logger.warning(
+                "New messages in input include non-tool messages, unexpected",
+                extra={
+                    "episode_id": self._episode_id,
+                    "new_message_roles": [m.role for m in new_messages],
+                },
+            )
+
+        if not new_messages:
+            return False
+
+        logger.debug(
+            "Pushing tool results to server",
+            extra={
+                "episode_id": self._episode_id,
+                "tool_result_count": len(new_messages),
+                "local_version": self._local_version,
+            },
+        )
+
+        # Push each tool result message
+        for msg in new_messages:
+            await self._ensure_connected()
+
+            if self._websocket:
+                await self._websocket.send(
+                    json.dumps(
+                        {
+                            "type": WebSocketMessageType.PUSH_MESSAGE.value,
+                            "data": {
+                                "message": self._serialize_message(msg),
+                                "since_version": self._local_version,
+                                "client_checksum": self._local_checksum,
+                            },
+                            "id": str(uuid.uuid4()),
+                            "timestamp": datetime.utcnow().isoformat(),
+                        }
+                    )
+                )
+
+                # Wait for push acknowledgment
+                ack_response = await self._wait_for_message_type(
+                    expected_type=WebSocketMessageType.PUSH_ACK,
+                    timeout=self._ws_config.push.confirmation_timeout,
+                    max_iterations=WebSocketDefaults.MAX_ACK_WAIT_ITERATIONS,
+                    context="tool_result_push",
+                )
+
+                if ack_response and isinstance(ack_response, PushAckMessage):
+                    # Update local state from ack
+                    self._local_version = ack_response.data.version
+                    self._local_checksum = ack_response.data.checksum
+                    self._local_messages.append(msg)
+
+                    logger.debug(
+                        "Tool result pushed successfully",
+                        extra={
+                            "episode_id": self._episode_id,
+                            "new_version": self._local_version,
+                            "message_role": msg.role,
+                        },
+                    )
+                else:
+                    logger.warning(
+                        "Failed to get push_ack for tool result",
+                        extra={"episode_id": self._episode_id},
+                    )
+
+        # Successfully pushed all tool results
+        return True
+
+    async def _wait_for_message_type(
+        self,
+        expected_type: WebSocketMessageType,
+        timeout: float,
+        max_iterations: int = WebSocketDefaults.MAX_EVENT_DISCARD_ITERATIONS,
+        context: str = "",
+    ) -> Optional[WebSocketMessageOrDict]:
+        """Wait for a specific WebSocket message type, discarding others.
+
+        Helper method to reduce code duplication when waiting for specific
+        message types like push_ack or sync_response.
+
+        Args:
+            expected_type: The WebSocketMessageType to wait for
+            timeout: Timeout in seconds for each queue get
+            max_iterations: Maximum iterations to discard non-matching events
+            context: Context string for logging (e.g., "tool_result_push")
+
+        Returns:
+            The matching message, or None if max_iterations exceeded or timeout
+        """
+        for iteration in range(max_iterations):
+            try:
+                response = await asyncio.wait_for(
+                    self._event_queue.get(),
+                    timeout=timeout,
+                )
+
+                # Handle both Pydantic models and dicts (for test compatibility)
+                response_type = response.type if hasattr(response, "type") else response.get("type")
+
+                if response_type == expected_type.value:
+                    return response
+                else:
+                    # Non-matching event - discard and continue
+                    logger.debug(
+                        f"Discarding non-matching event while waiting for {expected_type.value}",
+                        extra={
+                            "episode_id": self._episode_id,
+                            "response_type": response_type,
+                            "expected_type": expected_type.value,
+                            "iteration": iteration,
+                            "context": context,
+                        },
+                    )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"Timeout waiting for {expected_type.value}",
+                    extra={
+                        "episode_id": self._episode_id,
+                        "timeout": timeout,
+                        "context": context,
+                    },
+                )
+                return None
+
+        logger.warning(
+            f"Max iterations exceeded waiting for {expected_type.value}",
+            extra={
+                "episode_id": self._episode_id,
+                "max_iterations": max_iterations,
+                "context": context,
+            },
+        )
+        return None
+
     async def generate(
         self,
         input: str | list[ChatMessage],
@@ -683,8 +979,12 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
         """Generate with WebSocket-based bidirectional sync.
 
         All coordination happens via WebSocket:
-        - Pull: Receive transcript_modified events, request sync
+        - Pull: Receive state events (is_waiting_on_assistant, etc.), request sync
         - Push: Send push_message with new content
+
+        Server initializes transcript with [system, user] messages, which triggers
+        WAITING_FOR_ASSISTANT state → is_waiting_on_assistant event.
+        Client treats this like any other modification event.
 
         Args:
             input: Messages or text input to the model
@@ -694,26 +994,40 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
         Returns:
             ModelOutput from the base model
         """
-        # Skip blocking on first iteration if configured
-        if self._skip_first_iteration and self._first_call:
+        # Ensure WebSocket connected on first call
+        if self._first_call:
             self._first_call = False
-            logger.debug(
-                "Skipping WebSocket blocking on first iteration",
-                extra={"episode_id": self._episode_id},
-            )
-        elif self._ws_config.pull.enabled:
+            await self._ensure_connected()
+
+        # Push any tool results that Inspect AI added to input
+        # These are messages that exist in input but not yet on the server
+        pushed_tool_results = False
+        if self._ws_config.push.enabled and isinstance(input, list):
+            pushed_tool_results = await self._push_tool_results_if_needed(input)
+
+        # Wait for state event, then pull (unified flow for all calls)
+        if self._ws_config.pull.enabled:
             # Only pull if enabled (blue team waits for modifications, red team skips)
             # Block and wait for WebSocket notification with stuck_state retry
             if isinstance(input, list):
-                event_received = await self._wait_for_modification_event_with_retry()
+                # If we just pushed tool results, skip waiting for modification event
+                # We already know the transcript was modified (by us)
+                if pushed_tool_results:
+                    event_received = True
+                    logger.debug(
+                        "Skipping modification event wait - we just pushed tool results",
+                        extra={"episode_id": self._episode_id},
+                    )
+                else:
+                    event_received = await self._wait_for_modification_event_with_retry()
 
                 if event_received:
-                    try:
-                        # Request sync via WebSocket
-                        if self._websocket:
-                            await self._websocket.send_json(
+                    # Request sync via WebSocket
+                    if self._websocket:
+                        await self._websocket.send(
+                            json.dumps(
                                 {
-                                    "type": "sync_request",
+                                    "type": WebSocketMessageType.SYNC_REQUEST.value,
                                     "data": {
                                         "since_version": self._local_version,
                                         "client_checksum": self._local_checksum,
@@ -722,51 +1036,137 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
                                     "timestamp": datetime.utcnow().isoformat(),
                                 }
                             )
+                        )
 
-                        # Wait for sync response from queue (listener task queues all messages)
+                    # Wait for sync response from queue (listener task queues all messages)
+                    # Loop until we get the actual sync_response, discarding other events
+                    response = None
+                    response_type = None
+                    events_discarded = 0
+                    for iteration in range(WebSocketDefaults.MAX_SYNC_RESPONSE_ITERATIONS):
                         response = await asyncio.wait_for(
                             self._event_queue.get(),
                             timeout=self._ws_config.pull.sync_timeout,
                         )
 
-                        if response.get("type") == "sync_response":
-                            sync_data = response["data"]
+                        # Handle both Pydantic models (from listener) and dicts (from tests)
+                        # Check for Pydantic model first using hasattr, then fall back to dict access
+                        response_type = None
+                        if hasattr(response, "type"):
+                            response_type = response.type
+                        elif isinstance(response, dict):
+                            response_type = response.get("type")
 
-                            # Apply delta or full transcript
-                            if sync_data["sync_mode"] == "full":
-                                # Rewrite detected
-                                self._local_messages = [
-                                    self._deserialize_message(m) for m in sync_data["full_transcript"]
-                                ]
-                            elif sync_data["sync_mode"] == "delta" and sync_data.get("delta"):
-                                # Delta sync
-                                new_messages = [self._deserialize_message(m) for m in sync_data["delta"]]
+                        # Check if this is the sync_response we're waiting for
+                        if response_type == WebSocketMessageType.SYNC_RESPONSE.value:
+                            break
+
+                        # Check for error response
+                        if response_type == WebSocketMessageType.TRANSCRIPT_ERROR.value:
+                            break
+
+                        # Other events (state events, transcript_modified, push_ack, etc.) - discard
+                        # These are either already processed or not relevant to sync
+                        events_discarded += 1
+                        logger.debug(
+                            "Discarding non-sync event while waiting for sync response",
+                            extra={
+                                "episode_id": self._episode_id,
+                                "event_type": response_type,
+                                "iteration": iteration,
+                                "events_discarded": events_discarded,
+                            },
+                        )
+                        # Don't re-queue - just discard and get next event
+                    else:
+                        # Exhausted iterations without finding sync_response
+                        logger.error(
+                            "Exhausted iterations waiting for sync_response",
+                            extra={
+                                "episode_id": self._episode_id,
+                                "max_iterations": WebSocketDefaults.MAX_SYNC_RESPONSE_ITERATIONS,
+                                "events_discarded": events_discarded,
+                                "last_event_type": response_type,
+                            },
+                        )
+                        raise RuntimeError(
+                            f"Failed to get sync_response after "
+                            f"{WebSocketDefaults.MAX_SYNC_RESPONSE_ITERATIONS} iterations, "
+                            f"last event: {response_type}"
+                        )
+
+                    if response_type == WebSocketMessageType.SYNC_RESPONSE.value:
+                        # Get sync data - either from Pydantic model or parse from dict
+                        if isinstance(response, SyncResponseMessage):
+                            sync_data = response.data
+                        elif isinstance(response, dict):
+                            sync_data = SyncResponseData(**response["data"])
+                        else:
+                            raise TypeError(f"Unexpected response type: {type(response)}")
+
+                        # Apply delta or full transcript
+                        if sync_data.sync_mode == SyncMode.FULL:
+                            # Rewrite detected - replace entire transcript
+                            if not sync_data.full_transcript:
+                                logger.warning("Full sync mode but no full_transcript provided")
+                                raise ValueError("Missing full_transcript in FULL sync mode")
+
+                            self._local_messages = [self._deserialize_message(m) for m in sync_data.full_transcript]
+                        elif sync_data.sync_mode == SyncMode.DELTA:
+                            # Delta sync - append new messages
+                            if sync_data.delta:
+                                new_messages = [self._deserialize_message(m) for m in sync_data.delta]
                                 self._local_messages.extend(new_messages)
-
-                            # Update local state
-                            self._local_version = sync_data["current_version"]["sequence"]
-                            self._local_checksum = sync_data["current_version"]["checksum"]
-                            input = self._local_messages.copy()
-
+                        elif sync_data.sync_mode == SyncMode.NO_CHANGE:
+                            # No changes since requested version - transcript is already up to date
                             logger.debug(
-                                "Applied transcript sync via WebSocket",
+                                "Transcript sync: no changes since requested version",
                                 extra={
                                     "episode_id": self._episode_id,
-                                    "sync_mode": sync_data["sync_mode"],
-                                    "new_version": self._local_version,
+                                    "version": self._local_version,
                                 },
                             )
 
-                    except Exception as e:
-                        # Log but continue with original input (graceful degradation)
-                        logger.warning(
-                            "Failed to sync transcript after WebSocket event, continuing with original input",
+                        # Update local state
+                        self._local_version = sync_data.current_version.sequence
+                        self._local_checksum = sync_data.current_version.checksum
+                        input = self._local_messages.copy()
+
+                        logger.debug(
+                            "Applied transcript sync via WebSocket",
                             extra={
-                                "error": str(e),
-                                "error_type": type(e).__name__,
+                                "episode_id": self._episode_id,
+                                "sync_mode": sync_data.sync_mode.value,
+                                "new_version": self._local_version,
+                            },
+                        )
+                    elif response_type == WebSocketMessageType.TRANSCRIPT_ERROR.value:
+                        # Server reported an error - log and raise
+                        if isinstance(response, TranscriptErrorMessage):
+                            error_msg = response.data.message or "Unknown error"
+                        elif isinstance(response, dict):
+                            error_msg = response.get("data", {}).get("message", "Unknown error")
+                        else:
+                            error_msg = "Unknown error"
+                        logger.error(
+                            "Server returned transcript error",
+                            extra={
+                                "error": error_msg,
                                 "episode_id": self._episode_id,
                             },
                         )
+                        raise RuntimeError(f"Transcript sync error from server: {error_msg}")
+                    else:
+                        # Unexpected response type
+                        logger.error(
+                            "Unexpected response type from sync request",
+                            extra={
+                                "response_type": response_type,
+                                "expected": WebSocketMessageType.SYNC_RESPONSE.value,
+                                "episode_id": self._episode_id,
+                            },
+                        )
+                        raise RuntimeError(f"Unexpected sync response type: {response_type}")
             else:
                 logger.warning(
                     "WebSocket wrapper received non-list input, cannot replace with modified transcript",
@@ -791,39 +1191,69 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
                 await self._ensure_connected()
 
                 if self._websocket:
-                    await self._websocket.send_json(
-                        {
-                            "type": "push_message",
-                            "data": {
-                                "message": self._serialize_message(output.message),
-                                "since_version": self._local_version,
-                                "client_checksum": self._local_checksum,
-                            },
-                            "id": str(uuid.uuid4()),
-                            "timestamp": datetime.utcnow().isoformat(),
-                        }
+                    await self._websocket.send(
+                        json.dumps(
+                            {
+                                "type": WebSocketMessageType.PUSH_MESSAGE.value,
+                                "data": {
+                                    "message": self._serialize_message(output.message),
+                                    "since_version": self._local_version,
+                                    "client_checksum": self._local_checksum,
+                                },
+                                "id": str(uuid.uuid4()),
+                                "timestamp": datetime.utcnow().isoformat(),
+                            }
+                        )
                     )
 
-                # Wait for push acknowledgment from queue (listener task queues all messages)
-                response = await asyncio.wait_for(
-                    self._event_queue.get(),
+                # Wait for push acknowledgment using helper
+                ack_response = await self._wait_for_message_type(
+                    expected_type=WebSocketMessageType.PUSH_ACK,
                     timeout=self._ws_config.push.confirmation_timeout,
+                    max_iterations=WebSocketDefaults.MAX_ACK_WAIT_ITERATIONS,
+                    context="output_push",
                 )
 
-                if response.get("type") == "push_ack":
+                if ack_response:
+                    # Get push_ack data - either from Pydantic model or parse from dict
+                    if isinstance(ack_response, PushAckMessage):
+                        push_ack = ack_response.data
+                    elif isinstance(ack_response, dict):
+                        push_ack = PushAckData(**ack_response["data"])
+                    else:
+                        raise TypeError(f"Unexpected ack_response type: {type(ack_response)}")
+
                     # Update local state from server response
                     self._local_messages.append(output.message)
-                    self._local_version = response["data"]["version"]
-                    self._local_checksum = response["data"]["checksum"]
-
-                    logger.debug(
-                        "Pushed message via WebSocket",
-                        extra={
-                            "episode_id": self._episode_id,
-                            "new_version": self._local_version,
-                        },
+                    self._local_version = push_ack.version
+                    self._local_checksum = push_ack.checksum
+                else:
+                    logger.warning(
+                        "Failed to get push_ack (output push)",
+                        extra={"episode_id": self._episode_id},
                     )
+                    # Fallback: update local state optimistically
+                    self._local_messages.append(output.message)
+                    self._local_version += 1
+                    self._local_checksum = compute_checksum([self._serialize_message(m) for m in self._local_messages])
 
+            except asyncio.TimeoutError:
+                # Timeout waiting for push_ack
+                logger.warning(
+                    "Timeout waiting for push_ack, falling back to local tracking",
+                    extra={
+                        "episode_id": self._episode_id,
+                        "timeout": self._ws_config.push.confirmation_timeout,
+                        "websocket_connected": self._websocket is not None
+                        and not _is_websocket_closed(self._websocket),
+                        "listener_running": self._listener_task is not None and not self._listener_task.done(),
+                        "queue_size": self._event_queue.qsize(),
+                    },
+                )
+                # Fallback: update local state optimistically
+                self._local_messages.append(output.message)
+                self._local_version += 1
+                self._local_checksum = compute_checksum([self._serialize_message(m) for m in self._local_messages])
             except Exception as e:
                 # Log but don't crash
                 logger.warning(
@@ -851,7 +1281,7 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
         return output
 
     async def cleanup(self) -> None:
-        """Close WebSocket connection when episode ends."""
+        """Close WebSocket connection and release resources when episode ends."""
         if self._listener_task:
             self._listener_task.cancel()
             try:
@@ -859,7 +1289,19 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
             except asyncio.CancelledError:
                 pass
 
-        if self._websocket and not self._websocket.closed:
+        # Drain event queue to release message references
+        while not self._event_queue.empty():
+            try:
+                self._event_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+        # Clear local state to allow garbage collection
+        self._local_messages.clear()
+        self._local_version = 0
+        self._local_checksum = compute_checksum([])
+
+        if self._websocket and not _is_websocket_closed(self._websocket):
             await self._websocket.close()
             logger.info("WebSocket connection closed", extra={"episode_id": self._episode_id})
 

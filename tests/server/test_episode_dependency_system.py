@@ -12,6 +12,7 @@ from saber.server.episodes.episode_manager import EpisodeManager
 from saber.server.session_manager import SessionManager
 from saber.server.base import Episode, EpisodeState
 from saber.server.benchmarks.task import Task
+from saber.models.benchmark_task import SingleEpisodeTask
 
 
 class TestEpisodeDependencySystem:
@@ -91,6 +92,31 @@ class TestEpisodeDependencySystem:
             "another_dependent_task": another_dependent_task,
             "circular_task": circular_task
         }.get(task_id)
+
+        # Create SingleEpisodeTask objects for get_single_episode_task
+        def create_single_task(task_id):
+            task = {
+                "independent_task": independent_task,
+                "dependent_task": dependent_task,
+                "another_dependent_task": another_dependent_task,
+                "circular_task": circular_task
+            }.get(task_id)
+            if task is None:
+                return None
+            return SingleEpisodeTask(
+                task_id=task.task_id,
+                domain=task.domain,
+                title=task.title,
+                description=task.description,
+                max_steps=task.episode_config.get("max_steps", 10),
+                episode_attempts=1,
+                initial_context=task.initial_context,
+                instruction_prompt="Test instruction",
+                assistant_prompt="Test assistant",
+                submit_prompt="Test submit",
+            )
+
+        manager.get_single_episode_task.side_effect = create_single_task
 
         # Mock get_task_prompt method
         manager.get_task_prompt.return_value = "Test prompt for task"

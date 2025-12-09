@@ -737,16 +737,31 @@ class SessionMCPAPI:
         try:
             # Get transcript from episode context
             transcript = episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT, [])
+
             if not transcript:
+                logger.warning(
+                    "Transcript is empty during context extraction",
+                    extra={
+                        "episode_id": episode.episode_id,
+                        "context_keys": list(episode.context.keys()),
+                    },
+                )
                 return None, None
 
-            # Search backwards for the most recent assistant message
+            # Search backwards for the most recent assistant message WITH content
+            # Note: GPT-4 and similar models often emit assistant messages that only
+            # contain tool_calls with no text content. We need to find the most recent
+            # message that has actual text content (reasoning/thoughts).
             for msg in reversed(transcript):
                 if msg.get("role") == "assistant":
-                    assistant_message = msg.get("content")
-                    reasoning = msg.get("reasoning")
-                    return assistant_message, reasoning
+                    msg_content = msg.get("content")
+                    msg_reasoning = msg.get("reasoning")
 
+                    # If this message has content or reasoning, use it
+                    if msg_content or msg_reasoning:
+                        return msg_content, msg_reasoning
+
+            # No assistant message with content found - expected for pure tool-call responses
             return None, None
 
         except Exception as e:

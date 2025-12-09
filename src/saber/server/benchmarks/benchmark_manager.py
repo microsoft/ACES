@@ -227,7 +227,7 @@ class BenchmarkManager:
         # Create single-episode tasks for independent tasks
         for task_id in self._dependency_graph.get_independent_tasks():
             if task_id not in processed:
-                single = self._create_single_episode_task(self.tasks[task_id])
+                single = self.create_single_episode_task(self.tasks[task_id])
                 benchmark_tasks.append(single)
                 processed.add(task_id)
 
@@ -332,14 +332,14 @@ class BenchmarkManager:
             },
         )
 
-    def _create_single_episode_task(self, task: Task) -> SingleEpisodeTask:
+    def create_single_episode_task(self, task: Task) -> SingleEpisodeTask:
         """Create SingleEpisodeTask from a Task definition.
 
         Args:
             task: Task definition
 
         Returns:
-            SingleEpisodeTask with all configuration
+            SingleEpisodeTask with all configuration including rendered prompts
         """
         episode_config = task.episode_config or {}
         rendered_prompts = self.prompt_generator.render_agent_prompts_for_task(task)
@@ -353,6 +353,7 @@ class BenchmarkManager:
             description=task.description,
             subtask_count=len(task.subtasks),
             max_steps=episode_config.get("max_steps", 100),
+            initial_context=task.initial_context,
             instruction_prompt=rendered_prompts["instruction"],
             assistant_prompt=rendered_prompts["assistant"],
             submit_prompt=rendered_prompts["submit"],
@@ -374,6 +375,24 @@ class BenchmarkManager:
         if task_id not in self.tasks:
             raise TaskNotFoundException(task_id)
         return self.tasks[task_id]
+
+    def get_single_episode_task(self, task_id: str) -> SingleEpisodeTask:
+        """Get a SingleEpisodeTask by ID with rendered prompts.
+
+        This is the preferred method for getting task data needed for episode
+        creation, as it returns a SingleEpisodeTask with fully rendered prompts.
+
+        Args:
+            task_id: ID of the task to retrieve
+
+        Returns:
+            SingleEpisodeTask with rendered prompts
+
+        Raises:
+            TaskNotFoundException: If task is not found
+        """
+        task = self.get_task(task_id)
+        return self.create_single_episode_task(task)
 
     def get_subtask(self, task_id: str, subtask_id: str) -> SubTask:
         """

@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch, call
 import pytest
 from fastapi import HTTPException
 
+from saber.models.benchmark_task import SingleEpisodeTask
 from saber.server.base import Episode, EpisodeState
 from saber.server.episodes.constants import EpisodeTerminationReason
 from saber.server.session_manager import ClientSession, SessionManager
@@ -559,10 +560,25 @@ class TestSessionManagerDependencies:
             manager.benchmark_manager.prompt_generator.render_agent_prompts_for_task.return_value = {
                 "instruction": "test"
             }
+            # Mock get_single_episode_task to return proper SingleEpisodeTask
+            single_episode_task = SingleEpisodeTask(
+                task_id="dependent-task",
+                domain="test_domain",
+                title="Test Task",
+                description="Test description",
+                max_steps=10,
+                instruction_prompt="test",
+                assistant_prompt="test",
+                submit_prompt="test",
+                episode_attempts=1,
+            )
+            manager.benchmark_manager.get_single_episode_task = MagicMock(return_value=single_episode_task)
             manager.execution_manager.configure_for_task_async = AsyncMock()
             manager.execution_manager.wait_for_episode_healthy = AsyncMock()
             manager.execution_manager.copy_initial_files_to_episode = AsyncMock()
             manager.episode_manager.configure_for_task = AsyncMock()
+            # Mock initialize_episode_context to return proper dict
+            manager.episode_manager.initialize_episode_context = MagicMock(return_value={})
             return manager
 
     @pytest.mark.asyncio

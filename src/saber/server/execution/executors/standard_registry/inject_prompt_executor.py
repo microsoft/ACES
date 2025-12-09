@@ -83,6 +83,7 @@ class InjectPromptExecutor(DockerExecutor):
             sandbox_manager: Sandbox manager for executing commands in container
             config: Injection-specific configuration dictionary
             additional_params: Additional parameters for executor creation
+            session_manager: Session manager for cross-episode operations
             **kwargs: Additional keyword arguments
 
         Returns:
@@ -92,7 +93,7 @@ class InjectPromptExecutor(DockerExecutor):
         if additional_params:
             merged_kwargs.update(additional_params)
 
-        return cls(sandbox_manager=sandbox_manager, config=config, **merged_kwargs)
+        return cls(sandbox_manager=sandbox_manager, config=config, session_manager=session_manager, **merged_kwargs)
 
     def setup_parameters(self, config: Dict[str, Any]) -> None:
         """

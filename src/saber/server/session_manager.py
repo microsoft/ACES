@@ -1207,8 +1207,10 @@ class SessionManager:
         session = self._get_session(session_id)
         session.update_activity()
 
-        # Get the task object to access its configuration
-        task = self.benchmark_manager.get_task(task_id)
+        # Get the raw task for environment/dependency configuration
+        raw_task = self.benchmark_manager.get_task(task_id)
+        # Get SingleEpisodeTask with rendered prompts for transcript initialization
+        single_episode_task = self.benchmark_manager.get_single_episode_task(task_id)
 
         # Acquire GLOBAL lock to serialize episode creation (Docker compose only)
         async with self._episode_creation_lock:
@@ -1236,11 +1238,14 @@ class SessionManager:
             )
 
             # Create episode in CREATING state (changed from ACTIVE)
+            # Initialize context with transcript via public API (using SingleEpisodeTask with rendered prompts)
+            context = self.episode_manager.initialize_episode_context(single_episode_task)
+
             episode = Episode(
                 task_id=task_id,
                 session_id=session_id,
                 state=EpisodeState.CREATING,  # Changed from ACTIVE
-                context=task.initial_context.copy() if task.initial_context else {},
+                context=context,
                 creation_error=None,
                 metadata={"created_at": self._time_source.now().isoformat()},
                 end_time=None,
@@ -1268,9 +1273,9 @@ class SessionManager:
                 },
             )
 
-            # Handle automatic dependency resolution
+            # Handle automatic dependency resolution (using raw_task for dependency_template)
             effective_attach_to_episode_id = None
-            if task.dependency_template:
+            if raw_task.dependency_template:
                 logger.info(
                     "Task dependency detected",
                     extra={
@@ -1278,7 +1283,7 @@ class SessionManager:
                         "session_id": session_id,
                         "episode_id": episode.episode_id,
                         "task_id": task_id,
-                        "dependency_template": task.dependency_template,
+                        "dependency_template": raw_task.dependency_template,
                     },
                 )
 
@@ -1289,7 +1294,7 @@ class SessionManager:
                 try:
                     available_episode_id = await self.episode_manager.find_available_episode_for_dependency_with_retry(
                         session_id=session_id,
-                        target_task_id=task.dependency_template,
+                        target_task_id=raw_task.dependency_template,
                         dependent_task_id=task_id,
                         max_wait_seconds=dependency_config["wait_seconds"],
                         retry_interval=dependency_config["retry_interval"],
@@ -1316,7 +1321,7 @@ class SessionManager:
                     )
                 else:
                     dependency_error = ValueError(
-                        f"No available episodes with required dependency task_id {task.dependency_template} "
+                        f"No available episodes with required dependency task_id {raw_task.dependency_template} "
                         f"(waited {dependency_config['wait_seconds']}s)"
                     )
                     self.episode_manager.remove_episode_on_error(episode.episode_id, dependency_error)
@@ -1324,15 +1329,16 @@ class SessionManager:
                     session.remove_creating_episode(episode.episode_id)
                     raise ValueError(
                         f"Cannot create episode for task {task_id}: no available episodes with required dependency "
-                        f"task_id {task.dependency_template} after waiting {dependency_config['wait_seconds']}s"
+                        f"task_id {raw_task.dependency_template} after waiting {dependency_config['wait_seconds']}s"
                     )
 
             # Start Docker environment (WITHOUT health checks) - runs in thread pool
+            # Use raw_task for environment/executor configuration
             try:
                 await asyncio.to_thread(
                     self.execution_manager.configure_for_task_async,
                     episode.episode_id,
-                    task,
+                    raw_task,
                     session_id=session_id,
                     target_episode_id=effective_attach_to_episode_id,
                 )
@@ -1405,11 +1411,12 @@ class SessionManager:
 
         # AFTER LOCK RELEASE: Spawn background task for remaining finalization
         # (prompts, policy, file copies, etc.)
+        # Pass raw_task for environment/prompt rendering
         finalization_coro = self._finalize_episode_creation(
             episode_id=episode.episode_id,
             session_id=session_id,
             task_id=task_id,
-            task=task,
+            task=raw_task,
             attach_to_episode_id=effective_attach_to_episode_id,
         )
         self._schedule_episode_finalization(episode.episode_id, finalization_coro)

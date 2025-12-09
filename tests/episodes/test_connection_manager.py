@@ -15,6 +15,12 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from fastapi import WebSocket
 
+from saber.models.rest.websocket_messages import (
+    PongMessage,
+    StateEventData,
+    StateEventMessage,
+    TranscriptOperation,
+)
 from saber.server.episodes.connection_manager import ConnectionManager
 
 
@@ -53,13 +59,14 @@ class TestConnectionManagerConnect:
         # Verify metadata was stored
         assert mock_websocket in manager._connection_metadata
         conn_metadata = manager._connection_metadata[mock_websocket]
-        assert conn_metadata["episode_id"] == episode_id
-        assert conn_metadata["metadata"] == metadata
-        assert "connected_at" in conn_metadata
+        assert conn_metadata.episode_id == episode_id
+        assert conn_metadata.metadata == metadata
+        assert conn_metadata.connected_at is not None
 
         # Verify confirmation message was sent
         mock_websocket.send_json.assert_called_once()
         sent_message = mock_websocket.send_json.call_args[0][0]
+        # Message is serialized to dict by model_dump()
         assert sent_message["type"] == "connected"
         assert sent_message["episode_id"] == episode_id
 
@@ -74,7 +81,7 @@ class TestConnectionManagerConnect:
 
         # Verify metadata defaults to empty dict
         conn_metadata = manager._connection_metadata[mock_websocket]
-        assert conn_metadata["metadata"] == {}
+        assert conn_metadata.metadata == {}
 
     @pytest.mark.asyncio
     async def test_connect_multiple_connections_same_episode(self):
@@ -184,20 +191,32 @@ class TestConnectionManagerBroadcast:
         mock_ws1 = AsyncMock(spec=WebSocket)
         mock_ws2 = AsyncMock(spec=WebSocket)
         episode_id = "episode_123"
-        message = {"type": "test", "data": {"value": 42}}
+
+        # Create a proper Pydantic message
+        message = StateEventMessage(
+            type="is_waiting_on_user",
+            data=StateEventData(
+                version=1,
+                operation=TranscriptOperation.APPEND,
+                modification_count=0,
+                state="WAITING_FOR_USER"
+            ),
+            id="test-id",
+            timestamp=datetime.utcnow().isoformat()
+        )
 
         await manager.connect(episode_id, mock_ws1)
         await manager.connect(episode_id, mock_ws2)
 
         await manager.broadcast_to_episode(episode_id, message)
 
-        # Verify message sent to both connections
-        mock_ws1.send_json.assert_called()
-        mock_ws2.send_json.assert_called()
+        # Verify message sent to both connections (2 calls: connect + broadcast)
+        assert mock_ws1.send_json.call_count == 2
+        assert mock_ws2.send_json.call_count == 2
 
-        # Verify correct message content (skip initial connect confirmation)
-        calls = mock_ws1.send_json.call_args_list
-        assert any(call[0][0] == message for call in calls)
+        # Verify correct message content (second call is the broadcast)
+        broadcast_call = mock_ws1.send_json.call_args_list[1][0][0]
+        assert broadcast_call["type"] == "is_waiting_on_user"
 
     @pytest.mark.asyncio
     async def test_broadcast_episode_isolation(self):
@@ -207,7 +226,8 @@ class TestConnectionManagerBroadcast:
         mock_ws2 = AsyncMock(spec=WebSocket)
         episode_id1 = "episode_123"
         episode_id2 = "episode_456"
-        message = {"type": "test", "data": {"value": 42}}
+
+        message = PongMessage(timestamp=datetime.utcnow().isoformat())
 
         await manager.connect(episode_id1, mock_ws1)
         await manager.connect(episode_id2, mock_ws2)
@@ -219,14 +239,15 @@ class TestConnectionManagerBroadcast:
         await manager.broadcast_to_episode(episode_id1, message)
 
         # Verify only episode_id1 received message
-        mock_ws1.send_json.assert_called_once_with(message)
+        mock_ws1.send_json.assert_called_once()
+        mock_ws2.send_json.assert_not_called()
         mock_ws2.send_json.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_broadcast_to_nonexistent_episode(self):
         """Test broadcast to episode with no connections."""
         manager = ConnectionManager()
-        message = {"type": "test"}
+        message = PongMessage(timestamp=datetime.utcnow().isoformat())
 
         # Should not raise exception
         await manager.broadcast_to_episode("nonexistent_episode", message)
@@ -238,7 +259,7 @@ class TestConnectionManagerBroadcast:
         mock_ws_good = AsyncMock(spec=WebSocket)
         mock_ws_bad = AsyncMock(spec=WebSocket)
         episode_id = "episode_123"
-        message = {"type": "test"}
+        message = PongMessage(timestamp=datetime.utcnow().isoformat())
 
         await manager.connect(episode_id, mock_ws_good)
         await manager.connect(episode_id, mock_ws_bad)
@@ -399,8 +420,21 @@ class TestConnectionManagerConcurrency:
         await manager.connect(episode_id, mock_websocket)
         mock_websocket.reset_mock()
 
-        # Broadcast concurrently
-        messages = [{"type": "test", "index": i} for i in range(10)]
+        # Broadcast concurrently - use Pydantic messages
+        messages = [
+            StateEventMessage(
+                type="is_waiting_on_user",
+                data=StateEventData(
+                    version=i,
+                    operation=TranscriptOperation.APPEND,
+                    modification_count=i,
+                    state="WAITING_FOR_USER"
+                ),
+                id=f"test-{i}",
+                timestamp=datetime.utcnow().isoformat()
+            )
+            for i in range(10)
+        ]
         await asyncio.gather(*[
             manager.broadcast_to_episode(episode_id, msg)
             for msg in messages

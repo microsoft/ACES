@@ -131,18 +131,21 @@ class StuckStateMonitor:
         )
 
         # Broadcast error event
+        from ...models.rest.websocket_messages import TranscriptErrorData, TranscriptErrorMessage, TranscriptErrorType
+
+        error_message = TranscriptErrorMessage(
+            data=TranscriptErrorData(
+                error=TranscriptErrorType.STUCK_STATE,
+                state=current_state,
+                duration_seconds=duration,
+                threshold_seconds=threshold,
+            ),
+            timestamp=str(time.time()),
+        )
+
         await self.coordinator.connection_manager.broadcast_to_episode(
             episode_id=episode.episode_id,
-            message={
-                "type": "transcript_error",
-                "data": {
-                    "error": "stuck_state",
-                    "state": current_state,
-                    "duration_seconds": duration,
-                    "threshold_seconds": threshold,
-                },
-                "timestamp": time.time(),
-            },
+            message=error_message,
         )
 
         # Update episode context with stuck flag

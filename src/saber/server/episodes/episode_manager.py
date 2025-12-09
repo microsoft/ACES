@@ -10,6 +10,7 @@ from typing import Any, Dict, List, NamedTuple, Optional
 
 from saber.logging_config import LogCategory, get_saber_logger
 
+from ...models.constants import MetadataKeys
 from ..base import Action, CommandResult, Episode, EpisodeState, Step
 from ..benchmarks.task import Task
 from ..time_source import TimeSource, UTCTimeSource
@@ -89,11 +90,31 @@ class EpisodeManager:
         self.episodes[episode.episode_id] = episode
 
     def complete_episode(self, episode_id: str) -> Optional[Episode]:
-        """Move an episode from active to completed."""
+        """Move an episode from active to completed.
+
+        Clears heavy data (transcript, step snapshots) to prevent memory leaks
+        while preserving episode metadata for lookups.
+        """
         episode = self.episodes.pop(episode_id, None)
         if episode:
+            # Clear transcript data to free memory (can be large)
+            self._clear_episode_heavy_data(episode)
             self.completed_episodes[episode_id] = episode
         return episode
+
+    def _clear_episode_heavy_data(self, episode: Episode) -> None:
+        """Clear heavy data from episode to free memory.
+
+        Removes transcript and step context snapshots while preserving
+        essential episode metadata needed for lookups and evaluation.
+        """
+        # Clear transcript from context
+        episode.context.pop(MetadataKeys.CLIENT_TRANSCRIPT, None)
+        episode.context.pop(MetadataKeys.TRANSCRIPT_CHECKSUM, None)
+
+        # Clear step context snapshots (they can hold transcript copies)
+        for step in episode.steps:
+            step.context_snapshot.clear()
 
     def mark_episode_ready(self, episode_id: str) -> None:
         """
@@ -504,6 +525,111 @@ class EpisodeManager:
 
         return False, ""
 
+    def initialize_episode_context(self, task: Any) -> Dict[str, Any]:
+        """Initialize episode context from task configuration.
+
+        Creates a new context dict with:
+        - Initial context from task (if any)
+        - Transcript with system + user messages
+        - Version tracking metadata
+
+        This is the public API for creating episode context. SessionManager
+        should call this instead of manually copying initial_context.
+
+        Args:
+            task: Task object (SingleEpisodeTask, SubTaskDefinition, etc.)
+
+        Returns:
+            Initialized context dict ready for Episode creation
+        """
+        # Start with task's initial context (or empty dict)
+        context = task.initial_context.copy() if task.initial_context else {}
+
+        # Initialize transcript if applicable for this task type
+        should_init = self._should_initialize_transcript(task)
+        if should_init:
+            self._initialize_transcript(context, task)
+
+        # Log context initialization result
+        logger.debug(
+            "Episode context initialized",
+            extra={
+                "event": "episode_context_initialized",
+                "task_type": type(task).__name__,
+                "task_id": getattr(task, "task_id", "unknown"),
+                "transcript_initialized": should_init,
+                "transcript_version": context.get(MetadataKeys.TRANSCRIPT_VERSION) if should_init else None,
+                "transcript_length": len(context.get(MetadataKeys.CLIENT_TRANSCRIPT, [])) if should_init else 0,
+            },
+        )
+
+        return context
+
+    def _should_initialize_transcript(self, task: Any) -> bool:
+        """Check if transcript should be initialized for this task.
+
+        Transcripts are initialized for:
+        - SingleEpisodeTask: Traditional single-episode tasks
+        - SubTaskDefinition: Individual sub-tasks from orchestrated tasks
+
+        NOT initialized for:
+        - OrchestratedTask: Parent container doesn't execute directly
+
+        Args:
+            task: Task object to check
+
+        Returns:
+            True if transcript should be initialized
+        """
+        from ...models.benchmark_task import SingleEpisodeTask, SubTaskDefinition
+
+        return isinstance(task, (SingleEpisodeTask, SubTaskDefinition))
+
+    def _initialize_transcript(self, context: Dict[str, Any], task: Any) -> None:
+        """Initialize transcript in episode context from task prompts.
+
+        Creates initial transcript with:
+        - System message: Concatenation of instruction, assistant, and submit prompts
+        - User message: Task description
+
+        Works for both SingleEpisodeTask and SubTaskDefinition (from orchestrations).
+
+        Args:
+            context: Episode context dict to update (modified in-place)
+            task: SingleEpisodeTask or SubTaskDefinition with prompt fields
+        """
+        from ...models.benchmark_task import SingleEpisodeTask, SubTaskDefinition
+        from ...models.rest.websocket_messages import TranscriptOperation
+        from ...models.transcript import compute_checksum
+
+        if not isinstance(task, (SingleEpisodeTask, SubTaskDefinition)):
+            return
+
+        # Build system message from prompt components
+        prompt_parts = []
+        if task.instruction_prompt:
+            prompt_parts.append(task.instruction_prompt)
+        if task.assistant_prompt:
+            prompt_parts.append(task.assistant_prompt)
+        if task.submit_prompt:
+            prompt_parts.append(task.submit_prompt)
+
+        system_content = MetadataKeys.PROMPT_SECTION_DELIMITER.join(prompt_parts)
+
+        # Create initial transcript
+        initial_transcript = [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": task.description},
+        ]
+
+        # Update context with transcript metadata
+        # Version starts at 1 to indicate the "init" operation has been applied
+        # (version 0 means no operations, i.e., empty transcript)
+        context[MetadataKeys.CLIENT_TRANSCRIPT] = initial_transcript
+        context[MetadataKeys.TRANSCRIPT_VERSION] = 1
+        context[MetadataKeys.TRANSCRIPT_LAST_OPERATION] = TranscriptOperation.INIT.value
+        context[MetadataKeys.TRANSCRIPT_CHECKSUM] = compute_checksum(initial_transcript)
+
     def start_episode(
         self,
         session_id: str,
@@ -518,10 +644,10 @@ class EpisodeManager:
             session_id: ID of the session starting the episode
             task_id: Task ID to execute
             initial_context: Initial context for the episode
-            task: Optional task object for dependency tracking
+            task: Optional task object for dependency tracking and transcript initialization
 
         Returns:
-            New Episode instance
+            New Episode instance with initialized transcript (if task provided)
         """
         logger.info(
             "Episode start requested",
@@ -532,19 +658,34 @@ class EpisodeManager:
             },
         )
 
+        # Initialize context with transcript if task is a SingleEpisodeTask
+        context = initial_context or {}
+
+        if task and self._should_initialize_transcript(task):
+            self._initialize_transcript(context, task)
+            logger.debug(
+                "Transcript initialized from task",
+                extra={
+                    "event": "transcript_initialized",
+                    "session_id": session_id,
+                    "task_id": task_id,
+                    "message_count": len(context.get(MetadataKeys.CLIENT_TRANSCRIPT, [])),
+                },
+            )
+
         # Create new episode
         episode = Episode(
             task_id=task_id,
             session_id=session_id,
             state=EpisodeState.ACTIVE,
-            context=initial_context or {},
+            context=context,
             creation_error=None,
             metadata={"created_at": self._time_source.now().isoformat()},
             end_time=None,
             eval_submission=None,
             completion_reason=None,
             submission=None,
-            depends_on_task_id=task.depends_on_task_id if task else None,
+            depends_on_task_id=getattr(task, "depends_on_task_id", None),
             attached_to_episode_id=None,  # Will be set later if episode is attached
         )
 
@@ -782,13 +923,21 @@ class EpisodeManager:
         # Convert CommandResult to dictionary using dataclass asdict
         response_dict = asdict(response)
 
+        # Create context snapshot excluding heavy data (transcript)
+        # We preserve version/checksum for tracking but not the actual messages
+        context_snapshot = {
+            k: v
+            for k, v in episode.context.items()
+            if k not in (MetadataKeys.CLIENT_TRANSCRIPT, MetadataKeys.TRANSCRIPT_CHECKSUM)
+        }
+
         # Create step without adding it to episode yet
         step = Step(
             step_number=len(episode.steps),
             timestamp=self._time_source.now(),
             action=action,  # Pass Action object directly - it should work with Pydantic
             response=response_dict,
-            context_snapshot=episode.context.copy(),
+            context_snapshot=context_snapshot,
             done=False,  # Will be set by external completion logic
         )
 

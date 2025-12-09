@@ -135,6 +135,10 @@ class MetadataKeys(str, Enum):
     # WebSocket-based transcript coordination (Phase 2)
     TRANSCRIPT_VERSION = "_transcript_version"  # Monotonic sequence number (0, 1, 2, 3...)
     TRANSCRIPT_LAST_OPERATION = "_transcript_last_operation"  # Last operation type: append, rewrite, insert, rewind
+    TRANSCRIPT_CHECKSUM = "_transcript_checksum"  # SHA256 checksum of transcript
+
+    # Prompt formatting
+    PROMPT_SECTION_DELIMITER = "\n\n---\n\n"  # Delimiter between prompt sections in system message
 
     # Stuck state monitoring (Phase 4)
     CURRENT_TRANSCRIPT_STATE = "current_transcript_state"  # Current state for comparison
@@ -147,25 +151,18 @@ class MetadataKeys(str, Enum):
     TRANSCRIPT_LAST_MODIFIED_AT = "_transcript_last_modified_at"  # ISO timestamp of last red team modification
     TRANSCRIPT_MODIFICATION_COUNT = "_transcript_modification_count"  # Monotonic counter (1, 2, 3...)
 
-    # Legacy message injection (deprecated - use direct transcript modification)
-    PENDING_INJECTIONS = "_pending_injections"
-    INJECTION_HISTORY = "_injection_history"
-
     # Transcript metadata keys
     TRANSCRIPT_STEP_NUMBER = "step_number"
     TRANSCRIPT_TIMESTAMP = "timestamp"
     TRANSCRIPT_SOURCE = "source"
 
-    # Orchestration cross-episode metadata (Phase 2c: Transparent Agent Interface)
+    # Message injection metadata
+    PENDING_INJECTIONS = "_pending_injections"  # List of messages pending injection
+    INJECTION_HISTORY = "_injection_history"  # History of injected messages
+
+    # Orchestration cross-episode metadata
     ORCHESTRATION_TARGET_EPISODES = "_orchestration_target_episodes"
     ORCHESTRATION_ROLE = "_orchestration_role"
-
-
-# NOTE: The following constants have been moved to more appropriate locations:
-# - TranscriptSyncConfig -> models/rest/config.py
-# - APIEndpoints -> models/rest/endpoints.py
-# - ExecutionMode, TaskInitMode, ClientIdentifiers, CleanupReason -> models/core/execution.py
-# - EpisodeTerminationReason -> server/episodes/constants.py (canonical location)
 
 
 __all__ = [

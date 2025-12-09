@@ -12,10 +12,11 @@ Logging category: EPISODE
 
 import asyncio
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from ...logging_config import LogCategory, get_saber_logger
 from ...models.constants import MetadataKeys
+from ...models.rest.websocket_messages import StateEventData, StateEventMessage, SyncMode, TranscriptOperation
 from ...models.transcript import (
     TranscriptPushOperation,
     TranscriptSyncRequest,
@@ -190,7 +191,7 @@ class TranscriptCoordinator:
         # Step 4: Choose sync mode
         if client_checksum and client_checksum != expected_checksum:
             # REWRITE DETECTED: Client's version is invalid
-            sync_mode = "full"
+            sync_mode = SyncMode.FULL
             delta = None
             full_transcript = all_messages
             modified = True
@@ -207,14 +208,14 @@ class TranscriptCoordinator:
 
         elif current_version.sequence == client_version:
             # NO CHANGE: Client is up to date
-            sync_mode = "no_change"
+            sync_mode = SyncMode.NO_CHANGE
             delta = []
             full_transcript = None
             modified = False
 
         else:
             # DELTA: Client is behind but valid
-            sync_mode = "delta"
+            sync_mode = SyncMode.DELTA
             delta = all_messages[client_version:]
             full_transcript = None
             modified = True
@@ -290,7 +291,7 @@ class TranscriptCoordinator:
         self,
         episode_id: str,
         modified_transcript: List[Dict[str, str]],
-        operation: str,
+        operation: Union[str, TranscriptOperation],
         injected_by: str,
         expected_base_version: Optional[int] = None,
         expected_base_checksum: Optional[str] = None,
@@ -387,28 +388,39 @@ class TranscriptCoordinator:
 
         event_type = TranscriptStateMachine.state_to_event_type(new_state)
 
-        await self.connection_manager.broadcast_to_episode(
-            episode_id=episode_id,
-            message={  # type: ignore[arg-type,misc]
-                "type": event_type,
-                "data": {
-                    "version": new_version,
-                    "operation": operation,
-                    "modification_count": modification_count,
-                    "injected_by": injected_by,
-                    "state": new_state.value,
-                },
-                "id": str(uuid.uuid4()),
-                "timestamp": self._time_source.now().isoformat(),
-            },
+        # Normalize operation to TranscriptOperation enum
+        if isinstance(operation, TranscriptOperation):
+            operation_enum = operation
+        else:
+            try:
+                operation_enum = TranscriptOperation(operation)
+            except ValueError:
+                operation_enum = TranscriptOperation.APPEND
+
+        message = StateEventMessage(
+            type=event_type,
+            data=StateEventData(
+                version=new_version,
+                operation=operation_enum,
+                modification_count=modification_count,
+                injected_by=injected_by,
+                state=new_state.value,
+            ),
+            id=str(uuid.uuid4()),
+            timestamp=self._time_source.now().isoformat(),
         )
 
-        logger.info(
+        await self.connection_manager.broadcast_to_episode(
+            episode_id=episode_id,
+            message=message,
+        )
+
+        logger.debug(
             "Broadcast WebSocket transcript modification event",
             extra={
                 "episode_id": episode_id,
                 "version": new_version,
-                "operation": operation,
+                "operation": operation_enum.value,
                 "modification_count": modification_count,
                 "injected_by": injected_by,
                 "state": new_state.value,

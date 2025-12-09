@@ -8,6 +8,7 @@ from fastapi import HTTPException
 
 from saber.server.base import EpisodeState
 from saber.server.session_manager import SessionManager
+from saber.models.benchmark_task import SingleEpisodeTask
 
 
 @pytest.fixture
@@ -30,6 +31,7 @@ def mock_episode_manager():
     mock.get_episode_by_id = MagicMock()
     mock.add_episode_to_session = MagicMock()
     mock.configure_for_task = AsyncMock()  # This needs to be AsyncMock
+    mock.initialize_episode_context = MagicMock(return_value={})  # Return empty dict for Episode context
     return mock
 
 
@@ -47,6 +49,20 @@ def session_manager(mock_execution_manager, mock_episode_manager):
     mock_task.initial_context = {}
     mock_task.dependency_template = None
     mock_task_manager.get_task = MagicMock(return_value=mock_task)
+
+    # Mock get_single_episode_task returning a proper SingleEpisodeTask
+    single_episode_task = SingleEpisodeTask(
+        task_id="test_task",
+        domain="test_domain",
+        title="Test Task",
+        description="Test description",
+        max_steps=10,
+        instruction_prompt="Test instruction prompt",
+        assistant_prompt="Test assistant prompt",
+        submit_prompt="Test submit prompt",
+        episode_attempts=1,
+    )
+    mock_task_manager.get_single_episode_task = MagicMock(return_value=single_episode_task)
 
     # Mock prompt generator
     mock_prompt_generator = MagicMock()

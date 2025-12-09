@@ -13,7 +13,7 @@ from fastapi import WebSocket
 
 from ...logging_config import LogCategory, get_saber_logger
 from ...models.rest.websocket_constants import WebSocketCloseCode
-from ...models.rest.websocket_messages import ConnectionMetadata, WebSocketServerMessage
+from ...models.rest.websocket_messages import ConnectedMessage, ConnectionMetadata, WebSocketServerMessage
 from ..time_source import TimeSource, UTCTimeSource
 from .protocols import EpisodeManagerProtocol
 
@@ -94,13 +94,11 @@ class ConnectionManager:
         )
 
         # Send connection confirmation
-        await websocket.send_json(
-            {
-                "type": "connected",
-                "episode_id": episode_id,
-                "timestamp": self._time_source.now().isoformat(),
-            }
+        message = ConnectedMessage(
+            episode_id=episode_id,
+            timestamp=self._time_source.now().isoformat(),
         )
+        await websocket.send_json(message.model_dump())
 
     async def disconnect(self, episode_id: str, websocket: WebSocket) -> None:
         """
@@ -190,7 +188,7 @@ class ConnectionManager:
         # Send to all connections for this episode
         for connection in self._active_connections[episode_id]:
             try:
-                await connection.send_json(message)
+                await connection.send_json(message.model_dump())
             except Exception as e:
                 logger.warning(
                     "Failed to send WebSocket message, marking for disconnect",

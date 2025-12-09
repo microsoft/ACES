@@ -38,6 +38,22 @@ class MockEpisodeManager:
     def get_episode_by_id(self, episode_id: str):
         return self.episodes.get(episode_id)
 
+    def start_episode(self, session_id: str, task_id: str, **kwargs):
+        """Mock start_episode to support lifecycle hooks."""
+        episode_id = f"{session_id}-{task_id}"
+        episode = Episode(
+            episode_id=episode_id,
+            session_id=session_id,
+            task_id=task_id,
+        )
+        self.episodes[episode_id] = episode
+        return episode
+
+    def end_episode(self, episode_id: str, **kwargs):
+        """Mock end_episode."""
+        if episode_id in self.episodes:
+            del self.episodes[episode_id]
+
 
 @pytest.fixture
 def sample_transcript():

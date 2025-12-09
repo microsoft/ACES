@@ -274,15 +274,11 @@ def _wrap_model_for_transcript_sync(
 
     ws_config = WebSocketConfig(**ws_config_kwargs)
 
-    # Determine skip_first_iteration from pull.blocking (skip if not blocking)
-    skip_first_iteration = not ws_config.pull.blocking if ws_config.pull else True
-
     wrapped_model = WebSocketTranscriptSyncingModelWrapper(
         base_model=model,
         session_id=context.session_id,  # type: ignore[arg-type]
         episode_id=context.episode_id,  # type: ignore[arg-type]
         rest_url=context.rest_url,  # type: ignore[arg-type]
-        skip_first_iteration=skip_first_iteration,
         ws_config=ws_config,
     )
 
@@ -293,7 +289,6 @@ def _wrap_model_for_transcript_sync(
             "session_id": context.session_id,
             "episode_id": context.episode_id,
             "model": model_name,
-            "skip_first_iteration": skip_first_iteration,
             "pull_blocking": ws_config.pull.blocking,
             "pull_event_timeout": ws_config.pull.event_timeout,
             "push_confirmation_timeout": ws_config.push.confirmation_timeout,

@@ -13,6 +13,7 @@ from saber.server.session_manager import SessionManager
 from saber.server.base import Episode, EpisodeState
 from saber.server.benchmarks.task import Task
 from saber.models import EvalSubmission
+from saber.models.benchmark_task import SingleEpisodeTask
 
 
 class TestCascadeTermination:
@@ -66,6 +67,38 @@ class TestCascadeTermination:
         manager.get_task.side_effect = lambda task_id: {
             "independent_task": independent_task,
             "dependent_task": dependent_task,
+        }.get(task_id)
+
+        # Create SingleEpisodeTask objects for get_single_episode_task
+        independent_single_task = SingleEpisodeTask(
+            task_id="independent_task",
+            domain="test_domain",
+            title="Independent Task",
+            description="A task with no dependencies",
+            max_steps=10,
+            episode_attempts=1,
+            initial_context={"test": "context"},
+            instruction_prompt="Test instruction",
+            assistant_prompt="Test assistant",
+            submit_prompt="Test submit",
+        )
+
+        dependent_single_task = SingleEpisodeTask(
+            task_id="dependent_task",
+            domain="test_domain",
+            title="Dependent Task",
+            description="A task that depends on independent_task",
+            max_steps=10,
+            episode_attempts=1,
+            initial_context={"test": "context"},
+            instruction_prompt="Test instruction",
+            assistant_prompt="Test assistant",
+            submit_prompt="Test submit",
+        )
+
+        manager.get_single_episode_task.side_effect = lambda task_id: {
+            "independent_task": independent_single_task,
+            "dependent_task": dependent_single_task,
         }.get(task_id)
 
         # Mock get_task_prompt method

@@ -105,9 +105,8 @@ class TestCoordinatorStateMachineIntegration:
         # Check event format
         assert len(events_captured) == 1
         event = events_captured[0]
-        assert event["message"]["type"] == "is_waiting_on_assistant"
-        assert "state" in event["message"]["data"]
-        assert event["message"]["data"]["state"] == "WAITING_FOR_ASSISTANT"
+        assert event["message"].type == "is_waiting_on_assistant"
+        assert event["message"].data.state == "WAITING_FOR_ASSISTANT"
 
     async def test_auto_continue_does_not_trigger_on_tool_calls(self):
         """Auto-continue should NOT trigger when assistant has tool_calls."""
@@ -169,7 +168,7 @@ class TestCoordinatorStateMachineIntegration:
             injected_by="test",
         )
 
-        assert events_captured[-1]["type"] == "is_waiting_on_assistant"
+        assert events_captured[-1].type == "is_waiting_on_assistant"
 
         # Scenario 2: Assistant with tool_calls → WAITING_FOR_TOOLS
         await coordinator.notify_modification(
@@ -182,7 +181,7 @@ class TestCoordinatorStateMachineIntegration:
             injected_by="test",
         )
 
-        assert events_captured[-1]["type"] == "is_waiting_on_tools"
+        assert events_captured[-1].type == "is_waiting_on_tools"
 
         # Scenario 3: Tool response → WAITING_FOR_USER (assistant needs to respond)
         await coordinator.notify_modification(
@@ -197,7 +196,7 @@ class TestCoordinatorStateMachineIntegration:
         )
 
         # Tool message means waiting for user (who can continue the conversation)
-        assert events_captured[-1]["type"] == "is_waiting_on_user"
+        assert events_captured[-1].type == "is_waiting_on_user"
 
     async def test_stuck_state_monitor_integration(self):
         """End-to-end: stuck episodes trigger error events."""
@@ -234,9 +233,9 @@ class TestCoordinatorStateMachineIntegration:
             await asyncio.sleep(0.5)
 
             # Verify error event
-            errors = [e for e in events if e["type"] == "transcript_error"]
+            errors = [e for e in events if e.type == "transcript_error"]
             assert len(errors) > 0
-            assert errors[0]["data"]["error"] == "stuck_state"
+            assert errors[0].data.error == "stuck_state"
 
         finally:
             await coordinator.stop_monitor()

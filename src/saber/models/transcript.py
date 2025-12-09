@@ -8,7 +8,9 @@ import hashlib
 import json
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
+
+from .rest.websocket_messages import SyncMode
 
 
 def compute_checksum(messages: List[Dict[str, Any]]) -> str:
@@ -128,7 +130,7 @@ class TranscriptSyncResponse:
         current_version: Server's current version info
         delta: New messages since client's version (None if full sync or no changes)
         full_transcript: Complete transcript (None if delta sync or no changes)
-        sync_mode: Mode used ("delta", "full", "no_change")
+        sync_mode: Mode used (SyncMode.DELTA, SyncMode.FULL, SyncMode.NO_CHANGE)
         modified: Whether transcript was modified
         blocked: Whether request blocked waiting for changes (deprecated)
         wait_time_seconds: Time spent waiting (0 for immediate)
@@ -137,24 +139,27 @@ class TranscriptSyncResponse:
     current_version: TranscriptVersion
     delta: Optional[List[Dict[str, Any]]] = None
     full_transcript: Optional[List[Dict[str, Any]]] = None
-    sync_mode: str = "no_change"
+    sync_mode: Union[SyncMode, str] = SyncMode.NO_CHANGE
     modified: bool = False
     blocked: bool = False
     wait_time_seconds: float = 0.0
 
     def __post_init__(self) -> None:
-        """Validate sync mode consistency."""
-        valid_modes = ["delta", "full", "no_change"]
-        if self.sync_mode not in valid_modes:
-            raise ValueError(f"sync_mode must be one of {valid_modes}, got {self.sync_mode}")
+        """Validate sync mode consistency and normalize to enum."""
+        # Normalize string to enum if needed
+        if isinstance(self.sync_mode, str):
+            try:
+                object.__setattr__(self, "sync_mode", SyncMode(self.sync_mode))
+            except ValueError:
+                raise ValueError(f"sync_mode must be one of {[m.value for m in SyncMode]}, got {self.sync_mode}")
 
         # Validate consistency
-        if self.sync_mode == "delta" and self.delta is None:
-            raise ValueError("sync_mode='delta' requires delta to be set")
-        if self.sync_mode == "full" and self.full_transcript is None:
-            raise ValueError("sync_mode='full' requires full_transcript to be set")
-        if self.sync_mode == "no_change" and (self.delta or self.full_transcript):
-            raise ValueError("sync_mode='no_change' should not have delta or full_transcript")
+        if self.sync_mode == SyncMode.DELTA and self.delta is None:
+            raise ValueError("sync_mode=DELTA requires delta to be set")
+        if self.sync_mode == SyncMode.FULL and self.full_transcript is None:
+            raise ValueError("sync_mode=FULL requires full_transcript to be set")
+        if self.sync_mode == SyncMode.NO_CHANGE and (self.delta or self.full_transcript):
+            raise ValueError("sync_mode=NO_CHANGE should not have delta or full_transcript")
 
 
 __all__ = [

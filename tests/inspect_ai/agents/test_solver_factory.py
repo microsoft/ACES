@@ -241,7 +241,7 @@ class TestCreateSaberSolver:
             assert call_kwargs["session_id"] == "session-123"
             assert call_kwargs["episode_id"] == "episode-456"
             assert call_kwargs["rest_url"] == "http://localhost:8000"
-            # Also has skip_first_iteration and ws_config with defaults
+            # Also has ws_config with defaults
 
     @pytest.mark.asyncio
     async def test_solver_no_wrapping_without_complete_context(self, mock_state, mock_generate):
@@ -350,8 +350,8 @@ class TestSolverFactoryBlockingWrapper:
     """Test solver_factory WebSocket wrapper creation (Phase 4)."""
 
     @pytest.mark.asyncio
-    async def test_creates_websocket_wrapper_with_skip_first_iteration_true(self, mock_state, mock_generate):
-        """Test that WebSocketTranscriptSyncingModelWrapper gets skip_first_iteration=True when pull.blocking=False."""
+    async def test_creates_websocket_wrapper_with_pull_blocking_false(self, mock_state, mock_generate):
+        """Test that WebSocketTranscriptSyncingModelWrapper is created with correct config when pull.blocking=False."""
         metadata = {
             MetadataKeys.SESSION_ID: "session-123",
             MetadataKeys.EPISODE_ID: "episode-456",
@@ -363,7 +363,7 @@ class TestSolverFactoryBlockingWrapper:
             "transcript_config": {
                 "websocket": {
                     "pull": {
-                        "blocking": False,  # skip_first_iteration = not False = True
+                        "blocking": False,
                         "event_timeout": 300.0,
                     }
                 }
@@ -399,14 +399,16 @@ class TestSolverFactoryBlockingWrapper:
                         solver = create_saber_solver("test-agent", mock_factory)
                         await solver(mock_state, mock_generate)
 
-                        # Verify WebSocketTranscriptSyncingModelWrapper was created
+                        # Verify WebSocketTranscriptSyncingModelWrapper was created with correct args
                         mock_websocket_wrapper.assert_called_once()
                         call_args = mock_websocket_wrapper.call_args
                         assert call_args[1]["base_model"] == mock_model
                         assert call_args[1]["session_id"] == "session-123"
                         assert call_args[1]["episode_id"] == "episode-456"
                         assert call_args[1]["rest_url"] == "http://localhost:8000"
-                        assert call_args[1]["skip_first_iteration"] is True
+                        # Verify ws_config has correct pull settings
+                        ws_config = call_args[1]["ws_config"]
+                        assert ws_config.pull.blocking is False
 
                         # Verify wrapper was stored in state for cleanup
                         mock_state.store.set.assert_called_once_with(
@@ -510,11 +512,9 @@ class TestSolverFactoryBlockingWrapper:
 
 
 
-    """Test solver_factory WebSocket wrapper creation (Phase 4)."""
-
     @pytest.mark.asyncio
-    async def test_creates_websocket_wrapper_with_skip_first_iteration_false(self, mock_state, mock_generate):
-        """Test that WebSocketTranscriptSyncingModelWrapper gets skip_first_iteration=False when pull.blocking=True."""
+    async def test_creates_websocket_wrapper_with_pull_blocking_true(self, mock_state, mock_generate):
+        """Test that WebSocketTranscriptSyncingModelWrapper is created with correct config when pull.blocking=True."""
         metadata = {
             MetadataKeys.SESSION_ID: "session-123",
             MetadataKeys.EPISODE_ID: "episode-456",
@@ -526,7 +526,7 @@ class TestSolverFactoryBlockingWrapper:
             "transcript_config": {
                 "websocket": {
                     "pull": {
-                        "blocking": True,  # skip_first_iteration = not True = False
+                        "blocking": True,
                         "event_timeout": 300.0,
                     }
                 }
@@ -562,14 +562,16 @@ class TestSolverFactoryBlockingWrapper:
                         solver = create_saber_solver("test-agent", mock_factory)
                         await solver(mock_state, mock_generate)
 
-                        # Verify WebSocketTranscriptSyncingModelWrapper was created
+                        # Verify WebSocketTranscriptSyncingModelWrapper was created with correct args
                         mock_websocket_wrapper.assert_called_once()
                         call_args = mock_websocket_wrapper.call_args
                         assert call_args[1]["base_model"] == mock_model
                         assert call_args[1]["session_id"] == "session-123"
                         assert call_args[1]["episode_id"] == "episode-456"
                         assert call_args[1]["rest_url"] == "http://localhost:8000"
-                        assert call_args[1]["skip_first_iteration"] is False  # not blocking=True = False
+                        # Verify ws_config has correct pull settings
+                        ws_config = call_args[1]["ws_config"]
+                        assert ws_config.pull.blocking is True
 
                         # Verify wrapper was stored in state for cleanup
                         mock_state.store.set.assert_called_once_with(
@@ -638,7 +640,6 @@ class TestSolverFactoryBlockingWrapper:
 
                             # Verify wrapper was called with custom config
                             call_args = mock_websocket_wrapper.call_args
-                            assert call_args[1]["skip_first_iteration"] is False
                             assert call_args[1]["ws_config"] == mock_ws_config
 
     @pytest.mark.asyncio
@@ -748,7 +749,7 @@ class TestSolverFactoryBlockingWrapper:
             "transcript_config": {
                 "blocking": {
                     "enabled": True,
-                    # No skip_first_iteration - should use default (True)
+                    # Uses default blocking config
                 },
                 # No websocket section - should use all defaults
             }
@@ -782,6 +783,6 @@ class TestSolverFactoryBlockingWrapper:
                         solver = create_saber_solver("test-agent", mock_factory)
                         await solver(mock_state, mock_generate)
 
-                        # Verify defaults were used (pull.blocking=True by default, so skip_first_iteration=False)
+                        # Verify defaults were used
                         call_args = mock_websocket_wrapper.call_args
-                        assert call_args[1]["skip_first_iteration"] is False  # not blocking=True = False
+                        assert "ws_config" in call_args[1]  # ws_config should be passed

@@ -55,6 +55,22 @@ class MockEpisodeManager:
     def get_episode_by_id(self, episode_id: str):
         return self.episodes.get(episode_id)
 
+    def start_episode(self, session_id: str, task_id: str, **kwargs):
+        """Mock start_episode to support lifecycle hooks."""
+        episode_id = f"{session_id}-{task_id}"
+        episode = Episode(
+            episode_id=episode_id,
+            session_id=session_id,
+            task_id=task_id,
+        )
+        self.episodes[episode_id] = episode
+        return episode
+
+    def end_episode(self, episode_id: str, **kwargs):
+        """Mock end_episode."""
+        if episode_id in self.episodes:
+            del self.episodes[episode_id]
+
 
 class TestTranscriptCoordinatorInit:
     """Test TranscriptCoordinator initialization."""
@@ -407,10 +423,12 @@ class TestTranscriptCoordinatorNotifyModification:
         assert len(connection_manager.broadcasts) == 1
         broadcast = connection_manager.broadcasts[0]
         assert broadcast["episode_id"] == "ep-blue-1"
-        assert broadcast["message"]["type"] == "transcript_modified"
-        assert broadcast["message"]["data"]["version"] == 1
-        assert broadcast["message"]["data"]["operation"] == "append"
-        assert broadcast["message"]["data"]["injected_by"] == "ep-red-2"
+        # Message is now a Pydantic model with state-aware event type
+        # After adding a system message to an empty transcript, state is WAITING_FOR_USER
+        assert broadcast["message"].type == "is_waiting_on_user"
+        assert broadcast["message"].data.version == 1
+        assert broadcast["message"].data.operation.value == "append"
+        assert broadcast["message"].data.injected_by == "ep-red-2"
 
     @pytest.mark.asyncio
     async def test_notify_modification_sets_last_operation(self):

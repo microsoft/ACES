@@ -3,13 +3,21 @@
 import asyncio
 import time
 from enum import Enum
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Literal, Set
 
 from ...logging_config import LogCategory, get_saber_logger
 from ...models.constants import MetadataKeys
 from ..base import Episode
 
 logger = get_saber_logger(LogCategory.EPISODE, __name__)
+
+# Type alias for valid state event types that can be used in StateEventMessage
+StateEventType = Literal[
+    "transcript_modified",
+    "is_waiting_on_user",
+    "is_waiting_on_assistant",
+    "is_waiting_on_tools",
+]
 
 
 class TranscriptState(str, Enum):
@@ -213,28 +221,33 @@ class TranscriptStateMachine:
         return new_state in valid_targets
 
     @staticmethod
-    def state_to_event_type(state: TranscriptState) -> str:
+    def state_to_event_type(state: TranscriptState) -> StateEventType:
         """Convert state to WebSocket event type.
 
         Uses is_waiting_on_<role> format for events.
+        Error states return "transcript_modified" as a safe default since
+        TranscriptErrorMessage should be used for actual error notifications.
 
         Args:
             state: TranscriptState
 
         Returns:
-            Event type string (e.g., "is_waiting_on_assistant")
+            Event type literal (e.g., "is_waiting_on_assistant")
         """
-        event_map = {
+        event_map: Dict[TranscriptState, StateEventType] = {
             TranscriptState.WAITING_FOR_USER: "is_waiting_on_user",
             TranscriptState.WAITING_FOR_ASSISTANT: "is_waiting_on_assistant",
             TranscriptState.WAITING_FOR_TOOLS: "is_waiting_on_tools",
-            TranscriptState.ERROR_STUCK: "transcript_error",
-            TranscriptState.ERROR_MALFORMED: "transcript_error",
+            # Error states use transcript_modified as default
+            # Actual error notifications should use TranscriptErrorMessage
+            TranscriptState.ERROR_STUCK: "transcript_modified",
+            TranscriptState.ERROR_MALFORMED: "transcript_modified",
         }
-        return event_map.get(state, "transcript_updated")
+        return event_map.get(state, "transcript_modified")
 
 
 __all__ = [
+    "StateEventType",
     "TranscriptState",
     "TranscriptStateMachine",
 ]

@@ -72,7 +72,7 @@ class TestStuckStateMonitor:
 
         # Should have detected stuck state
         assert len(events_captured) > 0
-        assert any(e["type"] == "transcript_error" for e in events_captured)
+        assert any(e.type == "transcript_error" for e in events_captured)
 
         await monitor.stop()
 
@@ -118,7 +118,7 @@ class TestStuckStateMonitor:
             )
 
         # Should not have error events
-        error_events = [e for e in events_captured if e["type"] == "transcript_error"]
+        error_events = [e for e in events_captured if e.type == "transcript_error"]
         assert len(error_events) == 0
 
         await monitor.stop()
@@ -156,7 +156,7 @@ class TestStuckStateMonitor:
         await asyncio.sleep(0.7)
 
         # Should trigger based on episode's custom threshold
-        error_events = [e for e in events_captured if e["type"] == "transcript_error"]
+        error_events = [e for e in events_captured if e.type == "transcript_error"]
         assert len(error_events) > 0
 
         await monitor.stop()
@@ -196,7 +196,7 @@ class TestStuckStateMonitor:
         await asyncio.sleep(0.3)
 
         # Should not have any error events (episode is terminated)
-        error_events = [e for e in events_captured if e["type"] == "transcript_error"]
+        error_events = [e for e in events_captured if e.type == "transcript_error"]
         assert len(error_events) == 0
 
         await monitor.stop()
@@ -236,5 +236,5 @@ class TestStuckStateMonitor:
         await monitor.stop()
 
         # Should only have one error event (idempotent)
-        error_events = [e for e in events_captured if e["type"] == "transcript_error"]
+        error_events = [e for e in events_captured if e.type == "transcript_error"]
         assert len(error_events) == 1
