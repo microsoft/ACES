@@ -157,7 +157,9 @@ class DockerExecutor(CommandExecutor):
         log_operation_start(logger, "docker_execution_cleanup", episode_id=episode_id)
 
         try:
-            self._sandbox_manager.stop_episode_environment(episode_id)
+            import asyncio
+
+            asyncio.get_event_loop().run_until_complete(self._sandbox_manager.stop_episode_environment(episode_id))
         except Exception as exc:
             log_operation_failure(
                 logger,

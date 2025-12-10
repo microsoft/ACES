@@ -431,7 +431,6 @@ def saber_scorer() -> Scorer:
                     "event": "scorer_invoked",
                     "state_is_none": state is None,
                     "state_messages_is_none": state.messages is None if state else "state_is_none",
-                    "state_metadata": state.metadata if state else None,
                 },
             )
 
@@ -448,20 +447,6 @@ def saber_scorer() -> Scorer:
             episode_mapping = task_store.get("saber_episode_mapping", {})
             current_episode = episode_mapping.get(sample_id)
             episode_id = current_episode.episode_id if current_episode else None
-
-            # Log context state for debugging
-            logger.info(
-                "SABER context state",
-                extra={
-                    "event": "saber_context_check",
-                    "session_manager_present": session_manager is not None,
-                    "session_id_present": session_id is not None,
-                    "current_episode_present": current_episode is not None,
-                    "episode_id": episode_id,
-                    "task_id": task_id,
-                    "sample_id": sample_id,
-                },
-            )
 
             # Validate SABER context (fail-fast)
             if not session_manager:
@@ -634,7 +619,8 @@ def saber_scorer() -> Scorer:
                 },
             )
 
-            await session_manager.submit_evaluation_result(session_id, episode_id, evaluation_result)
+            # NOTE: submit_evaluation_result removed - server no longer needs evaluation data
+            # Evaluation is computed client-side and returned directly to inspect_ai
 
             if has_scorable_subtasks:
                 eval_complete_msg = (
@@ -1419,26 +1405,5 @@ async def _score_subtask_llm(
 
     # Calculate final score
     total_score = criteria.max_score if completed else 0.0
-
-    logger.info(
-        "Subtask LLM evaluation completed.\nContext: %s\nSystem prompt: %s\nUser prompt: %s\nJudge response: %s",
-        context,
-        system_message,
-        user_message,
-        judge_response,
-        extra={
-            "subtask_id": criteria.subtask_id,
-            "total_score": total_score,
-            "max_score": criteria.max_score,
-            "completed": completed,
-            "chunks_processed": len(step_chunks),
-            "step_evaluations_created": len(all_step_evaluations),
-            "event": "subtask_llm_eval_complete",
-            "context": context,
-            "system_prompt": system_message,
-            "user_prompt": user_message,
-            "judge_response": judge_response,
-        },
-    )
 
     return total_score, all_step_evaluations

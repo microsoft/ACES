@@ -141,9 +141,9 @@ class PermanentEnvironmentManager:
             )
             raise SandboxExecutionError(f"Failed to start permanent environment: {e}")
 
-    def stop_permanent_environment(self) -> None:
+    async def stop_permanent_environment(self) -> None:
         """
-        Stop the permanent environment using stored compose file path.
+        Stop the permanent environment using stored compose file path (async).
 
         Raises:
             SandboxExecutionError: If permanent environment cannot be stopped or no file path stored
@@ -172,7 +172,7 @@ class PermanentEnvironmentManager:
             )
 
             # Use orchestrator to stop the environment with explicit project name
-            self.orchestrator.stop_environment(self._compose_file_path, project_name=self.compose_project_name)
+            await self.orchestrator.stop_environment(self._compose_file_path, project_name=self.compose_project_name)
 
             self._is_running = False
             self._compose_file_path = None  # Clear stored path

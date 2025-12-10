@@ -5,10 +5,11 @@ This module tests the updated SandboxEnvironmentManager that uses ComposeOrchest
 with static compose files instead of dynamic generation.
 """
 
+import asyncio
 import os
 import tempfile
 from pathlib import Path
-from unittest.mock import Mock, MagicMock, patch
+from unittest.mock import Mock, MagicMock, patch, AsyncMock
 
 import pytest
 
@@ -187,16 +188,18 @@ networks:
 
         assert orchestrator is None
 
+    @pytest.mark.asyncio
     @patch('saber.server.execution.sandbox.sandbox_environment_manager.ComposeOrchestrator')
-    def test_stop_episode_environment_success(self, mock_orchestrator_class, manager):
+    async def test_stop_episode_environment_success(self, mock_orchestrator_class, manager):
         """Test successful episode environment stop."""
         # Setup - create environment first
         mock_orchestrator = Mock()
+        mock_orchestrator.stop_environment = AsyncMock()  # Make it async
         mock_orchestrator_class.return_value = mock_orchestrator
         manager.create_episode_environment_async("test-episode", "test_sandbox")
 
         # Test
-        result = manager.stop_episode_environment("test-episode")
+        result = await manager.stop_episode_environment("test-episode")
 
         # Verify
         assert result is True
@@ -204,59 +207,66 @@ networks:
         assert "test-episode" not in manager.episode_compose_files
         mock_orchestrator.stop_environment.assert_called_once()
 
-    def test_stop_episode_environment_not_exists(self, manager):
+    @pytest.mark.asyncio
+    async def test_stop_episode_environment_not_exists(self, manager):
         """Test stopping non-existent episode environment."""
-        result = manager.stop_episode_environment("nonexistent-episode")
+        result = await manager.stop_episode_environment("nonexistent-episode")
 
         assert result is False
 
+    @pytest.mark.asyncio
     @patch('saber.server.execution.sandbox.sandbox_environment_manager.ComposeOrchestrator')
-    def test_stop_episode_environment_orchestrator_failure(self, mock_orchestrator_class, manager):
+    async def test_stop_episode_environment_orchestrator_failure(self, mock_orchestrator_class, manager):
         """Test stop episode handles orchestrator failure."""
         # Setup - create environment and make stop fail
         mock_orchestrator = Mock()
-        mock_orchestrator.stop_environment.side_effect = RuntimeError("Docker error")
+        mock_orchestrator.stop_environment = AsyncMock(side_effect=RuntimeError("Docker error"))
         mock_orchestrator_class.return_value = mock_orchestrator
         manager.create_episode_environment_async("test-episode", "test_sandbox")
 
         # Test
         with pytest.raises(SandboxExecutionError) as excinfo:
-            manager.stop_episode_environment("test-episode")
+            await manager.stop_episode_environment("test-episode")
 
         assert "Failed to stop sandbox environment" in str(excinfo.value)
 
+    @pytest.mark.asyncio
     @patch('saber.server.execution.sandbox.sandbox_environment_manager.ComposeOrchestrator')
-    def test_cleanup_all_episodes_success(self, mock_orchestrator_class, manager):
+    async def test_cleanup_all_episodes_success(self, mock_orchestrator_class, manager):
         """Test cleanup of all environments."""
         # Setup - create multiple environments
         mock_orchestrator1 = Mock()
+        mock_orchestrator1.stop_environment = AsyncMock()
         mock_orchestrator2 = Mock()
+        mock_orchestrator2.stop_environment = AsyncMock()
         mock_orchestrator_class.side_effect = [mock_orchestrator1, mock_orchestrator2]
 
         manager.create_episode_environment_async("episode-1", "test_sandbox")
         manager.create_episode_environment_async("episode-2", "test_sandbox")
 
         # Test
-        manager.cleanup_all_episodes()
+        await manager.cleanup_all_episodes()
 
         # Verify all environments cleaned up
         assert len(manager.active_orchestrators) == 0
         assert len(manager.episode_compose_files) == 0
 
+    @pytest.mark.asyncio
     @patch('saber.server.execution.sandbox.sandbox_environment_manager.ComposeOrchestrator')
-    def test_cleanup_all_episodes_some_failures(self, mock_orchestrator_class, manager):
+    async def test_cleanup_all_episodes_some_failures(self, mock_orchestrator_class, manager):
         """Test cleanup handles some environment failures."""
         # Setup - create environments with one failing
         mock_orchestrator1 = Mock()
         mock_orchestrator2 = Mock()
-        mock_orchestrator1.stop_environment.side_effect = RuntimeError("Docker error")
+        mock_orchestrator1.stop_environment = AsyncMock(side_effect=RuntimeError("Docker error"))
+        mock_orchestrator2.stop_environment = AsyncMock()
         mock_orchestrator_class.side_effect = [mock_orchestrator1, mock_orchestrator2]
 
         manager.create_episode_environment_async("episode-1", "test_sandbox")
         manager.create_episode_environment_async("episode-2", "test_sandbox")
 
         # Test - should not raise exception even with failures
-        manager.cleanup_all_episodes()
+        await manager.cleanup_all_episodes()
 
         # Failed episode should still be tracked (since cleanup failed)
         # Successful episode should be cleaned up

@@ -444,7 +444,7 @@ class SessionManager:
                 extra={"event": "permanent_environment_stop_requested", "domain": self.domain_name},
             )
             try:
-                self.execution_manager.stop_permanent_environment()
+                await self.execution_manager.stop_permanent_environment()
                 logger.info(
                     "Permanent environment stopped",
                     extra={"event": "permanent_environment_stop_completed", "domain": self.domain_name},
@@ -970,8 +970,7 @@ class SessionManager:
 
                     async def cleanup_episode_task(ep_id: str) -> None:
                         try:
-                            await asyncio.to_thread(
-                                self.execution_manager.cleanup_episode,
+                            await self.execution_manager.cleanup_episode(
                                 ep_id,
                                 {"episode_end_reason": EpisodeTerminationReason.SESSION_TERMINATED},
                             )
@@ -1365,10 +1364,7 @@ class SessionManager:
                             "task_id": task_id,
                         },
                     )
-                    await asyncio.to_thread(
-                        self.execution_manager.cleanup_episode,
-                        episode.episode_id,
-                    )
+                    await self.execution_manager.cleanup_episode(episode.episode_id)
                     logger.info(
                         "Docker resource cleanup completed after failed episode creation",
                         extra={
@@ -1709,7 +1705,7 @@ class SessionManager:
                 )
 
         try:
-            await asyncio.to_thread(self.execution_manager.cleanup_episode, episode_id)
+            await self.execution_manager.cleanup_episode(episode_id)
             logger.info(
                 "Successfully cleaned up failed episode environment",
                 extra={
@@ -1953,7 +1949,9 @@ class SessionManager:
                 },
             )
             try:
-                episode_cleanup = self.execution_manager.cleanup_episode(episode_id, {"episode_end_reason": reason})
+                episode_cleanup = await self.execution_manager.cleanup_episode(
+                    episode_id, {"episode_end_reason": reason}
+                )
                 if episode_cleanup:
                     logger.info(
                         "Episode cleanup completed",

@@ -252,7 +252,6 @@ class TestScorerErrorPaths:
         )
         mock_session_manager.get_subtask_evaluation_criteria = AsyncMock()
         mock_session_manager.get_subtask_evaluation_criteria.return_value = []
-        mock_session_manager.submit_evaluation_result = AsyncMock()
 
         mock_store.get = MagicMock(side_effect=lambda key, default=None: {
             "saber_session_manager": mock_session_manager,
@@ -300,7 +299,6 @@ class TestScorerErrorPaths:
         )
         mock_session_manager.get_subtask_evaluation_criteria = AsyncMock()
         mock_session_manager.get_subtask_evaluation_criteria.return_value = []
-        mock_session_manager.submit_evaluation_result = AsyncMock()
 
         mock_store.get = MagicMock(side_effect=lambda key, default=None: {
             "saber_session_manager": mock_session_manager,
@@ -354,7 +352,6 @@ class TestScorerErrorPaths:
         )
         mock_session_manager.get_subtask_evaluation_criteria = AsyncMock()
         mock_session_manager.get_subtask_evaluation_criteria.return_value = []
-        mock_session_manager.submit_evaluation_result = AsyncMock()
 
         mock_store.get = MagicMock(side_effect=lambda key, default=None: {
             "saber_session_manager": mock_session_manager,
@@ -399,7 +396,6 @@ class TestScorerErrorPaths:
         )
         mock_session_manager.get_subtask_evaluation_criteria = AsyncMock()
         mock_session_manager.get_subtask_evaluation_criteria.return_value = []
-        mock_session_manager.submit_evaluation_result = AsyncMock()
 
         mock_store.get = MagicMock(side_effect=lambda key, default=None: {
             "saber_session_manager": mock_session_manager,
@@ -451,7 +447,6 @@ class TestScorerErrorPaths:
                 weight=0.5,
             ),
         ]
-        mock_session_manager.submit_evaluation_result = AsyncMock()
 
         mock_store.get = MagicMock(side_effect=lambda key, default=None: {
             "saber_session_manager": mock_session_manager,
@@ -507,7 +502,6 @@ class TestScorerErrorPaths:
                 criteria={"expected_outputs": ["expected"]},
             ),
         ]
-        mock_session_manager.submit_evaluation_result = AsyncMock()
 
         mock_store.get = MagicMock(side_effect=lambda key, default=None: {
             "saber_session_manager": mock_session_manager,

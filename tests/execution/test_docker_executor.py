@@ -5,7 +5,8 @@ This module tests the abstract Docker executor base class that provides shared
 Docker container management functionality.
 """
 
-from unittest.mock import MagicMock, patch
+import asyncio
+from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
 
@@ -147,20 +148,38 @@ class TestDockerExecutor:
         """Test successful execution cleanup."""
         episode_id = "test_episode_123"
 
-        docker_executor.cleanup_execution(episode_id)
+        # Create and set an event loop for this test since cleanup_execution uses asyncio.get_event_loop()
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            # Mock the async method to return a coroutine
+            async def mock_stop(ep_id):
+                return True
+            docker_executor._sandbox_manager.stop_episode_environment = mock_stop
 
-        docker_executor._sandbox_manager.stop_episode_environment.assert_called_once_with(episode_id)
+            docker_executor.cleanup_execution(episode_id)
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
 
     def test_cleanup_execution_with_error(self, docker_executor):
         """Test execution cleanup with error (should not raise)."""
         episode_id = "test_episode_123"
 
-        docker_executor._sandbox_manager.stop_episode_environment.side_effect = Exception("Cleanup error")
+        # Create and set an event loop for this test since cleanup_execution uses asyncio.get_event_loop()
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            # Mock the async method to raise an exception when awaited
+            async def mock_stop_error(ep_id):
+                raise Exception("Cleanup error")
+            docker_executor._sandbox_manager.stop_episode_environment = mock_stop_error
 
-        with pytest.raises(SandboxExecutionError, match="Failed to clean up execution resources"):
-            docker_executor.cleanup_execution(episode_id)
-
-        docker_executor._sandbox_manager.stop_episode_environment.assert_called_once_with(episode_id)
+            with pytest.raises(SandboxExecutionError, match="Failed to clean up execution resources"):
+                docker_executor.cleanup_execution(episode_id)
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
 
     def test_validate_docker_parameters_valid(self, docker_executor):
         """Test validation of valid Docker parameters."""

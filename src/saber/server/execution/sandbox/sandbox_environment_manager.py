@@ -315,9 +315,9 @@ class SandboxEnvironmentManager:
             )
             return None
 
-    def stop_episode_environment(self, episode_id: str) -> bool:
+    async def stop_episode_environment(self, episode_id: str) -> bool:
         """
-        Stop and clean up episode-specific sandbox environment.
+        Stop and clean up episode-specific sandbox environment (async).
 
         Args:
             episode_id: Episode identifier
@@ -342,7 +342,7 @@ class SandboxEnvironmentManager:
             orchestrator = self.active_orchestrators[episode_id]
             compose_file_path = self.episode_compose_files[episode_id]
 
-            orchestrator.stop_environment(compose_file_path, episode_id)
+            await orchestrator.stop_environment(compose_file_path, episode_id)
 
             # Remove from active tracking
             del self.active_orchestrators[episode_id]
@@ -368,16 +368,16 @@ class SandboxEnvironmentManager:
             )
             raise SandboxExecutionError(f"Failed to stop sandbox environment for episode {episode_id}: {e}")
 
-    def cleanup_all_episodes(self) -> None:
+    async def cleanup_all_episodes(self) -> None:
         """
-        Clean up all active episode environments.
+        Clean up all active episode environments (async).
         """
         episode_ids = list(self.active_orchestrators.keys())
 
         # Stop all episodes
         for episode_id in episode_ids:
             try:
-                self.stop_episode_environment(episode_id)
+                await self.stop_episode_environment(episode_id)
             except Exception as e:
                 logger.error(
                     "Sandbox environment cleanup failed",

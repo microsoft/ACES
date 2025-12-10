@@ -116,6 +116,13 @@ _DEPENDENCY_LOG_LEVELS: dict[str, int] = {
     "urllib3": logging.WARNING,
     "asyncio": logging.WARNING,
     "watchfiles": logging.ERROR,
+    # MCP client/server libraries
+    "mcp": logging.WARNING,
+    "mcp.client": logging.WARNING,
+    "mcp.server": logging.WARNING,
+    "mcp.client.streamable_http": logging.WARNING,
+    # Inspect AI internal MCP handling
+    "inspect_ai.tool._mcp": logging.WARNING,
 }
 
 

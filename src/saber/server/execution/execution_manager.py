@@ -782,9 +782,9 @@ class ExecutionManager:
             "episode_execution_counts": self._active_executions.copy(),
         }
 
-    def cleanup_episode(self, episode_id: str, context: Optional[Dict[str, Any]] = None) -> bool:
+    async def cleanup_episode(self, episode_id: str, context: Optional[Dict[str, Any]] = None) -> bool:
         """
-        Clean up episode resources including Docker containers.
+        Clean up episode resources including Docker containers (async).
 
         Args:
             episode_id: The episode ID to clean up
@@ -812,7 +812,7 @@ class ExecutionManager:
                         "episode_id": episode_id,
                     },
                 )
-                container_cleanup_success = self._sandbox_environment_manager.stop_episode_environment(episode_id)
+                container_cleanup_success = await self._sandbox_environment_manager.stop_episode_environment(episode_id)
                 if container_cleanup_success:
                     logger.info(
                         "Episode container cleanup completed",
@@ -981,9 +981,9 @@ class ExecutionManager:
             "Update your code to use start_permanent_environment_from_file() instead."
         )
 
-    def stop_permanent_environment(self) -> None:
+    async def stop_permanent_environment(self) -> None:
         """
-        Stop permanent environment through direct manager call.
+        Stop permanent environment through direct manager call (async).
 
         Raises:
             RuntimeError: If permanent environment shutdown fails
@@ -1000,7 +1000,7 @@ class ExecutionManager:
             "stop_permanent_environment",
         )
         try:
-            self._permanent_environment_manager.stop_permanent_environment()
+            await self._permanent_environment_manager.stop_permanent_environment()
             log_operation_success(
                 logger,
                 "stop_permanent_environment",
@@ -1024,9 +1024,9 @@ class ExecutionManager:
             return False
         return self._permanent_environment_manager.is_running()
 
-    def cleanup_all_containers(self, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def cleanup_all_containers(self, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        Clean up all containers (ephemeral and permanent) for server shutdown.
+        Clean up all containers (ephemeral and permanent) for server shutdown (async).
 
         Args:
             context: Additional context for debugging
@@ -1043,7 +1043,7 @@ class ExecutionManager:
         # Clean up all ephemeral episode containers
         try:
             if self._sandbox_environment_manager is not None:
-                self._sandbox_environment_manager.cleanup_all_episodes()
+                await self._sandbox_environment_manager.cleanup_all_episodes()
                 ephemeral_episodes_cleaned = len(self._sandbox_environment_manager.get_active_episodes())
                 ephemeral_success = True
             else:
@@ -1065,7 +1065,7 @@ class ExecutionManager:
         # Clean up permanent environment
         permanent_success = True
         try:
-            self.stop_permanent_environment()
+            await self.stop_permanent_environment()
         except Exception as exc:
             log_operation_failure(
                 logger,

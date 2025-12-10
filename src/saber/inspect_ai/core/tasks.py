@@ -15,6 +15,7 @@ Key features:
 - Robust cleanup on all failure paths
 """
 
+import logging
 import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union
@@ -24,7 +25,7 @@ from inspect_ai import Task
 from inspect_ai._util.error import PrerequisiteError
 
 from ...client.api.rest_client import SABERRestClient
-from ...logging_config import LogCategory, get_saber_logger
+from ...logging_config import LogCategory, LoggingConfig, get_saber_logger, init_logging
 from ...models import BenchmarkInfo
 from ...models.constants import MetadataKeys
 from ..agents.agent_resolver import resolve_agent_implementation
@@ -40,6 +41,78 @@ from .saber_scorer import saber_scorer
 from .task_filter import apply_task_filter
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
+
+# Track whether logging has been initialized for this process
+_logging_initialized = False
+_logging_init_lock = threading.Lock()
+
+
+def _initialize_inspect_logging(domain_slug: str, domains_root: Path, log_level: str = "INFO") -> None:
+    """Initialize SABER logging for inspect eval runs.
+
+    Sets up logging with:
+    - Console output DISABLED (to avoid breaking Inspect AI's rich display)
+    - File logging to logs/saber_inspect_{domain}_{timestamp}.log
+    - SaberLogger formatters active for structured output in log files
+
+    This is called once per process to ensure SABER logging is properly configured
+    when running via `uv run inspect eval domains/...`.
+
+    Args:
+        domain_slug: Domain being evaluated (used for log directory organization)
+        domains_root: Path to domains directory
+        log_level: Logging level (default: "INFO")
+    """
+    global _logging_initialized
+
+    with _logging_init_lock:
+        if _logging_initialized:
+            return
+
+        from datetime import datetime
+
+        # Resolve log level
+        level = getattr(logging, log_level.upper(), logging.INFO)
+
+        # Create timestamped log filename
+        timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+        log_filename = f"saber_inspect_{domain_slug}_{timestamp}.log"
+
+        # Determine log directory: logs/ at workspace root
+        workspace_root = domains_root.parent if domains_root.name == "domains" else domains_root
+        log_dir = workspace_root / "logs"
+
+        # Check if we can create the log directory (may fail in tests with fake paths)
+        enable_file = True
+        try:
+            log_dir.mkdir(parents=True, exist_ok=True)
+        except (OSError, PermissionError):
+            # Can't create log directory (e.g., test environment with fake paths)
+            # Disable file logging entirely - we don't want console output either
+            # as it breaks Inspect AI's rich display
+            enable_file = False
+            log_dir = Path(".")  # Placeholder, won't be used
+
+        # Initialize logging with file output only (no console)
+        # Console output breaks Inspect AI's rich terminal display
+        config = LoggingConfig(
+            level=level,
+            console=False,  # Disable console to avoid breaking Inspect AI's rich display
+            structured=False,  # Human-readable text format in log files
+            enable_file=enable_file,
+            log_dir=log_dir,
+            file_name=log_filename,
+        )
+
+        init_logging(config, force=True)
+        _logging_initialized = True
+
+        # Log initialization to file (won't appear on console)
+        if enable_file:
+            logger.info(
+                "SABER logging initialized for inspect eval",
+                extra={"domain": domain_slug, "log_file": str(log_dir / log_filename)},
+            )
 
 
 # Process-wide BlockingPortal for running async operations from sync context
@@ -160,6 +233,11 @@ def create_domain_task(
         Raises:
             PrerequisiteError: If server startup, health checks, or task loading fails
         """
+        # Initialize SABER logging for inspect runs
+        # This ensures the SaberLogger formatters are active and extra= fields are visible
+        # Log files go to logs/{domain}/client-logs/ with console output enabled
+        _initialize_inspect_logging(domain_slug, domains_root, log_level)
+
         # Validate mutually exclusive build options
         build_options_count = sum([build, rebuild_all, bool(rebuild)])
         if build_options_count > 1:

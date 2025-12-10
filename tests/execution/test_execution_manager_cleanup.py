@@ -5,8 +5,9 @@ This module tests the new direct component cleanup approach where ExecutionManag
 calls SandboxEnvironmentManager and PermanentEnvironmentManager directly.
 """
 
+import asyncio
 import pytest
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch, PropertyMock, AsyncMock
 
 from saber.server.execution.execution_manager import ExecutionManager
 
@@ -38,8 +39,9 @@ class TestExecutionManagerCleanup:
         """Mock sandbox environment manager."""
         mock = MagicMock()
         mock.is_ready.return_value = True
-        mock.stop_episode_environment.return_value = True
-        mock.cleanup_all_episodes.return_value = None
+        # Make async methods return coroutines
+        mock.stop_episode_environment = AsyncMock(return_value=True)
+        mock.cleanup_all_episodes = AsyncMock(return_value=None)
         mock.get_active_episodes.return_value = []
         return mock
 
@@ -48,7 +50,7 @@ class TestExecutionManagerCleanup:
         """Mock permanent environment manager."""
         mock = MagicMock()
         mock.is_running.return_value = True
-        mock.stop_permanent_environment.return_value = None
+        mock.stop_permanent_environment = AsyncMock(return_value=None)
         return mock
 
     @pytest.fixture
@@ -68,48 +70,52 @@ class TestExecutionManagerCleanup:
 
             return manager
 
-    def test_cleanup_episode_success(self, execution_manager, mock_sandbox_manager):
+    @pytest.mark.asyncio
+    async def test_cleanup_episode_success(self, execution_manager, mock_sandbox_manager):
         """Test successful episode cleanup through direct sandbox manager call."""
         episode_id = "test-episode-123"
         context = {"test": "context"}
 
         # Mock successful cleanup
-        mock_sandbox_manager.stop_episode_environment.return_value = True
+        mock_sandbox_manager.stop_episode_environment = AsyncMock(return_value=True)
 
-        # Call cleanup
-        result = execution_manager.cleanup_episode(episode_id, context)
+        # Call cleanup (now async)
+        result = await execution_manager.cleanup_episode(episode_id, context)
 
         # Verify direct sandbox manager call
         mock_sandbox_manager.stop_episode_environment.assert_called_once_with(episode_id)
         assert result is True
 
-    def test_cleanup_episode_failure(self, execution_manager, mock_sandbox_manager):
+    @pytest.mark.asyncio
+    async def test_cleanup_episode_failure(self, execution_manager, mock_sandbox_manager):
         """Test episode cleanup failure handling."""
         episode_id = "test-episode-123"
 
         # Mock cleanup failure
-        mock_sandbox_manager.stop_episode_environment.return_value = False
+        mock_sandbox_manager.stop_episode_environment = AsyncMock(return_value=False)
 
-        # Call cleanup
-        result = execution_manager.cleanup_episode(episode_id)
+        # Call cleanup (now async)
+        result = await execution_manager.cleanup_episode(episode_id)
 
         # Verify result reflects failure
         assert result is False
 
-    def test_cleanup_episode_exception(self, execution_manager, mock_sandbox_manager):
+    @pytest.mark.asyncio
+    async def test_cleanup_episode_exception(self, execution_manager, mock_sandbox_manager):
         """Test episode cleanup exception handling."""
         episode_id = "test-episode-123"
 
         # Mock cleanup exception
-        mock_sandbox_manager.stop_episode_environment.side_effect = Exception("Cleanup failed")
+        mock_sandbox_manager.stop_episode_environment = AsyncMock(side_effect=Exception("Cleanup failed"))
 
-        # Call cleanup
-        result = execution_manager.cleanup_episode(episode_id)
+        # Call cleanup (now async)
+        result = await execution_manager.cleanup_episode(episode_id)
 
         # Verify result reflects failure
         assert result is False
 
-    def test_cleanup_all_containers_success(self, execution_manager, mock_sandbox_manager, mock_permanent_manager):
+    @pytest.mark.asyncio
+    async def test_cleanup_all_containers_success(self, execution_manager, mock_sandbox_manager, mock_permanent_manager):
         """Test successful cleanup of all containers."""
         # Setup permanent manager
         execution_manager._permanent_environment_manager = mock_permanent_manager
@@ -117,8 +123,8 @@ class TestExecutionManagerCleanup:
         # Mock successful cleanup
         mock_sandbox_manager.get_active_episodes.return_value = ["ep1", "ep2"]
 
-        # Call cleanup
-        result = execution_manager.cleanup_all_containers({"test": "context"})
+        # Call cleanup (now async)
+        result = await execution_manager.cleanup_all_containers({"test": "context"})
 
         # Verify both sandbox and permanent cleanup were called
         mock_sandbox_manager.cleanup_all_episodes.assert_called_once()
@@ -129,13 +135,14 @@ class TestExecutionManagerCleanup:
         assert "permanent_environment_stopped" in result
         assert "total_cleanup_success" in result
 
-    def test_cleanup_all_containers_no_permanent_manager(self, execution_manager, mock_sandbox_manager):
+    @pytest.mark.asyncio
+    async def test_cleanup_all_containers_no_permanent_manager(self, execution_manager, mock_sandbox_manager):
         """Test cleanup when no permanent manager is configured."""
         # Ensure no permanent manager
         execution_manager._permanent_environment_manager = None
 
-        # Call cleanup
-        result = execution_manager.cleanup_all_containers()
+        # Call cleanup (now async)
+        result = await execution_manager.cleanup_all_containers()
 
         # Verify only sandbox cleanup was called
         mock_sandbox_manager.cleanup_all_episodes.assert_called_once()
@@ -143,31 +150,34 @@ class TestExecutionManagerCleanup:
         # Verify result indicates permanent environment was "stopped" (no-op)
         assert result["permanent_environment_stopped"] is True
 
-    def test_stop_permanent_environment_success(self, execution_manager, mock_permanent_manager):
+    @pytest.mark.asyncio
+    async def test_stop_permanent_environment_success(self, execution_manager, mock_permanent_manager):
         """Test successful permanent environment stop."""
         execution_manager._permanent_environment_manager = mock_permanent_manager
 
-        # Call stop
-        execution_manager.stop_permanent_environment()
+        # Call stop (now async)
+        await execution_manager.stop_permanent_environment()
 
         # Verify direct manager call
         mock_permanent_manager.stop_permanent_environment.assert_called_once()
 
-    def test_stop_permanent_environment_no_manager(self, execution_manager):
+    @pytest.mark.asyncio
+    async def test_stop_permanent_environment_no_manager(self, execution_manager):
         """Test permanent environment stop when no manager configured."""
         execution_manager._permanent_environment_manager = None
 
-        # Should not raise exception
-        execution_manager.stop_permanent_environment()
+        # Should not raise exception (now async)
+        await execution_manager.stop_permanent_environment()
 
-    def test_stop_permanent_environment_failure(self, execution_manager, mock_permanent_manager):
+    @pytest.mark.asyncio
+    async def test_stop_permanent_environment_failure(self, execution_manager, mock_permanent_manager):
         """Test permanent environment stop failure."""
         execution_manager._permanent_environment_manager = mock_permanent_manager
-        mock_permanent_manager.stop_permanent_environment.side_effect = Exception("Stop failed")
+        mock_permanent_manager.stop_permanent_environment = AsyncMock(side_effect=Exception("Stop failed"))
 
-        # Should raise RuntimeError
+        # Should raise RuntimeError (now async)
         with pytest.raises(RuntimeError, match="Failed to stop permanent environment"):
-            execution_manager.stop_permanent_environment()
+            await execution_manager.stop_permanent_environment()
 
     def test_is_permanent_environment_running(self, execution_manager, mock_permanent_manager):
         """Test permanent environment running status check."""

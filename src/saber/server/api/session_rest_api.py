@@ -50,7 +50,6 @@ from ...models.rest.evaluation import (
     EvaluationFileUploadResponse,
     EvaluationListResponse,
     EvaluationResponse,
-    EvaluationResultSubmission,
     EvaluationSummaryResponse,
     SubmissionEvaluationCriteriaResponse,
     SubtaskEvaluationCriteriaResponse,
@@ -1231,68 +1230,8 @@ class SessionRestAPI:
                 log_operation_failure(logger, "get_template_content", exc, template_path=template_path)
                 raise HTTPException(status_code=500, detail=f"Failed to get template content: {exc}") from exc
 
-        @self.app.post(APIEndpoints.EPISODE_EVALUATION)
-        async def submit_evaluation_endpoint(
-            session_id: str, episode_id: str, request: EvaluationResultSubmission
-        ) -> EvaluationResponse:
-            """Submit client-side evaluation result."""
-            log_operation_start(logger, "submit_evaluation", session_id=session_id, episode_id=episode_id)
-            try:
-                from datetime import datetime, timezone
-
-                from ...models.rest.evaluation import EvaluationResultResponse
-                from ..evaluation.models import EvaluationResult
-
-                # Get episode to extract required fields
-                episode = self.session_manager.get_episode_by_id(episode_id)
-                if not episode:
-                    raise HTTPException(status_code=404, detail="Episode not found")
-
-                # Build EvaluationResult from submission
-                result = EvaluationResult(
-                    episode_id=episode_id,
-                    task_id=request.details.get("task_id", episode.task_id),
-                    strategy=request.strategy,
-                    raw_score=request.raw_score,
-                    max_score=request.max_score,
-                    score=request.score,
-                    success=request.success,
-                    timestamp=datetime.now(timezone.utc),
-                    details=request.details,
-                    # Required fields from episode
-                    submission=episode.submission if hasattr(episode, "submission") and episode.submission else "",
-                    step_count=len(episode.steps),
-                    # Optional fields from episode
-                    executed_commands=getattr(episode, "executed_commands", []),
-                    completion_reason=getattr(episode, "completion_reason", None),
-                    model=getattr(episode, "model", None),
-                    choices=getattr(episode, "choices", []),
-                    tokens=getattr(episode, "tokens", {}),
-                    execution_time=getattr(episode, "execution_time", None),
-                )
-
-                # Store evaluation
-                await self.session_manager.evaluation_manager.store.save(result, session_id=session_id)
-
-                # Build response
-                evaluation_response = EvaluationResultResponse(
-                    episode_id=result.episode_id,
-                    task_id=result.task_id,
-                    strategy=result.strategy,
-                    raw_score=result.raw_score,
-                    max_score=result.max_score,
-                    score=result.score,
-                    success=result.success,
-                    timestamp=result.timestamp,
-                    details=result.details,
-                )
-
-                return EvaluationResponse(evaluation_result=evaluation_response, session_id=session_id)
-            except HTTPException:
-                raise
-            except Exception as exc:
-                log_operation_failure(logger, "submit_evaluation", exc, session_id=session_id, episode_id=episode_id)
-                raise HTTPException(status_code=500, detail=f"Failed to submit evaluation: {exc}") from exc
+        # NOTE: POST /evaluation endpoint REMOVED - evaluation computed client-side only
+        # Server no longer needs to store evaluation results
 
         # ===== WebSocket Endpoint for Real-Time Transcript Notifications =====
 

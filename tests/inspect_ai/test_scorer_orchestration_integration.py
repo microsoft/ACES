@@ -77,7 +77,6 @@ class TestScorerOrchestrationIntegration:
             )
         )
         mock.get_subtask_evaluation_criteria = AsyncMock(return_value=[])
-        mock.submit_evaluation_result = AsyncMock()
         return mock
 
     @pytest.mark.asyncio

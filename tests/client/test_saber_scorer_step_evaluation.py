@@ -233,9 +233,6 @@ class TestSaberScorerStepEvaluation:
         )
         saber_context["session_manager"].get_episode_steps.return_value = mock_steps_data
 
-        # Mock submit_evaluation_result to avoid server calls
-        saber_context["session_manager"].submit_evaluation_result.return_value = Mock()
-
         # Execute scoring - saber_scorer_instance is the scoring function
         target = Target(target="198.43.121.209")
         score = await saber_scorer_instance(task_state_with_episode, target)

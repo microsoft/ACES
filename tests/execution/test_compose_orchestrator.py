@@ -4,10 +4,11 @@ Unit tests for ComposeOrchestrator.
 Tests the simplified Docker Compose orchestration functionality.
 """
 
+import asyncio
 import subprocess
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, Mock, patch, AsyncMock
 import pytest
 
 from saber.server.execution.sandbox.compose_orchestrator import ComposeOrchestrator
@@ -202,16 +203,21 @@ services:
         with pytest.raises(RuntimeError):
             orchestrator.start_environment(temp_compose_file, config)
 
-    @patch('subprocess.run')
-    def test_stop_environment_success(self, mock_run, orchestrator, temp_compose_file):
+    @pytest.mark.asyncio
+    @patch('asyncio.create_subprocess_exec')
+    async def test_stop_environment_success(self, mock_create_subprocess, orchestrator, temp_compose_file):
         """Test successful environment stop."""
-        mock_run.return_value = Mock(stdout="Container stopped", stderr="", returncode=0)
+        # Setup mock async subprocess
+        mock_process = AsyncMock()
+        mock_process.communicate = AsyncMock(return_value=(b"Container stopped", b""))
+        mock_process.returncode = 0
+        mock_create_subprocess.return_value = mock_process
 
-        orchestrator.stop_environment(temp_compose_file)
+        await orchestrator.stop_environment(temp_compose_file)
 
         # Verify command
-        call_args = mock_run.call_args
-        cmd = call_args[0][0]
+        call_args = mock_create_subprocess.call_args
+        cmd = call_args[0]  # positional args passed to create_subprocess_exec
 
         assert cmd[0] == "docker"
         assert cmd[1] == "compose"
@@ -221,40 +227,49 @@ services:
         assert cmd[5] == "--volumes"
         assert cmd[6] == "--remove-orphans"
 
-    @patch('subprocess.run')
-    def test_stop_environment_with_episode_id(self, mock_run, orchestrator, temp_compose_file):
+    @pytest.mark.asyncio
+    @patch('asyncio.create_subprocess_exec')
+    async def test_stop_environment_with_episode_id(self, mock_create_subprocess, orchestrator, temp_compose_file):
         """Test environment stop with episode ID."""
-        mock_run.return_value = Mock(stdout="Container stopped", stderr="", returncode=0)
+        # Setup mock async subprocess
+        mock_process = AsyncMock()
+        mock_process.communicate = AsyncMock(return_value=(b"Container stopped", b""))
+        mock_process.returncode = 0
+        mock_create_subprocess.return_value = mock_process
 
         episode_id = "test-episode-456"
-        orchestrator.stop_environment(temp_compose_file, episode_id=episode_id)
+        await orchestrator.stop_environment(temp_compose_file, episode_id=episode_id)
 
         # Verify project name in command
-        call_args = mock_run.call_args
-        cmd = call_args[0][0]
+        call_args = mock_create_subprocess.call_args
+        cmd = call_args[0]  # positional args
 
         assert "-p" in cmd
         project_name_index = cmd.index("-p") + 1
         assert cmd[project_name_index] == f"saber-episode-{episode_id}"
 
-    def test_stop_environment_file_not_found(self, orchestrator):
+    @pytest.mark.asyncio
+    async def test_stop_environment_file_not_found(self, orchestrator):
         """Test stop environment fails when compose file doesn't exist."""
         nonexistent_file = Path("/nonexistent/compose.yml")
 
         with pytest.raises(FileNotFoundError) as excinfo:
-            orchestrator.stop_environment(nonexistent_file)
+            await orchestrator.stop_environment(nonexistent_file)
 
         assert str(nonexistent_file) in str(excinfo.value)
 
-    @patch('subprocess.run')
-    def test_stop_environment_docker_failure(self, mock_run, orchestrator, temp_compose_file):
+    @pytest.mark.asyncio
+    @patch('asyncio.create_subprocess_exec')
+    async def test_stop_environment_docker_failure(self, mock_create_subprocess, orchestrator, temp_compose_file):
         """Test stop environment handles docker compose failure."""
-        mock_run.side_effect = subprocess.CalledProcessError(
-            1, ["docker", "compose"], stderr="Container not found"
-        )
+        # Setup mock async subprocess to fail
+        mock_process = AsyncMock()
+        mock_process.communicate = AsyncMock(return_value=(b"", b"Container not found"))
+        mock_process.returncode = 1
+        mock_create_subprocess.return_value = mock_process
 
         with pytest.raises(RuntimeError) as excinfo:
-            orchestrator.stop_environment(temp_compose_file)
+            await orchestrator.stop_environment(temp_compose_file)
 
         assert "Failed to stop environment" in str(excinfo.value)
         assert "Container not found" in str(excinfo.value)
@@ -334,11 +349,8 @@ services:
         # Note: The current implementation may not set timeout, so we just verify it was called
         assert call_args is not None
 
-        # Test stop timeout (this API hasn't changed)
-        orchestrator.stop_environment(temp_compose_file, episode_id="test-episode")
-        call_args = mock_run.call_args
-        # Note: The current implementation may not set timeout, so we just verify it was called
-        assert call_args is not None
+        # Test stop timeout - now async, so we need to await it
+        # Note: We skip the stop_environment test here since it's async and already covered above
 
 
 class TestComposeOrchestratorAsync:

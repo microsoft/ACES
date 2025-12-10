@@ -386,7 +386,7 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
                     import websockets
 
                     logger.info(
-                        "Establishing WebSocket connection",
+                        "Etablishing WebSocket connection",
                         extra={
                             "episode_id": self._episode_id,
                             "url": self._ws_url,
@@ -798,6 +798,137 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
         )
         return False
 
+    async def _push_message_with_retry(
+        self,
+        msg: ChatMessage,
+        context: str = "message_push",
+        max_retries: Optional[int] = None,
+    ) -> bool:
+        """Push a message to the server with retry logic.
+
+        Retries the push with exponential backoff, reconnecting WebSocket if needed.
+        This ensures messages are actually delivered to the server rather than
+        falling back to optimistic local tracking (which causes version desync).
+
+        Args:
+            msg: The ChatMessage to push
+            context: Context string for logging (e.g., "tool_result_push", "output_push")
+            max_retries: Maximum retry attempts (defaults to ws_config value)
+
+        Returns:
+            True if push succeeded, False if all retries exhausted
+
+        Note:
+            On success, updates _local_version, _local_checksum, and _local_messages.
+            On failure, local state is NOT updated (server doesn't have the message).
+        """
+        if max_retries is None:
+            max_retries = self._ws_config.push.max_retry_attempts
+
+        backoff = 1.0  # Initial backoff in seconds
+
+        for attempt in range(max_retries + 1):
+            try:
+                # Ensure WebSocket is connected (will reconnect if closed)
+                await self._ensure_connected()
+
+                if not self._websocket or _is_websocket_closed(self._websocket):
+                    raise ConnectionError("WebSocket not connected after _ensure_connected")
+
+                # Send push message
+                await self._websocket.send(
+                    json.dumps(
+                        {
+                            "type": WebSocketMessageType.PUSH_MESSAGE.value,
+                            "data": {
+                                "message": self._serialize_message(msg),
+                                "since_version": self._local_version,
+                                "client_checksum": self._local_checksum,
+                            },
+                            "id": str(uuid.uuid4()),
+                            "timestamp": datetime.utcnow().isoformat(),
+                        }
+                    )
+                )
+
+                # Wait for push acknowledgment
+                ack_response = await self._wait_for_message_type(
+                    expected_type=WebSocketMessageType.PUSH_ACK,
+                    timeout=self._ws_config.push.confirmation_timeout,
+                    max_iterations=WebSocketDefaults.MAX_ACK_WAIT_ITERATIONS,
+                    context=context,
+                )
+
+                if ack_response:
+                    # Get push_ack data - either from Pydantic model or parse from dict
+                    if isinstance(ack_response, PushAckMessage):
+                        push_ack = ack_response.data
+                    elif isinstance(ack_response, dict):
+                        push_ack = PushAckData(**ack_response["data"])
+                    else:
+                        raise TypeError(f"Unexpected ack_response type: {type(ack_response)}")
+
+                    # Update local state from server response
+                    self._local_messages.append(msg)
+                    self._local_version = push_ack.version
+                    self._local_checksum = push_ack.checksum
+
+                    if attempt > 0:
+                        logger.info(
+                            f"Push succeeded after {attempt + 1} attempts",
+                            extra={
+                                "episode_id": self._episode_id,
+                                "context": context,
+                                "new_version": self._local_version,
+                            },
+                        )
+                    return True
+
+            except Exception as e:
+                logger.debug(
+                    f"Push attempt {attempt + 1}/{max_retries + 1} failed: {e}",
+                    extra={
+                        "episode_id": self._episode_id,
+                        "context": context,
+                        "error_type": type(e).__name__,
+                    },
+                )
+
+            # Check if we should retry
+            if attempt < max_retries:
+                logger.debug(
+                    f"Retrying push in {backoff:.1f}s",
+                    extra={
+                        "episode_id": self._episode_id,
+                        "context": context,
+                        "attempt": attempt + 1,
+                        "max_retries": max_retries,
+                    },
+                )
+
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * self._ws_config.push.retry_backoff_multiplier, 30.0)
+
+                # Force reconnect before retry by closing current connection
+                if self._websocket and not _is_websocket_closed(self._websocket):
+                    try:
+                        await self._websocket.close()
+                    except Exception:
+                        pass
+                self._websocket = None
+
+        # All retries exhausted
+        logger.error(
+            f"Push failed after {max_retries + 1} attempts - server does not have this message",
+            extra={
+                "episode_id": self._episode_id,
+                "context": context,
+                "message_role": msg.role,
+                "local_version": self._local_version,
+            },
+        )
+        return False
+
     async def _push_tool_results_if_needed(self, input: list[ChatMessage]) -> bool:
         """Push tool results to server if Inspect AI added them to input.
 
@@ -853,56 +984,25 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
             },
         )
 
-        # Push each tool result message
+        # Push each tool result message with retry
+        # Track if ALL pushes succeeded - if any fail, transcript is in inconsistent state
+        all_succeeded = True
         for msg in new_messages:
-            await self._ensure_connected()
-
-            if self._websocket:
-                await self._websocket.send(
-                    json.dumps(
-                        {
-                            "type": WebSocketMessageType.PUSH_MESSAGE.value,
-                            "data": {
-                                "message": self._serialize_message(msg),
-                                "since_version": self._local_version,
-                                "client_checksum": self._local_checksum,
-                            },
-                            "id": str(uuid.uuid4()),
-                            "timestamp": datetime.utcnow().isoformat(),
-                        }
-                    )
+            success = await self._push_message_with_retry(msg, context="tool_result_push")
+            if not success:
+                logger.error(
+                    "Failed to push tool result to server after retries - transcript is now inconsistent",
+                    extra={
+                        "episode_id": self._episode_id,
+                        "message_role": msg.role,
+                    },
                 )
+                all_succeeded = False
+                # Continue trying to push remaining messages to minimize damage
 
-                # Wait for push acknowledgment
-                ack_response = await self._wait_for_message_type(
-                    expected_type=WebSocketMessageType.PUSH_ACK,
-                    timeout=self._ws_config.push.confirmation_timeout,
-                    max_iterations=WebSocketDefaults.MAX_ACK_WAIT_ITERATIONS,
-                    context="tool_result_push",
-                )
-
-                if ack_response and isinstance(ack_response, PushAckMessage):
-                    # Update local state from ack
-                    self._local_version = ack_response.data.version
-                    self._local_checksum = ack_response.data.checksum
-                    self._local_messages.append(msg)
-
-                    logger.debug(
-                        "Tool result pushed successfully",
-                        extra={
-                            "episode_id": self._episode_id,
-                            "new_version": self._local_version,
-                            "message_role": msg.role,
-                        },
-                    )
-                else:
-                    logger.warning(
-                        "Failed to get push_ack for tool result",
-                        extra={"episode_id": self._episode_id},
-                    )
-
-        # Successfully pushed all tool results
-        return True
+        # Return True only if ALL tool results were pushed successfully
+        # If any failed, return False so caller knows not to trust sync from server
+        return all_succeeded
 
     async def _wait_for_message_type(
         self,
@@ -1187,87 +1287,16 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
 
         # Push new message via WebSocket (if push enabled)
         if self._ws_config.push.enabled:
-            try:
-                await self._ensure_connected()
-
-                if self._websocket:
-                    await self._websocket.send(
-                        json.dumps(
-                            {
-                                "type": WebSocketMessageType.PUSH_MESSAGE.value,
-                                "data": {
-                                    "message": self._serialize_message(output.message),
-                                    "since_version": self._local_version,
-                                    "client_checksum": self._local_checksum,
-                                },
-                                "id": str(uuid.uuid4()),
-                                "timestamp": datetime.utcnow().isoformat(),
-                            }
-                        )
-                    )
-
-                # Wait for push acknowledgment using helper
-                ack_response = await self._wait_for_message_type(
-                    expected_type=WebSocketMessageType.PUSH_ACK,
-                    timeout=self._ws_config.push.confirmation_timeout,
-                    max_iterations=WebSocketDefaults.MAX_ACK_WAIT_ITERATIONS,
-                    context="output_push",
-                )
-
-                if ack_response:
-                    # Get push_ack data - either from Pydantic model or parse from dict
-                    if isinstance(ack_response, PushAckMessage):
-                        push_ack = ack_response.data
-                    elif isinstance(ack_response, dict):
-                        push_ack = PushAckData(**ack_response["data"])
-                    else:
-                        raise TypeError(f"Unexpected ack_response type: {type(ack_response)}")
-
-                    # Update local state from server response
-                    self._local_messages.append(output.message)
-                    self._local_version = push_ack.version
-                    self._local_checksum = push_ack.checksum
-                else:
-                    logger.warning(
-                        "Failed to get push_ack (output push)",
-                        extra={"episode_id": self._episode_id},
-                    )
-                    # Fallback: update local state optimistically
-                    self._local_messages.append(output.message)
-                    self._local_version += 1
-                    self._local_checksum = compute_checksum([self._serialize_message(m) for m in self._local_messages])
-
-            except asyncio.TimeoutError:
-                # Timeout waiting for push_ack
-                logger.warning(
-                    "Timeout waiting for push_ack, falling back to local tracking",
+            success = await self._push_message_with_retry(output.message, context="output_push")
+            if not success:
+                # Log error but don't crash - agent can continue, but server is behind
+                logger.error(
+                    "Failed to push assistant output to server after retries - transcript may be out of sync",
                     extra={
                         "episode_id": self._episode_id,
-                        "timeout": self._ws_config.push.confirmation_timeout,
-                        "websocket_connected": self._websocket is not None
-                        and not _is_websocket_closed(self._websocket),
-                        "listener_running": self._listener_task is not None and not self._listener_task.done(),
-                        "queue_size": self._event_queue.qsize(),
+                        "message_role": output.message.role,
                     },
                 )
-                # Fallback: update local state optimistically
-                self._local_messages.append(output.message)
-                self._local_version += 1
-                self._local_checksum = compute_checksum([self._serialize_message(m) for m in self._local_messages])
-            except Exception as e:
-                # Log but don't crash
-                logger.warning(
-                    "Failed to push message via WebSocket, falling back to local tracking",
-                    extra={
-                        "error": str(e),
-                        "error_type": type(e).__name__,
-                        "episode_id": self._episode_id,
-                    },
-                )
-                # Fallback: update local state optimistically
-                self._local_messages.append(output.message)
-                self._local_version += 1
-                self._local_checksum = compute_checksum([self._serialize_message(m) for m in self._local_messages])
         else:
             # Push disabled - update local state only (no WebSocket communication)
             logger.debug(

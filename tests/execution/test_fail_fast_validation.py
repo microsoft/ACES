@@ -5,6 +5,7 @@ These tests verify that the system fails quickly and clearly when encountering
 various error conditions, following fail-fast principles.
 """
 
+import asyncio
 import os
 import subprocess
 import tempfile
@@ -480,7 +481,8 @@ services:
                 os.chdir(original_cwd)
                 Path(compose_file).unlink()
 
-    def test_stop_nonexistent_episode(self):
+    @pytest.mark.asyncio
+    async def test_stop_nonexistent_episode(self):
         """Test that stopping nonexistent episodes returns False (not exception)."""
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yml', delete=False) as f:
             f.write("""
@@ -499,8 +501,8 @@ services:
 
             manager = SandboxEnvironmentManager(config)
 
-            # Stopping nonexistent episode should return False, not raise exception
-            result = manager.stop_episode_environment("nonexistent-episode")
+            # Stopping nonexistent episode should return False, not raise exception (now async)
+            result = await manager.stop_episode_environment("nonexistent-episode")
             assert result is False
 
         finally:

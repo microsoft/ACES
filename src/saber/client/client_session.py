@@ -27,7 +27,6 @@ from ..models.rest.evaluation import (
     EvaluationCriteriaResponse,
     EvaluationOverrideRequest,
     EvaluationResultResponse,
-    EvaluationResultSubmission,
     SubmissionEvaluationCriteriaResponse,
     SubtaskEvaluationCriteriaResponse,
 )
@@ -1781,39 +1780,8 @@ class ClientSessionManager:
                     error_text = await response.text()
                     raise Exception(f"Failed to get template content: {response.status} - {error_text}")
 
-    async def submit_evaluation_result(
-        self, session_id: str, episode_id: str, evaluation_data: EvaluationResultSubmission
-    ) -> EvaluationResultResponse:
-        """
-        Submit client-side evaluation result.
-
-        Args:
-            session_id: Session ID
-            episode_id: Episode ID
-            evaluation_data: Evaluation result data
-
-        Returns:
-            EvaluationResultResponse
-
-        Raises:
-            Exception: If request fails
-        """
-        logger.info(
-            "Submitting evaluation result",
-            extra={"event": "submit_evaluation_result", "session_id": session_id, "episode_id": episode_id},
-        )
-
-        url = f"{self.base_url}/api/v1/session/{session_id}/episodes/{episode_id}/evaluation"
-
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=evaluation_data.model_dump()) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    response_obj = data.get("evaluation_result", data)
-                    return EvaluationResultResponse(**response_obj)
-                else:
-                    error_text = await response.text()
-                    raise Exception(f"Failed to submit evaluation result: {response.status} - {error_text}")
+    # NOTE: submit_evaluation_result() REMOVED - server no longer needs evaluation data
+    # Evaluation is computed client-side and returned directly to inspect_ai
 
     async def cleanup(self) -> None:
         """Cleanup session manager resources."""

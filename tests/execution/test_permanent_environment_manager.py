@@ -4,9 +4,10 @@ Unit tests for PermanentEnvironmentManager.
 Tests the file-based permanent environment lifecycle management.
 """
 
+import asyncio
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch, call
+from unittest.mock import MagicMock, Mock, patch, call, AsyncMock
 import pytest
 
 from saber.server.execution.exceptions import SandboxExecutionError
@@ -156,34 +157,37 @@ networks:
         assert "Failed to start permanent environment" in str(excinfo.value)
         assert "Docker error" in str(excinfo.value)
 
-    def test_stop_permanent_environment_success(self, manager, temp_compose_file):
+    @pytest.mark.asyncio
+    async def test_stop_permanent_environment_success(self, manager, temp_compose_file):
         """Test successful stop of permanent environment."""
         # Setup - mark as running and setup mocks
         manager._is_running = True
         manager._compose_file_path = temp_compose_file
-        manager.orchestrator.stop_environment = Mock()
+        manager.orchestrator.stop_environment = AsyncMock()
 
         # Test
-        manager.stop_permanent_environment()
+        await manager.stop_permanent_environment()
 
         # Verify
         assert manager._is_running is False
         assert manager._compose_file_path is None
         manager.orchestrator.stop_environment.assert_called_once_with(temp_compose_file, project_name=manager.compose_project_name)
 
-    def test_stop_permanent_environment_not_running(self, manager):
+    @pytest.mark.asyncio
+    async def test_stop_permanent_environment_not_running(self, manager):
         """Test stop when environment is not running."""
         # Setup - ensure not running
         manager._is_running = False
-        manager.orchestrator.stop_environment = Mock()
+        manager.orchestrator.stop_environment = AsyncMock()
 
         # Test
-        manager.stop_permanent_environment()
+        await manager.stop_permanent_environment()
 
         # Verify - should not call orchestrator since not running
         manager.orchestrator.stop_environment.assert_not_called()
 
-    def test_stop_permanent_environment_no_file_path(self, manager):
+    @pytest.mark.asyncio
+    async def test_stop_permanent_environment_no_file_path(self, manager):
         """Test stop fails when no compose file path is stored."""
         # Setup - mark as running but no file path
         manager._is_running = True
@@ -191,20 +195,21 @@ networks:
 
         # Test
         with pytest.raises(SandboxExecutionError) as excinfo:
-            manager.stop_permanent_environment()
+            await manager.stop_permanent_environment()
 
         assert "No compose file path stored" in str(excinfo.value)
 
-    def test_stop_permanent_environment_orchestrator_failure(self, manager, temp_compose_file):
+    @pytest.mark.asyncio
+    async def test_stop_permanent_environment_orchestrator_failure(self, manager, temp_compose_file):
         """Test stop handles orchestrator failure."""
         # Setup - mark as running and make orchestrator fail
         manager._is_running = True
         manager._compose_file_path = temp_compose_file
-        manager.orchestrator.stop_environment = Mock(side_effect=RuntimeError("Docker error"))
+        manager.orchestrator.stop_environment = AsyncMock(side_effect=RuntimeError("Docker error"))
 
         # Test
         with pytest.raises(SandboxExecutionError) as excinfo:
-            manager.stop_permanent_environment()
+            await manager.stop_permanent_environment()
 
         assert "Failed to stop permanent environment" in str(excinfo.value)
         assert "Docker error" in str(excinfo.value)

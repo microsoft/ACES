@@ -1153,12 +1153,16 @@ class TestErrorHandling:
         assert mock_base_model.generate.called
 
     @pytest.mark.asyncio
-    async def test_push_failure_graceful_degradation(self, mock_base_model, mock_websocket):
-        """Test that push failure doesn't crash, falls back to local tracking."""
+    async def test_push_failure_no_local_update(self, mock_base_model, mock_websocket):
+        """Test that push failure doesn't crash and does NOT update local state.
+
+        When push fails after retries, local state should NOT be updated because
+        the server doesn't have the message. This prevents version desync.
+        """
         # Arrange
         config = WebSocketConfig(
             pull=PullConfig(enabled=False),
-            push=PushConfig(enabled=True, confirmation_timeout=0.1)
+            push=PushConfig(enabled=True, confirmation_timeout=0.1, max_retry_attempts=0)  # No retries for fast test
         )
 
         wrapper = WebSocketTranscriptSyncingModelWrapper(
@@ -1178,10 +1182,67 @@ class TestErrorHandling:
         with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
             result = await wrapper.generate([{"role": "user", "content": "Test"}])
 
-        # Assert - should have updated local state as fallback
+        # Assert - local state should NOT be updated (server doesn't have the message)
+        assert len(wrapper._local_messages) == 0
+        assert wrapper._local_version == 0
+        # But generate should still return a result
+        assert result is not None
+
+    @pytest.mark.asyncio
+    async def test_push_retry_succeeds_on_second_attempt(self, mock_base_model, mock_websocket):
+        """Test that push retries and succeeds on second attempt."""
+        # Arrange
+        config = WebSocketConfig(
+            pull=PullConfig(enabled=False),
+            push=PushConfig(enabled=True, confirmation_timeout=0.5, max_retry_attempts=2)
+        )
+
+        wrapper = WebSocketTranscriptSyncingModelWrapper(
+            base_model=mock_base_model,
+            session_id="session-123",
+            episode_id="episode-456",
+            rest_url="http://localhost:8000",
+            ws_config=config,
+        )
+
+        wrapper._websocket = mock_websocket
+        wrapper._event_queue = asyncio.Queue()
+        wrapper._local_messages = []
+        wrapper._local_version = 0
+
+        # Queue will be empty on first attempt (timeout), then have push_ack on second
+        call_count = 0
+
+        async def mock_wait_for_message(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # First attempt: timeout (return None)
+                return None
+            else:
+                # Second attempt: success
+                return PushAckMessage(
+                    type="push_ack",
+                    data=PushAckData(version=1, checksum="abc123"),
+                    id="msg-1",
+                    timestamp=_ts(),
+                )
+
+        # Mock _ensure_connected to restore websocket (simulating reconnection)
+        async def mock_ensure_connected():
+            wrapper._websocket = mock_websocket
+
+        # Act
+        with patch.object(wrapper, '_ensure_connected', side_effect=mock_ensure_connected):
+            with patch.object(wrapper, '_wait_for_message_type', side_effect=mock_wait_for_message):
+                with patch('asyncio.sleep', new_callable=AsyncMock):  # Skip sleep for fast test
+                    result = await wrapper.generate([{"role": "user", "content": "Test"}])
+
+        # Assert - should succeed after retry
         assert len(wrapper._local_messages) == 1
         assert wrapper._local_version == 1
         assert result is not None
+        assert call_count == 2  # First attempt failed, second succeeded
 
     @pytest.mark.asyncio
     async def test_non_list_input_warning(self, mock_base_model, mock_websocket):

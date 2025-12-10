@@ -5,12 +5,13 @@ These tests verify the end-to-end functionality with real static compose files.
 They require Docker to be available but use minimal test containers.
 """
 
+import asyncio
 import os
 import subprocess
 import tempfile
 import time
 from pathlib import Path
-from unittest.mock import patch, Mock
+from unittest.mock import patch, Mock, AsyncMock
 import pytest
 
 from saber.server.execution.sandbox.compose_orchestrator import ComposeOrchestrator
@@ -126,7 +127,8 @@ networks:
                     pass
                 raise
 
-    def test_sandbox_environment_manager_lifecycle(self, minimal_compose_content, temp_directory):
+    @pytest.mark.asyncio
+    async def test_sandbox_environment_manager_lifecycle(self, minimal_compose_content, temp_directory):
         """Test complete SandboxEnvironmentManager lifecycle."""
         # Create the expected directory structure
         domain_path = temp_directory / "domains" / "integration-test" / "server" / "config" / "environments" / "sandbox"
@@ -165,8 +167,8 @@ networks:
                 orchestrator = manager.get_episode_environment(episode_id)
                 assert orchestrator is not None
 
-                # Stop episode environment
-                result = manager.stop_episode_environment(episode_id)
+                # Stop episode environment (now async)
+                result = await manager.stop_episode_environment(episode_id)
                 assert result is True
                 assert manager.is_episode_active(episode_id) is False
                 assert episode_id not in manager.get_active_episodes()
@@ -174,7 +176,7 @@ networks:
             except Exception:
                 # Ensure cleanup on any failure
                 try:
-                    manager.cleanup_all_environments()
+                    await manager.cleanup_all_episodes()
                 except:
                     pass
                 raise
@@ -182,7 +184,8 @@ networks:
             # Restore original working directory
             os.chdir(original_cwd)
 
-    def test_permanent_environment_manager_lifecycle(self, temp_compose_file, temp_directory):
+    @pytest.mark.asyncio
+    async def test_permanent_environment_manager_lifecycle(self, temp_compose_file, temp_directory):
         """Test complete PermanentEnvironmentManager lifecycle."""
         # Create a permanent compose file in the temp directory
         permanent_compose = temp_directory / "permanent.yml"
@@ -212,7 +215,7 @@ networks:
             mock_orchestrator = mock_orchestrator_class.return_value
             mock_orchestrator.container_logger = Mock()
             mock_orchestrator.start_environment = Mock()
-            mock_orchestrator.stop_environment = Mock()
+            mock_orchestrator.stop_environment = AsyncMock()  # Now async
 
             manager = PermanentEnvironmentManager(config)
 
@@ -221,18 +224,19 @@ networks:
                 manager.start_permanent_environment_from_file(permanent_compose)
                 assert manager._is_running is True
 
-                # Stop permanent environment (the current API doesn't take a file parameter)
-                manager.stop_permanent_environment()
+                # Stop permanent environment (now async)
+                await manager.stop_permanent_environment()
                 assert manager._is_running is False
             except Exception:
                 # Ensure cleanup on any failure
                 try:
-                    manager.stop_permanent_environment()
+                    await manager.stop_permanent_environment()
                 except:
                     pass
                 raise
 
-    def test_multiple_episode_isolation(self, minimal_compose_content, temp_directory):
+    @pytest.mark.asyncio
+    async def test_multiple_episode_isolation(self, minimal_compose_content, temp_directory):
         """Test that multiple episodes are properly isolated."""
         # Create the expected directory structure
         domain_path = temp_directory / "domains" / "isolation-test" / "server" / "config" / "environments" / "sandbox"
@@ -266,9 +270,9 @@ networks:
                 active_episodes = manager.get_active_episodes()
                 assert set(active_episodes) == set(episode_ids)
 
-                # Stop episodes individually
+                # Stop episodes individually (now async)
                 for episode_id in episode_ids:
-                    result = manager.stop_episode_environment(episode_id)
+                    result = await manager.stop_episode_environment(episode_id)
                     assert result is True
                     assert manager.is_episode_active(episode_id) is False
 
@@ -278,7 +282,7 @@ networks:
             except Exception:
                 # Ensure cleanup on any failure
                 try:
-                    manager.cleanup_all_environments()
+                    await manager.cleanup_all_episodes()
                 except:
                     pass
                 raise
@@ -336,7 +340,8 @@ invalid yaml content
             # Restore original working directory
             os.chdir(original_cwd)
 
-    def test_error_recovery_integration(self, minimal_compose_content, temp_directory):
+    @pytest.mark.asyncio
+    async def test_error_recovery_integration(self, minimal_compose_content, temp_directory):
         """Test error recovery in integrated environment management."""
         # Create the expected directory structure
         domain_path = temp_directory / "domains" / "error-recovery-test" / "server" / "config" / "environments" / "sandbox"
@@ -364,23 +369,23 @@ invalid yaml content
                 assert orchestrator is not None
                 assert compose_path is not None
 
-                # Simulate partial failure by stopping the orchestrator directly
+                # Simulate partial failure by stopping the orchestrator directly (now async)
                 orchestrator = manager.get_episode_environment(episode_id)
                 compose_file_path = manager.episode_compose_files[episode_id]
-                orchestrator.stop_environment(compose_file_path, episode_id)
+                await orchestrator.stop_environment(compose_file_path, episode_id)
 
                 # Manager should still track the episode as active
                 assert manager.is_episode_active(episode_id) is True
 
-                # Cleanup all should handle the partially failed state
-                manager.cleanup_all_episodes()
+                # Cleanup all should handle the partially failed state (now async)
+                await manager.cleanup_all_episodes()
                 # Episode might be in failed list since orchestrator already stopped
                 assert len(manager.get_active_episodes()) == 0
 
             except Exception:
                 # Ensure cleanup on any failure
                 try:
-                    manager.cleanup_all_episodes()
+                    await manager.cleanup_all_episodes()
                 except:
                     pass
                 raise

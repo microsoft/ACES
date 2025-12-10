@@ -1093,11 +1093,11 @@ class ComposeOrchestrator:
         except Exception:
             return None
 
-    def stop_environment(
+    async def stop_environment(
         self, compose_file_path: Path, episode_id: Optional[str] = None, project_name: Optional[str] = None
     ) -> None:
         """
-        Stop environment from compose file.
+        Stop environment from compose file (async to avoid blocking event loop).
 
         Args:
             compose_file_path: Path to the Docker Compose file
@@ -1108,6 +1108,8 @@ class ComposeOrchestrator:
             FileNotFoundError: If compose file doesn't exist
             RuntimeError: If docker compose command fails
         """
+        import asyncio
+
         if not compose_file_path.exists():
             raise FileNotFoundError(f"Compose file not found: {compose_file_path}")
 
@@ -1169,7 +1171,60 @@ class ComposeOrchestrator:
         )
 
         try:
-            result = subprocess.run(cmd, env=env, capture_output=True, text=True, check=True, timeout=60)
+            # Use async subprocess to avoid blocking the event loop
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                env=env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
+            try:
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=60)
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+                error_msg = f"Timeout stopping environment {compose_file_path}"
+                logger.error(
+                    "Compose environment stop timed out",
+                    extra={
+                        "event": "compose_environment_stop_timeout",
+                        "compose_file": str(compose_file_path),
+                        "project_name": active_project_name,
+                        "episode_id": episode_id,
+                    },
+                )
+                raise RuntimeError(error_msg)
+
+            if process.returncode != 0:
+                # Log the failure
+                if self.container_logger and active_project_name:
+                    self.container_logger.log_container_lifecycle_event(
+                        event_type="stop_failure",
+                        container_info={
+                            "project_name": active_project_name,
+                            "config_type": self.config_type,
+                            "compose_file": str(compose_file_path),
+                            "episode_id": episode_id,
+                        },
+                        additional_data={"error": stderr.decode() if stderr else "Unknown error"},
+                    )
+
+                error_msg = (
+                    f"Failed to stop environment {compose_file_path}: {stderr.decode() if stderr else 'Unknown error'}"
+                )
+                logger.error(
+                    "Compose environment stop failed",
+                    extra={
+                        "event": "compose_environment_stop_failed",
+                        "compose_file": str(compose_file_path),
+                        "project_name": active_project_name,
+                        "episode_id": episode_id,
+                        "return_code": process.returncode,
+                        "stderr": stderr.decode() if stderr else None,
+                    },
+                )
+                raise RuntimeError(error_msg)
 
             logger.info(
                 "Compose environment stopped",
@@ -1180,14 +1235,14 @@ class ComposeOrchestrator:
                     "episode_id": episode_id,
                 },
             )
-            if result.stdout:
+            if stdout:
                 logger.debug(
                     "Compose stop command output",
                     extra={
                         "event": "compose_environment_stop_output",
                         "compose_file": str(compose_file_path),
                         "project_name": active_project_name,
-                        "stdout": result.stdout,
+                        "stdout": stdout.decode(),
                     },
                 )
 
@@ -1209,42 +1264,18 @@ class ComposeOrchestrator:
             self.compose_file_path = None
             self.compose_data = None
 
-        except subprocess.CalledProcessError as e:
-            # Log the failure
-            if self.container_logger and active_project_name:
-                self.container_logger.log_container_lifecycle_event(
-                    event_type="stop_failure",
-                    container_info={
-                        "project_name": active_project_name,
-                        "config_type": self.config_type,
-                        "compose_file": str(compose_file_path),
-                        "episode_id": episode_id,
-                    },
-                    additional_data={"error": str(e)},
-                )
-
-            error_msg = f"Failed to stop environment {compose_file_path}: {e.stderr}"
+        except RuntimeError:
+            raise
+        except Exception as e:
+            error_msg = f"Unexpected error stopping environment {compose_file_path}: {e}"
             logger.error(
-                "Compose environment stop failed",
+                "Compose environment stop unexpected error",
                 extra={
-                    "event": "compose_environment_stop_failed",
+                    "event": "compose_environment_stop_error",
                     "compose_file": str(compose_file_path),
                     "project_name": active_project_name,
                     "episode_id": episode_id,
-                    "return_code": getattr(e, "returncode", None),
-                    "stderr": e.stderr,
-                },
-            )
-            raise RuntimeError(error_msg)
-        except subprocess.TimeoutExpired:
-            error_msg = f"Timeout stopping environment {compose_file_path}"
-            logger.error(
-                "Compose environment stop timed out",
-                extra={
-                    "event": "compose_environment_stop_timeout",
-                    "compose_file": str(compose_file_path),
-                    "project_name": active_project_name,
-                    "episode_id": episode_id,
+                    "error": str(e),
                 },
             )
             raise RuntimeError(error_msg)
