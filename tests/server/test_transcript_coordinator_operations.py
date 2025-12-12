@@ -1,10 +1,8 @@
-"""Unit tests for TranscriptCoordinator push operations (Phase 2).
+"""Unit tests for TranscriptCoordinator push operations.
 
 Tests for operation types:
 - append (default, blue team)
-- rewind (red team)
-- rewrite (red team)
-- insert (red team)
+- restart (red team - reset to initial transcript then append)
 """
 
 import pytest
@@ -57,7 +55,7 @@ class MockEpisodeManager:
 
 @pytest.fixture
 def sample_transcript():
-    """Sample transcript with 3 messages."""
+    """Sample transcript with 3 messages (system->user->assistant)."""
     return [
         {"role": "system", "content": "You are helpful"},
         {"role": "user", "content": "Hello"},
@@ -66,8 +64,18 @@ def sample_transcript():
 
 
 @pytest.fixture
-def episode_with_transcript(sample_transcript):
-    """Episode with existing transcript."""
+def initial_transcript():
+    """Initial transcript state captured after first assistant response."""
+    return [
+        {"role": "system", "content": "You are helpful"},
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi! How can I help?"},
+    ]
+
+
+@pytest.fixture
+def episode_with_transcript(sample_transcript, initial_transcript):
+    """Episode with existing transcript and initial transcript."""
     return Episode(
         episode_id="ep-test-123",
         task_id="task-1",
@@ -75,6 +83,7 @@ def episode_with_transcript(sample_transcript):
         state=EpisodeState.ACTIVE,
         context={
             MetadataKeys.CLIENT_TRANSCRIPT: sample_transcript.copy(),
+            MetadataKeys.INITIAL_TRANSCRIPT: initial_transcript.copy(),
             MetadataKeys.TRANSCRIPT_VERSION: 3,
             MetadataKeys.TRANSCRIPT_LAST_OPERATION: "append",
         },
@@ -153,267 +162,247 @@ class TestPushMessagesAppend:
         assert len(transcript) == 4
         assert transcript[-1] == new_message
 
-
-class TestPushMessagesRewind:
-    """Test _push_messages with rewind operation (red team)."""
-
     @pytest.mark.asyncio
-    async def test_rewind_single_message(self, coordinator):
-        """Test rewinding 1 message and appending new one."""
+    async def test_append_empty_messages(self, coordinator):
+        """Test appending empty list doesn't change transcript."""
         coord, episode = coordinator
 
-        new_message = {"role": "assistant", "content": "Injected response"}
-
-        await coord._push_messages(
-            episode=episode,
-            messages=[new_message],
-            operation="rewind",
-            rewind_count=1
-        )
-
-        transcript = episode.context[MetadataKeys.CLIENT_TRANSCRIPT]
-        # Should have: [system, user, new_message] (removed last assistant message)
-        assert len(transcript) == 3
-        assert transcript[-1] == new_message
-        assert transcript[0]["role"] == "system"
-        assert transcript[1]["role"] == "user"
-        assert episode.context[MetadataKeys.TRANSCRIPT_LAST_OPERATION] == "rewind"
-
-    @pytest.mark.asyncio
-    async def test_rewind_multiple_messages(self, coordinator):
-        """Test rewinding multiple messages."""
-        coord, episode = coordinator
-
-        new_message = {"role": "user", "content": "Replacement"}
-
-        await coord._push_messages(
-            episode=episode,
-            messages=[new_message],
-            operation="rewind",
-            rewind_count=2  # Remove last 2 messages
-        )
-
-        transcript = episode.context[MetadataKeys.CLIENT_TRANSCRIPT]
-        # Should have: [system, new_message]
-        assert len(transcript) == 2
-        assert transcript[0]["role"] == "system"
-        assert transcript[1] == new_message
-
-    @pytest.mark.asyncio
-    async def test_rewind_more_than_exists(self, coordinator):
-        """Test rewinding more messages than exist (should rewind all)."""
-        coord, episode = coordinator
-
-        new_message = {"role": "system", "content": "New start"}
-
-        await coord._push_messages(
-            episode=episode,
-            messages=[new_message],
-            operation="rewind",
-            rewind_count=100  # More than 3 existing messages
-        )
-
-        transcript = episode.context[MetadataKeys.CLIENT_TRANSCRIPT]
-        # Should have only new message (all existing removed)
-        assert len(transcript) == 1
-        assert transcript[0] == new_message
-
-    @pytest.mark.asyncio
-    async def test_rewind_zero_messages(self, coordinator):
-        """Test rewind with count=0 (equivalent to append)."""
-        coord, episode = coordinator
-
-        new_message = {"role": "user", "content": "Appended"}
-
-        await coord._push_messages(
-            episode=episode,
-            messages=[new_message],
-            operation="rewind",
-            rewind_count=0
-        )
-
-        transcript = episode.context[MetadataKeys.CLIENT_TRANSCRIPT]
-        assert len(transcript) == 4  # Same as append
-        assert transcript[-1] == new_message
-
-
-class TestPushMessagesRewrite:
-    """Test _push_messages with rewrite operation (red team)."""
-
-    @pytest.mark.asyncio
-    async def test_rewrite_entire_transcript(self, coordinator):
-        """Test replacing entire transcript."""
-        coord, episode = coordinator
-
-        new_transcript = [
-            {"role": "system", "content": "Completely new system"},
-            {"role": "user", "content": "New conversation"},
-        ]
-
-        await coord._push_messages(
-            episode=episode,
-            messages=new_transcript,
-            operation="rewrite"
-        )
-
-        transcript = episode.context[MetadataKeys.CLIENT_TRANSCRIPT]
-        assert transcript == new_transcript
-        assert len(transcript) == 2
-        assert episode.context[MetadataKeys.TRANSCRIPT_LAST_OPERATION] == "rewrite"
-
-    @pytest.mark.asyncio
-    async def test_rewrite_with_empty_transcript(self, coordinator):
-        """Test rewriting to empty transcript."""
-        coord, episode = coordinator
+        original_len = len(episode.context[MetadataKeys.CLIENT_TRANSCRIPT])
+        original_version = episode.context[MetadataKeys.TRANSCRIPT_VERSION]
 
         await coord._push_messages(
             episode=episode,
             messages=[],
-            operation="rewrite"
+            operation="append"
         )
 
         transcript = episode.context[MetadataKeys.CLIENT_TRANSCRIPT]
-        assert transcript == []
-        assert len(transcript) == 0
+        assert len(transcript) == original_len
+        # Version still increments even for empty push
+        assert episode.context[MetadataKeys.TRANSCRIPT_VERSION] == original_version + 1
 
 
-class TestPushMessagesInsert:
-    """Test _push_messages with insert operation (red team)."""
+class TestPushMessagesRestart:
+    """Test _push_messages with restart operation (red team).
+
+    Restart resets the transcript to the initial state (system->user->assistant)
+    that was captured after the blue team's first response, then appends the
+    new message. This allows the red team to start fresh conversations while
+    preserving the blue team's opening response.
+    """
 
     @pytest.mark.asyncio
-    async def test_insert_at_beginning(self, coordinator):
-        """Test inserting message at position 0."""
+    async def test_restart_resets_to_initial_and_appends(self, coordinator):
+        """Test restart resets to INITIAL_TRANSCRIPT and appends new message."""
         coord, episode = coordinator
 
-        new_message = {"role": "system", "content": "Inserted at start"}
+        # Add some extra conversation after initial
+        episode.context[MetadataKeys.CLIENT_TRANSCRIPT].extend([
+            {"role": "user", "content": "What's the weather?"},
+            {"role": "assistant", "content": "I don't have weather data."},
+        ])
+
+        new_message = {"role": "user", "content": "Fresh start attack"}
 
         await coord._push_messages(
             episode=episode,
             messages=[new_message],
-            operation="insert",
-            insert_position=0
+            operation="restart"
         )
 
         transcript = episode.context[MetadataKeys.CLIENT_TRANSCRIPT]
+        # Should have: initial transcript (3 messages) + new message
         assert len(transcript) == 4
-        assert transcript[0] == new_message
-        assert transcript[1]["content"] == "You are helpful"  # Original system message shifted
-
-    @pytest.mark.asyncio
-    async def test_insert_in_middle(self, coordinator):
-        """Test inserting message in the middle."""
-        coord, episode = coordinator
-
-        new_message = {"role": "system", "content": "Inserted in middle"}
-
-        await coord._push_messages(
-            episode=episode,
-            messages=[new_message],
-            operation="insert",
-            insert_position=2  # After system and user
-        )
-
-        transcript = episode.context[MetadataKeys.CLIENT_TRANSCRIPT]
-        assert len(transcript) == 4
-        assert transcript[2] == new_message
         assert transcript[0]["role"] == "system"
+        assert transcript[0]["content"] == "You are helpful"
         assert transcript[1]["role"] == "user"
-        assert transcript[3]["role"] == "assistant"  # Original last message shifted
+        assert transcript[1]["content"] == "Hello"
+        assert transcript[2]["role"] == "assistant"
+        assert transcript[2]["content"] == "Hi! How can I help?"  # Blue's first response preserved!
+        assert transcript[3] == new_message
+        assert episode.context[MetadataKeys.TRANSCRIPT_LAST_OPERATION] == "restart"
 
     @pytest.mark.asyncio
-    async def test_insert_at_end(self, coordinator):
-        """Test inserting at end (equivalent to append)."""
+    async def test_restart_preserves_blue_team_opening_response(self, coordinator):
+        """Test restart preserves the blue team's first assistant response."""
         coord, episode = coordinator
 
-        new_message = {"role": "user", "content": "Inserted at end"}
-
-        await coord._push_messages(
-            episode=episode,
-            messages=[new_message],
-            operation="insert",
-            insert_position=3  # At end of 3-message transcript
-        )
-
-        transcript = episode.context[MetadataKeys.CLIENT_TRANSCRIPT]
-        assert len(transcript) == 4
-        assert transcript[-1] == new_message
-
-    @pytest.mark.asyncio
-    async def test_insert_beyond_end(self, coordinator):
-        """Test insert position beyond transcript length (should insert at end)."""
-        coord, episode = coordinator
-
-        new_message = {"role": "user", "content": "Beyond end"}
-
-        await coord._push_messages(
-            episode=episode,
-            messages=[new_message],
-            operation="insert",
-            insert_position=100  # Way beyond length
-        )
-
-        transcript = episode.context[MetadataKeys.CLIENT_TRANSCRIPT]
-        assert len(transcript) == 4
-        assert transcript[-1] == new_message
-
-    @pytest.mark.asyncio
-    async def test_insert_multiple_messages(self, coordinator):
-        """Test inserting multiple messages at once."""
-        coord, episode = coordinator
-
-        new_messages = [
-            {"role": "system", "content": "Insert 1"},
-            {"role": "system", "content": "Insert 2"},
+        # Simulate extended conversation
+        episode.context[MetadataKeys.CLIENT_TRANSCRIPT] = [
+            {"role": "system", "content": "You are helpful"},
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi! How can I help?"},
+            {"role": "user", "content": "Tell me about security"},
+            {"role": "assistant", "content": "Security is important..."},
+            {"role": "user", "content": "Continue"},
+            {"role": "assistant", "content": "...and you should use encryption."},
         ]
 
+        # Red team does restart
         await coord._push_messages(
             episode=episode,
-            messages=new_messages,
-            operation="insert",
-            insert_position=1
+            messages=[{"role": "user", "content": "New attack vector"}],
+            operation="restart"
         )
 
         transcript = episode.context[MetadataKeys.CLIENT_TRANSCRIPT]
-        assert len(transcript) == 5
-        assert transcript[1:3] == new_messages
+        # Initial transcript (3) + new attack message (1)
+        assert len(transcript) == 4
+        # Blue team's first response is preserved
+        assert transcript[2]["content"] == "Hi! How can I help?"
+
+    @pytest.mark.asyncio
+    async def test_restart_without_initial_transcript_falls_back_to_append(self, coordinator):
+        """Test restart falls back to append if no INITIAL_TRANSCRIPT exists."""
+        coord, episode = coordinator
+
+        # Remove INITIAL_TRANSCRIPT
+        del episode.context[MetadataKeys.INITIAL_TRANSCRIPT]
+
+        original_transcript = episode.context[MetadataKeys.CLIENT_TRANSCRIPT].copy()
+        new_message = {"role": "user", "content": "Fallback append"}
+
+        await coord._push_messages(
+            episode=episode,
+            messages=[new_message],
+            operation="restart"
+        )
+
+        transcript = episode.context[MetadataKeys.CLIENT_TRANSCRIPT]
+        # Should fall back to append behavior
+        assert len(transcript) == len(original_transcript) + 1
+        assert transcript[-1] == new_message
+
+    @pytest.mark.asyncio
+    async def test_restart_with_empty_initial_transcript_falls_back(self, coordinator):
+        """Test restart with empty INITIAL_TRANSCRIPT falls back to append."""
+        coord, episode = coordinator
+
+        # Set empty INITIAL_TRANSCRIPT
+        episode.context[MetadataKeys.INITIAL_TRANSCRIPT] = []
+
+        original_len = len(episode.context[MetadataKeys.CLIENT_TRANSCRIPT])
+        new_message = {"role": "user", "content": "Empty fallback"}
+
+        await coord._push_messages(
+            episode=episode,
+            messages=[new_message],
+            operation="restart"
+        )
+
+        transcript = episode.context[MetadataKeys.CLIENT_TRANSCRIPT]
+        # Falls back to append
+        assert len(transcript) == original_len + 1
+
+    @pytest.mark.asyncio
+    async def test_multiple_restarts_always_use_same_initial(self, coordinator):
+        """Test multiple restarts always reset to the same INITIAL_TRANSCRIPT."""
+        coord, episode = coordinator
+
+        initial = episode.context[MetadataKeys.INITIAL_TRANSCRIPT].copy()
+
+        # First restart
+        await coord._push_messages(
+            episode=episode,
+            messages=[{"role": "user", "content": "Attack 1"}],
+            operation="restart"
+        )
+
+        # Simulate some conversation after restart
+        await coord._push_messages(
+            episode=episode,
+            messages=[
+                {"role": "assistant", "content": "Response to attack 1"},
+                {"role": "user", "content": "Follow up"},
+            ],
+            operation="append"
+        )
+
+        # Second restart
+        await coord._push_messages(
+            episode=episode,
+            messages=[{"role": "user", "content": "Attack 2"}],
+            operation="restart"
+        )
+
+        transcript = episode.context[MetadataKeys.CLIENT_TRANSCRIPT]
+        # Should reset to original initial + new attack
+        assert len(transcript) == len(initial) + 1
+        assert transcript[:3] == initial  # Original initial preserved
+        assert transcript[3]["content"] == "Attack 2"
 
 
 class TestPushMessagesVersioning:
     """Test version incrementing for all operations."""
 
     @pytest.mark.asyncio
-    async def test_version_increments_on_all_operations(self, coordinator):
-        """Test version increments for each operation type."""
+    async def test_version_increments_on_append(self, coordinator):
+        """Test version increments for append."""
         coord, episode = coordinator
 
         initial_version = episode.context[MetadataKeys.TRANSCRIPT_VERSION]
 
-        # Test append
-        await coord._push_messages(episode, [{"role": "user", "content": "1"}], "append")
+        await coord._push_messages(
+            episode=episode,
+            messages=[{"role": "user", "content": "Test"}],
+            operation="append"
+        )
+
         assert episode.context[MetadataKeys.TRANSCRIPT_VERSION] == initial_version + 1
 
-        # Test rewind
-        await coord._push_messages(episode, [{"role": "user", "content": "2"}], "rewind", rewind_count=1)
-        assert episode.context[MetadataKeys.TRANSCRIPT_VERSION] == initial_version + 2
+    @pytest.mark.asyncio
+    async def test_version_increments_on_restart(self, coordinator):
+        """Test version increments for restart."""
+        coord, episode = coordinator
 
-        # Test insert
-        await coord._push_messages(episode, [{"role": "user", "content": "3"}], "insert", insert_position=0)
-        assert episode.context[MetadataKeys.TRANSCRIPT_VERSION] == initial_version + 3
+        initial_version = episode.context[MetadataKeys.TRANSCRIPT_VERSION]
 
-        # Test rewrite
-        await coord._push_messages(episode, [{"role": "user", "content": "4"}], "rewrite")
-        assert episode.context[MetadataKeys.TRANSCRIPT_VERSION] == initial_version + 4
+        await coord._push_messages(
+            episode=episode,
+            messages=[{"role": "user", "content": "Test"}],
+            operation="restart"
+        )
+
+        assert episode.context[MetadataKeys.TRANSCRIPT_VERSION] == initial_version + 1
 
     @pytest.mark.asyncio
     async def test_last_operation_tracked(self, coordinator):
         """Test last_operation is tracked for each operation."""
         coord, episode = coordinator
 
-        await coord._push_messages(episode, [{"role": "user", "content": "test"}], "rewind")
-        assert episode.context[MetadataKeys.TRANSCRIPT_LAST_OPERATION] == "rewind"
+        await coord._push_messages(
+            episode=episode,
+            messages=[{"role": "user", "content": "test"}],
+            operation="append"
+        )
+        assert episode.context[MetadataKeys.TRANSCRIPT_LAST_OPERATION] == "append"
 
-        await coord._push_messages(episode, [{"role": "user", "content": "test"}], "insert")
-        assert episode.context[MetadataKeys.TRANSCRIPT_LAST_OPERATION] == "insert"
+        await coord._push_messages(
+            episode=episode,
+            messages=[{"role": "user", "content": "test"}],
+            operation="restart"
+        )
+        assert episode.context[MetadataKeys.TRANSCRIPT_LAST_OPERATION] == "restart"
 
-        await coord._push_messages(episode, [{"role": "user", "content": "test"}], "rewrite")
-        assert episode.context[MetadataKeys.TRANSCRIPT_LAST_OPERATION] == "rewrite"
+
+class TestUnknownOperationFallback:
+    """Test handling of unknown operations."""
+
+    @pytest.mark.asyncio
+    async def test_unknown_operation_falls_back_to_append(self, coordinator):
+        """Test unknown operation falls back to append behavior."""
+        coord, episode = coordinator
+
+        original_len = len(episode.context[MetadataKeys.CLIENT_TRANSCRIPT])
+        new_message = {"role": "user", "content": "Unknown op"}
+
+        await coord._push_messages(
+            episode=episode,
+            messages=[new_message],
+            operation="some_unknown_operation"
+        )
+
+        transcript = episode.context[MetadataKeys.CLIENT_TRANSCRIPT]
+        # Should fall back to append
+        assert len(transcript) == original_len + 1
+        assert transcript[-1] == new_message

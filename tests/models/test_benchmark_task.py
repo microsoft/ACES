@@ -34,6 +34,7 @@ class TestSingleEpisodeTask:
             instruction_prompt="Do the task",
             assistant_prompt="I'll help",
             submit_prompt="Submit your answer",
+            continue_prompt="",
         )
 
         assert task.execution_mode == TaskExecutionMode.SINGLE
@@ -55,6 +56,7 @@ class TestSingleEpisodeTask:
             instruction_prompt="test",
             assistant_prompt="test",
             submit_prompt="test",
+            continue_prompt="",
         )
 
         assert task.get_task_ids() == ["task_1"]
@@ -72,6 +74,7 @@ class TestSingleEpisodeTask:
             instruction_prompt="test",
             assistant_prompt="test",
             submit_prompt="test",
+            continue_prompt="",
         )
 
         assert task.matches_filter("xss_0_flag_capture") is True
@@ -90,6 +93,7 @@ class TestSingleEpisodeTask:
             instruction_prompt="test",
             assistant_prompt="test",
             submit_prompt="test",
+            continue_prompt="",
         )
 
         assert task.matches_filter("xss_*") is True
@@ -116,6 +120,7 @@ class TestOrchestratedTask:
             instruction_prompt="Defend",
             assistant_prompt="Helping defend",
             submit_prompt="Submit defense",
+            continue_prompt="",
         )
 
         red_subtask = SubTaskDefinition(
@@ -131,6 +136,7 @@ class TestOrchestratedTask:
             instruction_prompt="Attack",
             assistant_prompt="Helping attack",
             submit_prompt="Submit attack",
+            continue_prompt="",
         )
 
         return OrchestratedTask(
@@ -214,6 +220,7 @@ class TestOrchestratedTask:
                 instruction_prompt="test",
                 assistant_prompt="test",
                 submit_prompt="test",
+            continue_prompt="",
             )
             for i in range(5)
         ]
@@ -248,6 +255,7 @@ class TestSubTaskDefinition:
             instruction_prompt="Do it",
             assistant_prompt="Helping",
             submit_prompt="Submit",
+            continue_prompt="",
         )
 
         assert subtask.task_id == "test_subtask"
@@ -270,6 +278,7 @@ class TestSubTaskDefinition:
             instruction_prompt="test",
             assistant_prompt="test",
             submit_prompt="test",
+            continue_prompt="",
         )
 
         assert subtask.depends_on_role == "root"
@@ -292,6 +301,7 @@ class TestPolymorphicBehavior:
             instruction_prompt="test",
             assistant_prompt="test",
             submit_prompt="test",
+            continue_prompt="",
         )
 
         orchestrated = OrchestratedTask(
@@ -310,6 +320,7 @@ class TestPolymorphicBehavior:
                     instruction_prompt="test",
                     assistant_prompt="test",
                     submit_prompt="test",
+            continue_prompt="",
                 )
             ],
             episode_attempts=1,
@@ -341,6 +352,7 @@ class TestPolymorphicBehavior:
             instruction_prompt="test",
             assistant_prompt="test",
             submit_prompt="test",
+            continue_prompt="",
         )
 
         # Serialize to dict
@@ -372,6 +384,7 @@ class TestPolymorphicBehavior:
                     instruction_prompt="test",
                     assistant_prompt="test",
                     submit_prompt="test",
+            continue_prompt="",
                 ),
                 SubTaskDefinition(
                     task_id="sub_2",
@@ -386,6 +399,7 @@ class TestPolymorphicBehavior:
                     instruction_prompt="test",
                     assistant_prompt="test",
                     submit_prompt="test",
+            continue_prompt="",
                 ),
             ],
             episode_attempts=2,
@@ -420,6 +434,7 @@ class TestSubTaskDefinitionTranscriptConfig:
             instruction_prompt="test instruction",
             assistant_prompt="test assistant",
             submit_prompt="test submit",
+            continue_prompt="",
         )
 
         assert subtask.transcript_config is None
@@ -452,6 +467,7 @@ class TestSubTaskDefinitionTranscriptConfig:
             instruction_prompt="test instruction",
             assistant_prompt="test assistant",
             submit_prompt="test submit",
+            continue_prompt="",
             transcript_config=transcript_config,
         )
 
@@ -485,6 +501,7 @@ class TestSubTaskDefinitionTranscriptConfig:
             instruction_prompt="test instruction",
             assistant_prompt="test assistant",
             submit_prompt="test submit",
+            continue_prompt="",
             transcript_config=transcript_config,
         )
 
@@ -525,6 +542,7 @@ class TestSubTaskDefinitionTranscriptConfig:
                     instruction_prompt="red instruction",
                     assistant_prompt="red assistant",
                     submit_prompt="red submit",
+            continue_prompt="",
                     transcript_config=None,  # Red team doesn't use transcript sync
                 ),
                 SubTaskDefinition(
@@ -540,6 +558,7 @@ class TestSubTaskDefinitionTranscriptConfig:
                     instruction_prompt="blue instruction",
                     assistant_prompt="blue assistant",
                     submit_prompt="blue submit",
+            continue_prompt="",
                     transcript_config=blue_transcript_config,  # Blue team uses transcript sync
                 ),
             ],

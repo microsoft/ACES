@@ -145,6 +145,7 @@ class TestEvalRetrySupport:
             instruction_prompt="test",
             assistant_prompt="test",
             submit_prompt="test",
+            continue_prompt="",
         )
 
         metadata = {
@@ -262,16 +263,17 @@ class TestEvalRetrySupport:
         with patch('saber.inspect_ai.server.domain_manager.remove_active_domain'):
             with patch('saber.inspect_ai.server.session_manager.SessionLifecycleManager.terminate_session_sync'
                       ) as mock_terminate:
-                # Test cleanup=False (eval-retry scenario)
+                # Test cleanup=False (--no-sandbox-cleanup scenario)
                 await SABERSandboxEnvironment.task_cleanup(
                     "test_task", mock_config, cleanup=False
                 )
 
-                # Verify domain is still in registry (preserved for retry)
+                # Verify domain is still in registry (preserved for retry/inspection)
                 assert "test_domain" in SABERSandboxEnvironment._registry
 
-                # Verify session was terminated but domain not stopped
-                assert mock_terminate.call_count == 1
+                # Verify session was NOT terminated (so episodes remain alive on server)
+                # This is the key behavior for --no-sandbox-cleanup: everything stays alive
+                assert mock_terminate.call_count == 0
                 assert mock_controller.stop.call_count == 0
 
     @pytest.mark.asyncio
@@ -414,6 +416,7 @@ class TestEvalRetryIntegration:
                                     instruction_prompt="test",
                                     assistant_prompt="test",
                                     submit_prompt="test",
+            continue_prompt="",
                                 )
 
                                 # 2. First run: Initialize sample
@@ -472,6 +475,7 @@ class TestEvalRetryIntegration:
                                     instruction_prompt="test",
                                     assistant_prompt="test",
                                     submit_prompt="test",
+            continue_prompt="",
                                 )
                                 metadata2 = {
                                     MetadataKeys.BENCHMARK_TASK: task2.model_dump(),

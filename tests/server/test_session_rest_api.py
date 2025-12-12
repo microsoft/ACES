@@ -201,7 +201,8 @@ class TestSessionRestAPI:
                 max_steps=100,
                 instruction_prompt="Test instruction prompt 1",
                 assistant_prompt="Test assistant prompt 1",
-                submit_prompt="Test submit prompt 1"
+                submit_prompt="Test submit prompt 1",
+                continue_prompt="Test continue prompt 1"
             ),
             SingleEpisodeTask(
                 task_id="task_2",
@@ -213,7 +214,8 @@ class TestSessionRestAPI:
                 max_steps=50,
                 instruction_prompt="Test instruction prompt 2",
                 assistant_prompt="Test assistant prompt 2",
-                submit_prompt="Test submit prompt 2"
+                submit_prompt="Test submit prompt 2",
+                continue_prompt="Test continue prompt 2"
             )
         ]
 

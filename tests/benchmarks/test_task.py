@@ -35,7 +35,7 @@ class TestTask:
             domain="test_domain",
             title="Test Task",
             description="A test task",
-            prompts={"instruction": "test_task_prompt.md", "assistant": "test_task_prompt.md", "submit": "test_task_prompt.md"},
+            prompts={"instruction": "test_task_prompt.md", "assistant": "test_task_prompt.md", "submit": "test_task_prompt.md", "continue": "test_continue.md"},
             subtasks=[subtask1, subtask2],
         )
 
@@ -60,6 +60,7 @@ class TestTask:
                 "instruction": "blue_instruction.md",
                 "assistant": "blue_assistant.md",
                 "submit": "blue_submit.md",
+                "continue": "test_continue.md",
             },
             role="blue",
         )
@@ -76,6 +77,7 @@ class TestTask:
                 "instruction": "instruction.md",
                 "assistant": "assistant.md",
                 "submit": "submit.md",
+                "continue": "test_continue.md",
             },
         )
         assert task.role is None
@@ -92,6 +94,7 @@ class TestTask:
                     "instruction": "red_instruction.md",
                     "assistant": "red_assistant.md",
                     "submit": "red_submit.md",
+                    "continue": "test_continue.md",
                 },
                 dependency_template="blue_task",
                 role=None,  # Should fail - dependent task needs role
@@ -108,6 +111,7 @@ class TestTask:
                 "instruction": "red_instruction.md",
                 "assistant": "red_assistant.md",
                 "submit": "red_submit.md",
+                "continue": "test_continue.md",
             },
             dependency_template="blue_task",
             role="red",
@@ -127,6 +131,7 @@ class TestTask:
                 "instruction": "defender.md",
                 "assistant": "assistant.md",
                 "submit": "submit.md",
+                "continue": "test_continue.md",
             },
             role="defender",
         )
@@ -142,6 +147,7 @@ class TestTask:
                 "instruction": "attacker.md",
                 "assistant": "assistant.md",
                 "submit": "submit.md",
+                "continue": "test_continue.md",
             },
             dependency_template="defender_task",
             role="attacker",

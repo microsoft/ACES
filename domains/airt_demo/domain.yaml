@@ -18,17 +18,72 @@ images:
       saber.framework: "dual-agent"
 
   sandbox:
-    tag: "saber/airt_demo/sandbox:latest"
+    tag: "saber/airt_demo/red_sandbox:latest"
     dockerfile: "server/docker/red_team_sandbox/Dockerfile"
     context: "server/docker/red_team_sandbox"
     labels:
       saber.domain: "airt_demo"
       saber.component: "sandbox"
+      saber.agent.role: "red_attacker"
+
+  blue_sandbox:
+    tag: "saber/airt_demo/blue_sandbox:latest"
+    dockerfile: "server/docker/blue_team_sandbox/Dockerfile"
+    context: "server/docker/blue_team_sandbox"
+    labels:
+      saber.domain: "airt_demo"
+      saber.component: "sandbox"
+      saber.agent.role: "blue_agent"
 
   incident_db:
     tag: "saber/airt_demo/incident-db:latest"
-    dockerfile: "server/docker/db/Dockerfile.incident_5"
+    dockerfile: "server/docker/db/Dockerfile.incident_db"
     labels:
       saber.domain: "airt_demo"
       saber.component: "database"
       saber.service.type: "mysql"
+
+ports:
+  rest:
+    container: 8000
+    public: false
+
+  mcp:
+    container: 8001
+    public: false
+
+volumes: []
+
+capabilities:
+  networking:
+    internet_access: false
+    custom_networks:
+      - "saber-airt-demo-network"
+
+  filesystem:
+    host_access: false
+    writable_paths:
+      - "/app/logs"
+      - "/app/data"
+      - "/workspace"
+
+  execution:
+    docker_socket: true
+    privileged: false
+    tools:
+      - "python"
+      - "curl"
+      - "mysql-client"
+
+resources:
+  cpu_limit: "2.0"
+  memory_limit: "4g"
+  storage_limit: "10g"
+
+metadata:
+  maintainer: "saber-team@example.com"
+  documentation: "https://github.com/saber-team/saber/tree/main/domains/airt_demo"
+  tags:
+    - "ai-safety"
+    - "red-team"
+    - "prompt-injection"

@@ -129,6 +129,62 @@ networks:
         assert "test-episode-123" in manager.episode_compose_files
         mock_orchestrator.start_environment_async.assert_called_once()
 
+    @patch('saber.server.execution.sandbox.sandbox_environment_manager.ComposeOrchestrator')
+    def test_create_episode_environment_with_session_id(self, mock_orchestrator_class, manager):
+        """Test episode environment creation passes session_id to compose config.
+
+        This ensures that the SESSION_ID environment variable is available
+        for containers that need to call REST API (e.g., websocket_daemon).
+        """
+        # Setup mock
+        mock_orchestrator = Mock()
+        mock_orchestrator_class.return_value = mock_orchestrator
+
+        # Test with session_id
+        orchestrator, compose_path = manager.create_episode_environment_async(
+            "test-episode-123",
+            "test_sandbox",
+            session_id="test-session-456"
+        )
+
+        # Verify orchestrator was called
+        mock_orchestrator.start_environment_async.assert_called_once()
+
+        # Get the config that was passed to start_environment_async
+        call_args = mock_orchestrator.start_environment_async.call_args
+        config = call_args[0][1]  # Second positional argument is config
+
+        # Verify session_id is in additional_variables
+        assert config.additional_variables is not None
+        assert "SESSION_ID" in config.additional_variables
+        assert config.additional_variables["SESSION_ID"] == "test-session-456"
+
+    @patch('saber.server.execution.sandbox.sandbox_environment_manager.ComposeOrchestrator')
+    def test_create_episode_environment_without_session_id(self, mock_orchestrator_class, manager):
+        """Test episode environment creation without session_id.
+
+        When no session_id is provided, additional_variables should be None or empty.
+        """
+        # Setup mock
+        mock_orchestrator = Mock()
+        mock_orchestrator_class.return_value = mock_orchestrator
+
+        # Test without session_id
+        orchestrator, compose_path = manager.create_episode_environment_async(
+            "test-episode-123",
+            "test_sandbox"
+        )
+
+        # Verify orchestrator was called
+        mock_orchestrator.start_environment_async.assert_called_once()
+
+        # Get the config that was passed to start_environment_async
+        call_args = mock_orchestrator.start_environment_async.call_args
+        config = call_args[0][1]  # Second positional argument is config
+
+        # Verify additional_variables is None when no session_id
+        assert config.additional_variables is None
+
     def test_create_episode_environment_not_ready(self, manager):
         """Test episode creation fails when manager not ready."""
         manager._is_ready = False

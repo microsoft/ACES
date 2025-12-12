@@ -31,6 +31,7 @@ class TestConvertBenchmarkTaskToSample:
             instruction_prompt="Find the XSS vulnerability",
             assistant_prompt="I'll help you find it",
             submit_prompt="Submit your exploit",
+            continue_prompt="",
         )
 
         sample = _convert_benchmark_task_to_sample(task, attempt=1)
@@ -67,6 +68,7 @@ class TestConvertBenchmarkTaskToSample:
             instruction_prompt="test",
             assistant_prompt="test",
             submit_prompt="test",
+            continue_prompt="",
         )
 
         sample1 = _convert_benchmark_task_to_sample(task, attempt=1)
@@ -94,6 +96,7 @@ class TestConvertBenchmarkTaskToSample:
             instruction_prompt="test",
             assistant_prompt="test",
             submit_prompt="test",
+            continue_prompt="",
         )
 
         with pytest.raises(ValueError, match="attempt must be >= 1"):
@@ -119,6 +122,7 @@ class TestConvertTaskToSample:
             instruction_prompt="test",
             assistant_prompt="test",
             submit_prompt="test",
+            continue_prompt="",
         )
 
         sample = _convert_task_to_sample(task, attempt=1)
@@ -144,6 +148,7 @@ class TestConvertTaskToSample:
                     instruction_prompt="test",
                     assistant_prompt="test",
                     submit_prompt="test",
+            continue_prompt="",
                 )
             ],
             episode_attempts=1,
@@ -173,6 +178,7 @@ class TestCreateSaberDataset:
                 instruction_prompt="test",
                 assistant_prompt="test",
                 submit_prompt="test",
+            continue_prompt="",
             ),
             SingleEpisodeTask(
                 benchmark_task_id="task_2",
@@ -185,6 +191,7 @@ class TestCreateSaberDataset:
                 instruction_prompt="test",
                 assistant_prompt="test",
                 submit_prompt="test",
+            continue_prompt="",
             ),
         ]
 
@@ -222,6 +229,7 @@ class TestCreateSaberDataset:
                         instruction_prompt="test",
                         assistant_prompt="test",
                         submit_prompt="test",
+            continue_prompt="",
                     ),
                     SubTaskDefinition(
                         task_id="sub_2",
@@ -235,6 +243,7 @@ class TestCreateSaberDataset:
                         instruction_prompt="test",
                         assistant_prompt="test",
                         submit_prompt="test",
+            continue_prompt="",
                     ),
                 ],
                 episode_attempts=2,
@@ -269,6 +278,7 @@ class TestCreateSaberDataset:
                 instruction_prompt="test",
                 assistant_prompt="test",
                 submit_prompt="test",
+            continue_prompt="",
             ),
             OrchestratedTask(
                 benchmark_task_id="orch_1",
@@ -286,6 +296,7 @@ class TestCreateSaberDataset:
                         instruction_prompt="test",
                         assistant_prompt="test",
                         submit_prompt="test",
+            continue_prompt="",
                     )
                 ],
                 episode_attempts=2,
@@ -324,6 +335,7 @@ class TestCreateSaberDataset:
                 instruction_prompt="test",
                 assistant_prompt="test",
                 submit_prompt="test",
+            continue_prompt="",
             )
         ]
 
@@ -348,6 +360,7 @@ class TestMetadataStructure:
             instruction_prompt="test",
             assistant_prompt="test",
             submit_prompt="test",
+            continue_prompt="",
         )
 
         sample = _convert_benchmark_task_to_sample(task, attempt=1)
@@ -379,6 +392,7 @@ class TestMetadataStructure:
                     instruction_prompt="test",
                     assistant_prompt="test",
                     submit_prompt="test",
+            continue_prompt="",
                 )
             ],
             episode_attempts=1,

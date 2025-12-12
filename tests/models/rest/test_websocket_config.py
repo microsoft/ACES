@@ -3,8 +3,6 @@
 Tests cover:
 - Configuration defaults
 - Validation (positive values, max > initial)
-- from_blocking_config() mapping
-- Backward compatibility
 - Push/Pull configuration separation
 """
 
@@ -34,34 +32,30 @@ class TestWebSocketConfigDefaults:
         assert config.max_reconnect_delay == 30.0
         assert config.reconnect_backoff_multiplier == 2.0
 
-        # Push configuration
+        # Push configuration - only enabled is configurable
         assert config.push.enabled is True
-        assert config.push.confirmation_timeout == 5.0
-        assert config.push.retry_enabled is True
-        assert config.push.max_retry_attempts == 3
-        assert config.push.retry_backoff_multiplier == 2.0
+        assert config.push.confirmation_timeout == 5.0  # Internal default
+        assert config.push.retry_backoff_multiplier == 2.0  # Internal default
 
-        # Pull configuration
+        # Pull configuration - only enabled is configurable
         assert config.pull.enabled is True
-        assert config.pull.event_timeout == 300.0
-        assert config.pull.sync_timeout == 5.0
-        assert config.pull.event_queue_max_size == 100
+        assert config.pull.event_timeout == 300.0  # Internal default
+        assert config.pull.sync_timeout == 5.0  # Internal default
+        assert config.pull.event_queue_max_size == 100  # Internal default
 
-    def test_custom_values(self):
-        """Test creating config with custom values."""
+    def test_custom_enabled_values(self):
+        """Test creating config with custom enabled values."""
         config = WebSocketConfig(
             connection_timeout=5.0,
             max_reconnect_attempts=5,
-            push=PushConfig(confirmation_timeout=3.0, max_retry_attempts=5),
-            pull=PullConfig(event_timeout=60.0, event_queue_max_size=200),
+            push=PushConfig(enabled=False),
+            pull=PullConfig(enabled=False),
         )
 
         assert config.connection_timeout == 5.0
         assert config.max_reconnect_attempts == 5
-        assert config.push.confirmation_timeout == 3.0
-        assert config.push.max_retry_attempts == 5
-        assert config.pull.event_timeout == 60.0
-        assert config.pull.event_queue_max_size == 200
+        assert config.push.enabled is False
+        assert config.pull.enabled is False
 
 
 class TestWebSocketConfigValidation:
@@ -111,42 +105,32 @@ class TestWebSocketConfigValidation:
             WebSocketConfig(pong_timeout=-1.0)
 
 
-class TestPushConfigValidation:
-    """Test push configuration validation."""
+class TestPushConfigDefaults:
+    """Test push configuration defaults."""
 
-    def test_negative_confirmation_timeout_raises(self):
-        """Test that negative confirmation timeout raises ValueError."""
-        with pytest.raises(ValueError, match="confirmation_timeout must be positive"):
-            PushConfig(confirmation_timeout=-1.0)
+    def test_push_enabled_by_default(self):
+        """Test that push is enabled by default."""
+        config = PushConfig()
+        assert config.enabled is True
 
-    def test_negative_max_retry_attempts_raises(self):
-        """Test that negative max_retry_attempts raises ValueError."""
-        with pytest.raises(ValueError, match="max_retry_attempts must be non-negative"):
-            PushConfig(max_retry_attempts=-1)
-
-    def test_negative_retry_backoff_multiplier_raises(self):
-        """Test that negative retry_backoff_multiplier raises ValueError."""
-        with pytest.raises(ValueError, match="retry_backoff_multiplier must be positive"):
-            PushConfig(retry_backoff_multiplier=-1.0)
+    def test_push_can_be_disabled(self):
+        """Test that push can be disabled."""
+        config = PushConfig(enabled=False)
+        assert config.enabled is False
 
 
-class TestPullConfigValidation:
-    """Test pull configuration validation."""
+class TestPullConfigDefaults:
+    """Test pull configuration defaults."""
 
-    def test_negative_event_timeout_raises(self):
-        """Test that negative event timeout raises ValueError."""
-        with pytest.raises(ValueError, match="event_timeout must be positive"):
-            PullConfig(event_timeout=-1.0)
+    def test_pull_enabled_by_default(self):
+        """Test that pull is enabled by default."""
+        config = PullConfig()
+        assert config.enabled is True
 
-    def test_negative_sync_timeout_raises(self):
-        """Test that negative sync timeout raises ValueError."""
-        with pytest.raises(ValueError, match="sync_timeout must be positive"):
-            PullConfig(sync_timeout=-1.0)
-
-    def test_negative_queue_size_raises(self):
-        """Test that negative event_queue_max_size raises ValueError."""
-        with pytest.raises(ValueError, match="event_queue_max_size must be positive"):
-            PullConfig(event_queue_max_size=-1)
+    def test_pull_can_be_disabled(self):
+        """Test that pull can be disabled."""
+        config = PullConfig(enabled=False)
+        assert config.enabled is False
 
 
 class TestWebSocketConfigReconnectionBehavior:
@@ -196,15 +180,7 @@ class TestWebSocketConfigReconnectionBehavior:
 class TestWebSocketConfigQueueManagement:
     """Test event queue configuration."""
 
-    def test_queue_size_configurable(self):
-        """Test that queue size can be configured."""
-        small_queue = WebSocketConfig(pull=PullConfig(event_queue_max_size=10))
-        large_queue = WebSocketConfig(pull=PullConfig(event_queue_max_size=1000))
-
-        assert small_queue.pull.event_queue_max_size == 10
-        assert large_queue.pull.event_queue_max_size == 1000
-
-    def test_queue_size_default_reasonable(self):
+    def test_queue_size_has_reasonable_default(self):
         """Test that default queue size is reasonable (100)."""
         config = WebSocketConfig()
         assert config.pull.event_queue_max_size == 100

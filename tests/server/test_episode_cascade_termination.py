@@ -42,7 +42,8 @@ class TestCascadeTermination:
             prompts={
                 "instruction": "test_instruction.md",
                 "assistant": "test_assistant.md",
-                "submit": "test_submit.md"
+                "submit": "test_submit.md",
+                "continue": "test_continue.md",
             },
             initial_context={"test": "context"},
             episode_config={"max_steps": 10}
@@ -56,13 +57,17 @@ class TestCascadeTermination:
             prompts={
                 "instruction": "test_instruction.md",
                 "assistant": "test_assistant.md",
-                "submit": "test_submit.md"
+                "submit": "test_submit.md",
+                "continue": "test_continue.md",
             },
             initial_context={"test": "context"},
             dependency_template="independent_task",
             role="dependent_role",
             episode_config={"max_steps": 10}
         )
+        # Simulate template expansion - set depends_on_task_id and clear dependency_template
+        dependent_task.depends_on_task_id = "independent_task"
+        dependent_task.dependency_template = None
 
         manager.get_task.side_effect = lambda task_id: {
             "independent_task": independent_task,
@@ -81,6 +86,7 @@ class TestCascadeTermination:
             instruction_prompt="Test instruction",
             assistant_prompt="Test assistant",
             submit_prompt="Test submit",
+            continue_prompt="",
         )
 
         dependent_single_task = SingleEpisodeTask(
@@ -94,6 +100,7 @@ class TestCascadeTermination:
             instruction_prompt="Test instruction",
             assistant_prompt="Test assistant",
             submit_prompt="Test submit",
+            continue_prompt="",
         )
 
         manager.get_single_episode_task.side_effect = lambda task_id: {

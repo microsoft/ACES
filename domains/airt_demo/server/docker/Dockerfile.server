@@ -1,24 +1,20 @@
-# ai_redteam Server Image
-# Provides domain-specific configuration and runtime environment
+# SABER Server for AI Red Team Demo Domain
+# Extends the generic SABER server base
+FROM saber/server:latest
 
-FROM python:3.11-slim
+LABEL saber.domain="airt_demo"
+LABEL saber.component="server"
+LABEL saber.framework="dual-agent"
 
-WORKDIR /app
+# Copy domain-specific configuration
+COPY server/config/ /app/config/
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+# Copy domain-specific data directory (contains SQL files and other resources)
+COPY server/data/ /app/data/
 
-# Install Python dependencies
-RUN pip install --no-cache-dir \
-    fastapi \
-    uvicorn \
-    pydantic
+# Set domain-specific environment variables
+ENV SABER_DOMAIN=airt_demo
+ENV SABER_CONFIG_DIR=/app/config
 
-# Domain-specific setup
-ENV DOMAIN_NAME=ai_redteam
-
-EXPOSE 8000 8001
-
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Set domain-specific command
+CMD ["python", "-m", "saber.server", "--start", "--domain", "airt_demo"]

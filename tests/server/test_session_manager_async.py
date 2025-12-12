@@ -48,6 +48,7 @@ def session_manager(mock_execution_manager, mock_episode_manager):
     mock_task = Mock()
     mock_task.initial_context = {}
     mock_task.dependency_template = None
+    mock_task.depends_on_task_id = None  # Explicitly set to None to avoid triggering dependency resolution
     mock_task_manager.get_task = MagicMock(return_value=mock_task)
 
     # Mock get_single_episode_task returning a proper SingleEpisodeTask
@@ -60,6 +61,7 @@ def session_manager(mock_execution_manager, mock_episode_manager):
         instruction_prompt="Test instruction prompt",
         assistant_prompt="Test assistant prompt",
         submit_prompt="Test submit prompt",
+        continue_prompt="",
         episode_attempts=1,
     )
     mock_task_manager.get_single_episode_task = MagicMock(return_value=single_episode_task)

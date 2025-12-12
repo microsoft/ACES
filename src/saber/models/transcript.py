@@ -42,12 +42,14 @@ class TranscriptPushOperation(str, Enum):
 
     Used by both client and server to specify how new messages should be
     integrated into the existing transcript.
+
+    Simplified to two operations:
+    - APPEND: Add messages at end (default)
+    - RESTART: Reset to initial transcript (system->user->assistant) then append
     """
 
     APPEND = "append"  # Add messages at end (default)
-    REWIND = "rewind"  # Remove last N messages, then append
-    REWRITE = "rewrite"  # Replace entire transcript
-    INSERT = "insert"  # Insert at specific position
+    RESTART = "restart"  # Reset to initial transcript, then append new message
 
 
 @dataclass
@@ -62,7 +64,7 @@ class TranscriptVersion:
         sequence: Monotonic version counter (0, 1, 2, 3...)
         checksum: Full SHA256 hash (64 hex chars) of entire transcript
         message_count: Total number of messages in transcript
-        last_operation: Type of last operation ("append", "rewrite", "insert", "rewind")
+        last_operation: Type of last operation ("append", "restart", etc.)
     """
 
     sequence: int
@@ -88,6 +90,7 @@ class TranscriptSyncRequest:
     Request for transcript synchronization.
 
     Supports both push (client sends new messages) and pull (client requests updates).
+    Also supports observer mode for cross-episode access with security filtering.
 
     Attributes:
         episode_id: Target episode identifier
@@ -95,9 +98,11 @@ class TranscriptSyncRequest:
         client_checksum: SHA256 checksum of client's transcript at since_version (for validation)
         messages_to_push: New messages to append (optional)
         strategy: Sync strategy (immediate or wait_for_change)
-        operation: Operation type for push ("append", "rewind", "rewrite", "insert")
-        rewind_count: Number of messages to remove before push (for rewind operation)
-        insert_position: Position to insert messages (for insert operation)
+        operation: Operation type for push ("append" or "restart")
+        is_observer: Whether this is an observer request (cross-episode, read-only)
+        hide_system_prompt: Hide system/user messages before first assistant (security filter)
+        retrieval_mode: For observers: 'full', 'tail', or 'delta'
+        tail_count: For observers with tail mode: number of messages to return
     """
 
     episode_id: str
@@ -106,8 +111,11 @@ class TranscriptSyncRequest:
     messages_to_push: Optional[List[Dict[str, Any]]] = None
     strategy: str = SyncStrategy.IMMEDIATE.value
     operation: str = "append"
-    rewind_count: int = 1
-    insert_position: int = 0
+    # Observer mode parameters
+    is_observer: bool = False
+    hide_system_prompt: Optional[bool] = None  # None = use default (True for observers)
+    retrieval_mode: str = "full"  # 'full', 'tail', 'delta'
+    tail_count: int = 10
 
     def __post_init__(self) -> None:
         """Validate fields and set defaults."""
@@ -117,6 +125,12 @@ class TranscriptSyncRequest:
             raise ValueError(f"client_checksum must be 64 hex chars if provided, got {len(self.client_checksum)}")
         if self.messages_to_push is None:
             self.messages_to_push = []
+        # Default hide_system_prompt to True for observers (secure by default)
+        if self.hide_system_prompt is None:
+            self.hide_system_prompt = self.is_observer
+        # Clamp tail_count
+        if self.tail_count > 1000:
+            self.tail_count = 1000
 
 
 @dataclass

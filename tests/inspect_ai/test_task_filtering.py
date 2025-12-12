@@ -29,6 +29,7 @@ class TestTaskFilteringWithSingleEpisodeTasks:
                 instruction_prompt="test",
                 assistant_prompt="test",
                 submit_prompt="test",
+            continue_prompt="",
             ),
             SingleEpisodeTask(
                 benchmark_task_id="xss_1_flag_capture",
@@ -41,6 +42,7 @@ class TestTaskFilteringWithSingleEpisodeTasks:
                 instruction_prompt="test",
                 assistant_prompt="test",
                 submit_prompt="test",
+            continue_prompt="",
             ),
             SingleEpisodeTask(
                 benchmark_task_id="sql_injection_0",
@@ -53,6 +55,7 @@ class TestTaskFilteringWithSingleEpisodeTasks:
                 instruction_prompt="test",
                 assistant_prompt="test",
                 submit_prompt="test",
+            continue_prompt="",
             ),
         ]
 
@@ -174,6 +177,7 @@ class TestTaskFilteringWithOrchestratedTasks:
                         instruction_prompt="test",
                         assistant_prompt="test",
                         submit_prompt="test",
+            continue_prompt="",
                     ),
                     SubTaskDefinition(
                         task_id="red_attack_1",
@@ -187,6 +191,7 @@ class TestTaskFilteringWithOrchestratedTasks:
                         instruction_prompt="test",
                         assistant_prompt="test",
                         submit_prompt="test",
+            continue_prompt="",
                     ),
                 ],
                 episode_attempts=1,
@@ -207,6 +212,7 @@ class TestTaskFilteringWithOrchestratedTasks:
                         instruction_prompt="test",
                         assistant_prompt="test",
                         submit_prompt="test",
+            continue_prompt="",
                     ),
                     SubTaskDefinition(
                         task_id="red_attack_2",
@@ -220,6 +226,7 @@ class TestTaskFilteringWithOrchestratedTasks:
                         instruction_prompt="test",
                         assistant_prompt="test",
                         submit_prompt="test",
+            continue_prompt="",
                     ),
                 ],
                 episode_attempts=1,
@@ -305,6 +312,7 @@ class TestTaskFilteringMixedTypes:
                 instruction_prompt="test",
                 assistant_prompt="test",
                 submit_prompt="test",
+            continue_prompt="",
             ),
             OrchestratedTask(
                 benchmark_task_id="orch_1",
@@ -322,6 +330,7 @@ class TestTaskFilteringMixedTypes:
                         instruction_prompt="test",
                         assistant_prompt="test",
                         submit_prompt="test",
+            continue_prompt="",
                     ),
                     SubTaskDefinition(
                         task_id="red_1",
@@ -335,6 +344,7 @@ class TestTaskFilteringMixedTypes:
                         instruction_prompt="test",
                         assistant_prompt="test",
                         submit_prompt="test",
+            continue_prompt="",
                     ),
                 ],
                 episode_attempts=1,
@@ -350,6 +360,7 @@ class TestTaskFilteringMixedTypes:
                 instruction_prompt="test",
                 assistant_prompt="test",
                 submit_prompt="test",
+            continue_prompt="",
             ),
         ]
 
@@ -399,6 +410,7 @@ class TestErrorHandling:
                 instruction_prompt="test",
                 assistant_prompt="test",
                 submit_prompt="test",
+            continue_prompt="",
             )
         ]
 
@@ -425,6 +437,7 @@ class TestErrorHandling:
                 instruction_prompt="test",
                 assistant_prompt="test",
                 submit_prompt="test",
+            continue_prompt="",
             )
         ]
 

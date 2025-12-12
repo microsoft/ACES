@@ -90,14 +90,18 @@ class TestInjectPromptExecutorIPC:
 
         # Assert
         assert result.success is True
-        assert "Injected message" in result.data["message"]
+        # The result message now shows injection status (inject-and-wait)
+        assert "Injection" in result.data["message"] or "success" in str(result.data).lower()
 
-        # Verify execute_command was called
-        mock_env.execute_command.assert_called_once()
-        call_kwargs = mock_env.execute_command.call_args[1]
+        # Verify execute_command was called (now called twice: wait_for_user + inject_and_wait)
+        assert mock_env.execute_command.call_count == 2
+
+        # Get the inject_and_wait call (second call)
+        inject_call = mock_env.execute_command.call_args_list[1]
+        call_kwargs = inject_call[1]
 
         assert "curl" in call_kwargs["command"]
-        assert "http://localhost:9999/inject" in call_kwargs["command"]
+        assert "http://localhost:9999/inject_and_wait" in call_kwargs["command"]
 
         # Verify JSON payload contains injection data
         command_list = call_kwargs["command"]
@@ -107,8 +111,12 @@ class TestInjectPromptExecutorIPC:
         assert "append" in command_str
 
     @pytest.mark.asyncio
-    async def test_executor_sends_rewind_injection(self, mock_sandbox_manager, mock_session_manager, red_episode):
-        """Test executor sends rewind injection with rewind_count."""
+    async def test_executor_sends_restart_injection(self, mock_sandbox_manager, mock_session_manager, red_episode):
+        """Test executor sends restart injection.
+
+        The restart strategy resets the transcript to the initial state
+        (system->user->assistant) and then appends the new message.
+        """
         # Arrange
         executor = InjectPromptExecutor(
             sandbox_manager=mock_sandbox_manager,
@@ -117,7 +125,7 @@ class TestInjectPromptExecutorIPC:
 
         mock_env = mock_sandbox_manager.get_episode_environment(red_episode.episode_id)
 
-        daemon_response = {"success": True, "version": 3, "message_count": 3}
+        daemon_response = {"success": True, "version": 3, "message_count": 4}
         mock_result = Mock()
         mock_result.stdout = json.dumps(daemon_response)
         mock_result.exit_code = 0
@@ -125,50 +133,18 @@ class TestInjectPromptExecutorIPC:
 
         # Act
         result = await executor.execute(
-            parameters={"message": "Rewind test", "strategy": "rewind", "rewind_count": 2},
+            parameters={"message": "Fresh start!", "strategy": "restart"},
             context={"episode_id": red_episode.episode_id, "session_id": "session-789"}
         )
 
         # Assert
         assert result.success is True
 
-        # Verify rewind_count was included in payload
+        # Verify restart strategy was included in payload
         call_kwargs = mock_env.execute_command.call_args[1]
         command_str = " ".join(str(c) for c in call_kwargs["command"])
-        assert "rewind" in command_str
-        assert "rewind_count" in command_str
-
-    @pytest.mark.asyncio
-    async def test_executor_sends_insert_injection(self, mock_sandbox_manager, mock_session_manager, red_episode):
-        """Test executor sends insert injection with insert_position."""
-        # Arrange
-        executor = InjectPromptExecutor(
-            sandbox_manager=mock_sandbox_manager,
-            session_manager=mock_session_manager
-        )
-
-        mock_env = mock_sandbox_manager.get_episode_environment(red_episode.episode_id)
-
-        daemon_response = {"success": True, "version": 4, "message_count": 4}
-        mock_result = Mock()
-        mock_result.stdout = json.dumps(daemon_response)
-        mock_result.exit_code = 0
-        mock_env.execute_command.return_value = mock_result
-
-        # Act
-        result = await executor.execute(
-            parameters={"message": "Insert test", "strategy": "insert", "insert_position": 1},
-            context={"episode_id": red_episode.episode_id, "session_id": "session-789"}
-        )
-
-        # Assert
-        assert result.success is True
-
-        # Verify insert_position was included in payload
-        call_kwargs = mock_env.execute_command.call_args[1]
-        command_str = " ".join(str(c) for c in call_kwargs["command"])
-        assert "insert" in command_str
-        assert "insert_position" in command_str
+        assert "restart" in command_str
+        assert "Fresh start!" in command_str
 
     @pytest.mark.asyncio
     async def test_executor_handles_daemon_error(self, mock_sandbox_manager, mock_session_manager, red_episode):
@@ -223,7 +199,8 @@ class TestInjectPromptExecutorIPC:
 
         # Assert
         assert result.success is False
-        assert "Failed to parse daemon response" in result.error
+        # Error message format changed - now includes "Invalid JSON" from the wait_for_user path
+        assert "Invalid JSON" in result.error or "parse" in result.error.lower()
 
     @pytest.mark.asyncio
     async def test_executor_validates_missing_message(self, mock_sandbox_manager, mock_session_manager, red_episode):

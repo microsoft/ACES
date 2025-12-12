@@ -37,6 +37,7 @@ def mock_task():
         instruction_prompt="Test instruction",
         assistant_prompt="Test assistant",
         submit_prompt="Test submit",
+            continue_prompt="",
     )
 
 
@@ -189,6 +190,7 @@ class TestTaskCallableExecution:
                 instruction_prompt="",
                 assistant_prompt="",
                 submit_prompt="",
+            continue_prompt="",
             ),
             SingleEpisodeTask(
                 benchmark_task_id="labyrinth_hard",
@@ -201,6 +203,7 @@ class TestTaskCallableExecution:
                 instruction_prompt="",
                 assistant_prompt="",
                 submit_prompt="",
+            continue_prompt="",
             ),
         ]
 
@@ -279,6 +282,7 @@ class TestTaskCallableExecution:
                 instruction_prompt="",
                 assistant_prompt="",
                 submit_prompt="",
+            continue_prompt="",
             ),
             SingleEpisodeTask(
                 benchmark_task_id="xss_1_blind",
@@ -291,6 +295,7 @@ class TestTaskCallableExecution:
                 instruction_prompt="",
                 assistant_prompt="",
                 submit_prompt="",
+            continue_prompt="",
             ),
             SingleEpisodeTask(
                 benchmark_task_id="sql_injection_basic",
@@ -303,6 +308,7 @@ class TestTaskCallableExecution:
                 instruction_prompt="",
                 assistant_prompt="",
                 submit_prompt="",
+            continue_prompt="",
             ),
             SingleEpisodeTask(
                 benchmark_task_id="cmd_injection_task",
@@ -315,6 +321,7 @@ class TestTaskCallableExecution:
                 instruction_prompt="",
                 assistant_prompt="",
                 submit_prompt="",
+            continue_prompt="",
             ),
         ]
 
@@ -409,6 +416,7 @@ class TestTaskCallableExecution:
                 instruction_prompt="",
                 assistant_prompt="",
                 submit_prompt="",
+            continue_prompt="",
             ),
             SingleEpisodeTask(
                 benchmark_task_id="sql_injection_basic",
@@ -421,6 +429,7 @@ class TestTaskCallableExecution:
                 instruction_prompt="",
                 assistant_prompt="",
                 submit_prompt="",
+            continue_prompt="",
             ),
             SingleEpisodeTask(
                 benchmark_task_id="cmd_injection_advanced",
@@ -433,6 +442,7 @@ class TestTaskCallableExecution:
                 instruction_prompt="",
                 assistant_prompt="",
                 submit_prompt="",
+            continue_prompt="",
             ),
         ]
 

@@ -7,7 +7,7 @@ transcript synchronization.
 """
 
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Dict, Optional
 
 from inspect_ai.model import Model, get_model
 from inspect_ai.model._model import active_model, active_model_context_var
@@ -36,6 +36,7 @@ class SABERExecutionContext:
     instruction_prompt: str
     assistant_prompt: str
     submit_prompt: str
+    continue_prompt: str
 
     # Episode context
     session_id: Optional[str]
@@ -102,21 +103,42 @@ class SABERExecutionContext:
         instruction_prompt = metadata.get(MetadataKeys.INSTRUCTION_PROMPT)
         assistant_prompt = metadata.get(MetadataKeys.ASSISTANT_PROMPT)
         submit_prompt = metadata.get(MetadataKeys.SUBMIT_PROMPT)
+        continue_prompt = metadata.get(MetadataKeys.CONTINUE_PROMPT)
+
+        # Log prompt extraction for debugging
+        logger.info(
+            "Extracting prompts from sample metadata",
+            extra={
+                "event": "solver_factory_extract_prompts",
+                "sample_id": sample_id,
+                "has_instruction_prompt": bool(instruction_prompt),
+                "has_assistant_prompt": bool(assistant_prompt),
+                "has_submit_prompt": bool(submit_prompt),
+                "has_continue_prompt": bool(continue_prompt),
+                "metadata_keys": list(metadata.keys()),
+                "continue_prompt_value": continue_prompt[:100] if continue_prompt else "<MISSING>",
+            },
+        )
 
         # Validate required prompts
         if not instruction_prompt:
             raise ValueError(
                 "Missing 'instruction_prompt' in sample metadata. "
-                "Ensure the SABER server is providing all three prompts."
+                "Ensure the SABER server is providing all four prompts."
             )
         if not assistant_prompt:
             raise ValueError(
                 "Missing 'assistant_prompt' in sample metadata. "
-                "Ensure the SABER server is providing all three prompts."
+                "Ensure the SABER server is providing all four prompts."
             )
         if not submit_prompt:
             raise ValueError(
-                "Missing 'submit_prompt' in sample metadata. " "Ensure the SABER server is providing all three prompts."
+                "Missing 'submit_prompt' in sample metadata. " "Ensure the SABER server is providing all four prompts."
+            )
+        if not continue_prompt:
+            raise ValueError(
+                "Missing 'continue_prompt' in sample metadata. "
+                "Ensure the SABER server is providing all four prompts."
             )
 
         # Resolve REST URL from domain
@@ -135,6 +157,7 @@ class SABERExecutionContext:
             instruction_prompt=instruction_prompt,
             assistant_prompt=assistant_prompt,
             submit_prompt=submit_prompt,
+            continue_prompt=continue_prompt,
             session_id=session_id,
             episode_id=episode_id,
             domain_slug=domain_slug,
@@ -233,44 +256,24 @@ def _wrap_model_for_transcript_sync(
         return model
 
     # ALWAYS use WebSocket wrapper for unified coordination infrastructure
-    # Configuration controls behavior (pull.blocking controls whether to wait)
     websocket_config = context.transcript_config.get("websocket", {}) if context.transcript_config else {}
 
-    # Build WebSocketConfig from YAML
-    # Handle nested push/pull configuration or flat legacy configuration
+    # Build WebSocketConfig from YAML - only enabled flags are configurable
     from ...models.rest.websocket_config import PullConfig, PushConfig
 
-    ws_config_kwargs = {}
+    ws_config_kwargs: Dict[str, Any] = {}
 
-    # Extract top-level connection settings
-    for key in [
-        "connection_timeout",
-        "ping_interval",
-        "pong_timeout",
-        "reconnect_enabled",
-        "max_reconnect_attempts",
-        "initial_reconnect_delay",
-        "max_reconnect_delay",
-        "reconnect_backoff_multiplier",
-    ]:
-        if key in websocket_config and websocket_config[key] is not None:
-            ws_config_kwargs[key] = websocket_config[key]
-
-    # Handle push configuration (nested or flat)
+    # Handle push configuration - only enabled is configurable
     if "push" in websocket_config:
         push_dict = websocket_config["push"]
-        ws_config_kwargs["push"] = PushConfig(**{k: v for k, v in push_dict.items() if v is not None})
+        if "enabled" in push_dict:
+            ws_config_kwargs["push"] = PushConfig(enabled=push_dict["enabled"])
 
-    # Handle pull configuration (nested or flat)
+    # Handle pull configuration - only enabled is configurable
     if "pull" in websocket_config:
         pull_dict = websocket_config["pull"]
-        ws_config_kwargs["pull"] = PullConfig(**{k: v for k, v in pull_dict.items() if v is not None})
-    elif "event_timeout" in websocket_config:
-        # Legacy flat configuration - map to pull config
-        ws_config_kwargs["pull"] = PullConfig(
-            event_timeout=websocket_config.get("event_timeout", 300.0),
-            sync_timeout=websocket_config.get("sync_timeout", 5.0),
-        )
+        if "enabled" in pull_dict:
+            ws_config_kwargs["pull"] = PullConfig(enabled=pull_dict["enabled"])
 
     ws_config = WebSocketConfig(**ws_config_kwargs)
 
@@ -289,9 +292,8 @@ def _wrap_model_for_transcript_sync(
             "session_id": context.session_id,
             "episode_id": context.episode_id,
             "model": model_name,
-            "pull_blocking": ws_config.pull.blocking,
-            "pull_event_timeout": ws_config.pull.event_timeout,
-            "push_confirmation_timeout": ws_config.push.confirmation_timeout,
+            "pull_enabled": ws_config.pull.enabled,
+            "push_enabled": ws_config.push.enabled,
         },
     )
 
@@ -352,6 +354,8 @@ def create_saber_solver(agent_name: str, agent_factory: Callable, role_config: O
                     instruction_prompt=context.instruction_prompt,
                     assistant_prompt=context.assistant_prompt,
                     submit_prompt=context.submit_prompt,
+                    continue_prompt=context.continue_prompt,
+                    transcript_config=context.transcript_config,
                 )
 
                 # Execute agent - it will use the wrapped model internally

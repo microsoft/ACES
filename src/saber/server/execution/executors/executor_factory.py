@@ -6,7 +6,7 @@ This module provides a factory pattern for creating and managing different types
 of command executors, supporting scaling to many executor types.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import mcp.types as mcp_types
 
@@ -47,7 +47,9 @@ class ExecutorFactory:
         # Store configuration by reference so updates to the dict are reflected
         # This allows ExecutionManager to update config after factory creation
         self._configuration = configuration if configuration is not None else {}
-        self._executor_instances: Dict[str, CommandExecutor] = {}
+        # Cache executors by (executor_type, episode_id) tuple to support episode-specific configs
+        # episode_id=None is used for schema discovery during MCP registration
+        self._executor_instances: Dict[Tuple[str, Optional[str]], CommandExecutor] = {}
 
         # Get all available executors from the global registry
         self._all_available_executors = executor_registry.get_available_executors()
@@ -115,7 +117,7 @@ class ExecutorFactory:
 
     def unregister_episode_configuration(self, episode_id: str) -> None:
         """
-        Remove episode-specific configuration.
+        Remove episode-specific configuration and cached executors.
 
         Args:
             episode_id: Episode identifier to remove
@@ -127,6 +129,23 @@ class ExecutorFactory:
                 extra={
                     "event": "executor_factory_episode_unregistered",
                     "episode_id": episode_id,
+                },
+            )
+
+        # Clear cached executor instances for this episode
+        keys_to_remove = [
+            key for key in self._executor_instances.keys() if key[1] == episode_id  # key is (executor_type, episode_id)
+        ]
+        for key in keys_to_remove:
+            del self._executor_instances[key]
+
+        if keys_to_remove:
+            logger.debug(
+                "Episode executor instances cleared from cache",
+                extra={
+                    "event": "executor_factory_episode_cache_cleared",
+                    "episode_id": episode_id,
+                    "cleared_count": len(keys_to_remove),
                 },
             )
 
@@ -182,9 +201,12 @@ class ExecutorFactory:
                 f"Available types: {allowed_executors}"
             )
 
+        # Cache key includes episode_id to support episode-specific configurations
+        cache_key = (executor_type, episode_id)
+
         # Return existing instance unless force_new is True
-        if not force_new and executor_type in self._executor_instances:
-            return self._executor_instances[executor_type]
+        if not force_new and cache_key in self._executor_instances:
+            return self._executor_instances[cache_key]
 
         # Get executor class from global registry
         try:
@@ -205,10 +227,22 @@ class ExecutorFactory:
         # Get the executor class's default configuration
         default_config = executor_class.get_default_config()
 
-        # Get executor-specific configuration from global configuration
-        # Look under 'executors' key first, then fall back to root level (for backwards compatibility)
-        executors_section = self._configuration.get("executors", {})
-        executor_config = executors_section.get(executor_type, self._configuration.get(executor_type, {}))
+        # Get episode-specific configuration if available, otherwise use factory-level config
+        episode_config = {}
+        if episode_id and episode_id in self._episode_configurations:
+            episode_config = self._episode_configurations[episode_id].get("config", {})
+
+        # Look for executor-specific config: episode config > factory config > defaults
+        # First check episode-level executors section
+        episode_executors = episode_config.get("executors", {})
+        executor_config_from_episode = episode_executors.get(executor_type, {})
+
+        # Then check factory-level executors section (fallback)
+        factory_executors = self._configuration.get("executors", {})
+        executor_config_from_factory = factory_executors.get(executor_type, self._configuration.get(executor_type, {}))
+
+        # Merge: defaults < factory config < episode config
+        executor_config = {**executor_config_from_factory, **executor_config_from_episode}
 
         # Merge with defaults, giving preference to executor-specific config
         # No global timeout override - each executor must specify its own timeout
@@ -232,8 +266,8 @@ class ExecutorFactory:
             session_manager=self._session_manager,
         )
 
-        # Cache the instance
-        self._executor_instances[executor_type] = executor_instance
+        # Cache the instance by (executor_type, episode_id)
+        self._executor_instances[cache_key] = executor_instance
         return executor_instance
 
     def get_all_mcp_tools(self, episode_id: Optional[str] = None) -> List[mcp_types.Tool]:
@@ -354,7 +388,8 @@ class ExecutorFactory:
 
     def cleanup_all_executors(self) -> None:
         """Clean up all executor instances."""
-        for executor_type, executor in self._executor_instances.items():
+        for cache_key, executor in self._executor_instances.items():
+            executor_type, episode_id = cache_key
             try:
                 # Cleanup is handled by the sandbox manager
                 logger.debug(
@@ -362,6 +397,7 @@ class ExecutorFactory:
                     extra={
                         "event": "executor_factory_cleanup_recorded",
                         "executor_type": executor_type,
+                        "episode_id": episode_id,
                     },
                 )
             except Exception as e:
@@ -370,6 +406,7 @@ class ExecutorFactory:
                     extra={
                         "event": "executor_factory_cleanup_failed",
                         "executor_type": executor_type,
+                        "episode_id": episode_id,
                         "error": str(e),
                     },
                 )
@@ -398,9 +435,14 @@ class ExecutorFactory:
                     },
                 )
 
+        # Format cache keys for display: "executor_type" or "executor_type@episode_id"
+        active_instances = [
+            f"{ex_type}@{ep_id}" if ep_id else ex_type for ex_type, ep_id in self._executor_instances.keys()
+        ]
+
         info = {
             "available_types": self.get_available_executors(),
-            "active_instances": list(self._executor_instances.keys()),
+            "active_instances": active_instances,
             "registry_size": len(self._all_available_executors),
             "configurations": configurations,
         }

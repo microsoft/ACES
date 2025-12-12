@@ -91,7 +91,8 @@ class DockerExecutor(CommandExecutor):
         if additional_params:
             merged_kwargs.update(additional_params)
 
-        return cls(sandbox_manager=sandbox_manager, docker_config=config, **merged_kwargs)
+        # Pass config correctly to __init__ (not as docker_config)
+        return cls(sandbox_manager=sandbox_manager, config=config, **merged_kwargs)
 
     def get_episode_environment(self, episode_id: str) -> "ComposeOrchestrator":
         """

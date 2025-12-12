@@ -22,7 +22,7 @@ from ..logging_config import (
     log_operation_success,
     log_session_end,
 )
-from ..models import BenchmarkInfo, EpisodeEndResponse, EvalSubmission
+from ..models import BenchmarkInfo, EpisodeEndResponse, EvalSubmission, MetadataKeys
 from .api.session_mcp_api import SessionMCPAPI
 from .api.session_rest_api import SessionRestAPI
 from .base import Action, CommandResult, Episode, EpisodeState
@@ -1272,17 +1272,19 @@ class SessionManager:
                 },
             )
 
-            # Handle automatic dependency resolution (using raw_task for dependency_template)
+            # Handle automatic dependency resolution (using raw_task.depends_on_task_id)
+            # Note: dependency_template is cleared after template expansion, depends_on_task_id is set instead
+            # by template_expander.py via direct attribute assignment (bypassing __init__ validation)
             effective_attach_to_episode_id = None
-            if raw_task.dependency_template:
-                logger.info(
+            if raw_task.depends_on_task_id:
+                logger.info(  # type: ignore[unreachable]
                     "Task dependency detected",
                     extra={
                         "event": "task_dependency_detected",
                         "session_id": session_id,
                         "episode_id": episode.episode_id,
                         "task_id": task_id,
-                        "dependency_template": raw_task.dependency_template,
+                        "depends_on_task_id": raw_task.depends_on_task_id,
                     },
                 )
 
@@ -1293,7 +1295,7 @@ class SessionManager:
                 try:
                     available_episode_id = await self.episode_manager.find_available_episode_for_dependency_with_retry(
                         session_id=session_id,
-                        target_task_id=raw_task.dependency_template,
+                        target_task_id=raw_task.depends_on_task_id,
                         dependent_task_id=task_id,
                         max_wait_seconds=dependency_config["wait_seconds"],
                         retry_interval=dependency_config["retry_interval"],
@@ -1309,6 +1311,11 @@ class SessionManager:
                 if available_episode_id:
                     effective_attach_to_episode_id = available_episode_id
                     self.episode_manager.attach_episode_to_episode(episode.episode_id, available_episode_id)
+
+                    # CRITICAL: Store target episode ID in context for orchestration-aware executors
+                    # (inject_prompt, get_target_transcript) to resolve the target episode
+                    episode.context[MetadataKeys.ORCHESTRATION_TARGET_EPISODES] = [available_episode_id]
+
                     logger.info(
                         "Episode attached to dependency",
                         extra={
@@ -1316,11 +1323,12 @@ class SessionManager:
                             "session_id": session_id,
                             "episode_id": episode.episode_id,
                             "dependency_episode_id": available_episode_id,
+                            "orchestration_target_episodes": [available_episode_id],
                         },
                     )
                 else:
                     dependency_error = ValueError(
-                        f"No available episodes with required dependency task_id {raw_task.dependency_template} "
+                        f"No available episodes with required dependency task_id {raw_task.depends_on_task_id} "
                         f"(waited {dependency_config['wait_seconds']}s)"
                     )
                     self.episode_manager.remove_episode_on_error(episode.episode_id, dependency_error)
@@ -1328,7 +1336,7 @@ class SessionManager:
                     session.remove_creating_episode(episode.episode_id)
                     raise ValueError(
                         f"Cannot create episode for task {task_id}: no available episodes with required dependency "
-                        f"task_id {raw_task.dependency_template} after waiting {dependency_config['wait_seconds']}s"
+                        f"task_id {raw_task.depends_on_task_id} after waiting {dependency_config['wait_seconds']}s"
                     )
 
             # Start Docker environment (WITHOUT health checks) - runs in thread pool

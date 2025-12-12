@@ -45,7 +45,7 @@ class TestExecutorFiltering:
                     "task_id": "test_task",
                     "title": "Test Task",
                     "description": "Test description",
-                    "prompts": {"instruction": "test_task_prompt.md", "assistant": "test_task_prompt.md", "submit": "test_task_prompt.md"},
+                    "prompts": {"instruction": "test_task_prompt.md", "assistant": "test_task_prompt.md", "submit": "test_task_prompt.md", "continue": "test_continue.md"},
                     "submission_evaluation_config": {
                         "strategy": "static",
                         "criteria": {
@@ -100,7 +100,7 @@ class TestExecutorFiltering:
                     "task_id": "test_task",
                     "title": "Test Task",
                     "description": "Test description",
-                    "prompts": {"instruction": "test_task_prompt.md", "assistant": "test_task_prompt.md", "submit": "test_task_prompt.md"},
+                    "prompts": {"instruction": "test_task_prompt.md", "assistant": "test_task_prompt.md", "submit": "test_task_prompt.md", "continue": "test_continue.md"},
                     "submission_evaluation_config": {
                         "strategy": "static",
                         "criteria": {
@@ -184,7 +184,7 @@ class TestExecutorFiltering:
                     "task_id": "test_task",
                     "title": "Test Task",
                     "description": "Test description",
-                    "prompts": {"instruction": "test_task_prompt.md", "assistant": "test_task_prompt.md", "submit": "test_task_prompt.md"},
+                    "prompts": {"instruction": "test_task_prompt.md", "assistant": "test_task_prompt.md", "submit": "test_task_prompt.md", "continue": "test_continue.md"},
                     "subtasks": [
                         {
                             "subtask_id": "test_subtask",
@@ -235,7 +235,7 @@ class TestExecutorFiltering:
                     "task_id": "test_task",
                     "title": "Test Task",
                     "description": "Test description",
-                    "prompts": {"instruction": "test_task_prompt.md", "assistant": "test_task_prompt.md", "submit": "test_task_prompt.md"},
+                    "prompts": {"instruction": "test_task_prompt.md", "assistant": "test_task_prompt.md", "submit": "test_task_prompt.md", "continue": "test_continue.md"},
                     "execution_config": {
                         "allowed_executors": []  # Empty list should trigger validation error
                     },

@@ -15,6 +15,12 @@ class SyncRequestData:
     since_version: int = 0
     client_checksum: Optional[str] = None
 
+    # Observer/cross-episode fields (for red team accessing blue team transcript)
+    target_episode_id: Optional[str] = None
+    hide_system_prompt: Optional[bool] = None
+    retrieval_mode: Optional[str] = None  # full, delta, tail
+    tail_count: Optional[int] = None
+
 
 @dataclass
 class PushMessageRequestData:

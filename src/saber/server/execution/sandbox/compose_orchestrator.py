@@ -239,7 +239,9 @@ class ComposeOrchestrator:
                     "stderr": e.stderr,
                 },
             )
-            raise RuntimeError(f"Failed to start environment: {e}")
+            # Include stderr in error message for better debugging
+            stderr_text = e.stderr.strip() if e.stderr else "(no stderr)"
+            raise RuntimeError(f"Failed to start environment: {e}\n\nDocker output:\n{stderr_text}")
         except subprocess.TimeoutExpired as e:
             # Log timeout failure
             if self.container_logger:
@@ -427,8 +429,10 @@ class ComposeOrchestrator:
 
             # Include diagnostic hint in exception message
             error_msg = f"Failed to start environment: {e}"
+            if stderr_text:
+                error_msg += f"\n\nDocker output:\n{stderr_text}"
             if error_hints:
-                error_msg += f" | Hints: {'; '.join(error_hints)}"
+                error_msg += f"\n\nHints: {'; '.join(error_hints)}"
             raise RuntimeError(error_msg)
 
     def wait_for_healthy(self, compose_file_path: str, timeout_seconds: int = 180, check_interval: float = 2.0) -> None:

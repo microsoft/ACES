@@ -88,6 +88,7 @@ global_defaults:
     instruction: "missing_template.md"
     assistant: "missing_template.md"
     submit: "missing_template.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:

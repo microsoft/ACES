@@ -20,7 +20,7 @@ Following SABER's philosophy:
 - No silent data loss during conversion
 """
 
-from typing import List, Union
+from typing import Any, Dict, List, Union
 
 from inspect_ai.dataset import MemoryDataset, Sample
 
@@ -345,7 +345,7 @@ def _convert_task_to_sample(task_data: BenchmarkTask, attempt: int = 1) -> Sampl
         # Use first sub-task's prompts as defaults
         first_sub_task = task_data.sub_tasks[0] if task_data.sub_tasks else None
 
-        task_metadata = {
+        task_metadata: Dict[str, Any] = {
             MetadataKeys.BENCHMARK_TASK: task_data.model_dump(),
             MetadataKeys.EXECUTION_MODE: TaskExecutionMode.ORCHESTRATED.value,
             MetadataKeys.ORCHESTRATION_ID: task_data.benchmark_task_id,
@@ -355,13 +355,31 @@ def _convert_task_to_sample(task_data: BenchmarkTask, attempt: int = 1) -> Sampl
                 else task_data.orchestration_strategy
             ),
             MetadataKeys.INSTRUCTION_PROMPT: first_sub_task.instruction_prompt if first_sub_task else "",
-            "assistant_prompt": first_sub_task.assistant_prompt if first_sub_task else "",
-            "submit_prompt": first_sub_task.submit_prompt if first_sub_task else "",
+            MetadataKeys.ASSISTANT_PROMPT: first_sub_task.assistant_prompt if first_sub_task else "",
+            MetadataKeys.SUBMIT_PROMPT: first_sub_task.submit_prompt if first_sub_task else "",
+            MetadataKeys.CONTINUE_PROMPT: first_sub_task.continue_prompt if first_sub_task else None,
             MetadataKeys.ATTEMPT: attempt,
             MetadataKeys.TOTAL_ATTEMPTS: task_data.episode_attempts,
             MetadataKeys.TOOL_CALL_LIMIT: first_sub_task.max_steps if first_sub_task else 30,
             MetadataKeys.SAMPLE_ID: sample_id,
         }
+
+        logger.info(
+            "Orchestrated task sample created with prompts",
+            extra={
+                "event": "inspect_orchestrated_task_sample_prompts",
+                "sample_id": sample_id,
+                "has_instruction_prompt": bool(task_metadata.get(MetadataKeys.INSTRUCTION_PROMPT)),
+                "has_assistant_prompt": bool(task_metadata.get(MetadataKeys.ASSISTANT_PROMPT)),
+                "has_submit_prompt": bool(task_metadata.get(MetadataKeys.SUBMIT_PROMPT)),
+                "has_continue_prompt": bool(task_metadata.get(MetadataKeys.CONTINUE_PROMPT)),
+                "continue_prompt_value": (
+                    str(task_metadata.get(MetadataKeys.CONTINUE_PROMPT, "<MISSING>"))[:100]
+                    if task_metadata.get(MetadataKeys.CONTINUE_PROMPT)
+                    else "<MISSING>"
+                ),
+            },
+        )
 
         return Sample(id=sample_id, input=task_input, target=task_target, metadata=task_metadata)
     else:
@@ -403,13 +421,14 @@ def _convert_benchmark_task_to_sample(benchmark_task: BenchmarkTask, attempt: in
     task_input = f"Title: {benchmark_task.title}\nTask: {benchmark_task.description}"
     task_target = f"Successfully complete the task: {benchmark_task.title or benchmark_task.description}"
 
-    task_metadata = {
+    task_metadata: Dict[str, Any] = {
         MetadataKeys.BENCHMARK_TASK: benchmark_task.model_dump(),
         MetadataKeys.EXECUTION_MODE: TaskExecutionMode.SINGLE.value,
         MetadataKeys.TASK_ID: benchmark_task.task_id,
         MetadataKeys.INSTRUCTION_PROMPT: benchmark_task.instruction_prompt,
-        "assistant_prompt": benchmark_task.assistant_prompt,
-        "submit_prompt": benchmark_task.submit_prompt,
+        MetadataKeys.ASSISTANT_PROMPT: benchmark_task.assistant_prompt,
+        MetadataKeys.SUBMIT_PROMPT: benchmark_task.submit_prompt,
+        MetadataKeys.CONTINUE_PROMPT: benchmark_task.continue_prompt,
         MetadataKeys.ATTEMPT: attempt,
         MetadataKeys.TOTAL_ATTEMPTS: benchmark_task.episode_attempts,
         MetadataKeys.TOOL_CALL_LIMIT: benchmark_task.max_steps,
@@ -418,6 +437,24 @@ def _convert_benchmark_task_to_sample(benchmark_task: BenchmarkTask, attempt: in
     sample_id = f"{benchmark_task.task_id}__attempt_{attempt}"
 
     task_metadata[MetadataKeys.SAMPLE_ID] = sample_id
+
+    logger.info(
+        "Single episode task sample created with prompts",
+        extra={
+            "event": "inspect_single_task_sample_prompts",
+            "sample_id": sample_id,
+            "benchmark_task_id": benchmark_task.benchmark_task_id,
+            "has_instruction_prompt": bool(task_metadata.get(MetadataKeys.INSTRUCTION_PROMPT)),
+            "has_assistant_prompt": bool(task_metadata.get(MetadataKeys.ASSISTANT_PROMPT)),
+            "has_submit_prompt": bool(task_metadata.get(MetadataKeys.SUBMIT_PROMPT)),
+            "has_continue_prompt": bool(task_metadata.get(MetadataKeys.CONTINUE_PROMPT)),
+            "continue_prompt_value": (
+                str(task_metadata.get(MetadataKeys.CONTINUE_PROMPT, "<MISSING>"))[:100]
+                if task_metadata.get(MetadataKeys.CONTINUE_PROMPT)
+                else "<MISSING>"
+            ),
+        },
+    )
 
     logger.debug(
         "Benchmark task metadata prepared",
@@ -464,7 +501,7 @@ def _convert_sub_task_to_sample(
     task_target = f"Successfully complete {sub_task.role} task: {sub_task.title}"
 
     # Metadata includes orchestration coordination info
-    task_metadata = {
+    task_metadata: Dict[str, Any] = {
         MetadataKeys.BENCHMARK_TASK: orchestrated_task.model_dump(),
         MetadataKeys.EXECUTION_MODE: "orchestrated_sub_task",  # NEW mode for multi-sample orchestration
         MetadataKeys.ORCHESTRATION_ID: orchestrated_task.benchmark_task_id,
@@ -474,8 +511,9 @@ def _convert_sub_task_to_sample(
         MetadataKeys.ORDER: sub_task.order,
         # Use this sub-task's prompts
         MetadataKeys.INSTRUCTION_PROMPT: sub_task.instruction_prompt,
-        "assistant_prompt": sub_task.assistant_prompt,
-        "submit_prompt": sub_task.submit_prompt,
+        MetadataKeys.ASSISTANT_PROMPT: sub_task.assistant_prompt,
+        MetadataKeys.SUBMIT_PROMPT: sub_task.submit_prompt,
+        MetadataKeys.CONTINUE_PROMPT: sub_task.continue_prompt,
         MetadataKeys.ATTEMPT: attempt,
         MetadataKeys.TOTAL_ATTEMPTS: orchestrated_task.episode_attempts,
         MetadataKeys.TOOL_CALL_LIMIT: sub_task.max_steps,
@@ -486,15 +524,24 @@ def _convert_sub_task_to_sample(
     if sub_task.transcript_config:
         task_metadata["transcript_config"] = sub_task.transcript_config
 
-    logger.debug(
-        "Orchestrated sub-task sample created",
+    logger.info(
+        "Orchestrated sub-task sample created with prompts",
         extra={
-            "event": "inspect_orchestrated_sub_task_sample_created",
+            "event": "inspect_orchestrated_sub_task_sample_prompts",
             "orchestration_id": orchestrated_task.benchmark_task_id,
             "sub_task_role": sub_task.role,
             "task_id": sub_task.task_id,
             "depends_on_role": sub_task.depends_on_role,
             "sample_id": sample_id,
+            "has_instruction_prompt": bool(task_metadata.get(MetadataKeys.INSTRUCTION_PROMPT)),
+            "has_assistant_prompt": bool(task_metadata.get(MetadataKeys.ASSISTANT_PROMPT)),
+            "has_submit_prompt": bool(task_metadata.get(MetadataKeys.SUBMIT_PROMPT)),
+            "has_continue_prompt": bool(task_metadata.get(MetadataKeys.CONTINUE_PROMPT)),
+            "continue_prompt_value": (
+                str(task_metadata.get(MetadataKeys.CONTINUE_PROMPT, "<MISSING>"))[:100]
+                if task_metadata.get(MetadataKeys.CONTINUE_PROMPT)
+                else "<MISSING>"
+            ),
         },
     )
 

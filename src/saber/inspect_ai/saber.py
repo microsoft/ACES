@@ -17,6 +17,7 @@ from typing import Any, Dict, Optional
 
 import anyio
 from inspect_ai._util.error import PrerequisiteError
+from inspect_ai.log._samples import sample_active
 from inspect_ai.tool import Tool
 from inspect_ai.tool._mcp._local import MCPServerLocal
 from inspect_ai.util import sandboxenv, store
@@ -46,8 +47,10 @@ from saber.models import (
 
 from .config.env_loader import deserialize_config, get_config_files, get_default_concurrency, load_environment
 from .constants import InspectStoreKeys, SandboxTimeouts
+from .core.orchestration_coordinator import OrchestrationCoordinator
+from .core.orchestration_init import OrchestrationInitializer
 from .core.task_handlers import get_benchmark_task_handler
-from .core.types import HandlerState
+from .core.types import HandlerState, OrchestrationSubTaskState
 from .server.domain_manager import get_active_domain, remove_active_domain
 from .server.episode_manager import EpisodeLifecycleManager
 from .server.sandbox_registry import SandboxRegistry
@@ -281,6 +284,9 @@ class SABERSandboxEnvironment:
                 mcp_url=active_domain["mcp_url"],
                 session_id=session_id,
             )
+
+            # Initialize orchestration initializer for multi-sample orchestration support
+            cls._orchestration_initializer = OrchestrationInitializer()
             return
 
         controller = DomainController(Path(domains_root))
@@ -317,6 +323,9 @@ class SABERSandboxEnvironment:
                 f"Domain '{domain_slug}' started for task '{task_name}'",
                 extra={"domain": domain_slug, "task": task_name, "session_id": session_id},
             )
+
+            # Initialize orchestration initializer for multi-sample orchestration support
+            cls._orchestration_initializer = OrchestrationInitializer()
 
         except Exception as e:
             SandboxRegistry.unregister_domain(domain_slug)
@@ -474,6 +483,23 @@ class SABERSandboxEnvironment:
                 self._episode_ids = self._handler_state.episode_ids
                 self._primary_episode_id = self._handler_state.primary_episode_id
                 self._episode_id = self._primary_episode_id
+
+                # Register ActiveSample with coordinator for sibling interruption
+                active = sample_active()
+                if active is not None and isinstance(self._handler_state, OrchestrationSubTaskState):
+                    OrchestrationCoordinator().set_active_sample(
+                        orchestration_id=self._handler_state.orchestration_id,
+                        role=self._handler_state.sub_task_role,
+                        active_sample=active,
+                    )
+                    logger.debug(
+                        "Registered ActiveSample with OrchestrationCoordinator",
+                        extra={
+                            "orchestration_id": self._handler_state.orchestration_id,
+                            "role": self._handler_state.sub_task_role,
+                            "active_sample_id": active.id,
+                        },
+                    )
             elif benchmark_task is not None:
                 # Use task handler pattern for single episode tasks
                 # (OrchestratedTask should not reach here with new dataset creation)
@@ -798,17 +824,18 @@ class SABERSandboxEnvironment:
 
         if not cleanup_requested and not cleanup:
             logger.info(
-                f"Preserving domain '{domain_slug}' ownership for potential eval-retry",
+                f"Preserving domain '{domain_slug}' ownership for potential eval-retry (--no-sandbox-cleanup)",
                 extra={
                     "domain": domain_slug,
                     "task": task_name,
                     "session_id": session_id,
-                    "note": "Domain will remain in registry for faster retry",
+                    "note": "Domain and session preserved - episodes remain alive on server",
                 },
             )
-            if session_id and rest_url:
-                session_mgr = SessionLifecycleManager(rest_url)
-                session_mgr.terminate_session_sync(session_id)
+            # NOTE: We do NOT terminate the session here when --no-sandbox-cleanup is used.
+            # Terminating the session would cause the server to end all episodes,
+            # defeating the purpose of --no-sandbox-cleanup.
+            # The domain, session, and episodes all remain alive for debugging/inspection.
             return
 
         SandboxRegistry.unregister_domain(domain_slug)

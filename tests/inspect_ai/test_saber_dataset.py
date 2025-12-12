@@ -165,6 +165,7 @@ class TestCreateSABERDataset:
             instruction_prompt="Do the task",
             assistant_prompt="I'll help",
             submit_prompt="Submit",
+            continue_prompt="Continue",
         )
 
         dataset = await create_saber_dataset([task])
@@ -192,6 +193,7 @@ class TestCreateSABERDataset:
             instruction_prompt="Do the task",
             assistant_prompt="I'll help",
             submit_prompt="Submit",
+            continue_prompt="Continue",
         )
 
         dataset = await create_saber_dataset([task])
@@ -219,6 +221,7 @@ class TestCreateSABERDataset:
                 instruction_prompt="Blue instructions",
                 assistant_prompt="Blue assistant",
                 submit_prompt="Blue submit",
+                continue_prompt="Blue continue",
             ),
             SubTaskDefinition(
                 role="red",
@@ -233,6 +236,7 @@ class TestCreateSABERDataset:
                 instruction_prompt="Red instructions",
                 assistant_prompt="Red assistant",
                 submit_prompt="Red submit",
+                continue_prompt="Red continue",
             ),
         ]
 
@@ -276,6 +280,7 @@ class TestCreateSABERDataset:
             instruction_prompt="Do it",
             assistant_prompt="OK",
             submit_prompt="Done",
+            continue_prompt="Continue",
         )
 
         sub_tasks = [
@@ -292,6 +297,7 @@ class TestCreateSABERDataset:
                 instruction_prompt="Alpha",
                 assistant_prompt="Alpha",
                 submit_prompt="Alpha",
+                continue_prompt="Alpha continue",
             ),
         ]
 
@@ -337,6 +343,7 @@ class TestCreateSABERDataset:
                 instruction_prompt="",
                 assistant_prompt="",
                 submit_prompt="",
+                continue_prompt="",
             ),
             SubTaskDefinition(
                 role="role2",
@@ -351,6 +358,7 @@ class TestCreateSABERDataset:
                 instruction_prompt="",
                 assistant_prompt="",
                 submit_prompt="",
+                continue_prompt="",
             ),
         ]
 
@@ -384,6 +392,7 @@ class TestConvertTaskToSample:
             instruction_prompt="Instruction",
             assistant_prompt="Assistant",
             submit_prompt="Submit",
+            continue_prompt="Continue",
         )
 
         sample = _convert_task_to_sample(task, attempt=1)
@@ -409,6 +418,7 @@ class TestConvertTaskToSample:
                 instruction_prompt="Inst",
                 assistant_prompt="Asst",
                 submit_prompt="Sub",
+                continue_prompt="Cont",
             ),
         ]
 
@@ -452,6 +462,7 @@ class TestConvertBenchmarkTaskToSample:
             instruction_prompt="Do it",
             assistant_prompt="OK",
             submit_prompt="Submit",
+            continue_prompt="Continue",
         )
 
         sample = _convert_benchmark_task_to_sample(task, attempt=2)
@@ -479,6 +490,7 @@ class TestConvertBenchmarkTaskToSample:
             instruction_prompt="",
             assistant_prompt="",
             submit_prompt="",
+            continue_prompt="",
         )
 
         with pytest.raises(ValueError, match="attempt must be >= 1"):
@@ -500,6 +512,7 @@ class TestConvertBenchmarkTaskToSample:
                 instruction_prompt="",
                 assistant_prompt="",
                 submit_prompt="",
+                continue_prompt="",
             ),
         ]
 
@@ -540,6 +553,7 @@ class TestConvertSubTaskToSample:
             instruction_prompt="Defend the system",
             assistant_prompt="I will defend",
             submit_prompt="Submit defense",
+            continue_prompt="Continue defending",
         )
 
         orch_task = OrchestratedTask(
@@ -579,6 +593,7 @@ class TestConvertSubTaskToSample:
             instruction_prompt="Attack",
             assistant_prompt="I will attack",
             submit_prompt="Submit attack",
+            continue_prompt="Continue attacking",
         )
 
         orch_task = OrchestratedTask(
@@ -609,6 +624,7 @@ class TestConvertSubTaskToSample:
             instruction_prompt="Inst",
             assistant_prompt="Asst",
             submit_prompt="Sub",
+            continue_prompt="Cont",
         )
 
         orch_task = OrchestratedTask(
@@ -654,6 +670,7 @@ class TestConvertSubTaskToSample:
             instruction_prompt="Defend",
             assistant_prompt="I will defend",
             submit_prompt="Submit",
+            continue_prompt="Continue",
             transcript_config=transcript_config,
         )
 
@@ -688,6 +705,7 @@ class TestConvertSubTaskToSample:
             instruction_prompt="Attack",
             assistant_prompt="I will attack",
             submit_prompt="Submit",
+            continue_prompt="Continue",
             transcript_config=None,
         )
 
@@ -717,6 +735,7 @@ class TestConvertSubTaskToSample:
             instruction_prompt="Attack",
             assistant_prompt="I will attack",
             submit_prompt="Submit",
+            continue_prompt="Continue",
             transcript_config=None,  # No transcript sync
         )
 
@@ -733,6 +752,7 @@ class TestConvertSubTaskToSample:
             instruction_prompt="Defend",
             assistant_prompt="I will defend",
             submit_prompt="Submit",
+            continue_prompt="Continue",
             transcript_config={"websocket": {"pull": {"enabled": True, "blocking": True}}},  # With transcript sync
         )
 

@@ -69,7 +69,6 @@ class WebSocketDefaults:
 
     # Push configuration (sending new messages to server)
     PUSH_CONFIRMATION_TIMEOUT_SECONDS = 5.0  # Acknowledgment timeout
-    PUSH_MAX_RETRY_ATTEMPTS = 3  # Number of retry attempts on failure
     PUSH_RETRY_BACKOFF_MULTIPLIER = 2.0  # Exponential backoff multiplier
 
     # Reconnection policy

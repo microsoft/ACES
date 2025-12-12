@@ -138,12 +138,20 @@ class TranscriptCoordinator:
         """
         Unified sync with differential updates and WebSocket notifications.
 
-        Flow:
+        Supports two modes:
+        - Owner mode (is_observer=False): Full bidirectional sync with checksum validation
+        - Observer mode (is_observer=True): Read-only access with optional security filtering
+
+        Flow for owner mode:
         1. Client pushes new messages → version increments (last write wins)
         2. Server computes checksum and validates client's view
         3. If checksums match → send delta (efficient)
         4. If checksums differ → send full transcript (rewrite detected)
-        5. If no changes and WAIT_FOR_CHANGE → return immediately (WebSocket handles blocking)
+
+        Flow for observer mode:
+        1. Apply security filtering (hide_system_prompt)
+        2. Apply retrieval mode (full, delta, tail)
+        3. Return filtered transcript (no checksum validation)
 
         Note: WebSocket notifications happen in notify_modification(),
         not in sync(). Clients receive events via WebSocket and then call sync() to pull data.
@@ -163,14 +171,23 @@ class TranscriptCoordinator:
         if not episode:
             raise ValueError(f"Episode {request.episode_id} not found")
 
+        # Observer mode: read-only with security filtering
+        if request.is_observer:
+            return await self._sync_observer(episode, request, start_time)
+
+        # Owner mode: full bidirectional sync
+        return await self._sync_owner(episode, request, start_time)
+
+    async def _sync_owner(
+        self, episode: Episode, request: TranscriptSyncRequest, start_time: float
+    ) -> TranscriptSyncResponse:
+        """Handle owner mode sync with checksum validation."""
         # Step 1: Push new messages if provided (LAST WRITE WINS)
         if request.messages_to_push:
             await self._push_messages(
                 episode,
                 request.messages_to_push,
                 operation=request.operation,
-                rewind_count=request.rewind_count,
-                insert_position=request.insert_position,
             )
 
         # Step 2: Get current server state
@@ -228,17 +245,121 @@ class TranscriptCoordinator:
             full_transcript=full_transcript,
             sync_mode=sync_mode,
             modified=modified,
-            blocked=False,  # No blocking in sync() - handled by WebSocket
+            blocked=False,
             wait_time_seconds=wait_time,
         )
+
+    async def _sync_observer(
+        self, episode: Episode, request: TranscriptSyncRequest, start_time: float
+    ) -> TranscriptSyncResponse:
+        """Handle observer mode sync with security filtering.
+
+        Observer mode is read-only and applies:
+        - Security filtering (hide system prompt)
+        - Retrieval mode filtering (full, delta, tail)
+        - No checksum validation (observers don't track state)
+        """
+        # Get raw transcript
+        raw_messages = episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT, [])
+        version = episode.context.get(MetadataKeys.TRANSCRIPT_VERSION, 0)
+
+        # Apply security filter: hide system prompt
+        messages = self._filter_for_observer(raw_messages, request.hide_system_prompt or False)
+
+        # Apply retrieval mode
+        sync_mode: SyncMode
+        delta: Optional[List[Dict[str, Any]]] = None
+        full_transcript: Optional[List[Dict[str, Any]]] = None
+        modified: bool
+
+        if request.retrieval_mode == "delta":
+            if request.since_version >= version:
+                # Client is up to date
+                sync_mode = SyncMode.NO_CHANGE
+                modified = False
+            else:
+                # Compute filtered delta
+                if request.hide_system_prompt:
+                    # Filter messages at since_version point to compute delta correctly
+                    filtered_at_since = self._filter_for_observer(raw_messages[: request.since_version], True)
+                    delta = messages[len(filtered_at_since) :]
+                else:
+                    delta = messages[request.since_version :]
+                sync_mode = SyncMode.DELTA
+                modified = True
+
+        elif request.retrieval_mode == "tail" and request.tail_count > 0:
+            # Tail mode: return last N messages
+            tail_count = min(request.tail_count, 1000)
+            full_transcript = messages[-tail_count:] if len(messages) > tail_count else messages
+            sync_mode = SyncMode.FULL
+            modified = True
+
+        else:
+            # Full mode (default)
+            full_transcript = messages
+            sync_mode = SyncMode.FULL
+            modified = True
+
+        wait_time = asyncio.get_event_loop().time() - start_time
+
+        logger.debug(
+            "Observer sync completed",
+            extra={
+                "episode_id": request.episode_id,
+                "hide_system_prompt": request.hide_system_prompt,
+                "retrieval_mode": request.retrieval_mode,
+                "message_count": len(messages),
+                "version": version,
+                "sync_mode": sync_mode.value,
+            },
+        )
+
+        # Compute checksum on filtered view (what observer actually sees)
+        observer_checksum = compute_checksum(messages)
+
+        return TranscriptSyncResponse(
+            current_version=TranscriptVersion(
+                sequence=version,
+                checksum=observer_checksum,
+                message_count=len(messages),
+                last_operation="",
+            ),
+            delta=delta,
+            full_transcript=full_transcript,
+            sync_mode=sync_mode,
+            modified=modified,
+            blocked=False,
+            wait_time_seconds=wait_time,
+        )
+
+    def _filter_for_observer(self, messages: List[Dict[str, Any]], hide_system_prompt: bool) -> List[Dict[str, Any]]:
+        """Apply security filtering for observer access.
+
+        When hide_system_prompt=True, only returns messages starting from
+        the first assistant message. This prevents observers from seeing
+        the target's system prompt / guardrail instructions.
+        """
+        if not hide_system_prompt or not messages:
+            return messages
+
+        filtered = []
+        found_first_assistant = False
+        for msg in messages:
+            role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
+            if not found_first_assistant:
+                if role == "assistant":
+                    found_first_assistant = True
+                    filtered.append(msg)
+            else:
+                filtered.append(msg)
+        return filtered
 
     async def _push_messages(
         self,
         episode: Episode,
         messages: List[Dict[str, str]],
         operation: str = "append",
-        rewind_count: Optional[int] = 1,
-        insert_position: Optional[int] = 0,
     ) -> None:
         """
         Push messages with operation type (LAST WRITE WINS).
@@ -246,9 +367,7 @@ class TranscriptCoordinator:
         Args:
             episode: Episode instance
             messages: Messages to add/push
-            operation: "append", "rewind", "rewrite", "insert"
-            rewind_count: Number of messages to remove (rewind only)
-            insert_position: Position to insert at (insert only)
+            operation: "append" or "restart"
         """
         existing = episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT, [])
         current_version = episode.context.get(MetadataKeys.TRANSCRIPT_VERSION, 0)
@@ -257,26 +376,48 @@ class TranscriptCoordinator:
         if operation == TranscriptPushOperation.APPEND.value:
             updated_messages = existing + messages
 
-        elif operation == TranscriptPushOperation.REWIND.value:
-            # Remove last N messages, then append
-            safe_rewind_count = max(0, min(rewind_count if rewind_count is not None else 1, len(existing)))
-            rewound = existing[:-safe_rewind_count] if safe_rewind_count > 0 else existing
-            updated_messages = rewound + messages
-
-        elif operation == TranscriptPushOperation.REWRITE.value:
-            # Replace entire transcript
-            updated_messages = messages
-
-        elif operation == TranscriptPushOperation.INSERT.value:
-            # Insert at specific position
-            safe_insert_position = max(0, min(insert_position if insert_position is not None else 0, len(existing)))
-            updated_messages = existing[:safe_insert_position] + messages + existing[safe_insert_position:]
+        elif operation == TranscriptPushOperation.RESTART.value:
+            # Reset to initial transcript (system->user) then append new messages
+            initial = episode.context.get(MetadataKeys.INITIAL_TRANSCRIPT, [])
+            if initial:
+                # Use a copy of initial transcript to avoid mutation
+                updated_messages = list(initial) + messages
+            else:
+                # Fallback: if no initial transcript, just use the new messages
+                logger.warning(
+                    "No initial transcript found for restart operation, falling back to append",
+                    extra={"episode_id": episode.episode_id},
+                )
+                updated_messages = existing + messages
 
         else:
             # Fallback to append for unknown operations
+            logger.warning(
+                f"Unknown operation '{operation}', falling back to append",
+                extra={"episode_id": episode.episode_id, "operation": operation},
+            )
             updated_messages = existing + messages
 
         new_version = current_version + 1  # Always increment (monotonic)
+
+        # Capture initial transcript after first assistant response
+        # This ensures restart preserves the blue team's opening response
+        initial = episode.context.get(MetadataKeys.INITIAL_TRANSCRIPT, [])
+        initial_has_assistant = any(msg.get("role") == "assistant" for msg in initial)
+
+        if not initial_has_assistant:
+            # Check if we just added an assistant message
+            new_has_assistant = any(msg.get("role") == "assistant" for msg in messages)
+            if new_has_assistant:
+                # Update INITIAL_TRANSCRIPT to include the first assistant response
+                await episode.update_context_atomic({MetadataKeys.INITIAL_TRANSCRIPT: list(updated_messages)})
+                logger.debug(
+                    "Captured initial transcript with first assistant response",
+                    extra={
+                        "episode_id": episode.episode_id,
+                        "message_count": len(updated_messages),
+                    },
+                )
 
         await episode.update_context_atomic(
             {
@@ -451,6 +592,53 @@ class TranscriptCoordinator:
 
         # Cleanup WebSocket connections
         await self.connection_manager.cleanup_episode(episode_id)
+
+    def get_initial_state_event(self, episode_id: str) -> Optional["StateEventMessage"]:
+        """Get initial state event for a newly connected WebSocket client.
+
+        Creates a state event message reflecting the current transcript state.
+        This unblocks the client's first generate() call which waits for a state event.
+
+        Args:
+            episode_id: Episode identifier
+
+        Returns:
+            StateEventMessage with current state, or None if episode not found
+        """
+        episode = self.episode_manager.get_episode_by_id(episode_id)
+        if not episode:
+            return None
+
+        current_state = self._state_machine.get_state(episode)
+        event_type = TranscriptStateMachine.state_to_event_type(current_state)
+        current_version = episode.context.get(MetadataKeys.TRANSCRIPT_VERSION, 0)
+        modification_count = episode.context.get(MetadataKeys.TRANSCRIPT_MODIFICATION_COUNT, 0)
+
+        return StateEventMessage(
+            type=event_type,
+            data=StateEventData(
+                version=current_version,
+                operation=TranscriptOperation.INIT,
+                modification_count=modification_count,
+                state=current_state.value,
+            ),
+            id=str(uuid.uuid4()),
+            timestamp=self._time_source.now().isoformat(),
+        )
+
+    def get_episode_state(self, episode_id: str) -> Optional[str]:
+        """Get current transcript state for an episode.
+
+        Args:
+            episode_id: Episode identifier
+
+        Returns:
+            State value string, or None if episode not found
+        """
+        episode = self.episode_manager.get_episode_by_id(episode_id)
+        if not episode:
+            return None
+        return self._state_machine.get_state(episode).value
 
 
 __all__ = ["TranscriptCoordinator"]

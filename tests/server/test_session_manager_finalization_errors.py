@@ -28,7 +28,7 @@ class TestFinalizationErrors:
             domain="test_domain",
             title="Test Task",
             description="Test description",
-            prompts={"instruction": "test.md", "assistant": "test.md", "submit": "test.md"},
+            prompts={"instruction": "test.md", "assistant": "test.md", "submit": "test.md", "continue": "test_continue.md"},
             initial_context={},
         )
 

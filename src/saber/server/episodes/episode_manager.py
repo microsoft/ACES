@@ -592,6 +592,9 @@ class EpisodeManager:
         - System message: Concatenation of instruction, assistant, and submit prompts
         - User message: Task description
 
+        Also stores the continue_prompt for AutoContinueManager to use when
+        injecting server-side continue messages.
+
         Works for both SingleEpisodeTask and SubTaskDefinition (from orchestrations).
 
         Args:
@@ -626,9 +629,18 @@ class EpisodeManager:
         # Version starts at 1 to indicate the "init" operation has been applied
         # (version 0 means no operations, i.e., empty transcript)
         context[MetadataKeys.CLIENT_TRANSCRIPT] = initial_transcript
+        # Store the initial transcript separately for restart operations
+        # This preserves the original system->user messages for red team restart
+        context[MetadataKeys.INITIAL_TRANSCRIPT] = list(initial_transcript)  # Deep copy
         context[MetadataKeys.TRANSCRIPT_VERSION] = 1
         context[MetadataKeys.TRANSCRIPT_LAST_OPERATION] = TranscriptOperation.INIT.value
         context[MetadataKeys.TRANSCRIPT_CHECKSUM] = compute_checksum(initial_transcript)
+
+        # Store continue_prompt for AutoContinueManager to use
+        # This allows server-side continue message injection to use the task's
+        # configured continue prompt instead of a hardcoded default
+        if task.continue_prompt:
+            context[MetadataKeys.CONTINUE_PROMPT] = task.continue_prompt
 
     def start_episode(
         self,

@@ -445,3 +445,155 @@ class TestEpisodeManager:
                     retrieved = manager.completed_episodes.get(episode.episode_id)
                     assert retrieved == episode
                     assert retrieved.episode_id in manager.session_episodes[session_id]
+
+
+class TestTranscriptInitialization:
+    """Test cases for transcript initialization from task prompts."""
+
+    def test_initialize_transcript_stores_continue_prompt(self):
+        """Test that _initialize_transcript stores continue_prompt in context."""
+        from saber.models import SingleEpisodeTask
+        from saber.models.constants import MetadataKeys
+
+        manager = EpisodeManager()
+
+        task = SingleEpisodeTask(
+            task_id="test_task",
+            title="Test Task",
+            description="A test task",
+            domain="test",
+            max_steps=10,
+            episode_attempts=1,
+            instruction_prompt="You are a helpful assistant",
+            assistant_prompt="I will help you",
+            submit_prompt="Submit your work",
+            continue_prompt="Keep working on the task",
+        )
+
+        context = {}
+        manager._initialize_transcript(context, task)
+
+        # Should have stored the continue_prompt
+        assert MetadataKeys.CONTINUE_PROMPT in context
+        assert context[MetadataKeys.CONTINUE_PROMPT] == "Keep working on the task"
+
+    def test_initialize_transcript_with_custom_continue_prompt(self):
+        """Test that custom continue prompts are preserved."""
+        from saber.models import SingleEpisodeTask
+        from saber.models.constants import MetadataKeys
+
+        manager = EpisodeManager()
+
+        custom_continue = "Please proceed to the next analysis step. Do NOT call submit()."
+        task = SingleEpisodeTask(
+            task_id="blue_team_task",
+            title="Blue Team Task",
+            description="Analyze the database",
+            domain="test",
+            max_steps=10,
+            episode_attempts=1,
+            instruction_prompt="You are a guardrailed assistant",
+            assistant_prompt="I help with database queries",
+            submit_prompt="Submit findings",
+            continue_prompt=custom_continue,
+        )
+
+        context = {}
+        manager._initialize_transcript(context, task)
+
+        assert context[MetadataKeys.CONTINUE_PROMPT] == custom_continue
+
+    def test_initialize_transcript_with_subtask_definition(self):
+        """Test that SubTaskDefinition also stores continue_prompt."""
+        from saber.models.benchmark_task import SubTaskDefinition
+        from saber.models.constants import MetadataKeys
+
+        manager = EpisodeManager()
+
+        subtask = SubTaskDefinition(
+            task_id="subtask_1",
+            title="Subtask",
+            description="A subtask",
+            order=0,
+            domain="test",
+            episode_attempts=1,
+            max_steps=10,
+            instruction_prompt="Instructions",
+            assistant_prompt="Assistant",
+            submit_prompt="Submit",
+            continue_prompt="Subtask continue prompt",
+        )
+
+        context = {}
+        manager._initialize_transcript(context, subtask)
+
+        assert MetadataKeys.CONTINUE_PROMPT in context
+        assert context[MetadataKeys.CONTINUE_PROMPT] == "Subtask continue prompt"
+
+    def test_initialize_transcript_creates_initial_messages(self):
+        """Test that _initialize_transcript creates initial transcript messages."""
+        from saber.models import SingleEpisodeTask
+        from saber.models.constants import MetadataKeys
+
+        manager = EpisodeManager()
+
+        task = SingleEpisodeTask(
+            task_id="test_task",
+            title="Test",
+            description="Task description",
+            domain="test",
+            max_steps=10,
+            episode_attempts=1,
+            instruction_prompt="Instruction",
+            assistant_prompt="Assistant",
+            submit_prompt="Submit",
+            continue_prompt="Continue",
+        )
+
+        context = {}
+        manager._initialize_transcript(context, task)
+
+        # Should have transcript
+        assert MetadataKeys.CLIENT_TRANSCRIPT in context
+        transcript = context[MetadataKeys.CLIENT_TRANSCRIPT]
+        assert len(transcript) == 2
+
+        # System message combines prompts
+        assert transcript[0]["role"] == "system"
+        assert "Instruction" in transcript[0]["content"]
+        assert "Assistant" in transcript[0]["content"]
+        assert "Submit" in transcript[0]["content"]
+
+        # User message is description
+        assert transcript[1]["role"] == "user"
+        assert transcript[1]["content"] == "Task description"
+
+    def test_start_episode_with_task_stores_continue_prompt(self):
+        """Test that start_episode stores continue_prompt when task is provided."""
+        from saber.models import SingleEpisodeTask
+        from saber.models.constants import MetadataKeys
+
+        manager = EpisodeManager()
+
+        task = SingleEpisodeTask(
+            task_id="full_test",
+            title="Full Test",
+            description="Full test description",
+            domain="test",
+            max_steps=10,
+            episode_attempts=1,
+            instruction_prompt="Full instructions",
+            assistant_prompt="Full assistant",
+            submit_prompt="Full submit",
+            continue_prompt="Full continue prompt for testing",
+        )
+
+        episode = manager.start_episode(
+            session_id="test_session",
+            task_id="full_test",
+            task=task
+        )
+
+        # Episode context should have continue_prompt
+        assert MetadataKeys.CONTINUE_PROMPT in episode.context
+        assert episode.context[MetadataKeys.CONTINUE_PROMPT] == "Full continue prompt for testing"

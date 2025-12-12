@@ -45,12 +45,14 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   benchmark_config:
     episode_attempts: 3
   prompts:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
 
 benchmark_config:
   episode_attempts: 3
@@ -105,6 +107,7 @@ tasks:
         instruction: "test_instruction.md"
         assistant: "test_assistant.md"
         submit: "test_submit.md"
+        continue: "test_continue.md"
 
     benchmark_config:
       episode_attempts: 4
@@ -201,6 +204,7 @@ tasks:
           instruction: "test_instruction.md"
           assistant: "test_assistant.md"
           submit: "test_submit.md"
+          continue: "test_continue.md"
 
       benchmark_config:
         episode_attempts: 4
@@ -318,6 +322,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
 
 benchmark_config:
   episode_attempts: 4
@@ -402,6 +407,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   benchmark_config:
     episode_attempts: 1
   episode_config:
@@ -410,6 +416,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
 
 tasks:
   - task_id: default_timeout_task
@@ -473,6 +480,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -534,6 +542,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -639,6 +648,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
 
 benchmark_config:
   other_setting: true
@@ -735,6 +745,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -799,6 +810,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   benchmark_config:
     episode_attempts: 3
 
@@ -903,6 +915,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
 
 benchmark_config:
   episode_attempts: 3
@@ -942,7 +955,8 @@ tasks:
                 "prompts": {
                     "instruction": "test_instruction.md",
                     "assistant": "test_assistant.md",
-                    "submit": "test_submit.md"
+                    "submit": "test_submit.md",
+                    "continue": "test_continue.md"
                 }
             }
             assert global_defaults == expected_defaults
@@ -1005,6 +1019,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   benchmark_config:
     episode_attempts: 3
   execution_config:
@@ -1075,6 +1090,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   benchmark_config:
     episode_attempts: 3
 
@@ -1154,6 +1170,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   benchmark_config:
     episode_attempts: 3
 
@@ -1268,6 +1285,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   benchmark_config:
     episode_attempts: 2
 
@@ -1407,6 +1425,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   benchmark_config:
     episode_attempts: 3
 
@@ -1452,6 +1471,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   benchmark_config:
     episode_attempts: 5
     timeout_strategy: "fail_fast"
@@ -1531,6 +1551,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   benchmark_config:
     episode_attempts: 2
 
@@ -1607,6 +1628,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -1743,6 +1765,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   benchmark_config:
     episode_attempts: 3
 
@@ -1860,6 +1883,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   benchmark_config:
     episode_attempts: 3
 
@@ -1967,6 +1991,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   benchmark_config:
     episode_attempts: 3
 
@@ -2053,6 +2078,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   benchmark_config:
     episode_attempts: 3
 
@@ -2122,6 +2148,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   benchmark_config:
     episode_attempts: 3
 
@@ -2211,6 +2238,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   benchmark_config:
     episode_attempts: 3
     timeout_strategy: "graceful"
@@ -2486,6 +2514,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -2572,6 +2601,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   benchmark_config:
     episode_attempts: 2
 
@@ -2949,6 +2979,7 @@ global_defaults:
     instruction: "instruction.md"
     assistant: "assistant.md"
     submit: "submit.md"
+    continue: "test_continue.md"
 
 benchmark_config:
   episode_attempts: 1
@@ -3009,6 +3040,7 @@ global_defaults:
     instruction: "instruction.md"
     assistant: "assistant.md"
     submit: "submit.md"
+    continue: "test_continue.md"
 
 benchmark_config:
   episode_attempts: 1
@@ -3069,6 +3101,7 @@ global_defaults:
     instruction: "instruction.md"
     assistant: "assistant.md"
     submit: "submit.md"
+    continue: "test_continue.md"
 
 benchmark_config:
   episode_attempts: 1
@@ -3143,6 +3176,7 @@ global_defaults:
     instruction: "instruction.md"
     assistant: "assistant.md"
     submit: "submit.md"
+    continue: "test_continue.md"
 
 benchmark_config:
   episode_attempts: 1
@@ -3193,6 +3227,7 @@ global_defaults:
     instruction: "instruction.md"
     assistant: "assistant.md"
     submit: "submit.md"
+    continue: "test_continue.md"
 
 benchmark_config:
   episode_attempts: 1
@@ -3268,6 +3303,7 @@ global_defaults:
     instruction: "instruction.md"
     assistant: "assistant.md"
     submit: "submit.md"
+    continue: "test_continue.md"
 
 benchmark_config:
   episode_attempts: 1

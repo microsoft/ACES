@@ -44,7 +44,7 @@ class TestBenchmarkManagerCore:
     def test_load_tasks_from_directory_delegates_to_config_loader(self, mock_load, temp_config_dir):
         """Test that loading delegates to BenchmarkConfigLoader."""
         mock_task = Mock(spec=Task)
-        mock_task.prompts={"instruction": "test_prompt.md", "assistant": "test_prompt.md", "submit": "test_prompt.md"}
+        mock_task.prompts={"instruction": "test_prompt.md", "assistant": "test_prompt.md", "submit": "test_prompt.md", "continue": "test_continue.md"}
         mock_task.task_id = "test_task"
         mock_task.submission_evaluation_config = None  # No LLM judge config
         mock_task.depends_on_task_id = None  # No dependencies (set by template expander after expansion)
@@ -361,6 +361,7 @@ global_defaults:
     instruction: "test_task_prompt.md"
     assistant: "test_task_prompt.md"
     submit: "test_task_prompt.md"
+    continue: "test_continue.md"
   execution_config:
     timeout: 300
   episode_config:
@@ -895,8 +896,8 @@ class TestBenchmarkManagerMultiPrompt:
         # Test direct prompt rendering
         rendered_prompts = manager.prompt_generator.render_agent_prompts_for_task(task)
 
-        # Verify all three prompt types are rendered
-        expected_prompt_types = {'instruction', 'assistant', 'submit'}
+        # Verify all four prompt types are rendered
+        expected_prompt_types = {'instruction', 'assistant', 'submit', 'continue'}
         actual_prompt_types = set(rendered_prompts.keys())
 
         assert expected_prompt_types == actual_prompt_types, f"Expected {expected_prompt_types}, got {actual_prompt_types}"
@@ -974,6 +975,7 @@ global_defaults:
     instruction: "instructions/default.md"
     assistant: "assistants/default.md"
     submit: "submits/default.md"
+    continue: "test_continue.md"
 
 benchmark_config:
   episode_attempts: 1
@@ -991,6 +993,7 @@ tasks:
       instruction: "instructions/blue.md"
       assistant: "assistants/blue.md"
       submit: "submits/blue.md"
+      continue: "test_continue.md"
     submission_evaluation_config:
       strategy: "static"
       criteria:
@@ -1008,6 +1011,7 @@ tasks:
       instruction: "instructions/red.md"
       assistant: "assistants/red.md"
       submit: "submits/red.md"
+      continue: "test_continue.md"
     submission_evaluation_config:
       strategy: "static"
       criteria:
@@ -1062,6 +1066,7 @@ global_defaults:
     instruction: "instructions/default.md"
     assistant: "assistants/default.md"
     submit: "submits/default.md"
+    continue: "test_continue.md"
 
 benchmark_config:
   episode_attempts: 1
@@ -1079,6 +1084,7 @@ tasks:
       instruction: "instructions/root.md"
       assistant: "assistants/root.md"
       submit: "submits/root.md"
+      continue: "test_continue.md"
     submission_evaluation_config:
       strategy: "static"
       criteria:
@@ -1096,6 +1102,7 @@ tasks:
       instruction: "instructions/dependent.md"
       assistant: "assistants/dependent.md"
       submit: "submits/dependent.md"
+      continue: "test_continue.md"
     submission_evaluation_config:
       strategy: "static"
       criteria:
@@ -1133,6 +1140,7 @@ global_defaults:
     instruction: "instructions/default.md"
     assistant: "assistants/default.md"
     submit: "submits/default.md"
+    continue: "test_continue.md"
 
 benchmark_config:
   episode_attempts: 1
@@ -1150,6 +1158,7 @@ tasks:
       instruction: "instructions/defender.md"
       assistant: "assistants/defender.md"
       submit: "submits/defender.md"
+      continue: "test_continue.md"
     submission_evaluation_config:
       strategy: "static"
       criteria:
@@ -1167,6 +1176,7 @@ tasks:
       instruction: "instructions/attacker.md"
       assistant: "assistants/attacker.md"
       submit: "submits/attacker.md"
+      continue: "test_continue.md"
     submission_evaluation_config:
       strategy: "static"
       criteria:
@@ -1210,6 +1220,7 @@ global_defaults:
     instruction: "instructions/default.md"
     assistant: "assistants/default.md"
     submit: "submits/default.md"
+    continue: "test_continue.md"
 
 benchmark_config:
   episode_attempts: 1
@@ -1226,6 +1237,7 @@ tasks:
       instruction: "instructions/single.md"
       assistant: "assistants/single.md"
       submit: "submits/single.md"
+      continue: "test_continue.md"
     submission_evaluation_config:
       strategy: "static"
       criteria:

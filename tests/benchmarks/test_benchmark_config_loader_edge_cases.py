@@ -83,6 +83,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -147,6 +148,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -208,6 +210,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -250,6 +253,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -285,6 +289,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   execution_config: "should_be_dict"
 
 benchmark_config:
@@ -339,6 +344,7 @@ global_defaults:
     instruction: 123
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
 
 benchmark_config:
   episode_attempts: 3
@@ -367,6 +373,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -416,6 +423,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -465,6 +473,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -515,6 +524,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -570,6 +580,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:

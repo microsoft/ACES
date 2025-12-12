@@ -79,7 +79,7 @@ class Task:
         if not isinstance(prompts, dict):
             raise ValueError(f"Task '{task_id}': prompts must be a dictionary")
 
-        required_prompt_types = ["instruction", "assistant", "submit"]
+        required_prompt_types = ["instruction", "assistant", "submit", "continue"]
         for prompt_type in required_prompt_types:
             if prompt_type not in prompts:
                 raise ValueError(f"Task '{task_id}': missing required prompt type '{prompt_type}'")

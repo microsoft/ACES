@@ -15,29 +15,28 @@ class PushConfig:
     """Configuration for pushing messages to server via WebSocket.
 
     Controls how the client sends new messages and handles confirmations.
+    Retries are always enabled with exponential backoff - push must succeed
+    for transcript consistency.
 
     Attributes:
         enabled: Whether to push messages via WebSocket
-        confirmation_timeout: Timeout waiting for push_ack from server (seconds)
-        retry_enabled: Whether to retry failed push operations
-        max_retry_attempts: Maximum number of retry attempts for push
-        retry_backoff_multiplier: Multiplier for exponential backoff on retry
     """
 
     enabled: bool = True
-    confirmation_timeout: float = WebSocketDefaults.PUSH_CONFIRMATION_TIMEOUT_SECONDS
-    retry_enabled: bool = True
-    max_retry_attempts: int = WebSocketDefaults.PUSH_MAX_RETRY_ATTEMPTS
-    retry_backoff_multiplier: float = WebSocketDefaults.PUSH_RETRY_BACKOFF_MULTIPLIER
 
-    def __post_init__(self) -> None:
-        """Validate configuration values."""
-        if self.confirmation_timeout <= 0:
-            raise ValueError(f"confirmation_timeout must be positive, got {self.confirmation_timeout}")
-        if self.max_retry_attempts < 0:
-            raise ValueError(f"max_retry_attempts must be non-negative, got {self.max_retry_attempts}")
-        if self.retry_backoff_multiplier <= 0:
-            raise ValueError(f"retry_backoff_multiplier must be positive, got {self.retry_backoff_multiplier}")
+    # Internal defaults (not configurable via YAML - these are implementation details)
+    _confirmation_timeout: float = WebSocketDefaults.PUSH_CONFIRMATION_TIMEOUT_SECONDS
+    _retry_backoff_multiplier: float = WebSocketDefaults.PUSH_RETRY_BACKOFF_MULTIPLIER
+
+    @property
+    def confirmation_timeout(self) -> float:
+        """Timeout waiting for push_ack from server (seconds)."""
+        return self._confirmation_timeout
+
+    @property
+    def retry_backoff_multiplier(self) -> float:
+        """Multiplier for exponential backoff on retry."""
+        return self._retry_backoff_multiplier
 
 
 @dataclass
@@ -47,27 +46,30 @@ class PullConfig:
     Controls how the client waits for and receives server-initiated updates.
 
     Attributes:
-        enabled: Whether to wait for transcript_modified events
-        blocking: Whether to block waiting for events (if False, use event_timeout=0 semantics)
-        event_timeout: Timeout waiting for transcript modification events (seconds)
-        sync_timeout: Timeout for sync_request/sync_response round-trip (seconds)
-        event_queue_max_size: Maximum number of queued transcript_modified events
+        enabled: Whether to wait for transcript_modified events (blue team: True, red team: False)
     """
 
     enabled: bool = True
-    blocking: bool = True
-    event_timeout: float = WebSocketDefaults.PULL_EVENT_TIMEOUT_SECONDS
-    sync_timeout: float = WebSocketDefaults.PULL_SYNC_TIMEOUT_SECONDS
-    event_queue_max_size: int = WebSocketDefaults.PULL_EVENT_QUEUE_MAX_SIZE
 
-    def __post_init__(self) -> None:
-        """Validate configuration values."""
-        if self.event_timeout <= 0:
-            raise ValueError(f"event_timeout must be positive, got {self.event_timeout}")
-        if self.sync_timeout <= 0:
-            raise ValueError(f"sync_timeout must be positive, got {self.sync_timeout}")
-        if self.event_queue_max_size <= 0:
-            raise ValueError(f"event_queue_max_size must be positive, got {self.event_queue_max_size}")
+    # Internal defaults (not configurable via YAML - these are implementation details)
+    _event_timeout: float = WebSocketDefaults.PULL_EVENT_TIMEOUT_SECONDS
+    _sync_timeout: float = WebSocketDefaults.PULL_SYNC_TIMEOUT_SECONDS
+    _event_queue_max_size: int = WebSocketDefaults.PULL_EVENT_QUEUE_MAX_SIZE
+
+    @property
+    def event_timeout(self) -> float:
+        """Timeout waiting for transcript modification events (seconds)."""
+        return self._event_timeout
+
+    @property
+    def sync_timeout(self) -> float:
+        """Timeout for sync_request/sync_response round-trip (seconds)."""
+        return self._sync_timeout
+
+    @property
+    def event_queue_max_size(self) -> int:
+        """Maximum number of queued transcript_modified events."""
+        return self._event_queue_max_size
 
 
 @dataclass

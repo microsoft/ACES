@@ -42,6 +42,7 @@ class TestSingleEpisodeTaskHandler:
             instruction_prompt="test",
             assistant_prompt="test",
             submit_prompt="test",
+            continue_prompt="",
         )
 
     @pytest.fixture
@@ -224,6 +225,7 @@ class TestSingleEpisodeTaskHandler:
                     instruction_prompt="test",
                     assistant_prompt="test",
                     submit_prompt="test",
+            continue_prompt="",
                 )
             ],
             episode_attempts=1,
@@ -260,6 +262,7 @@ class TestOrchestratedTaskHandler:
                     instruction_prompt="test",
                     assistant_prompt="test",
                     submit_prompt="test",
+            continue_prompt="",
                 ),
                 SubTaskDefinition(
                     task_id="red_task_1",
@@ -274,6 +277,7 @@ class TestOrchestratedTaskHandler:
                     instruction_prompt="test",
                     assistant_prompt="test",
                     submit_prompt="test",
+            continue_prompt="",
                 ),
             ],
             episode_attempts=1,
@@ -500,6 +504,7 @@ class TestTaskHandlerFactory:
             instruction_prompt="test",
             assistant_prompt="test",
             submit_prompt="test",
+            continue_prompt="",
         )
 
         handler = get_benchmark_task_handler(task)
@@ -523,6 +528,7 @@ class TestTaskHandlerFactory:
                     instruction_prompt="test",
                     assistant_prompt="test",
                     submit_prompt="test",
+            continue_prompt="",
                 )
             ],
             episode_attempts=1,
@@ -562,6 +568,7 @@ class TestSemaphoreLifecycle:
             instruction_prompt="test",
             assistant_prompt="test",
             submit_prompt="test",
+            continue_prompt="",
         )
 
         with pytest.raises(Exception):
@@ -595,6 +602,7 @@ class TestSemaphoreLifecycle:
                     instruction_prompt="test",
                     assistant_prompt="test",
                     submit_prompt="test",
+            continue_prompt="",
                 )
             ],
             episode_attempts=1,
@@ -629,6 +637,7 @@ class TestSemaphoreLifecycle:
                     instruction_prompt="test",
                     assistant_prompt="test",
                     submit_prompt="test",
+            continue_prompt="",
                 )
             ],
             episode_attempts=1,
@@ -728,6 +737,7 @@ class TestSemaphoreLifecycle:
             instruction_prompt="test",
             assistant_prompt="test",
             submit_prompt="test",
+            continue_prompt="",
         )
 
         with pytest.raises(asyncio.TimeoutError):
@@ -775,6 +785,7 @@ class TestSemaphoreLifecycle:
                     instruction_prompt="test",
                     assistant_prompt="test",
                     submit_prompt="test",
+            continue_prompt="",
                 ),
                 SubTaskDefinition(
                     task_id="task_2",
@@ -788,6 +799,7 @@ class TestSemaphoreLifecycle:
                     instruction_prompt="test",
                     assistant_prompt="test",
                     submit_prompt="test",
+            continue_prompt="",
                 ),
             ],
             episode_attempts=1,
@@ -833,6 +845,7 @@ class TestSemaphoreLifecycle:
             instruction_prompt="test",
             assistant_prompt="test",
             submit_prompt="test",
+            continue_prompt="",
         )
 
         with pytest.raises(Exception, match="Ready failed"):
@@ -885,6 +898,7 @@ class TestSemaphoreLifecycle:
                     instruction_prompt="test",
                     assistant_prompt="test",
                     submit_prompt="test",
+            continue_prompt="",
                 ),
                 SubTaskDefinition(
                     task_id="task_2",
@@ -898,6 +912,7 @@ class TestSemaphoreLifecycle:
                     instruction_prompt="test",
                     assistant_prompt="test",
                     submit_prompt="test",
+            continue_prompt="",
                 ),
             ],
             episode_attempts=1,

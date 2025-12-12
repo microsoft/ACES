@@ -321,8 +321,10 @@ class TestOrchestrationInitializer:
                 semaphore=semaphore,
             )
 
-        # Verify termination was triggered
-        mock_coordinator.trigger_termination.assert_called_once_with("orch-cleanup-1")
+        # Verify termination was triggered with skip_role to avoid self-interrupt
+        mock_coordinator.trigger_termination.assert_called_once_with(
+            "orch-cleanup-1", skip_role="blue"
+        )
 
         # Verify all episodes were ended
         assert session_manager.end_episode.call_count == 2
@@ -467,3 +469,88 @@ class TestOrchestrationInitializer:
 
         # Should have attempted termination despite failure
         mock_coordinator.trigger_termination.assert_called_once()
+
+
+class TestCleanupWithSkipRole:
+    """Test cleanup_orchestrated_sub_task with skip_role for sibling interruption."""
+
+    @pytest.fixture
+    def initializer(self):
+        """Create orchestration initializer."""
+        return OrchestrationInitializer()
+
+    @pytest.fixture
+    def session_manager(self):
+        """Create mock session manager."""
+        mock = MagicMock()
+        mock.create_episode = AsyncMock()
+        mock.wait_for_episode_ready = AsyncMock()
+        mock.end_episode = AsyncMock()
+        return mock
+
+    @pytest.mark.asyncio
+    async def test_cleanup_passes_skip_role_to_trigger_termination(
+        self, initializer, session_manager
+    ):
+        """Test that cleanup passes the current role as skip_role to avoid self-interrupt."""
+        handler_state = {
+            "episode_ids": ["episode-blue"],
+            "primary_episode_id": "episode-blue",
+            "semaphore_acquired": False,
+            "orchestration_id": "orch-skip-test",
+            "sub_task_role": "blue",  # Blue is cleaning up
+        }
+
+        with patch("saber.inspect_ai.core.orchestration_init.OrchestrationCoordinator") as mock_coordinator_class:
+            mock_coordinator = MagicMock()
+            mock_coordinator.trigger_termination.return_value = [
+                ("blue", "episode-blue"),
+                ("red", "episode-red"),
+            ]
+            mock_coordinator.cleanup_sample.return_value = False
+            mock_coordinator_class.return_value = mock_coordinator
+
+            await initializer.cleanup_orchestrated_sub_task(
+                handler_state=handler_state,
+                session_id="session-skip",
+                session_manager=session_manager,
+                semaphore=None,
+            )
+
+        # Verify trigger_termination was called with skip_role="blue"
+        mock_coordinator.trigger_termination.assert_called_once_with(
+            "orch-skip-test", skip_role="blue"
+        )
+
+    @pytest.mark.asyncio
+    async def test_cleanup_with_orchestration_state_object(
+        self, initializer, session_manager
+    ):
+        """Test cleanup with OrchestrationSubTaskState object."""
+        from saber.inspect_ai.core.types import OrchestrationSubTaskState
+
+        handler_state = OrchestrationSubTaskState(
+            episode_ids=["episode-green"],
+            primary_episode_id="episode-green",
+            semaphore_acquired=False,
+            orchestration_id="orch-state-obj",
+            sub_task_role="green",
+        )
+
+        with patch("saber.inspect_ai.core.orchestration_init.OrchestrationCoordinator") as mock_coordinator_class:
+            mock_coordinator = MagicMock()
+            mock_coordinator.trigger_termination.return_value = [("green", "episode-green")]
+            mock_coordinator.cleanup_sample.return_value = True
+            mock_coordinator_class.return_value = mock_coordinator
+
+            await initializer.cleanup_orchestrated_sub_task(
+                handler_state=handler_state,
+                session_id="session-obj",
+                session_manager=session_manager,
+                semaphore=None,
+            )
+
+        # Verify trigger_termination was called with skip_role="green"
+        mock_coordinator.trigger_termination.assert_called_once_with(
+            "orch-state-obj", skip_role="green"
+        )

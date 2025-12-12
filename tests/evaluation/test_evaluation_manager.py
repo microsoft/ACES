@@ -35,7 +35,7 @@ class TestEvaluationManager:
             domain="test_domain",
             title="Test Task",
             description="A test task",
-            prompts={"instruction": "test_template.j2", "assistant": "test_template.j2", "submit": "test_template.j2"},
+            prompts={"instruction": "test_template.j2", "assistant": "test_template.j2", "submit": "test_template.j2", "continue": "test_continue.md"},
             submission_evaluation_config={
                 "strategy": "static",
                 "criteria": {"expected_answers": ["flag{correct}"]},
@@ -51,7 +51,7 @@ class TestEvaluationManager:
             domain="test_domain",
             title="No Eval Task",
             description="Task without evaluation",
-            prompts={"instruction": "test_template.j2", "assistant": "test_template.j2", "submit": "test_template.j2"}
+            prompts={"instruction": "test_template.j2", "assistant": "test_template.j2", "submit": "test_template.j2", "continue": "test_continue.md"}
         )
 
     @pytest.fixture
@@ -97,7 +97,7 @@ class TestEvaluationManager:
             domain="test_domain",
             title="Invalid Task",
             description="Task with invalid strategy",
-            prompts={"instruction": "test_template.j2", "assistant": "test_template.j2", "submit": "test_template.j2"},
+            prompts={"instruction": "test_template.j2", "assistant": "test_template.j2", "submit": "test_template.j2", "continue": "test_continue.md"},
             submission_evaluation_config={
                 "strategy": "invalid_strategy",
                 "criteria": {},
@@ -115,7 +115,7 @@ class TestEvaluationManager:
             domain="test_domain",
             title="Invalid Static Task",
             description="Task with invalid static config",
-            prompts={"instruction": "test_template.j2", "assistant": "test_template.j2", "submit": "test_template.j2"},
+            prompts={"instruction": "test_template.j2", "assistant": "test_template.j2", "submit": "test_template.j2", "continue": "test_continue.md"},
             submission_evaluation_config={
                 "strategy": "static",
                 "criteria": {},  # Missing expected_answers
@@ -133,7 +133,7 @@ class TestEvaluationManager:
             domain="test_domain",
             title="Invalid Score Task",
             description="Task with invalid max_score",
-            prompts={"instruction": "test_template.j2", "assistant": "test_template.j2", "submit": "test_template.j2"},
+            prompts={"instruction": "test_template.j2", "assistant": "test_template.j2", "submit": "test_template.j2", "continue": "test_continue.md"},
             submission_evaluation_config={
                 "strategy": "static",
                 "criteria": {"expected_answers": ["answer"]},

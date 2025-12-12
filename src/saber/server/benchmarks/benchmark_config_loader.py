@@ -86,7 +86,8 @@ FIELD_MAX_RETRY_INTERVAL = "max_retry_interval"
 PROMPT_TYPE_INSTRUCTION = "instruction"
 PROMPT_TYPE_ASSISTANT = "assistant"
 PROMPT_TYPE_SUBMIT = "submit"
-REQUIRED_PROMPT_TYPES = [PROMPT_TYPE_INSTRUCTION, PROMPT_TYPE_ASSISTANT, PROMPT_TYPE_SUBMIT]
+PROMPT_TYPE_CONTINUE = "continue"
+REQUIRED_PROMPT_TYPES = [PROMPT_TYPE_INSTRUCTION, PROMPT_TYPE_ASSISTANT, PROMPT_TYPE_SUBMIT, PROMPT_TYPE_CONTINUE]
 
 # File names
 FILENAME_GLOBAL_CONFIG = "global.yaml"
@@ -1227,26 +1228,12 @@ class BenchmarkConfigLoader:
                                 f"Task '{task_id}' {FIELD_TRANSCRIPT_CONFIG}.websocket.push must be a dictionary"
                             )
 
-                        for field_name, field_type in [
-                            ("confirmation_timeout", (int, float)),
-                            ("max_retry_attempts", int),
-                            ("retry_backoff_multiplier", (int, float)),
-                        ]:
-                            if field_name in push_config:
-                                value = push_config[field_name]
-                                if not isinstance(value, field_type) or value <= 0:  # type: ignore[arg-type]
-                                    raise InvalidTaskDefinitionException(
-                                        f"Task '{task_id}' {FIELD_TRANSCRIPT_CONFIG}.websocket.push.{field_name} "
-                                        f"must be positive number"
-                                    )
-
-                        for bool_field in ["enabled", "retry_enabled"]:
-                            if bool_field in push_config:
-                                if not isinstance(push_config[bool_field], bool):
-                                    raise InvalidTaskDefinitionException(
-                                        f"Task '{task_id}' {FIELD_TRANSCRIPT_CONFIG}.websocket.push.{bool_field} "
-                                        f"must be boolean"
-                                    )
+                        if "enabled" in push_config:
+                            if not isinstance(push_config["enabled"], bool):
+                                raise InvalidTaskDefinitionException(
+                                    f"Task '{task_id}' {FIELD_TRANSCRIPT_CONFIG}.websocket.push.enabled "
+                                    f"must be boolean"
+                                )
 
                     # Validate pull configuration if present
                     if "pull" in websocket_config:
@@ -1256,26 +1243,12 @@ class BenchmarkConfigLoader:
                                 f"Task '{task_id}' {FIELD_TRANSCRIPT_CONFIG}.websocket.pull must be a dictionary"
                             )
 
-                        for field_name, field_type in [
-                            ("event_timeout", (int, float)),
-                            ("sync_timeout", (int, float)),
-                            ("event_queue_max_size", int),
-                        ]:
-                            if field_name in pull_config:
-                                value = pull_config[field_name]
-                                if not isinstance(value, field_type) or value <= 0:  # type: ignore[arg-type]
-                                    raise InvalidTaskDefinitionException(
-                                        f"Task '{task_id}' {FIELD_TRANSCRIPT_CONFIG}.websocket.pull.{field_name} "
-                                        f"must be positive number"
-                                    )
-
-                        for bool_field in ["enabled", "blocking"]:
-                            if bool_field in pull_config:
-                                if not isinstance(pull_config[bool_field], bool):
-                                    raise InvalidTaskDefinitionException(
-                                        f"Task '{task_id}' {FIELD_TRANSCRIPT_CONFIG}.websocket.pull.{bool_field} "
-                                        f"must be boolean"
-                                    )
+                        if "enabled" in pull_config:
+                            if not isinstance(pull_config["enabled"], bool):
+                                raise InvalidTaskDefinitionException(
+                                    f"Task '{task_id}' {FIELD_TRANSCRIPT_CONFIG}.websocket.pull.enabled "
+                                    f"must be boolean"
+                                )
 
             task_benchmark_config = task_data.get(FIELD_BENCHMARK_CONFIG, {})
             global_benchmark_defaults = self.global_defaults.get(FIELD_BENCHMARK_CONFIG, {})

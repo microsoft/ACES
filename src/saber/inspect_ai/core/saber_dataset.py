@@ -20,7 +20,7 @@ Following SABER's philosophy:
 - No silent data loss during conversion
 """
 
-from typing import List, Union
+from typing import Any, Dict, List, Union
 
 from inspect_ai.dataset import MemoryDataset, Sample
 
@@ -355,8 +355,9 @@ def _convert_task_to_sample(task_data: BenchmarkTask, attempt: int = 1) -> Sampl
                 else task_data.orchestration_strategy
             ),
             MetadataKeys.INSTRUCTION_PROMPT: first_sub_task.instruction_prompt if first_sub_task else "",
-            "assistant_prompt": first_sub_task.assistant_prompt if first_sub_task else "",
-            "submit_prompt": first_sub_task.submit_prompt if first_sub_task else "",
+            MetadataKeys.ASSISTANT_PROMPT: first_sub_task.assistant_prompt if first_sub_task else "",
+            MetadataKeys.SUBMIT_PROMPT: first_sub_task.submit_prompt if first_sub_task else "",
+            MetadataKeys.CONTINUE_PROMPT: first_sub_task.continue_prompt if first_sub_task else "",
             MetadataKeys.ATTEMPT: attempt,
             MetadataKeys.TOTAL_ATTEMPTS: task_data.episode_attempts,
             MetadataKeys.TOOL_CALL_LIMIT: first_sub_task.max_steps if first_sub_task else 30,
@@ -403,13 +404,14 @@ def _convert_benchmark_task_to_sample(benchmark_task: BenchmarkTask, attempt: in
     task_input = f"Title: {benchmark_task.title}\nTask: {benchmark_task.description}"
     task_target = f"Successfully complete the task: {benchmark_task.title or benchmark_task.description}"
 
-    task_metadata = {
+    task_metadata: Dict[str, Any] = {
         MetadataKeys.BENCHMARK_TASK: benchmark_task.model_dump(),
         MetadataKeys.EXECUTION_MODE: TaskExecutionMode.SINGLE.value,
         MetadataKeys.TASK_ID: benchmark_task.task_id,
         MetadataKeys.INSTRUCTION_PROMPT: benchmark_task.instruction_prompt,
-        "assistant_prompt": benchmark_task.assistant_prompt,
-        "submit_prompt": benchmark_task.submit_prompt,
+        MetadataKeys.ASSISTANT_PROMPT: benchmark_task.assistant_prompt,
+        MetadataKeys.SUBMIT_PROMPT: benchmark_task.submit_prompt,
+        MetadataKeys.CONTINUE_PROMPT: benchmark_task.continue_prompt,
         MetadataKeys.ATTEMPT: attempt,
         MetadataKeys.TOTAL_ATTEMPTS: benchmark_task.episode_attempts,
         MetadataKeys.TOOL_CALL_LIMIT: benchmark_task.max_steps,
@@ -468,7 +470,7 @@ def _convert_sub_task_to_sample(
     task_target = f"Successfully complete {sub_task.role} task: {sub_task.title}"
 
     # Metadata includes orchestration coordination info
-    task_metadata = {
+    task_metadata: Dict[str, Any] = {
         MetadataKeys.BENCHMARK_TASK: orchestrated_task.model_dump(),
         MetadataKeys.EXECUTION_MODE: "orchestrated_sub_task",  # NEW mode for multi-sample orchestration
         MetadataKeys.ORCHESTRATION_ID: orchestrated_task.benchmark_task_id,
@@ -478,8 +480,9 @@ def _convert_sub_task_to_sample(
         MetadataKeys.ORDER: sub_task.order,
         # Use this sub-task's prompts
         MetadataKeys.INSTRUCTION_PROMPT: sub_task.instruction_prompt,
-        "assistant_prompt": sub_task.assistant_prompt,
-        "submit_prompt": sub_task.submit_prompt,
+        MetadataKeys.ASSISTANT_PROMPT: sub_task.assistant_prompt,
+        MetadataKeys.SUBMIT_PROMPT: sub_task.submit_prompt,
+        MetadataKeys.CONTINUE_PROMPT: sub_task.continue_prompt,
         MetadataKeys.ATTEMPT: attempt,
         MetadataKeys.TOTAL_ATTEMPTS: orchestrated_task.episode_attempts,
         MetadataKeys.TOOL_CALL_LIMIT: sub_task.max_steps,

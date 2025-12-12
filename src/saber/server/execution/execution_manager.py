@@ -415,6 +415,7 @@ class ExecutionManager:
                     "event": "task_environment_specified_async",
                     "episode_id": episode_id,
                     "environment": task.environment,
+                    "session_id": session_id,  # DEBUG: Log session_id
                 },
             )
 
@@ -454,7 +455,7 @@ class ExecutionManager:
                     else task.environment.get("base_template", str(task.environment))
                 )
                 self._sandbox_environment_manager.create_episode_environment_async(
-                    episode_id, environment_name, target_episode_id
+                    episode_id, environment_name, target_episode_id, session_id=session_id
                 )
                 log_operation_success(
                     logger,

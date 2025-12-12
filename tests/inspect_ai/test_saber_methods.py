@@ -134,6 +134,7 @@ class TestDeserializeBenchmarkTask:
             "instruction_prompt": "Do it",
             "assistant_prompt": "OK",
             "submit_prompt": "Submit",
+            "continue_prompt": "",
         }
 
         task = instance._deserialize_benchmark_task(data)
@@ -161,6 +162,7 @@ class TestDeserializeBenchmarkTask:
             "instruction_prompt": "Inst",
             "assistant_prompt": "Asst",
             "submit_prompt": "Sub",
+            "continue_prompt": "",
         }
 
         data = {
@@ -195,6 +197,7 @@ class TestDeserializeBenchmarkTask:
             "instruction_prompt": "Do it",
             "assistant_prompt": "OK",
             "submit_prompt": "Submit",
+            "continue_prompt": "",
         }
 
         task = instance._deserialize_benchmark_task(data)

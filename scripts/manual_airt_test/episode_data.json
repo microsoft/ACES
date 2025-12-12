@@ -1,0 +1,15 @@
+{
+  "domain": "airt_demo",
+  "rest_url": "http://localhost:8000",
+  "mcp_url": "http://localhost:8001",
+  "session_id": "95fb76a3-cda6-4300-9be9-85b01372d95d",
+  "blue": {
+    "task_id": "ai_redteam_blue_agent_ai_redteam_red_attacker",
+    "episode_id": "3372d37f-bf15-401c-ac38-56f90479ac88"
+  },
+  "red": {
+    "task_id": "ai_redteam_red_attacker",
+    "episode_id": "b2762ab0-c99b-4d86-8f14-58b7f598a026",
+    "attached_to": "3372d37f-bf15-401c-ac38-56f90479ac88"
+  }
+}

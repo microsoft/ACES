@@ -34,6 +34,7 @@ class TestServerSideTranscriptInit:
             instruction_prompt="You are a security agent",
             assistant_prompt="Use these tools to complete the task",
             submit_prompt="Submit your answer with /submit",
+            continue_prompt="",
         )
 
         # Act
@@ -86,6 +87,7 @@ class TestServerSideTranscriptInit:
             instruction_prompt="Instruction part",
             assistant_prompt="Assistant part",
             submit_prompt="Submit part",
+            continue_prompt="",
         )
 
         # Act
@@ -137,6 +139,7 @@ class TestServerSideTranscriptInit:
             instruction_prompt="Inst",
             assistant_prompt="Asst",
             submit_prompt="Submit",
+            continue_prompt="",
         )
 
         initial_context = {
@@ -174,6 +177,7 @@ class TestServerSideTranscriptInit:
             instruction_prompt="",  # Empty
             assistant_prompt="Assistant content",
             submit_prompt="",  # Empty
+            continue_prompt="",  # Empty
         )
 
         # Act
@@ -209,6 +213,7 @@ class TestServerSideTranscriptInit:
             instruction_prompt="Instruction",
             assistant_prompt="Assistant",
             submit_prompt="Submit",
+            continue_prompt="",
         )
 
         # Act
@@ -240,6 +245,7 @@ class TestServerSideTranscriptInit:
             instruction_prompt="I",
             assistant_prompt="A",
             submit_prompt="S",
+            continue_prompt="",
         )
 
         # Act
@@ -268,6 +274,7 @@ class TestServerSideTranscriptInit:
             instruction_prompt="I",
             assistant_prompt="A",
             submit_prompt="S",
+            continue_prompt="",
         )
 
         # Act
@@ -320,6 +327,7 @@ class TestOrchestratedTaskTranscriptInit:
             instruction_prompt="You are a defensive security agent",
             assistant_prompt="Use defensive tools",
             submit_prompt="Submit your defense strategy",
+            continue_prompt="",
         )
 
         # Act

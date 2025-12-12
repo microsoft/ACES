@@ -7,10 +7,7 @@ policy, status, and events. Tool execution is handled by SessionMCPAPI.
 Logging category: REST_API.
 """
 
-import uuid
-
 # Forward declaration to avoid circular imports
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
@@ -37,11 +34,9 @@ from ...models import (
     SessionTerminateResponse,
     StepEvaluationStrategy,
     SubmissionEvaluationStrategy,
-    TranscriptGetResponse,
     TranscriptPushRequest,
     TranscriptPushResponse,
     TranscriptSyncConfig,
-    TranscriptSyncRequest,
 )
 from ...models.rest.evaluation import (
     EpisodeStepData,
@@ -56,20 +51,7 @@ from ...models.rest.evaluation import (
     TaskEvaluationContext,
     TemplateContentResponse,
 )
-from ...models.rest.websocket_constants import WebSocketCloseCode, WebSocketMessageType
-from ...models.rest.websocket_messages import (
-    PongMessage,
-    PushAckData,
-    PushAckMessage,
-    StateEventData,
-    StateEventMessage,
-    SyncMode,
-    SyncResponseData,
-    SyncResponseMessage,
-    TranscriptOperation,
-    TranscriptVersion,
-)
-from ...models.rest.websocket_requests import PushMessageRequestData, SyncRequestData
+from ...models.rest.websocket_constants import WebSocketCloseCode
 from ..evaluation.exceptions import EvaluationNotFoundError, InvalidEvaluationRequestError, SessionEvaluationError
 
 if TYPE_CHECKING:
@@ -811,38 +793,8 @@ class SessionRestAPI:
                 log_operation_failure(logger, "push_transcript", exc, session_id=session_id, episode_id=episode_id)
                 raise HTTPException(status_code=500, detail=f"Failed to push transcript: {exc}") from exc
 
-        @self.app.get(APIEndpoints.EPISODE_TRANSCRIPT)
-        async def get_transcript_endpoint(session_id: str, episode_id: str) -> TranscriptGetResponse:
-            """Get conversation transcript for episode (for red team access)."""
-            log_operation_start(logger, "get_transcript", session_id=session_id, episode_id=episode_id)
-            try:
-                # Get episode
-                episode = self.session_manager.get_episode_by_id(episode_id)
-                if not episode:
-                    raise HTTPException(status_code=404, detail=f"Episode {episode_id} not found")
-
-                # Retrieve transcript from episode context
-                messages = episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT, [])
-                last_updated = episode.context.get(MetadataKeys.TRANSCRIPT_LAST_PUSHED_AT)
-                metadata = episode.context.get(MetadataKeys.TRANSCRIPT_METADATA)
-
-                log_operation_success(
-                    logger, "get_transcript", session_id=session_id, episode_id=episode_id, message_count=len(messages)
-                )
-
-                return TranscriptGetResponse(
-                    episode_id=episode_id,
-                    messages=messages,
-                    message_count=len(messages),
-                    last_updated=last_updated,
-                    metadata=metadata,
-                )
-
-            except HTTPException:
-                raise
-            except Exception as exc:
-                log_operation_failure(logger, "get_transcript", exc, session_id=session_id, episode_id=episode_id)
-                raise HTTPException(status_code=500, detail=f"Failed to get transcript: {exc}") from exc
+        # NOTE: GET /transcript endpoint REMOVED - transcript retrieval now uses WebSocket sync_request
+        # The daemon and other observers use WebSocket sync with is_observer=True for cross-episode access
 
         @self.app.post(APIEndpoints.EPISODE_MESSAGES_INJECT)
         async def inject_message_endpoint(
@@ -1230,9 +1182,6 @@ class SessionRestAPI:
                 log_operation_failure(logger, "get_template_content", exc, template_path=template_path)
                 raise HTTPException(status_code=500, detail=f"Failed to get template content: {exc}") from exc
 
-        # NOTE: POST /evaluation endpoint REMOVED - evaluation computed client-side only
-        # Server no longer needs to store evaluation results
-
         # ===== WebSocket Endpoint for Real-Time Transcript Notifications =====
 
         @self.app.websocket("/api/v1/episodes/{episode_id}/ws")
@@ -1241,7 +1190,7 @@ class SessionRestAPI:
             WebSocket endpoint for bidirectional transcript synchronization.
 
             Protocol (Server → Client):
-            - Client connects → server sends {"type": "connected"}
+            - Client connects → server sends initial state event
             - Red team injects → server broadcasts {"type": "transcript_modified", "data": {...}}
 
             Protocol (Client → Server):
@@ -1255,6 +1204,10 @@ class SessionRestAPI:
             3. Agent pushes messages via WebSocket (replaces REST sync API)
             4. Red team injects → server broadcasts event → Blue agent pulls delta via WebSocket
             """
+            from .websocket_handlers import get_message_router
+
+            coordinator = self.session_manager.episode_manager.transcript_coordinator
+
             # Validate episode exists
             episode = self.session_manager.episode_manager.get_episode_by_id(episode_id)
             if not episode:
@@ -1275,39 +1228,17 @@ class SessionRestAPI:
             # Send initial state event after connection
             # This unblocks the client's first generate() call which waits for a state event
             try:
-                from ..episodes.transcript_state_machine import TranscriptStateMachine
-
-                coordinator = self.session_manager.episode_manager.transcript_coordinator
-                state_machine = coordinator._state_machine
-
-                # Re-fetch episode to get current transcript state
-                episode = self.session_manager.episode_manager.get_episode_by_id(episode_id)
-                if episode:
-                    current_state = state_machine.get_state(episode)
-                    event_type = TranscriptStateMachine.state_to_event_type(current_state)
-                    current_version = episode.context.get(MetadataKeys.TRANSCRIPT_VERSION, 0)
-                    modification_count = episode.context.get(MetadataKeys.TRANSCRIPT_MODIFICATION_COUNT, 0)
-
-                    initial_state_event = StateEventMessage(
-                        type=event_type,
-                        data=StateEventData(
-                            version=current_version,
-                            operation=TranscriptOperation.INIT,
-                            modification_count=modification_count,
-                            state=current_state.value,
-                        ),
-                        id=str(uuid.uuid4()),
-                        timestamp=datetime.utcnow().isoformat(),
-                    )
+                initial_state_event = coordinator.get_initial_state_event(episode_id)
+                if initial_state_event:
                     await websocket.send_json(initial_state_event.model_dump())
 
                     logger.debug(
                         "Sent initial state event after WebSocket connect",
                         extra={
                             "episode_id": episode_id,
-                            "state": current_state.value,
-                            "event_type": event_type,
-                            "version": current_version,
+                            "state": initial_state_event.data.state,
+                            "event_type": initial_state_event.type,
+                            "version": initial_state_event.data.version,
                         },
                     )
             except Exception as e:
@@ -1318,159 +1249,40 @@ class SessionRestAPI:
                 await websocket.close(code=WebSocketCloseCode.INTERNAL_ERROR, reason="Initial state event failed")
                 return
 
+            # Get the message router for handling incoming messages
+            router = get_message_router()
+
             try:
                 # Handle bidirectional WebSocket messages
                 while True:
                     data = await websocket.receive_json()
-                    message_type = data.get("type")
 
-                    if message_type == WebSocketMessageType.PING:
-                        # Keepalive
-                        pong = PongMessage(timestamp=datetime.utcnow().isoformat())
-                        await websocket.send_json(pong.model_dump())
+                    # Debug logging for received data
+                    logger.debug(
+                        "WebSocket received message",
+                        extra={
+                            "episode_id": episode_id,
+                            "data_type": type(data).__name__,
+                            "data_keys": list(data.keys()) if isinstance(data, dict) else None,
+                        },
+                    )
 
-                    elif message_type == WebSocketMessageType.SYNC_REQUEST:
-                        # Client requesting transcript sync
-                        request_data = SyncRequestData(**data.get("data", {}))
+                    if data is None:
+                        logger.warning("WebSocket received None data", extra={"episode_id": episode_id})
+                        continue
 
-                        sync_request = TranscriptSyncRequest(
-                            episode_id=episode_id,
-                            since_version=request_data.since_version,
-                            client_checksum=request_data.client_checksum,
-                        )
-
-                        coordinator = self.session_manager.episode_manager.transcript_coordinator
-                        sync_response = await coordinator.sync(sync_request)
-
-                        # Cast sync_mode to SyncMode (post_init normalizes it but mypy doesn't know)
-                        sync_mode = (
-                            sync_response.sync_mode
-                            if isinstance(sync_response.sync_mode, SyncMode)
-                            else SyncMode(sync_response.sync_mode)
-                        )
-                        response_data = SyncResponseData(
-                            current_version=TranscriptVersion(
-                                sequence=sync_response.current_version.sequence,
-                                checksum=sync_response.current_version.checksum,
-                                message_count=sync_response.current_version.message_count,
-                                last_operation=sync_response.current_version.last_operation,
-                            ),
-                            delta=sync_response.delta,
-                            full_transcript=sync_response.full_transcript,
-                            sync_mode=sync_mode,
-                            modified=sync_response.modified,
-                        )
-
-                        message = SyncResponseMessage(
-                            data=response_data,
-                            id=data.get("id", ""),
-                            timestamp=datetime.utcnow().isoformat(),
-                        )
-                        await websocket.send_json(message.model_dump())
-
-                    elif message_type == WebSocketMessageType.PUSH_MESSAGE:
-                        # Client pushing new message (supports both normal and injection mode)
-                        push_data = PushMessageRequestData(**data.get("data", {}))
-
-                        # Support cross-episode pushes (red team targeting blue team)
-                        target_episode_id = push_data.target_episode_id or episode_id
-
-                        sync_request = TranscriptSyncRequest(
-                            episode_id=target_episode_id,
-                            since_version=push_data.since_version,
-                            client_checksum=push_data.client_checksum,
-                            messages_to_push=[push_data.message],
-                            # "strategy" in client message maps to "operation" in backend
-                            operation=push_data.strategy,
-                            rewind_count=push_data.rewind_count,
-                            insert_position=push_data.insert_position,
-                        )
-
-                        coordinator = self.session_manager.episode_manager.transcript_coordinator
-                        sync_response = await coordinator.sync(sync_request)
-
-                        # Build response with optional injection metadata
-                        push_response: Dict[str, Any] = {
-                            "version": sync_response.current_version.sequence,
-                            "checksum": sync_response.current_version.checksum,
-                        }
-
-                        # Get current transcript state after push
-                        target_episode = self.session_manager.episode_manager.get_episode_by_id(target_episode_id)
-                        target_state_value: str = "modified"
-                        modification_count = 0
-                        if target_episode:
-                            state_machine = coordinator._state_machine
-                            target_state_value = state_machine.get_state(target_episode).value
-                            modification_count = target_episode.context.get(
-                                MetadataKeys.TRANSCRIPT_MODIFICATION_COUNT, 0
-                            )
-
-                        # Prepare state event for broadcast (only for cross-episode/injection)
-                        state_event = None
-                        is_cross_episode = target_episode_id != episode_id
-
-                        if is_cross_episode and target_episode:
-                            # Cross-episode push (injection): update modification count and add metadata
-                            modification_count += 1
-                            await target_episode.update_context_atomic(
-                                {MetadataKeys.TRANSCRIPT_MODIFICATION_COUNT: modification_count}
-                            )
-                            push_response["modification_count"] = modification_count
-                            push_response["target_episode_id"] = target_episode_id
-
-                            # Convert strategy string to TranscriptOperation enum
-                            try:
-                                operation = TranscriptOperation(push_data.strategy)
-                            except ValueError:
-                                operation = TranscriptOperation.APPEND
-
-                            state_event = StateEventMessage(
-                                type="transcript_modified",
-                                data=StateEventData(
-                                    version=sync_response.current_version.sequence,
-                                    operation=operation,
-                                    modification_count=modification_count,
-                                    injected_by=episode_id,
-                                    state=target_state_value,
-                                ),
-                                id=str(uuid.uuid4()),
-                                timestamp=datetime.utcnow().isoformat(),
-                            )
-                        # For same-episode pushes, no state event needed - client knows it pushed
-
-                        # 1. Send push_ack FIRST (client is waiting for this)
-                        ack_data = PushAckData(
-                            version=push_response["version"],
-                            checksum=push_response["checksum"],
-                            modification_count=push_response.get("modification_count"),
-                            target_episode_id=push_response.get("target_episode_id"),
-                        )
-
-                        ack_message = PushAckMessage(
-                            data=ack_data,
-                            id=data.get("id", ""),
-                            timestamp=datetime.utcnow().isoformat(),
-                        )
-                        await websocket.send_json(ack_message.model_dump())
-
-                        # 2. Then broadcast state event (for next generate() call to proceed)
-                        if state_event:
-                            await coordinator.connection_manager.broadcast_to_episode(
-                                episode_id=target_episode_id,
-                                message=state_event,
-                            )
-
-                    else:
-                        logger.warning(
-                            "Unknown WebSocket message type",
-                            extra={"episode_id": episode_id, "type": message_type},
-                        )
+                    # Route message to appropriate handler
+                    await router.route(data, websocket, episode_id, coordinator)
 
             except WebSocketDisconnect:
                 logger.info("WebSocket client disconnected", extra={"episode_id": episode_id})
             except Exception as e:
-                logger.error("WebSocket error", extra={"episode_id": episode_id, "error": str(e)})
+                import traceback
+
+                logger.error(
+                    "WebSocket error",
+                    extra={"episode_id": episode_id, "error": str(e), "traceback": traceback.format_exc()},
+                )
             finally:
                 await self.session_manager.episode_manager.connection_manager.disconnect(episode_id, websocket)
 

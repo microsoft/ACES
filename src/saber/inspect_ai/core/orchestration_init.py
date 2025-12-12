@@ -259,7 +259,8 @@ class OrchestrationInitializer:
         coordinator = OrchestrationCoordinator()
 
         # Trigger cascade termination for entire orchestration
-        episodes_to_cleanup = coordinator.trigger_termination(orchestration_id)
+        # Pass skip_role to avoid interrupting the sample that initiated cleanup
+        episodes_to_cleanup = coordinator.trigger_termination(orchestration_id, skip_role=role)
 
         logger.info(
             f"Triggered cascade termination for orchestration {orchestration_id}",

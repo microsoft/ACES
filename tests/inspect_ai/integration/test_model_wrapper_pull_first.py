@@ -127,17 +127,22 @@ class TestClientPullFirst:
         # Assert - should have pulled transcript after state event
         # _local_messages includes the pulled transcript PLUS the assistant response pushed after generate()
         assert len(wrapper._local_messages) == 3  # system, user (pulled), assistant (pushed)
-        assert wrapper._local_messages[0] == initial_transcript[0]
-        assert wrapper._local_messages[1] == initial_transcript[1]
+        # Compare role and content (local_messages are ChatMessage objects, initial_transcript are dicts)
+        assert wrapper._local_messages[0].role == initial_transcript[0]["role"]
+        assert wrapper._local_messages[0].content == initial_transcript[0]["content"]
+        assert wrapper._local_messages[1].role == initial_transcript[1]["role"]
+        assert wrapper._local_messages[1].content == initial_transcript[1]["content"]
         assert wrapper._local_version == 1  # After push
         assert wrapper._first_call == False
 
     @pytest.mark.asyncio
-    async def test_event_driven_timeout_raises_error(self, mock_base_model, mock_websocket):
-        """Client should handle timeout waiting for state event gracefully."""
-        # Arrange
+    async def test_event_driven_waits_for_event(self, mock_base_model, mock_websocket):
+        """Client waits for state event with unlimited retries (sample invalid without sync)."""
+        # Arrange - create wrapper with short timeout for faster test
+        # Disable push to simplify test - we're testing the pull/wait behavior
         config = WebSocketConfig(
-            pull=PullConfig(enabled=True, event_timeout=0.1)  # Short timeout
+            push=PushConfig(enabled=False),
+            pull=PullConfig(enabled=True, _event_timeout=0.1)  # Short timeout per attempt
         )
 
         wrapper = WebSocketTranscriptSyncingModelWrapper(
@@ -151,20 +156,25 @@ class TestClientPullFirst:
         wrapper._websocket = mock_websocket
         wrapper._first_call = False  # Past first call
 
-        # Mock event queue that times out
-        async def timeout_scenario():
-            await asyncio.sleep(10)  # Longer than event_timeout
+        # Track that wait_for_state_event_with_retry was called
+        retry_called = False
+        async def mock_wait_for_state_event_with_retry():
+            nonlocal retry_called
+            retry_called = True
+            return True  # Event received
 
-        wrapper._event_queue = AsyncMock()
-        wrapper._event_queue.get = AsyncMock(side_effect=timeout_scenario)
-        wrapper._event_queue.empty = MagicMock(return_value=True)
-
-        # Act - should timeout gracefully and continue with client input
+        # Act - should call wait_for_state_event_with_retry and eventually succeed
         with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
-            client_input = [{"role": "user", "content": "test"}]
-            result = await wrapper.generate(client_input)
+            with patch.object(wrapper._events, 'wait_for_state_event_with_retry', side_effect=mock_wait_for_state_event_with_retry):
+                with patch.object(wrapper._sync, 'request_sync', new_callable=AsyncMock, return_value=SyncResponseData(
+                    sync_mode=SyncMode.NO_CHANGE,
+                    current_version=TranscriptVersion(sequence=1, checksum="abc"),
+                )):
+                    client_input = [{"role": "user", "content": "test"}]
+                    result = await wrapper.generate(client_input)
 
-        # Assert - should have called base model with client input (graceful degradation)
+        # Assert - should have called wait_for_state_event_with_retry and base model
+        assert retry_called
         mock_base_model.generate.assert_called_once()
 
     @pytest.mark.asyncio
@@ -229,8 +239,13 @@ class TestClientPullFirst:
         # Assert - base model should receive SERVER transcript, not client input
         mock_base_model.generate.assert_called_once()
         actual_input = mock_base_model.generate.call_args[0][0]
-        assert actual_input == server_transcript
-        assert actual_input != client_input
+        # actual_input are ChatMessage objects, server_transcript are dicts - compare by role/content
+        assert len(actual_input) == len(server_transcript)
+        for actual, expected in zip(actual_input, server_transcript):
+            assert actual.role == expected["role"]
+            assert actual.content == expected["content"]
+        # Make sure it's not the client input
+        assert actual_input[0].content != client_input[0]["content"]
 
     @pytest.mark.asyncio
     async def test_subsequent_calls_use_normal_flow(self, mock_base_model, mock_websocket):
@@ -250,6 +265,7 @@ class TestClientPullFirst:
             ChatMessageUser(content="User")
         ]
         wrapper._ws_config.pull.enabled = False  # Disable pull for this test
+        wrapper._ws_config.push.enabled = False  # Disable push for this test
 
         client_input = [ChatMessageUser(content="Second call message")]
 

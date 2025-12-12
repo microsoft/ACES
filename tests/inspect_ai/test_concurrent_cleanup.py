@@ -36,6 +36,7 @@ class TestConcurrentCleanup:
             instruction_prompt="test",
             assistant_prompt="test",
             submit_prompt="test",
+            continue_prompt="",
         )
 
         # Mock session manager
@@ -95,6 +96,7 @@ class TestConcurrentCleanup:
                     instruction_prompt="test",
                     assistant_prompt="test",
                     submit_prompt="test",
+            continue_prompt="",
                 ),
                 SubTaskDefinition(
                     task_id="sub_2",
@@ -108,6 +110,7 @@ class TestConcurrentCleanup:
                     instruction_prompt="test",
                     assistant_prompt="test",
                     submit_prompt="test",
+            continue_prompt="",
                 ),
             ],
             episode_attempts=1,

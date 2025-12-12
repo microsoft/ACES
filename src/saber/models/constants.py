@@ -130,6 +130,7 @@ class MetadataKeys(str, Enum):
 
     # Transcript synchronization context keys
     CLIENT_TRANSCRIPT = "_client_transcript"
+    INITIAL_TRANSCRIPT = "_initial_transcript"  # Original transcript (system->user) for restart operation
     TRANSCRIPT_METADATA = "_transcript_metadata"
 
     # WebSocket-based transcript coordination (Phase 2)

@@ -68,14 +68,25 @@ async def resolve_target_episode_id(
         )
         return None
 
+    # DEBUG: Log all context keys for troubleshooting
+    logger.info(
+        "Checking orchestration metadata in episode context",
+        extra={
+            "red_episode_id": red_episode_id,
+            "context_keys": list(red_episode.context.keys()) if red_episode.context else [],
+            "has_orchestration_key": MetadataKeys.ORCHESTRATION_TARGET_EPISODES in (red_episode.context or {}),
+        },
+    )
+
     target_episodes = red_episode.context.get(MetadataKeys.ORCHESTRATION_TARGET_EPISODES)
     if not target_episodes or not isinstance(target_episodes, list) or len(target_episodes) == 0:
-        logger.debug(
+        logger.warning(
             "No target episodes in orchestration metadata",
             extra={
                 "red_episode_id": red_episode_id,
                 "has_target_episodes": target_episodes is not None,
                 "is_list": isinstance(target_episodes, list) if target_episodes else False,
+                "target_episodes_value": str(target_episodes),
             },
         )
         return None

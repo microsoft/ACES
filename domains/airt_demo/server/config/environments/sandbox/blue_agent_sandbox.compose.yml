@@ -8,7 +8,7 @@
 
 services:
   ai-redteam-blue-sandbox:
-    image: saber/ai_redteam/sandbox:latest
+    image: saber/airt_demo/blue_sandbox:latest
     container_name: ai-redteam-blue-sandbox-${EPISODE_ID:-default}
     working_dir: /workspace
     user: "0:0"  # Run as root for system command access
@@ -51,7 +51,7 @@ services:
 
   # Ephemeral database for this episode
   incident-db:
-    image: saber/ai_redteam/incident-db:latest
+    image: saber/airt_demo/incident-db:latest
     container_name: incident-db-${EPISODE_ID:-default}
     environment:
       - MYSQL_ROOT_PASSWORD=root_password_2024
@@ -79,5 +79,4 @@ services:
 
 networks:
   saber-episode-network:
-    external: true
-    name: saber-episode-network-${EPISODE_ID:-default}
+    driver: bridge

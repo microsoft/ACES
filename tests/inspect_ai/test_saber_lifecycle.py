@@ -243,6 +243,7 @@ class TestSampleInitPaths:
             instruction_prompt="test",
             assistant_prompt="test",
             submit_prompt="test",
+            continue_prompt="",
         )
 
         metadata = {

@@ -393,69 +393,7 @@ class SABERRestClient:
                 )
                 raise Exception(f"Failed to get episode metadata: {response.status} - {error_text}")
 
-    async def pull_episode_transcript(
-        self,
-        session_id: str,
-        episode_id: str,
-    ) -> Dict[str, Any]:
-        """
-        Pull complete conversation transcript from SABER server.
-
-        Retrieves the full transcript including all messages, timestamps, and metadata.
-        Used by WebSocketTranscriptSyncingModelWrapper for differential sync after WebSocket events.
-
-        Args:
-            session_id: SABER session identifier
-            episode_id: SABER episode identifier
-
-        Returns:
-            Dictionary containing:
-                - messages: List of {role: str, content: str} messages
-                - message_count: int
-                - last_updated: Optional[str] ISO timestamp
-                - metadata: Optional[Dict] transcript metadata
-
-        Raises:
-            aiohttp.ClientError: If HTTP request fails
-            Exception: If response parsing fails
-        """
-        url = (
-            f"{self.saber_server_url}"
-            f"{APIEndpoints.EPISODE_TRANSCRIPT.format(session_id=session_id, episode_id=episode_id)}"
-        )
-
-        operation = "pull_episode_transcript"
-        log_operation_start(
-            logger,
-            operation,
-            session_id=session_id,
-            episode_id=episode_id,
-            url=url,
-        )
-
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=self.request_timeout) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    log_operation_success(
-                        logger,
-                        operation,
-                        session_id=session_id,
-                        episode_id=episode_id,
-                        message_count=data.get("message_count", 0),
-                    )
-                    return cast(Dict[str, Any], data)
-
-                error_text = await response.text()
-                log_operation_failure(
-                    logger,
-                    operation,
-                    f"HTTP {response.status}",
-                    url=url,
-                    status_code=response.status,
-                    response_text=error_text,
-                )
-                raise Exception(f"Failed to pull episode transcript: {response.status} - {error_text}")
+    # NOTE: pull_episode_transcript() REMOVED - transcript retrieval now uses WebSocket sync_request
 
     async def push_episode_transcript(
         self,

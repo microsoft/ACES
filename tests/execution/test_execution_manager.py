@@ -124,7 +124,7 @@ class TestExecutionManager:
 
         # Should have called environment creation on the mocked sandbox manager with environment string
         mock_sandbox_manager.create_episode_environment_async.assert_called_once_with(
-            "episode123", "test_env", None
+            "episode123", "test_env", None, session_id="session123"
         )
 
         # Should have updated configuration (only cli config should be present since python_config is None)
@@ -597,5 +597,5 @@ class TestExecutionManagerDebugMode:
 
         # Verify episode_id was passed to create_episode_environment_async
         mock_sandbox_instance.create_episode_environment_async.assert_called_once_with(
-            episode_id, "test_env", None
+            episode_id, "test_env", None, session_id="session123"
         )

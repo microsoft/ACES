@@ -8,21 +8,25 @@
 
 services:
   ai-redteam-red-sandbox:
-    image: saber/ai_redteam/sandbox:latest
+    image: saber/airt_demo/red_sandbox:latest
     container_name: ai-redteam-red-sandbox-${EPISODE_ID:-default}
     working_dir: /workspace
     user: "0:0"  # Run as root
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # Required for Linux - allows container to reach host
     environment:
       - PYTHONPATH=/workspace
       - PYTHONUNBUFFERED=1
       - EPISODE_ID=${EPISODE_ID:-default}
+      - SESSION_ID=${SESSION_ID:-default}
       - AGENT_ROLE=red_attacker
       - TARGET_AGENT=blue_agent
-      # WebSocket daemon configuration
-      - SABER_WEBSOCKET_URL=ws://host.docker.internal:8000/api/v1/episodes/${EPISODE_ID:-default}/ws
+      # WebSocket daemon configuration - use SABER server container name on saber-network
+      - SABER_WEBSOCKET_URL=ws://airt_demo-saber-server:8000/api/v1/episodes/${EPISODE_ID:-default}/ws
       - IPC_PORT=9999
     networks:
       - saber-episode-network
+      - saber-server-network  # Additional network to reach SABER server
     restart: "no"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9999/health"]
@@ -46,5 +50,7 @@ services:
 
 networks:
   saber-episode-network:
+    driver: bridge
+  saber-server-network:
     external: true
-    name: saber-episode-network-${EPISODE_ID:-default}
+    name: airt_demo-saber-network

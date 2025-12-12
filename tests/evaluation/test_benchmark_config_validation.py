@@ -15,6 +15,7 @@ DEFAULT_PROMPTS = {
     "instruction": "instructions/default.md",
     "assistant": "assistants/default.md",
     "submit": "submits/default.md",
+    "continue": "continues/default.md",
 }
 
 
@@ -43,6 +44,7 @@ def _normalize_yaml_with_prompts(raw_yaml: str, prompts: dict[str, str] | None =
           "instruction": template,
           "assistant": template,
           "submit": template,
+          "continue": template,
         },
       )
     else:
@@ -71,6 +73,7 @@ tasks:
       instruction: "test_task_prompt.md"
       assistant: "test_task_prompt.md"
       submit: "test_task_prompt.md"
+      continue: "test_continue.md"
     execution_config:
       executors:
         test_executor:

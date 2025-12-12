@@ -164,13 +164,14 @@ class PromptGenerator:
 
     def render_agent_prompts_for_task(self, task: Task) -> Dict[str, str]:
         """
-        Render all three prompt types for a specific task.
+        Render all prompt types for a specific task.
 
         Args:
             task: Task object with prompts dictionary
 
         Returns:
-            Dictionary with rendered prompts: {"instruction": "...", "assistant": "...", "submit": "..."}
+            Dictionary with rendered prompts:
+            {"instruction": "...", "assistant": "...", "submit": "...", "continue": "..."}
 
         Raises:
             PromptGenerationError: If template rendering fails
@@ -178,7 +179,7 @@ class PromptGenerator:
         """
         rendered_prompts = {}
 
-        for prompt_type in ["instruction", "assistant", "submit"]:
+        for prompt_type in ["instruction", "assistant", "submit", "continue"]:
             template_file = task.prompts.get(prompt_type)
             if not template_file:
                 raise PromptGenerationError(f"Task '{task.task_id}' missing {prompt_type} prompt template")

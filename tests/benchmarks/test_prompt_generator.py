@@ -143,7 +143,8 @@ class TestPromptGenerator:
             prompts={
                 "instruction": "basic_prompt.md",
                 "assistant": "basic_prompt.md",
-                "submit": "basic_prompt.md"
+                "submit": "basic_prompt.md",
+                "continue": "basic_prompt.md"
             },
             subtasks=[subtask],
             execution_config={"timeout": 30},

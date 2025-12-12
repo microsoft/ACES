@@ -288,6 +288,7 @@ class BenchmarkManager:
                 instruction_prompt=root_prompts["instruction"],
                 assistant_prompt=root_prompts["assistant"],
                 submit_prompt=root_prompts["submit"],
+                continue_prompt=root_prompts["continue"],
                 transcript_config=root_episode_config.get("transcript_config"),
             )
         )
@@ -313,6 +314,7 @@ class BenchmarkManager:
                     instruction_prompt=dependent_prompts["instruction"],
                     assistant_prompt=dependent_prompts["assistant"],
                     submit_prompt=dependent_prompts["submit"],
+                    continue_prompt=dependent_prompts["continue"],
                     transcript_config=dependent_episode_config.get("transcript_config"),
                 )
             )
@@ -357,6 +359,7 @@ class BenchmarkManager:
             instruction_prompt=rendered_prompts["instruction"],
             assistant_prompt=rendered_prompts["assistant"],
             submit_prompt=rendered_prompts["submit"],
+            continue_prompt=rendered_prompts["continue"],
         )
 
     def get_task(self, task_id: str) -> Task:

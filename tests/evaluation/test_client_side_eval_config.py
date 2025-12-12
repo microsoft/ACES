@@ -27,6 +27,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -45,6 +46,7 @@ tasks:
       instruction: "test_instruction.md"
       assistant: "test_assistant.md"
       submit: "test_submit.md"
+      continue: "test_continue.md"
     execution_config:
     episode_config:
       max_steps: 10
@@ -111,6 +113,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -129,6 +132,7 @@ tasks:
       instruction: "test_instruction.md"
       assistant: "test_assistant.md"
       submit: "test_submit.md"
+      continue: "test_continue.md"
     execution_config:
     episode_config:
       max_steps: 10
@@ -173,6 +177,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -191,6 +196,7 @@ tasks:
       instruction: "test_instruction.md"
       assistant: "test_assistant.md"
       submit: "test_submit.md"
+      continue: "test_continue.md"
     execution_config:
     episode_config:
       max_steps: 10
@@ -232,6 +238,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -250,6 +257,7 @@ tasks:
       instruction: "test_instruction.md"
       assistant: "test_assistant.md"
       submit: "test_submit.md"
+      continue: "test_continue.md"
     execution_config:
     episode_config:
       max_steps: 10
@@ -299,6 +307,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -317,6 +326,7 @@ tasks:
       instruction: "test_instruction.md"
       assistant: "test_assistant.md"
       submit: "test_submit.md"
+      continue: "test_continue.md"
     execution_config:
     episode_config:
       max_steps: 10
@@ -377,6 +387,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -395,6 +406,7 @@ tasks:
       instruction: "test_instruction.md"
       assistant: "test_assistant.md"
       submit: "test_submit.md"
+      continue: "test_continue.md"
     execution_config:
     episode_config:
       max_steps: 10
@@ -443,6 +455,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -461,6 +474,7 @@ tasks:
       instruction: "test_instruction.md"
       assistant: "test_assistant.md"
       submit: "test_submit.md"
+      continue: "test_continue.md"
     execution_config:
     episode_config:
       max_steps: 10
@@ -499,6 +513,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -517,6 +532,7 @@ tasks:
       instruction: "test_instruction.md"
       assistant: "test_assistant.md"
       submit: "test_submit.md"
+      continue: "test_continue.md"
     execution_config:
     episode_config:
       max_steps: 10
@@ -556,6 +572,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -574,6 +591,7 @@ tasks:
       instruction: "test_instruction.md"
       assistant: "test_assistant.md"
       submit: "test_submit.md"
+      continue: "test_continue.md"
     execution_config:
     episode_config:
       max_steps: 10
@@ -613,6 +631,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -631,6 +650,7 @@ tasks:
       instruction: "test_instruction.md"
       assistant: "test_assistant.md"
       submit: "test_submit.md"
+      continue: "test_continue.md"
     execution_config:
     episode_config:
       max_steps: 10
@@ -670,6 +690,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -688,6 +709,7 @@ tasks:
       instruction: "test_instruction.md"
       assistant: "test_assistant.md"
       submit: "test_submit.md"
+      continue: "test_continue.md"
     execution_config:
     episode_config:
       max_steps: 10
@@ -733,6 +755,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -751,6 +774,7 @@ tasks:
       instruction: "test_instruction.md"
       assistant: "test_assistant.md"
       submit: "test_submit.md"
+      continue: "test_continue.md"
     execution_config:
     episode_config:
       max_steps: 10
@@ -787,6 +811,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -805,6 +830,7 @@ tasks:
       instruction: "test_instruction.md"
       assistant: "test_assistant.md"
       submit: "test_submit.md"
+      continue: "test_continue.md"
     execution_config:
     episode_config:
       max_steps: 10
@@ -841,6 +867,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -859,6 +886,7 @@ tasks:
       instruction: "test_instruction.md"
       assistant: "test_assistant.md"
       submit: "test_submit.md"
+      continue: "test_continue.md"
     execution_config:
     episode_config:
       max_steps: 10
@@ -896,6 +924,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -914,6 +943,7 @@ tasks:
       instruction: "test_instruction.md"
       assistant: "test_assistant.md"
       submit: "test_submit.md"
+      continue: "test_continue.md"
     execution_config:
     episode_config:
       max_steps: 10
@@ -951,6 +981,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -969,6 +1000,7 @@ tasks:
       instruction: "test_instruction.md"
       assistant: "test_assistant.md"
       submit: "test_submit.md"
+      continue: "test_continue.md"
     execution_config:
     episode_config:
       max_steps: 10
@@ -1006,6 +1038,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -1024,6 +1057,7 @@ tasks:
       instruction: "test_instruction.md"
       assistant: "test_assistant.md"
       submit: "test_submit.md"
+      continue: "test_continue.md"
     execution_config:
     episode_config:
       max_steps: 10
@@ -1065,6 +1099,7 @@ global_defaults:
     instruction: "test_instruction.md"
     assistant: "test_assistant.md"
     submit: "test_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -1083,6 +1118,7 @@ tasks:
       instruction: "task_instruction.md"
       assistant: "task_assistant.md"
       submit: "task_submit.md"
+      continue: "test_continue.md"
     execution_config:
       executors:
         bash:

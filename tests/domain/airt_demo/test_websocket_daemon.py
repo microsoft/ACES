@@ -90,8 +90,12 @@ async def test_daemon_sends_injection_message(mock_websocket, daemon_config):
 
 
 @pytest.mark.asyncio
-async def test_daemon_sends_rewind_injection(mock_websocket, daemon_config):
-    """Test daemon sends rewind injection correctly."""
+async def test_daemon_sends_restart_injection(mock_websocket, daemon_config):
+    """Test daemon sends restart injection correctly.
+
+    The restart strategy resets the transcript to the initial state
+    (system->user->assistant) and then appends the new message.
+    """
     if WebSocketDaemon is None:
         pytest.skip("WebSocketDaemon not implemented yet")
 
@@ -107,54 +111,20 @@ async def test_daemon_sends_rewind_injection(mock_websocket, daemon_config):
         daemon._pending_responses[sent_msg["id"]].set_result({
             "type": "push_ack",
             "id": sent_msg["id"],
-            "data": {"success": True, "version": 3, "message_count": 3}
+            "data": {"success": True, "version": 3, "message_count": 4}
         })
 
     mock_websocket.send.side_effect = capture_send
 
     result = await daemon.send_injection(
         target_episode_id="blue-123",
-        message="Rewind test",
-        strategy="rewind",
-        rewind_count=2
+        message="Restart test - fresh start",
+        strategy="restart"
     )
 
-    assert sent_msg["data"]["strategy"] == "rewind"
-    assert sent_msg["data"]["rewind_count"] == 2
-
-
-@pytest.mark.asyncio
-async def test_daemon_sends_insert_injection(mock_websocket, daemon_config):
-    """Test daemon sends insert injection correctly."""
-    if WebSocketDaemon is None:
-        pytest.skip("WebSocketDaemon not implemented yet")
-
-    daemon = WebSocketDaemon(**daemon_config)
-    daemon.websocket = mock_websocket
-    daemon.connected = True
-
-    sent_msg = None
-
-    async def capture_send(message):
-        nonlocal sent_msg
-        sent_msg = json.loads(message)
-        daemon._pending_responses[sent_msg["id"]].set_result({
-            "type": "push_ack",
-            "id": sent_msg["id"],
-            "data": {"success": True, "version": 4, "message_count": 4}
-        })
-
-    mock_websocket.send.side_effect = capture_send
-
-    result = await daemon.send_injection(
-        target_episode_id="blue-123",
-        message="Insert test",
-        strategy="insert",
-        insert_position=1
-    )
-
-    assert sent_msg["data"]["strategy"] == "insert"
-    assert sent_msg["data"]["insert_position"] == 1
+    assert sent_msg["data"]["strategy"] == "restart"
+    assert sent_msg["data"]["message"]["content"] == "Restart test - fresh start"
+    assert result["success"] is True
 
 
 @pytest.mark.asyncio
@@ -284,3 +254,123 @@ async def test_daemon_handles_concurrent_requests(mock_websocket, daemon_config)
     assert len(results) == 3
     assert all(r["success"] for r in results)
     assert sent_count == 3
+
+
+@pytest.mark.asyncio
+async def test_daemon_wait_for_user_success(daemon_config):
+    """Test wait_for_user endpoint returns success when connected."""
+    if WebSocketDaemon is None:
+        pytest.skip("WebSocketDaemon not implemented yet")
+
+    daemon = WebSocketDaemon(**daemon_config)
+    daemon.connected = True
+    daemon.websocket = AsyncMock()  # Mock websocket to simulate connected state
+
+    # Mock wait_for_state_event to return success immediately
+    daemon.wait_for_state_event = AsyncMock(return_value={
+        "success": True,
+        "state": "waiting_for_user",
+        "version": 1,
+        "target_episode_id": "blue-456",
+    })
+
+    mock_request = Mock(spec=web.Request)
+    mock_request.json = AsyncMock(return_value={
+        "target_episode_id": "blue-456",
+        "max_wait_seconds": 60
+    })
+
+    response = await daemon.handle_wait_for_user(mock_request)
+
+    assert response.status == 200
+    response_data = json.loads(response.text)
+    assert response_data["success"] is True
+    assert response_data["target_episode_id"] == "blue-456"
+
+
+@pytest.mark.asyncio
+async def test_daemon_wait_for_user_missing_episode_id(daemon_config):
+    """Test wait_for_user returns error when target_episode_id is missing."""
+    if WebSocketDaemon is None:
+        pytest.skip("WebSocketDaemon not implemented yet")
+
+    daemon = WebSocketDaemon(**daemon_config)
+    daemon.connected = True
+
+    mock_request = Mock(spec=web.Request)
+    mock_request.json = AsyncMock(return_value={
+        "max_wait_seconds": 60
+        # Missing target_episode_id
+    })
+
+    response = await daemon.handle_wait_for_user(mock_request)
+
+    assert response.status == 400
+    response_data = json.loads(response.text)
+    assert response_data["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_daemon_wait_for_user_not_connected(daemon_config):
+    """Test wait_for_user returns error when WebSocket not connected."""
+    if WebSocketDaemon is None:
+        pytest.skip("WebSocketDaemon not implemented yet")
+
+    daemon = WebSocketDaemon(**daemon_config)
+    daemon.connected = False  # Not connected
+
+    mock_request = Mock(spec=web.Request)
+    mock_request.json = AsyncMock(return_value={
+        "target_episode_id": "blue-456",
+        "max_wait_seconds": 60
+    })
+
+    response = await daemon.handle_wait_for_user(mock_request)
+
+    assert response.status == 503
+    response_data = json.loads(response.text)
+    assert response_data["success"] is False
+    assert "not connected" in response_data["error"]
+
+
+@pytest.mark.asyncio
+async def test_daemon_transcript_missing_session_id(daemon_config):
+    """Test transcript endpoint returns error when session_id not configured."""
+    if WebSocketDaemon is None:
+        pytest.skip("WebSocketDaemon not implemented yet")
+
+    daemon = WebSocketDaemon(**daemon_config)
+    daemon.connected = True
+    daemon.session_id = ""  # No session_id configured
+    daemon.rest_base_url = ""  # No REST URL
+
+    mock_request = Mock(spec=web.Request)
+    mock_request.json = AsyncMock(return_value={
+        "target_episode_id": "blue-456"
+    })
+
+    response = await daemon.handle_transcript(mock_request)
+
+    assert response.status == 503
+    response_data = json.loads(response.text)
+    assert response_data["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_daemon_transcript_missing_target_episode_id(daemon_config):
+    """Test transcript endpoint returns error when target_episode_id missing."""
+    if WebSocketDaemon is None:
+        pytest.skip("WebSocketDaemon not implemented yet")
+
+    daemon = WebSocketDaemon(**daemon_config, session_id="test-session", rest_base_url="http://localhost:8000")
+
+    mock_request = Mock(spec=web.Request)
+    mock_request.json = AsyncMock(return_value={
+        # Missing target_episode_id
+    })
+
+    response = await daemon.handle_transcript(mock_request)
+
+    assert response.status == 400
+    response_data = json.loads(response.text)
+    assert response_data["success"] is False

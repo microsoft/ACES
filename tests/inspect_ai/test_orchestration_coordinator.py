@@ -6,7 +6,7 @@ including singleton behavior, registration, dependency tracking, and cleanup.
 
 import asyncio
 import pytest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from saber.inspect_ai.core.orchestration_coordinator import OrchestrationCoordinator
 
@@ -537,3 +537,225 @@ class TestComplexScenarios:
         assert "blue" in group.samples
         assert "green" in group.samples
         assert "red" not in group.samples
+
+
+class TestSetActiveSample:
+    """Test set_active_sample method for ActiveSample reference tracking."""
+
+    def test_set_active_sample_success(self):
+        """Test successful ActiveSample registration."""
+        coordinator = OrchestrationCoordinator()
+        coordinator.register_root_sample("orch_123", "blue", "sample_blue")
+
+        # Create mock ActiveSample
+        mock_active_sample = MagicMock()
+        mock_active_sample.id = "active_sample_id_123"
+
+        coordinator.set_active_sample("orch_123", "blue", mock_active_sample)
+
+        # Verify it was stored
+        group = coordinator._orchestrations.get("orch_123")
+        assert group is not None
+        assert group.samples["blue"].active_sample is mock_active_sample
+
+    def test_set_active_sample_orchestration_not_found(self):
+        """Test set_active_sample when orchestration doesn't exist."""
+        coordinator = OrchestrationCoordinator()
+
+        mock_active_sample = MagicMock()
+
+        # Should not raise, just return silently
+        coordinator.set_active_sample("orch_999", "blue", mock_active_sample)
+
+    def test_set_active_sample_role_not_found(self):
+        """Test set_active_sample when role doesn't exist."""
+        coordinator = OrchestrationCoordinator()
+        coordinator.register_root_sample("orch_123", "blue", "sample_blue")
+
+        mock_active_sample = MagicMock()
+
+        # Should not raise, just return silently
+        coordinator.set_active_sample("orch_123", "red", mock_active_sample)
+
+        # Verify nothing was set on blue
+        group = coordinator._orchestrations.get("orch_123")
+        assert group.samples["blue"].active_sample is None
+
+    @pytest.mark.asyncio
+    async def test_set_active_sample_multiple_samples(self):
+        """Test setting ActiveSample for multiple samples in orchestration."""
+        coordinator = OrchestrationCoordinator()
+
+        coordinator.register_root_sample("orch_123", "blue", "sample_blue")
+        await coordinator.register_dependent_sample("orch_123", "red", "sample_red", "blue", 2)
+
+        mock_active_blue = MagicMock()
+        mock_active_blue.id = "active_blue"
+        mock_active_red = MagicMock()
+        mock_active_red.id = "active_red"
+
+        coordinator.set_active_sample("orch_123", "blue", mock_active_blue)
+        coordinator.set_active_sample("orch_123", "red", mock_active_red)
+
+        group = coordinator._orchestrations.get("orch_123")
+        assert group.samples["blue"].active_sample is mock_active_blue
+        assert group.samples["red"].active_sample is mock_active_red
+
+
+class TestTriggerTerminationWithSkipRole:
+    """Test trigger_termination with skip_role parameter for sibling interruption."""
+
+    def test_trigger_termination_skip_role_not_interrupted(self):
+        """Test that skip_role sample is not interrupted."""
+        coordinator = OrchestrationCoordinator()
+        coordinator.register_root_sample("orch_123", "blue", "sample_blue")
+        coordinator.set_episode_id("orch_123", "blue", "episode_blue_1")
+
+        # Set mock ActiveSample
+        mock_active_blue = MagicMock()
+        coordinator.set_active_sample("orch_123", "blue", mock_active_blue)
+
+        # Trigger termination with skip_role=blue
+        episodes = coordinator.trigger_termination("orch_123", skip_role="blue")
+
+        # Blue should NOT have been interrupted
+        mock_active_blue.interrupt.assert_not_called()
+        assert episodes == [("blue", "episode_blue_1")]
+
+    @pytest.mark.asyncio
+    async def test_trigger_termination_interrupts_sibling_samples(self):
+        """Test that sibling samples are interrupted when one completes."""
+        coordinator = OrchestrationCoordinator()
+
+        coordinator.register_root_sample("orch_123", "blue", "sample_blue")
+        await coordinator.register_dependent_sample("orch_123", "red", "sample_red", "blue", 2)
+
+        coordinator.set_episode_id("orch_123", "blue", "episode_blue")
+        coordinator.set_episode_id("orch_123", "red", "episode_red")
+
+        # Set mock ActiveSamples
+        mock_active_blue = MagicMock()
+        mock_active_red = MagicMock()
+        coordinator.set_active_sample("orch_123", "blue", mock_active_blue)
+        coordinator.set_active_sample("orch_123", "red", mock_active_red)
+
+        # Blue completes and triggers termination
+        episodes = coordinator.trigger_termination("orch_123", skip_role="blue")
+
+        # Blue should NOT be interrupted (it's the one completing)
+        mock_active_blue.interrupt.assert_not_called()
+
+        # Red SHOULD be interrupted with "score"
+        mock_active_red.interrupt.assert_called_once_with("score")
+
+        assert len(episodes) == 2
+
+    @pytest.mark.asyncio
+    async def test_trigger_termination_handles_interrupt_exception(self):
+        """Test that interrupt exceptions are handled gracefully."""
+        coordinator = OrchestrationCoordinator()
+
+        coordinator.register_root_sample("orch_123", "blue", "sample_blue")
+        await coordinator.register_dependent_sample("orch_123", "red", "sample_red", "blue", 2)
+
+        coordinator.set_episode_id("orch_123", "blue", "episode_blue")
+        coordinator.set_episode_id("orch_123", "red", "episode_red")
+
+        # Set mock ActiveSamples - red will raise on interrupt
+        mock_active_blue = MagicMock()
+        mock_active_red = MagicMock()
+        mock_active_red.interrupt.side_effect = RuntimeError("Task group not available")
+        coordinator.set_active_sample("orch_123", "blue", mock_active_blue)
+        coordinator.set_active_sample("orch_123", "red", mock_active_red)
+
+        # Should not raise, should handle gracefully
+        episodes = coordinator.trigger_termination("orch_123", skip_role="blue")
+
+        # Should still return episodes
+        assert len(episodes) == 2
+        # Group should still be marked as terminated
+        group = coordinator._orchestrations.get("orch_123")
+        assert group.terminated is True
+
+    @pytest.mark.asyncio
+    async def test_trigger_termination_no_active_sample_skips_interrupt(self):
+        """Test that samples without ActiveSample reference are skipped."""
+        coordinator = OrchestrationCoordinator()
+
+        coordinator.register_root_sample("orch_123", "blue", "sample_blue")
+        await coordinator.register_dependent_sample("orch_123", "red", "sample_red", "blue", 2)
+
+        coordinator.set_episode_id("orch_123", "blue", "episode_blue")
+        coordinator.set_episode_id("orch_123", "red", "episode_red")
+
+        # Only set ActiveSample for blue, not red
+        mock_active_blue = MagicMock()
+        coordinator.set_active_sample("orch_123", "blue", mock_active_blue)
+
+        # Trigger from blue - should not raise even though red has no ActiveSample
+        episodes = coordinator.trigger_termination("orch_123", skip_role="blue")
+
+        # Blue not interrupted (skip_role)
+        mock_active_blue.interrupt.assert_not_called()
+        # Red has no ActiveSample so nothing to interrupt
+        assert len(episodes) == 2
+
+    @pytest.mark.asyncio
+    async def test_trigger_termination_three_samples_one_skipped(self):
+        """Test termination with three samples, one skipped."""
+        coordinator = OrchestrationCoordinator()
+
+        coordinator.register_root_sample("orch_123", "blue", "sample_blue")
+        await coordinator.register_dependent_sample("orch_123", "red", "sample_red", "blue", 2)
+        await coordinator.register_dependent_sample("orch_123", "green", "sample_green", "blue", 3)
+
+        coordinator.set_episode_id("orch_123", "blue", "episode_blue")
+        coordinator.set_episode_id("orch_123", "red", "episode_red")
+        coordinator.set_episode_id("orch_123", "green", "episode_green")
+
+        mock_active_blue = MagicMock()
+        mock_active_red = MagicMock()
+        mock_active_green = MagicMock()
+        coordinator.set_active_sample("orch_123", "blue", mock_active_blue)
+        coordinator.set_active_sample("orch_123", "red", mock_active_red)
+        coordinator.set_active_sample("orch_123", "green", mock_active_green)
+
+        # Red completes first
+        episodes = coordinator.trigger_termination("orch_123", skip_role="red")
+
+        # Red not interrupted
+        mock_active_red.interrupt.assert_not_called()
+        # Blue and green ARE interrupted
+        mock_active_blue.interrupt.assert_called_once_with("score")
+        mock_active_green.interrupt.assert_called_once_with("score")
+
+        assert len(episodes) == 3
+
+    def test_trigger_termination_without_skip_role_interrupts_all(self):
+        """Test that without skip_role, all samples with ActiveSample are interrupted."""
+        coordinator = OrchestrationCoordinator()
+        coordinator.register_root_sample("orch_123", "blue", "sample_blue")
+        coordinator.set_episode_id("orch_123", "blue", "episode_blue")
+
+        mock_active_blue = MagicMock()
+        coordinator.set_active_sample("orch_123", "blue", mock_active_blue)
+
+        # Trigger without skip_role (default None)
+        episodes = coordinator.trigger_termination("orch_123")
+
+        # Should interrupt all
+        mock_active_blue.interrupt.assert_called_once_with("score")
+
+    def test_trigger_termination_backward_compatible(self):
+        """Test that trigger_termination works without skip_role (backward compat)."""
+        coordinator = OrchestrationCoordinator()
+        coordinator.register_root_sample("orch_123", "blue", "sample_blue")
+        coordinator.set_episode_id("orch_123", "blue", "episode_blue")
+
+        # No ActiveSample set - old behavior
+        episodes = coordinator.trigger_termination("orch_123")
+
+        # Should still work and return episodes
+        assert episodes == [("blue", "episode_blue")]
+        group = coordinator._orchestrations.get("orch_123")
+        assert group.terminated is True

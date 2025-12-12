@@ -90,8 +90,14 @@ async def test_daemon_sends_injection_message(mock_websocket, daemon_config):
 
 
 @pytest.mark.asyncio
-async def test_daemon_sends_rewind_injection(mock_websocket, daemon_config):
-    """Test daemon sends rewind injection correctly."""
+async def test_daemon_sends_restart_injection(mock_websocket, daemon_config):
+    """Test daemon sends restart injection correctly.
+
+    The restart strategy resets the transcript to the initial state
+    (system->user->assistant) and then appends the new message.
+    This is useful when the red team wants to start a fresh conversation
+    while preserving the blue team's opening response.
+    """
     if WebSocketDaemon is None:
         pytest.skip("WebSocketDaemon not implemented yet")
 
@@ -107,54 +113,20 @@ async def test_daemon_sends_rewind_injection(mock_websocket, daemon_config):
         daemon._pending_responses[sent_msg["id"]].set_result({
             "type": "push_ack",
             "id": sent_msg["id"],
-            "data": {"success": True, "version": 3, "message_count": 3}
+            "data": {"success": True, "version": 3, "message_count": 4}
         })
 
     mock_websocket.send.side_effect = capture_send
 
     result = await daemon.send_injection(
         target_episode_id="blue-123",
-        message="Rewind test",
-        strategy="rewind",
-        rewind_count=2
+        message="Restart test - fresh start",
+        strategy="restart"
     )
 
-    assert sent_msg["data"]["strategy"] == "rewind"
-    assert sent_msg["data"]["rewind_count"] == 2
-
-
-@pytest.mark.asyncio
-async def test_daemon_sends_insert_injection(mock_websocket, daemon_config):
-    """Test daemon sends insert injection correctly."""
-    if WebSocketDaemon is None:
-        pytest.skip("WebSocketDaemon not implemented yet")
-
-    daemon = WebSocketDaemon(**daemon_config)
-    daemon.websocket = mock_websocket
-    daemon.connected = True
-
-    sent_msg = None
-
-    async def capture_send(message):
-        nonlocal sent_msg
-        sent_msg = json.loads(message)
-        daemon._pending_responses[sent_msg["id"]].set_result({
-            "type": "push_ack",
-            "id": sent_msg["id"],
-            "data": {"success": True, "version": 4, "message_count": 4}
-        })
-
-    mock_websocket.send.side_effect = capture_send
-
-    result = await daemon.send_injection(
-        target_episode_id="blue-123",
-        message="Insert test",
-        strategy="insert",
-        insert_position=1
-    )
-
-    assert sent_msg["data"]["strategy"] == "insert"
-    assert sent_msg["data"]["insert_position"] == 1
+    assert sent_msg["data"]["strategy"] == "restart"
+    assert sent_msg["data"]["message"]["content"] == "Restart test - fresh start"
+    assert result["success"] is True
 
 
 @pytest.mark.asyncio

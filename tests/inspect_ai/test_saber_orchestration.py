@@ -191,3 +191,121 @@ class TestOrchestratedIntegration:
         # Verify both init and cleanup were called
         assert mock_orch_init.init_orchestrated_sub_task.call_count == 1
         assert mock_orch_init.cleanup_orchestrated_sub_task.call_count == 1
+
+
+class TestActiveSampleRegistration:
+    """Test ActiveSample registration with OrchestrationCoordinator."""
+
+    @pytest.mark.asyncio
+    async def test_active_sample_registered_for_orchestrated_task(self, orchestrated_metadata_root):
+        """Test that ActiveSample is registered with coordinator for orchestrated samples."""
+        from saber.inspect_ai.core.types import OrchestrationSubTaskState
+
+        # Setup registry entry
+        SABERSandboxEnvironment._registry["test_domain"] = DomainRegistryEntry(
+            domain_slug="test_domain",
+            owner="test_task",
+            controller=MagicMock(),
+            context=MagicMock(),
+            ownership=True,
+            rest_port=8000,
+            mcp_port=8001,
+            rest_url="http://localhost:8000",
+            mcp_url="http://localhost:8001",
+            session_id="session_456",
+        )
+
+        instance = SABERSandboxEnvironment(
+            domain_slug="test_domain",
+            domains_root=Path("/tmp"),
+            max_concurrent_episodes=2,
+        )
+        instance._session_id = "session_456"
+        instance._session_manager = AsyncMock()
+        instance._episode_manager = AsyncMock()
+
+        # Mock OrchestrationInitializer
+        mock_orch_init = AsyncMock()
+        mock_handler_state = OrchestrationSubTaskState(
+            episode_ids=["episode_blue"],
+            primary_episode_id="episode_blue",
+            orchestration_id="orch_123",
+            sub_task_role="blue",
+            semaphore_acquired=True,
+        )
+        mock_orch_init.init_orchestrated_sub_task.return_value = mock_handler_state
+        type(instance)._orchestration_initializer = mock_orch_init
+
+        # Mock sample_active to return an ActiveSample
+        mock_active_sample = MagicMock()
+        mock_active_sample.id = "active_sample_123"
+
+        # Mock the coordinator
+        with patch("saber.inspect_ai.saber.sample_active") as mock_sample_active, \
+             patch("saber.inspect_ai.saber.OrchestrationCoordinator") as mock_coordinator_class:
+            mock_sample_active.return_value = mock_active_sample
+            mock_coordinator = MagicMock()
+            mock_coordinator_class.return_value = mock_coordinator
+
+            # Initialize
+            await instance._init_sample(orchestrated_metadata_root)
+
+            # Verify set_active_sample was called
+            mock_coordinator.set_active_sample.assert_called_once_with(
+                orchestration_id="orch_123",
+                role="blue",
+                active_sample=mock_active_sample,
+            )
+
+    @pytest.mark.asyncio
+    async def test_active_sample_not_registered_when_none(self, orchestrated_metadata_root):
+        """Test that set_active_sample is not called when sample_active returns None."""
+        from saber.inspect_ai.core.types import OrchestrationSubTaskState
+
+        # Setup registry entry
+        SABERSandboxEnvironment._registry["test_domain"] = DomainRegistryEntry(
+            domain_slug="test_domain",
+            owner="test_task",
+            controller=MagicMock(),
+            context=MagicMock(),
+            ownership=True,
+            rest_port=8000,
+            mcp_port=8001,
+            rest_url="http://localhost:8000",
+            mcp_url="http://localhost:8001",
+            session_id="session_456",
+        )
+
+        instance = SABERSandboxEnvironment(
+            domain_slug="test_domain",
+            domains_root=Path("/tmp"),
+            max_concurrent_episodes=2,
+        )
+        instance._session_id = "session_456"
+        instance._session_manager = AsyncMock()
+        instance._episode_manager = AsyncMock()
+
+        # Mock OrchestrationInitializer
+        mock_orch_init = AsyncMock()
+        mock_handler_state = OrchestrationSubTaskState(
+            episode_ids=["episode_blue"],
+            primary_episode_id="episode_blue",
+            orchestration_id="orch_123",
+            sub_task_role="blue",
+            semaphore_acquired=True,
+        )
+        mock_orch_init.init_orchestrated_sub_task.return_value = mock_handler_state
+        type(instance)._orchestration_initializer = mock_orch_init
+
+        # Mock sample_active to return None
+        with patch("saber.inspect_ai.saber.sample_active") as mock_sample_active, \
+             patch("saber.inspect_ai.saber.OrchestrationCoordinator") as mock_coordinator_class:
+            mock_sample_active.return_value = None
+            mock_coordinator = MagicMock()
+            mock_coordinator_class.return_value = mock_coordinator
+
+            # Initialize
+            await instance._init_sample(orchestrated_metadata_root)
+
+            # Verify set_active_sample was NOT called
+            mock_coordinator.set_active_sample.assert_not_called()

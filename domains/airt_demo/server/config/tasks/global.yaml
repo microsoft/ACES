@@ -1,4 +1,4 @@
-domain: ai_redteam
+domain: airt_demo
 
 global_defaults:
   execution_config:
@@ -11,26 +11,13 @@ global_defaults:
   episode_config:
     max_steps: 50
 
-    # Default transcript coordination for multi-agent tasks
+    # Transcript coordination - only meaningful config is pull.enabled
+    # Red team (default): doesn't wait for transcript modifications
+    # Blue team: overrides to pull.enabled=true to receive injections
     transcript_config:
       websocket:
-        # Connection settings
-        connection_timeout: 10.0
-        ping_interval: 30.0
-
-        # Pull configuration - receiving transcript modifications from server
         pull:
-          enabled: false              # Disabled by default (red team doesn't pull)
-          blocking: true              # Wait for transcript_modified events (when enabled)
-          event_timeout: 300.0        # How long to wait for modifications (5 min)
-          sync_timeout: 5.0           # Timeout for sync_request/sync_response
-
-        # Push configuration - sending new messages to server
-        push:
-          enabled: true
-          confirmation_timeout: 5.0   # Timeout for push acknowledgment
-          retry_enabled: true
-          max_retry_attempts: 3
+          enabled: false
 
   benchmark_config:
     episode_attempts: 1

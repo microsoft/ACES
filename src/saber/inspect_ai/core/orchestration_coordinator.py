@@ -34,6 +34,7 @@ class SampleRegistration:
     episode_id: Optional[str] = None
     ready_event: asyncio.Event = field(default_factory=asyncio.Event)
     termination_requested: bool = False
+    active_sample: Optional[Any] = None  # Reference to Inspect AI's ActiveSample for interrupt
 
 
 @dataclass
@@ -330,14 +331,57 @@ class OrchestrationCoordinator:
             },
         )
 
-    def trigger_termination(self, orchestration_id: str) -> list[tuple[str, str]]:
+    def set_active_sample(
+        self,
+        orchestration_id: str,
+        role: str,
+        active_sample: Any,
+    ) -> None:
+        """Store reference to Inspect AI's ActiveSample for interrupt capability.
+
+        This allows the coordinator to interrupt sibling samples when one sample
+        completes, triggering their natural cleanup and scoring paths.
+
+        Args:
+            orchestration_id: Orchestration ID
+            role: Sample's role
+            active_sample: The Inspect AI ActiveSample instance
+        """
+        group = self._orchestrations.get(orchestration_id)
+        if not group:
+            logger.warning(
+                f"Orchestration {orchestration_id} not found when setting active_sample",
+                extra={"orchestration_id": orchestration_id, "role": role},
+            )
+            return
+
+        sample = group.samples.get(role)
+        if not sample:
+            logger.warning(
+                f"Sample {role} not found in orchestration {orchestration_id}",
+                extra={"orchestration_id": orchestration_id, "role": role},
+            )
+            return
+
+        sample.active_sample = active_sample
+
+        logger.debug(
+            f"Set active_sample reference for {role}",
+            extra={
+                "orchestration_id": orchestration_id,
+                "role": role,
+            },
+        )
+
+    def trigger_termination(self, orchestration_id: str, skip_role: Optional[str] = None) -> list[tuple[str, str]]:
         """Trigger cascade termination for entire orchestration.
 
-        Marks all samples in the orchestration for termination and returns
-        episode IDs that need cleanup.
+        Marks all samples in the orchestration for termination, interrupts sibling
+        samples (except skip_role), and returns episode IDs that need cleanup.
 
         Args:
             orchestration_id: Orchestration ID to terminate
+            skip_role: Role of the sample initiating termination (won't be interrupted)
 
         Returns:
             List of (role, episode_id) tuples for cleanup
@@ -361,11 +405,26 @@ class OrchestrationCoordinator:
             if sample.episode_id:
                 episodes_to_cleanup.append((role, sample.episode_id))
 
+            # Interrupt sibling samples (not the one initiating cleanup)
+            if role != skip_role and sample.active_sample is not None:
+                try:
+                    sample.active_sample.interrupt("score")
+                    logger.info(
+                        f"Interrupted sibling sample {role} in orchestration {orchestration_id}",
+                        extra={"orchestration_id": orchestration_id, "role": role},
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to interrupt sample {role}: {e}",
+                        extra={"orchestration_id": orchestration_id, "role": role},
+                    )
+
         logger.info(
             f"Triggered termination for orchestration {orchestration_id}",
             extra={
                 "orchestration_id": orchestration_id,
                 "episodes_to_cleanup": len(episodes_to_cleanup),
+                "skip_role": skip_role,
             },
         )
 

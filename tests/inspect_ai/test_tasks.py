@@ -48,6 +48,7 @@ def mock_task():
         instruction_prompt="Test instruction",
         assistant_prompt="Test assistant",
         submit_prompt="Test submit",
+            continue_prompt="",
     )
 
 
@@ -451,6 +452,7 @@ class TestApplyTaskFilter:
                 instruction_prompt="",
                 assistant_prompt="",
                 submit_prompt="",
+            continue_prompt="",
             ),
             SingleEpisodeTask(
                 benchmark_task_id="labyrinth_hard",
@@ -463,6 +465,7 @@ class TestApplyTaskFilter:
                 instruction_prompt="",
                 assistant_prompt="",
                 submit_prompt="",
+            continue_prompt="",
             ),
             SingleEpisodeTask(
                 benchmark_task_id="other_task",
@@ -475,6 +478,7 @@ class TestApplyTaskFilter:
                 instruction_prompt="",
                 assistant_prompt="",
                 submit_prompt="",
+            continue_prompt="",
             ),
         ]
 
@@ -497,6 +501,7 @@ class TestApplyTaskFilter:
                 instruction_prompt="",
                 assistant_prompt="",
                 submit_prompt="",
+            continue_prompt="",
             ),
             SingleEpisodeTask(
                 benchmark_task_id="task_hard",
@@ -509,6 +514,7 @@ class TestApplyTaskFilter:
                 instruction_prompt="",
                 assistant_prompt="",
                 submit_prompt="",
+            continue_prompt="",
             ),
         ]
 
@@ -793,6 +799,7 @@ class TestTaskFilterAdvanced:
                 instruction_prompt="",
                 assistant_prompt="",
                 submit_prompt="",
+            continue_prompt="",
             ),
             SingleEpisodeTask(
                 benchmark_task_id="task_b",
@@ -805,6 +812,7 @@ class TestTaskFilterAdvanced:
                 instruction_prompt="",
                 assistant_prompt="",
                 submit_prompt="",
+            continue_prompt="",
             ),
         ]
 
@@ -829,6 +837,7 @@ class TestTaskFilterAdvanced:
                 instruction_prompt="",
                 assistant_prompt="",
                 submit_prompt="",
+            continue_prompt="",
             ),
         ]
 

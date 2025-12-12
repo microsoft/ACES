@@ -57,13 +57,17 @@ class TranscriptErrorType(str, Enum):
 
 
 class TranscriptOperation(str, Enum):
-    """Transcript operation types."""
+    """Transcript operation types.
+
+    Simplified to:
+    - INIT: Initial transcript creation
+    - APPEND: Add messages at end (default)
+    - RESTART: Reset to initial transcript then append
+    """
 
     INIT = "init"  # Initial transcript creation
     APPEND = "append"  # Add messages at end (default)
-    REWIND = "rewind"  # Remove last N messages, then append
-    REWRITE = "rewrite"  # Replace entire transcript
-    INSERT = "insert"  # Insert at specific position
+    RESTART = "restart"  # Reset to initial transcript, then append
 
 
 # Pydantic models for structured validation
@@ -79,10 +83,28 @@ class TranscriptVersion(BaseModel):
 
 
 class SyncRequestData(BaseModel):
-    """Client sync request data."""
+    """Data payload for sync_request messages."""
 
-    since_version: Optional[int] = Field(default=None, description="Last known version", ge=0)
+    since_version: int = Field(default=0, description="Last known version", ge=0)
     client_checksum: Optional[str] = Field(default=None, description="Client checksum for verification")
+
+    # Observer/cross-episode fields (for red team accessing blue team transcript)
+    target_episode_id: Optional[str] = Field(default=None, description="Target episode for cross-episode sync")
+    hide_system_prompt: Optional[bool] = Field(default=None, description="Hide system messages for security")
+    retrieval_mode: Optional[str] = Field(default=None, description="Retrieval mode: full, delta, tail")
+    tail_count: Optional[int] = Field(default=None, description="Number of messages for tail mode", ge=1)
+
+
+class PushMessageRequestData(BaseModel):
+    """Data payload for push_message messages (normal and injection mode)."""
+
+    message: Dict[str, Any] = Field(description="Message to push")
+    since_version: int = Field(default=0, ge=0)
+    client_checksum: Optional[str] = Field(default=None)
+
+    # Injection fields (optional - red team only)
+    target_episode_id: Optional[str] = Field(default=None, description="Target episode for injection")
+    strategy: str = Field(default="append", description="Operation strategy: append or restart")
 
 
 class SyncResponseData(BaseModel):
@@ -107,8 +129,6 @@ class PushMessageData(BaseModel):
     # Injection fields (red team only)
     target_episode_id: Optional[str] = Field(default=None, description="Target episode for injection")
     strategy: Optional[TranscriptOperation] = Field(default=None, description="Operation strategy")
-    rewind_count: Optional[int] = Field(default=None, ge=0)
-    insert_position: Optional[int] = Field(default=None, ge=0)
 
 
 class PushAckData(BaseModel):
@@ -232,9 +252,11 @@ __all__ = [
     "SyncMode",
     "TranscriptErrorType",
     "TranscriptOperation",
-    # Data models
-    "TranscriptVersion",
+    # Data models (request dataclasses)
     "SyncRequestData",
+    "PushMessageRequestData",
+    # Data models (response Pydantic)
+    "TranscriptVersion",
     "SyncResponseData",
     "PushMessageData",
     "PushAckData",

@@ -88,6 +88,7 @@ class SubTaskDefinition(BaseModel):
     instruction_prompt: str = Field(..., description="Agent instruction prompt")
     assistant_prompt: str = Field(..., description="Agent assistant prompt")
     submit_prompt: str = Field(..., description="Agent submit prompt")
+    continue_prompt: str = Field(..., description="Agent continue prompt (message shown after each step)")
 
     # Transcript coordination (for orchestrated tasks that need transcript synchronization)
     transcript_config: Optional[Dict[str, Any]] = Field(
@@ -189,6 +190,7 @@ class SingleEpisodeTask(BenchmarkTask):
     instruction_prompt: str = Field(..., description="Agent instruction prompt")
     assistant_prompt: str = Field(..., description="Agent assistant prompt")
     submit_prompt: str = Field(..., description="Agent submit prompt")
+    continue_prompt: str = Field(..., description="Agent continue prompt (message shown after each step)")
 
     # Transcript coordination (WebSocket coordination for transcript synchronization)
     transcript_config: Optional[Dict[str, Any]] = Field(

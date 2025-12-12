@@ -155,14 +155,11 @@ class TestEndToEndTimestampBasedFlowREST:
         has_changes_now = data["last_modified_at"] is not None and data["last_modified_at"] > last_pull
         assert has_changes_now is True
 
-        # Step 5: Blue team pulls transcript (using existing GET /transcript endpoint)
-        response = test_client.get(
-            f"/api/v1/session/{sample_episode.session_id}/episodes/{sample_episode.episode_id}/transcript"
-        )
-        assert response.status_code == 200
-        transcript_data = response.json()
-        assert len(transcript_data["messages"]) == 3
-        assert transcript_data["messages"][-1]["content"] == "Malicious"
+        # Step 5: Verify transcript content directly from episode context
+        # (GET /transcript endpoint was removed - transcript retrieval now uses WebSocket sync_request)
+        transcript = sample_episode.context[MetadataKeys.CLIENT_TRANSCRIPT]
+        assert len(transcript) == 3
+        assert transcript[-1]["content"] == "Malicious"
 
         # Step 6: Blue team updates client-side last_pull timestamp
         new_last_pull = modification_time

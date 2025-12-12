@@ -59,7 +59,7 @@ class TestBenchmarkConfigLoaderPermanentSupport:
                     "task_id": "test_task_with_permanent",
                     "title": "Test Task with Permanent Environment",
                     "description": "Task that uses permanent environment",
-                    "prompts": {"instruction": "test_task_with_permanent_prompt.md", "assistant": "test_task_with_permanent_prompt.md", "submit": "test_task_with_permanent_prompt.md"},
+                    "prompts": {"instruction": "test_task_with_permanent_prompt.md", "assistant": "test_task_with_permanent_prompt.md", "submit": "test_task_with_permanent_prompt.md", "continue": "test_continue.md"},
                     "sandbox_environment": "test_sandbox",
                     "permanent_environment": "default",  # Reference to the global permanent environment
                     "execution_config": {
@@ -103,7 +103,7 @@ class TestBenchmarkConfigLoaderPermanentSupport:
                     "task_id": "test_task_no_permanent",
                     "title": "Test Task without Permanent Environment",
                     "description": "Task that doesn't use permanent environment",
-                    "prompts": {"instruction": "test_task_no_permanent_prompt.md", "assistant": "test_task_no_permanent_prompt.md", "submit": "test_task_no_permanent_prompt.md"},
+                    "prompts": {"instruction": "test_task_no_permanent_prompt.md", "assistant": "test_task_no_permanent_prompt.md", "submit": "test_task_no_permanent_prompt.md", "continue": "test_continue.md"},
                     "sandbox_environment": "test_sandbox",
                     "execution_config": {
                         "executors": {
@@ -211,7 +211,7 @@ class TestBenchmarkConfigLoaderPermanentSupport:
             "task_id": "enhanced_task",
             "title": "Enhanced Task",
             "description": "Task with both environment types",
-            "prompts": {"instruction": "enhanced_task_prompt.md", "assistant": "enhanced_task_prompt.md", "submit": "enhanced_task_prompt.md"},
+            "prompts": {"instruction": "enhanced_task_prompt.md", "assistant": "enhanced_task_prompt.md", "submit": "enhanced_task_prompt.md", "continue": "test_continue.md"},
             "sandbox_environment": "test_sandbox",
             "permanent_environment": "default",
             "execution_config": {
@@ -279,7 +279,7 @@ class TestBenchmarkConfigLoaderPermanentSupport:
             "task_id": "permanent_only_task",
             "title": "Permanent Only Task",
             "description": "Task with only permanent environment",
-            "prompts": {"instruction": "permanent_only_task_prompt.md", "assistant": "permanent_only_task_prompt.md", "submit": "permanent_only_task_prompt.md"},
+            "prompts": {"instruction": "permanent_only_task_prompt.md", "assistant": "permanent_only_task_prompt.md", "submit": "permanent_only_task_prompt.md", "continue": "test_continue.md"},
             "permanent_environment": "default",
             "execution_config": {
                         "executors": {

@@ -98,6 +98,7 @@ global_defaults:
     instruction: "malware_family_analysis_prompt.md"
     assistant: "malware_family_analysis_prompt.md"
     submit: "malware_family_analysis_prompt.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash_executor:
@@ -161,6 +162,7 @@ global_defaults:
     instruction: "malware_analysis_prompt.md"
     assistant: "malware_analysis_prompt.md"
     submit: "malware_analysis_prompt.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash_executor:
@@ -217,6 +219,7 @@ def temp_config_dir_helper():
             "instruction": "instructions/default.md",
             "assistant": "assistants/default.md",
             "submit": "submits/default.md",
+            "continue": "test_continue.md",
         }
 
         # Create global.yaml with domain and benchmark_config
@@ -273,7 +276,7 @@ def temp_config_dir_helper():
         prompts_dir.mkdir()
 
         # Create some sample prompt template files (legacy single-prompt format)
-        for template_name in ["malware_family_analysis_prompt.md", "malware_analysis_prompt.md", "test_task_prompt.md"]:
+        for template_name in ["malware_family_analysis_prompt.md", "malware_analysis_prompt.md", "test_task_prompt.md", "test_continue.md"]:
             template_file = prompts_dir / template_name
             template_file.write_text("# Sample Template\n\nThis is a sample prompt template for testing.")
 
@@ -358,7 +361,7 @@ def temp_config_dir(tmp_path, sample_task_yaml):
     prompts_dir.mkdir()
 
     # Create some sample prompt template files
-    for template_name in ["malware_family_analysis_prompt.md", "malware_analysis_prompt.md", "test_task_prompt.md"]:
+    for template_name in ["malware_family_analysis_prompt.md", "malware_analysis_prompt.md", "test_task_prompt.md", "test_continue.md"]:
         template_file = prompts_dir / template_name
         template_file.write_text("# Sample Template\n\nThis is a sample prompt template for testing.")
 
@@ -595,6 +598,7 @@ tasks:
       instruction: "instructions/security_analysis_instruction.md"
       assistant: "assistants/security_analysis_assistant.md"
       submit: "submits/security_analysis_submit.md"
+      continue: "test_continue.md"
     execution_config:
       executors:
         bash_executor:
@@ -625,3 +629,146 @@ tasks:
         completion_conditions: ["vulnerability_scan", "manual_testing"]
         depends_on: ["reconnaissance"]
 """
+
+
+# =============================================================================
+# Inspect AI / Agent Test Fixtures
+# =============================================================================
+# These fixtures provide standardized test data for agent and solver tests.
+# Import MetadataKeys here to avoid import issues in test files.
+
+from saber.models.constants import MetadataKeys as _MetadataKeys
+
+
+@pytest.fixture
+def base_prompts():
+    """Base prompts for agent testing.
+
+    Returns a dictionary with all four required prompts.
+    Use this when you need prompts without other metadata.
+    """
+    return {
+        "instruction": "Test instruction prompt",
+        "assistant": "Test assistant prompt",
+        "submit": "Test submit prompt",
+        "continue": "Test continue prompt",
+    }
+
+
+@pytest.fixture
+def base_metadata(base_prompts):
+    """Base metadata containing only required prompts.
+
+    Use this for tests that need minimal metadata without session/episode context.
+    """
+    return {
+        _MetadataKeys.INSTRUCTION_PROMPT: base_prompts["instruction"],
+        _MetadataKeys.ASSISTANT_PROMPT: base_prompts["assistant"],
+        _MetadataKeys.SUBMIT_PROMPT: base_prompts["submit"],
+        _MetadataKeys.CONTINUE_PROMPT: base_prompts["continue"],
+    }
+
+
+@pytest.fixture
+def complete_saber_metadata(base_metadata):
+    """Complete metadata for SABER solver testing.
+
+    Includes all prompts plus session, episode, domain, and task identifiers.
+    Use this for tests that require full SABER execution context.
+    """
+    return {
+        **base_metadata,
+        _MetadataKeys.SESSION_ID: "session-123",
+        _MetadataKeys.EPISODE_ID: "episode-456",
+        _MetadataKeys.SABER_DOMAIN_SLUG: "test-domain",
+        _MetadataKeys.TASK_ID: "task-789",
+        _MetadataKeys.SAMPLE_ID: "sample-1",
+    }
+
+
+@pytest.fixture
+def blue_team_metadata(complete_saber_metadata):
+    """Metadata for blue team agent testing.
+
+    Includes role and transcript config for continuous operation agents.
+    Blue team agents typically have pull.enabled=true for transcript sync.
+    """
+    return {
+        **complete_saber_metadata,
+        _MetadataKeys.SUB_TASK_ROLE: "blue",
+        _MetadataKeys.CONTINUE_PROMPT: "Please proceed. Do NOT call submit() - you are a continuous operation agent.",
+        "transcript_config": {
+            "websocket": {
+                "pull": {
+                    "enabled": True,
+                    "blocking": True,
+                }
+            }
+        },
+    }
+
+
+@pytest.fixture
+def red_team_metadata(complete_saber_metadata):
+    """Metadata for red team agent testing.
+
+    Includes role for attacker agents that should submit when done.
+    """
+    return {
+        **complete_saber_metadata,
+        _MetadataKeys.SUB_TASK_ROLE: "red",
+        _MetadataKeys.CONTINUE_PROMPT: "Please proceed. If done, call submit() with your answer.",
+    }
+
+
+@pytest.fixture
+def transcript_sync_metadata(complete_saber_metadata):
+    """Metadata with full transcript synchronization config.
+
+    Use this for testing WebSocket transcript coordination.
+    """
+    return {
+        **complete_saber_metadata,
+        "transcript_config": {
+            "websocket": {
+                "pull": {
+                    "enabled": True,
+                    "blocking": False,
+                    "event_timeout": 300.0,
+                }
+            }
+        },
+    }
+
+
+@pytest.fixture
+def mock_episode_mapping():
+    """Mock episode mapping for store.get() calls.
+
+    Returns a function that can be used with side_effect for store.get().
+    """
+    from unittest.mock import MagicMock
+
+    def _get_mapping(sample_id="sample-1", episode_id="episode-456"):
+        return {
+            sample_id: MagicMock(episode_id=episode_id)
+        }
+    return _get_mapping
+
+
+@pytest.fixture
+def mock_store_get(mock_episode_mapping):
+    """Create a mock for state.store.get() with common values.
+
+    Use with: mock_state.store.get.side_effect = mock_store_get
+    """
+    def _store_get(key, default=None):
+        from saber.inspect_ai.constants import InspectStoreKeys
+
+        values = {
+            InspectStoreKeys.DOMAIN_SLUG: "test-domain",
+            InspectStoreKeys.SESSION_ID: "session-123",
+            InspectStoreKeys.EPISODE_MAPPING: mock_episode_mapping(),
+        }
+        return values.get(key, default)
+    return _store_get

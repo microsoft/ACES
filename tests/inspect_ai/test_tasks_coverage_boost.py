@@ -118,6 +118,7 @@ class TestExternalDomainDetection:
                         instruction_prompt="",
                         assistant_prompt="",
                         submit_prompt="",
+            continue_prompt="",
                     )
                 ],
                 total_tasks=1,
@@ -310,6 +311,7 @@ class TestOrchestrationLogging:
                         instruction_prompt="",
                         assistant_prompt="",
                         submit_prompt="",
+            continue_prompt="",
                     ),
                     SubTaskDefinition(
                         task_id="blue_task",
@@ -324,6 +326,7 @@ class TestOrchestrationLogging:
                         instruction_prompt="",
                         assistant_prompt="",
                         submit_prompt="",
+            continue_prompt="",
                     ),
                 ],
             )

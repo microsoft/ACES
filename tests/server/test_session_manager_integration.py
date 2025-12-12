@@ -99,6 +99,7 @@ class TestSessionManagerIntegration:
         mock_task.initial_context = {"test": "data"}
         mock_task.episode_config = {"max_steps": 20}  # Add episode_config to prevent early termination
         mock_task.dependency_template = None  # No dependencies
+        mock_task.depends_on_task_id = None  # No dependencies
         manager.benchmark_manager.get_task.return_value = mock_task
 
         # Mock get_single_episode_task to return proper SingleEpisodeTask
@@ -111,6 +112,7 @@ class TestSessionManagerIntegration:
             instruction_prompt="test",
             assistant_prompt="test",
             submit_prompt="test",
+            continue_prompt="",
             episode_attempts=1,
             initial_context={"test": "data"},
         )

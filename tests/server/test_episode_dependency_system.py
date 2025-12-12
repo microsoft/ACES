@@ -32,7 +32,8 @@ class TestEpisodeDependencySystem:
             prompts={
                 "instruction": "test_instruction.md",
                 "assistant": "test_assistant.md",
-                "submit": "test_submit.md"
+                "submit": "test_submit.md",
+                "continue": "test_continue.md",
             },
             initial_context={"test": "context"},
             episode_config={"max_steps": 10}
@@ -46,13 +47,17 @@ class TestEpisodeDependencySystem:
             prompts={
                 "instruction": "test_instruction.md",
                 "assistant": "test_assistant.md",
-                "submit": "test_submit.md"
+                "submit": "test_submit.md",
+                "continue": "test_continue.md",
             },
             initial_context={"test": "context"},
             dependency_template="independent_task",
             role="dependent_role",
             episode_config={"max_steps": 10}
         )
+        # Simulate template expansion - set depends_on_task_id and clear dependency_template
+        dependent_task.depends_on_task_id = "independent_task"
+        dependent_task.dependency_template = None
 
         another_dependent_task = Task(
             task_id="another_dependent_task",
@@ -62,13 +67,17 @@ class TestEpisodeDependencySystem:
             prompts={
                 "instruction": "test_instruction.md",
                 "assistant": "test_assistant.md",
-                "submit": "test_submit.md"
+                "submit": "test_submit.md",
+                "continue": "test_continue.md",
             },
             initial_context={"test": "context"},
             dependency_template="independent_task",
             role="another_dependent_role",
             episode_config={"max_steps": 10}
         )
+        # Simulate template expansion - set depends_on_task_id and clear dependency_template
+        another_dependent_task.depends_on_task_id = "independent_task"
+        another_dependent_task.dependency_template = None
 
         circular_task = Task(
             task_id="circular_task",
@@ -78,13 +87,17 @@ class TestEpisodeDependencySystem:
             prompts={
                 "instruction": "test_instruction.md",
                 "assistant": "test_assistant.md",
-                "submit": "test_submit.md"
+                "submit": "test_submit.md",
+                "continue": "test_continue.md",
             },
             initial_context={"test": "context"},
             dependency_template="circular_task",  # Self-reference
             role="circular_role",
             episode_config={"max_steps": 10}
         )
+        # Simulate template expansion - set depends_on_task_id and clear dependency_template
+        circular_task.depends_on_task_id = "circular_task"
+        circular_task.dependency_template = None
 
         manager.get_task.side_effect = lambda task_id: {
             "independent_task": independent_task,
@@ -114,6 +127,7 @@ class TestEpisodeDependencySystem:
                 instruction_prompt="Test instruction",
                 assistant_prompt="Test assistant",
                 submit_prompt="Test submit",
+                continue_prompt="",
             )
 
         manager.get_single_episode_task.side_effect = create_single_task

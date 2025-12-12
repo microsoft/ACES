@@ -139,7 +139,11 @@ class SandboxEnvironmentManager:
         return compose_file_path
 
     def create_episode_environment_async(
-        self, episode_id: str, sandbox_environment: str, target_episode_id: Optional[str] = None
+        self,
+        episode_id: str,
+        sandbox_environment: str,
+        target_episode_id: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> tuple[ComposeOrchestrator, Path]:
         """
         Create episode environment without waiting for health checks.
@@ -151,6 +155,7 @@ class SandboxEnvironmentManager:
             episode_id: Episode identifier
             sandbox_environment: Environment name
             target_episode_id: Optional episode to attach to
+            session_id: Optional session ID for REST API access
 
         Returns:
             Tuple of (orchestrator, processed_compose_path)
@@ -173,16 +178,32 @@ class SandboxEnvironmentManager:
                     "event": "sandbox_env_async_creation_requested",
                     "episode_id": episode_id,
                     "sandbox_environment": sandbox_environment,
+                    "session_id": session_id,  # DEBUG: Log session_id
                 },
             )
 
             orchestrator = ComposeOrchestrator(logging_config=self.logging_config)
 
             permanent_network_prefix = f"{self.domain}_permanent_environment_"
+
+            # Build additional variables for compose substitution
+            additional_vars: Dict[str, str] = {}
+            if session_id:
+                additional_vars["SESSION_ID"] = session_id
+                logger.info(
+                    "Adding SESSION_ID to compose environment",
+                    extra={
+                        "event": "session_id_added_to_compose",
+                        "episode_id": episode_id,
+                        "session_id": session_id,
+                    },
+                )
+
             config = ComposeEnvironmentConfig(
                 episode_id=episode_id,
                 permanent_network_prefix=permanent_network_prefix,
                 target_episode_id=target_episode_id,
+                additional_variables=additional_vars if additional_vars else None,
             )
 
             # Track the orchestrator and compose file BEFORE starting containers

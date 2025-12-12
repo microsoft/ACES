@@ -570,6 +570,7 @@ class TestSessionManagerDependencies:
                 instruction_prompt="test",
                 assistant_prompt="test",
                 submit_prompt="test",
+                continue_prompt="test",
                 episode_attempts=1,
             )
             manager.benchmark_manager.get_single_episode_task = MagicMock(return_value=single_episode_task)
@@ -587,9 +588,11 @@ class TestSessionManagerDependencies:
         session = await session_manager.create_session("test-client")
 
         # Create task with dependency
+        # Note: After template expansion, dependency_template is cleared and depends_on_task_id is set
         task = MagicMock()
         task.task_id = "dependent-task"
-        task.depends_on_task_id = "parent-task"
+        task.depends_on_task_id = "parent-task"  # Use correct attribute name (post-expansion)
+        task.dependency_template = None  # Cleared after expansion
         task.initial_context = {}
         session_manager.benchmark_manager.get_task.return_value = task
 
@@ -604,15 +607,22 @@ class TestSessionManagerDependencies:
         # Should attach to parent episode
         session_manager.episode_manager.attach_episode_to_episode.assert_called_once()
 
+        # CRITICAL: Verify ORCHESTRATION_TARGET_EPISODES is set for executor resolution
+        from saber.models.constants import MetadataKeys
+        assert MetadataKeys.ORCHESTRATION_TARGET_EPISODES in episode.context
+        assert episode.context[MetadataKeys.ORCHESTRATION_TARGET_EPISODES] == ["parent-episode-123"]
+
     @pytest.mark.asyncio
     async def test_start_episode_with_dependency_not_found(self, session_manager):
         """Test starting episode when dependency not found."""
         session = await session_manager.create_session("test-client")
 
         # Create task with dependency
+        # Note: After template expansion, dependency_template is cleared and depends_on_task_id is set
         task = MagicMock()
         task.task_id = "dependent-task"
-        task.dependency_template = "parent-task"
+        task.depends_on_task_id = "parent-task"  # Use correct attribute name (post-expansion)
+        task.dependency_template = None  # Cleared after expansion
         task.initial_context = {}
         session_manager.benchmark_manager.get_task.return_value = task
 
@@ -632,9 +642,11 @@ class TestSessionManagerDependencies:
         session = await session_manager.create_session("test-client")
 
         # Create task with dependency
+        # Note: After template expansion, dependency_template is cleared and depends_on_task_id is set
         task = MagicMock()
         task.task_id = "dependent-task"
-        task.dependency_template = "parent-task"
+        task.depends_on_task_id = "parent-task"  # Use correct attribute name (post-expansion)
+        task.dependency_template = None  # Cleared after expansion
         task.initial_context = {}
         session_manager.benchmark_manager.get_task.return_value = task
 

@@ -323,12 +323,17 @@ class TestInjectionStrategies:
         assert payload["message"] == "Injected message"
 
     @pytest.mark.asyncio
-    async def test_rewind_strategy_removes_then_appends(
+    async def test_restart_strategy_resets_to_initial(
         self,
         blue_episode: Episode,
         red_episode: Episode,
     ):
-        """Test rewind strategy - sends rewind with count to daemon."""
+        """Test restart strategy - sends restart to daemon.
+
+        Restart resets the transcript to the initial state (system->user->assistant)
+        and then appends the new message. This is useful when the red team wants
+        to start fresh while preserving the blue team's opening response.
+        """
         # Arrange
         mock_sandbox, mock_env = create_mock_sandbox_manager({"success": True, "version": 1})
         mock_session = create_mock_session_manager(blue_episode, red_episode)
@@ -339,9 +344,8 @@ class TestInjectionStrategies:
         )
 
         parameters = {
-            "message": "Injected after rewind",
-            "strategy": "rewind",
-            "rewind_count": 2
+            "message": "Fresh start with new attack",
+            "strategy": "restart"
         }
         context = {
             "session_id": "session-xyz",
@@ -353,95 +357,15 @@ class TestInjectionStrategies:
 
         # Assert
         assert result.success is True
-        assert result.metadata["strategy"] == "rewind"
+        assert result.metadata["strategy"] == "restart"
 
-        # Verify payload includes rewind_count
+        # Verify payload includes restart strategy
         call_args = mock_env.execute_command.call_args
         curl_cmd = call_args.kwargs.get("command") or call_args[1].get("command")
         d_index = curl_cmd.index("-d")
         payload = json.loads(curl_cmd[d_index + 1])
-        assert payload["strategy"] == "rewind"
-        assert payload["rewind_count"] == 2
-
-    @pytest.mark.asyncio
-    async def test_rewrite_strategy_replaces_entire_transcript(
-        self,
-        blue_episode: Episode,
-        red_episode: Episode,
-    ):
-        """Test rewrite strategy - sends rewrite to daemon."""
-        # Arrange
-        mock_sandbox, mock_env = create_mock_sandbox_manager({"success": True, "version": 1})
-        mock_session = create_mock_session_manager(blue_episode, red_episode)
-
-        executor = InjectPromptExecutor(
-            sandbox_manager=mock_sandbox,
-            session_manager=mock_session
-        )
-
-        parameters = {
-            "message": "New transcript content",
-            "strategy": "rewrite"
-        }
-        context = {
-            "session_id": "session-xyz",
-            "episode_id": red_episode.episode_id,
-        }
-
-        # Act
-        result = await executor.execute(parameters, context)
-
-        # Assert
-        assert result.success is True
-        assert result.metadata["strategy"] == "rewrite"
-
-        # Verify payload
-        call_args = mock_env.execute_command.call_args
-        curl_cmd = call_args.kwargs.get("command") or call_args[1].get("command")
-        d_index = curl_cmd.index("-d")
-        payload = json.loads(curl_cmd[d_index + 1])
-        assert payload["strategy"] == "rewrite"
-
-    @pytest.mark.asyncio
-    async def test_insert_strategy_inserts_at_position(
-        self,
-        blue_episode: Episode,
-        red_episode: Episode,
-    ):
-        """Test insert strategy - sends insert with position to daemon."""
-        # Arrange
-        mock_sandbox, mock_env = create_mock_sandbox_manager({"success": True, "version": 1})
-        mock_session = create_mock_session_manager(blue_episode, red_episode)
-
-        executor = InjectPromptExecutor(
-            sandbox_manager=mock_sandbox,
-            session_manager=mock_session
-        )
-
-        parameters = {
-            "message": "Inserted at position 2",
-            "strategy": "insert",
-            "insert_position": 2
-        }
-        context = {
-            "session_id": "session-xyz",
-            "episode_id": red_episode.episode_id,
-        }
-
-        # Act
-        result = await executor.execute(parameters, context)
-
-        # Assert
-        assert result.success is True
-        assert result.metadata["strategy"] == "insert"
-
-        # Verify payload includes insert_position
-        call_args = mock_env.execute_command.call_args
-        curl_cmd = call_args.kwargs.get("command") or call_args[1].get("command")
-        d_index = curl_cmd.index("-d")
-        payload = json.loads(curl_cmd[d_index + 1])
-        assert payload["strategy"] == "insert"
-        assert payload["insert_position"] == 2
+        assert payload["strategy"] == "restart"
+        assert payload["message"] == "Fresh start with new attack"
 
     @pytest.mark.asyncio
     async def test_invalid_strategy_fails(
@@ -477,86 +401,6 @@ class TestInjectionStrategies:
 
         # Verify curl was NOT called (validation failed before sending)
         mock_env.execute_command.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_rewind_count_clamping(
-        self,
-        blue_episode: Episode,
-        red_episode: Episode,
-    ):
-        """Test that rewind_count is sent to daemon (daemon handles clamping)."""
-        # Arrange
-        mock_sandbox, mock_env = create_mock_sandbox_manager({"success": True, "version": 1})
-        mock_session = create_mock_session_manager(blue_episode, red_episode)
-
-        executor = InjectPromptExecutor(
-            sandbox_manager=mock_sandbox,
-            session_manager=mock_session
-        )
-
-        # Large rewind count - daemon will handle clamping
-        parameters = {
-            "message": "Test",
-            "strategy": "rewind",
-            "rewind_count": 100
-        }
-        context = {
-            "session_id": "session-xyz",
-            "episode_id": red_episode.episode_id,
-        }
-
-        # Act
-        result = await executor.execute(parameters, context)
-
-        # Assert - should succeed, daemon handles clamping
-        assert result.success is True
-
-        # Verify the rewind_count was sent
-        call_args = mock_env.execute_command.call_args
-        curl_cmd = call_args.kwargs.get("command") or call_args[1].get("command")
-        d_index = curl_cmd.index("-d")
-        payload = json.loads(curl_cmd[d_index + 1])
-        assert payload["rewind_count"] == 100
-
-    @pytest.mark.asyncio
-    async def test_insert_position_clamping(
-        self,
-        blue_episode: Episode,
-        red_episode: Episode,
-    ):
-        """Test that insert_position is sent to daemon (daemon handles clamping)."""
-        # Arrange
-        mock_sandbox, mock_env = create_mock_sandbox_manager({"success": True, "version": 1})
-        mock_session = create_mock_session_manager(blue_episode, red_episode)
-
-        executor = InjectPromptExecutor(
-            sandbox_manager=mock_sandbox,
-            session_manager=mock_session
-        )
-
-        # Large insert position - daemon will handle clamping
-        parameters = {
-            "message": "Test",
-            "strategy": "insert",
-            "insert_position": 1000
-        }
-        context = {
-            "session_id": "session-xyz",
-            "episode_id": red_episode.episode_id,
-        }
-
-        # Act
-        result = await executor.execute(parameters, context)
-
-        # Assert - should succeed, daemon handles clamping
-        assert result.success is True
-
-        # Verify the insert_position was sent
-        call_args = mock_env.execute_command.call_args
-        curl_cmd = call_args.kwargs.get("command") or call_args[1].get("command")
-        d_index = curl_cmd.index("-d")
-        payload = json.loads(curl_cmd[d_index + 1])
-        assert payload["insert_position"] == 1000
 
 
 class TestBackwardCompatibility:

@@ -133,14 +133,16 @@ class TestExecutorFactory:
         executor = executor_factory.get_executor("bash")
 
         assert isinstance(executor, BashExecutor)
-        assert executor == executor_factory._executor_instances["bash"]
+        # Cache key is (executor_type, episode_id) tuple
+        assert executor == executor_factory._executor_instances[("bash", None)]
 
     def test_get_executor_python(self, executor_factory):
         """Test getting Python executor."""
         executor = executor_factory.get_executor("python")
 
         assert isinstance(executor, PythonExecutor)
-        assert executor == executor_factory._executor_instances["python"]
+        # Cache key is (executor_type, episode_id) tuple
+        assert executor == executor_factory._executor_instances[("python", None)]
 
     def test_get_executor_cached(self, executor_factory):
         """Test that executors are cached and reused."""
@@ -472,3 +474,204 @@ class TestExecutorFactory:
 
         # Verify clean state
         assert len(executor_factory._episode_configurations) == 0
+
+    def test_episode_specific_executor_caching(self, executor_factory):
+        """Test that executors are cached by (executor_type, episode_id) tuple."""
+        # Register two episodes with different configurations
+        executor_factory.register_episode_configuration(
+            "episode-alpha",
+            allowed_executors=["bash"],
+            episode_config={"executors": {"bash": {"timeout": 100}}}
+        )
+        executor_factory.register_episode_configuration(
+            "episode-beta",
+            allowed_executors=["bash"],
+            episode_config={"executors": {"bash": {"timeout": 200}}}
+        )
+
+        # Get executors for each episode
+        exec_alpha = executor_factory.get_executor("bash", episode_id="episode-alpha")
+        exec_beta = executor_factory.get_executor("bash", episode_id="episode-beta")
+
+        # They should be different instances
+        assert exec_alpha is not exec_beta
+
+        # Verify cache keys use (executor_type, episode_id) tuple
+        assert ("bash", "episode-alpha") in executor_factory._executor_instances
+        assert ("bash", "episode-beta") in executor_factory._executor_instances
+        assert len(executor_factory._executor_instances) == 2
+
+        # Getting the same executor for the same episode should return cached instance
+        exec_alpha_again = executor_factory.get_executor("bash", episode_id="episode-alpha")
+        assert exec_alpha is exec_alpha_again
+
+        # Cleanup
+        executor_factory.unregister_episode_configuration("episode-alpha")
+        executor_factory.unregister_episode_configuration("episode-beta")
+
+    def test_episode_specific_timeout_configuration(self, executor_factory):
+        """Test that episode-specific timeout configurations are correctly applied to executors."""
+        # Register episodes with different timeout values
+        executor_factory.register_episode_configuration(
+            "blue-team",
+            allowed_executors=["bash", "python"],
+            episode_config={"executors": {"bash": {"timeout": 30}, "python": {"timeout": 60}}}
+        )
+        executor_factory.register_episode_configuration(
+            "red-team",
+            allowed_executors=["bash", "python"],
+            episode_config={"executors": {"bash": {"timeout": 600}, "python": {"timeout": 900}}}
+        )
+
+        # Get executors for blue team
+        blue_bash = executor_factory.get_executor("bash", episode_id="blue-team")
+        blue_python = executor_factory.get_executor("python", episode_id="blue-team")
+
+        # Get executors for red team
+        red_bash = executor_factory.get_executor("bash", episode_id="red-team")
+        red_python = executor_factory.get_executor("python", episode_id="red-team")
+
+        # Verify timeouts are episode-specific
+        assert blue_bash.get_timeout() == 30.0
+        assert blue_python.get_timeout() == 60.0
+        assert red_bash.get_timeout() == 600.0
+        assert red_python.get_timeout() == 900.0
+
+        # Verify they are different instances
+        assert blue_bash is not red_bash
+        assert blue_python is not red_python
+
+        # Cleanup
+        executor_factory.unregister_episode_configuration("blue-team")
+        executor_factory.unregister_episode_configuration("red-team")
+
+    def test_unregister_episode_clears_cached_executors(self, executor_factory):
+        """Test that unregistering an episode removes its cached executors."""
+        # Register an episode
+        executor_factory.register_episode_configuration(
+            "temp-episode",
+            allowed_executors=["bash", "python"],
+            episode_config={"executors": {"bash": {"timeout": 100}, "python": {"timeout": 200}}}
+        )
+
+        # Create executors for this episode
+        bash_exec = executor_factory.get_executor("bash", episode_id="temp-episode")
+        python_exec = executor_factory.get_executor("python", episode_id="temp-episode")
+
+        # Verify they're cached
+        assert ("bash", "temp-episode") in executor_factory._executor_instances
+        assert ("python", "temp-episode") in executor_factory._executor_instances
+        initial_cache_size = len(executor_factory._executor_instances)
+
+        # Unregister the episode
+        executor_factory.unregister_episode_configuration("temp-episode")
+
+        # Verify cached executors for this episode are removed
+        assert ("bash", "temp-episode") not in executor_factory._executor_instances
+        assert ("python", "temp-episode") not in executor_factory._executor_instances
+        assert len(executor_factory._executor_instances) == initial_cache_size - 2
+
+        # Verify configuration is also removed
+        assert "temp-episode" not in executor_factory._episode_configurations
+
+    def test_episode_cache_isolation_during_concurrent_access(self, executor_factory):
+        """Test that multiple episodes can coexist without cache interference."""
+        # Register multiple episodes
+        episodes = [
+            ("ep-1", {"executors": {"bash": {"timeout": 10}}}),
+            ("ep-2", {"executors": {"bash": {"timeout": 20}}}),
+            ("ep-3", {"executors": {"bash": {"timeout": 30}}}),
+        ]
+
+        for ep_id, config in episodes:
+            executor_factory.register_episode_configuration(
+                ep_id,
+                allowed_executors=["bash"],
+                episode_config=config
+            )
+
+        # Get all executors
+        executors = {
+            ep_id: executor_factory.get_executor("bash", episode_id=ep_id)
+            for ep_id, _ in episodes
+        }
+
+        # Verify each has correct timeout
+        assert executors["ep-1"].get_timeout() == 10.0
+        assert executors["ep-2"].get_timeout() == 20.0
+        assert executors["ep-3"].get_timeout() == 30.0
+
+        # Unregister middle episode
+        executor_factory.unregister_episode_configuration("ep-2")
+
+        # Verify other episodes' executors still work and remain cached
+        assert ("bash", "ep-1") in executor_factory._executor_instances
+        assert ("bash", "ep-3") in executor_factory._executor_instances
+        assert ("bash", "ep-2") not in executor_factory._executor_instances
+
+        # Original executors should still have correct timeouts
+        assert executors["ep-1"].get_timeout() == 10.0
+        assert executors["ep-3"].get_timeout() == 30.0
+
+        # Getting executor again should return same cached instance
+        ep1_again = executor_factory.get_executor("bash", episode_id="ep-1")
+        assert ep1_again is executors["ep-1"]
+
+        # Cleanup
+        executor_factory.unregister_episode_configuration("ep-1")
+        executor_factory.unregister_episode_configuration("ep-3")
+
+    def test_executor_without_episode_id_uses_factory_config(self, executor_factory):
+        """Test that executors created without episode_id use factory-level config."""
+        # Get executor without episode context (used during MCP registration)
+        exec_no_episode = executor_factory.get_executor("bash", episode_id=None)
+
+        # Should be cached with (executor_type, None) key
+        assert ("bash", None) in executor_factory._executor_instances
+
+        # Register an episode with different config
+        executor_factory.register_episode_configuration(
+            "episode-with-config",
+            allowed_executors=["bash"],
+            episode_config={"executors": {"bash": {"timeout": 999}}}
+        )
+
+        # Get executor for that episode
+        exec_with_episode = executor_factory.get_executor("bash", episode_id="episode-with-config")
+
+        # They should be different instances
+        assert exec_no_episode is not exec_with_episode
+
+        # Episode executor should have episode-specific timeout
+        assert exec_with_episode.get_timeout() == 999.0
+
+        # Non-episode executor should have default timeout (60.0 from BashExecutor defaults)
+        assert exec_no_episode.get_timeout() == 60.0
+
+        # Cleanup
+        executor_factory.unregister_episode_configuration("episode-with-config")
+
+    def test_get_executor_info_shows_episode_cache_keys(self, executor_factory):
+        """Test that get_executor_info correctly displays episode-specific cache keys."""
+        # Register episodes and create executors
+        executor_factory.register_episode_configuration(
+            "info-test-ep",
+            allowed_executors=["bash"],
+            episode_config={"executors": {"bash": {"timeout": 100}}}
+        )
+
+        # Create executor without episode (for MCP schema)
+        executor_factory.get_executor("bash", episode_id=None)
+
+        # Create executor with episode
+        executor_factory.get_executor("bash", episode_id="info-test-ep")
+
+        # Get executor info
+        info = executor_factory.get_executor_info()
+
+        # active_instances should show formatted keys
+        assert "bash" in info["active_instances"]  # (bash, None) -> "bash"
+        assert "bash@info-test-ep" in info["active_instances"]  # (bash, info-test-ep) -> "bash@info-test-ep"
+
+        # Cleanup
+        executor_factory.unregister_episode_configuration("info-test-ep")

@@ -26,6 +26,7 @@ global_defaults:
     instruction: "global_instruction.md"
     assistant: "global_assistant.md"
     submit: "global_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -80,6 +81,7 @@ global_defaults:
     instruction: "global_instruction.md"
     assistant: "global_assistant.md"
     submit: "global_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -98,6 +100,7 @@ tasks:
       instruction: "task_instruction.md"
       assistant: "task_assistant.md"
       submit: "task_submit.md"
+      continue: "test_continue.md"
     execution_config:
       executors:
         bash:
@@ -138,6 +141,7 @@ global_defaults:
     instruction: "global_instruction.md"
     assistant: "global_assistant.md"
     submit: "global_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -243,6 +247,7 @@ global_defaults:
     instruction: "global_instruction.md"
     assistant: "global_assistant.md"
     submit: "global_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -294,6 +299,7 @@ global_defaults:
     instruction: "global_instruction.md"
     assistant: "global_assistant.md"
     submit: "global_submit.md"
+    continue: "test_continue.md"
     invalid_type: "invalid.md"
   execution_config:
     executors:
@@ -329,6 +335,7 @@ global_defaults:
     instruction: "global_instruction.md"
     assistant: "global_assistant.md"
     submit: "global_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -381,6 +388,7 @@ global_defaults:
     instruction: "global_instruction.md"
     assistant: "global_assistant.md"
     submit: "global_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -433,6 +441,7 @@ global_defaults:
     instruction: "global_instruction.md"
     assistant: "global_assistant.md"
     submit: "global_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:
@@ -485,6 +494,7 @@ global_defaults:
     instruction: "global_instruction.md"
     assistant: "global_assistant.md"
     submit: "global_submit.md"
+    continue: "test_continue.md"
   execution_config:
     executors:
       bash:

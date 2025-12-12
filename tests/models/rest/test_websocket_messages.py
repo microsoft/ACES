@@ -25,18 +25,20 @@ def test_push_message_with_injection_fields():
     assert data.message["role"] == "system"
 
 
-def test_push_message_with_rewind_strategy():
-    """Test push_message with rewind injection strategy."""
+def test_push_message_with_restart_strategy():
+    """Test push_message with restart injection strategy.
+
+    Restart resets the transcript to initial state and appends a new message.
+    """
     data = PushMessageData(
-        message={"role": "system", "content": "Test"},
+        message={"role": "user", "content": "Fresh start"},
         since_version=10,
         target_episode_id="ep-blue-123",
-        strategy="rewind",
-        rewind_count=5,
+        strategy="restart",
     )
 
-    assert data.rewind_count == 5
-    assert data.strategy == "rewind"
+    assert data.strategy == "restart"
+    assert data.message["content"] == "Fresh start"
 
 
 def test_push_ack_with_injection_response():

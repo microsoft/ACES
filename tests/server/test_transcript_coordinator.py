@@ -2,7 +2,7 @@
 
 Tests cover Phase 2:
 - Version tracking (monotonic sequence numbers)
-- SHA256 checksum validation (rewrite detection)
+- SHA256 checksum validation (restart detection)
 - Differential sync (delta vs full transcript)
 - WebSocket notification broadcasting
 - Last write wins semantics
@@ -89,7 +89,7 @@ class TestTranscriptCoordinatorInit:
 
 
 class TestTranscriptCoordinatorChecksumComputation:
-    """Test SHA256 checksum computation for rewrite detection."""
+    """Test SHA256 checksum computation for restart/modification detection."""
 
     def test_compute_checksum_empty_transcript(self):
         """Test checksum computation for empty transcript."""
@@ -282,13 +282,17 @@ class TestTranscriptCoordinatorSync:
         assert response.modified
 
     @pytest.mark.asyncio
-    async def test_sync_rewrite_detected_returns_full_transcript(self):
-        """Test rewrite detection triggers full transcript sync."""
+    async def test_sync_restart_detected_returns_full_transcript(self):
+        """Test restart detection triggers full transcript sync.
+
+        When a restart operation occurs, the client's checksum won't match
+        the server's transcript, triggering a full sync instead of delta.
+        """
         episode_manager = MockEpisodeManager()
         coordinator = TranscriptCoordinator(episode_manager, MockConnectionManager())
 
         current_messages = [
-            {"role": "system", "content": "REWRITTEN"},
+            {"role": "system", "content": "After restart"},
         ]
         episode = Episode(
             episode_id="ep-1",
@@ -298,12 +302,12 @@ class TestTranscriptCoordinatorSync:
             context={
                 MetadataKeys.CLIENT_TRANSCRIPT: current_messages,
                 MetadataKeys.TRANSCRIPT_VERSION: 2,
-                MetadataKeys.TRANSCRIPT_LAST_OPERATION: "rewrite",
+                MetadataKeys.TRANSCRIPT_LAST_OPERATION: "restart",
             },
         )
         episode_manager.episodes["ep-1"] = episode
 
-        # Client has wrong checksum (different content at version 1)
+        # Client has wrong checksum (different content from before restart)
         wrong_checksum = compute_checksum([{"role": "system", "content": "ORIGINAL"}])
         request = TranscriptSyncRequest(
             episode_id="ep-1",
@@ -448,8 +452,8 @@ class TestTranscriptCoordinatorNotifyModification:
         )
         episode_manager.episodes["ep-1"] = episode
 
-        # Test different operation types
-        for operation in ["append", "rewrite", "insert", "rewind"]:
+        # Test different operation types (only append and restart are supported now)
+        for operation in ["append", "restart"]:
             await coordinator.notify_modification(
                 episode_id="ep-1",
                 modified_transcript=[{"role": "system", "content": f"Op: {operation}"}],
@@ -515,7 +519,7 @@ class TestTranscriptCoordinatorNotifyModification:
         await coordinator.notify_modification(
             episode_id="ep-1",
             modified_transcript=[{"role": "system", "content": "Msg1"}],
-            operation="rewrite",
+            operation="restart",
             injected_by="red",
             expected_base_version=5,
         )
@@ -791,3 +795,419 @@ def coordinator_with_episodes(blue_episode, red_episode):
     coordinator = TranscriptCoordinator(episode_manager, connection_manager)
 
     return coordinator, episode_manager, connection_manager, blue_episode, red_episode
+
+
+# =============================================================================
+# Observer Mode Tests
+# =============================================================================
+
+
+class TestTranscriptCoordinatorObserverMode:
+    """Test observer mode sync functionality."""
+
+    @pytest.mark.asyncio
+    async def test_sync_observer_mode_returns_full_transcript(self, coordinator_with_episodes):
+        """Test observer mode returns full transcript."""
+        coordinator, _, _, blue_episode, _ = coordinator_with_episodes
+
+        request = TranscriptSyncRequest(
+            episode_id=blue_episode.episode_id,
+            since_version=0,
+            is_observer=True,
+            hide_system_prompt=False,
+        )
+
+        response = await coordinator.sync(request)
+
+        assert response.sync_mode.value == "full"
+        assert response.full_transcript is not None
+        assert len(response.full_transcript) == 3  # system, user, assistant
+        assert response.current_version.sequence == 3
+
+    @pytest.mark.asyncio
+    async def test_sync_observer_hides_system_prompt(self, coordinator_with_episodes):
+        """Test observer mode with hide_system_prompt filters system messages."""
+        coordinator, _, _, blue_episode, _ = coordinator_with_episodes
+
+        request = TranscriptSyncRequest(
+            episode_id=blue_episode.episode_id,
+            since_version=0,
+            is_observer=True,
+            hide_system_prompt=True,
+        )
+
+        response = await coordinator.sync(request)
+
+        # Should only return messages starting from first assistant
+        assert response.full_transcript is not None
+        assert len(response.full_transcript) == 1  # Only assistant message
+        assert response.full_transcript[0]["role"] == "assistant"
+
+    @pytest.mark.asyncio
+    async def test_sync_observer_delta_mode(self, coordinator_with_episodes):
+        """Test observer mode with delta retrieval."""
+        coordinator, _, _, blue_episode, _ = coordinator_with_episodes
+
+        request = TranscriptSyncRequest(
+            episode_id=blue_episode.episode_id,
+            since_version=2,
+            is_observer=True,
+            hide_system_prompt=False,
+            retrieval_mode="delta",
+        )
+
+        response = await coordinator.sync(request)
+
+        assert response.sync_mode.value == "delta"
+        assert response.delta is not None
+        assert len(response.delta) == 1  # One new message since version 2
+
+    @pytest.mark.asyncio
+    async def test_sync_observer_no_change_when_up_to_date(self, coordinator_with_episodes):
+        """Test observer mode returns no_change when client is up to date."""
+        coordinator, _, _, blue_episode, _ = coordinator_with_episodes
+
+        request = TranscriptSyncRequest(
+            episode_id=blue_episode.episode_id,
+            since_version=3,  # Already at version 3
+            is_observer=True,
+            hide_system_prompt=False,
+            retrieval_mode="delta",
+        )
+
+        response = await coordinator.sync(request)
+
+        assert response.sync_mode.value == "no_change"
+        assert response.modified is False
+
+    @pytest.mark.asyncio
+    async def test_sync_observer_tail_mode(self, coordinator_with_episodes):
+        """Test observer mode with tail retrieval."""
+        coordinator, _, _, blue_episode, _ = coordinator_with_episodes
+
+        request = TranscriptSyncRequest(
+            episode_id=blue_episode.episode_id,
+            since_version=0,
+            is_observer=True,
+            hide_system_prompt=False,
+            retrieval_mode="tail",
+            tail_count=2,
+        )
+
+        response = await coordinator.sync(request)
+
+        assert response.sync_mode.value == "full"
+        assert response.full_transcript is not None
+        assert len(response.full_transcript) == 2  # Last 2 messages
+
+    @pytest.mark.asyncio
+    async def test_sync_observer_no_checksum_tracking(self, coordinator_with_episodes):
+        """Test observer mode computes checksum on filtered view."""
+        coordinator, _, _, blue_episode, _ = coordinator_with_episodes
+
+        request = TranscriptSyncRequest(
+            episode_id=blue_episode.episode_id,
+            since_version=0,
+            is_observer=True,
+        )
+
+        response = await coordinator.sync(request)
+
+        # Observer mode computes checksum on their filtered view
+        assert len(response.current_version.checksum) == 64  # Valid SHA256
+
+
+class TestFilterForObserver:
+    """Test _filter_for_observer helper."""
+
+    def test_filter_removes_system_messages(self):
+        """Test filtering removes messages before first assistant."""
+        coordinator = TranscriptCoordinator(MockEpisodeManager(), MockConnectionManager())
+
+        messages = [
+            {"role": "system", "content": "You are helpful"},
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there"},
+            {"role": "user", "content": "Thanks"},
+        ]
+
+        filtered = coordinator._filter_for_observer(messages, hide_system_prompt=True)
+
+        assert len(filtered) == 2
+        assert filtered[0]["role"] == "assistant"
+        assert filtered[1]["role"] == "user"
+
+    def test_filter_returns_all_when_disabled(self):
+        """Test filtering returns all messages when hide_system_prompt=False."""
+        coordinator = TranscriptCoordinator(MockEpisodeManager(), MockConnectionManager())
+
+        messages = [
+            {"role": "system", "content": "You are helpful"},
+            {"role": "user", "content": "Hello"},
+        ]
+
+        filtered = coordinator._filter_for_observer(messages, hide_system_prompt=False)
+
+        assert len(filtered) == 2
+        assert filtered[0]["role"] == "system"
+
+    def test_filter_handles_empty_list(self):
+        """Test filtering handles empty message list."""
+        coordinator = TranscriptCoordinator(MockEpisodeManager(), MockConnectionManager())
+
+        filtered = coordinator._filter_for_observer([], hide_system_prompt=True)
+
+        assert filtered == []
+
+    def test_filter_handles_no_assistant_messages(self):
+        """Test filtering with no assistant messages returns empty."""
+        coordinator = TranscriptCoordinator(MockEpisodeManager(), MockConnectionManager())
+
+        messages = [
+            {"role": "system", "content": "You are helpful"},
+            {"role": "user", "content": "Hello"},
+        ]
+
+        filtered = coordinator._filter_for_observer(messages, hide_system_prompt=True)
+
+        # No assistant message found, so nothing is returned
+        assert len(filtered) == 0
+
+class TestRestartOperationWithInitialTranscript:
+    """Test restart operation and INITIAL_TRANSCRIPT preservation.
+
+    These tests verify that:
+    1. INITIAL_TRANSCRIPT is captured after the first assistant response
+    2. Restart operation uses INITIAL_TRANSCRIPT to reset the conversation
+    3. Blue team's opening response is preserved through restart
+    """
+
+    @pytest.mark.asyncio
+    async def test_initial_transcript_captured_after_first_assistant_response(self):
+        """Test that INITIAL_TRANSCRIPT is updated when first assistant message is added."""
+        episode_manager = MockEpisodeManager()
+        connection_manager = MockConnectionManager()
+        coordinator = TranscriptCoordinator(episode_manager, connection_manager)
+
+        # Setup episode with initial system/user messages (no assistant yet)
+        initial_messages = [
+            {"role": "system", "content": "You are a helpful assistant"},
+            {"role": "user", "content": "Hello"},
+        ]
+        episode = Episode(
+            episode_id="ep-blue-1",
+            task_id="task-1",
+            session_id="session-1",
+            state=EpisodeState.ACTIVE,
+            context={
+                MetadataKeys.CLIENT_TRANSCRIPT: initial_messages,
+                MetadataKeys.INITIAL_TRANSCRIPT: list(initial_messages),  # Copy, no assistant
+                MetadataKeys.TRANSCRIPT_VERSION: 1,
+            },
+        )
+        episode_manager.episodes["ep-blue-1"] = episode
+
+        # Push first assistant response (simulating agent's first generate())
+        request = TranscriptSyncRequest(
+            episode_id="ep-blue-1",
+            operation="append",
+            messages_to_push=[{"role": "assistant", "content": "Hello! How can I help you today?"}],
+        )
+        await coordinator.sync(request)
+
+        # Verify INITIAL_TRANSCRIPT now includes the assistant response
+        initial = episode.context.get(MetadataKeys.INITIAL_TRANSCRIPT, [])
+        assert len(initial) == 3
+        assert initial[0]["role"] == "system"
+        assert initial[1]["role"] == "user"
+        assert initial[2]["role"] == "assistant"
+        assert initial[2]["content"] == "Hello! How can I help you today?"
+
+    @pytest.mark.asyncio
+    async def test_initial_transcript_not_updated_on_subsequent_assistant_messages(self):
+        """Test that INITIAL_TRANSCRIPT is not updated after first assistant response."""
+        episode_manager = MockEpisodeManager()
+        connection_manager = MockConnectionManager()
+        coordinator = TranscriptCoordinator(episode_manager, connection_manager)
+
+        # Setup episode that already has first assistant response captured
+        initial_messages = [
+            {"role": "system", "content": "You are a helpful assistant"},
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "First response"},
+        ]
+        episode = Episode(
+            episode_id="ep-blue-1",
+            task_id="task-1",
+            session_id="session-1",
+            state=EpisodeState.ACTIVE,
+            context={
+                MetadataKeys.CLIENT_TRANSCRIPT: initial_messages,
+                MetadataKeys.INITIAL_TRANSCRIPT: list(initial_messages),  # Has assistant
+                MetadataKeys.TRANSCRIPT_VERSION: 2,
+            },
+        )
+        episode_manager.episodes["ep-blue-1"] = episode
+
+        # Push another user and assistant message
+        request = TranscriptSyncRequest(
+            episode_id="ep-blue-1",
+            operation="append",
+            messages_to_push=[
+                {"role": "user", "content": "Follow up question"},
+                {"role": "assistant", "content": "Second response"},
+            ],
+        )
+        await coordinator.sync(request)
+
+        # Verify INITIAL_TRANSCRIPT was NOT updated
+        initial = episode.context.get(MetadataKeys.INITIAL_TRANSCRIPT, [])
+        assert len(initial) == 3  # Still only original 3 messages
+        assert initial[2]["content"] == "First response"  # Original assistant response
+
+    @pytest.mark.asyncio
+    async def test_restart_operation_resets_to_initial_transcript(self):
+        """Test restart operation resets transcript to INITIAL_TRANSCRIPT state."""
+        episode_manager = MockEpisodeManager()
+        connection_manager = MockConnectionManager()
+        coordinator = TranscriptCoordinator(episode_manager, connection_manager)
+
+        # Setup episode with extended conversation
+        initial_messages = [
+            {"role": "system", "content": "You are a helpful assistant"},
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hello! How can I help?"},
+        ]
+        current_messages = initial_messages + [
+            {"role": "user", "content": "What's the weather?"},
+            {"role": "assistant", "content": "I don't have weather data."},
+            {"role": "user", "content": "Then what can you do?"},
+        ]
+        episode = Episode(
+            episode_id="ep-blue-1",
+            task_id="task-1",
+            session_id="session-1",
+            state=EpisodeState.ACTIVE,
+            context={
+                MetadataKeys.CLIENT_TRANSCRIPT: current_messages,
+                MetadataKeys.INITIAL_TRANSCRIPT: list(initial_messages),  # Original state
+                MetadataKeys.TRANSCRIPT_VERSION: 5,
+            },
+        )
+        episode_manager.episodes["ep-blue-1"] = episode
+
+        # Red team performs restart with a new injection
+        request = TranscriptSyncRequest(
+            episode_id="ep-blue-1",
+            operation="restart",
+            messages_to_push=[{"role": "user", "content": "New attack prompt"}],
+        )
+        response = await coordinator.sync(request)
+
+        # Verify transcript was reset to initial + new message
+        transcript = episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT, [])
+        assert len(transcript) == 4  # system, user, assistant, new_user
+        assert transcript[0]["content"] == "You are a helpful assistant"
+        assert transcript[1]["content"] == "Hello"
+        assert transcript[2]["content"] == "Hello! How can I help?"  # Blue's first response preserved!
+        assert transcript[3]["content"] == "New attack prompt"  # Red's new injection
+
+    @pytest.mark.asyncio
+    async def test_restart_without_initial_transcript_falls_back_to_append(self):
+        """Test restart falls back to append if INITIAL_TRANSCRIPT is missing."""
+        episode_manager = MockEpisodeManager()
+        connection_manager = MockConnectionManager()
+        coordinator = TranscriptCoordinator(episode_manager, connection_manager)
+
+        # Setup episode without INITIAL_TRANSCRIPT set
+        current_messages = [
+            {"role": "system", "content": "You are helpful"},
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi!"},
+        ]
+        episode = Episode(
+            episode_id="ep-blue-1",
+            task_id="task-1",
+            session_id="session-1",
+            state=EpisodeState.ACTIVE,
+            context={
+                MetadataKeys.CLIENT_TRANSCRIPT: current_messages,
+                # No INITIAL_TRANSCRIPT!
+                MetadataKeys.TRANSCRIPT_VERSION: 3,
+            },
+        )
+        episode_manager.episodes["ep-blue-1"] = episode
+
+        # Attempt restart
+        request = TranscriptSyncRequest(
+            episode_id="ep-blue-1",
+            operation="restart",
+            messages_to_push=[{"role": "user", "content": "New message"}],
+        )
+        await coordinator.sync(request)
+
+        # Should fall back to append
+        transcript = episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT, [])
+        assert len(transcript) == 4  # Original 3 + new message
+        assert transcript[3]["content"] == "New message"
+
+    @pytest.mark.asyncio
+    async def test_multiple_restarts_always_use_same_initial_transcript(self):
+        """Test multiple restarts always reset to same INITIAL_TRANSCRIPT."""
+        episode_manager = MockEpisodeManager()
+        connection_manager = MockConnectionManager()
+        coordinator = TranscriptCoordinator(episode_manager, connection_manager)
+
+        # Setup episode with initial state
+        initial_messages = [
+            {"role": "system", "content": "System prompt"},
+            {"role": "user", "content": "First user message"},
+            {"role": "assistant", "content": "First assistant response"},
+        ]
+        episode = Episode(
+            episode_id="ep-blue-1",
+            task_id="task-1",
+            session_id="session-1",
+            state=EpisodeState.ACTIVE,
+            context={
+                MetadataKeys.CLIENT_TRANSCRIPT: list(initial_messages),
+                MetadataKeys.INITIAL_TRANSCRIPT: list(initial_messages),
+                MetadataKeys.TRANSCRIPT_VERSION: 2,
+            },
+        )
+        episode_manager.episodes["ep-blue-1"] = episode
+
+        # First restart
+        request1 = TranscriptSyncRequest(
+            episode_id="ep-blue-1",
+            operation="restart",
+            messages_to_push=[{"role": "user", "content": "Attack 1"}],
+        )
+        await coordinator.sync(request1)
+
+        # Simulate some conversation after restart
+        request2 = TranscriptSyncRequest(
+            episode_id="ep-blue-1",
+            operation="append",
+            messages_to_push=[
+                {"role": "assistant", "content": "Response to attack 1"},
+                {"role": "user", "content": "Follow up"},
+            ],
+        )
+        await coordinator.sync(request2)
+
+        # Second restart - should go back to original initial
+        request3 = TranscriptSyncRequest(
+            episode_id="ep-blue-1",
+            operation="restart",
+            messages_to_push=[{"role": "user", "content": "Attack 2"}],
+        )
+        await coordinator.sync(request3)
+
+        # Verify reset to initial transcript
+        transcript = episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT, [])
+        assert len(transcript) == 4
+        assert transcript[0]["content"] == "System prompt"
+        assert transcript[1]["content"] == "First user message"
+        assert transcript[2]["content"] == "First assistant response"
+        assert transcript[3]["content"] == "Attack 2"
