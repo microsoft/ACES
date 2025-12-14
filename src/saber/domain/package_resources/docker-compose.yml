@@ -38,10 +38,10 @@ services:
     security_opt:
       - no-new-privileges:false
     user: root
-    restart: unless-stopped
+    restart: "no"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:${REST_PORT:-8000}/api/v1/health"]
-      interval: 30s
+      interval: 10s
       timeout: 10s
       retries: 3
       start_period: 40s

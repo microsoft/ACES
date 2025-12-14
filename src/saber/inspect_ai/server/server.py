@@ -207,12 +207,8 @@ class DomainController:
                 },
                 exc_info=True,
             )
-            raise PrerequisiteError(
-                f"Failed to start SABER domain '{domain}'.\n\n"
-                f"Error: {e}\n\n"
-                f"Ensure the domain is properly configured:\n"
-                f"  uv run saber-domain validate {domain} --domains-root {self._domains_root}"
-            )
+            # Re-raise with original exception message preserved (contains diagnostics from orchestrator)
+            raise PrerequisiteError(str(e)) from e
 
         # Construct URLs and context
         rest_url = f"http://localhost:{rest_port}"

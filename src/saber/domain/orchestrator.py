@@ -727,9 +727,35 @@ class DockerRunner:
                 "-d",
             ]
 
-            print(f"Starting domain {domain}...")
+            print(f"Starting domain {domain}...", flush=True)
             subprocess.run(cmd, check=True)
-            print(f"✓ Domain {domain} started successfully")
+
+            # Give container a moment to start or fail immediately
+            time.sleep(2)
+
+            # Check if container is still running (detect immediate crashes)
+            container_name = f"{domain}-saber-server"
+            check_result = subprocess.run(
+                ["docker", "inspect", "--format", "{{.State.Status}}", container_name],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+
+            if check_result.returncode == 0:
+                container_status = check_result.stdout.strip()
+                if container_status not in ["running", "starting"]:
+                    # Container crashed immediately - show logs before failing
+                    print(
+                        f"\n❌ Container {container_name} crashed immediately (status: {container_status})", flush=True
+                    )
+                    self._show_failure_diagnostics(domain, env_vars, container_name, "Container crashed during startup")
+                    raise DockerError(
+                        f"Container {container_name} failed to start (status: {container_status})",
+                        command=" ".join(cmd),
+                    )
+
+            print(f"✓ Domain {domain} containers started, checking health...", flush=True)
 
             # Wait for health checks
             self._wait_for_services(domain, env_vars)
@@ -823,29 +849,209 @@ class DockerRunner:
         except subprocess.CalledProcessError:
             pass
 
-    def _wait_for_services(self, domain: str, env_vars: Dict[str, str], timeout: int = 60) -> None:
-        """Wait for services to be healthy."""
-        profiles = set(env_vars.get("COMPOSE_PROFILES", "").split(","))
-        if not profiles or "server" not in profiles:
-            return
+    def _show_failure_diagnostics(
+        self, domain: str, env_vars: Dict[str, str], container_name: str, reason: str
+    ) -> None:
+        """Show diagnostic information when server fails to start.
 
+        Args:
+            domain: Domain name
+            env_vars: Environment variables
+            container_name: Name of the container
+            reason: Brief reason for the failure
+        """
+        print("\nRetrieving diagnostic information...\n", flush=True)
+
+        # Try to get container logs for debugging
+        try:
+            logs_result = subprocess.run(
+                ["docker", "logs", "--tail", "100", container_name], capture_output=True, text=True, timeout=5
+            )
+            if logs_result.stdout or logs_result.stderr:
+                print(f"Container logs from {container_name}:", flush=True)
+                print("=" * 80, flush=True)
+                if logs_result.stdout:
+                    print(logs_result.stdout, flush=True)
+                if logs_result.stderr:
+                    print(logs_result.stderr, flush=True)
+                print("=" * 80, flush=True)
+        except Exception as e:
+            print(f"Could not retrieve container logs: {e}", flush=True)
+
+        # Try to find and display the most recent server log file with errors
+        print("\nSearching for server log file errors...\n", flush=True)
+        try:
+            # Path to server logs directory (from domains_root)
+            domains_root = Path(env_vars.get("DOMAINS_ROOT", "."))
+            server_logs_dir = domains_root / domain / "server" / "logs" / "server-logs"
+
+            if server_logs_dir.exists():
+                # Find the most recent log file
+                log_files = sorted(
+                    server_logs_dir.glob("saber-server-*.log*"), key=lambda p: p.stat().st_mtime, reverse=True
+                )
+
+                if log_files:
+                    latest_log = log_files[0]
+                    print(f"📄 Most recent server log file: {latest_log}", flush=True)
+                    print("=" * 80, flush=True)
+
+                    # Read the log file and extract error lines
+                    error_lines = []
+                    warning_lines = []
+                    try:
+                        with open(latest_log, "r") as f:
+                            for line in f:
+                                line_lower = line.lower()
+                                if (
+                                    "error" in line_lower
+                                    or "exception" in line_lower
+                                    or "traceback" in line_lower
+                                    or "failed" in line_lower
+                                ):
+                                    error_lines.append(line.rstrip())
+                                elif "warning" in line_lower or "warn" in line_lower:
+                                    warning_lines.append(line.rstrip())
+
+                        if error_lines:
+                            print(f"\n🔴 Found {len(error_lines)} error/exception lines:", flush=True)
+                            print("-" * 80, flush=True)
+                            # Show all errors (they're usually not that many)
+                            for line in error_lines:
+                                print(line, flush=True)
+                            print("-" * 80, flush=True)
+                        else:
+                            print("No obvious errors found in log file.", flush=True)
+
+                        if warning_lines and len(warning_lines) <= 20:
+                            print(f"\n⚠️  Found {len(warning_lines)} warnings:", flush=True)
+                            print("-" * 80, flush=True)
+                            for line in warning_lines:
+                                print(line, flush=True)
+                            print("-" * 80, flush=True)
+                        elif warning_lines:
+                            print(f"\n⚠️  Found {len(warning_lines)} warnings (showing last 20):", flush=True)
+                            print("-" * 80, flush=True)
+                            for line in warning_lines[-20:]:
+                                print(line, flush=True)
+                            print("-" * 80, flush=True)
+
+                    except Exception as e:
+                        print(f"Error reading log file: {e}", flush=True)
+
+                    print("=" * 80, flush=True)
+
+                    # Print clear message about where to find the full log
+                    print("\n💡 For complete details, view the full log file:", flush=True)
+                    print(f"   {latest_log}", flush=True)
+                    print(f"   (Use: cat {latest_log} | less)", flush=True)
+                else:
+                    print(f"No log files found in {server_logs_dir}", flush=True)
+            else:
+                print(f"Server logs directory not found: {server_logs_dir}", flush=True)
+
+        except Exception as e:
+            print(f"Could not access server log files: {e}", flush=True)
+
+        # Stop the containers since they're unhealthy
+        print("\nStopping unhealthy containers...", flush=True)
+        try:
+            subprocess.run(
+                ["docker", "compose", "-f", str(self.compose_file), "-p", domain, "down"],
+                capture_output=True,
+                timeout=30,
+            )
+            print("✓ Containers stopped", flush=True)
+        except Exception as e:
+            print(f"Warning: Failed to stop containers: {e}", flush=True)
+
+    def _wait_for_services(self, domain: str, env_vars: Dict[str, str], timeout: int = 60) -> None:
+        """Wait for services to be healthy.
+
+        Raises:
+            DockerError: If services fail to become healthy within timeout
+        """
+        # Always check health for server in new architecture (no profiles)
         rest_port = int(env_vars.get("REST_PORT", "8000"))
-        print(f"Waiting for server health check on port {rest_port}...")
+        container_name = f"{domain}-saber-server"
+        print(f"Waiting for server health check on port {rest_port}...", flush=True)
 
         start_time = time.time()
+        attempt = 0
         while time.time() - start_time < timeout:
+            attempt += 1
+
+            # Check if container is still running before checking port
+            check_result = subprocess.run(
+                ["docker", "inspect", "--format", "{{.State.Status}}", container_name],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+
+            if check_result.returncode == 0:
+                container_status = check_result.stdout.strip()
+                if container_status not in ["running", "starting"]:
+                    # Container crashed during health check
+                    elapsed = time.time() - start_time
+                    print(
+                        f"\n❌ Container crashed during health check after {elapsed:.0f}s (status: {container_status})",
+                        flush=True,
+                    )
+                    self._show_failure_diagnostics(domain, env_vars, container_name, "Container crashed")
+                    raise DockerError(
+                        f"Container {container_name} crashed during health check (status: {container_status})",
+                        command="docker compose up -d (health check)",
+                    )
+
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                     sock.settimeout(2)
                     if sock.connect_ex(("localhost", rest_port)) == 0:
-                        print("✓ Server is responding")
+                        elapsed = time.time() - start_time
+                        print(f"✓ Server is responding (after {elapsed:.1f}s, {attempt} attempts)", flush=True)
                         return
             except Exception:
                 pass
 
+            # Show progress every 10 seconds
+            if attempt % 5 == 0:
+                elapsed = time.time() - start_time
+                print(f"  Still waiting... ({elapsed:.0f}s elapsed, attempt {attempt})", flush=True)
+
             time.sleep(2)
 
-        print(f"⚠ Server health check timeout after {timeout}s")
+        # Health check timeout - show diagnostics
+        elapsed = time.time() - start_time
+        print(f"\n❌ Server health check TIMEOUT after {elapsed:.0f}s ({attempt} attempts)", flush=True)
+        self._show_failure_diagnostics(domain, env_vars, container_name, "Health check timeout")
+
+        # Stop the containers since they're unhealthy
+        print("\nStopping unhealthy containers...", flush=True)
+        try:
+            subprocess.run(
+                ["docker", "compose", "-f", str(self.compose_file), "-p", domain, "down"],
+                capture_output=True,
+                timeout=30,
+            )
+            print("✓ Containers stopped", flush=True)
+        except Exception as e:
+            print(f"Warning: Failed to stop containers: {e}", flush=True)
+
+        # Raise error to fail the startup
+        raise DockerError(
+            f"Server failed to become healthy within {timeout}s.\n"
+            f"The server containers have been stopped.\n\n"
+            "Common causes:\n"
+            "  1. Server crash during startup (check logs above)\n"
+            "  2. Missing dependencies or configuration\n"
+            f"  3. Port conflicts or network issues\n\n"
+            f"To debug:\n"
+            f"  1. Check full logs: docker logs {container_name}\n"
+            f"  2. Try manual start: docker compose -p {domain} up\n"
+            f"  3. Check domain configuration in domains/{domain}/",
+            command="docker compose up -d (health check)",
+        )
 
 
 class DomainOrchestrator:
