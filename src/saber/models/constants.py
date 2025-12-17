@@ -35,6 +35,11 @@ class StepEvaluationStrategy(str, Enum):
     - STATIC: Pattern matching against expected outputs in step results
     - LLM_JUDGE: LLM-based evaluation using judge templates
     - TOOL_CALL: Evaluation based on tool call analysis and execution patterns
+    - STATIC_JACCARD: Jaccard similarity for set-based matching
+    - TOOL_CALL_COUNT: Count tool call executions with threshold-based pass/fail
+
+    Note: Domain-specific strategies (e.g., CTI Realm's C0-C4 checkpoint strategies)
+    are defined in their respective domain modules.
     """
 
     STATIC = "static"
@@ -45,6 +50,12 @@ class StepEvaluationStrategy(str, Enum):
 
     TOOL_CALL = "tool_call"
     """Evaluation based on tool call analysis and execution (subtasks only)"""
+
+    STATIC_JACCARD = "static_jaccard"
+    """Jaccard similarity scoring for set-based comparisons (subtasks only)"""
+
+    TOOL_CALL_COUNT = "tool_call_count"
+    """Count tool call executions in steps (binary: pass if >= threshold, fail otherwise)"""
 
     def __str__(self) -> str:
         """Return the enum value as string for logging and serialization."""

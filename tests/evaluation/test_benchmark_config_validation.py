@@ -186,7 +186,11 @@ tasks:
             os.unlink(temp_path)
 
     def test_invalid_evaluation_strategy(self):
-        """Test that invalid evaluation strategy causes validation failure."""
+        """Test that custom/unknown strategies are now accepted.
+
+        Strategy validation was relaxed to allow domains to define custom strategies
+        that are registered at the client-side (inspect_ai scoring registry).
+        """
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
             f.write(_normalize_yaml_with_prompts("""
 domain: "test_domain"
@@ -195,9 +199,9 @@ benchmark_config:
   episode_attempts: 1
 
 tasks:
-  - task_id: "invalid_strategy_task"
-    title: "Invalid Strategy Task"
-    description: "Task with invalid evaluation strategy"
+  - task_id: "custom_strategy_task"
+    title: "Custom Strategy Task"
+    description: "Task with custom evaluation strategy"
     prompt_template_file: "test_template.j2"
     execution_config:
       executors:
@@ -206,7 +210,7 @@ tasks:
     episode_config:
       max_steps: 10
     submission_evaluation_config:
-      strategy: "invalid_strategy"
+      strategy: "custom_strategy"
       criteria: {}
       scoring:
         max_score: 1.0
@@ -217,9 +221,9 @@ tasks:
 
         try:
             loader = BenchmarkConfigLoader("test_domain")
-
-            with pytest.raises(InvalidTaskDefinitionException, match="Invalid submission evaluation strategy"):
-                loader.load_tasks_from_file(temp_path)
+            # Custom strategies are now allowed (validation deferred to client-side)
+            tasks = loader.load_tasks_from_file(temp_path)
+            assert len(tasks) == 1
 
         finally:
             os.unlink(temp_path)

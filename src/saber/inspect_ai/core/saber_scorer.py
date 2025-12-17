@@ -28,7 +28,7 @@ from inspect_ai.util import store
 from jinja2 import BaseLoader, Environment, TemplateError
 
 from ...logging_config import LogCategory, get_saber_logger
-from ...models.constants import MetadataKeys, StepEvaluationStrategy, SubmissionEvaluationStrategy
+from ...models.constants import MetadataKeys, StepEvaluationStrategy
 from ...models.core import EvalSubmission
 from ...models.rest.evaluation import (
     EpisodeStepsResponse,
@@ -39,6 +39,7 @@ from ...models.rest.evaluation import (
     SubtaskEvaluationCriteriaResponse,
 )
 from ..constants import SandboxTimeouts
+from .scoring import get_submission_scorer
 
 logger = get_saber_logger(LogCategory.EVALUATION, __name__)
 
@@ -559,7 +560,12 @@ def saber_scorer() -> Scorer:
                 )
 
                 total_subtask_score, subtask_scores_raw_results, step_evaluations = await _score_all_subtasks(
-                    steps_data, subtasks_criteria_list, submission_criteria.task_context, session_manager, state
+                    steps_data,
+                    subtasks_criteria_list,
+                    submission_criteria.task_context,
+                    session_manager,
+                    state,
+                    submission_data,
                 )
 
                 # Map individual scores back to subtask IDs
@@ -591,6 +597,23 @@ def saber_scorer() -> Scorer:
                     if criteria.strategy and criteria.strategy != ""
                 )
                 max_possible += weighted_max_possible
+
+            # Normalize scores to be out of 1.0 instead of max_possible
+            normalized_total_score = total_score / max_possible if max_possible > 0 else 0.0
+            normalized_submission_score = submission_score / submission_criteria.scoring.get("max_score", 1.0)
+
+            # Calculate normalized subtask score (if applicable)
+            if has_scorable_subtasks and subtasks_criteria_list:
+                weighted_max_possible_subtasks = sum(
+                    criteria.max_score * criteria.weight
+                    for criteria in subtasks_criteria_list
+                    if criteria.strategy and criteria.strategy != ""
+                )
+                normalized_subtask_score = (
+                    total_subtask_score / weighted_max_possible_subtasks if weighted_max_possible_subtasks > 0 else 0.0
+                )
+            else:
+                normalized_subtask_score = 0.0
 
             # Step 8: Submit evaluation result
             evaluation_result = EvaluationResultSubmission(
@@ -665,17 +688,20 @@ def saber_scorer() -> Scorer:
 
             # Build metadata - only include subtask data if subtasks_criteria_list exists
             metadata = {
-                MetadataKeys.SUBMISSION_SCORE: submission_score,
+                MetadataKeys.SUBMISSION_SCORE: normalized_submission_score,
                 "max_possible": max_possible,
                 MetadataKeys.TASK_ID: task_id,
                 "scorer_version": "2.3",
                 "scoring_method": "sum",
+                "raw_submission_score": submission_score,
+                "raw_total_score": total_score,
             }
 
             # Only add subtask-related metadata when subtasks are actually being scored
             if has_scorable_subtasks:
-                metadata[MetadataKeys.SUBTASK_SCORE] = total_subtask_score
-                metadata[MetadataKeys.WEIGHTED_SUBTASK_SCORE] = total_subtask_score
+                metadata[MetadataKeys.SUBTASK_SCORE] = normalized_subtask_score
+                metadata[MetadataKeys.WEIGHTED_SUBTASK_SCORE] = normalized_subtask_score
+                metadata["raw_subtask_score"] = total_subtask_score
                 metadata[MetadataKeys.STEP_EVALUATIONS] = [se.model_dump() for se in sum(step_evaluations, [])]
                 metadata[MetadataKeys.SUBTASK_SCORES] = subtask_scores_weighted  # Keep nested for programmatic access
 
@@ -693,11 +719,11 @@ def saber_scorer() -> Scorer:
             if has_scorable_subtasks:
                 explanation = (
                     f"{submission_explanation}, "
-                    f"weighted_subtasks={total_subtask_score:.2f}, "
-                    f"sum(submission, subtasks)={total_score}"
+                    f"weighted_subtasks={total_subtask_score:.2f}/{weighted_max_possible_subtasks:.2f}, "
+                    f"sum(submission, subtasks)={total_score:.2f}/{max_possible:.2f} = {normalized_total_score:.3f}"
                 )
             else:
-                explanation = f"{submission_explanation}"
+                explanation = f"{submission_explanation} = {normalized_total_score:.3f}"
 
             # === ORCHESTRATION COORDINATION ===
             # Wait for all orchestrated samples to complete scoring before returning Score
@@ -749,7 +775,7 @@ def saber_scorer() -> Scorer:
                     # Proceed with partial results rather than failing
 
             return Score(
-                value=total_score,
+                value=normalized_total_score,
                 answer=agent_answer,  # Use the agent answer we extracted earlier
                 explanation=explanation,
                 metadata=metadata,
@@ -794,6 +820,9 @@ async def _score_submission(
     """
     Score submission using configured strategy.
 
+    Uses the submission scorer registry to dispatch to the appropriate scoring function.
+    Domains can register custom submission strategies (e.g., trajectory_analysis).
+
     Args:
         submission_data: Episode submission data
         criteria: Submission evaluation criteria
@@ -804,12 +833,15 @@ async def _score_submission(
         Tuple of (submission_score, explanation) where score is 0.0 to max_score
     """
     strategy = criteria.strategy
-    if strategy == SubmissionEvaluationStrategy.STATIC:
-        return await _score_submission_static(submission_data, criteria)
-    elif strategy == SubmissionEvaluationStrategy.LLM_JUDGE:
-        return await _score_submission_llm(submission_data, criteria, session_manager, state)
-    else:
-        raise RuntimeError(f"Unknown submission strategy: {strategy}")
+
+    # Get scorer from registry - this allows domains to register custom strategies
+    try:
+        scorer_func = get_submission_scorer(strategy)
+    except KeyError as e:
+        raise RuntimeError(f"Unknown submission strategy: {strategy}") from e
+
+    # Call the scorer - all submission scorers have the same signature
+    return await scorer_func(submission_data, criteria, session_manager, state)
 
 
 async def _score_submission_static(
@@ -952,6 +984,7 @@ async def _score_all_subtasks(
     task_context: Any,
     session_manager: Any,
     state: TaskState,
+    submission_data: EpisodeSubmissionResponse,
 ) -> Tuple[float, List[float], List[List[StepEvaluation]]]:
     """
     Score all subtasks using their configured evaluation strategies.
@@ -965,6 +998,7 @@ async def _score_all_subtasks(
         task_context: Task context
         session_manager: Client session manager
         state: Task state
+        submission_data: Episode submission data (for strategies that need final answer)
 
     Returns:
         Tuple of (total_subtask_score, individual_scores, all_step_evaluations)
@@ -1070,6 +1104,25 @@ async def _score_all_subtasks(
                 "event": "subtask_scored",
             },
         )
+
+    # Build detailed checkpoint breakdown summary
+    checkpoint_summary_lines = ["\n=== Step-Based Checkpoint Evaluation Summary ==="]
+
+    for i, (criteria, subtask_score) in enumerate(zip(list_of_all_subtask_criteria, all_scores)):
+        strategy_name = criteria.strategy if criteria.strategy else "SKIP"
+        achieved = "✓" if subtask_score > 0 else "✗"
+
+        # Map subtask_id to checkpoint name (C0-C4)
+        checkpoint_name = criteria.subtask_id.upper() if criteria.subtask_id else f"Subtask{i}"
+
+        checkpoint_summary_lines.append(
+            f"{checkpoint_name} ({strategy_name}): {achieved} ({subtask_score:.2f}/{criteria.max_score})"
+        )
+
+    checkpoint_summary_lines.append(f"\nTotal Step-Based Score: {total_subtask_score:.2f}")
+    checkpoint_summary = "\n".join(checkpoint_summary_lines)
+
+    logger.info(checkpoint_summary)
 
     logger.info(
         "All subtasks scored",

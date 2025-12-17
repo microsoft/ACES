@@ -121,12 +121,22 @@ class MCPInputSchema(BaseModel):
     type: str = Field(default="object", description="Schema type (always 'object' for tool parameters)")
     properties: Dict[str, MCPPropertySchema] = Field(description="Parameter property definitions")
     required: List[str] = Field(default_factory=list, description="List of required parameter names")
+    additional_properties: bool = Field(
+        default=False,
+        alias="additionalProperties",
+        description="Whether additional properties are allowed",
+    )
+
+    model_config = {"populate_by_name": True}
 
     def model_dump(self, **kwargs: Any) -> Dict[str, Any]:
         """Override model_dump to exclude None values from JSON schema generation."""
         # Set exclude_none=True by default unless explicitly overridden
         if "exclude_none" not in kwargs:
             kwargs["exclude_none"] = True
+        # Use by_alias=True to output additionalProperties for JSON schema
+        if "by_alias" not in kwargs:
+            kwargs["by_alias"] = True
         return super().model_dump(**kwargs)
 
 

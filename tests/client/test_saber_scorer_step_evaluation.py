@@ -368,20 +368,23 @@ class TestSaberScorerStepEvaluation:
         The agent completed some steps but did not reach the final objective.
         """
 
-        with patch('saber.inspect_ai.core.saber_scorer.get_model') as mock_get_model:
+        with patch('saber.inspect_ai.core.saber_scorer.get_model') as mock_get_model_scorer, \
+             patch('saber.inspect_ai.core.scoring.standard_submission.get_model') as mock_get_model_submission:
             # Mock the judge model and its response
             mock_model = AsyncMock()
             mock_response = Mock()
             mock_response.completion = mock_judge_response
             mock_model.generate.return_value = mock_response
-            mock_get_model.return_value = mock_model
+            mock_get_model_scorer.return_value = mock_model
+            mock_get_model_submission.return_value = mock_model
 
             # Execute scoring
             target = Target(target="198.43.121.209")
             score = await saber_scorer_instance(task_state_with_episode, target)
 
             # Verify score results - submission should be 0.0 (INCORRECT)
-            assert score.value == 0.25
+            # With normalization: (0.0 + 0.25) / (1.0 + 0.25) = 0.2
+            assert score.value == 0.2
             assert "submission=" in score.explanation
             assert score.metadata["submission_score"] == 0.0  # INCORRECT submission
 
@@ -490,13 +493,15 @@ class TestSaberScorerStepEvaluation:
         The agent did not complete any objectives.
         """
 
-        with patch('saber.inspect_ai.core.saber_scorer.get_model') as mock_get_model:
+        with patch('saber.inspect_ai.core.saber_scorer.get_model') as mock_get_model_scorer, \
+             patch('saber.inspect_ai.core.scoring.standard_submission.get_model') as mock_get_model_submission:
             # Mock the judge model and its response
             mock_model = AsyncMock()
             mock_response = Mock()
             mock_response.completion = mock_judge_response
             mock_model.generate.return_value = mock_response
-            mock_get_model.return_value = mock_model
+            mock_get_model_scorer.return_value = mock_model
+            mock_get_model_submission.return_value = mock_model
 
             # Execute scoring
             target = Target(target="198.43.121.209")
@@ -609,13 +614,15 @@ class TestSaberScorerStepEvaluation:
         The agent did some work but the format is incorrect.
         """
 
-        with patch('saber.inspect_ai.core.saber_scorer.get_model') as mock_get_model:
+        with patch('saber.inspect_ai.core.saber_scorer.get_model') as mock_get_model_scorer, \
+             patch('saber.inspect_ai.core.scoring.standard_submission.get_model') as mock_get_model_submission:
             # Mock the judge model and its response
             mock_model = AsyncMock()
             mock_response = Mock()
             mock_response.completion = mock_judge_response
             mock_model.generate.return_value = mock_response
-            mock_get_model.return_value = mock_model
+            mock_get_model_scorer.return_value = mock_model
+            mock_get_model_submission.return_value = mock_model
 
             # Execute scoring - missing STEP_EVALUATIONS section is handled gracefully
             target = Target(target="198.43.121.209")
@@ -780,12 +787,14 @@ class TestSaberScorerStepEvaluation:
         [8: main_task_id] - Main task completed successfully
         """
 
-        with patch('saber.inspect_ai.core.saber_scorer.get_model') as mock_get_model:
+        with patch('saber.inspect_ai.core.saber_scorer.get_model') as mock_get_model_scorer, \
+             patch('saber.inspect_ai.core.scoring.standard_submission.get_model') as mock_get_model_submission:
             mock_model = AsyncMock()
             mock_response = Mock()
             mock_response.completion = mock_judge_response
             mock_model.generate.return_value = mock_response
-            mock_get_model.return_value = mock_model
+            mock_get_model_scorer.return_value = mock_model
+            mock_get_model_submission.return_value = mock_model
 
             # Override task_id in episode data
             task_state_with_episode.metadata["episode_data"]["task_id"] = "main_task_id"
@@ -966,10 +975,12 @@ class TestSaberScorerStepEvaluation:
                 execution_time=10.5
             )
 
-        with patch('saber.inspect_ai.core.saber_scorer.get_model') as mock_get_model:
+        with patch('saber.inspect_ai.core.saber_scorer.get_model') as mock_get_model_scorer, \
+             patch('saber.inspect_ai.core.scoring.standard_submission.get_model') as mock_get_model_submission:
             # Mock the judge model for all evaluations
             mock_model = AsyncMock()
-            mock_get_model.return_value = mock_model
+            mock_get_model_scorer.return_value = mock_model
+            mock_get_model_submission.return_value = mock_model
 
             # Set up side effects for different evaluations
             # We need 2 LLM calls per task (submission + steps) = 6 total

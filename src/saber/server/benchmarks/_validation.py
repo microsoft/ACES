@@ -5,13 +5,7 @@ Extracted from BenchmarkConfigLoader to improve testability and reduce file size
 
 from typing import Any, Dict
 
-from ...models.constants import (
-    EVAL_STRATEGY_LLM_JUDGE,
-    EVAL_STRATEGY_STATIC,
-    EVAL_STRATEGY_TOOL_CALL,
-    VALID_STEP_EVAL_STRATEGIES,
-    VALID_SUBMISSION_EVAL_STRATEGIES,
-)
+from ...models.constants import EVAL_STRATEGY_LLM_JUDGE, EVAL_STRATEGY_STATIC, EVAL_STRATEGY_TOOL_CALL
 from .exceptions import InvalidTaskDefinitionException
 
 # Field name constants
@@ -80,12 +74,14 @@ def validate_submission_evaluation_config(eval_config: Dict[str, Any], task_id: 
     Raises:
         InvalidTaskDefinitionException: If configuration is invalid
     """
-    # Validate strategy
+    # Validate strategy - accept any non-empty string
+    # Strategy validation happens client-side via the scorer registry
+    # This allows domains to define custom strategies without server-side changes
     strategy = eval_config.get(FIELD_STRATEGY)
-    if strategy not in VALID_SUBMISSION_EVAL_STRATEGIES:
+    if not strategy or not isinstance(strategy, str):
         raise InvalidTaskDefinitionException(
-            f"Task '{task_id}': Invalid submission evaluation strategy. "
-            f"Must be one of {VALID_SUBMISSION_EVAL_STRATEGIES}, got: {strategy}"
+            f"Task '{task_id}': Missing or invalid submission evaluation strategy. "
+            f"Strategy must be a non-empty string."
         )
 
     # Validate criteria section
@@ -171,13 +167,12 @@ def validate_step_evaluation_config(eval_config: Dict[str, Any], task_id: str) -
     if weight > 1.0:
         raise InvalidTaskDefinitionException(f"Task '{task_id}': weight must not exceed 1.0, got: {weight}")
 
-    # Validate strategy
+    # Validate strategy - accept any string (empty/None allowed for informational checkpoints)
+    # Strategy validation happens client-side via the scorer registry
+    # This allows domains to define custom strategies without server-side changes
     strategy = eval_config.get(FIELD_STRATEGY)
-    if strategy not in VALID_STEP_EVAL_STRATEGIES:
-        raise InvalidTaskDefinitionException(
-            f"Task '{task_id}': Invalid step evaluation strategy. "
-            f"Must be one of {VALID_STEP_EVAL_STRATEGIES}, got: {strategy}"
-        )
+    if strategy is not None and not isinstance(strategy, str):
+        raise InvalidTaskDefinitionException(f"Task '{task_id}': Step evaluation strategy must be a string or null.")
 
     # Validate criteria section
     criteria = eval_config.get(FIELD_CRITERIA)
@@ -186,7 +181,8 @@ def validate_step_evaluation_config(eval_config: Dict[str, Any], task_id: str) -
             f"Task '{task_id}': Missing or invalid {FIELD_CRITERIA} in {FIELD_STEP_EVALUATION_CONFIG}"
         )
 
-    # Strategy-specific validation
+    # Validate criteria fields based on strategy (only for standard strategies)
+    # Domain-specific strategies handle their own criteria validation
     if strategy == EVAL_STRATEGY_STATIC:
         if "expected_outputs" not in criteria:
             raise InvalidTaskDefinitionException(

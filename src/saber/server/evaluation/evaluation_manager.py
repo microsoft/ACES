@@ -17,7 +17,7 @@ from saber.logging_config import LogCategory, get_saber_logger
 
 from ..benchmarks.task import Task
 from .constants import EVAL_STRATEGY_STATIC, SUPPORTED_STRATEGIES
-from .exceptions import EvaluationConfigError, InvalidEvaluationRequestError, InvalidEvaluationStrategyError
+from .exceptions import EvaluationConfigError, InvalidEvaluationRequestError
 from .models import EpisodeEvaluationData, EvaluationConfig, EvaluationResult
 from .store import EvaluationStore, JsonFileEvaluationStore
 
@@ -83,7 +83,11 @@ class EvaluationManager:
 
         Raises:
             EvaluationConfigError: If task lacks submission_evaluation_config or config is invalid
-            InvalidEvaluationStrategyError: If strategy is not supported
+
+        Note:
+            Strategy validation happens client-side via the scorer registry.
+            The server accepts any strategy string - if no scorer is registered
+            for it, the client will fail fast when attempting to score.
         """
         # NEW FORMAT: Check for submission_evaluation_config
         if not hasattr(task, "submission_evaluation_config") or not task.submission_evaluation_config:
@@ -97,10 +101,15 @@ class EvaluationManager:
         except Exception as e:
             raise EvaluationConfigError(f"Invalid submission_evaluation_config for task {task.task_id}: {e}") from e
 
+        # Log non-standard strategies for visibility (validation happens client-side)
         if config.strategy not in SUPPORTED_STRATEGIES:
-            raise InvalidEvaluationStrategyError(
-                f"Unsupported evaluation strategy '{config.strategy}' for task {task.task_id}. "
-                f"Supported strategies: {SUPPORTED_STRATEGIES}"
+            logger.info(
+                "Task uses custom evaluation strategy (validated client-side)",
+                extra={
+                    "event": "custom_strategy_configured",
+                    "task_id": task.task_id,
+                    "strategy": config.strategy,
+                },
             )
 
         # Validate strategy-specific configuration

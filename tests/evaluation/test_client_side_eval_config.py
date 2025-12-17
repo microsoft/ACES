@@ -446,7 +446,11 @@ class TestStepEvaluationConfigValidation:
     """Test cases for step_evaluation_config validation."""
 
     def test_step_config_with_invalid_strategy(self):
-        """Test that step config with invalid strategy fails validation."""
+        """Test that step config with custom strategy is now accepted.
+
+        Strategy validation was relaxed to allow domains to define custom strategies
+        that are registered at the client-side (inspect_ai scoring registry).
+        """
         yaml_content = """
 domain: test_domain
 
@@ -467,9 +471,9 @@ benchmark_config:
   episode_attempts: 1
 
 tasks:
-  - task_id: invalid_step_strategy
-    title: Invalid Step Strategy
-    description: Task with invalid step strategy
+  - task_id: custom_step_strategy
+    title: Custom Step Strategy
+    description: Task with custom step strategy
     prompts:
       instruction: "test_instruction.md"
       assistant: "test_assistant.md"
@@ -485,7 +489,7 @@ tasks:
       scoring:
         max_score: 1.0
     step_evaluation_config:
-      strategy: "invalid_strategy"
+      strategy: "custom_strategy"
       criteria:
         model: "gpt-4"
     subtasks: []
@@ -496,9 +500,9 @@ tasks:
 
         try:
             loader = BenchmarkConfigLoader("test_domain")
-
-            with pytest.raises(InvalidTaskDefinitionException, match="Invalid step evaluation strategy"):
-                loader.load_tasks_from_file(temp_path)
+            # Custom strategies are now allowed (validation deferred to client-side)
+            tasks = loader.load_tasks_from_file(temp_path)
+            assert len(tasks) == 1
 
         finally:
             os.unlink(temp_path)

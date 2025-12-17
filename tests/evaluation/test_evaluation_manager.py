@@ -91,22 +91,27 @@ class TestEvaluationManager:
             evaluation_manager.configure_for_task(task_without_eval)
 
     def test_configure_for_task_invalid_strategy(self, evaluation_manager):
-        """Test configuration failure with invalid strategy."""
+        """Test that custom strategies are now accepted.
+
+        Strategy validation was relaxed - the server accepts any strategy string
+        and validation happens at the client-side via the scorer registry.
+        """
         task = Task(
-            task_id="invalid_task",
+            task_id="custom_task",
             domain="test_domain",
-            title="Invalid Task",
-            description="Task with invalid strategy",
+            title="Custom Task",
+            description="Task with custom strategy",
             prompts={"instruction": "test_template.j2", "assistant": "test_template.j2", "submit": "test_template.j2", "continue": "test_continue.md"},
             submission_evaluation_config={
-                "strategy": "invalid_strategy",
+                "strategy": "custom_strategy",  # Custom strategies are now allowed
                 "criteria": {},
                 "scoring": {"max_score": 1.0}
             }
         )
 
-        with pytest.raises(InvalidEvaluationStrategyError, match="Unsupported evaluation strategy"):
-            evaluation_manager.configure_for_task(task)
+        # Should not raise exception - custom strategies are validated at client-side
+        evaluation_manager.configure_for_task(task)
+        assert task.task_id in evaluation_manager.evaluation_configs
 
     def test_configure_for_task_invalid_static_config(self, evaluation_manager):
         """Test configuration failure with invalid static config."""

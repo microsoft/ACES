@@ -173,7 +173,8 @@ class TestDomainController:
         # Mock failed start
         mock_orchestrator.start_domain.side_effect = Exception("Startup failed")
 
-        with pytest.raises(PrerequisiteError, match="Failed to start SABER domain"):
+        # Exception message is preserved from the original exception
+        with pytest.raises(PrerequisiteError, match="Startup failed"):
             await controller.start(domain="test_domain")
 
     @pytest.mark.asyncio

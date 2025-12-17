@@ -1587,7 +1587,7 @@ class TestScoreSubmission:
         mock_model = AsyncMock()
         mock_model.generate = AsyncMock(return_value=mock_output)
 
-        with patch("saber.inspect_ai.core.saber_scorer.get_model", return_value=mock_model):
+        with patch("saber.inspect_ai.core.scoring.standard_submission.get_model", return_value=mock_model):
             score, explanation = await _score_submission(submission_data, criteria, Mock(), state)
 
         assert score == 1.0
@@ -1660,8 +1660,18 @@ class TestScoreAllSubtasks:
             )
         ]
 
+        # Create mock submission_data
+        submission_data = EpisodeSubmissionResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            submission="test",
+            model="test",
+            tokens={},
+        )
+
         total_score, individual_scores, evaluations = await _score_all_subtasks(
-            steps_data, criteria_list, Mock(description="Test", domain="test"), Mock(), Mock()
+            steps_data, criteria_list, Mock(description="Test", domain="test"), Mock(), Mock(), submission_data
         )
 
         assert total_score == 1.0
@@ -1724,8 +1734,18 @@ class TestScoreAllSubtasks:
             ),
         ]
 
+        # Create mock submission_data
+        submission_data = EpisodeSubmissionResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            submission="test",
+            model="test",
+            tokens={},
+        )
+
         total_score, individual_scores, evaluations = await _score_all_subtasks(
-            steps_data, criteria_list, Mock(description="Test", domain="test"), Mock(), Mock()
+            steps_data, criteria_list, Mock(description="Test", domain="test"), Mock(), Mock(), submission_data
         )
 
         assert total_score == 2.0
@@ -1759,8 +1779,18 @@ class TestScoreAllSubtasks:
             )
         ]
 
+        # Create mock submission_data
+        submission_data = EpisodeSubmissionResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            submission="test",
+            model="test",
+            tokens={},
+        )
+
         total_score, individual_scores, evaluations = await _score_all_subtasks(
-            steps_data, criteria_list, Mock(description="Test"), Mock(), Mock()
+            steps_data, criteria_list, Mock(description="Test"), Mock(), Mock(), submission_data
         )
 
         assert total_score == 0.0
@@ -1794,7 +1824,17 @@ class TestScoreAllSubtasks:
             )
         ]
 
+        # Create mock submission_data
+        submission_data = EpisodeSubmissionResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            submission="test",
+            model="test",
+            tokens={},
+        )
+
         with pytest.raises(RuntimeError, match="Unknown subtask strategy"):
             await _score_all_subtasks(
-                steps_data, criteria_list, Mock(description="Test"), Mock(), Mock()
+                steps_data, criteria_list, Mock(description="Test"), Mock(), Mock(), submission_data
             )

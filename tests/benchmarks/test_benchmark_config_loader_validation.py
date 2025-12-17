@@ -656,8 +656,9 @@ tasks:
 
         try:
             loader = BenchmarkConfigLoader("test_domain")
-            with pytest.raises(InvalidTaskDefinitionException, match="Invalid submission evaluation strategy"):
-                loader.load_tasks_from_file(temp_path)
+            # Custom strategies are now allowed (validation deferred to client-side scoring registry)
+            tasks = loader.load_tasks_from_file(temp_path)
+            assert len(tasks) == 1  # Should load successfully
         finally:
             Path(temp_path).unlink()
 

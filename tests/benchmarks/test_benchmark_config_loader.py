@@ -2841,11 +2841,16 @@ class TestBenchmarkConfigLoaderValidation:
             validate_step_evaluation_config(invalid_config_bad_steps, "test_task")
 
     def test_validate_step_evaluation_config_invalid_strategy(self):
-        """Test validation with invalid strategy."""
+        """Test validation with custom/unknown strategy is now accepted.
+
+        Strategy validation was relaxed to allow domains to define custom strategies
+        that are registered at the client-side (inspect_ai scoring registry).
+        """
         loader = BenchmarkConfigLoader("test_domain")
 
-        invalid_strategy_config = {
-            "strategy": "invalid_strategy",
+        # Previously invalid strategy is now accepted (validation deferred to client)
+        custom_strategy_config = {
+            "strategy": "custom_strategy",  # Custom strategies are now allowed
             "criteria": {
                 "some_field": "some_value"
             },
@@ -2855,8 +2860,8 @@ class TestBenchmarkConfigLoaderValidation:
             }
         }
 
-        with pytest.raises(InvalidTaskDefinitionException, match="Invalid step evaluation strategy"):
-            validate_step_evaluation_config(invalid_strategy_config, "test_task")
+        # Should not raise exception - custom strategies are validated at client-side
+        validate_step_evaluation_config(custom_strategy_config, "test_task")
 
     def test_validate_step_evaluation_config_scoring_validation(self):
         """Test validation of scoring section."""

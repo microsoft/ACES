@@ -1,0 +1,159 @@
+"""Standard submission scoring methods.
+
+This module provides the standard scoring methods for task submissions:
+- static: Pattern matching against expected answers
+- llm_judge: LLM-based evaluation using judge templates
+"""
+
+from typing import Any, Tuple
+
+from inspect_ai.model import ChatMessageSystem, ChatMessageUser, get_model
+from inspect_ai.solver import TaskState
+from jinja2 import Environment
+
+from ....logging_config import LogCategory, get_saber_logger
+from ....models.rest.evaluation import EpisodeSubmissionResponse, SubmissionEvaluationCriteriaResponse
+from .template_utils import TemplateStringLoader
+
+logger = get_saber_logger(LogCategory.EVALUATION, __name__)
+
+
+async def score_submission_static(
+    submission_data: EpisodeSubmissionResponse,
+    criteria: SubmissionEvaluationCriteriaResponse,
+    session_manager: Any,
+    state: TaskState,
+) -> Tuple[float, str]:
+    """Static submission scoring using pattern matching.
+
+    Args:
+        submission_data: Episode submission data
+        criteria: Submission evaluation criteria
+        session_manager: Client session manager (unused)
+        state: Task state (unused)
+
+    Returns:
+        Tuple of (score, explanation) where score is 0.0 or max_score
+    """
+    expected_answers = criteria.criteria.get("expected_answers", [])
+    max_score = criteria.scoring.get("max_score", 1.0)
+
+    # Normalize expected_answers to always be a list (handle string or list input)
+    if isinstance(expected_answers, str):
+        expected_answers = [expected_answers]
+
+    submission_lower = submission_data.submission.lower()
+    for expected in expected_answers:
+        if expected.lower() in submission_lower:
+            logger.info(
+                "Static submission match found",
+                extra={"expected": expected, "score": max_score, "event": "static_submission_match"},
+            )
+            explanation = f"submission={max_score} Expected: {expected_answers}"
+            return max_score, explanation
+
+    logger.info("Static submission no match", extra={"score": 0.0, "event": "static_submission_no_match"})
+    explanation = f"submission=0.0 Expected: {expected_answers}"
+    return 0.0, explanation
+
+
+async def score_submission_llm(
+    submission_data: EpisodeSubmissionResponse,
+    criteria: SubmissionEvaluationCriteriaResponse,
+    session_manager: Any,
+    state: TaskState,
+) -> Tuple[float, str]:
+    """LLM-based submission scoring using judge templates.
+
+    Args:
+        submission_data: Episode submission data
+        criteria: Submission evaluation criteria
+        session_manager: Client session manager (unused - templates in criteria)
+        state: Task state
+
+    Returns:
+        Tuple of (score, explanation) from LLM judge
+    """
+    # Get template content directly from criteria (matching saber_scorer.py interface)
+    system_template = criteria.criteria.get("judge_system_template")
+    user_template = criteria.criteria.get("judge_user_template")
+    model_name = criteria.criteria.get("model")
+
+    if not all([system_template, user_template, model_name]):
+        raise RuntimeError(
+            f"LLM submission evaluation requires judge_system_template, judge_user_template, "
+            f"and model in criteria. Got keys: {list(criteria.criteria.keys())}"
+        )
+
+    # Type narrowing - we've verified these are not None above
+    assert system_template is not None
+    assert user_template is not None
+    assert model_name is not None
+
+    logger.debug(
+        "Using templates from criteria",
+        extra={
+            "system_len": len(system_template),
+            "user_len": len(user_template),
+            "model": model_name,
+            "event": "using_criteria_templates",
+        },
+    )
+
+    # Setup Jinja2 with inline templates
+    env = Environment(loader=TemplateStringLoader({"system": system_template, "user": user_template}))
+
+    # Build context
+    golden_answer = criteria.criteria.get("golden_answer", "")
+    context = {
+        "question": criteria.task_context.description,
+        "golden_answer": golden_answer,
+        "submission": submission_data.submission,
+        "task_id": criteria.task_id,
+        "domain": criteria.task_context.domain,
+    }
+
+    # Render templates
+    system_message = env.get_template("system").render(context)
+    user_message = env.get_template("user").render(context)
+
+    logger.debug(
+        "Rendered submission templates",
+        extra={
+            "system_len": len(system_message),
+            "user_len": len(user_message),
+            "event": "render_submission_templates",
+        },
+    )
+
+    # Execute LLM
+    state.messages.clear()
+    state.messages.append(ChatMessageSystem(content=system_message))
+    state.messages.append(ChatMessageUser(content=user_message))
+
+    model = get_model(model_name)
+    response = await model.generate(state.messages)
+    state.output = response  # Update state with LLM response
+
+    # Parse response (expect CORRECT/INCORRECT)
+    judge_response = state.output.completion.upper()
+    max_score = criteria.scoring.get("max_score", 1.0)
+
+    # Check for INCORRECT first (since INCORRECT contains CORRECT as substring)
+    if "INCORRECT" in judge_response:
+        logger.info("LLM judge: INCORRECT", extra={"score": 0.0, "event": "llm_submission_incorrect"})
+        explanation = f"submission=0.0 Expected: {golden_answer}" if golden_answer else "submission=0.0"
+        return 0.0, explanation
+
+    if "CORRECT" in judge_response:
+        logger.info("LLM judge: CORRECT", extra={"score": max_score, "event": "llm_submission_correct"})
+        explanation = f"submission={max_score}"
+        return max_score, explanation
+
+    # Fallback: couldn't parse response
+    logger.warning(
+        "Could not parse LLM judge response, defaulting to 0",
+        extra={"response": judge_response[:200], "event": "llm_submission_parse_error"},
+    )
+    explanation = "submission=0.0 (unable to parse LLM response)"
+    return 0.0, explanation
