@@ -3,13 +3,16 @@
 This module exposes the airt_demo domain as an Inspect AI task that can be
 evaluated with commands like:
 
-    inspect eval domains/airt_demo --model openai/gpt-4
-    inspect eval domains/airt_demo -T task_filter="airt_demo_*" --model anthropic/claude-3-opus
+    inspect eval domains/airt_demo -T roles_file=domains/airt_demo/ai_redteam_roles.yaml
+
+NOTE: This domain REQUIRES a roles_file to configure different models and behaviors
+for red and blue team agents. Using --model alone is not supported.
 """
 
 from pathlib import Path
 
 from inspect_ai import task
+from inspect_ai._util.error import PrerequisiteError
 
 # Import SABER's task factory
 from saber.inspect_ai import create_domain_task
@@ -29,12 +32,19 @@ _airt_demo_factory = create_domain_task(
 
 # Wrap in @task decorator for Inspect AI discovery
 @task
-def airt_demo(**kwargs):
+def airt_demo(roles_file: str | None = None, roles: str | dict | None = None, **kwargs):
     """AI Red Team Testing Demo - AI safety guardrail testing
 
-    Dynamically loads tasks from the running SABER server.
+    This domain implements adversarial AI red teaming where a red team agent
+    attempts to bypass the safety guardrails of a blue team agent through
+    prompt injection attacks.
+
+    REQUIRED: You must specify a roles_file to configure different models
+    and behaviors for red and blue team agents.
 
     Args:
+        roles_file: REQUIRED - Path to roles configuration YAML file
+        roles: Alternative inline role configuration (dict or JSON string)
         rest_port: REST API port (default: 8000)
         mcp_port: MCP API port (default: 8001)
         task_filter: Optional task filter (exact match, glob pattern, or comma-separated)
@@ -43,25 +53,32 @@ def airt_demo(**kwargs):
         rebuild: Remove and rebuild images matching this prefix (e.g., 'server')
         rebuild_all: Remove and rebuild all images (default: False)
         stop_saber_after: Stop SABER domain after task completes (default: False)
-        roles_file: Path to roles configuration file for dual-agent setup
 
     Returns:
         Inspect AI Task with SABER airt_demo dataset loaded from server
 
     Examples:
-        # Basic evaluation (server stays running after)
-        inspect eval domains/airt_demo --model openai/gpt-4
+        # Use the default dual-role configuration (RECOMMENDED)
+        inspect eval domains/airt_demo -T roles_file=domains/airt_demo/ai_redteam_roles.yaml
 
-        # Build missing images first
-        inspect eval domains/airt_demo --model openai/gpt-4 -T build=true
+        # With rebuild
+        inspect eval domains/airt_demo -T roles_file=domains/airt_demo/ai_redteam_roles.yaml -T rebuild=server
 
-        # Rebuild all images (clean slate)
-        inspect eval domains/airt_demo --model openai/gpt-4 -T rebuild_all=true
-
-        # Filter to specific tasks
-        inspect eval domains/airt_demo --model openai/gpt-4 -T task_filter="airt_demo_blue_agent"
-
-        # Use dual-role configuration
-        inspect eval domains/airt_demo -T roles_file=airt_demo_roles.yaml
+        # Filter to specific role
+        inspect eval domains/airt_demo -T roles_file=domains/airt_demo/ai_redteam_roles.yaml -T task_filter="*blue*"
     """
-    return _airt_demo_factory(**kwargs)
+    # Validate that roles_file or roles is provided
+    if roles_file is None and roles is None:
+        raise PrerequisiteError(
+            "The airt_demo domain REQUIRES a roles configuration file.\n\n"
+            "This domain runs adversarial red/blue team agents that need different\n"
+            "models and configurations (e.g., blue team has submit disabled).\n\n"
+            "Usage:\n"
+            "  inspect eval domains/airt_demo -T roles_file=domains/airt_demo/ai_redteam_roles.yaml\n\n"
+            "You can customize the roles file or create your own. See:\n"
+            "  domains/airt_demo/ai_redteam_roles.yaml\n\n"
+            "NOTE: Do not use --model with this domain. Model selection is handled\n"
+            "      per-role in the roles configuration file."
+        )
+
+    return _airt_demo_factory(roles_file=roles_file, roles=roles, **kwargs)

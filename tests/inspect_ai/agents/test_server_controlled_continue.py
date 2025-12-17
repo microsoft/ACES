@@ -18,8 +18,8 @@ class TestServerControlledOnContinue:
     """Test cases for _server_controlled_on_continue callback."""
 
     @pytest.mark.asyncio
-    async def test_calls_wait_and_sync_on_wrapper(self):
-        """Test that callback calls wait_and_sync_transcript on the model wrapper."""
+    async def test_calls_wait_for_injection_and_sync_on_wrapper(self):
+        """Test that callback calls wait_for_injection_and_sync on the model wrapper."""
         from inspect_ai.agent._agent import AgentState
         from inspect_ai.model import ChatMessageUser, ChatMessageAssistant
         from saber.inspect_ai.integration.model_wrapper import WebSocketTranscriptSyncingModelWrapper
@@ -31,7 +31,7 @@ class TestServerControlledOnContinue:
             ChatMessageAssistant(content="Assistant response"),
             ChatMessageUser(content="Server-injected continue prompt"),
         ]
-        mock_wrapper.wait_and_sync_transcript = AsyncMock(return_value=synced_messages)
+        mock_wrapper.wait_for_injection_and_sync = AsyncMock(return_value=synced_messages)
 
         # Create initial state
         initial_messages = [
@@ -44,8 +44,8 @@ class TestServerControlledOnContinue:
         with patch("saber.inspect_ai.agents.registry.react.active_model", return_value=mock_wrapper):
             result = await _server_controlled_on_continue(state)
 
-        # Verify wait_and_sync_transcript was called
-        mock_wrapper.wait_and_sync_transcript.assert_called_once()
+        # Verify wait_for_injection_and_sync was called
+        mock_wrapper.wait_for_injection_and_sync.assert_called_once()
 
         # Verify result is an AgentState with synced messages
         assert isinstance(result, AgentState)
@@ -53,24 +53,53 @@ class TestServerControlledOnContinue:
         assert result.messages[-1].content == "Server-injected continue prompt"
 
     @pytest.mark.asyncio
-    async def test_returns_original_state_when_not_wrapper(self):
-        """Test that callback returns original state when model is not WebSocket wrapper."""
+    async def test_returns_false_when_not_wrapper_and_no_tool_calls(self):
+        """Test that callback returns False when model is not WebSocket wrapper and no tool_calls."""
         from inspect_ai.agent._agent import AgentState
         from inspect_ai.model import ChatMessageUser, ChatMessageAssistant
 
         # Create mock regular model (not a wrapper)
         mock_model = MagicMock()
 
+        # Assistant message with no tool_calls
+        assistant_msg = ChatMessageAssistant(content="Assistant response")
+        assistant_msg.tool_calls = None  # No tool calls
+
         initial_messages = [
             ChatMessageUser(content="User message"),
-            ChatMessageAssistant(content="Assistant response"),
+            assistant_msg,
         ]
         state = AgentState(messages=initial_messages)
 
         with patch("saber.inspect_ai.agents.registry.react.active_model", return_value=mock_model):
             result = await _server_controlled_on_continue(state)
 
-        # Should return original state unchanged
+        # Should return False to stop the loop when no tool_calls
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_returns_state_when_not_wrapper_and_has_tool_calls(self):
+        """Test that callback returns state when model is not WebSocket wrapper but has tool_calls."""
+        from inspect_ai.agent._agent import AgentState
+        from inspect_ai.model import ChatMessageUser, ChatMessageAssistant
+
+        # Create mock regular model (not a wrapper)
+        mock_model = MagicMock()
+
+        # Assistant message with tool_calls
+        assistant_msg = ChatMessageAssistant(content="Assistant response")
+        assistant_msg.tool_calls = [MagicMock()]  # Has tool calls
+
+        initial_messages = [
+            ChatMessageUser(content="User message"),
+            assistant_msg,
+        ]
+        state = AgentState(messages=initial_messages)
+
+        with patch("saber.inspect_ai.agents.registry.react.active_model", return_value=mock_model):
+            result = await _server_controlled_on_continue(state)
+
+        # Should return state to continue when there are tool_calls
         assert result is state
 
     @pytest.mark.asyncio
@@ -95,7 +124,7 @@ class TestServerControlledOnContinue:
 
         mock_wrapper = MagicMock(spec=WebSocketTranscriptSyncingModelWrapper)
         synced_messages = [ChatMessageUser(content="Synced")]
-        mock_wrapper.wait_and_sync_transcript = AsyncMock(return_value=synced_messages)
+        mock_wrapper.wait_for_injection_and_sync = AsyncMock(return_value=synced_messages)
 
         # Create state with explicit output
         state = AgentState(messages=[ChatMessageUser(content="Original")])
@@ -116,21 +145,21 @@ class TestServerControlledOnContinue:
 
     @pytest.mark.asyncio
     async def test_handles_sync_error_gracefully(self):
-        """Test that callback handles errors from sync and returns original state."""
+        """Test that callback handles errors from sync and returns False to stop loop."""
         from inspect_ai.agent._agent import AgentState
         from inspect_ai.model import ChatMessageUser
         from saber.inspect_ai.integration.model_wrapper import WebSocketTranscriptSyncingModelWrapper
 
         mock_wrapper = MagicMock(spec=WebSocketTranscriptSyncingModelWrapper)
-        mock_wrapper.wait_and_sync_transcript = AsyncMock(side_effect=RuntimeError("Sync failed"))
+        mock_wrapper.wait_for_injection_and_sync = AsyncMock(side_effect=RuntimeError("Sync failed"))
 
         state = AgentState(messages=[ChatMessageUser(content="Test")])
 
         with patch("saber.inspect_ai.agents.registry.react.active_model", return_value=mock_wrapper):
             result = await _server_controlled_on_continue(state)
 
-        # Should return original state on error
-        assert result is state
+        # Should return False on error to stop the loop gracefully
+        assert result is False
 
 
 class TestCreateAgentWithTranscriptConfig:

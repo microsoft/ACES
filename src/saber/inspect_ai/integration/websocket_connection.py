@@ -11,13 +11,11 @@ Logging category: AGENT.
 
 import asyncio
 import json
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import urlparse, urlunparse
 
-try:
-    from websockets.client import WebSocketClientProtocol
-except ImportError:
-    WebSocketClientProtocol = Any
+if TYPE_CHECKING:
+    from websockets import ClientConnection
 
 from ...logging_config import LogCategory, get_saber_logger
 from ...models.rest.websocket_config import WebSocketConfig
@@ -57,7 +55,7 @@ class WebSocketConnectionManager:
         self._ws_config = ws_config or WebSocketConfig()
 
         # Connection state
-        self._websocket: Optional[WebSocketClientProtocol] = None
+        self._websocket: Optional["ClientConnection"] = None
         self._ws_lock = asyncio.Lock()
         self._listener_task: Optional[asyncio.Task[None]] = None
 
@@ -75,7 +73,7 @@ class WebSocketConnectionManager:
         )
 
     @property
-    def websocket(self) -> Optional[WebSocketClientProtocol]:
+    def websocket(self) -> Optional["ClientConnection"]:
         """Get the current WebSocket connection (may be None or closed)."""
         return self._websocket
 
@@ -141,7 +139,7 @@ class WebSocketConnectionManager:
     async def ensure_connected(
         self,
         on_connected_callback: Optional[Any] = None,
-    ) -> WebSocketClientProtocol:
+    ) -> "ClientConnection":
         """Establish WebSocket connection with reconnection support.
 
         Implements exponential backoff reconnection and proper resource cleanup.
@@ -304,7 +302,7 @@ class WebSocketConnectionManager:
 
         self._websocket = None
 
-    async def force_reconnect(self, on_connected_callback: Optional[Any] = None) -> WebSocketClientProtocol:
+    async def force_reconnect(self, on_connected_callback: Optional[Any] = None) -> "ClientConnection":
         """Force close and reconnect.
 
         Useful when connection is in bad state and needs reset.

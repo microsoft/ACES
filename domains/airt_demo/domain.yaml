@@ -17,7 +17,7 @@ images:
       saber.component: "server"
       saber.framework: "dual-agent"
 
-  sandbox:
+  red_sandbox:
     tag: "saber/airt_demo/red_sandbox:latest"
     dockerfile: "server/docker/red_team_sandbox/Dockerfile"
     context: "server/docker/red_team_sandbox"

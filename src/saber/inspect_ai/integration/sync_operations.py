@@ -13,12 +13,10 @@ import asyncio
 import json
 import uuid
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-try:
-    from websockets.client import WebSocketClientProtocol
-except ImportError:
-    WebSocketClientProtocol = Any
+if TYPE_CHECKING:
+    from websockets import ClientConnection
 
 from inspect_ai.model import ChatMessage
 
@@ -116,7 +114,7 @@ class TranscriptSyncOperations:
 
     async def push_message_with_retry(
         self,
-        websocket: WebSocketClientProtocol,
+        websocket: "ClientConnection",
         msg: ChatMessage,
         context: str = "message_push",
         reconnect_callback: Optional[Any] = None,
@@ -132,7 +130,7 @@ class TranscriptSyncOperations:
             msg: The ChatMessage to push
             context: Context string for logging (e.g., "tool_result_push", "output_push")
             reconnect_callback: Optional async callback to reconnect on failure.
-                               Signature: async def callback() -> WebSocketClientProtocol
+                               Signature: async def callback() -> ClientConnection
 
         Returns:
             True when push succeeds (always succeeds eventually or raises)
@@ -235,7 +233,7 @@ class TranscriptSyncOperations:
 
     async def push_tool_results_if_needed(
         self,
-        websocket: WebSocketClientProtocol,
+        websocket: "ClientConnection",
         input_messages: List[ChatMessage],
         reconnect_callback: Optional[Any] = None,
     ) -> bool:
@@ -316,7 +314,7 @@ class TranscriptSyncOperations:
 
     async def request_sync(
         self,
-        websocket: WebSocketClientProtocol,
+        websocket: "ClientConnection",
     ) -> Optional[SyncResponseData]:
         """Request transcript sync from server.
 
@@ -431,24 +429,70 @@ class TranscriptSyncOperations:
         Returns:
             Updated local messages list
         """
+        old_version = self._local_version
+        old_count = len(self._local_messages)
+
+        logger.info(
+            "[RESTART_DEBUG] apply_sync_response called",
+            extra={
+                "episode_id": self._episode_id,
+                "sync_mode": sync_data.sync_mode.value,
+                "old_version": old_version,
+                "old_message_count": old_count,
+                "server_version": sync_data.current_version.sequence,
+            },
+        )
+
         if sync_data.sync_mode == SyncMode.FULL:
             # Rewrite detected - replace entire transcript
             if not sync_data.full_transcript:
                 logger.warning("Full sync mode but no full_transcript provided")
                 raise ValueError("Missing full_transcript in FULL sync mode")
 
+            logger.info(
+                "[RESTART_DEBUG] FULL sync mode - replacing entire transcript (RESTART)",
+                extra={
+                    "episode_id": self._episode_id,
+                    "old_messages": (
+                        [f"{m.role}: {str(m.content)[:50]}..." for m in self._local_messages[-3:]]
+                        if self._local_messages
+                        else []
+                    ),
+                    "new_message_count": len(sync_data.full_transcript),
+                },
+            )
             self._local_messages = [deserialize_message(m) for m in sync_data.full_transcript]
+            logger.info(
+                "[RESTART_DEBUG] After FULL sync replacement",
+                extra={
+                    "episode_id": self._episode_id,
+                    "new_messages": (
+                        [f"{m.role}: {str(m.content)[:50]}..." for m in self._local_messages[-3:]]
+                        if self._local_messages
+                        else []
+                    ),
+                    "new_count": len(self._local_messages),
+                },
+            )
 
         elif sync_data.sync_mode == SyncMode.DELTA:
             # Delta sync - append new messages
             if sync_data.delta:
                 new_messages = [deserialize_message(m) for m in sync_data.delta]
+                logger.info(
+                    "[RESTART_DEBUG] DELTA sync mode - appending messages",
+                    extra={
+                        "episode_id": self._episode_id,
+                        "delta_count": len(new_messages),
+                        "delta_roles": [m.role for m in new_messages],
+                    },
+                )
                 self._local_messages.extend(new_messages)
 
         elif sync_data.sync_mode == SyncMode.NO_CHANGE:
             # No changes since requested version - transcript is already up to date
-            logger.debug(
-                "Transcript sync: no changes since requested version",
+            logger.info(
+                "[RESTART_DEBUG] NO_CHANGE sync mode - transcript up to date",
                 extra={
                     "episode_id": self._episode_id,
                     "version": self._local_version,
@@ -459,17 +503,48 @@ class TranscriptSyncOperations:
         self._local_version = sync_data.current_version.sequence
         self._local_checksum = sync_data.current_version.checksum
 
-        logger.debug(
-            "Applied transcript sync",
+        # Analyze for orphaned tool_calls
+        tool_calls_info = self._analyze_tool_calls_client(self._local_messages)
+
+        logger.info(
+            "[RESTART_DEBUG] Applied transcript sync complete",
             extra={
                 "episode_id": self._episode_id,
                 "sync_mode": sync_data.sync_mode.value,
+                "old_version": old_version,
                 "new_version": self._local_version,
-                "message_count": len(self._local_messages),
+                "old_message_count": old_count,
+                "new_message_count": len(self._local_messages),
+                "last_message_role": self._local_messages[-1].role if self._local_messages else "none",
+                "tool_calls_info": tool_calls_info,
+                "has_orphaned_tool_calls": len(tool_calls_info.get("orphaned_tool_call_ids", [])) > 0,
             },
         )
 
         return self._local_messages.copy()
+
+    def _analyze_tool_calls_client(self, messages: List[ChatMessage]) -> Dict[str, Any]:
+        """Analyze tool_calls in client-side messages to detect orphaned calls."""
+        all_tool_call_ids: List[str] = []
+        responded_tool_call_ids: List[str] = []
+
+        for msg in messages:
+            if msg.role == "assistant" and hasattr(msg, "tool_calls") and msg.tool_calls:
+                for tc in msg.tool_calls:
+                    if hasattr(tc, "id") and tc.id:
+                        all_tool_call_ids.append(tc.id)
+            elif msg.role == "tool":
+                # Tool messages have tool_call_id
+                if hasattr(msg, "tool_call_id") and msg.tool_call_id:
+                    responded_tool_call_ids.append(msg.tool_call_id)
+
+        orphaned = [tc_id for tc_id in all_tool_call_ids if tc_id not in responded_tool_call_ids]
+
+        return {
+            "total_tool_calls": len(all_tool_call_ids),
+            "responded_tool_calls": len(responded_tool_call_ids),
+            "orphaned_tool_call_ids": orphaned[:5],  # Truncate for logging
+        }
 
     def update_local_state_without_push(self, msg: ChatMessage) -> None:
         """Update local state when push is disabled.

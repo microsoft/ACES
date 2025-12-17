@@ -350,12 +350,34 @@ def create_saber_solver(agent_name: str, agent_factory: Callable, role_config: O
                 # Call it with prompts to get the actual agent
                 create_with_prompts = agent_factory()
 
+                # Get submit configuration from role config if available
+                submit_enabled: Optional[bool] = None
+                if context.role and role_config:
+                    try:
+                        role_agent_config = role_config.get_config_for_role(context.role)
+                        submit_enabled = role_agent_config.submit
+                        if submit_enabled is False:
+                            logger.info(
+                                f"Submit tool DISABLED for role '{context.role}' via role config",
+                                extra={
+                                    "role": context.role,
+                                    "task_id": context.task_id,
+                                    "submit_enabled": False,
+                                },
+                            )
+                    except Exception as e:
+                        logger.debug(
+                            f"Could not get submit config for role '{context.role}': {e}",
+                            extra={"role": context.role},
+                        )
+
                 agent = create_with_prompts(
                     instruction_prompt=context.instruction_prompt,
                     assistant_prompt=context.assistant_prompt,
                     submit_prompt=context.submit_prompt,
                     continue_prompt=context.continue_prompt,
                     transcript_config=context.transcript_config,
+                    submit=submit_enabled,
                 )
 
                 # Execute agent - it will use the wrapped model internally

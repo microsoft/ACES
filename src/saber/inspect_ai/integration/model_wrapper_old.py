@@ -23,14 +23,14 @@ import asyncio
 import json
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+
+if TYPE_CHECKING:
+    from websockets import ClientConnection
 
 try:
-    from websockets.client import WebSocketClientProtocol
     from websockets.protocol import State as WebSocketState
 except ImportError:
-    # Fallback for type checking when websockets not installed
-    WebSocketClientProtocol = Any
     WebSocketState = None
 
 
@@ -284,7 +284,7 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
         self._ws_config = ws_config or WebSocketConfig()
 
         # WebSocket connection state
-        self._websocket: Optional[WebSocketClientProtocol] = None
+        self._websocket: Optional["ClientConnection"] = None
         self._ws_lock = asyncio.Lock()
         self._event_queue: asyncio.Queue[WebSocketMessageOrDict] = asyncio.Queue(
             maxsize=self._ws_config.pull.event_queue_max_size
@@ -499,7 +499,7 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
                         except Exception as e:
                             logger.warning(f"Error closing WebSocket during cleanup: {e}")
 
-    async def _listen_for_events_impl(self, websocket: WebSocketClientProtocol) -> None:
+    async def _listen_for_events_impl(self, websocket: "ClientConnection") -> None:
         """Background task that listens for WebSocket events.
 
         Receives transcript_modified events and queues them for generate().

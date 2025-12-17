@@ -25,7 +25,7 @@ Logging category: AGENT.
 """
 
 import asyncio
-from typing import Any, List, Optional
+from typing import Any, ClassVar, Dict, List, Optional
 
 from inspect_ai.model import ChatMessage, Model, ModelOutput
 
@@ -61,6 +61,42 @@ class WebSocketTranscriptSyncingModelWrapper:
     - _events: WebSocketEventProcessor for event handling
     - _sync: TranscriptSyncOperations for push/pull operations
     """
+
+    # Class-level registry to track wrappers by episode_id for cleanup
+    _wrappers_by_episode: ClassVar[Dict[str, "WebSocketTranscriptSyncingModelWrapper"]] = {}
+
+    @classmethod
+    def get_wrapper_for_episode(cls, episode_id: str) -> Optional["WebSocketTranscriptSyncingModelWrapper"]:
+        """Get the wrapper instance for a given episode_id.
+
+        Used by sandbox cleanup to find and cleanup the wrapper.
+
+        Args:
+            episode_id: The episode ID to look up
+
+        Returns:
+            The wrapper instance if found, None otherwise
+        """
+        return cls._wrappers_by_episode.get(episode_id)
+
+    @classmethod
+    def _register_wrapper(cls, episode_id: str, wrapper: "WebSocketTranscriptSyncingModelWrapper") -> None:
+        """Register a wrapper instance for cleanup lookup."""
+        cls._wrappers_by_episode[episode_id] = wrapper
+        logger.debug(
+            "Registered wrapper for episode",
+            extra={"episode_id": episode_id, "total_registered": len(cls._wrappers_by_episode)},
+        )
+
+    @classmethod
+    def _unregister_wrapper(cls, episode_id: str) -> None:
+        """Unregister a wrapper instance after cleanup."""
+        if episode_id in cls._wrappers_by_episode:
+            del cls._wrappers_by_episode[episode_id]
+            logger.debug(
+                "Unregistered wrapper for episode",
+                extra={"episode_id": episode_id, "total_registered": len(cls._wrappers_by_episode)},
+            )
 
     def __init__(
         self,
@@ -106,6 +142,9 @@ class WebSocketTranscriptSyncingModelWrapper:
 
         # Flag to skip waiting in generate() after wait_and_sync_transcript() already synced
         self._skip_next_wait = False
+
+        # Register this wrapper for cleanup lookup
+        self._register_wrapper(episode_id, self)
 
         logger.debug(
             "Created WebSocketTranscriptSyncingModelWrapper",
@@ -276,40 +315,90 @@ class WebSocketTranscriptSyncingModelWrapper:
         # Wait for state event, then pull (unified flow for all calls)
         if self._ws_config.pull.enabled:
             if isinstance(input, list):
+                logger.info(
+                    "[RESTART_DEBUG] generate() starting pull flow",
+                    extra={
+                        "episode_id": self._episode_id,
+                        "skip_next_wait": self._skip_next_wait,
+                        "pushed_tool_results": pushed_tool_results,
+                        "input_message_count": len(input),
+                        "local_version": self._sync.local_version,
+                    },
+                )
                 # If wait_and_sync_transcript() just synced, skip waiting
                 if self._skip_next_wait:
                     event_received = True
                     self._skip_next_wait = False
-                    logger.debug(
-                        "Skipping wait - wait_and_sync_transcript already synced",
+                    logger.info(
+                        "[RESTART_DEBUG] Skipping wait - wait_and_sync_transcript already synced",
                         extra={"episode_id": self._episode_id},
                     )
                 # If we just pushed tool results, skip waiting
                 elif pushed_tool_results:
                     event_received = True
-                    logger.debug(
-                        "Skipping wait - just pushed tool results",
+                    logger.info(
+                        "[RESTART_DEBUG] Skipping wait - just pushed tool results",
                         extra={"episode_id": self._episode_id},
                     )
                 else:
+                    logger.info(
+                        "[RESTART_DEBUG] Waiting for state event...",
+                        extra={"episode_id": self._episode_id},
+                    )
                     event_received = await self._events.wait_for_state_event_with_retry()
+                    logger.info(
+                        "[RESTART_DEBUG] State event wait completed",
+                        extra={"episode_id": self._episode_id, "event_received": event_received},
+                    )
 
                 if event_received:
                     websocket = self._connection.websocket
                     if websocket:
                         # Request and apply sync
+                        logger.info(
+                            "[RESTART_DEBUG] Requesting sync from server",
+                            extra={
+                                "episode_id": self._episode_id,
+                                "local_version_before": self._sync.local_version,
+                            },
+                        )
                         sync_data = await self._sync.request_sync(websocket)
                         if sync_data:
+                            logger.info(
+                                "[RESTART_DEBUG] Sync response received",
+                                extra={
+                                    "episode_id": self._episode_id,
+                                    "sync_mode": sync_data.sync_mode.value,
+                                    "server_version": sync_data.current_version.sequence,
+                                    "full_transcript_len": (
+                                        len(sync_data.full_transcript) if sync_data.full_transcript else 0
+                                    ),
+                                    "delta_len": len(sync_data.delta) if sync_data.delta else 0,
+                                    "modified": sync_data.modified,
+                                },
+                            )
                             input = self._sync.apply_sync_response(sync_data)
 
-                            logger.debug(
-                                "Applied transcript sync via WebSocket",
+                            logger.info(
+                                "[RESTART_DEBUG] Applied transcript sync via WebSocket",
                                 extra={
                                     "episode_id": self._episode_id,
                                     "sync_mode": sync_data.sync_mode.value,
                                     "new_version": self._sync.local_version,
+                                    "new_message_count": len(input),
+                                    "last_message_role": input[-1].role if input else "none",
                                 },
                             )
+                        else:
+                            logger.warning(
+                                "[RESTART_DEBUG] No sync_data received from server",
+                                extra={"episode_id": self._episode_id},
+                            )
+                    else:
+                        logger.warning(
+                            "[RESTART_DEBUG] No websocket available for sync",
+                            extra={"episode_id": self._episode_id},
+                        )
             else:
                 logger.warning(
                     "WebSocket wrapper received non-list input, cannot replace with modified transcript",
@@ -373,11 +462,28 @@ class WebSocketTranscriptSyncingModelWrapper:
         Raises:
             RuntimeError: If sync fails or times out
         """
+        logger.info(
+            "[RESTART_DEBUG] wait_and_sync_transcript() called (AgentContinue callback)",
+            extra={
+                "episode_id": self._episode_id,
+                "current_local_version": self._sync.local_version,
+                "current_message_count": len(self._sync.local_messages),
+            },
+        )
+
         # Ensure WebSocket is connected
         await self._ensure_connected()
 
         # Wait for modification event
+        logger.info(
+            "[RESTART_DEBUG] Waiting for state event in wait_and_sync_transcript",
+            extra={"episode_id": self._episode_id},
+        )
         event_received = await self._events.wait_for_state_event_with_retry()
+        logger.info(
+            "[RESTART_DEBUG] State event received in wait_and_sync_transcript",
+            extra={"episode_id": self._episode_id, "event_received": event_received},
+        )
 
         if not event_received:
             logger.warning(
@@ -397,20 +503,105 @@ class WebSocketTranscriptSyncingModelWrapper:
         sync_data = await self._sync.request_sync(websocket)
 
         if sync_data:
+            logger.info(
+                "[RESTART_DEBUG] Applying sync in wait_and_sync_transcript",
+                extra={
+                    "episode_id": self._episode_id,
+                    "sync_mode": sync_data.sync_mode.value,
+                    "server_version": sync_data.current_version.sequence,
+                    "full_transcript_len": len(sync_data.full_transcript) if sync_data.full_transcript else 0,
+                    "delta_len": len(sync_data.delta) if sync_data.delta else 0,
+                },
+            )
             self._sync.apply_sync_response(sync_data)
 
             logger.info(
-                "Transcript synced for AgentContinue callback",
+                "[RESTART_DEBUG] Transcript synced for AgentContinue callback",
                 extra={
                     "episode_id": self._episode_id,
                     "sync_mode": sync_data.sync_mode.value,
                     "message_count": len(self._sync.local_messages),
+                    "last_message_role": self._sync.local_messages[-1].role if self._sync.local_messages else "none",
                 },
             )
 
             # Signal generate() to skip waiting
             self._skip_next_wait = True
+            logger.info(
+                "[RESTART_DEBUG] Set _skip_next_wait=True",
+                extra={"episode_id": self._episode_id},
+            )
+        else:
+            logger.warning(
+                "[RESTART_DEBUG] No sync_data in wait_and_sync_transcript",
+                extra={"episode_id": self._episode_id},
+            )
 
+        logger.info(
+            "[RESTART_DEBUG] wait_and_sync_transcript returning",
+            extra={
+                "episode_id": self._episode_id,
+                "returning_message_count": len(self._sync.local_messages),
+            },
+        )
+        return self._sync.local_messages.copy()
+
+    async def wait_for_injection_and_sync(self) -> List[ChatMessage]:
+        """Wait for red team injection, then sync transcript.
+
+        This method is used by the AgentContinue callback to wait for red team
+        to inject a user message. It specifically waits for is_waiting_on_assistant
+        event which indicates a new user message was added.
+
+        Waits indefinitely - the evaluation's task timeout or red team submission
+        will terminate the session if needed.
+
+        Returns:
+            List of ChatMessage with server-provided transcript after injection
+        """
+        logger.info(
+            "[INJECTION_WAIT] wait_for_injection_and_sync() called - waiting indefinitely",
+            extra={
+                "episode_id": self._episode_id,
+                "current_local_version": self._sync.local_version,
+                "current_message_count": len(self._sync.local_messages),
+            },
+        )
+
+        # Ensure WebSocket is connected
+        await self._ensure_connected()
+
+        # Wait for injection event (is_waiting_on_assistant) - no timeout
+        await self._events.wait_for_injection_event()
+
+        # Injection received - sync transcript to get the new user message
+        websocket = self._connection.websocket
+        if not websocket:
+            raise RuntimeError("WebSocket not connected")
+
+        sync_data = await self._sync.request_sync(websocket)
+
+        if sync_data:
+            logger.info(
+                "[INJECTION_WAIT] Applying sync after injection",
+                extra={
+                    "episode_id": self._episode_id,
+                    "sync_mode": sync_data.sync_mode.value,
+                    "server_version": sync_data.current_version.sequence,
+                },
+            )
+            self._sync.apply_sync_response(sync_data)
+
+            # Signal generate() to skip waiting
+            self._skip_next_wait = True
+
+        logger.info(
+            "[INJECTION_WAIT] wait_for_injection_and_sync returning",
+            extra={
+                "episode_id": self._episode_id,
+                "message_count": len(self._sync.local_messages),
+            },
+        )
         return self._sync.local_messages.copy()
 
     # =========================================================================
@@ -419,22 +610,62 @@ class WebSocketTranscriptSyncingModelWrapper:
 
     async def cleanup(self) -> None:
         """Close WebSocket connection and release resources when episode ends."""
+        logger.info(
+            "[CLEANUP] cleanup() CALLED - starting shutdown sequence",
+            extra={"episode_id": self._episode_id},
+        )
+
+        # Signal shutdown to unblock any waiting operations (e.g., wait_for_injection_event)
+        logger.info(
+            "[CLEANUP] Signaling shutdown to event processor",
+            extra={"episode_id": self._episode_id},
+        )
+        self._events.signal_shutdown()
+
         # Cancel listener task (may be set via backward-compat property)
         if self._events._listener_task:
+            logger.info(
+                "[CLEANUP] Cancelling listener task",
+                extra={"episode_id": self._episode_id},
+            )
             self._events._listener_task.cancel()
             try:
                 await self._events._listener_task
             except asyncio.CancelledError:
                 pass
+            logger.info(
+                "[CLEANUP] Listener task cancelled",
+                extra={"episode_id": self._episode_id},
+            )
 
         # Close connection (handles its own listener task if started via ensure_connected)
+        logger.info(
+            "[CLEANUP] Closing WebSocket connection",
+            extra={"episode_id": self._episode_id},
+        )
         await self._connection.close()
 
         # Drain event queue
+        logger.info(
+            "[CLEANUP] Draining event queue",
+            extra={"episode_id": self._episode_id},
+        )
         self._events.drain_queue()
 
         # Clear sync state
+        logger.info(
+            "[CLEANUP] Clearing sync state",
+            extra={"episode_id": self._episode_id},
+        )
         self._sync.clear_state()
+
+        # Unregister from class-level registry
+        self._unregister_wrapper(self._episode_id)
+
+        logger.info(
+            "[CLEANUP] cleanup() COMPLETE",
+            extra={"episode_id": self._episode_id},
+        )
 
     # =========================================================================
     # Delegation to base model

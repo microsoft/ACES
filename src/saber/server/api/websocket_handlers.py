@@ -183,6 +183,17 @@ class PushMessageHandler(BaseWebSocketHandler):
         target_episode_id = push_data.target_episode_id or episode_id
         is_cross_episode = target_episode_id != episode_id
 
+        logger.info(
+            "[RESTART_DEBUG] PushMessageHandler.handle() called",
+            extra={
+                "source_episode_id": episode_id,
+                "target_episode_id": target_episode_id,
+                "is_cross_episode": is_cross_episode,
+                "strategy": push_data.strategy,
+                "message_role": push_data.message.get("role") if push_data.message else None,
+            },
+        )
+
         # Execute the push via coordinator
         sync_request = TranscriptSyncRequest(
             episode_id=target_episode_id,
@@ -193,6 +204,19 @@ class PushMessageHandler(BaseWebSocketHandler):
         )
 
         sync_response = await coordinator.sync(sync_request)
+
+        logger.info(
+            "[RESTART_DEBUG] Push sync completed",
+            extra={
+                "target_episode_id": target_episode_id,
+                "new_version": sync_response.current_version.sequence,
+                "sync_mode": (
+                    sync_response.sync_mode.value
+                    if sync_response.sync_mode and hasattr(sync_response.sync_mode, "value")
+                    else sync_response.sync_mode
+                ),
+            },
+        )
 
         # Build response
         ack_data, state_event = await self._build_push_response(
@@ -212,11 +236,33 @@ class PushMessageHandler(BaseWebSocketHandler):
         )
         await websocket.send_json(ack_message.model_dump())
 
+        logger.info(
+            "[RESTART_DEBUG] Push ack sent to pusher",
+            extra={
+                "source_episode_id": episode_id,
+                "target_episode_id": target_episode_id,
+                "ack_version": ack_data.version,
+            },
+        )
+
         # Broadcast state event to target episode (for cross-episode injections)
         if state_event:
+            logger.info(
+                "[RESTART_DEBUG] Broadcasting state event to target episode",
+                extra={
+                    "target_episode_id": target_episode_id,
+                    "event_type": state_event.type,
+                    "event_version": state_event.data.version if state_event.data else None,
+                    "event_state": state_event.data.state if state_event.data else None,
+                },
+            )
             await coordinator.connection_manager.broadcast_to_episode(
                 episode_id=target_episode_id,
                 message=state_event,
+            )
+            logger.info(
+                "[RESTART_DEBUG] State event broadcast completed",
+                extra={"target_episode_id": target_episode_id},
             )
 
     async def _build_push_response(

@@ -20,6 +20,7 @@ class TestRoleAgentConfig:
         assert config.agent == "react"
         assert config.model is None
         assert config.attempts is None
+        assert config.submit is None
         assert config.kwargs == {}
 
     def test_create_role_agent_config_full(self):
@@ -28,14 +29,32 @@ class TestRoleAgentConfig:
             agent="react",
             model="gpt-4",
             attempts=3,
+            submit=False,
             kwargs={"temperature": 0.7, "max_tokens": 4000}
         )
 
         assert config.agent == "react"
         assert config.model == "gpt-4"
         assert config.attempts == 3
+        assert config.submit is False
         assert config.kwargs["temperature"] == 0.7
         assert config.kwargs["max_tokens"] == 4000
+
+    def test_create_role_agent_config_submit_enabled(self):
+        """Test creating RoleAgentConfig with submit explicitly enabled."""
+        config = RoleAgentConfig(agent="react", submit=True)
+
+        assert config.agent == "react"
+        assert config.submit is True
+
+    def test_create_role_agent_config_submit_disabled(self):
+        """Test creating RoleAgentConfig with submit disabled for blue team."""
+        # Blue team (continuous monitoring) should have submit disabled
+        config = RoleAgentConfig(agent="react", model="gpt-4o", submit=False)
+
+        assert config.agent == "react"
+        assert config.model == "gpt-4o"
+        assert config.submit is False
 
 
 class TestRoleBasedConfig:

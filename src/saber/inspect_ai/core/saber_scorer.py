@@ -1386,6 +1386,10 @@ async def _score_subtasks_llm_batch(
     valid_checkpoint_ids = [c.subtask_id for c in llm_criteria_list]
     all_completions: Dict[str, List[int]] = {cp_id: [] for cp_id in valid_checkpoint_ids}
 
+    # Initialize judge_response to handle empty steps case
+    # If no steps, default to NO_COMPLETIONS (subtask not completed)
+    judge_response = "NO_COMPLETIONS"
+
     for chunk_idx, chunk in enumerate(step_chunks):
         # Build context - create step objects that match template expectations
         step_objects = []

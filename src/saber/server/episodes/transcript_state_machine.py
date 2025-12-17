@@ -151,7 +151,30 @@ class TranscriptStateMachine:
         if not transcript:
             return TranscriptState.WAITING_FOR_USER
 
-        # Skip system messages, process from last to first
+        # Find the last assistant message with tool_calls and check if all are responded to
+        # This is more accurate than just looking at the last message
+        last_assistant_with_tools_idx = -1
+        pending_tool_call_ids: Set[str] = set()
+
+        for i, msg in enumerate(transcript):
+            role = msg.get("role")
+            if role == "assistant":
+                tool_calls = msg.get("tool_calls")
+                if tool_calls:
+                    last_assistant_with_tools_idx = i
+                    # Reset pending set to this assistant's tool_calls
+                    pending_tool_call_ids = {tc["id"] for tc in tool_calls if isinstance(tc, dict) and tc.get("id")}
+            elif role == "tool" and last_assistant_with_tools_idx >= 0:
+                # Tool response - remove from pending
+                tool_call_id = msg.get("tool_call_id")
+                if tool_call_id:
+                    pending_tool_call_ids.discard(tool_call_id)
+
+        # If there are still pending tool_calls, we're waiting for tools
+        if pending_tool_call_ids:
+            return TranscriptState.WAITING_FOR_TOOLS
+
+        # No pending tool_calls - check the last non-system message
         for msg in reversed(transcript):
             role = msg.get("role")
 
@@ -162,13 +185,11 @@ class TranscriptStateMachine:
                 return TranscriptState.WAITING_FOR_ASSISTANT
 
             if role == "assistant":
-                # Check for tool_calls
-                if msg.get("tool_calls"):
-                    return TranscriptState.WAITING_FOR_TOOLS
-                else:
-                    return TranscriptState.WAITING_FOR_USER
+                # No pending tool_calls (checked above), so waiting for user
+                return TranscriptState.WAITING_FOR_USER
 
             if role == "tool":
+                # All tool_calls responded to (checked above), so waiting for user
                 return TranscriptState.WAITING_FOR_USER
 
             # Unknown role - stop processing

@@ -200,7 +200,17 @@ class RoleAgentConfig(BaseModel):
 
     attempts: Optional[int] = Field(default=None, description="Episode attempts for this role (overrides task default)")
 
+    submit: Optional[bool] = Field(
+        default=None,
+        description="Whether to enable the submit tool for this role. "
+        "Set to False for continuous monitoring agents (like blue team) that should never submit. "
+        "Default (None) means submit is enabled.",
+    )
+
     kwargs: Dict[str, Any] = Field(default_factory=dict, description="Additional agent-specific parameters")
+
+    # Documentation
+    description: Optional[str] = Field(default=None, description="Human-readable description of this role's purpose")
 
     # Future extensions
     tools: Optional[List[str]] = Field(default=None, description="Role-specific tool restrictions")

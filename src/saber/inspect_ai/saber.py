@@ -662,32 +662,55 @@ class SABERSandboxEnvironment:
 
     async def _cleanup_sample(self, interrupted: bool = False) -> None:
         """Internal method to cleanup sample state (handlers, episodes, mappings)."""
+        logger.info(
+            "[SAMPLE_CLEANUP] _cleanup_sample() CALLED",
+            extra={"episode_id": self._episode_id, "interrupted": interrupted},
+        )
         with anyio.CancelScope(shield=True):
             try:
                 # Cleanup WebSocket model wrapper if present (before episode cleanup)
-                from .constants import InspectStoreKeys
+                # Use the class-level registry to find the wrapper by episode_id
+                from .integration.model_wrapper import WebSocketTranscriptSyncingModelWrapper
 
-                wrapper = None
-                try:
-                    # Try to get wrapper from store (might not exist for non-WebSocket cases)
-                    wrapper = getattr(self, "_state", None)
-                    if wrapper and hasattr(wrapper, "store"):
-                        wrapper = wrapper.store.get(InspectStoreKeys.MODEL_WRAPPER)
-                except Exception:
-                    pass  # Wrapper not found or store not accessible
+                wrapper = (
+                    WebSocketTranscriptSyncingModelWrapper.get_wrapper_for_episode(self._episode_id)
+                    if self._episode_id
+                    else None
+                )
+                logger.info(
+                    "[SAMPLE_CLEANUP] Looking up wrapper in class registry",
+                    extra={
+                        "episode_id": self._episode_id,
+                        "wrapper_found": wrapper is not None,
+                        "wrapper_type": type(wrapper).__name__ if wrapper else None,
+                    },
+                )
 
                 if wrapper and hasattr(wrapper, "cleanup"):
                     try:
+                        logger.info(
+                            "[SAMPLE_CLEANUP] Calling wrapper.cleanup()",
+                            extra={"episode_id": self._episode_id},
+                        )
                         await wrapper.cleanup()
-                        logger.debug(
-                            "Cleaned up WebSocket model wrapper",
+                        logger.info(
+                            "[SAMPLE_CLEANUP] wrapper.cleanup() COMPLETED",
                             extra={"episode_id": self._episode_id},
                         )
                     except Exception as e:
                         logger.warning(
-                            "Failed to cleanup WebSocket model wrapper",
+                            "[SAMPLE_CLEANUP] Failed to cleanup WebSocket model wrapper",
                             extra={"episode_id": self._episode_id, "error": str(e)},
                         )
+                else:
+                    logger.info(
+                        "[SAMPLE_CLEANUP] No wrapper to cleanup or no cleanup method",
+                        extra={
+                            "episode_id": self._episode_id,
+                            "has_wrapper": wrapper is not None,
+                            "has_cleanup": hasattr(wrapper, "cleanup") if wrapper else False,
+                        },
+                    )
 
                 # Check if this is an orchestrated sub-task by looking for orchestration_id field
                 if (

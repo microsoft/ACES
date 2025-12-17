@@ -429,7 +429,7 @@ class DockerRunner:
             manifest: Domain manifest
             domains_root: Path to domains directory
             dry_run: If True, show commands without executing
-            image_filter: Optional prefix to filter which images to build (e.g., 'server', 'cookie', 'sandbox')
+            image_filter: Optional substring to filter which images to build (e.g., 'server', 'cookie', 'sandbox')
             rebuild_mode: If True, remove and rebuild images. If False, only build missing images.
 
         Raises:
@@ -443,20 +443,20 @@ class DockerRunner:
 
         # Filter images if requested
         if image_filter:
-            images_to_build = {name: config for name, config in images_config.items() if name.startswith(image_filter)}
+            images_to_build = {name: config for name, config in images_config.items() if image_filter in name}
             if not images_to_build:
                 raise DockerError(
                     f"No images found matching filter '{image_filter}'. "
                     f"Available images: {', '.join(images_config.keys())}"
                 )
-            print(f"🔍 Filtered images by prefix '{image_filter}': {', '.join(images_to_build.keys())}")
+            print(f"🔍 Filtered images matching '{image_filter}': {', '.join(images_to_build.keys())}")
         else:
             images_to_build = images_config
 
         # Ensure base images exist first
         # In rebuild mode: rebuild base images if no filter or filter matches base images
         # In build mode: ensure base images exist (build if missing) when needed
-        needs_base_images = any(name in ["server", "sandbox"] for name in images_to_build.keys())
+        needs_base_images = any(name == "server" or "sandbox" in name for name in images_to_build.keys())
 
         if rebuild_mode and (image_filter is None or needs_base_images):
             # Rebuild mode: remove and rebuild base images
@@ -1135,7 +1135,7 @@ class DomainOrchestrator:
 
         Args:
             domain: Domain name
-            image_filter: Optional prefix filter for image names (e.g., 'server', 'cookie', 'sandbox')
+            image_filter: Optional substring filter for image names (e.g., 'server', 'cookie', 'sandbox')
             dry_run: Show commands without executing
             rebuild_mode: If True, remove and rebuild. If False, only build missing images.
         """

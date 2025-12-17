@@ -405,6 +405,28 @@ class OrchestrationCoordinator:
             if sample.episode_id:
                 episodes_to_cleanup.append((role, sample.episode_id))
 
+                # Signal the wrapper's shutdown event to unblock wait_for_injection_event
+                # This is critical for blue team agents that are waiting indefinitely
+                try:
+                    from ..integration.model_wrapper import WebSocketTranscriptSyncingModelWrapper
+
+                    wrapper = WebSocketTranscriptSyncingModelWrapper.get_wrapper_for_episode(sample.episode_id)
+                    if wrapper:
+                        wrapper._events.signal_shutdown()
+                        logger.info(
+                            f"Signaled shutdown to wrapper for {role} in orchestration {orchestration_id}",
+                            extra={
+                                "orchestration_id": orchestration_id,
+                                "role": role,
+                                "episode_id": sample.episode_id,
+                            },
+                        )
+                except Exception as e:
+                    logger.debug(
+                        f"Could not signal wrapper shutdown for {role}: {e}",
+                        extra={"orchestration_id": orchestration_id, "role": role},
+                    )
+
             # Interrupt sibling samples (not the one initiating cleanup)
             if role != skip_role and sample.active_sample is not None:
                 try:
@@ -548,6 +570,20 @@ class OrchestrationCoordinator:
                 "event": "orchestration_sample_scored",
             },
         )
+
+        # When the first sample finishes scoring, trigger termination for siblings
+        # This is needed for domains like airt_demo where one role (blue) monitors
+        # indefinitely and needs to be terminated when the other role (red) finishes
+        if len(group.scored_samples) == 1 and len(group.samples) > 1:
+            logger.info(
+                f"First sample {role} scored - triggering termination cascade for siblings",
+                extra={
+                    "orchestration_id": orchestration_id,
+                    "role": role,
+                    "siblings": list(set(group.samples.keys()) - {role}),
+                },
+            )
+            self.trigger_termination(orchestration_id, skip_role=role)
 
         # Check if all samples have scored
         if len(group.scored_samples) == len(group.samples):

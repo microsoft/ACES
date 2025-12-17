@@ -277,6 +277,25 @@ class WebSocketDaemon:
             logger.error(f"IPC request failed: {e}")
             return web.json_response({"success": False, "error": str(e)}, status=500)
 
+    def _build_target_ws_url(self, target_episode_id: str) -> str:
+        """Build WebSocket URL for a target episode.
+
+        Args:
+            target_episode_id: The episode ID to connect to
+
+        Returns:
+            WebSocket URL for the target episode
+        """
+        # Parse base URL from our ws_url: ws://host:port/api/v1/episodes/{id}/ws
+        import re
+
+        match = re.match(r"(wss?://[^/]+)", self.ws_url)
+        if match:
+            base = match.group(1)
+            return f"{base}/api/v1/episodes/{target_episode_id}/ws"
+        # Fallback: just replace the episode ID in our URL
+        return re.sub(r"/episodes/[^/]+/ws", f"/episodes/{target_episode_id}/ws", self.ws_url)
+
     async def wait_for_state_event(
         self,
         target_episode_id: str,
@@ -285,8 +304,8 @@ class WebSocketDaemon:
     ) -> dict:
         """Wait for target episode to reach a specific state via WebSocket events.
 
-        Subscribes to state events from the server and waits until the target
-        episode reaches the specified state (e.g., waiting_for_user).
+        Connects to the TARGET episode's WebSocket to listen for state events
+        broadcast by the server. This is the single source of truth for state.
 
         Args:
             target_episode_id: Target episode to monitor
@@ -296,62 +315,91 @@ class WebSocketDaemon:
         Returns:
             Dict with success status and state information
         """
-        if not self.connected or not self.websocket:
-            return {"success": False, "error": "WebSocket not connected"}
+        # Map internal state names to server event types
+        state_to_event_type = {
+            "waiting_for_user": "is_waiting_on_user",
+            "waiting_for_assistant": "is_waiting_on_assistant",
+            "waiting_for_tools": "is_waiting_on_tools",
+        }
+        target_event_type = state_to_event_type.get(target_state, f"is_{target_state}")
+
+        # Build WebSocket URL for target episode
+        target_ws_url = self._build_target_ws_url(target_episode_id)
+        logger.info(f"Connecting to target episode WebSocket for state events: {target_ws_url}")
 
         # Create an event that will be set when we receive the target state
         state_event = asyncio.Event()
         received_state: Dict[str, Any] = {}
 
-        # Store original handler reference (kept for potential rollback/debugging)
-        _ = self._pending_responses.copy()
-
-        # Create a temporary state event listener (ID used for debugging)
-        _ = f"state_listener_{target_episode_id}_{uuid.uuid4()}"
-
         async def listen_for_state():
-            """Background listener for state events."""
+            """Connect to target's WebSocket and listen for state events."""
+            target_ws = None
             try:
-                # Poll for state changes using sync_request with short intervals
-                poll_interval = 2.0  # Check every 2 seconds
-                elapsed = 0.0
+                # Connect to target episode's WebSocket
+                target_ws = await websockets.connect(
+                    target_ws_url,
+                    ping_interval=20,
+                    ping_timeout=10,
+                )
+                logger.info(f"Connected to target episode WebSocket: {target_episode_id}")
 
-                while elapsed < max_wait_seconds and not state_event.is_set():
-                    try:
-                        # Use sync_request to check current state
-                        sync_response = await self.send_sync_request(
-                            target_episode_id=target_episode_id,
-                            since_version=0,
-                            hide_system_prompt=True,
-                            retrieval_mode="full",
-                            timeout=10.0,
-                        )
-
-                        # Check if state indicates waiting_for_user
-                        # The sync_response contains current_version info
-                        # A transcript that hasn't changed recently indicates waiting state
-                        current_version = sync_response.get("current_version", {})
-                        # sync_mode could be used for more sophisticated state checking
-                        _ = sync_response.get("sync_mode", "")
-
-                        # For now, consider any successful sync as "ready"
-                        # More sophisticated: check actual state from server
-                        if sync_response:
+                # Wait for connected message
+                msg = await target_ws.recv()
+                data = json.loads(msg)
+                if data.get("type") == "connected":
+                    logger.debug(f"Target WebSocket connected: {data}")
+                    # Check if initial state matches what we want
+                    initial_state = data.get("data", {}).get("state")
+                    if initial_state:
+                        # Map server state to event type for comparison
+                        initial_event_type = state_to_event_type.get(initial_state, f"is_{initial_state}")
+                        if initial_event_type == target_event_type:
+                            logger.info(f"Target already in {target_state} state")
                             received_state["state"] = target_state
-                            received_state["version"] = (
-                                current_version.get("sequence", 0) if isinstance(current_version, dict) else 0
-                            )
+                            received_state["version"] = data.get("data", {}).get("version", 0)
                             state_event.set()
                             return
 
-                    except Exception as e:
-                        logger.debug(f"State poll attempt failed: {e}")
+                # Listen for state events
+                while not state_event.is_set():
+                    try:
+                        msg = await asyncio.wait_for(target_ws.recv(), timeout=5.0)
+                        data = json.loads(msg)
+                        msg_type = data.get("type", "")
 
-                    await asyncio.sleep(poll_interval)
-                    elapsed += poll_interval
+                        logger.debug(f"Target WebSocket message: type={msg_type}")
 
-            except asyncio.CancelledError:
-                pass
+                        # Check if this is the state event we're waiting for
+                        if msg_type == target_event_type:
+                            logger.info(f"Received target state event: {msg_type}")
+                            received_state["state"] = target_state
+                            received_state["version"] = data.get("data", {}).get("version", 0)
+                            state_event.set()
+                            return
+
+                        # Also check for state in data payload (some events include state field)
+                        event_data = data.get("data", {})
+                        if isinstance(event_data, dict):
+                            current_state = event_data.get("state")
+                            if current_state == target_state:
+                                logger.info(f"Received state in event data: {current_state}")
+                                received_state["state"] = current_state
+                                received_state["version"] = event_data.get("version", 0)
+                                state_event.set()
+                                return
+
+                    except asyncio.TimeoutError:
+                        # No message received, continue waiting
+                        continue
+                    except websockets.ConnectionClosed:
+                        logger.warning("Target WebSocket connection closed")
+                        break
+
+            except Exception as e:
+                logger.error(f"Error listening for target state events: {e}")
+            finally:
+                if target_ws:
+                    await target_ws.close()
 
         # Start listening task
         listener_task = asyncio.create_task(listen_for_state())
@@ -483,36 +531,85 @@ class WebSocketDaemon:
             response_messages = []
             final_version = inject_version
 
+            # For restart strategy, we need to track the post-injection state
+            # because delta won't work after a full transcript replacement
+            is_restart = strategy == "restart"
+            post_inject_message_count = 0
+
+            if is_restart:
+                # Get the post-injection transcript to establish baseline
+                try:
+                    post_inject_sync = await self.send_sync_request(
+                        target_episode_id=target_episode_id,
+                        since_version=0,
+                        hide_system_prompt=True,
+                        retrieval_mode="full",
+                        timeout=10.0,
+                    )
+                    post_inject_transcript = post_inject_sync.get("full_transcript", [])
+                    post_inject_message_count = len(post_inject_transcript)
+                    logger.info(f"inject_and_wait: Post-restart baseline: {post_inject_message_count} messages")
+                except Exception as e:
+                    logger.warning(f"inject_and_wait: Could not get post-injection baseline: {e}")
+
             while elapsed < max_wait_seconds:
                 await asyncio.sleep(poll_interval)
                 elapsed += poll_interval
 
                 try:
-                    # Check for new messages since injection
-                    sync_response = await self.send_sync_request(
-                        target_episode_id=target_episode_id,
-                        since_version=inject_version,
-                        hide_system_prompt=True,
-                        retrieval_mode="delta",
-                        timeout=10.0,
-                    )
+                    if is_restart:
+                        # For restart: use full sync and compare message counts
+                        sync_response = await self.send_sync_request(
+                            target_episode_id=target_episode_id,
+                            since_version=0,
+                            hide_system_prompt=True,
+                            retrieval_mode="full",
+                            timeout=10.0,
+                        )
 
-                    current_version = sync_response.get("current_version", {})
-                    current_seq = current_version.get("sequence", 0) if isinstance(current_version, dict) else 0
+                        current_version = sync_response.get("current_version", {})
+                        current_seq = current_version.get("sequence", 0) if isinstance(current_version, dict) else 0
+                        full_transcript = sync_response.get("full_transcript", [])
 
-                    # Check if there are new messages (delta)
-                    delta = sync_response.get("delta", [])
+                        # Check if there are new messages beyond the post-injection state
+                        if len(full_transcript) > post_inject_message_count:
+                            # Look for an assistant message in the new messages
+                            new_messages = full_transcript[post_inject_message_count:]
+                            has_assistant_response = any(msg.get("role") == "assistant" for msg in new_messages)
 
-                    if delta and len(delta) > 0:
-                        # We have new messages! Check if blue team has responded
-                        # Look for an assistant message in the delta
-                        has_assistant_response = any(msg.get("role") == "assistant" for msg in delta)
+                            if has_assistant_response:
+                                response_messages = new_messages
+                                final_version = current_seq
+                                logger.info(
+                                    f"inject_and_wait: Blue team responded (restart) with {len(new_messages)} messages"
+                                )
+                                break
+                    else:
+                        # For append: use delta sync as before
+                        sync_response = await self.send_sync_request(
+                            target_episode_id=target_episode_id,
+                            since_version=inject_version,
+                            hide_system_prompt=True,
+                            retrieval_mode="delta",
+                            timeout=10.0,
+                        )
 
-                        if has_assistant_response:
-                            response_messages = delta
-                            final_version = current_seq
-                            logger.info(f"inject_and_wait: Blue team responded with {len(delta)} messages")
-                            break
+                        current_version = sync_response.get("current_version", {})
+                        current_seq = current_version.get("sequence", 0) if isinstance(current_version, dict) else 0
+
+                        # Check if there are new messages (delta)
+                        delta = sync_response.get("delta", [])
+
+                        if delta and len(delta) > 0:
+                            # We have new messages! Check if blue team has responded
+                            # Look for an assistant message in the delta
+                            has_assistant_response = any(msg.get("role") == "assistant" for msg in delta)
+
+                            if has_assistant_response:
+                                response_messages = delta
+                                final_version = current_seq
+                                logger.info(f"inject_and_wait: Blue team responded with {len(delta)} messages")
+                                break
 
                 except Exception as e:
                     logger.warning(f"inject_and_wait: Poll error: {e}")

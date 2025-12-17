@@ -134,6 +134,235 @@ class TranscriptCoordinator:
             last_operation=last_op,
         )
 
+    def _has_complete_assistant_turn(self, messages: List[Dict[str, Any]]) -> bool:
+        """
+        Check if the transcript has a complete assistant turn.
+
+        A "complete" assistant turn means:
+        - There's at least one assistant message, AND
+        - If the last assistant message has tool_calls, all tool_calls have responses
+
+        This is used to determine if it's safe to capture INITIAL_TRANSCRIPT.
+
+        Args:
+            messages: List of transcript messages
+
+        Returns:
+            True if there's a complete assistant turn, False otherwise
+        """
+        if not messages:
+            return False
+
+        # Find the last assistant message
+        last_assistant_idx = -1
+        for i, msg in enumerate(messages):
+            if msg.get("role") == "assistant":
+                last_assistant_idx = i
+
+        if last_assistant_idx == -1:
+            return False  # No assistant message
+
+        last_assistant = messages[last_assistant_idx]
+        tool_calls = last_assistant.get("tool_calls")
+
+        if not tool_calls:
+            # No tool_calls = complete turn
+            return True
+
+        # Has tool_calls - check if all have responses
+        tool_call_ids = {tc.get("id") for tc in tool_calls if tc.get("id")}
+
+        # Look for tool responses after this assistant message
+        for msg in messages[last_assistant_idx + 1 :]:
+            if msg.get("role") == "tool":
+                tool_call_id = msg.get("tool_call_id")
+                if tool_call_id in tool_call_ids:
+                    tool_call_ids.discard(tool_call_id)
+
+        # Complete if all tool_calls have responses
+        return len(tool_call_ids) == 0
+
+    def _analyze_tool_calls(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Analyze tool_calls in a transcript to detect orphaned calls.
+
+        Args:
+            messages: List of transcript messages
+
+        Returns:
+            Dict with analysis: total_tool_calls, responded_tool_calls, orphaned_tool_call_ids
+        """
+        all_tool_call_ids: List[str] = []
+        responded_tool_call_ids: List[str] = []
+
+        for msg in messages:
+            if msg.get("role") == "assistant":
+                tool_calls = msg.get("tool_calls", [])
+                for tc in tool_calls:
+                    if tc.get("id"):
+                        all_tool_call_ids.append(tc["id"])
+            elif msg.get("role") == "tool":
+                tool_call_id = msg.get("tool_call_id")
+                if tool_call_id:
+                    responded_tool_call_ids.append(tool_call_id)
+
+        orphaned = [tc_id for tc_id in all_tool_call_ids if tc_id not in responded_tool_call_ids]
+
+        return {
+            "total_tool_calls": len(all_tool_call_ids),
+            "responded_tool_calls": len(responded_tool_call_ids),
+            "orphaned_tool_call_ids": orphaned,
+            "all_tool_call_ids": all_tool_call_ids[:5],  # Truncate for logging
+        }
+
+    async def _is_duplicate_push(
+        self,
+        episode: "Episode",
+        messages_to_push: List[Dict[str, Any]],
+        client_since_version: int,
+    ) -> bool:
+        """
+        Detect if this push is a duplicate (client retry after lost ACK).
+
+        A push is considered a duplicate if:
+        1. The client's since_version is behind the current server version, AND
+        2. The message(s) being pushed match the last message(s) in the transcript
+
+        This handles the case where:
+        - Client pushes message, server appends it, version becomes N+1
+        - ACK is lost (network issues)
+        - Client retries push with since_version=N
+        - Without this check, server would append duplicate
+
+        Args:
+            episode: The target episode
+            messages_to_push: Messages the client is trying to push
+            client_since_version: The client's last known version
+
+        Returns:
+            True if this is a duplicate push that should be skipped
+        """
+        if not messages_to_push:
+            return False
+
+        current_transcript = episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT, [])
+        current_version = episode.context.get(MetadataKeys.TRANSCRIPT_VERSION, 0)
+
+        # Only check for duplicates if client is behind
+        if client_since_version >= current_version:
+            return False
+
+        # Check if the last N messages match what's being pushed
+        push_count = len(messages_to_push)
+        if len(current_transcript) < push_count:
+            return False
+
+        # Get the last N messages from transcript
+        last_messages = current_transcript[-push_count:]
+
+        # Compare each message
+        for pushed, existing in zip(messages_to_push, last_messages):
+            if not self._messages_match(pushed, existing):
+                return False
+
+        return True
+
+    def _messages_match(self, msg1: Dict[str, Any], msg2: Dict[str, Any]) -> bool:
+        """
+        Check if two messages are semantically equivalent.
+
+        Compares role, content, and tool_calls/tool_call_id.
+        """
+        if msg1.get("role") != msg2.get("role"):
+            return False
+
+        # Compare content (handle both string and list content)
+        content1 = msg1.get("content")
+        content2 = msg2.get("content")
+        if content1 != content2:
+            return False
+
+        # For assistant messages, compare tool_calls
+        if msg1.get("role") == "assistant":
+            tc1 = msg1.get("tool_calls", []) or []
+            tc2 = msg2.get("tool_calls", []) or []
+            if len(tc1) != len(tc2):
+                return False
+            for t1, t2 in zip(tc1, tc2):
+                # Handle case where tool_calls items might be strings or non-dict types
+                if not isinstance(t1, dict) or not isinstance(t2, dict):
+                    # Fall back to direct comparison
+                    if t1 != t2:
+                        return False
+                    continue
+                if t1.get("id") != t2.get("id"):
+                    return False
+                # Safely get function info
+                func1_raw = t1.get("function") if isinstance(t1, dict) else None
+                func2_raw = t2.get("function") if isinstance(t2, dict) else None
+                func1 = func1_raw if isinstance(func1_raw, dict) else {}
+                func2 = func2_raw if isinstance(func2_raw, dict) else {}
+                if func1.get("name") != func2.get("name"):
+                    return False
+
+        # For tool messages, compare tool_call_id
+        if msg1.get("role") == "tool":
+            if msg1.get("tool_call_id") != msg2.get("tool_call_id"):
+                return False
+
+        return True
+
+    def _find_safe_initial_transcript(self, messages: List[Dict[str, Any]]) -> Optional[List[Dict[str, Any]]]:
+        """
+        Find the safe capture point for INITIAL_TRANSCRIPT.
+
+        This returns a prefix of the transcript that ends in a "complete" state -
+        either ending with an assistant message without tool_calls, or ending
+        with all tool responses for the last assistant's tool_calls.
+
+        Args:
+            messages: List of transcript messages
+
+        Returns:
+            A safe prefix to use as INITIAL_TRANSCRIPT, or None if no safe point found
+        """
+        if not messages:
+            return None
+
+        # Strategy: find the first complete assistant turn and include everything up to it
+        for i, msg in enumerate(messages):
+            if msg.get("role") != "assistant":
+                continue
+
+            tool_calls = msg.get("tool_calls")
+            if not tool_calls:
+                # Assistant without tool_calls - safe capture point
+                return messages[: i + 1]
+
+            # Has tool_calls - find where all responses end
+            tool_call_ids = {tc.get("id") for tc in tool_calls if tc.get("id")}
+            last_tool_response_idx = i
+
+            for j in range(i + 1, len(messages)):
+                next_msg = messages[j]
+                if next_msg.get("role") == "tool":
+                    tool_call_id = next_msg.get("tool_call_id")
+                    if tool_call_id in tool_call_ids:
+                        tool_call_ids.discard(tool_call_id)
+                        last_tool_response_idx = j
+                elif next_msg.get("role") == "assistant":
+                    # Hit another assistant - if previous tool_calls satisfied, capture up to here
+                    if len(tool_call_ids) == 0:
+                        return messages[: last_tool_response_idx + 1]
+                    # Otherwise this is invalid state, keep looking
+                    break
+
+            # If we've satisfied all tool_calls, capture up to last tool response
+            if len(tool_call_ids) == 0:
+                return messages[: last_tool_response_idx + 1]
+
+        return None
+
     async def sync(self, request: TranscriptSyncRequest) -> TranscriptSyncResponse:
         """
         Unified sync with differential updates and WebSocket notifications.
@@ -183,12 +412,24 @@ class TranscriptCoordinator:
     ) -> TranscriptSyncResponse:
         """Handle owner mode sync with checksum validation."""
         # Step 1: Push new messages if provided (LAST WRITE WINS)
+        # Include idempotency check to handle client retries
         if request.messages_to_push:
-            await self._push_messages(
-                episode,
-                request.messages_to_push,
-                operation=request.operation,
-            )
+            is_duplicate = await self._is_duplicate_push(episode, request.messages_to_push, request.since_version)
+            if is_duplicate:
+                logger.info(
+                    "[IDEMPOTENCY] Skipping duplicate push (client retry detected)",
+                    extra={
+                        "episode_id": episode.episode_id,
+                        "since_version": request.since_version,
+                        "message_role": request.messages_to_push[0].get("role") if request.messages_to_push else None,
+                    },
+                )
+            else:
+                await self._push_messages(
+                    episode,
+                    request.messages_to_push,
+                    operation=request.operation,
+                )
 
         # Step 2: Get current server state
         current_version = self._get_current_version(episode)
@@ -372,20 +613,96 @@ class TranscriptCoordinator:
         existing = episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT, [])
         current_version = episode.context.get(MetadataKeys.TRANSCRIPT_VERSION, 0)
 
+        logger.info(
+            "[RESTART_DEBUG] _push_messages called",
+            extra={
+                "episode_id": episode.episode_id,
+                "operation": operation,
+                "existing_count": len(existing),
+                "new_message_count": len(messages),
+                "current_version": current_version,
+            },
+        )
+
+        # Validate: Check for duplicate tool_call IDs across all existing assistant messages
+        # This is a safety net for when idempotency check fails or client re-sends old messages
+        if existing and messages:
+            new_msg = messages[0]
+            if new_msg.get("role") == "assistant":
+                raw_tool_calls: Any = new_msg.get("tool_calls", [])
+                new_tool_calls: List[Any] = raw_tool_calls if isinstance(raw_tool_calls, list) else []
+                if new_tool_calls:
+                    new_ids = set()
+                    for tc in new_tool_calls:
+                        if isinstance(tc, dict) and tc.get("id"):
+                            new_ids.add(tc.get("id"))
+
+                    if new_ids:
+                        # Collect all tool_call IDs from existing assistant messages
+                        existing_ids = set()
+                        for msg in existing:
+                            if msg.get("role") == "assistant":
+                                for tc in msg.get("tool_calls", []) or []:
+                                    if isinstance(tc, dict) and tc.get("id"):
+                                        existing_ids.add(tc.get("id"))
+
+                        # Check if any of the new tool_call IDs already exist
+                        overlap = new_ids & existing_ids
+                        if overlap:
+                            logger.warning(
+                                "[DUPLICATE_GUARD] Blocking assistant message with duplicate tool_call IDs",
+                                extra={
+                                    "episode_id": episode.episode_id,
+                                    "duplicate_tool_call_ids": list(overlap),
+                                    "existing_count": len(existing),
+                                },
+                            )
+                            # Don't add the duplicate - return without modifying transcript
+                            # The caller will still get a sync response with current state
+                            return
+
         # Apply operation to compute new transcript
         if operation == TranscriptPushOperation.APPEND.value:
             updated_messages = existing + messages
+            logger.info(
+                "[RESTART_DEBUG] APPEND operation - extending existing transcript",
+                extra={
+                    "episode_id": episode.episode_id,
+                    "result_count": len(updated_messages),
+                },
+            )
 
         elif operation == TranscriptPushOperation.RESTART.value:
             # Reset to initial transcript (system->user) then append new messages
             initial = episode.context.get(MetadataKeys.INITIAL_TRANSCRIPT, [])
+            initial_tool_calls_info = self._analyze_tool_calls(initial) if initial else {}
+            logger.info(
+                "[RESTART_DEBUG] RESTART operation - analyzing INITIAL_TRANSCRIPT",
+                extra={
+                    "episode_id": episode.episode_id,
+                    "initial_transcript_count": len(initial),
+                    "initial_roles": [m.get("role") for m in initial] if initial else [],
+                    "initial_tool_calls_info": initial_tool_calls_info,
+                },
+            )
             if initial:
                 # Use a copy of initial transcript to avoid mutation
                 updated_messages = list(initial) + messages
+                result_tool_calls_info = self._analyze_tool_calls(updated_messages)
+                logger.info(
+                    "[RESTART_DEBUG] RESTART result transcript",
+                    extra={
+                        "episode_id": episode.episode_id,
+                        "result_count": len(updated_messages),
+                        "result_roles": [m.get("role") for m in updated_messages],
+                        "result_tool_calls_info": result_tool_calls_info,
+                        "has_orphaned_tool_calls": result_tool_calls_info.get("orphaned_tool_call_ids", []) != [],
+                    },
+                )
             else:
                 # Fallback: if no initial transcript, just use the new messages
                 logger.warning(
-                    "No initial transcript found for restart operation, falling back to append",
+                    "[RESTART_DEBUG] No initial transcript found for restart operation, falling back to append",
                     extra={"episode_id": episode.episode_id},
                 )
                 updated_messages = existing + messages
@@ -393,30 +710,78 @@ class TranscriptCoordinator:
         else:
             # Fallback to append for unknown operations
             logger.warning(
-                f"Unknown operation '{operation}', falling back to append",
+                f"[RESTART_DEBUG] Unknown operation '{operation}', falling back to append",
                 extra={"episode_id": episode.episode_id, "operation": operation},
             )
             updated_messages = existing + messages
 
         new_version = current_version + 1  # Always increment (monotonic)
 
-        # Capture initial transcript after first assistant response
-        # This ensures restart preserves the blue team's opening response
-        initial = episode.context.get(MetadataKeys.INITIAL_TRANSCRIPT, [])
-        initial_has_assistant = any(msg.get("role") == "assistant" for msg in initial)
+        logger.info(
+            "[RESTART_DEBUG] Updating episode context with new transcript",
+            extra={
+                "episode_id": episode.episode_id,
+                "new_version": new_version,
+                "updated_message_count": len(updated_messages),
+                "last_message_role": updated_messages[-1].get("role") if updated_messages else "none",
+            },
+        )
 
-        if not initial_has_assistant:
-            # Check if we just added an assistant message
-            new_has_assistant = any(msg.get("role") == "assistant" for msg in messages)
-            if new_has_assistant:
-                # Update INITIAL_TRANSCRIPT to include the first assistant response
-                await episode.update_context_atomic({MetadataKeys.INITIAL_TRANSCRIPT: list(updated_messages)})
-                logger.debug(
-                    "Captured initial transcript with first assistant response",
-                    extra={
-                        "episode_id": episode.episode_id,
-                        "message_count": len(updated_messages),
-                    },
+        # Capture initial transcript after first COMPLETE assistant turn.
+        # "Complete" means the assistant message doesn't have pending tool_calls,
+        # or all tool_calls have been responded to. This ensures restart won't
+        # create an invalid transcript with orphaned tool_calls.
+        initial = episode.context.get(MetadataKeys.INITIAL_TRANSCRIPT, [])
+        initial_has_complete_assistant = self._has_complete_assistant_turn(initial)
+
+        # Debug: analyze current initial transcript for tool_calls
+        initial_tool_calls_info = self._analyze_tool_calls(initial) if initial else {}
+        logger.info(
+            "[RESTART_DEBUG] INITIAL_TRANSCRIPT analysis before capture check",
+            extra={
+                "episode_id": episode.episode_id,
+                "initial_message_count": len(initial),
+                "initial_has_complete_assistant": initial_has_complete_assistant,
+                "initial_tool_calls_info": initial_tool_calls_info,
+            },
+        )
+
+        if not initial_has_complete_assistant:
+            updated_has_complete = self._has_complete_assistant_turn(updated_messages)
+            logger.info(
+                "[RESTART_DEBUG] Checking updated transcript for complete assistant turn",
+                extra={
+                    "episode_id": episode.episode_id,
+                    "updated_has_complete_assistant": updated_has_complete,
+                    "updated_tool_calls_info": self._analyze_tool_calls(updated_messages),
+                },
+            )
+            # Check if the updated transcript now has a complete assistant turn
+            if updated_has_complete:
+                # Find the safe capture point: everything up to and including
+                # the first complete assistant turn
+                capture_point = self._find_safe_initial_transcript(updated_messages)
+                if capture_point:
+                    capture_tool_calls_info = self._analyze_tool_calls(capture_point)
+                    await episode.update_context_atomic({MetadataKeys.INITIAL_TRANSCRIPT: capture_point})
+                    logger.info(
+                        "[RESTART_DEBUG] Captured initial transcript with complete assistant turn",
+                        extra={
+                            "episode_id": episode.episode_id,
+                            "message_count": len(capture_point),
+                            "message_roles": [m.get("role") for m in capture_point],
+                            "capture_tool_calls_info": capture_tool_calls_info,
+                        },
+                    )
+                else:
+                    logger.warning(
+                        "[RESTART_DEBUG] _find_safe_initial_transcript returned None despite complete turn",
+                        extra={"episode_id": episode.episode_id},
+                    )
+            else:
+                logger.info(
+                    "[RESTART_DEBUG] Skipping INITIAL_TRANSCRIPT capture - no complete assistant turn yet",
+                    extra={"episode_id": episode.episode_id},
                 )
 
         await episode.update_context_atomic(
@@ -426,6 +791,52 @@ class TranscriptCoordinator:
                 MetadataKeys.TRANSCRIPT_LAST_OPERATION: operation,
                 MetadataKeys.TRANSCRIPT_LAST_PUSHED_AT: self._time_source.now().isoformat(),
             }
+        )
+
+        # Broadcast state event after push so observers (like red team daemon) can
+        # track when blue team reaches WAITING_FOR_USER state
+        new_state = self._state_machine.get_state(episode)
+        old_state = episode.context.get(MetadataKeys.CURRENT_TRANSCRIPT_STATE)
+        if old_state != new_state.value:
+            self._state_machine.update_state_timestamp(episode.episode_id)
+            await episode.update_context_atomic({MetadataKeys.CURRENT_TRANSCRIPT_STATE: new_state.value})
+
+        event_type = TranscriptStateMachine.state_to_event_type(new_state)
+
+        # Normalize operation to TranscriptOperation enum
+        if isinstance(operation, TranscriptOperation):
+            operation_enum = operation
+        else:
+            try:
+                operation_enum = TranscriptOperation(operation)
+            except ValueError:
+                operation_enum = TranscriptOperation.APPEND
+
+        state_event = StateEventMessage(
+            type=event_type,
+            data=StateEventData(
+                version=new_version,
+                operation=operation_enum,
+                modification_count=episode.context.get(MetadataKeys.TRANSCRIPT_MODIFICATION_COUNT, 0),
+                state=new_state.value,
+            ),
+            id=str(uuid.uuid4()),
+            timestamp=self._time_source.now().isoformat(),
+        )
+
+        await self.connection_manager.broadcast_to_episode(
+            episode_id=episode.episode_id,
+            message=state_event,
+        )
+
+        logger.debug(
+            "Broadcast state event after push",
+            extra={
+                "episode_id": episode.episode_id,
+                "version": new_version,
+                "state": new_state.value,
+                "event_type": event_type,
+            },
         )
 
     async def notify_modification(

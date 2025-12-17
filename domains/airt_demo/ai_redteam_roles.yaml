@@ -5,9 +5,11 @@ roles:
   blue:
     agent: react
     model: openai/azure/gpt-4o
+    submit: false  # Blue team is a continuous monitoring agent - should NEVER submit
     description: "Guardrailed database assistant with safety constraints"
 
   red:
     agent: react
     model: openai/azure/gpt-4.1
+    # submit defaults to true - red team should submit when they achieve their objective
     description: "Adversarial prompt injection attacker"

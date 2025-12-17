@@ -4,6 +4,7 @@ This is the default agent implementation based on inspect_ai's react agent.
 It extracts prompts from sample metadata and uses SABER's MCP tools.
 """
 
+import asyncio
 from typing import Any, Callable, Optional
 
 from inspect_ai.agent import react
@@ -17,14 +18,15 @@ from ...integration.tools import saber_tools
 logger = get_saber_logger(LogCategory.AGENT, __name__)
 
 
-async def _server_controlled_on_continue(state: AgentState) -> AgentState:
+async def _server_controlled_on_continue(state: AgentState) -> AgentState | bool:
     """AgentContinue callback that waits for server to inject messages.
 
     This callback is used when transcript_config.websocket.pull.enabled=True.
     Instead of client-side continue prompt injection, it:
-    1. Waits for server transcript modification (via WebSocket)
+    1. Waits specifically for red team to inject a user message (is_waiting_on_assistant event)
     2. Syncs transcript from server
-    3. Returns AgentState with server-provided messages
+    3. Returns AgentState with server-provided messages (if injection happened)
+    4. Returns False to stop the loop (if no injection within timeout)
 
     This allows the server's AutoContinueManager or red team to inject
     messages into the transcript without client-side interference.
@@ -33,29 +35,49 @@ async def _server_controlled_on_continue(state: AgentState) -> AgentState:
         state: Current agent state
 
     Returns:
-        AgentState with server-synced messages
+        AgentState with server-synced messages (continue), or False (stop)
     """
     from ...integration.model_wrapper import WebSocketTranscriptSyncingModelWrapper
+
+    logger.info(
+        "[INJECTION_WAIT] _server_controlled_on_continue callback invoked",
+        extra={"current_message_count": len(state.messages)},
+    )
 
     # Get the active model (should be our wrapper)
     model = active_model()
 
+    logger.info(
+        "[INJECTION_WAIT] Active model retrieved",
+        extra={"model_type": type(model).__name__ if model else "None"},
+    )
+
     if not isinstance(model, WebSocketTranscriptSyncingModelWrapper):
         logger.warning(
-            "Server-controlled continue called but model is not WebSocket wrapper, " "falling back to no-op continue",
+            "[INJECTION_WAIT] Server-controlled continue called but model is not WebSocket wrapper, "
+            "falling back to default behavior (stop if no tool_calls)",
             extra={"model_type": type(model).__name__ if model else "None"},
         )
-        # Return True-equivalent: continue loop but let generate() handle sync
-        # We return the state unchanged - the next generate() will sync
+        # Default behavior: stop if last assistant message has no tool_calls
+        if state.messages and hasattr(state.messages[-1], "tool_calls"):
+            if not state.messages[-1].tool_calls:
+                return False
         return state
 
-    # Wait for server to inject message and sync transcript
+    # Wait for red team to inject a user message (wait indefinitely)
+    # The evaluation's task timeout or red team submission will terminate if needed
     try:
-        synced_messages = await model.wait_and_sync_transcript()
+        logger.info(
+            "[INJECTION_WAIT] Calling model.wait_for_injection_and_sync() - waiting indefinitely",
+        )
+        synced_messages = await model.wait_for_injection_and_sync()
 
-        logger.debug(
-            "Server-controlled continue: synced transcript from server",
-            extra={"message_count": len(synced_messages)},
+        logger.info(
+            "[INJECTION_WAIT] Injection received, continuing with synced transcript",
+            extra={
+                "message_count": len(synced_messages),
+                "last_message_role": synced_messages[-1].role if synced_messages else "none",
+            },
         )
 
         # Return new AgentState with server-provided messages
@@ -63,14 +85,21 @@ async def _server_controlled_on_continue(state: AgentState) -> AgentState:
         # Preserve output from current state
         if state._output is not None:
             new_state.output = state.output
+
         return new_state
+
+    except asyncio.CancelledError:
+        logger.info(
+            "[INJECTION_WAIT] Cancelled (shutdown signal), stopping loop gracefully",
+        )
+        return False
 
     except Exception as e:
         logger.error(
-            "Error in server-controlled continue, returning current state",
+            "[INJECTION_WAIT] Error in server-controlled continue, stopping loop",
             extra={"error": str(e)},
         )
-        return state
+        return False
 
 
 def create_agent(**kwargs: Any) -> Callable[..., Any]:
@@ -81,6 +110,7 @@ def create_agent(**kwargs: Any) -> Callable[..., Any]:
     - Uses saber_tools() to get MCP client from sandbox
     - Runs standard React loop with tool calling
     - Supports server-controlled continue when transcript_config.pull.enabled=True
+    - Can disable the submit tool for continuous monitoring agents
 
     Args:
         **kwargs: Additional parameters passed to react()
@@ -99,6 +129,7 @@ def create_agent(**kwargs: Any) -> Callable[..., Any]:
         submit_prompt: str,
         continue_prompt: str,
         transcript_config: Optional[dict] = None,
+        submit: Optional[bool] = None,
     ) -> Any:
         """Inner factory that receives prompts from task execution.
 
@@ -108,6 +139,8 @@ def create_agent(**kwargs: Any) -> Callable[..., Any]:
             submit_prompt: Instructions about submission
             continue_prompt: Message shown after each step to guide the agent
             transcript_config: Optional transcript configuration dict
+            submit: Whether to enable the submit tool. None=True (default), False=disabled.
+                   Disable for continuous monitoring agents that should never submit.
         """
         # Determine if server-controlled continue should be used
         # This is enabled when websocket.pull.enabled=True
@@ -117,6 +150,10 @@ def create_agent(**kwargs: Any) -> Callable[..., Any]:
             pull_config = ws_config.get("pull", {})
             use_server_continue = pull_config.get("enabled", False)
 
+        # Determine submit tool behavior
+        # submit=None means use default (True), submit=False disables the tool
+        submit_enabled = submit if submit is not None else True
+
         logger.debug(
             "Creating React agent with SABER prompts",
             extra={
@@ -125,6 +162,7 @@ def create_agent(**kwargs: Any) -> Callable[..., Any]:
                 "submit_length": len(submit_prompt),
                 "continue_length": len(continue_prompt),
                 "use_server_continue": use_server_continue,
+                "submit_enabled": submit_enabled,
             },
         )
 
@@ -144,15 +182,23 @@ def create_agent(**kwargs: Any) -> Callable[..., Any]:
                 "Using client-controlled continue (pull.enabled=False or not configured)",
             )
 
+        # Log when submit is disabled (important for debugging)
+        if not submit_enabled:
+            logger.info(
+                "Submit tool DISABLED for this agent (submit=False)",
+                extra={"submit_enabled": False},
+            )
+
         return react(
             prompt=AgentPrompt(
                 instructions=instruction_prompt,
                 handoff_prompt=None,
                 assistant_prompt=assistant_prompt,
-                submit_prompt=submit_prompt,
+                submit_prompt=submit_prompt if submit_enabled else None,
             ),
             tools=[saber_tools()],
             on_continue=on_continue,
+            submit=submit_enabled,
             **kwargs,
         )
 

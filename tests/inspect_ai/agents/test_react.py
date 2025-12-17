@@ -171,3 +171,72 @@ class TestContinuePromptBehavior:
 
             call_kwargs = mock_react.call_args.kwargs
             assert call_kwargs["on_continue"] == continue_prompt
+
+
+class TestSubmitToolConfiguration:
+    """Test cases for submit tool enable/disable functionality."""
+
+    @patch("saber.inspect_ai.agents.registry.react.react")
+    @patch("saber.inspect_ai.agents.registry.react.saber_tools")
+    def test_submit_enabled_by_default(self, mock_saber_tools, mock_react):
+        """Test that submit tool is enabled by default (submit=None or not passed)."""
+        mock_saber_tools.return_value = Mock()
+        mock_react.return_value = Mock()
+
+        agent_factory = create_agent()
+
+        # Call without submit parameter - should default to enabled
+        agent_factory("instruction", "assistant", "submit", "continue")
+
+        call_kwargs = mock_react.call_args.kwargs
+        assert call_kwargs["submit"] is True
+        assert call_kwargs["prompt"].submit_prompt == "submit"
+
+    @patch("saber.inspect_ai.agents.registry.react.react")
+    @patch("saber.inspect_ai.agents.registry.react.saber_tools")
+    def test_submit_enabled_explicitly(self, mock_saber_tools, mock_react):
+        """Test that submit tool can be explicitly enabled."""
+        mock_saber_tools.return_value = Mock()
+        mock_react.return_value = Mock()
+
+        agent_factory = create_agent()
+
+        # Explicitly enable submit
+        agent_factory("instruction", "assistant", "submit", "continue", submit=True)
+
+        call_kwargs = mock_react.call_args.kwargs
+        assert call_kwargs["submit"] is True
+        assert call_kwargs["prompt"].submit_prompt == "submit"
+
+    @patch("saber.inspect_ai.agents.registry.react.react")
+    @patch("saber.inspect_ai.agents.registry.react.saber_tools")
+    def test_submit_disabled_for_blue_team(self, mock_saber_tools, mock_react):
+        """Test that submit tool can be disabled for continuous monitoring agents."""
+        mock_saber_tools.return_value = Mock()
+        mock_react.return_value = Mock()
+
+        agent_factory = create_agent()
+
+        # Disable submit for blue team (continuous monitoring)
+        agent_factory("instruction", "assistant", "submit", "continue", submit=False)
+
+        call_kwargs = mock_react.call_args.kwargs
+        assert call_kwargs["submit"] is False
+        # When submit is disabled, submit_prompt should be None
+        assert call_kwargs["prompt"].submit_prompt is None
+
+    @patch("saber.inspect_ai.agents.registry.react.react")
+    @patch("saber.inspect_ai.agents.registry.react.saber_tools")
+    def test_submit_none_treated_as_enabled(self, mock_saber_tools, mock_react):
+        """Test that submit=None is treated as enabled (default behavior)."""
+        mock_saber_tools.return_value = Mock()
+        mock_react.return_value = Mock()
+
+        agent_factory = create_agent()
+
+        # Pass submit=None explicitly
+        agent_factory("instruction", "assistant", "submit", "continue", submit=None)
+
+        call_kwargs = mock_react.call_args.kwargs
+        assert call_kwargs["submit"] is True
+        assert call_kwargs["prompt"].submit_prompt == "submit"
