@@ -956,6 +956,9 @@ async def _score_all_subtasks(
     """
     Score all subtasks using their configured evaluation strategies.
 
+    Optimized to batch all LLM_JUDGE subtasks into a single LLM call,
+    since the template evaluates all checkpoints at once.
+
     Args:
         steps_data: Episode steps data
         list_of_all_subtask_criteria: List of subtask evaluation criteria
@@ -966,9 +969,9 @@ async def _score_all_subtasks(
     Returns:
         Tuple of (total_subtask_score, individual_scores, all_step_evaluations)
     """
-    all_scores = []
-    total_subtask_score = 0.0
-    all_step_evaluations: List[List[StepEvaluation]] = []
+    # Initialize results storage - one entry per subtask in original order
+    all_scores: List[float] = [0.0] * len(list_of_all_subtask_criteria)
+    all_step_evaluations: List[List[StepEvaluation]] = [[] for _ in list_of_all_subtask_criteria]
 
     logger.info(
         "Starting subtask evaluation",
@@ -982,9 +985,12 @@ async def _score_all_subtasks(
         },
     )
 
-    tasks = []
+    # Group subtasks by strategy for efficient processing
+    # LLM_JUDGE subtasks will be batched into a single call
+    llm_judge_subtasks: List[Tuple[int, SubtaskEvaluationCriteriaResponse]] = []  # (index, criteria)
+    other_tasks: List[Tuple[int, Any]] = []  # (index, coroutine)
 
-    for criteria in list_of_all_subtask_criteria:
+    for idx, criteria in enumerate(list_of_all_subtask_criteria):
         # Skip subtasks without a configured strategy (informational checkpoints only)
         if not criteria.strategy or criteria.strategy == "":
             logger.info(
@@ -995,8 +1001,7 @@ async def _score_all_subtasks(
                     "event": "subtask_skip_no_strategy",
                 },
             )
-            # Add a placeholder result with 0 score for this subtask
-            tasks.append(_score_subtask_skip(steps_data, criteria))
+            # Results already initialized to (0.0, [])
             continue
 
         logger.info(
@@ -1009,32 +1014,58 @@ async def _score_all_subtasks(
                 "event": "subtask_eval_strategy",
             },
         )
+
         if criteria.strategy == StepEvaluationStrategy.STATIC:
-            tasks.append(_score_subtask_static(steps_data, criteria))
+            other_tasks.append((idx, _score_subtask_static(steps_data, criteria)))
         elif criteria.strategy == StepEvaluationStrategy.TOOL_CALL:
-            tasks.append(_score_subtask_tool_call(steps_data, criteria))
+            other_tasks.append((idx, _score_subtask_tool_call(steps_data, criteria)))
         elif criteria.strategy == StepEvaluationStrategy.LLM_JUDGE:
-            tasks.append(
-                _score_subtask_llm(
-                    steps_data, criteria, task_context, session_manager, state, list_of_all_subtask_criteria
-                )
-            )
+            # Collect LLM_JUDGE subtasks for batch processing
+            llm_judge_subtasks.append((idx, criteria))
         else:
             raise RuntimeError(f"Unknown subtask strategy: {criteria.strategy}")
 
-    results = await asyncio.gather(*tasks)
-    for i, (subtask_score, step_evals) in enumerate(results):
-        criteria = list_of_all_subtask_criteria[i]
-        total_subtask_score += subtask_score
-        all_scores.append(subtask_score)
-        all_step_evaluations.append(step_evals)
+    # Process non-LLM tasks in parallel
+    if other_tasks:
+        other_results = await asyncio.gather(*[task for _, task in other_tasks])
+        for (idx, _), (subtask_score, step_evals) in zip(other_tasks, other_results):
+            all_scores[idx] = subtask_score
+            all_step_evaluations[idx] = step_evals
 
+    # Process all LLM_JUDGE subtasks in a single batched call
+    if llm_judge_subtasks:
+        llm_criteria_list = [criteria for _, criteria in llm_judge_subtasks]
+
+        # Make single LLM call for all LLM_JUDGE subtasks
+        batch_results = await _score_subtasks_llm_batch(
+            steps_data, llm_criteria_list, task_context, session_manager, state
+        )
+
+        # Map results back to original indices
+        for i, (idx, criteria) in enumerate(llm_judge_subtasks):
+            subtask_score, step_evals = batch_results[i]
+            all_scores[idx] = subtask_score
+            all_step_evaluations[idx] = step_evals
+
+            logger.debug(
+                "LLM subtask scored (batch)",
+                extra={
+                    "subtask_id": criteria.subtask_id,
+                    "score": subtask_score,
+                    "max_score": criteria.max_score,
+                    "event": "llm_subtask_scored_batch",
+                },
+            )
+
+    # Log final results
+    total_subtask_score = sum(all_scores)
+    for idx, criteria in enumerate(list_of_all_subtask_criteria):
         logger.debug(
             "Subtask scored",
             extra={
                 "subtask_id": criteria.subtask_id,
                 "strategy": criteria.strategy,
-                "score": subtask_score,
+                "score": all_scores[idx],
                 "max_score": criteria.max_score,
                 "event": "subtask_scored",
             },
@@ -1045,36 +1076,12 @@ async def _score_all_subtasks(
         extra={
             "total_score": total_subtask_score,
             "subtask_count": len(list_of_all_subtask_criteria),
-            "step_evaluations": len(all_step_evaluations[0]) if all_step_evaluations else 0,
+            "step_evaluations": len(all_step_evaluations[0]) if all_step_evaluations and all_step_evaluations[0] else 0,
             "event": "all_subtasks_scored",
         },
     )
 
     return total_subtask_score, all_scores, all_step_evaluations
-
-
-async def _score_subtask_skip(
-    steps_data: EpisodeStepsResponse,
-    criteria: SubtaskEvaluationCriteriaResponse,
-) -> Tuple[float, List[StepEvaluation]]:
-    """
-    Skip scoring for subtasks without step_evaluation_config (informational checkpoints only).
-
-    Args:
-        steps_data: Episode steps data
-        criteria: Subtask criteria (without strategy)
-
-    Returns:
-        Tuple of (0.0, empty_list) - no score for informational subtasks
-    """
-    logger.info(
-        "Subtask skipped - no evaluation strategy configured (informational only)",
-        extra={
-            "subtask_id": criteria.subtask_id,
-            "event": "subtask_skip_complete",
-        },
-    )
-    return 0.0, []
 
 
 async def _score_subtask_static(
@@ -1230,64 +1237,154 @@ async def _score_subtask_tool_call(
     return subtask_score, all_graded_steps
 
 
-async def _score_subtask_llm(
+def _parse_llm_step_evaluations(response_text: str, valid_checkpoint_ids: List[str]) -> Dict[str, List[int]]:
+    """
+    Parse LLM judge response to extract checkpoint completions.
+
+    Expected format from LLM:
+    ```
+    STEP_EVALUATIONS:
+    [step_number: checkpoint_id] - Brief reason
+    [step_number: checkpoint_id] - Brief reason
+    ```
+    Or: [NO_COMPLETIONS]
+
+    Args:
+        response_text: Raw LLM response text
+        valid_checkpoint_ids: List of valid checkpoint IDs to match against
+
+    Returns:
+        Dict mapping checkpoint_id -> list of step numbers that completed it
+    """
+    import re
+
+    completions: Dict[str, List[int]] = {cp_id: [] for cp_id in valid_checkpoint_ids}
+
+    # Check for no completions
+    if "NO_COMPLETIONS" in response_text.upper():
+        return completions
+
+    # Pattern to match [step_number: checkpoint_id] format
+    # Handles variations like [0: checkpoint_1], [5: checkpoint_2], etc.
+    pattern = r"\[(\d+)\s*:\s*(\w+)\]"
+    matches = re.findall(pattern, response_text)
+
+    for step_str, checkpoint_id in matches:
+        try:
+            step_number = int(step_str)
+            # Only accept valid checkpoint IDs
+            if checkpoint_id in completions:
+                if step_number not in completions[checkpoint_id]:
+                    completions[checkpoint_id].append(step_number)
+                    logger.debug(
+                        "Parsed checkpoint completion",
+                        extra={
+                            "step_number": step_number,
+                            "checkpoint_id": checkpoint_id,
+                            "event": "llm_parse_completion",
+                        },
+                    )
+            else:
+                logger.warning(
+                    "LLM returned unknown checkpoint_id",
+                    extra={
+                        "checkpoint_id": checkpoint_id,
+                        "valid_ids": valid_checkpoint_ids,
+                        "event": "llm_parse_unknown_checkpoint",
+                    },
+                )
+        except ValueError:
+            logger.warning(
+                "Failed to parse step number from LLM response",
+                extra={"step_str": step_str, "event": "llm_parse_step_error"},
+            )
+
+    return completions
+
+
+async def _score_subtasks_llm_batch(
     steps_data: EpisodeStepsResponse,
-    criteria: SubtaskEvaluationCriteriaResponse,
+    llm_criteria_list: List[SubtaskEvaluationCriteriaResponse],
     task_context: Any,
     session_manager: Any,
     state: TaskState,
-    all_subtask_criteria: Optional[List[SubtaskEvaluationCriteriaResponse]] = None,
-) -> Tuple[float, List[StepEvaluation]]:
+) -> List[Tuple[float, List[StepEvaluation]]]:
     """
-    Score steps using LLM evaluation.
+    Score multiple LLM_JUDGE subtasks in a single batched LLM call.
+
+    This is an optimization over calling _score_subtask_llm for each subtask,
+    since the template already evaluates all checkpoints at once.
 
     Args:
         steps_data: Episode steps data
-        criteria: Step evaluation criteria
+        llm_criteria_list: List of subtask criteria all using LLM_JUDGE strategy
         task_context: Task context
         session_manager: Client session manager
         state: Task state
-        all_subtask_criteria: Optional list of all subtask criteria for context
 
     Returns:
-        Tuple of (total_step_score, list_of_step_evaluations)
+        List of (subtask_score, step_evaluations) tuples, one per subtask in llm_criteria_list
     """
-    # Get template content directly from criteria
-    system_template = criteria.criteria.get("judge_system_template")
-    user_template = criteria.criteria.get("judge_user_template")
-    model_name = criteria.criteria.get("model")
-    steps_per_message = criteria.criteria.get("steps_per_message", 10)
+    if not llm_criteria_list:
+        return []
+
+    # Use the first criteria for template/model info (all LLM_JUDGE subtasks share same config)
+    first_criteria = llm_criteria_list[0]
+    system_template = first_criteria.criteria.get("judge_system_template")
+    user_template = first_criteria.criteria.get("judge_user_template")
+    model_name = first_criteria.criteria.get("model")
+    steps_per_message = first_criteria.criteria.get("steps_per_message", 10)
 
     if not all([system_template, user_template, model_name]):
         raise RuntimeError("Missing required template content or model in step criteria")
 
-    # Type narrowing - we've verified these are not None above
     assert system_template is not None
     assert user_template is not None
     assert model_name is not None
 
-    logger.debug(
-        "Using step templates from criteria",
+    logger.info(
+        "Starting batch LLM subtask evaluation",
         extra={
-            "system_len": len(system_template),
-            "user_len": len(user_template),
-            "event": "using_step_criteria_templates",
+            "subtask_count": len(llm_criteria_list),
+            "subtask_ids": [c.subtask_id for c in llm_criteria_list],
+            "model": model_name,
+            "event": "llm_batch_eval_start",
         },
     )
 
     # Setup Jinja2
     env = Environment(loader=TemplateStringLoader({"system": system_template, "user": user_template}))
 
-    # Chunk steps
-    all_step_evaluations: List[StepEvaluation] = []
+    # Build subtasks list for template
+    subtasks_for_template = []
+    for criteria in llm_criteria_list:
+        subtasks_for_template.append(
+            {
+                "subtask_id": criteria.subtask_id,
+                "title": criteria.title,
+                "description": criteria.description,
+                "objective": criteria.objective,
+            }
+        )
+
+    # Chunk steps if necessary
     step_chunks = [
         steps_data.steps[i : i + steps_per_message] for i in range(0, len(steps_data.steps), steps_per_message)
     ]
 
     logger.info(
-        "Processing step chunks",
-        extra={"total_steps": len(steps_data.steps), "chunks": len(step_chunks), "event": "step_chunking"},
+        "Processing step chunks for batch LLM",
+        extra={
+            "total_steps": len(steps_data.steps),
+            "chunks": len(step_chunks),
+            "steps_per_message": steps_per_message,
+            "event": "llm_batch_chunking",
+        },
     )
+
+    # Collect all completions across chunks
+    valid_checkpoint_ids = [c.subtask_id for c in llm_criteria_list]
+    all_completions: Dict[str, List[int]] = {cp_id: [] for cp_id in valid_checkpoint_ids}
 
     for chunk_idx, chunk in enumerate(step_chunks):
         # Build context - create step objects that match template expectations
@@ -1300,8 +1397,7 @@ async def _score_subtask_llm(
                         "tool_name": step.tool_name,
                         "tool_input": step.tool_input,
                         "tool_output": step.tool_output,
-                        "done": False,  # We don't have this info from EpisodeStepData
-                        # These may not be available in EpisodeStepData
+                        "done": False,
                         "assistant_message": getattr(step, "assistant_message", None),
                         "reasoning": getattr(step, "reasoning", None),
                     }
@@ -1311,37 +1407,11 @@ async def _score_subtask_llm(
         # Create episode-like object
         episode = EpisodeContextForTemplate(step_objects)
 
-        # Build simplified context for subtask evaluation
-        # Use information directly from criteria instead of searching task_context
-        # Build subtasks list from all_subtask_criteria if available
-        subtasks_for_template = []
-        if all_subtask_criteria:
-            for subtask in all_subtask_criteria:
-                subtasks_for_template.append(
-                    {
-                        "subtask_id": subtask.subtask_id,
-                        "title": subtask.title,
-                        "description": subtask.description,
-                        "objective": subtask.objective,
-                    }
-                )
-        elif hasattr(task_context, "subtasks"):
-            subtasks_for_template = task_context.subtasks
-
         context = {
             "question": task_context.description,
-            "episode": episode,  # Steps to evaluate
-            # current subtask being evaluated
-            "subtask": {
-                "id": criteria.subtask_id,
-                "description": criteria.description,
-                "objective": criteria.objective,
-                "title": criteria.title,
-            },
-            "model": criteria.criteria.get("model", ""),
+            "episode": episode,
             "domain": task_context.domain if hasattr(task_context, "domain") else None,
-            "task_id": criteria.task_id,
-            # Add task object with subtasks for template compatibility
+            "task_id": first_criteria.task_id,
             "task": {
                 "task_id": task_context.task_id,
                 "title": task_context.title,
@@ -1356,54 +1426,86 @@ async def _score_subtask_llm(
         user_message = env.get_template("user").render(context)
 
         logger.debug(
-            "Rendered step chunk templates",
+            "Rendered batch LLM templates",
             extra={
                 "chunk": chunk_idx,
                 "system_len": len(system_message),
                 "user_len": len(user_message),
-                "event": "render_step_chunk",
+                "event": "llm_batch_render",
             },
         )
 
-        # Execute LLM
+        # Execute LLM (single call for all subtasks)
         state.messages.clear()
         state.messages.append(ChatMessageSystem(content=system_message))
         state.messages.append(ChatMessageUser(content=user_message))
 
         model = get_model(model_name)
         response = await model.generate(state.messages)
-        state.output = response  # Update state with LLM response
+        state.output = response
 
-        # Parse LLM response for simple completion judgment
-        judge_response = state.output.completion.upper()
+        # Parse LLM response
+        judge_response = state.output.completion
+        chunk_completions = _parse_llm_step_evaluations(judge_response, valid_checkpoint_ids)
+
+        # Merge chunk completions into all_completions
+        for cp_id, steps in chunk_completions.items():
+            for step_num in steps:
+                if step_num not in all_completions[cp_id]:
+                    all_completions[cp_id].append(step_num)
 
         logger.debug(
-            "LLM response for chunk",
-            extra={"chunk": chunk_idx, "response_preview": judge_response[:100], "event": "llm_chunk_response"},
+            "Batch LLM chunk processed",
+            extra={
+                "chunk": chunk_idx,
+                "completions": {k: len(v) for k, v in chunk_completions.items()},
+                "event": "llm_batch_chunk_complete",
+            },
         )
 
-    # After processing all chunks, determine if subtask was completed
-    # Combine all LLM responses to make final judgment
-    # For now, use the last chunk's response (could be enhanced to consider all chunks)
-    completed = False
-    if "NO_COMPLETIONS" in judge_response:
-        completed = False
-    else:
-        completed = True
+    # Build results for each subtask
+    results: List[Tuple[float, List[StepEvaluation]]] = []
 
-    # Create step evaluations for all steps
-    # Mark all steps with the same completion status based on LLM judgment
-    for step in steps_data.steps:
-        all_step_evaluations.append(
-            StepEvaluation(
-                step_number=step.step_number,
-                objective_id=criteria.subtask_id,
-                objective_type="subtask",
-                completed=completed,
+    for criteria in llm_criteria_list:
+        checkpoint_id = criteria.subtask_id
+        completed_steps = all_completions.get(checkpoint_id, [])
+        is_completed = len(completed_steps) > 0
+
+        # Create step evaluations
+        step_evaluations = []
+        for step in steps_data.steps:
+            step_evaluations.append(
+                StepEvaluation(
+                    step_number=step.step_number,
+                    objective_id=checkpoint_id,
+                    objective_type="subtask",
+                    completed=step.step_number in completed_steps,
+                )
             )
+
+        # Calculate score
+        subtask_score = criteria.max_score if is_completed else 0.0
+
+        results.append((subtask_score, step_evaluations))
+
+        logger.debug(
+            "Batch LLM subtask result",
+            extra={
+                "subtask_id": checkpoint_id,
+                "completed": is_completed,
+                "completed_steps": completed_steps,
+                "score": subtask_score,
+                "event": "llm_batch_subtask_result",
+            },
         )
 
-    # Calculate final score
-    total_score = criteria.max_score if completed else 0.0
+    logger.info(
+        "Batch LLM subtask evaluation complete",
+        extra={
+            "subtask_count": len(llm_criteria_list),
+            "completions": {k: len(v) for k, v in all_completions.items()},
+            "event": "llm_batch_eval_complete",
+        },
+    )
 
-    return total_score, all_step_evaluations
+    return results

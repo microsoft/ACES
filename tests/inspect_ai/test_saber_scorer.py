@@ -25,14 +25,14 @@ from saber.inspect_ai.core.saber_scorer import (
     EpisodeContextForTemplate,
     StepContextForTemplate,
     TemplateStringLoader,
+    _parse_llm_step_evaluations,
     _score_all_subtasks,
     _score_submission,
     _score_submission_llm,
     _score_submission_static,
-    _score_subtask_llm,
-    _score_subtask_skip,
     _score_subtask_static,
     _score_subtask_tool_call,
+    _score_subtasks_llm_batch,
     clean_dict,
     per_task_submission_scores,
     per_task_subtask_scores,
@@ -904,37 +904,66 @@ class TestScoreSubmissionLLM:
 # ============================================================================
 
 
-class TestScoreSubtaskSkip:
-    """Test cases for _score_subtask_skip."""
+class TestParseLLMStepEvaluations:
+    """Test cases for _parse_llm_step_evaluations."""
 
-    @pytest.mark.asyncio
-    async def test_score_subtask_skip_returns_zero(self, task_context):
-        """Test that skip scoring returns 0.0 and empty list."""
-        steps_data = EpisodeStepsResponse(
-            session_id="session1",
-            episode_id="ep1",
-            task_id="task1",
-            steps=[],
-            total_steps=0,
-        )
-        criteria = SubtaskEvaluationCriteriaResponse(
-            session_id="session1",
-            episode_id="ep1",
-            task_id="task1",
-            subtask_id="subtask1",
-            title="Test",
-            description="Test subtask",
-            objective="Test objective",
-            strategy="",  # No strategy
-            criteria={},
-            max_score=1.0,
-            weight=1.0,
-            task_context=task_context,
-        )
+    def test_parse_single_completion(self):
+        """Test parsing a single checkpoint completion."""
+        response = """
+        STEP_EVALUATIONS:
+        [5: checkpoint_1] - Agent discovered the vulnerability
+        """
+        valid_ids = ["checkpoint_1", "checkpoint_2"]
+        result = _parse_llm_step_evaluations(response, valid_ids)
+        assert result["checkpoint_1"] == [5]
+        assert result["checkpoint_2"] == []
 
-        score, evaluations = await _score_subtask_skip(steps_data, criteria)
-        assert score == 0.0
-        assert evaluations == []
+    def test_parse_multiple_completions(self):
+        """Test parsing multiple checkpoint completions."""
+        response = """
+        STEP_EVALUATIONS:
+        [2: checkpoint_1] - Agent enumerated endpoints
+        [5: checkpoint_2] - Agent identified vulnerability
+        [8: checkpoint_3] - Agent exploited the vulnerability
+        """
+        valid_ids = ["checkpoint_1", "checkpoint_2", "checkpoint_3", "checkpoint_4"]
+        result = _parse_llm_step_evaluations(response, valid_ids)
+        assert result["checkpoint_1"] == [2]
+        assert result["checkpoint_2"] == [5]
+        assert result["checkpoint_3"] == [8]
+        assert result["checkpoint_4"] == []
+
+    def test_parse_no_completions(self):
+        """Test parsing NO_COMPLETIONS response."""
+        response = "[NO_COMPLETIONS]"
+        valid_ids = ["checkpoint_1", "checkpoint_2"]
+        result = _parse_llm_step_evaluations(response, valid_ids)
+        assert result["checkpoint_1"] == []
+        assert result["checkpoint_2"] == []
+
+    def test_parse_ignores_invalid_checkpoint_ids(self):
+        """Test that invalid checkpoint IDs are ignored."""
+        response = """
+        STEP_EVALUATIONS:
+        [5: checkpoint_1] - Valid
+        [6: invalid_checkpoint] - Should be ignored
+        """
+        valid_ids = ["checkpoint_1", "checkpoint_2"]
+        result = _parse_llm_step_evaluations(response, valid_ids)
+        assert result["checkpoint_1"] == [5]
+        assert result["checkpoint_2"] == []
+        assert "invalid_checkpoint" not in result
+
+    def test_parse_deduplicates_step_numbers(self):
+        """Test that duplicate step numbers for same checkpoint are deduplicated."""
+        response = """
+        STEP_EVALUATIONS:
+        [5: checkpoint_1] - First mention
+        [5: checkpoint_1] - Duplicate
+        """
+        valid_ids = ["checkpoint_1"]
+        result = _parse_llm_step_evaluations(response, valid_ids)
+        assert result["checkpoint_1"] == [5]
 
 
 class TestScoreSubtaskStatic:
@@ -1233,12 +1262,12 @@ class TestScoreSubtaskToolCall:
         assert evaluations == []
 
 
-class TestScoreSubtaskLLM:
-    """Test cases for _score_subtask_llm."""
+class TestScoreSubtasksLLMBatch:
+    """Test cases for _score_subtasks_llm_batch."""
 
     @pytest.mark.asyncio
-    async def test_llm_subtask_completed(self, task_context):
-        """Test LLM subtask scoring when subtask is completed."""
+    async def test_llm_batch_single_subtask_completed(self, task_context):
+        """Test LLM batch scoring with single subtask completed."""
         steps_data = EpisodeStepsResponse(
             session_id="session1",
             episode_id="ep1",
@@ -1258,14 +1287,14 @@ class TestScoreSubtaskLLM:
             session_id="session1",
             episode_id="ep1",
             task_id="task1",
-            subtask_id="subtask1",
+            subtask_id="checkpoint_1",
             title="Test Task",
             description="Test Description",
             objective="Test Objective",
             strategy=StepEvaluationStrategy.LLM_JUDGE,
             criteria={
                 "judge_system_template": "Evaluate steps",
-                "judge_user_template": "Check if objective completed: {{ subtask.objective }}",
+                "judge_user_template": "Check steps",
                 "model": "openai/gpt-4",
                 "steps_per_message": 10,
             },
@@ -1274,26 +1303,125 @@ class TestScoreSubtaskLLM:
             task_context=task_context,
         )
 
-        task_context = Mock(description="Task description", domain="test")
         state = Mock(spec=TaskState)
         state.messages = []
         mock_output = Mock(spec=ModelOutput)
-        mock_output.completion = "COMPLETED"
+        mock_output.completion = """
+        STEP_EVALUATIONS:
+        [1: checkpoint_1] - Agent completed the objective
+        """
         state.output = mock_output
 
         mock_model = AsyncMock()
         mock_model.generate = AsyncMock(return_value=mock_output)
 
         with patch("saber.inspect_ai.core.saber_scorer.get_model", return_value=mock_model):
-            score, evaluations = await _score_subtask_llm(steps_data, criteria, task_context, Mock(), state)
+            results = await _score_subtasks_llm_batch(
+                steps_data, [criteria], task_context, Mock(), state
+            )
 
+        assert len(results) == 1
+        score, evaluations = results[0]
         assert score == 1.0
         assert len(evaluations) == 1
-        assert all(e.completed for e in evaluations)
+        assert evaluations[0].completed
 
     @pytest.mark.asyncio
-    async def test_llm_subtask_not_completed(self, task_context):
-        """Test LLM subtask scoring when subtask is not completed."""
+    async def test_llm_batch_multiple_subtasks(self, task_context):
+        """Test LLM batch scoring with multiple subtasks - only one LLM call."""
+        steps_data = EpisodeStepsResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            steps=[
+                EpisodeStepData(
+                    step_number=0,
+                    tool_name="bash",
+                    tool_input={},
+                    tool_output="enumerated",
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                EpisodeStepData(
+                    step_number=1,
+                    tool_name="bash",
+                    tool_input={},
+                    tool_output="exploited",
+                    timestamp=datetime.now(timezone.utc),
+                ),
+            ],
+            total_steps=2,
+        )
+        criteria_list = [
+            SubtaskEvaluationCriteriaResponse(
+                session_id="session1",
+                episode_id="ep1",
+                task_id="task1",
+                subtask_id="checkpoint_1",
+                title="Discovery",
+                description="Discover endpoints",
+                objective="Enumerate API",
+                strategy=StepEvaluationStrategy.LLM_JUDGE,
+                criteria={
+                    "judge_system_template": "Evaluate",
+                    "judge_user_template": "Check",
+                    "model": "openai/gpt-4",
+                },
+                max_score=1.0,
+                weight=0.25,
+                task_context=task_context,
+            ),
+            SubtaskEvaluationCriteriaResponse(
+                session_id="session1",
+                episode_id="ep1",
+                task_id="task1",
+                subtask_id="checkpoint_2",
+                title="Exploitation",
+                description="Exploit vulnerability",
+                objective="Execute exploit",
+                strategy=StepEvaluationStrategy.LLM_JUDGE,
+                criteria={
+                    "judge_system_template": "Evaluate",
+                    "judge_user_template": "Check",
+                    "model": "openai/gpt-4",
+                },
+                max_score=1.0,
+                weight=0.75,
+                task_context=task_context,
+            ),
+        ]
+
+        state = Mock(spec=TaskState)
+        state.messages = []
+        mock_output = Mock(spec=ModelOutput)
+        # LLM returns both checkpoints completed
+        mock_output.completion = """
+        STEP_EVALUATIONS:
+        [0: checkpoint_1] - Agent enumerated endpoints
+        [1: checkpoint_2] - Agent exploited vulnerability
+        """
+        state.output = mock_output
+
+        mock_model = AsyncMock()
+        mock_model.generate = AsyncMock(return_value=mock_output)
+
+        with patch("saber.inspect_ai.core.saber_scorer.get_model", return_value=mock_model):
+            results = await _score_subtasks_llm_batch(
+                steps_data, criteria_list, task_context, Mock(), state
+            )
+
+        # Should only call LLM once (batched)
+        assert mock_model.generate.call_count == 1
+
+        # Both subtasks scored
+        assert len(results) == 2
+        score1, evals1 = results[0]
+        score2, evals2 = results[1]
+        assert score1 == 1.0
+        assert score2 == 1.0
+
+    @pytest.mark.asyncio
+    async def test_llm_batch_no_completions(self, task_context):
+        """Test LLM batch scoring when no checkpoints completed."""
         steps_data = EpisodeStepsResponse(
             session_id="session1",
             episode_id="ep1",
@@ -1313,14 +1441,14 @@ class TestScoreSubtaskLLM:
             session_id="session1",
             episode_id="ep1",
             task_id="task1",
-            subtask_id="subtask1",
+            subtask_id="checkpoint_1",
             title="Test",
             description="Test",
             objective="Test",
             strategy=StepEvaluationStrategy.LLM_JUDGE,
             criteria={
                 "judge_system_template": "Evaluate",
-                "judge_user_template": "Check {{ subtask.objective }}",
+                "judge_user_template": "Check",
                 "model": "openai/gpt-4",
             },
             max_score=1.0,
@@ -1328,25 +1456,27 @@ class TestScoreSubtaskLLM:
             task_context=task_context,
         )
 
-        task_context = Mock(description="Task", domain="test")
         state = Mock(spec=TaskState)
         state.messages = []
         mock_output = Mock(spec=ModelOutput)
-        mock_output.completion = "NO_COMPLETIONS"
+        mock_output.completion = "[NO_COMPLETIONS]"
         state.output = mock_output
 
         mock_model = AsyncMock()
         mock_model.generate = AsyncMock(return_value=mock_output)
 
         with patch("saber.inspect_ai.core.saber_scorer.get_model", return_value=mock_model):
-            score, evaluations = await _score_subtask_llm(steps_data, criteria, task_context, Mock(), state)
+            results = await _score_subtasks_llm_batch(
+                steps_data, [criteria], task_context, Mock(), state
+            )
 
+        score, evaluations = results[0]
         assert score == 0.0
         assert all(not e.completed for e in evaluations)
 
     @pytest.mark.asyncio
-    async def test_llm_subtask_missing_templates_raises_error(self, task_context):
-        """Test LLM subtask raises error when templates are missing."""
+    async def test_llm_batch_missing_templates_raises_error(self, task_context):
+        """Test LLM batch raises error when templates are missing."""
         steps_data = EpisodeStepsResponse(
             session_id="session1",
             episode_id="ep1",
@@ -1358,7 +1488,7 @@ class TestScoreSubtaskLLM:
             session_id="session1",
             episode_id="ep1",
             task_id="task1",
-            subtask_id="subtask1",
+            subtask_id="checkpoint_1",
             title="Test",
             description="Test",
             objective="Test",
@@ -1373,7 +1503,22 @@ class TestScoreSubtaskLLM:
         state.messages = []
 
         with pytest.raises(RuntimeError, match="Missing required template"):
-            await _score_subtask_llm(steps_data, criteria, Mock(), Mock(), state)
+            await _score_subtasks_llm_batch(steps_data, [criteria], task_context, Mock(), state)
+
+    @pytest.mark.asyncio
+    async def test_llm_batch_empty_list_returns_empty(self, task_context):
+        """Test LLM batch with empty criteria list returns empty."""
+        steps_data = EpisodeStepsResponse(
+            session_id="session1",
+            episode_id="ep1",
+            task_id="task1",
+            steps=[],
+            total_steps=0,
+        )
+
+        state = Mock(spec=TaskState)
+        results = await _score_subtasks_llm_batch(steps_data, [], task_context, Mock(), state)
+        assert results == []
 
 
 # ============================================================================
