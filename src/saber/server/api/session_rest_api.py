@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse
 
 from ...logging_config import get_api_logger, log_operation_failure, log_operation_start, log_operation_success
 from ...models import (
@@ -405,23 +406,63 @@ class SessionRestAPI:
                 raise HTTPException(status_code=500, detail=f"Failed to get tasks: {exc}") from exc
 
         @self.app.get(APIEndpoints.HEALTH, response_model=HealthResponse)
-        async def health_check() -> HealthResponse:
-            """Enhanced health check endpoint with manifest metadata and dependency validation."""
-            health_data = self.session_manager.get_health_metadata()
+        async def health_check() -> HealthResponse | JSONResponse:
+            """Enhanced health check endpoint with manifest metadata and dependency validation.
 
-            # Return 503 Service Unavailable if server or dependencies are unhealthy
-            if health_data.get("status") != "healthy":
+            Returns 200 when healthy, 503 when startup failed, or 202 while starting.
+            The permanent_environment field contains per-service health status.
+            """
+            health_data = self.session_manager.get_health_metadata()
+            top_level_status = health_data.get("status", "")
+            perm_env = health_data.get("permanent_environment", {})
+            perm_status = perm_env.get("status", "")
+
+            # Return 503 Service Unavailable only if startup FAILED (not while starting)
+            if perm_status == "startup_failed":
                 from fastapi import HTTPException
 
                 raise HTTPException(
                     status_code=503,
                     detail={
-                        "message": "Server unhealthy - permanent environment dependencies failed",
+                        "message": "Server unhealthy - permanent environment startup failed",
                         "health_data": health_data,
                     },
                 )
 
-            return HealthResponse(**health_data)
+            # Return 202 Accepted while still starting (with progress info)
+            # Check both perm_status and top_level_status for "starting"
+            if perm_status == "starting" or top_level_status == "starting":
+                from fastapi.responses import JSONResponse
+
+                healthy_count = perm_env.get("healthy_services", 0)
+                total_count = perm_env.get("total_services", "?")
+                services = perm_env.get("services", {})
+
+                # Build list of unhealthy services for display
+                unhealthy_services = [name for name, info in services.items() if not info.get("healthy", False)]
+
+                return JSONResponse(
+                    status_code=202,
+                    content={
+                        "status": "starting",
+                        "message": f"Permanent environment starting: {healthy_count}/{total_count} services healthy",
+                        "domain": health_data.get("domain"),
+                        "permanent_environment": perm_env,
+                        "unhealthy_services": unhealthy_services[:10],  # Limit for display
+                    },
+                )
+
+            # Return 200 when fully healthy
+            return HealthResponse(
+                status=str(health_data.get("status", "healthy")),
+                domain=str(health_data.get("domain", "")),
+                domain_slug=health_data.get("domain_slug"),
+                schema_version=health_data.get("schema_version"),
+                capabilities=health_data.get("capabilities"),
+                config_checksum=health_data.get("config_checksum"),
+                manifest_path=health_data.get("manifest_path"),
+                build_metadata=health_data.get("build_metadata"),
+            )
 
         # Evaluation endpoints
         @self.app.get(APIEndpoints.EVALUATION_BY_EPISODE, response_model=EvaluationResponse)

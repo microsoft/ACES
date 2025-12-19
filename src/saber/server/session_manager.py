@@ -215,6 +215,11 @@ class SessionManager:
         # This semaphore prevents overwhelming the system with concurrent health checks
         self._finalization_semaphore = asyncio.Semaphore(16)  # Max 16 concurrent finalizations
 
+        # Track permanent environment startup status
+        self._permanent_env_startup_task: Optional[asyncio.Task[None]] = None
+        self._permanent_env_startup_error: Optional[str] = None
+        self._permanent_env_startup_complete = False
+
         # Manifest information for health endpoints
         self.manifest = manifest or {}
         self.manifest_path = manifest_path
@@ -331,9 +336,17 @@ class SessionManager:
 
         # Check permanent environment health if configured
         perm_env_health = self._check_permanent_environment_health()
+        perm_status = perm_env_health.get("status", "")
+
         if not perm_env_health["healthy"]:
-            metadata["status"] = "unhealthy"
-            metadata["permanent_environment_error"] = perm_env_health["error"]
+            # Set status based on whether it's starting or actually unhealthy
+            if perm_status == "starting":
+                metadata["status"] = "starting"
+            else:
+                metadata["status"] = "unhealthy"
+                # Only add error if present
+                if "error" in perm_env_health:
+                    metadata["permanent_environment_error"] = perm_env_health["error"]
 
         metadata["permanent_environment"] = perm_env_health
 
@@ -343,12 +356,63 @@ class SessionManager:
         """Check permanent environment health using ComposeHealthChecker.
 
         Returns:
-            Dict with health status and details
+            Dict with health status and details including:
+            - healthy: True if all services healthy, False otherwise
+            - status: 'starting', 'healthy', 'unhealthy', 'failed', etc.
+            - services: Per-service health status (when available)
         """
         # Check if permanent environment is configured
         permanent_env_name = self.benchmark_manager.config_loader.get_permanent_environment()
         if not permanent_env_name:
             return {"healthy": True, "status": "not_configured", "message": "No permanent environment configured"}
+
+        # Check if startup failed
+        if self._permanent_env_startup_error:
+            return {
+                "healthy": False,
+                "status": "startup_failed",
+                "error": self._permanent_env_startup_error,
+                "environment_name": permanent_env_name,
+            }
+
+        # Check if still starting up (background task running)
+        if not self._permanent_env_startup_complete:
+            # Get current health status to show progress
+            try:
+                from pathlib import Path
+
+                from saber.server.execution.sandbox.compose_health_checker import ComposeHealthChecker
+
+                permanent_compose_path = (
+                    Path(self.config_dir) / "environments" / "permanent" / f"{permanent_env_name}.compose.yml"
+                )
+                if permanent_compose_path.exists() and self.execution_manager._permanent_environment_manager:
+                    health_checker = ComposeHealthChecker()
+                    project_name = self.execution_manager._permanent_environment_manager.compose_project_name
+                    health_summary = health_checker.get_service_health_summary(
+                        str(permanent_compose_path), project_name
+                    )
+                    return {
+                        "healthy": False,
+                        "status": "starting",
+                        "message": (
+                            f"Permanent environment starting: "
+                            f"{health_summary['healthy_count']}/{health_summary['total_count']} services healthy"
+                        ),
+                        "environment_name": permanent_env_name,
+                        "healthy_services": health_summary["healthy_count"],
+                        "total_services": health_summary["total_count"],
+                        "services": health_summary["services"],
+                    }
+            except Exception:
+                pass  # Fall through to basic starting status
+
+            return {
+                "healthy": False,
+                "status": "starting",
+                "message": "Permanent environment is starting up...",
+                "environment_name": permanent_env_name,
+            }
 
         # Check if permanent environment manager exists and is running
         if not self.execution_manager._permanent_environment_manager:
@@ -403,11 +467,16 @@ class SessionManager:
             }
 
     async def start_server(self) -> None:
-        """Start both REST and MCP servers concurrently with session cleanup."""
+        """Start both REST and MCP servers concurrently with session cleanup.
+
+        Permanent environment is started in the background so the REST API
+        can respond to health checks immediately with startup progress.
+        """
         import asyncio
 
-        # Start permanent environment if configured
-        await self._start_permanent_environment()
+        # Start permanent environment in background (non-blocking)
+        # This allows REST API to respond to health checks during startup
+        self._permanent_env_startup_task = asyncio.create_task(self._start_permanent_environment_async())
 
         # Start the session cleanup task
         self.cleanup_task = asyncio.create_task(self._session_cleanup_loop())
@@ -2696,24 +2765,26 @@ class SessionManager:
 
         return stats
 
-    async def _start_permanent_environment(self) -> None:
-        """Start permanent environment if configured through ExecutionManager lifecycle management."""
+    async def _start_permanent_environment_async(self) -> None:
+        """Start permanent environment in background, tracking status for health endpoint."""
         permanent_env_name = self.benchmark_manager.config_loader.get_permanent_environment()
         if not permanent_env_name:
             logger.info(
                 "No permanent environment configured",
                 extra={"event": "permanent_environment_not_configured"},
             )
+            self._permanent_env_startup_complete = True
             return
 
         try:
             logger.info(
-                "Starting permanent environment",
+                "Starting permanent environment (background)",
                 extra={
                     "event": "permanent_environment_start",
                     "environment": permanent_env_name,
                 },
             )
+            print(f"[SERVER] Starting permanent environment '{permanent_env_name}' in background...", flush=True)
 
             # Build path to permanent environment compose file
             from pathlib import Path
@@ -2726,13 +2797,22 @@ class SessionManager:
                 raise RuntimeError(f"Permanent environment compose file not found: {permanent_compose_path}")
 
             # Start permanent environment directly through PermanentEnvironmentManager
+            # This is a blocking call that waits for all services to be healthy
             if not self.execution_manager._permanent_environment_manager:
                 raise RuntimeError("Permanent environment manager is not initialized")
 
-            self.execution_manager._permanent_environment_manager.start_permanent_environment_from_file(
-                permanent_compose_path
+            # Run the blocking compose startup in a thread pool to avoid blocking the event loop
+            import asyncio
+
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                self.execution_manager._permanent_environment_manager.start_permanent_environment_from_file,
+                permanent_compose_path,
             )
 
+            self._permanent_env_startup_complete = True
+            print(f"[SERVER] ✓ Permanent environment '{permanent_env_name}' is healthy", flush=True)
             logger.info(
                 "Permanent environment started",
                 extra={
@@ -2743,14 +2823,20 @@ class SessionManager:
             )
 
         except Exception as e:
+            self._permanent_env_startup_error = str(e)
+            self._permanent_env_startup_complete = True  # Mark complete (with error)
+            print(f"[SERVER] ✗ Permanent environment startup failed: {e}", flush=True)
             logger.error(
                 "Failed to start permanent environment",
                 extra={
                     "event": "permanent_environment_start_failed",
                     "environment": permanent_env_name,
-                    "compose_path": str(permanent_compose_path),
                     "error": str(e),
                     "error_type": type(e).__name__,
                 },
             )
-            raise
+            # Don't re-raise - let health endpoint report the error
+
+    async def _start_permanent_environment(self) -> None:
+        """Legacy sync wrapper - deprecated, use _start_permanent_environment_async."""
+        await self._start_permanent_environment_async()

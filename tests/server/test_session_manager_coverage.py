@@ -120,6 +120,7 @@ class TestSessionManagerHealthChecks:
         """Test permanent environment health when manager not initialized."""
         session_manager.benchmark_manager.config_loader.get_permanent_environment.return_value = "test-env"
         session_manager.execution_manager._permanent_environment_manager = None
+        session_manager._permanent_env_startup_complete = True  # Simulate completed startup
 
         health = session_manager._check_permanent_environment_health()
 
@@ -132,6 +133,7 @@ class TestSessionManagerHealthChecks:
         mock_perm_env_manager = MagicMock()
         mock_perm_env_manager.is_running.return_value = False
         session_manager.execution_manager._permanent_environment_manager = mock_perm_env_manager
+        session_manager._permanent_env_startup_complete = True  # Simulate completed startup
 
         health = session_manager._check_permanent_environment_health()
 
@@ -145,6 +147,7 @@ class TestSessionManagerHealthChecks:
         mock_perm_env_manager.is_running.return_value = True
         session_manager.execution_manager._permanent_environment_manager = mock_perm_env_manager
         session_manager.config_dir = str(tmp_path)
+        session_manager._permanent_env_startup_complete = True  # Simulate completed startup
 
         health = session_manager._check_permanent_environment_health()
 
@@ -159,6 +162,7 @@ class TestSessionManagerHealthChecks:
         mock_perm_env_manager.is_running.return_value = True
         mock_perm_env_manager.compose_project_name = "test-project"
         session_manager.execution_manager._permanent_environment_manager = mock_perm_env_manager
+        session_manager._permanent_env_startup_complete = True  # Simulate completed startup
 
         # Create compose file
         config_dir = tmp_path / "config"
@@ -195,6 +199,7 @@ class TestSessionManagerHealthChecks:
         mock_perm_env_manager.is_running.return_value = True
         mock_perm_env_manager.compose_project_name = "test-project"
         session_manager.execution_manager._permanent_environment_manager = mock_perm_env_manager
+        session_manager._permanent_env_startup_complete = True  # Simulate completed startup
 
         # Create compose file
         config_dir = tmp_path / "config"

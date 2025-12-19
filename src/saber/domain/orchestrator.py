@@ -402,17 +402,6 @@ class DockerRunner:
         except Exception:
             return False
 
-    def _detect_repo_structure_for_stop(self, domains_root: Path) -> tuple[Path, Path]:
-        """Detect repository structure for stop operations.
-
-        Args:
-            domains_root: Path to domains directory
-
-        Returns:
-            Tuple of (saber_src_path, env_file_path)
-        """
-        return detect_repo_structure(domains_root)
-
     def build_images(
         self,
         domain: str,
@@ -784,51 +773,8 @@ class DockerRunner:
             print(f"Would stop domain {domain}")
             return
 
-        # Detect repository structure for required paths
-        saber_src_path, env_file_path = self._detect_repo_structure_for_stop(domains_root)
-
-        # Create minimal environment file for compose down
-        minimal_env = {
-            "DOMAIN": domain,
-            "DOMAINS_ROOT": str(domains_root),
-            "SERVER_IMAGE": "dummy",  # Not needed for 'down' but required by compose file
-            "REST_PORT": "8000",  # Not needed for 'down' but required by compose file
-            "MCP_PORT": "8001",  # Not needed for 'down' but required by compose file
-            "LOG_LEVEL": "INFO",  # Not needed for 'down' but required by compose file
-            "SABER_SRC": str(saber_src_path),  # Required by compose file volume mounts
-            "ENV_FILE": str(env_file_path),  # Required by compose file volume mounts
-        }
-
-        # Create temporary env file
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
-            for key, value in minimal_env.items():
-                f.write(f"{key}={value}\n")
-            env_file = f.name
-
-        try:
-            cmd = [
-                "docker",
-                "compose",
-                "-f",
-                str(self.compose_file),
-                "--env-file",
-                env_file,
-                "--project-name",
-                domain,
-                "down",
-            ]
-
-            print(f"Stopping domain {domain}...")
-            subprocess.run(cmd, check=True)
-            print(f"✓ Domain {domain} stopped successfully")
-        except subprocess.CalledProcessError as e:
-            raise DockerError(f"Failed to stop domain {domain}", command=" ".join(cmd), exit_code=e.returncode)
-        finally:
-            # Clean up temporary env file
-            try:
-                os.unlink(env_file)
-            except Exception:
-                pass
+        # Use centralized cleanup which handles both server and permanent env
+        self._cleanup_domain_containers(domain)
 
     def _validate_docker(self) -> None:
         """Validate Docker and Docker Compose are available."""
@@ -953,17 +899,99 @@ class DockerRunner:
         except Exception as e:
             print(f"Could not access server log files: {e}", flush=True)
 
-        # Stop the containers since they're unhealthy
-        print("\nStopping unhealthy containers...", flush=True)
+        # Stop all containers since they're unhealthy
+        self._cleanup_domain_containers(domain)
+
+    def _cleanup_domain_containers(self, domain: str) -> None:
+        """Clean up all containers for a domain, including permanent environment.
+
+        This method ensures both the main server containers and any permanent
+        environment containers are stopped and removed.
+
+        Args:
+            domain: Domain name
+        """
+        print("\nStopping all domain containers...", flush=True)
+
+        # Stop the main server containers
         try:
             subprocess.run(
                 ["docker", "compose", "-f", str(self.compose_file), "-p", domain, "down"],
                 capture_output=True,
                 timeout=30,
             )
-            print("✓ Containers stopped", flush=True)
+            print("✓ Server containers stopped", flush=True)
         except Exception as e:
-            print(f"Warning: Failed to stop containers: {e}", flush=True)
+            print(f"Warning: Failed to stop server containers: {e}", flush=True)
+
+        # Also stop any permanent environment containers that may have been started
+        # The permanent environment uses project name: {domain}_permanent_environment
+        # Since we don't have the compose file path here, we'll find containers by label
+        permanent_project_name = f"{domain}_permanent_environment"
+        print(f"Stopping permanent environment containers ({permanent_project_name})...", flush=True)
+
+        try:
+            # Find all containers belonging to this compose project
+            find_result = subprocess.run(
+                [
+                    "docker",
+                    "ps",
+                    "-aq",
+                    "--filter",
+                    f"label=com.docker.compose.project={permanent_project_name}",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            container_ids = find_result.stdout.strip().split()
+            if container_ids and container_ids[0]:  # Check if we found any containers
+                print(f"  Found {len(container_ids)} permanent environment container(s)", flush=True)
+
+                # Stop and remove each container
+                for container_id in container_ids:
+                    try:
+                        subprocess.run(
+                            ["docker", "rm", "-f", container_id],
+                            capture_output=True,
+                            timeout=30,
+                        )
+                    except Exception:
+                        pass  # Best effort cleanup
+
+                print("✓ Permanent environment containers stopped", flush=True)
+
+                # Also clean up any networks created by the project
+                try:
+                    network_result = subprocess.run(
+                        [
+                            "docker",
+                            "network",
+                            "ls",
+                            "-q",
+                            "--filter",
+                            f"label=com.docker.compose.project={permanent_project_name}",
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                    network_ids = network_result.stdout.strip().split()
+                    for network_id in network_ids:
+                        if network_id:
+                            subprocess.run(
+                                ["docker", "network", "rm", network_id],
+                                capture_output=True,
+                                timeout=10,
+                            )
+                except Exception:
+                    pass  # Best effort network cleanup
+            else:
+                print("  (No permanent environment containers found)", flush=True)
+
+        except Exception as e:
+            print(f"Warning: Failed to stop permanent environment containers: {e}", flush=True)
 
     def _wait_for_services(self, domain: str, env_vars: Dict[str, str], timeout: int = 60) -> None:
         """Wait for services to be healthy.
@@ -1026,22 +1054,10 @@ class DockerRunner:
         print(f"\n❌ Server health check TIMEOUT after {elapsed:.0f}s ({attempt} attempts)", flush=True)
         self._show_failure_diagnostics(domain, env_vars, container_name, "Health check timeout")
 
-        # Stop the containers since they're unhealthy
-        print("\nStopping unhealthy containers...", flush=True)
-        try:
-            subprocess.run(
-                ["docker", "compose", "-f", str(self.compose_file), "-p", domain, "down"],
-                capture_output=True,
-                timeout=30,
-            )
-            print("✓ Containers stopped", flush=True)
-        except Exception as e:
-            print(f"Warning: Failed to stop containers: {e}", flush=True)
-
-        # Raise error to fail the startup
+        # Raise error to fail the startup (containers already stopped by _show_failure_diagnostics)
         raise DockerError(
             f"Server failed to become healthy within {timeout}s.\n"
-            f"The server containers have been stopped.\n\n"
+            f"All domain containers have been stopped (including permanent environment).\n\n"
             "Common causes:\n"
             "  1. Server crash during startup (check logs above)\n"
             "  2. Missing dependencies or configuration\n"

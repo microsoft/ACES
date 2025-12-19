@@ -185,14 +185,39 @@ class ComposeOrchestrator:
                 },
             )
 
-            # Use the processed compose file (with variables resolved) for health checks
-            # NO TRY-CATCH: Health check failures will propagate up and fail episode creation
-            self.health_checker.wait_for_all_services_healthy(
-                compose_file_path=processed_compose_path,  # Use processed file, not original
-                project_name=self.project_name,
-                timeout_seconds=180,  # 3 minutes for health checks - reasonable for complex environments
-                check_interval=2.0,  # Check every 2 seconds
+            # Use longer timeout for permanent environments (databases may need time to initialize)
+            # Sandbox environments use shorter timeout since they're lightweight
+            health_timeout = 600 if config.config_type == "permanent" else 180
+            print(
+                f"[COMPOSE] Starting health checks for {config.config_type} environment (timeout: {health_timeout}s)",
+                flush=True,
             )
+
+            # Use the processed compose file (with variables resolved) for health checks
+            # If health check fails, clean up containers before propagating exception
+            try:
+                self.health_checker.wait_for_all_services_healthy(
+                    compose_file_path=processed_compose_path,  # Use processed file, not original
+                    project_name=self.project_name,
+                    timeout_seconds=health_timeout,  # 10 min for permanent, 3 min for sandbox
+                    check_interval=2.0,  # Check every 2 seconds
+                )
+            except Exception as health_error:
+                # Clean up containers that were started before health check failed
+                print("[COMPOSE] ✗ Health check failed, cleaning up containers...", flush=True)
+                logger.error(
+                    "Health check failed, initiating cleanup",
+                    extra={
+                        "event": "compose_health_check_failed_cleanup",
+                        "project_name": self.project_name,
+                        "config_type": config.config_type,
+                        "error": str(health_error),
+                    },
+                )
+                self._cleanup_failed_environment(self.project_name)
+                raise  # Re-raise the original exception after cleanup
+
+            print(f"[COMPOSE] ✓ {config.config_type} environment health checks passed", flush=True)
             logger.info(
                 "Compose environment healthy",
                 extra={
@@ -464,12 +489,26 @@ class ComposeOrchestrator:
         if self.project_name is None:
             raise RuntimeError("Project name must be set before waiting for services to become healthy")
 
-        self.health_checker.wait_for_all_services_healthy(
-            compose_file_path=compose_file_path,
-            project_name=self.project_name,
-            timeout_seconds=timeout_seconds,
-            check_interval=check_interval,
-        )
+        try:
+            self.health_checker.wait_for_all_services_healthy(
+                compose_file_path=compose_file_path,
+                project_name=self.project_name,
+                timeout_seconds=timeout_seconds,
+                check_interval=check_interval,
+            )
+        except Exception as health_error:
+            # Clean up containers that were started before health check failed
+            print("[COMPOSE] ✗ Health check failed, cleaning up containers...", flush=True)
+            logger.error(
+                "Health check failed in wait_for_healthy, initiating cleanup",
+                extra={
+                    "event": "compose_health_wait_failed_cleanup",
+                    "project_name": self.project_name,
+                    "error": str(health_error),
+                },
+            )
+            self._cleanup_failed_environment(self.project_name)
+            raise  # Re-raise the original exception after cleanup
 
         logger.info(
             "Compose environment healthy",

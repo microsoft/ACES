@@ -147,6 +147,7 @@ class ComposeHealthChecker:
             )
 
         start_time = time.time()
+        last_print_time = 0.0
 
         while time.time() - start_time < timeout_seconds:
             try:
@@ -157,14 +158,31 @@ class ComposeHealthChecker:
                 healthy_count = sum(1 for status in health_status.values() if status["healthy"])
                 total_count = len(health_status)
 
-                logger.debug(
-                    "Compose health check progress",
+                # Log progress at INFO level so it's visible during eval
+                elapsed = round(time.time() - start_time, 2)
+                unhealthy_names = [name for name, status in health_status.items() if not status["healthy"]]
+
+                # Print progress every 10 seconds to avoid spam
+                if time.time() - last_print_time >= 10 or healthy_count == total_count:
+                    print(
+                        f"[COMPOSE] Health: {healthy_count}/{total_count} services healthy "
+                        f"({elapsed:.0f}s/{timeout_seconds}s)",
+                        flush=True,
+                    )
+                    if unhealthy_names and len(unhealthy_names) <= 5:
+                        print(f"[COMPOSE]   Waiting for: {', '.join(unhealthy_names)}", flush=True)
+                    last_print_time = time.time()
+
+                logger.info(
+                    f"Health check progress: {healthy_count}/{total_count} services healthy ({elapsed}s elapsed)",
                     extra={
                         "event": "compose_health_check_progress",
                         "project_name": project_name,
                         "service_count": total_count,
                         "healthy_services": healthy_count,
-                        "elapsed_seconds": round(time.time() - start_time, 2),
+                        "unhealthy_services": unhealthy_names,
+                        "elapsed_seconds": elapsed,
+                        "timeout_seconds": timeout_seconds,
                     },
                 )
 
@@ -211,6 +229,7 @@ class ComposeHealthChecker:
             time.sleep(check_interval)
 
         # Timeout reached - perform final check and report failures
+        print(f"[COMPOSE] ✗ Health check timeout ({timeout_seconds}s) - checking final status...", flush=True)
         try:
             final_status = self._check_all_services_health(services, project_name)
         except Exception as e:
@@ -222,6 +241,7 @@ class ComposeHealthChecker:
                 unhealthy_services.append(
                     f"{name} (container: {status.get('container_name', 'unknown')}): {status['reason']}"
                 )
+                print(f"[COMPOSE]   ✗ {name}: {status['reason']}", flush=True)
 
         # Create detailed error message for fail-fast behavior
         error_msg = (
@@ -233,6 +253,7 @@ class ComposeHealthChecker:
             error_msg += f"  • {service_error}\n"
 
         error_msg += f"\nProject: {project_name}\nCompose file: {compose_file_path}"
+        print(f"[COMPOSE] ERROR: {error_msg}", flush=True)
 
         logger.error(
             "Compose services failed health check",

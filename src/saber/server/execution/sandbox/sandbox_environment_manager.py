@@ -288,13 +288,31 @@ class SandboxEnvironmentManager:
             )
         except Exception as e:
             logger.error(
-                "Episode environment health check failed",
+                "Episode environment health check failed, cleaning up",
                 extra={
                     "event": "sandbox_env_health_failed",
                     "episode_id": episode_id,
                     "error": str(e),
                 },
             )
+            # Clean up the failed episode environment using orchestrator's sync cleanup
+            try:
+                if orchestrator.project_name:
+                    orchestrator._cleanup_failed_environment(orchestrator.project_name)
+                # Remove from active tracking
+                if episode_id in self.active_orchestrators:
+                    del self.active_orchestrators[episode_id]
+                if episode_id in self.episode_compose_files:
+                    del self.episode_compose_files[episode_id]
+            except Exception as cleanup_error:
+                logger.warning(
+                    "Failed to cleanup episode after health check failure",
+                    extra={
+                        "event": "sandbox_env_health_cleanup_failed",
+                        "episode_id": episode_id,
+                        "cleanup_error": str(cleanup_error),
+                    },
+                )
             raise SandboxExecutionError(f"Episode {episode_id} environment failed health checks: {e}")
 
     def get_episode_environment(self, episode_id: str) -> Optional[ComposeOrchestrator]:

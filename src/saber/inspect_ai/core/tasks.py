@@ -464,11 +464,17 @@ async def _start_and_load_tasks(
             )
 
         logger.info(f"SABER domain '{domain_slug}' started, waiting for health checks")
+        print(f"[SABER] Domain '{domain_slug}' started, beginning REST API health check...", flush=True)
 
-        # Wait for server health with retry/backoff
+        # Wait for server health - polls indefinitely every 15s until healthy
         assert context is not None  # Help mypy understand context is not None
-        await wait_for_server_health(context.rest_url, max_retries=30, backoff=2.0)
+        await wait_for_server_health(
+            context.rest_url,
+            domain=domain_slug,
+            domains_root=Path(domains_root),
+        )
 
+        print(f"[SABER] Domain '{domain_slug}' health check passed!", flush=True)
         logger.info(f"SABER domain '{domain_slug}' is healthy, querying tasks")
 
         # Query REST API for benchmark info

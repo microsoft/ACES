@@ -109,10 +109,15 @@ class TestHealthCheckFailureHandling:
         assert '--tail' in logs_calls[0][0][0]
         assert '100' in logs_calls[0][0][0]  # Changed from 50 to 100
 
-        # Verify containers were stopped
+        # Verify server containers were stopped via docker compose down
         down_calls = [c for c in mock_subprocess.call_args_list
                       if c[0] and 'down' in c[0][0]]
-        assert len(down_calls) == 1
+        assert len(down_calls) == 1  # Server containers via docker compose down
+
+        # Verify permanent environment cleanup was attempted via docker ps (label filter)
+        ps_calls = [c for c in mock_subprocess.call_args_list
+                    if c[0] and 'ps' in c[0][0] and 'com.docker.compose.project' in str(c[0][0])]
+        assert len(ps_calls) == 1  # docker ps to find permanent env containers
 
         # Verify failure message was printed (check for crash indicator)
         print_calls = [str(c) for c in mock_print.call_args_list]

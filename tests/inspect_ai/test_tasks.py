@@ -30,7 +30,6 @@ from saber.inspect_ai.server.domain_manager import (
     remove_active_domain,
 )
 from saber.inspect_ai.core.task_filter import apply_task_filter as _apply_task_filter
-from saber.inspect_ai.server.health_check import wait_for_server_health as wait_for_server_health
 from saber.models import BenchmarkInfo, SingleEpisodeTask
 
 
@@ -378,52 +377,6 @@ class TestPreflightCheck:
 
             # Verify controller was started
             mock_controller.start.assert_called_once()
-
-
-class TestWaitForServerHealth:
-    """Test wait_for_server_health retry logic."""
-
-    @pytest.mark.asyncio
-    async def test_health_check_succeeds_first_attempt(self):
-        """Test health check succeeds on first attempt."""
-        mock_response = MagicMock()
-        mock_response.status = 200
-        mock_response.json = AsyncMock(return_value={"domain": "test_domain"})
-        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
-        mock_response.__aexit__ = AsyncMock()
-
-        mock_session = MagicMock()
-        mock_session.get = MagicMock(return_value=mock_response)
-        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_session.__aexit__ = AsyncMock()
-
-        mock_client_session = Mock(return_value=mock_session)
-
-        with patch('saber.inspect_ai.server.health_check.aiohttp.ClientSession', mock_client_session), \
-             patch('saber.inspect_ai.server.health_check.aiohttp.ClientTimeout'), \
-             patch('saber.inspect_ai.server.health_check.aiohttp.ClientError', Exception):
-            # Should not raise
-            await wait_for_server_health("http://localhost:8000", max_retries=3, backoff=0.1)
-
-    @pytest.mark.asyncio
-    async def test_health_check_fails_after_max_retries(self):
-        """Test health check fails after exceeding max retries."""
-        mock_session = MagicMock()
-        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_session.__aexit__ = AsyncMock()
-
-        # Always fail
-        mock_session.get = MagicMock(side_effect=Exception("Connection refused"))
-
-        mock_client_session = Mock(return_value=mock_session)
-
-        with patch('saber.inspect_ai.server.health_check.aiohttp.ClientSession', mock_client_session), \
-             patch('saber.inspect_ai.server.health_check.aiohttp.ClientTimeout'), \
-             patch('saber.inspect_ai.server.health_check.aiohttp.ClientError', Exception):
-            with pytest.raises(PrerequisiteError) as exc_info:
-                await wait_for_server_health("http://localhost:8000", max_retries=3, backoff=0.01)
-
-            assert "failed after 3 attempts" in str(exc_info.value)
 
 
 class TestApplyTaskFilter:
