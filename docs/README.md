@@ -1,215 +1,68 @@
-# SABER Architecture Documentation - Current Implementation
+# SABER Architecture Documentation
 
-## Overview
+This directory contains comprehensive documentation for the SABER system architecture, including design documents and visual diagrams.
 
-This document describes the current architecture for SABER (Security Agent Benchmarking and Evaluation Research), a modern distributed system designed to evaluate agentic workflows in cybersecurity domains using **Inspect AI integration** with **Model Context Protocol (MCP)**.
+## Architecture Diagrams
 
-**ARCHITECTURE**: The system uses inspect_ai framework integration with async/await patterns throughout. Agents run directly via inspect_ai
-
-## Current Architecture Diagrams
+All architecture diagrams are located in [assets/](assets/). Below is a complete inventory organized by subsystem.
 
 ### System Overview
-- **[System Overview](system/system_overview_architecture.puml)**: Current system components with inspect_ai integration
 
-### Server Architecture (Current)
-- **[Server Architecture Current](server/server_architecture_current.puml)**: Current async FastAPI/FastMCP implementation
-- **[Command Execution Architecture](server/execution/command_execution_architecture.puml)**: Docker sandbox execution framework for server-side command isolation
+| Diagram | Description |
+|---------|-------------|
+| [SABER System Overview](assets/system/SABER%20System%20Overview.png) | High-level architecture showing the complete SABER system with client-server separation, inspect_ai integration, and Docker sandbox execution. This is the best starting point for understanding how all components fit together. |
 
-### Client Architecture (Current)
-- **[Client Architecture](client/client_architecture.puml)**: Inspect AI integration architecture
-- **[Inspect AI Integration Sequence](client/inspect_ai_integration_sequence.puml)**: Current client-server interaction flow
+### Client-Side (Inspect AI Integration)
 
+| Diagram | Description |
+|---------|-------------|
+| [SABER Inspect AI Integration Architecture](assets/client/SABER%20Inspect%20AI%20Integration%20Architecture.png) | Component diagram showing how SABER integrates with inspect_ai, including the SABERSandboxEnvironment, task factories, and agent registry. Illustrates the key abstractions that enable seamless evaluation workflows. |
+| [SABER Inspect AI Integration Sequence](assets/client/SABER%20Inspect%20AI%20Integration%20Sequence.png) | Sequence diagram tracing a complete evaluation from task creation through sample execution. Shows the interactions between inspect_ai, SABER client components, and the server during an evaluation run. |
+| [SABER MCP Architecture](assets/client/SABER%20MCP%20Architecture.png) | Architecture of the Model Context Protocol (MCP) client that provides tool access to agents. Details how tools are discovered, cached, and invoked through the MCP protocol. |
 
-## Current Implementation Summary
+### Server-Side Architecture
 
-### Core Architecture Principles
+| Diagram | Description |
+|---------|-------------|
+| [SABER Server Architecture - Current Implementation](assets/server/SABER%20Server%20Architecture%20-%20Current%20Implementation.png) | Overview of server-side components including the dual-protocol design with FastAPI REST endpoints and FastMCP server. Shows how SessionManager orchestrates all server operations. |
+| [SABER Server Architecture - Detailed](assets/server/session/SABER%20Server%20Architecture%20-%20Detailed.png) | Detailed view of session management internals including lifecycle states, resource tracking, and cleanup strategies. Essential for understanding multi-session server behavior. |
 
-1. **Direct Agent Execution**: Agents run in the same process as the evaluation orchestrator using inspect_ai framework
-2. **Async Context Managers**: Proper resource management with async/await patterns throughout
-3. **Fail-Fast Design**: Upfront validation with structured error handling
-4. **Session-Based MCP**: Per-episode MCP clients for tool access via inspect_ai native integration
-5. **Server-Side Sandboxing**: Docker containers used only on server side for secure command execution
+#### API Layer
 
-### Core Components (Current)
+| Diagram | Description |
+|---------|-------------|
+| [MCP Integration Workflow](assets/server/api/MCP%20Integration%20Workflow.png) | End-to-end workflow for MCP tool operations from client request through execution and response. Shows how tool calls are validated, routed to the correct episode, and executed in Docker sandboxes. |
 
-#### Server Side
-- **SessionManager**: Central orchestrator managing multi-session server with FastAPI/FastMCP
-- **SessionRestAPI**: REST protocol handler for session/episode management
-- **SessionMCPAPI**: MCP protocol handler for tool discovery and execution only
-- **ExecutionManager**: Docker sandbox orchestration for secure command execution on server
-- **BenchmarkManager**: YAML-based task and benchmark configuration
-- **EpisodeManager**: Multi-episode session support with termination handling  
-- **PolicyManager**: Dynamic policy and prompt generation
-- **EvaluationManager**: Trajectory tracking and performance metrics
+#### Benchmark Management
 
-#### Client Side  
-- **SABEREvaluationOrchestrator**: Main async context manager coordinating evaluation lifecycle
-- **ClientSessionManager**: HTTP session lifecycle with REST/MCP clients
-- **AgentManager**: Agent discovery, initialization, and lifecycle management
-- **DatasetManager**: SABER dataset creation from server benchmark info
-- **SABERReactAgent**: inspect_ai compatible agent with SABER MCP tool integration
+| Diagram | Description |
+|---------|-------------|
+| [SABER Benchmark Framework Architecture](assets/server/benchmarks/SABER%20Benchmark%20Framework%20Architecture%20-%20Current%20Implementation.png) | Architecture of the YAML-based benchmark and task configuration system. Explains how domain.yaml files are parsed, validated, and transformed into executable task definitions. |
 
+#### Episode Management
 
-## System Architecture
+| Diagram | Description |
+|---------|-------------|
+| [Episode Creation Flow with Semaphore Management](assets/server/episodes/Episode%20Creation%20Flow%20with%20Semaphore%20Management.png) | Detailed flow showing how episodes are created with proper concurrency control. Illustrates semaphore acquisition, Docker container setup, and resource allocation during episode initialization. |
+| [Episode Management Workflow](assets/server/episodes/Episode%20Management%20Workflow.png) | Complete lifecycle of an episode from creation through execution to cleanup. Covers state transitions, error handling, and resource release patterns. |
+| [Transcript Management Components](assets/server/episodes/Transcript%20Management%20Components.png) | Component diagram for the transcript subsystem that captures agent interactions. Shows TranscriptManager, storage backends, and integration points with episode execution. |
+| [Transcript Management Flow](assets/server/episodes/Transcript%20Management%20Flow.png) | Data flow diagram showing how transcript entries are captured, buffered, and persisted. Includes handling of concurrent writes and flush strategies. |
+| [Transcript State Machine](assets/server/episodes/Transcript%20State%20Machine.png) | State machine defining valid transcript lifecycle states and transitions. Documents the states (initializing, recording, finalizing, closed) and the events that trigger transitions. |
 
-### Core Design Principles
+#### Execution Management
 
-1. **Separation of Concerns**: Clear boundaries between client orchestration and server execution
-2. **Fail-Fast**: Upfront validation prevents runtime surprises
-3. **Resource Management**: Async context managers ensure proper cleanup
-4. **Security First**: Server-side Docker sandboxing for untrusted command execution
-5. **Industry Standards**: inspect_ai for evaluation, MCP for tool protocol
+| Diagram | Description |
+|---------|-------------|
+| [Command Execution Architecture](assets/server/execution/Command%20Execution%20Architecture.png) | Architecture of the Docker sandbox execution system that runs agent commands securely. Details container management, command routing, output capture, and timeout handling. |
+| [Sandbox Environment Setup Sequence](assets/server/execution/Sandbox%20Environment%20Setup%20Sequence.png) | Sequence diagram showing sandbox initialization from compose file parsing through container startup. Includes health checks, network configuration, and volume mounting. |
 
-## System Components
+### Task Orchestration
 
-### Server Side Architecture
-
-The server manages concurrent client sessions and provides secure command execution via Docker sandboxing.
-
-#### SessionManager (SABER Domain Server)
-The central orchestrator for each security domain, responsible for:
-- **Multi-Session Management**: Creates, tracks, and manages multiple concurrent client sessions with lifecycle control
-- **Component Coordination**: Orchestrates BenchmarkManager, ExecutionManager, PolicyManager, and EvaluationManager
-- **Domain Hosting**: Provides single-domain server instances designed for horizontal scaling
-- **Server Lifecycle**: Handles startup, shutdown, and resource cleanup across all active sessions
-- **Episode Management**: Manages RL-style episode creation, progression, and termination per session
-
-#### SessionRestAPI
-REST protocol handler that processes HTTP endpoints and delegates to SessionManager:
-- **HTTP Endpoints**: FastAPI-based REST API with endpoints for session management, episode management, and status monitoring  
-- **Request Delegation**: Converts HTTP requests to SessionManager method calls with proper error handling
-- **API Documentation**: Auto-generated OpenAPI/Swagger documentation for client integration
-
-#### SessionMCPAPI
-Model Context Protocol handler component managed by SessionManager:
-- **MCP Server**: Hosts MCP server alongside REST API for agent tool execution only
-- **Dynamic Tool Discovery**: Provides real-time tool schemas from ExecutionManager
-- **Tool Execution**: Maps MCP tool calls to SessionManager command execution pipeline
-- **Session Context**: Maintains session mapping between MCP clients and SessionManager sessions
-- **Focused Scope**: ONLY handles tool discovery and execution via MCP protocol - no session management
-
-#### BenchmarkManager
-Benchmark orchestration and task management:
-- **Task Configuration**: Loads and manages task definitions from YAML configuration files
-- **Benchmark Orchestration**: Manages multiple episode attempts for pass@k evaluation
-- **Task Lookup**: Provides task object retrieval by task ID with complete configuration
-- **Episode Coordination**: Orchestrates multiple episode runs across all benchmark tasks
-- **Configuration Management**: Tasks contain all execution parameters (sandbox_environment, permanent_environment, allowed_executors)
-
-##### BenchmarkConfigLoader
-YAML configuration management:
-- **Task Loading**: Parses task definitions including execution configuration
-- **Benchmark Configuration**: Loads domain-level and task-specific benchmark settings
-- **Task Validation**: Ensures proper YAML structure and required fields
-- **Object Creation**: Creates Task objects with complete configuration
-- **Single Source**: Only component that reads task configuration files
-
-##### Benchmark Framework
-Task objects with complete execution and benchmark configuration:
-- **Complete Configuration**: Tasks contain sandbox_environment, permanent_environment references, allowed_executors
-- **Benchmark Settings**: Tasks include episode_attempts, success_criteria
-- **Dual Environment Support**: Both ephemeral sandbox and permanent shared services
-- **Self-Contained**: All parameters in Task object - no separate lookups needed
-- **Subtask Information**: Contains subtasks for informational purposes only
-
-#### EpisodeManager
-Managed directly by SessionManager for better separation of concerns:
-- **Session-Level Management**: Per-session episode lifecycle management
-- **Episode Lifecycle**: Manages RL-style episode creation, progression, and termination
-- **Step Coordination**: Handles individual action steps within episodes
-- **RL Interface**: Provides episode state management for RL workflows
-
-#### ExecutionManager
-Docker sandbox execution manager for server-side command isolation:
-- **Environment Management**: Orchestrates ephemeral and permanent Docker environments for secure command processing
-- **Dual Manager Architecture**: SandboxEnvironmentManager (session-scoped) and PermanentEnvironmentManager (server-scoped)
-- **Executor Factory**: Manages multiple executor types (CLI, Python, SQL) with dynamic selection
-- **Security Validation**: Comprehensive security validation and command filtering before execution
-- **Multi-Network Support**: Containers connect to isolated episode networks and permanent service networks
-- **MCP Tool Interface**: Provides MCP tool schemas for agent command execution
-
-#### EvaluationManager
-Tracks and evaluates agent performance:
-- **Action Logging**: Records all agent actions, commands, and execution results with timestamps
-- **Trajectory Tracking**: Maintains complete session trajectories for performance analysis
-- **Performance Metrics**: Tracks session and episode-level metrics for benchmarking
-- **Storage Integration**: Pluggable storage backends for trajectory data persistence
-
-#### PolicyManager
-Manages domain-specific operational context:
-- **Policy Documents**: Domain-specific guidelines, constraints, and available command sets
-- **Action Validation**: Validates agent actions against domain policies and security constraints
-- **Resource Management**: Provides policy information as MCP resources for agent context
-- **Domain Configuration**: Domain-specific operational rules and behavioral guidelines
-
-### Client Side Architecture
-
-The client orchestrates evaluations using inspect_ai framework with direct agent execution.
-
-#### SABEREvaluationOrchestrator
-Main async context manager orchestrating evaluation workflow:
-- **Component Lifecycle**: Manages initialization and cleanup of all client components
-- **Upfront Validation**: Validates configuration and server connectivity before execution
-- **Resource Management**: Ensures proper cleanup via async context manager pattern
-- **Evaluation Execution**: Coordinates dataset creation, agent initialization, and eval_async invocation
-- **Error Handling**: Structured error propagation with detailed context
-
-#### ClientSessionManager
-HTTP session lifecycle manager for dual-protocol communication:
-- **REST API Client**: Session and episode management via HTTP
-- **MCP Client**: Per-episode MCP clients for tool discovery and execution
-- **Connection Pooling**: Efficient HTTP session reuse
-- **Error Handling**: Network error handling with retries and timeouts
-- **Session Context**: Manages session IDs and episode contexts
-
-#### AgentManager
-Agent discovery and lifecycle management:
-- **Agent Resolution**: Resolves agent assignments from config and dataset metadata
-- **Direct Agent Creation**: Creates agents using SABERAgentFactory during task setup
-- **Task Integration**: Integrates agents with inspect_ai Task objects
-- **Lifecycle Management**: Handles agent initialization and cleanup
-- **No Agent Caching**: Simplified architecture with on-demand agent creation
-
-#### DatasetManager  
-SABER dataset creation for inspect_ai integration:
-- **Task Discovery**: Fetches available tasks from SABER server
-- **Dataset Creation**: Converts SABER tasks to inspect_ai Sample objects
-- **Metadata Handling**: Preserves task metadata for agent resolution
-- **Episode Attempts**: Supports multiple attempts per task for pass@k evaluation
-- **Clean Conversion**: Maintains separation between task description and agent prompt
-
-#### SABERAgentFactory
-Factory for creating agents from various sources:
-- **Registry Creation**: Creates agents from SABERAgentRegistry by ID
-- **Custom Agents**: Loads custom agent implementations from files
-- **inspect_ai Integration**: Creates agents compatible with inspect_ai evaluation
-- **MCP Tool Integration**: Integrates SABER MCP tools via inspect_ai native patterns
-- **Session Context**: Passes session manager context to agents
-
-#### SABERAgentRegistry
-Registry system for agent discovery:
-- **Agent Registration**: Decorator-based registration of agent factory functions
-- **Agent Specs**: Maintains metadata about available agents
-- **Built-in Agents**: Includes saber_react agent with MCP integration
-- **Custom Registration**: Supports registration of custom agent implementations
-- **Agent Discovery**: Provides list of available agents with metadata
-
-#### SABERReactAgent
-inspect_ai compatible agent with SABER MCP integration:
-- **React Pattern**: Uses inspect_ai's react() agent for tool use loops
-- **MCP Tools**: Accesses SABER server tools via inspect_ai's native MCP integration
-- **Session Context**: Maintains session and episode context via inspect_ai store
-- **Episode Management**: Handles episode creation and termination
-- **Policy Integration**: Retrieves and uses domain-specific policies
-
-### Connection Flow
-
-1. **Client Initialization**: SABEREvaluationOrchestrator validates config and initializes components
-2. **Server Connection**: ClientSessionManager establishes REST and MCP connections to SABER server
-3. **Dataset Creation**: DatasetManager fetches tasks and creates inspect_ai dataset
-4. **Agent Creation**: AgentManager creates agents using SABERAgentFactory for each task
-5. **Evaluation Execution**: inspect_ai eval_async runs tasks with direct agent execution
-6. **Tool Execution**: Agents use MCP tools via inspect_ai's native integration (no sidecar needed)
-7. **Command Execution**: SABER server executes commands in Docker sandboxes and returns results
-8. **Results Collection**: inspect_ai collects results and generates evaluation logs
-9. **Cleanup**: Async context managers ensure proper resource cleanup
+| Diagram | Description |
+|---------|-------------|
+| [Dependency Graph Validation](assets/architecture/Dependency%20Graph%20Validation.png) | Diagram showing how task dependencies are validated for cycles and ordering. Explains the topological sort algorithm used to determine safe execution order. |
+| [Orchestrated Multi-Episode Task Workflow](assets/architecture/Orchestrated%20Multi-Episode%20Task%20Workflow.png) | Workflow for running multiple evaluation episodes concurrently with proper resource management. Shows how max_concurrent_episodes is enforced and how failures are isolated. |
+| [Role-Based Configuration System](assets/architecture/Role-Based%20Configuration%20System.png) | Configuration system for defining agent roles in multi-agent scenarios. Documents how roles are declared in YAML, validated, and applied to agent instances. |
+| [Semaphore Management Strategy](assets/architecture/Semaphore%20Management%20Strategy.png) | System-wide concurrency control strategy using semaphores. Explains how resource limits are enforced across sessions, episodes, and Docker operations to prevent resource exhaustion. |
+| [Single Episode Task Workflow](assets/architecture/Single%20Episode%20Task%20Workflow.png) | Complete workflow for a single evaluation episode from sample receipt through scoring. Shows the interaction between solver, tools, sandbox, and scoring components. |
+| [Task Handler Class Diagram](assets/architecture/Task%20Handler%20Class%20Diagram.png) | Class diagram showing the TaskHandler hierarchy and related components. Documents the interfaces and implementations for different task types and execution strategies. |

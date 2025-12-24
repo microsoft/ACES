@@ -26,9 +26,12 @@ package "saber.models" {
     +description: str
     +subtask_count: int
     +max_steps: int
+    +initial_context: Optional[Dict]
     +instruction_prompt: str
     +assistant_prompt: str
     +submit_prompt: str
+    +continue_prompt: str
+    +transcript_config: Optional[Dict]
     --
     +get_task_ids(): List[str]
     +get_total_episodes(): int
@@ -48,9 +51,9 @@ package "saber.models" {
 
   class SubTaskDefinition {
     +task_id: str
-    +role: str | None
+    +role: Optional[str]
     +order: int
-    +depends_on_role: str | None
+    +depends_on_role: Optional[str]
     +domain: str
     +title: str
     +description: str
@@ -60,6 +63,8 @@ package "saber.models" {
     +instruction_prompt: str
     +assistant_prompt: str
     +submit_prompt: str
+    +continue_prompt: str
+    +transcript_config: Optional[Dict]
   }
 
   enum TaskExecutionMode {
@@ -74,27 +79,47 @@ package "saber.models" {
   }
 }
 
-package "saber.inspect_ai.task_handlers" {
+package "saber.inspect_ai.core.types" {
+  class HandlerState <<dataclass>> {
+    +episode_ids: List[str]
+    +primary_episode_id: str
+    +semaphore_acquired: bool
+    --
+    +has_multiple_episodes(): bool
+    +to_dict(): Dict[str, Any]
+  }
+
+  class OrchestratedHandlerState <<dataclass>> {
+    +episodes: List[Dict[str, Any]]
+    --
+    +get_episode_by_role(role): Optional[Dict]
+    +to_dict(): Dict[str, Any]
+  }
+
+  HandlerState <|-- OrchestratedHandlerState
+}
+
+package "saber.inspect_ai.core.task_handlers" {
   abstract class BenchmarkTaskHandler {
     #_semaphore_acquired: bool
-    #_acquired_semaphore_ref: Semaphore
+    #_acquired_semaphore_ref: Optional[Semaphore]
     #_cleanup_error_count: int
     #_cleanup_lock: asyncio.Lock
     --
-    +__del__(): void
-    {abstract} +initialize(): Dict[str, Any]
-    {abstract} +cleanup(): CleanupResult
+    +__del__(): None
+    {abstract} +initialize(task, session_id, session_manager, semaphore): HandlerState
+    {abstract} +cleanup(state, session_id, session_manager, semaphore): CleanupResult
   }
 
   class SingleEpisodeTaskHandler {
     --
-    +initialize(task, session_id, session_manager, semaphore): Dict
+    +initialize(task, session_id, session_manager, semaphore): HandlerState
     +cleanup(state, session_id, session_manager, semaphore): CleanupResult
   }
 
   class OrchestratedTaskHandler {
     --
-    +initialize(task, session_id, session_manager, semaphore): Dict
+    +initialize(task, session_id, session_manager, semaphore): OrchestratedHandlerState
     +cleanup(state, session_id, session_manager, semaphore): CleanupResult
   }
 
@@ -123,14 +148,17 @@ OrchestratedTask ..> OrchestrationStrategy : uses
 BenchmarkTaskHandler <|-- SingleEpisodeTaskHandler
 BenchmarkTaskHandler <|-- OrchestratedTaskHandler
 BenchmarkTaskHandler ..> CleanupResult : returns
+SingleEpisodeTaskHandler ..> HandlerState : returns
+OrchestratedTaskHandler ..> OrchestratedHandlerState : returns
 Factory ..> BenchmarkTaskHandler : creates
 Factory ..> SingleEpisodeTask : inspects
 Factory ..> OrchestratedTask : inspects
 
 note right of BenchmarkTaskHandler::__del__
   **Semaphore Leak Detection**
-  Logs critical error if handler
-  destroyed without cleanup()
+  Logs error "SEMAPHORE LEAK DETECTED"
+  if handler destroyed without cleanup().
+  Semaphore slot is permanently lost.
 end note
 
 note bottom of SingleEpisodeTaskHandler

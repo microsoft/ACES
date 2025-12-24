@@ -34,30 +34,33 @@ package "Domain Server Core" {
         +shutdown_event: asyncio.Event
         +manifest: Optional[Dict[str, Any]]
         +manifest_path: Optional[str]
+        -_episode_creation_lock: asyncio.Semaphore
+        -_episode_finalization_tasks: Dict[str, asyncio.Task]
+        -_finalization_semaphore: asyncio.Semaphore
         --
-        +start_server(): void
-        +shutdown(): void
+        +async start_server(): void
+        +async shutdown(): void
         +get_health_metadata(): Dict[str, Any]
-        +create_session(client_id: str): ClientSession
-        +terminate_session(session_id: str): void
-        +start_episode(session_id: str, task_id: str): Episode
-        +end_episode(session_id: str, episode_id: str, reason: str, result?: str, eval_submission?: EvalSubmission): EpisodeEndResponse
-        +execute_action(session_id: str, episode_id: str, action: Action): CommandResult
-        +execute_episode_action(session_id: str, episode_id: str, action: Action): CommandResult
-        +get_current_task(session_id: str, episode_id: str): Task
+        +async create_session(client_id: str): ClientSession
+        +async terminate_session(session_id: str, reason?: str): void
+        +async start_episode(session_id: str, task_id: str): Episode
+        +async end_episode(episode_id: str, session_id: str, reason?: str, submission?: EvalSubmission): EpisodeEndResponse
+        +async execute_action(session_id: str, episode_id: str, action: Action): CommandResult
+        +async execute_episode_action(session_id: str, episode_id: str, action: Action): CommandResult
+        +async get_current_task(session_id: str, episode_id: str): Task
         +get_policy(session_id: str, episode_id: str): PolicyDocument
         +get_benchmark_info(): BenchmarkInfo
-        +list_session_episodes(session_id: str, status_filter?: str): List[Episode]
-        +get_episode_details(session_id: str, episode_id: str): Episode
+        +async list_session_episodes(session_id: str, status_filter?: str): List[Episode]
+        +async get_episode_details(session_id: str, episode_id: str): Episode
         +get_episode_by_id(episode_id: str): Optional[Episode]
         +get_evaluation_service(): SessionEvaluationService
-        +get_evaluation_criteria(session_id: str, episode_id: str): EvaluationCriteriaResponse
-        +save_evaluation_file(session_id: str, file: UploadFile): int
-        +override_episode_evaluation(session_id: str, episode_id: str, request: EvaluationOverrideRequest): EvaluationResult
+        +async save_evaluation_file(session_id: str, file: UploadFile): int
         +get_session_stats(): Dict[str, Any]
-        +_cleanup_episode_network(episode_id: str): void
-        +_cleanup_saber_episode_networks(): void
-        +_start_permanent_environment(): void
+        +async _cleanup_episode_network(episode_id: str): void
+        +async _cleanup_saber_episode_networks(): void
+        +async _start_permanent_environment(): void
+        +_check_permanent_environment_health(): Dict[str, Any]
+        +async _cleanup_inactive_sessions(): void
     }
 
     package "Protocol Handlers" {
@@ -67,21 +70,30 @@ package "Domain Server Core" {
             +host: str
             +port: int
             --
-            +start_server(): void
+            +async start_server(): void
+            -_setup_routes(): void
             --
             **REST API Endpoints**
-            +POST /session
-            +DELETE /session/{session_id}
-            +GET /session/{session_id}/current-task
-            +GET /session/{session_id}/policy
-            +POST /session/{session_id}/start-episode
-            +GET /benchmark
-            +GET /health
-            +GET /sessions
-            +GET /sessions/stats
-            +GET /debug/cleanup-history
-            +GET /debug/cleanup-history/{session_id}
-            +GET /debug/active-cleanups
+            +POST /api/v1/session
+            +DELETE /api/v1/session/{session_id}
+            +POST /api/v1/session/{session_id}/episodes
+            +GET /api/v1/session/{session_id}/episodes/{episode_id}/status
+            +DELETE /api/v1/session/{session_id}/episodes/{episode_id}
+            +GET /api/v1/session/{session_id}/episodes/{episode_id}/task
+            +GET /api/v1/session/{session_id}/episodes/{episode_id}/policy
+            +GET /api/v1/session/{session_id}/episodes/{episode_id}/steps
+            +POST /api/v1/session/{session_id}/episodes/{episode_id}/transcript
+            +GET/POST /api/v1/session/{session_id}/episodes/{episode_id}/submission
+            +GET/POST /api/v1/session/{session_id}/episodes/{episode_id}/messages/inject
+            +GET /api/v1/session/{session_id}/episodes/{episode_id}/submission-evaluation-criteria
+            +GET /api/v1/session/{session_id}/episodes/{episode_id}/subtask-evaluation-criteria
+            +GET /api/v1/session/{session_id}/evaluations/{episode_id}
+            +GET /api/v1/session/{session_id}/evaluations
+            +GET /api/v1/session/{session_id}/evaluations/summary
+            +POST /api/v1/session/{session_id}/evaluations/upload
+            +GET /api/v1/tasks
+            +GET /api/v1/templates/{template_path}
+            +GET /api/v1/health
         }
 
         class SessionMCPAPI {
@@ -91,19 +103,21 @@ package "Domain Server Core" {
             +mcp_server: Optional[FastMCP]
             +tool_generator: MCPToolGenerator
             --
-            +start_mcp_server(): void
-            +shutdown_mcp_server(): void
-            +handle_list_tools(): List[MCPTool]
-            +handle_call_tool(): MCPResult
-            +_get_session_from_headers(): Optional[str]
-            +_convert_action_parameters(action_name: str, arguments: Dict): Action
-            +_convert_command_result_to_mcp(result: CommandResult): List[MCPContent]
+            +async start_mcp_server(): void
+            -async _get_headers(): RequestHeaders
+            --
+            **MCP Headers Required**
+            +X-SABER-Session-ID: Optional[str]
+            +X-SABER-Episode-ID: Optional[str]
+            +X-SABER-Orchestration-Env: str (REQUIRED)
+            +X-SABER-Task-ID: Optional[str]
         }
     }
 
     class ClientSession {
         +session_id: str
         +client_id: str
+        +creating_episode_ids: List[str]
         +active_episode_ids: List[str]
         +episode_history: List[str]
         +task_queue: List[str]
@@ -113,8 +127,11 @@ package "Domain Server Core" {
         +context: Dict[str, Any]
         --
         +update_activity(): void
+        +add_creating_episode(episode_id: str): void
+        +move_to_active_episode(episode_id: str): void
         +add_active_episode(episode_id: str): void
         +remove_active_episode(episode_id: str): void
+        +remove_creating_episode(episode_id: str): void
         +complete_episode(episode_id: str): void
         +add_task_to_queue(task_id: str): void
         +get_next_task(): Optional[str]
@@ -139,6 +156,7 @@ package "Benchmark Management" {
         +get_task(task_id: str): Task
         +get_subtask(task_id: str, subtask_id: str): SubTask
         +list_tasks(): List[Dict[str, Any]]
+        +get_benchmark_info(): BenchmarkInfo
         +get_benchmark_config(): Dict[str, Any]
         +get_episode_config(task_id: str): Dict[str, Any]
         +list_benchmark_tasks(): List[Dict[str, Any]]
@@ -171,8 +189,13 @@ package "Benchmark Management" {
         +execution_config: Dict[str, Any]
         +episode_config: Dict[str, Any]
         +benchmark_config: Dict[str, Any]
-        +evaluation_config: Dict[str, Any]
+        +submission_evaluation_config: Dict[str, Any]
+        +step_evaluation_config: Optional[Dict[str, Any]]
         +depends_on_task_id: Optional[str]
+        +role: Optional[str]
+        +initial_files: Dict[str, str]
+        +is_template: bool
+        +dependency_template: Optional[str]
         --
         +add_subtask(subtask: SubTask): void
         +get_subtask_by_id(subtask_id: str): Optional[SubTask]
@@ -189,22 +212,24 @@ package "Episode Management" {
         +session_episodes: Dict[str, List[str]]
         +completed_episodes: Dict[str, Episode]
         +episode_configs: Dict[str, Dict[str, Any]]
+        +connection_manager: ConnectionManager
+        +transcript_coordinator: TranscriptCoordinator
         --
         +get_episode_by_id(episode_id: str): Optional[Episode]
-        +get_session_episodes(session_id: str, include_completed: bool): List[Episode]
+        +get_session_episodes(session_id: str, include_completed?: bool): List[Episode]
         +get_active_episodes_for_session(session_id: str): List[Episode]
         +add_episode_to_session(session_id: str, episode: Episode): void
         +complete_episode(episode_id: str): Optional[Episode]
         +mark_episode_ready(episode_id: str): void
         +mark_episode_failed_creation(episode_id: str, error_message: str): void
         +find_available_episode_for_dependency(session_id: str, target_task_id: str, dependent_task_id: str): Optional[str]
-        +async find_available_episode_for_dependency_with_retry(session_id: str, target_task_id: str, dependent_task_id: str, max_wait_seconds: float, retry_interval: float, max_retry_interval: float): Optional[str]
+        +async find_available_episode_for_dependency_with_retry(...): Optional[str]
         +attach_episode_to_episode(dependent_episode_id: str, target_episode_id: str): void
         +async configure_for_task(episode_id: str, task: Task): void
         +should_terminate_episode(episode_id: str): tuple[bool, str]
-        +start_episode(session_id: str, task_id: str, initial_context: Optional[Dict], task: Optional[Task]): Episode
+        +start_episode(session_id: str, task_id: str, initial_context?: Dict, task?: Task): Episode
         +step(episode_id: str, action: Action, command_result: CommandResult): StepResult
-        +end_episode(episode_id: str, reason: str, result: Optional[str]): Episode
+        +async end_episode(episode_id: str, reason: str, result?: str): Episode
         +get_episode_state(episode_id: str): Optional[EpisodeState]
         +create_step(episode: Episode, action: Action, response: CommandResult): Step
         +update_episode_state(episode: Episode, step: Step): void
@@ -223,27 +248,34 @@ package "Episode Management" {
         +context: Dict[str, Any]
         +metadata: Dict[str, Any]
         +completion_reason: Optional[str]
+        +creation_error: Optional[str]
         +max_steps: int
         +submission: Optional[str]
         +eval_submission: Optional[EvalSubmission]
-        +depends_on_task_id: Optional[str]
         +attached_to_episode_id: Optional[str]
         +attached_episode_ids: List[str]
+        -_context_lock: asyncio.Lock
         --
         +add_step(step: Step): void
+        +async update_context_atomic(updates: Dict[str, Any]): void
         +get_executed_commands(): List[str]
         +attach_to_episode(target_episode_id: str): void
         +add_attached_episode(episode_id: str): void
         +has_attached_episode_with_task(task_id: str, episodes_by_id: Dict): bool
+        +with_step_range(start_index: int, end_index: int): Episode
         +is_complete: bool (property)
+        +is_ready: bool (property)
         +duration: Optional[float] (property)
     }
 
     enum EpisodeState {
+        CREATING
         CREATED
+        READY
         ACTIVE
         COMPLETED
         FAILED
+        FAILED_CREATION
         TIMEOUT
         RESET
     }
@@ -255,54 +287,71 @@ package "Command Execution Framework" {
         +_config_dir: str
         +_configuration: Dict[str, Any]
         +_executor_factory: Optional[ExecutorFactory]
-        +_sandbox_manager: Optional[SandboxEnvironmentManager]
+        +_sandbox_environment_manager: Optional[SandboxEnvironmentManager]
         +_permanent_environment_manager: Optional[PermanentEnvironmentManager]
+        +_file_copier: Optional[Any]
         +_active_executions: Dict[str, int]
         +_max_concurrent_per_episode: int
         +_debug_mode: bool
         --
-        +step(action: Action, context?: Dict): CommandResult
-        +configure_for_task(episode_id: str, task: Task, session_id?: str, target_episode_id?: str): void
+        +async step(action: Action, context?: Dict): CommandResult
+        +configure_for_task_async(episode_id: str, task: Task, session_id?: str, target_episode_id?: str): void
+        +async wait_for_episode_healthy(episode_id: str, timeout_seconds?: int): void
+        +get_execution_container_name(episode_id: str): Optional[str]
+        +async copy_initial_files_to_episode(episode_id: str, task: Task): void
         +initialize_permanent_environment_manager(config: Dict): void
-        +cleanup_episode(episode_id: str, context?: Dict): bool
+        +start_permanent_environment(environment_spec: Any): void
+        +async stop_permanent_environment(): void
+        +is_permanent_environment_running(): bool
+        +async cleanup_episode(episode_id: str, context?: Dict): bool
+        +cleanup_session(session_id: str, context?: Dict): bool
+        +async cleanup_all_containers(context?: Dict): Dict[str, Any]
         +is_sandbox_ready(): bool
-        +to_mcp_tools(episode_id?: str): List[Dict[str, Any]]
-        +get_executor(executor_type: str, episode_id?: str): DockerExecutor
+        +to_mcp_tools(episode_id?: str): List[mcp_types.Tool]
+        +get_executor(executor_type: str, episode_id?: str): CommandExecutor
         +get_available_executors(episode_id?: str): List[str]
-        +get_execution_stats(): Dict[str, Any]
         +list_commands(episode_id?: str): List[Dict[str, Any]]
+        +property debug_mode: bool
     }
 
     class ExecutorFactory {
         +_sandbox_manager: SandboxEnvironmentManager
         +_configuration: Dict[str, Any]
-        +_executor_instances: Dict[str, DockerExecutor]
+        +_executor_instances: Dict[str, CommandExecutor]
         +_all_available_executors: List[str]
         +_episode_configurations: Dict[str, Dict[str, Any]]
+        +_session_manager: Optional[Any]
         --
         +register_episode_configuration(episode_id: str, allowed_executors?: List[str], episode_config?: Dict): void
         +unregister_episode_configuration(episode_id: str): void
         +get_executor(executor_type: str, episode_id?: str): CommandExecutor
         +get_available_executors(episode_id?: str): List[str]
-        +to_mcp_tools(episode_id?: str): List[Dict[str, Any]]
+        +to_mcp_tools(episode_id?: str): List[mcp_types.Tool]
     }
 
-    class BashExecutor {
+    class BashExecutor extends DockerExecutor {
         +_sandbox_env_manager: SandboxEnvironmentManager
         +_config: Dict[str, Any]
         --
-        +execute(action: Action): CommandResult
+        +async execute(action: Action): CommandResult
         +validate_parameters(action: Action): ValidationResult
-        +to_mcp_schema(): Dict[str, Any]
+        +to_mcp_schema(): MCPToolSchema
     }
 
-    class PythonExecutor {
+    class PythonExecutor extends DockerExecutor {
         +_sandbox_env_manager: SandboxEnvironmentManager
         +_config: Dict[str, Any]
         --
-        +execute(action: Action): CommandResult
+        +async execute(action: Action): CommandResult
         +validate_parameters(action: Action): ValidationResult
-        +to_mcp_schema(): Dict[str, Any]
+        +to_mcp_schema(): MCPToolSchema
+    }
+
+    abstract class DockerExecutor {
+        --
+        +{abstract} async execute(action: Action): CommandResult
+        +{abstract} validate_parameters(action: Action): ValidationResult
+        +{abstract} to_mcp_schema(): MCPToolSchema
     }
 
     class SandboxEnvironmentManager {
@@ -311,33 +360,39 @@ package "Command Execution Framework" {
         +episode_compose_files: Dict[str, Path]
         +domain: str
         +environments_base_path: Path
+        +logging_config: Dict[str, Any]
+        -_is_ready: bool
         --
-        +create_episode_environment(episode_id: str, sandbox_environment: str, target_episode_id?: str): bool
+        +is_ready(): bool
+        +wait_for_ready(timeout?: int): bool
+        +create_episode_environment_async(episode_id: str, sandbox_environment: str, target_episode_id?: str): bool
         +get_episode_environment(episode_id: str): Optional[ComposeOrchestrator]
-        +stop_episode_environment(episode_id: str): bool
-        +list_active_episodes(): List[str]
+        +async stop_episode_environment(episode_id: str): bool
+        +get_episode_status(episode_id: str): Optional[Dict[str, Any]]
     }
 
     class PermanentEnvironmentManager {
-        +permanent_config: Dict[str, Any]
-        +permanent_services: Dict[str, PermanentService]
-        +permanent_network: DockerNetwork
+        +config: Dict[str, Any]
+        +domain: str
+        +compose_project_name: str
+        +orchestrator: ComposeOrchestrator
+        -_is_running: bool
+        -_compose_file_path: Optional[Path]
         --
-        +start_permanent_services(env_spec: PermanentEnvironmentSpec): void
-        +stop_permanent_services(): void
-        +get_service_endpoints(service_name: str): ServiceEndpoints
-        +connect_sandbox_to_permanent(sandbox_env: ComposeOrchestrator, episode_id: str): void
-        +is_service_healthy(service_name: str): bool
-        +list_permanent_services(): List[str]
+        +start_permanent_environment_from_file(compose_file_path: Path): void
+        +async stop_permanent_environment(): void
+        +is_running(): bool
     }
 }
 
 package "Policy and Evaluation" {
 
     class PolicyManager {
-        +domain_policy: PolicyDocument
+        +domain_name: str
+        -_episode_policies: Dict[str, PolicyDocument]
         --
-        +get_policy(): PolicyDocument
+        +set_episode_policy(episode_id: str, prompt: str): void
+        +get_policy(episode_id?: str): PolicyDocument
     }
 
     class PolicyDocument {
@@ -347,41 +402,26 @@ package "Policy and Evaluation" {
     }
 
     class EvaluationManager {
-        +evaluators: Dict[str, BaseEvaluator]
         +evaluation_configs: Dict[str, EvaluationConfig]
         +config_dir: Optional[str]
         +store: EvaluationStore
         --
         +configure_for_task(task: Task): void
-        +evaluate_episode(episode: Episode, task: Task): EvaluationResult
         +get_evaluation_config(task_id: str): Optional[EvaluationConfig]
-        +get_stored_evaluation(episode_id: str): Optional[EvaluationResult]
-        +list_evaluations(filters?: Dict): List[EvaluationResult]
-        +validate_evaluation_config(config: Dict): bool
+        +async log_session_start(session_id: str, client_id: str): void
+        +async log_session_end(session_id: str): void
+        +async log_episode_start(session_id: str, episode_id: str, task_id: str): void
+        +async log_episode_end(session_id: str, completion_reason: str): void
+        +async log_action(session_id: str, episode_id: str, action: Any, result: Any): void
     }
 
-    class ActionTracker {
-        +session_actions: Dict[str, List[ActionRecord]]
+    class SessionEvaluationService {
+        +store: EvaluationStore
         --
-        +record_action(): void
-        +get_session_actions(): List[ActionRecord]
-    }
-
-    class ActionRecord {
-        +session_id: str
-        +command_name: str
-        +parameters: Dict[str, Any]
-        +result: CommandResult
-        +timestamp: datetime
-        --
-        +to_dict(): Dict[str, Any]
-    }
-
-    class TrajectoryStore {
-        +storage_backend: StorageBackend
-        --
-        +save_trajectory(): void
-        +load_trajectory(): List[ActionRecord]
+        +async get_evaluation(session_id: str, episode_id: str): EvaluationResult
+        +async list_session_evaluations(session_id: str, task_id?: str): List[EvaluationResult]
+        +async get_session_summary(session_id: str): Dict[str, Any]
+        +async validate_session_access(session_id: str): bool
     }
 
     class StepResult {
@@ -416,27 +456,28 @@ ExecutionManager ..> PermanentEnvironmentManager : optional
 
 ExecutorFactory ..> BashExecutor : creates
 ExecutorFactory ..> PythonExecutor : creates
+BashExecutor --|> DockerExecutor
+PythonExecutor --|> DockerExecutor
 
 PolicyManager *-- PolicyDocument
-EvaluationManager ..> ActionTracker : legacy (stub)
-EvaluationManager ..> TrajectoryStore : legacy (stub)
-ActionTracker *-- ActionRecord
+EvaluationManager o-- SessionEvaluationService : provides store
+BenchmarkManager *-- BenchmarkConfigLoader : uses
+BenchmarkManager *-- PromptGenerator : uses
+EpisodeManager *-- ConnectionManager : uses
+EpisodeManager *-- TranscriptCoordinator : uses
 
 note top of SessionManager
 **SABER Domain Server & Session Manager**
-- Hosts one security domain (scalable to multiple instances)
-- Manages multiple concurrent client sessions with timeout and cleanup
-- Multi-episode support: sessions can have multiple active episodes simultaneously
-- Single point of access for all client interactions via REST and MCP APIs
-- Orchestrates task execution and command processing through ExecutionManager
-- Handles server lifecycle (start/shutdown) with graceful cleanup
-- Coordinates all server components with proper initialization order
-- Built for horizontal scaling with load balancing capabilities
-- Session timeout management with automatic cleanup of inactive sessions
+- Central orchestrator hosting one security domain with async/await architecture
+- Manages multiple concurrent client sessions with automatic timeout and cleanup
+- Multi-episode support with episode creation semaphores for resource management
+- Background episode finalization with semaphore-limited concurrent health checks
 - Dual protocol handlers: REST API for session/episode management, MCP API for tool execution
-- Episode-scoped execution: all operations now reference episode_id explicitly
-- Enhanced evaluation capabilities with SessionEvaluationService
-- Manifest support for health endpoints with domain metadata
+- Episode-scoped execution: all operations reference episode_id explicitly
+- Health monitoring with manifest information and permanent environment checks
+- Client-side evaluation: server stores results, client performs LLM judge evaluation
+- Supports creating/active/completed episode state tracking
+- Session timeout management with automatic cleanup of inactive sessions
 - Permanent environment initialization through ExecutionManager
 end note
 
@@ -446,7 +487,7 @@ note left of SessionMCPAPI
 - Dynamically discovers tools from ExecutionManager via MCPToolGenerator
 - Maps MCP tool calls to SessionManager command execution using headers
 - Session context AND episode context obtained from HTTP headers
-- Headers: X-SABER-Session-ID, X-SABER-Episode-ID, X-SABER-Orchestration-Environment
+- Headers: X-SABER-Session-ID, X-SABER-Episode-ID, X-SABER-Orchestration-Env
 - ONLY handles tool discovery and execution via MCP protocol
 - Complements REST API which handles all other operations
 - Uses header-based session/episode mapping instead of maintaining active state
@@ -456,29 +497,30 @@ end note
 note right of SessionRestAPI
 **REST Protocol Handler**
 - FastAPI-based REST endpoints for session and episode management
-- Handles session lifecycle, episode start/end, policy access, benchmark info
-- Episode-scoped operations: most endpoints now require episode_id
-- OpenAPI documentation generation with domain-specific titles
-- Includes debug endpoints for cleanup history and session statistics
-- Enhanced evaluation endpoints: get/list/override evaluations
+- Session lifecycle: create/terminate sessions
+- Episode lifecycle: create/status/end episodes with async readiness waiting
+- Episode data: task, policy, steps, submission, transcript
+- Message injection for orchestrated task coordination
+- Evaluation endpoints: criteria retrieval, results, summaries
+- Template content retrieval for client-side prompt rendering
 - File upload support for evaluation context
-- NO benchmark orchestration endpoints - that's client responsibility
+- All /api/v1 prefixed endpoints
+- NO benchmark orchestration - client responsibility
 - Delegates all business logic to SessionManager
 end note
 
 note top of BenchmarkManager
 **Task Definition Manager with Prompt Generation**
 - Focuses purely on task definition management and YAML parsing
-- NO server-side benchmark orchestration - that's client responsibility
-- Provides task lookup by ID and task configuration access
-- BenchmarkInfo is pure data container for client orchestration
+- NO server-side benchmark orchestration - client responsibility
 - Task objects contain execution_config, episode_config, evaluation_config
-- Three-prompt system: instruction, assistant, submit templates
+- Four-prompt system: instruction, assistant, submit, continue templates
 - Validates all templates at startup (fail-fast)
 - Environment can be string reference or dict config
 - BenchmarkConfigLoader handles YAML parsing from directory structure
-- Supports episode configuration extraction for EpisodeManager setup
-- Supports episode dependency tracking via depends_on_task_id
+- PromptGenerator handles Jinja2 template rendering
+- Supports template tasks with is_template and dependency_template fields
+- Role-based task configuration for orchestrated evaluations
 - Injects judge prompt renderers for llm_judge evaluation tasks
 end note
 
@@ -516,16 +558,16 @@ See command_execution_architecture.puml for complete detailed design.
 end note
 
 note bottom of EvaluationManager
-**Production Evaluation Implementation**
-- Full evaluation capabilities with multiple strategies
-- Strategy support: static (flag-based), llm_judge (LLM-as-judge)
+**Client-Side Evaluation Storage**
+- Server is now dumb storage only - evaluation happens client-side
 - Task-based configuration with fail-fast validation
 - Evaluation storage via EvaluationStore abstraction
-- Episode-based evaluation with rich submission data
-- Judge prompt rendering integration with BenchmarkManager
-- Evaluation criteria retrieval and override support
+- SessionEvaluationService provides retrieval operations
+- Strategy support: static (flag-based), llm_judge (LLM-as-judge)
+- Evaluation criteria retrieval for client-side rendering
+- No server-side evaluation execution - client performs all scoring
+- Logging of session/episode lifecycle events
 - No backwards compatibility - fail fast on missing config
-- ActionTracker and TrajectoryStore shown for legacy reference only
 end note
 
 @enduml

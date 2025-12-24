@@ -70,10 +70,12 @@ package "SABER Server Side" {
         +shutdown_event: asyncio.Event
         +manifest: Optional[Dict[str, Any]]
         +manifest_path: Optional[str]
+        -_episode_creation_lock: asyncio.Semaphore
+        -_episode_finalization_tasks: Dict[str, asyncio.Task]
+        -_finalization_semaphore: asyncio.Semaphore
         --
         +async create_session(client_id: str): ClientSession
         +async terminate_session(session_id: str, reason?: str): void
-        +async initiate_episode(session_id: str, task_id: str): Episode
         +async start_episode(session_id: str, task_id: str): Episode
         +async end_episode(episode_id: str, session_id: str, reason?: str, submission?: EvalSubmission): EpisodeEndResponse
         +async execute_action(session_id: str, episode_id: str, action: Action): CommandResult
@@ -82,6 +84,8 @@ package "SABER Server Side" {
         +get_benchmark_info(): BenchmarkInfo
         +get_evaluation_service(): SessionEvaluationService
         +get_health_metadata(): Dict[str, Any]
+        +async start_server(): void
+        +async shutdown(): void
         +async _cleanup_inactive_sessions(): void
         +_check_permanent_environment_health(): Dict[str, Any]
     }
@@ -89,18 +93,21 @@ package "SABER Server Side" {
     class BenchmarkManager {
         +domain: str
         +config_dir: Path
+        +tasks_dir_path: Path
         +tasks: Dict[str, Task]
         +benchmark_config: Dict[str, Any]
-        +dependency_configs: Dict[str, DependencyConfig]
+        +config_loader: BenchmarkConfigLoader
+        +prompt_generator: PromptGenerator
         --
         +get_task(task_id: str): Task
         +list_tasks(): List[Dict[str, Any]]
+        +get_benchmark_info(): BenchmarkInfo
         +get_benchmark_config(): Dict[str, Any]
-        +get_dependency_config(task_id: str): DependencyConfig
+        +get_dependency_config(): Dict[str, float]
         +list_benchmark_tasks(): List[Dict[str, Any]]
-        +_load_tasks(): void
-        +_load_benchmark_config(): void
-        +_load_dependency_configs(): void
+        +get_task_prompt(task_id: str, prompt_type?: str): str
+        +load_tasks_from_directory(): void
+        +validate_all_task_templates(): void
     }
 
     class EpisodeManager {
@@ -108,21 +115,23 @@ package "SABER Server Side" {
         +session_episodes: Dict[str, List[str]]
         +completed_episodes: Dict[str, Episode]
         +episode_configs: Dict[str, Dict[str, Any]]
+        +connection_manager: ConnectionManager
+        +transcript_coordinator: TranscriptCoordinator
         --
         +get_episode_by_id(episode_id: str): Optional[Episode]
-        +get_session_episodes(session_id: str, include_completed: bool): List[Episode]
+        +get_session_episodes(session_id: str, include_completed?: bool): List[Episode]
         +get_active_episodes_for_session(session_id: str): List[Episode]
         +add_episode_to_session(session_id: str, episode: Episode): void
         +complete_episode(episode_id: str): Optional[Episode]
         +mark_episode_ready(episode_id: str): void
         +mark_episode_failed_creation(episode_id: str, error_message: str): void
         +find_available_episode_for_dependency(session_id: str, target_task_id: str, dependent_task_id: str): Optional[str]
-        +async find_available_episode_for_dependency_with_retry(session_id: str, target_task_id: str, dependent_task_id: str, max_wait_seconds: float, retry_interval: float, max_retry_interval: float): Optional[str]
+        +async find_available_episode_for_dependency_with_retry(session_id: str, target_task_id: str, dependent_task_id: str, ...): Optional[str]
         +attach_episode_to_episode(dependent_episode_id: str, target_episode_id: str): void
         +async configure_for_task(episode_id: str, task: Task): void
-        +start_episode(session_id: str, task_id: str, initial_context: Optional[Dict], task: Optional[Task]): Episode
+        +start_episode(session_id: str, task_id: str, initial_context?: Dict, task?: Task): Episode
         +step(episode_id: str, action: Action, command_result: CommandResult): StepResult
-        +end_episode(episode_id: str, reason: str, result: Optional[str]): Episode
+        +async end_episode(episode_id: str, reason: str, result?: str): Episode
         +cleanup_session(session_id: str): void
     }
 
@@ -144,46 +153,47 @@ package "SABER Server Side" {
         +async copy_initial_files_to_episode(episode_id: str, task: Task): void
         +initialize_permanent_environment_manager(config: Dict[str, Any]): void
         +start_permanent_environment(environment_spec: Any): void
-        +stop_permanent_environment(): void
+        +async stop_permanent_environment(): void
         +is_permanent_environment_running(): bool
-        +cleanup_episode(episode_id: str, context?: Dict): bool
+        +async cleanup_episode(episode_id: str, context?: Dict): bool
         +cleanup_session(session_id: str, context?: Dict): bool
-        +cleanup_all_containers(context?: Dict): Dict[str, Any]
+        +async cleanup_all_containers(context?: Dict): Dict[str, Any]
         +is_sandbox_ready(): bool
         +to_mcp_tools(episode_id?: str): List[mcp_types.Tool]
-        +get_executor(executor_type: str, episode_id?: str): DockerExecutor
+        +get_executor(executor_type: str, episode_id?: str): CommandExecutor
         +get_available_executors(episode_id?: str): List[str]
         +list_commands(episode_id?: str): List[Dict[str, Any]]
-        +debug_mode(): bool
+        +property debug_mode: bool
     }
 
     class PolicyManager {
         +domain_name: str
-        +policy_document: PolicyDocument
+        -_episode_policies: Dict[str, PolicyDocument]
         --
-        +get_policy(): PolicyDocument
-        +_load_policy(): PolicyDocument
+        +set_episode_policy(episode_id: str, prompt: str): void
+        +get_policy(episode_id?: str): PolicyDocument
     }
 
     class EvaluationManager {
         +store: EvaluationStore
+        +evaluation_configs: Dict[str, EvaluationConfig]
+        +config_dir: Optional[str]
         --
-        +log_session_start(session_id: str, client_id: str): void
-        +log_session_end(session_id: str): void
-        +log_episode_start(session_id: str, episode_id: str, task_id: str): void
-        +log_episode_end(session_id: str, episode_id: str, reason: str): void
-        +log_action(session_id: str, episode_id: str, action: Action, result: CommandResult): void
+        +configure_for_task(task: Task): void
+        +async log_session_start(session_id: str, client_id: str): void
+        +async log_session_end(session_id: str): void
+        +async log_episode_start(session_id: str, episode_id: str, task_id: str): void
+        +async log_episode_end(session_id: str, completion_reason: str): void
+        +async log_action(session_id: str, episode_id: str, action: Any, result: Any): void
     }
 
     class SessionEvaluationService {
         +store: EvaluationStore
         --
-        +get_evaluation_criteria(session_id: str, episode_id: str): EvaluationCriteriaResponse
-        +get_evaluation(session_id: str, episode_id: str): EvaluationResponse
-        +list_evaluations(session_id: str, task_id: Optional[str]): EvaluationListResponse
-        +get_evaluation_summary(session_id: str): EvaluationSummaryResponse
-        +override_evaluation(session_id: str, episode_id: str, request: EvaluationOverrideRequest): EvaluationOverrideResponse
-        +upload_evaluation_file(session_id: str, episode_id: str, file: UploadFile): EvaluationFileUploadResponse
+        +async get_evaluation(session_id: str, episode_id: str): EvaluationResult
+        +async list_session_evaluations(session_id: str, task_id?: str): List[EvaluationResult]
+        +async get_session_summary(session_id: str): Dict[str, Any]
+        +async validate_session_access(session_id: str): bool
     }
 
     class SessionRestAPI {
@@ -192,8 +202,8 @@ package "SABER Server Side" {
         +port: int
         +app: FastAPI
         --
-        +_setup_routes(): void
-        +start_server(): void
+        -_setup_routes(): void
+        +async start_server(): void
     }
 
     class SessionMCPAPI {
@@ -203,9 +213,8 @@ package "SABER Server Side" {
         +mcp_server: Optional[FastMCP]
         +tool_generator: MCPToolGenerator
         --
-        +_get_headers(): RequestHeaders
-        +_setup_mcp_handlers(): void
-        +start_server(): void
+        -async _get_headers(): RequestHeaders
+        +async start_mcp_server(): void
     }
 }
 
@@ -234,68 +243,77 @@ package "SABER Client Side - Inspect AI Integration" {
     }
 
     class SABERSandboxEnvironment {
-        +domain: str
-        +session_manager: ClientSessionManager
-        +episode_id: Optional[str]
+        +_domain_slug: str
+        +_domains_root: Path
+        +_rest_port: int
+        +_mcp_port: int
+        +_mcp_timeout: float
+        +_episode_id: Optional[str]
+        +_task_id: Optional[str]
+        +_session_manager: Optional[ClientSessionManager]
+        +_episode_manager: Optional[EpisodeLifecycleManager]
+        -_episode_semaphore: asyncio.Semaphore <<class>>
         --
-        +setup(): SandboxEnvironmentSpec
-        +exec(): ExecResult
-        +__call__(): tuple
-        --
-        **Sandbox Lifecycle**
-        +_start_domain_server()
-        +_create_episode()
-        +_cleanup_episode()
+        +async task_init(task_name: str, config?: BaseModel): void <<class>>
+        +async sample_init(task_name: str, config?: BaseModel, metadata: dict): dict[str, SABERSandboxEnvironment] <<class>>
+        +async sample_cleanup(task_name: str, config?: BaseModel, environments: dict, interrupted: bool): void <<class>>
+        +async task_cleanup(task_name: str, config?: BaseModel, cleanup: bool): void <<class>>
+        +async exec(*args, **kwargs): Any
+        +default_concurrency(): Optional[int] <<class>>
+        +config_files(): list[str] <<class>>
     }
 
-    class create_saber_dataset {
-        +session_manager: ClientSessionManager
-        +task_filter: Optional[str]
+    class create_saber_dataset <<function>> {
         --
         **Dataset Factory**
-        +Fetches tasks from server
-        +Creates inspect_ai.Sample instances
+        +async create_saber_dataset(tasks_data: List[BenchmarkTask]): SABERDataset
+        +Converts BenchmarkTask to inspect_ai.Sample
+        +Supports single and orchestrated tasks
+        +Preserves orchestration boundaries in slicing
     }
 
-    class saber_scorer {
-        +session_manager: ClientSessionManager
+    class saber_scorer <<function>> {
         --
-        **Scorer Implementation**
-        +Retrieves evaluation from server
-        +Creates inspect_ai.Score
+        **Scorer Implementation (@scorer decorator)**
+        +saber_scorer(): Scorer
+        +Client-side evaluation architecture
+        +LLM judge execution with Jinja2 templates
+        +Submits results to server
     }
 
     class ClientSessionManager {
         +config: SessionManagerConfig
-        +rest_client: SABERRestClient
-        +_current_session_id: Optional[str]
+        +base_url: str
+        +client_id: str
+        +timeout: float
+        -_current_session_id: Optional[str]
         --
-        +create_session(): str
-        +terminate_session(): bool
-        +create_episode(): EpisodeCreateResponse
-        +get_tasks(): List[TaskInfo]
-        +get_policy_response(): PolicyResponse
-        +submit_evaluation(): EvaluationResponse
+        +async create_session(): str
+        +async terminate_session(session_id: str): void
+        +async create_episode(session_id: str, task_id: str): EpisodeCreateResponse
+        +async create_episode_and_wait(session_id: str, task_id: str, ...): EpisodeCreateResponse
+        +async get_policy_response(session_id: str, episode_id: str): Optional[PolicyResponse]
+        +async get_tasks(task_ids: List[str]): List[TaskInfo]
+        -async _retry_request(operation_name: str, request_func: Callable, max_retries?: int): tuple
     }
 
     class SABERRestClient {
-        +base_url: str
-        +timeout: float
+        +saber_server_url: str
+        +request_timeout: float
         --
-        +get_benchmark_info(): BenchmarkInfo
-        +create_session(): SessionCreateResponse
-        +create_episode(): EpisodeCreateResponse
-        +get_evaluation(): EvaluationResponse
-        +health_check(): Dict[str, Any]
+        +async get_benchmark_info(): BenchmarkInfo
+        +async health_check(): Dict[str, Any]
+        +async get_evaluation(session_id: str, episode_id: str): EvaluationResponse
+        +async get_evaluation_summary(session_id: str): EvaluationSummaryResponse
     }
 
     class DomainController {
-        +domain_slug: str
-        +process: Optional[subprocess.Popen]
+        -_domains_root: Path
+        -_orchestrator: DomainOrchestrator
         --
-        +start_server(): void
-        +stop_server(): void
-        +health_check(): bool
+        +async check_running_domain(rest_port?: int, mcp_port?: int): Optional[str]
+        +async start(domain: str, rest_port?: int, mcp_port?: int, log_level?: str, build?: str, rebuild?: str): DomainContext
+        +async stop(domain: str): void
     }
 }
 
@@ -309,27 +327,30 @@ SessionManager *-- EvaluationManager
 SessionManager *-- SessionEvaluationService
 SessionManager *-- SessionRestAPI
 SessionManager *-- SessionMCPAPI
-EvaluationManager *-- SessionEvaluationService : provides store
+EvaluationManager o-- SessionEvaluationService : provides store
+BenchmarkManager *-- BenchmarkConfigLoader : uses
+BenchmarkManager *-- PromptGenerator : uses
+EpisodeManager *-- ConnectionManager : uses
+EpisodeManager *-- TranscriptCoordinator : uses
 
 ' Client Internal Relationships
 DomainTask ..> create_domain_task : uses
-create_domain_task *-- SABERSandboxEnvironment : creates
+create_domain_task ..> SABERSandboxEnvironment : creates sandbox config
 create_domain_task ..> create_saber_dataset : uses
 create_domain_task ..> saber_scorer : uses
 create_domain_task ..> DomainController : manages
 
-SABERSandboxEnvironment *-- ClientSessionManager : uses
-create_saber_dataset ..> ClientSessionManager : uses
-saber_scorer ..> ClientSessionManager : uses
+SABERSandboxEnvironment o-- ClientSessionManager : uses
+SABERSandboxEnvironment o-- EpisodeLifecycleManager : uses
+create_saber_dataset ..> BenchmarkTask : converts to Sample
 
-ClientSessionManager *-- SABERRestClient : uses
-DomainController ..> SessionManager : launches/manages
+DomainController *-- DomainOrchestrator : uses
 
 ' Client-Server Communication
 ClientSessionManager ..> SessionRestAPI : "HTTP REST API calls"
-SABERSandboxEnvironment ..> SessionMCPAPI : "MCP tool execution"
+SABERSandboxEnvironment ..> SessionMCPAPI : "MCP tool execution (via Inspect AI)"
 SABERRestClient ..> SessionRestAPI : "Direct HTTP calls"
-DomainController ..> SessionManager : "Process management"
+DomainController ..> SessionManager : "Docker Compose lifecycle"
 
 note top of SessionManager
 **SABER Domain Server & Session Manager - Current Implementation**
@@ -337,10 +358,10 @@ note top of SessionManager
 - Manages multiple concurrent client sessions with automatic timeout and cleanup via asyncio tasks
 - Dual protocol support: SessionRestAPI (FastAPI) for session/episode management, SessionMCPAPI (FastMCP) for tool execution
 - Integrates ExecutionManager for Docker sandbox command execution with security validation
-- Supports multi-episode sessions with cascade termination for dependent episodes
+- Supports multi-episode sessions with episode creation semaphores for resource management
+- Background episode finalization with semaphore-limited concurrent health checks
 - Health monitoring with manifest information and permanent environment checks
-- Built for horizontal scaling with stateless design and proper async resource management
-- Enhanced evaluation support with SessionEvaluationService for criteria retrieval and file uploads
+- Client-side evaluation: server stores results, client performs LLM judge evaluation
 end note
 
 note top of ExecutionManager
@@ -377,26 +398,25 @@ note top of ClientSessionManager
 
 Manages HTTP session lifecycle with SABER server:
 - Session creation and episode management via REST API
-- Task and policy information retrieval
-- Evaluation submission and retrieval
-- MCP tool execution handled by Inspect AI's mcp_server_http()
+- Episode creation with async wait for readiness
+- Task and policy information retrieval with retry logic
 - Fail-fast error handling with structured exceptions
-- Async context manager for proper resource cleanup
-- Used by SABERSandboxEnvironment, dataset, and scorer
+- Used by SABERSandboxEnvironment via EpisodeLifecycleManager
 
-No custom MCP client - Inspect AI handles MCP natively.
+Note: No direct REST client - uses aiohttp for HTTP calls.
+MCP tool execution handled by Inspect AI's mcp_server_http().
 end note
 
 note bottom of SABERSandboxEnvironment
 **SABER Sandbox Environment - Inspect AI Bridge**
 
 Implements Inspect AI SandboxEnvironment protocol:
-- Manages SABER domain server lifecycle
-- Creates and manages episodes per evaluation sample
-- Provides MCP tool execution via Inspect AI
-- Handles context injection for agent messages
-- Automatic episode cleanup on sample completion
+- Four-phase lifecycle: task_init → sample_init → sample_cleanup → task_cleanup
+- Class-level domain ownership with SandboxRegistry
+- Episode concurrency limiting via asyncio.Semaphore
+- Session and episode management delegated to lifecycle managers
 - Stores episode_id in Inspect AI's global store
+- MCP tool execution via Inspect AI's native mcp_server_http()
 
 This is the bridge between Inspect AI's agent framework
 and SABER's security testing infrastructure.

@@ -10,7 +10,6 @@ participant "SessionMCPAPI\n(FastMCP)" as MCP
 participant "SessionManager" as SM
 participant "ExecutionManager" as EM_EXEC
 participant "EpisodeManager" as EM_EP
-participant "MCPToolGenerator" as ToolGen
 
 == Session Initialization (REST First) ==
 Agent -> REST: POST /api/v1/session?client_id=client_id
@@ -19,9 +18,9 @@ SM -> REST: ClientSession
 REST -> Agent: session_id
 
 == Episode Creation (REST) ==
-Agent -> REST: POST /api/v1/episode/{session_id}?task_id=task_id
-REST -> SM: create_episode(session_id, task_id)
-SM -> EM_EP: start_episode(session_id, task_id, task)
+Agent -> REST: POST /api/v1/session/{session_id}/episodes?task_id=task_id
+REST -> SM: start_episode(session_id, task_id)
+SM -> EM_EP: create_episode(session_id, task_id)
 EM_EP -> SM: Episode
 SM -> REST: EpisodeCreateResponse
 REST -> Agent: episode_id
@@ -39,10 +38,9 @@ Agent -> InspectMCP: list_tools()
 InspectMCP -> MCP: handle_list_tools()
 MCP -> MCP: _get_headers()
 note right: Extract orchestration_env and episode context
-MCP -> SM: get_execution_manager()
+MCP -> SM: execution_manager.to_mcp_tools(episode_id)
 SM -> EM_EXEC: to_mcp_tools(episode_id)
-EM_EXEC -> ToolGen: get_available_executors()
-ToolGen -> EM_EXEC: dynamic_tool_schemas[]
+EM_EXEC -> EM_EXEC: executor_factory.get_all_mcp_tools()
 note right of EM_EXEC: Returns clean tool schemas:\n- python(code: str)\n- cli(command: str)\n- end_episode(submission?: str) [STANDALONE only]
 EM_EXEC -> MCP: executor_tools + conditional_hardcoded_tools
 MCP -> InspectMCP: mcp.types.Tool[]

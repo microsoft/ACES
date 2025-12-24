@@ -221,6 +221,7 @@ def main():
         # Build PlantUML command
         cmd = [
             "java",
+            "-Djava.awt.headless=true",
             "-DPLANTUML_LIMIT_SIZE=8192",
             "-jar", str(plantuml_jar),
             "-tpng",

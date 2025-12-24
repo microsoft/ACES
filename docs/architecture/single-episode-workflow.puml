@@ -62,7 +62,7 @@ Eval -> Handler: cleanup(state, session_id, semaphore)
 activate Handler
 
 Handler -> Session: end_episode(session_id, "ep_123")
-Session -> Server: POST /episodes/ep_123/end
+Session -> Server: DELETE /episodes/ep_123
 Server -> Container: docker stop cybench_001
 Container --> Server: Stopped
 Server --> Session: ✓ Ended

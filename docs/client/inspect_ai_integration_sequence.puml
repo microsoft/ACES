@@ -70,7 +70,7 @@ end note
 TaskFactory -> Dataset: create_saber_dataset(session_mgr, task_filter)
 activate Dataset
 Dataset -> SessionMgr: get_tasks()
-SessionMgr -> Server: GET /api/v1/benchmark
+SessionMgr -> Server: GET /api/v1/tasks
 Server --> SessionMgr: BenchmarkInfo
 SessionMgr --> Dataset: List[TaskInfo]
 
@@ -177,7 +177,7 @@ loop For each sample
 
     InspectCLI -> Sandbox: sample_cleanup()
     Sandbox -> SessionMgr: end_episode(episode_id)
-    SessionMgr -> Server: POST /api/v1/session/{id}/episodes/{eid}/end
+    SessionMgr -> Server: DELETE /api/v1/session/{id}/episodes/{eid}
     Server -> Server: Cleanup episode resources
     Server --> SessionMgr: Success
     SessionMgr --> Sandbox: Success
@@ -211,152 +211,6 @@ note over User
 - Per-sample scores
 - Aggregate metrics
 - Logs saved to .inspect_ai/logs/
-end note
-
-@enduml
-Orchestrator -> "inspect_ai": eval_async(tasks, model, **kwargs)
-
-loop for each task/episode
-    "inspect_ai" -> Agent: execute(state, tools)
-    note right of Agent
-      Agent retrieves from sample metadata:
-      - task_id
-      - instruction_prompt
-      - assistant_prompt
-      - submit_prompt
-    end note
-
-    Agent -> SessionMgr: create_episode(session_id, task_id)
-    SessionMgr -> Server: POST /api/v1/session/{session_id}/episodes?task_id={task_id}
-    Server -> Server: start_episode(session_id, task_id)
-    Server --> SessionMgr: EpisodeCreateResponse
-    note right of SessionMgr
-      EpisodeCreateResponse:
-      - episode_id
-      - task_id
-      - attached_to_episode_id (if dependency)
-      - created_at
-    end note
-
-    Agent -> Agent: mcp_server_http(url, headers)
-    activate MCP
-    note right of Agent
-      MCP headers include:
-      - session_id
-      - episode_id
-      - task_id
-      - orchestration_env: INSPECT
-    end note
-
-    Agent -> Agent: Create AgentPrompt(instructions, assistant_prompt, submit_prompt)
-
-    loop agent reasoning and tool execution
-        Agent -> MCP: list_tools() [via inspect_ai]
-        MCP -> Server: POST /api/v1/mcp/list_tools
-        Server -> ExecMgr: get_available_tools(episode_id)
-        activate ExecMgr
-        ExecMgr --> Server: List[ExecutorMetadata]
-        Server -> Server: to_mcp_tools()
-        Server --> MCP: mcp.ListToolsResult
-        MCP --> Agent: available_tools
-
-        Agent -> Agent: reasoning_step() [by base agent]
-        note right of Agent
-          Base agent implementation
-          (e.g., react) handles
-          reasoning loop
-        end note
-
-        opt tool execution needed
-            Agent -> MCP: call_tool(name, arguments) [via inspect_ai]
-            MCP -> Server: POST /api/v1/mcp/call_tool
-            Server -> Server: extract session_id/episode_id from headers
-            Server -> ExecMgr: execute_action(episode_id, action)
-            ExecMgr -> ExecMgr: execute_in_sandbox(episode_id)
-            ExecMgr --> Server: CommandResult
-            Server -> Server: to_mcp_result()
-            Server --> MCP: mcp.CallToolResult
-            MCP --> Agent: tool_result
-        end
-
-        opt episode termination or submission
-            note over Agent, Server
-              Agent may call submit_eval tool
-              which triggers episode completion
-            end note
-        end
-    end
-
-    deactivate ExecMgr
-    deactivate MCP
-
-    Agent --> "inspect_ai": final_agent_state
-end
-
-"inspect_ai" --> Orchestrator: EvalLog
-
-== Cleanup (Guaranteed via Context Managers) ==
-
-Orchestrator -> Orchestrator: __aexit__()
-Orchestrator -> AgentMgr: __aexit__()
-deactivate AgentMgr
-Orchestrator -> DatasetMgr: __aexit__()
-deactivate DatasetMgr
-Orchestrator -> SessionMgr: __aexit__()
-SessionMgr -> SessionMgr: cleanup_session()
-SessionMgr -> Server: DELETE /api/v1/session/{session_id}
-Server -> Server: terminate_session(session_id)
-Server -> Server: cleanup_session_resources()
-note right of Server
-  Cleanup includes:
-  - All active episodes
-  - Docker sandboxes
-  - Episode orchestrators
-  - Temporary resources
-end note
-deactivate Server
-deactivate SessionMgr
-
-deactivate Agent
-deactivate Orchestrator
-
-Orchestrator --> CLI: EvalLog
-CLI -> CLI: display_results(eval_log)
-CLI --> User: Evaluation Complete
-
-note right of Server
-**SABER Server Features**
-- Multi-episode session support
-- Episode dependency tracking
-- Episode-scoped Docker sandboxes
-- MCP protocol implementation
-- Automatic resource cleanup
-- Three-prompt system (instruction/assistant/submit)
-- Production evaluation with multiple strategies
-end note
-
-note left of Orchestrator
-**Key Architecture**
-- Async context managers ensure cleanup
-- Fail-fast validation prevents silent failures
-- inspect_ai native integration (no custom wrappers)
-- MCP via inspect_ai's mcp_server_http()
-- Multi-prompt system from sample metadata
-- Episode-based execution with dependencies
-- Factory pattern for agent creation
-- Clean separation of concerns
-end note
-
-note over "inspect_ai"
-**Inspect AI Integration**
-- Standard evaluation framework
-- Built-in logging and metrics
-- Agent state management
-- Native MCP support via mcp_server_http()
-- AgentPrompt with 3-prompt structure
-- Tool execution framework
-- Parallel evaluation support
-- Store API for context passing
 end note
 
 @enduml

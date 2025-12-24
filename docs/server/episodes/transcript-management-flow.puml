@@ -1,0 +1,402 @@
+@startuml Transcript Management Flow
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam handwritten false
+skinparam defaultFontName Arial
+skinparam sequenceMessageAlign center
+
+title SABER Transcript Management Flow\nWebSocket-Based Bidirectional Synchronization
+
+' ============================================================================
+' PARTICIPANTS
+' ============================================================================
+
+box "Client Side (Inspect AI)" #LightBlue
+    participant "Agent\n(generate loop)" as Agent
+    participant "WebSocketTranscript\nSyncingModelWrapper" as Wrapper
+    participant "TranscriptSync\nOperations" as ClientSync
+    participant "WebSocketEvent\nProcessor" as EventProc
+    participant "WebSocketConnection\nManager" as ConnMgr
+end box
+
+box "Network" #LightGray
+    participant "WebSocket\nConnection" as WS
+end box
+
+box "Server Side" #LightGreen
+    participant "WebSocket\nEndpoint" as WSEndpoint
+    participant "WebSocketMessage\nRouter" as Router
+    participant "TranscriptCoordinator" as Coordinator
+    participant "TranscriptState\nMachine" as StateMachine
+    participant "ConnectionManager" as ServerConn
+    participant "Episode\n(context store)" as Episode
+end box
+
+' ============================================================================
+' LEGEND - STATE MACHINE
+' ============================================================================
+
+note over StateMachine #Yellow
+**Transcript State Machine**
+━━━━━━━━━━━━━━━━━━━━━━━━
+States:
+• WAITING_FOR_USER
+• WAITING_FOR_ASSISTANT
+• WAITING_FOR_TOOLS
+
+Transitions:
+• USER → ASSISTANT (valid)
+• ASSISTANT → TOOLS (if tool_calls)
+• ASSISTANT → USER (no tool_calls)
+• TOOLS → USER (all responded)
+
+Events sent:
+• is_waiting_on_user
+• is_waiting_on_assistant
+• is_waiting_on_tools
+end note
+
+' ============================================================================
+' PHASE 1: CONNECTION ESTABLISHMENT
+' ============================================================================
+
+== Phase 1: WebSocket Connection Establishment ==
+
+Agent -> Wrapper: generate(input, tools)
+note right: First generate() call
+activate Wrapper
+
+Wrapper -> ConnMgr: ensure_connected()
+activate ConnMgr
+
+ConnMgr -> WS: WebSocket connect\n/api/v1/episodes/{episode_id}/ws
+activate WS
+
+WS -> WSEndpoint: Accept connection
+activate WSEndpoint
+
+WSEndpoint -> ServerConn: connect(episode_id, websocket)
+ServerConn -> ServerConn: Register connection
+
+WSEndpoint -> Coordinator: get_initial_state_event(episode_id)
+Coordinator -> StateMachine: get_state(episode)
+StateMachine -> Episode: Get CLIENT_TRANSCRIPT
+Episode --> StateMachine: transcript[]
+StateMachine --> Coordinator: TranscriptState.WAITING_FOR_ASSISTANT
+Coordinator --> WSEndpoint: StateEventMessage
+
+WSEndpoint --> WS: {"type": "connected", ...}
+WSEndpoint --> WS: {"type": "is_waiting_on_assistant",\n  "data": {"state": "WAITING_FOR_ASSISTANT", "version": 0}}
+
+WS --> ConnMgr: Connected + Initial State
+ConnMgr -> EventProc: start_listener(websocket)
+note right: Background task\nlistens for events
+EventProc --> ConnMgr: listener_task
+ConnMgr --> Wrapper: ✓ Connected
+deactivate ConnMgr
+deactivate WSEndpoint
+
+' ============================================================================
+' PHASE 2: INITIAL TRANSCRIPT PULL
+' ============================================================================
+
+== Phase 2: Initial Transcript Sync (Pull) ==
+
+Wrapper -> EventProc: wait_for_state_event_with_retry()
+EventProc -> EventProc: Check event_queue
+note right: Initial state event\nalready in queue
+EventProc --> Wrapper: event_received = True
+
+Wrapper -> ClientSync: request_sync(websocket)
+activate ClientSync
+
+ClientSync -> WS: {"type": "sync_request",\n  "data": {"since_version": 0, "client_checksum": null}}
+WS -> Router: route(data, websocket, episode_id)
+Router -> Router: SyncRequestHandler.handle()
+
+Router -> Coordinator: sync(TranscriptSyncRequest)
+activate Coordinator
+
+Coordinator -> Episode: Get CLIENT_TRANSCRIPT
+Episode --> Coordinator: transcript[]
+
+Coordinator -> Coordinator: Compute checksum\nDetermine sync_mode
+
+note right of Coordinator #Pink
+**Sync Mode Decision:**
+• NO_CHANGE: client up-to-date
+• DELTA: client behind, checksum valid
+• FULL: checksum mismatch (rewrite)
+end note
+
+Coordinator --> Router: TranscriptSyncResponse\n(sync_mode=FULL, full_transcript=[...])
+deactivate Coordinator
+
+Router --> WS: {"type": "sync_response",\n  "data": {"sync_mode": "full", "full_transcript": [...]}}
+
+WS --> ClientSync: sync_response
+ClientSync -> ClientSync: apply_sync_response()
+note right: Update local_messages\nlocal_version\nlocal_checksum
+ClientSync --> Wrapper: Updated messages
+deactivate ClientSync
+
+Wrapper --> Agent: input = [system, user, ...]
+note right: Agent now has\nserver transcript
+
+' ============================================================================
+' PHASE 3: AGENT GENERATES RESPONSE
+' ============================================================================
+
+== Phase 3: Agent Generates & Pushes Response ==
+
+Agent -> Agent: LLM generates response
+Agent --> Wrapper: ModelOutput(message)
+
+Wrapper -> ClientSync: push_message_with_retry(websocket, message)
+activate ClientSync
+
+ClientSync -> WS: {"type": "push_message",\n  "data": {"message": {...}, "since_version": 1}}
+
+WS -> Router: route(data, websocket, episode_id)
+Router -> Router: PushMessageHandler.handle()
+
+Router -> Coordinator: sync(TranscriptSyncRequest\n  with messages_to_push)
+activate Coordinator
+
+Coordinator -> Coordinator: _is_duplicate_push()?
+note right: Idempotency check\nfor client retries
+
+Coordinator -> Coordinator: _push_messages(episode, messages)
+
+Coordinator -> Episode: Update CLIENT_TRANSCRIPT
+Coordinator -> Episode: Update TRANSCRIPT_VERSION++
+
+Coordinator -> StateMachine: get_state(episode)
+note right: Analyze new transcript\nfor state transition
+StateMachine --> Coordinator: New state
+
+alt Has tool_calls
+    StateMachine --> Coordinator: WAITING_FOR_TOOLS
+else No tool_calls
+    StateMachine --> Coordinator: WAITING_FOR_USER
+end
+
+Coordinator -> Episode: Update CURRENT_TRANSCRIPT_STATE
+
+Coordinator -> ServerConn: broadcast_to_episode(StateEventMessage)
+note right: Notify all connected\nclients of state change
+
+Coordinator --> Router: TranscriptSyncResponse
+deactivate Coordinator
+
+Router --> WS: {"type": "push_ack",\n  "data": {"version": 2, "checksum": "..."}}
+
+WS --> ClientSync: push_ack
+ClientSync -> ClientSync: Update local state
+ClientSync --> Wrapper: True (success)
+deactivate ClientSync
+
+Wrapper --> Agent: output
+deactivate Wrapper
+
+' ============================================================================
+' PHASE 4: TOOL EXECUTION FLOW
+' ============================================================================
+
+== Phase 4: Tool Execution & Results Push ==
+
+note over Agent #LightYellow
+Agent executes tools locally
+(Inspect AI handles tool execution)
+Agent receives tool results
+end note
+
+Agent -> Wrapper: generate(input + tool_results, tools)
+activate Wrapper
+
+Wrapper -> ClientSync: push_tool_results_if_needed()
+activate ClientSync
+
+note right of ClientSync
+Compare local_messages count
+with input length to detect
+new tool result messages
+end note
+
+loop For each tool result message
+    ClientSync -> WS: {"type": "push_message",\n  "data": {"message": {"role": "tool", ...}}}
+    WS -> Router: PushMessageHandler
+    Router -> Coordinator: _push_messages()
+    Coordinator -> Episode: Append to CLIENT_TRANSCRIPT
+    Coordinator -> StateMachine: get_state()
+
+    alt All tool_calls responded
+        StateMachine --> Coordinator: WAITING_FOR_USER
+    else Still pending tool_calls
+        StateMachine --> Coordinator: WAITING_FOR_TOOLS
+    end
+
+    Coordinator -> ServerConn: broadcast_to_episode()
+    Router --> WS: push_ack
+    WS --> ClientSync: ✓
+end
+
+ClientSync --> Wrapper: True
+deactivate ClientSync
+
+note right: Agent continues\ngeneration loop
+
+' ============================================================================
+' PHASE 5: RED TEAM INJECTION (Cross-Episode)
+' ============================================================================
+
+== Phase 5: Red Team Injection (Optional) ==
+
+box "Red Team" #LightCoral
+    participant "Red Team\nDaemon" as RedDaemon
+end box
+
+RedDaemon -> WSEndpoint: connect(red_episode_id)
+note over RedDaemon #Pink
+Red team connects with its own
+episode_id but can target blue
+end note
+
+RedDaemon -> WS: {"type": "push_message",\n  "data": {\n    "target_episode_id": "blue_episode",\n    "message": {"role": "user", "content": "..."},\n    "strategy": "append"\n  }}
+
+WS -> Router: PushMessageHandler (cross-episode)
+Router -> Router: is_cross_episode = True
+
+Router -> Coordinator: sync(TranscriptSyncRequest)
+activate Coordinator
+
+Coordinator -> Episode: Get blue episode
+Coordinator -> Coordinator: _push_messages()
+note right: Inject into blue\nteam's transcript
+
+Coordinator -> StateMachine: get_state()
+StateMachine --> Coordinator: WAITING_FOR_ASSISTANT
+
+Coordinator -> Episode: Increment MODIFICATION_COUNT
+
+Coordinator -> ServerConn: broadcast_to_episode(\n  target=blue_episode_id,\n  StateEventMessage)
+note right #Pink: Blue agent\nreceives injection\nnotification
+
+Coordinator --> Router: TranscriptSyncResponse
+deactivate Coordinator
+
+Router --> WS: push_ack (to red team)
+
+' Blue agent receives notification
+ServerConn --> WS: {"type": "is_waiting_on_assistant",\n  "data": {"injected_by": "red_episode"}}
+
+note over Wrapper #Yellow
+Event queued in EventProcessor
+Blue agent will sync on next generate()
+end note
+
+WS --> EventProc: State event received
+EventProc -> EventProc: Queue event
+
+' ============================================================================
+' PHASE 6: BLUE AGENT PROCESSES INJECTION
+' ============================================================================
+
+== Phase 6: Blue Agent Processes Injection ==
+
+Agent -> Wrapper: generate() [next iteration]
+activate Wrapper
+
+Wrapper -> EventProc: wait_for_state_event_with_retry()
+EventProc --> Wrapper: event_received = True\n(injection notification)
+
+Wrapper -> ClientSync: request_sync(websocket)
+ClientSync -> WS: sync_request
+
+WS -> Coordinator: sync()
+Coordinator -> Coordinator: Detect checksum mismatch\n(transcript was modified)
+
+Coordinator --> WS: {"type": "sync_response",\n  "data": {"sync_mode": "full", ...}}
+note right #Pink
+FULL sync because
+checksum doesn't match
+(injection modified transcript)
+end note
+
+WS --> ClientSync: sync_response
+ClientSync -> ClientSync: apply_sync_response()\nReplace entire local transcript
+ClientSync --> Wrapper: Updated messages
+
+Wrapper --> Agent: input = [system, user, ..., injected_message]
+deactivate Wrapper
+
+note over Agent
+Agent now sees the
+injected message and
+continues processing
+end note
+
+' ============================================================================
+' PHASE 7: RESTART OPERATION
+' ============================================================================
+
+== Phase 7: Restart Operation (Optional) ==
+
+note over RedDaemon #LightCoral
+Red team can reset blue transcript
+to INITIAL_TRANSCRIPT and inject
+a new message (conversation reset)
+end note
+
+RedDaemon -> WS: {"type": "push_message",\n  "data": {\n    "target_episode_id": "blue_episode",\n    "strategy": "restart",\n    "message": {"role": "user", "content": "New prompt"}\n  }}
+
+WS -> Coordinator: sync() with operation=restart
+activate Coordinator
+
+Coordinator -> Episode: Get INITIAL_TRANSCRIPT
+note right: Captured after first\ncomplete assistant turn
+
+Coordinator -> Coordinator: _push_messages(\n  operation=restart)
+
+note right of Coordinator #Yellow
+**Restart Logic:**
+1. Get INITIAL_TRANSCRIPT (safe checkpoint)
+2. Replace CLIENT_TRANSCRIPT with:
+   INITIAL_TRANSCRIPT + new_message
+3. Increment version
+end note
+
+Coordinator -> Episode: Update CLIENT_TRANSCRIPT
+Coordinator -> ServerConn: broadcast(sync_mode=FULL)
+Coordinator --> WS: push_ack
+deactivate Coordinator
+
+note over Wrapper
+Blue agent receives FULL sync
+with reset transcript on next
+generate() call
+end note
+
+' ============================================================================
+' CLEANUP
+' ============================================================================
+
+== Phase 8: Cleanup ==
+
+Agent -> Wrapper: cleanup()
+activate Wrapper
+
+Wrapper -> EventProc: stop_listener()
+EventProc -> EventProc: Cancel listener_task
+
+Wrapper -> ConnMgr: cleanup()
+ConnMgr -> WS: close()
+WS -> WSEndpoint: Disconnect
+WSEndpoint -> ServerConn: disconnect(episode_id, websocket)
+ServerConn -> ServerConn: Remove from active_connections
+
+WS --> ConnMgr: Closed
+Wrapper --> Agent: ✓ Cleanup complete
+deactivate Wrapper
+
+@enduml

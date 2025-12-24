@@ -22,8 +22,8 @@ note right
   **OrchestratedTask:**
   - strategy: SEQUENTIAL_PAIRED
   - sub_tasks: [
-      {role: "red", task_id: "cti_red_001", depends_on: null},
-      {role: "blue", task_id: "cti_blue_001", depends_on: "red"}
+      {role: "red", task_id: "cti_red_001", order: 0, depends_on_role: null},
+      {role: "blue", task_id: "cti_blue_001", order: 1, depends_on_role: "red"}
     ]
 end note
 
@@ -40,7 +40,7 @@ group Sequential Episode Creation (Dependency Order)
   Handler -> Handler: Validate strategy == SEQUENTIAL_PAIRED
   note right: Other strategies raise NotImplementedError
 
-  Handler -> Handler: Sort sub_tasks by dependency\n(root first, then dependents)
+  Handler -> Handler: Sort sub_tasks by order field\n(root has order=0, dependents have higher order)
 
   == Create Red Episode (Root) ==
   Handler -> Session: create_episode(session_id, "cti_red_001")
@@ -70,7 +70,7 @@ group Sequential Episode Creation (Dependency Order)
   Session --> Handler: ✓ Blue episode ready
 end
 
-Handler --> Eval: state = {\n  episode_ids: ["ep_red_123", "ep_blue_123"],\n  primary_episode_id: "ep_red_123",\n  semaphore_acquired: True\n}
+Handler --> Eval: OrchestratedHandlerState(\n  episode_ids=["ep_red_123", "ep_blue_123"],\n  primary_episode_id="ep_red_123",\n  semaphore_acquired=True,\n  episodes=[\n    {episode_id: "ep_red_123", task_id: "cti_red_001", role: "red"},\n    {episode_id: "ep_blue_123", task_id: "cti_blue_001", role: "blue"}\n  ]\n)
 deactivate Handler
 
 == Agent Execution (External - Role-Based) ==

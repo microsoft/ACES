@@ -1,0 +1,224 @@
+@startuml Transcript Management Components
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam component {
+    BackgroundColor LightBlue
+    BorderColor Navy
+}
+skinparam package {
+    BackgroundColor LightYellow
+    BorderColor DarkGoldenRod
+}
+skinparam interface {
+    BackgroundColor White
+}
+
+title SABER Transcript Management Component Architecture
+
+' ============================================================================
+' CLIENT SIDE COMPONENTS
+' ============================================================================
+
+package "Client Side (saber.inspect_ai.integration)" #LightCyan {
+
+    component "WebSocketTranscriptSyncingModelWrapper" as ModelWrapper {
+        port "generate()" as gen_port
+        port "cleanup()" as cleanup_port
+        port "wait_and_sync_transcript()" as sync_port
+    }
+
+    component "WebSocketConnectionManager" as ClientConnMgr {
+        port "ensure_connected()" as ensure_conn
+        port "force_reconnect()" as reconnect
+        port "websocket" as ws_prop
+    }
+
+    component "WebSocketEventProcessor" as EventProc {
+        port "start_listener()" as start_listen
+        port "wait_for_state_event()" as wait_event
+        port "event_queue" as event_q
+    }
+
+    component "TranscriptSyncOperations" as SyncOps {
+        port "push_message_with_retry()" as push_msg
+        port "request_sync()" as req_sync
+        port "apply_sync_response()" as apply_sync
+        port "local_version" as local_ver
+        port "local_messages" as local_msgs
+    }
+
+    ModelWrapper --> ClientConnMgr : uses
+    ModelWrapper --> EventProc : uses
+    ModelWrapper --> SyncOps : uses
+    SyncOps --> EventProc : waits on
+}
+
+' ============================================================================
+' NETWORK
+' ============================================================================
+
+cloud "WebSocket Connection" as WSCloud {
+    interface "ws://server/api/v1/episodes/{id}/ws" as WSInterface
+}
+
+ClientConnMgr -down-> WSInterface : connects
+WSInterface -down-> WSEndpoint : handles
+
+' ============================================================================
+' SERVER SIDE COMPONENTS
+' ============================================================================
+
+package "Server Side (saber.server)" #LightGreen {
+
+    package "API Layer (saber.server.api)" #PaleGreen {
+        component "SessionRestAPI" as RestAPI {
+            port "websocket_endpoint()" as ws_endpoint
+        }
+
+        component "WebSocketMessageRouter" as Router {
+            port "route()" as route_port
+        }
+
+        component "PingHandler" as PingH
+        component "SyncRequestHandler" as SyncH
+        component "PushMessageHandler" as PushH
+
+        Router --> PingH : routes ping
+        Router --> SyncH : routes sync_request
+        Router --> PushH : routes push_message
+    }
+
+    package "Episode Management (saber.server.episodes)" #PaleTurquoise {
+        component "TranscriptCoordinator" as Coordinator {
+            port "sync()" as coord_sync
+            port "notify_modification()" as notify_mod
+            port "get_initial_state_event()" as get_init
+        }
+
+        component "TranscriptStateMachine" as StateMachine {
+            port "get_state()" as get_state
+            port "state_to_event_type()" as state_to_evt
+            port "is_valid_transition()" as valid_trans
+        }
+
+        component "ConnectionManager" as ServerConnMgr {
+            port "connect()" as srv_connect
+            port "disconnect()" as srv_disconnect
+            port "broadcast_to_episode()" as broadcast
+        }
+
+        component "AutoContinueManager" as AutoCont {
+            port "handle_auto_continue()" as auto_cont
+        }
+
+        component "StuckStateMonitor" as StuckMon {
+            port "start()" as mon_start
+            port "check_all_episodes()" as check_all
+        }
+
+        component "EpisodeManager" as EpisodeMgr {
+            port "get_episode_by_id()" as get_ep
+        }
+
+        database "Episode Context" as EpContext {
+            card "CLIENT_TRANSCRIPT"
+            card "TRANSCRIPT_VERSION"
+            card "INITIAL_TRANSCRIPT"
+            card "CURRENT_STATE"
+        }
+
+        Coordinator --> StateMachine : determines state
+        Coordinator --> ServerConnMgr : broadcasts events
+        Coordinator --> AutoCont : triggers
+        Coordinator --> EpContext : reads/writes
+
+        StuckMon --> Coordinator : monitors
+        StuckMon --> EpisodeMgr : lists episodes
+
+        EpisodeMgr --> EpContext : manages
+    }
+
+    RestAPI --> Router : delegates
+    SyncH --> Coordinator : calls sync()
+    PushH --> Coordinator : calls sync()
+}
+
+' ============================================================================
+' COMPONENT DESCRIPTIONS
+' ============================================================================
+
+note top of ModelWrapper
+**WebSocketTranscriptSyncingModelWrapper**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Wraps base Model to intercept generate()
+• Establishes WebSocket on first call
+• Syncs transcript before generation
+• Pushes assistant output after generation
+• Handles tool result pushes
+
+Key Properties:
+• _base_model: Underlying Model
+• _skip_next_wait: Optimization flag
+end note
+
+note top of Coordinator
+**TranscriptCoordinator**
+━━━━━━━━━━━━━━━━━━━━━━━
+Central orchestrator for transcript sync
+• Handles sync requests (owner & observer)
+• Validates checksums for rewrite detection
+• Manages version incrementing
+• Broadcasts state events via WebSocket
+• Supports APPEND and RESTART operations
+
+Key Methods:
+• sync(): Unified sync with differential updates
+• notify_modification(): Red team injection path
+• _push_messages(): Core transcript mutation
+end note
+
+note right of StateMachine
+**TranscriptStateMachine**
+━━━━━━━━━━━━━━━━━━━━━
+Detects transcript state from messages
+• Analyzes tool_calls vs tool responses
+• Validates state transitions
+• Converts states to WebSocket events
+
+State Detection Logic:
+1. Find assistant messages with tool_calls
+2. Track which tool_call IDs have responses
+3. If pending tool_calls → WAITING_FOR_TOOLS
+4. If last message is user → WAITING_FOR_ASSISTANT
+5. Otherwise → WAITING_FOR_USER
+end note
+
+note bottom of EpContext
+**Episode Context Keys**
+━━━━━━━━━━━━━━━━━━
+• CLIENT_TRANSCRIPT: Full message list
+• TRANSCRIPT_VERSION: Monotonic counter
+• INITIAL_TRANSCRIPT: Safe restart point
+• TRANSCRIPT_CHECKSUM: SHA256 hash
+• CURRENT_TRANSCRIPT_STATE: Cached state
+• MODIFICATION_COUNT: Injection counter
+end note
+
+' ============================================================================
+' DATA FLOW LEGEND
+' ============================================================================
+
+legend bottom
+|= Arrow |= Meaning |
+| →      | Uses/Delegates to |
+| ---->  | Network/WebSocket |
+| -[#red]-> | Error path |
+
+**Message Types:**
+• sync_request / sync_response
+• push_message / push_ack
+• is_waiting_on_* (state events)
+• transcript_error
+endlegend
+
+@enduml

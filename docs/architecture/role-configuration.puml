@@ -9,16 +9,18 @@ title Role-Based Configuration System\n(Agent/Model Assignment for Orchestrated 
 package "Configuration Models" {
   class RoleAgentConfig {
     +agent: str = "react"
-    +model: str | None
-    +attempts: int | None
+    +model: Optional[str]
+    +attempts: Optional[int]
+    +submit: Optional[bool]
     +kwargs: Dict[str, Any]
-    +tools: List[str] | None
-    +timeout: int | None
+    +description: Optional[str]
+    +tools: Optional[List[str]]
+    +timeout: Optional[int]
   }
 
   class RoleBasedConfig {
     +roles: Dict[str, RoleAgentConfig]
-    +defaults: RoleAgentConfig | None
+    +defaults: Optional[RoleAgentConfig]
     --
     +get_config_for_role(role: str): RoleAgentConfig
     +to_agent_assignments(): List[AgentAssignment]
@@ -91,34 +93,40 @@ package "Example 2: Override via CLI" {
   CLI --> Merged : =
 
   note bottom of Merged
-    **Merge Priority:**
-    1. Role-specific CLI args (highest)
-    2. Global CLI args
-    3. Role config from file
-    4. Defaults
+    **Merge Priority (in get_config_for_role):**
+    1. Role-specific config fields (highest)
+    2. Default config fields
+    3. RoleAgentConfig defaults (agent="react")
+
+    Note: kwargs are merged, not replaced
   end note
 }
 
 note as ConfigFlow
   **Configuration Loading Flow**
+  (saber/client/config_loader.py)
 
   1. User loads configuration:
-     RoleConfigLoader.load("roles.yaml")
+     RoleConfigLoader.load(source)
 
-  2. Parse YAML/JSON and create RoleBasedConfig
-     - Validate role names
-     - Ensure roles or defaults exist
+  2. Source can be:
+     - Dict → direct Python dict
+     - Path → file path
+     - String starting with '{' → inline JSON
+     - String → file path (YAML/JSON)
 
-  3. User creates dataset with overrides:
-     saber_dataset(roles=config, red_model="override")
+  3. Parse and validate:
+     - validate_role_names() - ensure valid role names
+     - validate_has_configuration() - ensure roles or defaults exist
 
-  4. Merge overrides:
-     - Parse override keys (role_field pattern)
-     - Update role configs
+  4. Get config for specific role:
+     get_config_for_role(role) merges:
+     - defaults.dict(exclude_unset=True)
+     - role_config.dict(exclude_unset=True)
+     - kwargs are merged (dict merge, not replace)
 
-  5. Convert to AgentAssignment list
-
-  6. Return Dataset with role assignments
+  5. Convert to AgentAssignment list:
+     to_agent_assignments() creates one assignment per role
 end note
 
 @enduml

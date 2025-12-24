@@ -23,13 +23,14 @@ activate BM
 BM --> SM: Task (with environment, execution_config, episode_config)
 deactivate BM
 
-SM -> EM_EP: start_episode(session_id, task_id, initial_context, task)
+SM -> SM: create Episode object (state=CREATING)
+SM -> EM_EP: add_episode_to_session(session_id, episode)
 activate EM_EP
-
-EM_EP -> EM_EP: create Episode object (state=ACTIVE)
-EM_EP -> EM_EP: handle dependency resolution if needed
-EM_EP --> SM: Episode
+EM_EP --> SM: episode tracked
 deactivate EM_EP
+
+SM -> SM: session.add_creating_episode(episode_id)
+SM -> SM: handle dependency resolution if needed (with retry)
 
 == Task Configuration and Environment Setup ==
 
@@ -44,39 +45,54 @@ ExecutionManager configures from task object:
 - Handles network attachment for dependent episodes
 end note
 
-EM -> SBMGR: create_episode_environment(episode_id, task.environment, target_episode_id)
+EM -> SBMGR: create_episode_environment_async(episode_id, task.environment, target_episode_id, session_id)
 activate SBMGR
 
 SBMGR -> CO: new ComposeOrchestrator(logging_config)
 activate CO
 
 CO -> CO: resolve compose file path from task.environment
-CO -> DC: docker-compose up -d with episode-specific config
+CO -> DC: docker-compose up -d (NO health checks)
 activate DC
 
-DC -> DC: Start execution container + target services
-DC -> DC: Wait for all health checks
-DC --> CO: All services healthy
+DC -> DC: Start containers without waiting for health
+DC --> CO: Containers starting
 deactivate DC
 
-CO --> SBMGR: Environment ready
+CO --> SBMGR: (orchestrator, compose_path)
 deactivate CO
 
-SBMGR --> EM: Episode environment created
+SBMGR --> EM: Environment started (health checks pending)
 deactivate SBMGR
 
 EM -> EM: reset executor factory for new sandbox manager
-EM --> SM: configuration_complete
+EM --> SM: configure_for_task_async complete
 deactivate EM
 
-== Additional Component Configuration ==
+SM -> SM: session.move_to_active_episode(episode_id)
+SM -> SM: Release episode creation lock
 
-SM -> SM: policy_manager.set_episode_policy(episode_id, policy_document)
-SM -> SM: session.add_active_episode(episode_id)
-SM -> SM: store episode configuration and metadata
+== Background Finalization (runs concurrently) ==
 
-SM --> Agent: EpisodeCreateResponse{episode_id, task_id, session_id, state, episode_context}
+SM -> SM: spawn _finalize_episode_creation background task
+note over SM
+Background finalization:
+1. Wait for health checks (with semaphore limit)
+2. Generate prompts via PromptGenerator
+3. policy_manager.set_episode_policy(episode_id, session_id, prompt)
+4. episode_manager.configure_for_task(episode_id, task)
+5. Copy initial files to execution container
+6. Configure evaluation manager
+7. mark_episode_ready(episode_id)
+end note
+
+SM --> Agent: EpisodeCreateResponse{episode_id, state=CREATING}
 deactivate SM
+
+== Client Polls for Episode Status ==
+
+Agent -> SM: GET /api/v1/session/{session_id}/episodes/{episode_id}/status
+SM --> Agent: EpisodeStatusResponse{state=READY} (after finalization completes)
 
 == Command Execution with Episode Context ==
 
@@ -142,13 +158,13 @@ EM_EP -> EM_EP: update episode state and completion info
 EM_EP --> SM: Episode completed
 deactivate EM_EP
 
-SM -> EM: cleanup episode environment
+SM -> EM: cleanup_episode(episode_id)
 activate EM
 
-EM -> SBMGR: cleanup_episode(episode_id)
+EM -> SBMGR: stop_episode_environment(episode_id)
 activate SBMGR
 
-SBMGR -> CO: stop_environment()
+SBMGR -> CO: stop_environment(compose_file_path, episode_id)
 activate CO
 
 CO -> DC: docker-compose down --volumes
@@ -166,6 +182,8 @@ deactivate SBMGR
 
 EM --> SM: Episode cleanup complete
 deactivate EM
+
+SM -> SM: _cleanup_episode_network_with_retry(episode_id)
 
 == Session Cleanup ==
 
@@ -185,34 +203,39 @@ note over Agent, DC
 **Current Sandbox Environment Implementation**
 
 **Key Architecture Principles:**
-- Eager environment creation: Sandbox created during episode initialization
+- Async environment creation: Docker compose starts immediately, health checks run in background
+- Episode state lifecycle: CREATING -> READY -> ACTIVE -> COMPLETED
+- Global episode creation lock serializes Docker Compose operations
+- Background finalization with semaphore-limited concurrent health checks
 - Episode-based environment isolation with unique container naming
-- Docker Compose orchestration for all environments (single or multi-container)
-- Episode dependency resolution with network attachment capability
-- Episode-scoped environment lifecycle with proper cleanup
+- Episode dependency resolution with retry logic for race conditions
 
 **Environment Management:**
 - task.environment specifies static compose file template name
-- SandboxEnvironmentManager creates ComposeOrchestrator per episode
+- SandboxEnvironmentManager.create_episode_environment_async() starts containers without blocking
 - ComposeOrchestrator handles Docker Compose operations directly
-- Episode-specific environment variables for container naming
-- Optional network attachment for dependent episodes
+- Episode-specific environment variables (EPISODE_ID, SESSION_ID) for container naming
+- Optional network attachment for dependent episodes via target_episode_id
 
 **Execution Flow:**
-1. Episode creation triggers immediate environment setup
-2. ExecutionManager configures for episode with dependency resolution
-3. ComposeOrchestrator starts episode-specific containers
-4. MCP commands execute with episode context via headers
-5. Commands run in episode-specific execution containers
-6. Episode cleanup removes all episode-specific resources
+1. Episode creation acquires global lock for Docker serialization
+2. Episode created in CREATING state, added to creating_episode_ids
+3. ExecutionManager.configure_for_task_async() starts containers (no health checks)
+4. Episode moves to active_episode_ids, lock released
+5. Background task runs health checks, prompts, file copies, marks READY
+6. Client polls status until episode is READY
+7. MCP commands execute with episode context via headers
+8. Episode cleanup removes all episode-specific resources + networks
 
 **Current Implementation Details:**
-- REST API: POST /api/v1/session/{session_id}/episodes
-- MCP headers required: session_id, episode_id, orchestration_env
+- REST API: POST /api/v1/session/{session_id}/episodes?task_id=...
+- Response returns immediately with state=CREATING
+- MCP headers required: X-SABER-Session-ID, X-SABER-Episode-ID, X-SABER-Orchestration-Env
 - Episode-based concurrency limits (max 3 concurrent per episode)
 - Fail-fast parameter validation and error handling
 - Complete environment isolation per episode
-- Client-side benchmark orchestration
+- Client-side benchmark orchestration and evaluation
+- Network cleanup with retry logic to prevent subnet pool exhaustion
 end note
 
 @enduml

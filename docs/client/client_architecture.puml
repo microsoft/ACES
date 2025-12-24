@@ -66,8 +66,9 @@ package "SABER Inspect AI Integration (saber/inspect_ai/)" {
         +rest_port: int = 8000
         +mcp_port: int = 8001
         +_session_manager: ClientSessionManager
-        +_session_id: Optional[str]
-        +_episode_id: Optional[str]
+        +_handler: BenchmarkTaskHandler
+        +_handler_state: HandlerState
+        +_episode_manager: EpisodeLifecycleManager
         --
         +task_init(): void
         +sample_init(): SandboxEnvironmentSpec
@@ -78,6 +79,7 @@ package "SABER Inspect AI Integration (saber/inspect_ai/)" {
         - Implements Inspect AI protocol
         - Per-task session management
         - Per-sample episode management
+        - Handler-based orchestration support
     }
 
     class create_saber_dataset {
@@ -103,18 +105,17 @@ package "SABER Inspect AI Integration (saber/inspect_ai/)" {
         **Returns:** Scorer
     }
 
-    class context_injection {
+    class transcript_sync {
         --
-        **Context Injection System**
-        +saber_tool_params()
-        +saber_execute_tools()
-        +extract_assistant_content()
-        +extract_reasoning_content()
+        **Transcript Sync System**
+        +create_transcript_syncing_generate()
+        +_push_transcript_delta()
+        +serialize_chat_message()
         --
-        **Patches Inspect AI**
-        - Injects assistant message context
-        - Injects reasoning content (o1/o3)
-        - Thread-safe with contextvars
+        **Transcript-Based Context**
+        - Push transcripts after generate()
+        - Differential sync (only new messages)
+        - Graceful degradation on failures
     }
 }
 
@@ -155,28 +156,28 @@ package "Client Session Layer (saber/client/)" {
         +base_url: str
         +client_id: str
         +rest_timeout: float
+        +mcp_server_url: str
+        +mcp_timeout: float
         --
         **Configuration**
         +from_urls() factory
-        +from_env() factory
     }
 }
 
-package "Domain Server Layer (saber/inspect_ai/)" {
+package "Domain Server Layer (saber/inspect_ai/server/)" {
     class DomainController {
         +domains_root: Path
-        +active_domains: Dict
+        +_orchestrator: DomainOrchestrator
         --
-        +start_domain(): DomainContext
-        +stop_domain(): void
-        +check_running_domain(): Optional[Dict]
-        +health_check(): bool
+        +start(): DomainContext
+        +stop(): void
+        +check_running_domain(): Optional[str]
         --
         **Server Lifecycle Management**
-        - Launches saber-domain start
+        - Wraps DomainOrchestrator
+        - Async-compatible interface
         - Health monitoring
         - Graceful shutdown
-        - Multi-domain support
     }
 }
 
@@ -188,7 +189,7 @@ create_domain_task ..> saber_scorer : uses
 create_domain_task ..> DomainController : manages
 
 SABERSandboxEnvironment *-- ClientSessionManager : uses
-SABERSandboxEnvironment ..> context_injection : applies patches
+SABERSandboxEnvironment ..> transcript_sync : uses for context
 create_saber_dataset ..> ClientSessionManager : uses
 saber_scorer ..> ClientSessionManager : uses
 
@@ -219,8 +220,9 @@ note right of SABERSandboxEnvironment
 Implements Inspect AI SandboxEnvironment protocol:
 - Manages SABER domain server lifecycle
 - Creates/manages episodes per sample
-- Provides MCP tool execution
-- Handles context injection for agent messages
+- Provides MCP tool execution via native inspect_ai
+- Transcript sync for server context
+- Handler-based orchestration support
 - Automatic cleanup on completion
 
 This is the bridge between Inspect AI
@@ -239,17 +241,16 @@ Manages communication with SABER server:
 Used by all Inspect AI integration components.
 end note
 
-note bottom of context_injection
-**Context Injection System**
+note bottom of transcript_sync
+**Transcript Sync System**
 
-Patches Inspect AI's tool execution to inject:
-- Assistant message content (what agent said)
-- Reasoning content (o1/o3 model internal reasoning)
+Synchronizes agent conversation to SABER server:
+- Pushes transcript after each generate() call
+- Differential sync (only new messages)
+- Server has fresh context before tool execution
 
-This context is sent to SABER tools via
-special parameters for evaluation and logging.
-
-Thread-safe via contextvars for concurrent evals.
+Replaces deprecated monkey-patch approach.
+Graceful degradation on network failures.
 end note
 
 @enduml

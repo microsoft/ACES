@@ -30,11 +30,15 @@ package "SABER Server Core - Current Implementation" {
         +active_sessions: Dict[str, ClientSession]
         +cleanup_task: Optional[asyncio.Task]
         +shutdown_event: asyncio.Event
-        +_episode_creation_lock: asyncio.Semaphore
+        +_episode_creation_lock: asyncio.Semaphore(3)
         +_episode_finalization_tasks: Dict[str, asyncio.Task]
-        +_finalization_semaphore: asyncio.Semaphore
+        +_finalization_semaphore: asyncio.Semaphore(16)
+        +_permanent_env_startup_task: Optional[asyncio.Task]
+        +_permanent_env_startup_error: Optional[str]
+        +_permanent_env_startup_complete: bool
         +manifest: Dict[str, Any]
         +manifest_path: Optional[str]
+        +_time_source: TimeSource
         +benchmark_manager: BenchmarkManager
         +episode_manager: EpisodeManager
         +execution_manager: ExecutionManager
@@ -48,9 +52,8 @@ package "SABER Server Core - Current Implementation" {
         +async shutdown(): void
         +async create_session(client_id: str): ClientSession
         +async terminate_session(session_id: str, reason?: str): void
-        +async initiate_episode(session_id: str, task_id: str): Episode
         +async start_episode(session_id: str, task_id: str): Episode
-        +async end_episode(episode_id: str, session_id: str, reason?: str, submission?: EvalSubmission): EpisodeEndResponse
+        +async end_episode(session_id: str, episode_id: str, reason?: str, submission?: EvalSubmission, cascade_end_attached_episodes?: bool): EpisodeEndResponse
         +async execute_action(session_id: str, episode_id: str, action: Action): CommandResult
         +async execute_episode_action(session_id: str, episode_id: str, action: Action): CommandResult
         +async get_current_task(session_id: str, episode_id: str): Task
@@ -61,13 +64,14 @@ package "SABER Server Core - Current Implementation" {
         +get_evaluation_service(): SessionEvaluationService
         +get_episode_status(episode_id: str): Optional[Episode]
         +get_episode_by_id(episode_id: str): Optional[Episode]
-        +async save_evaluation_file(session_id: str, file: UploadFile): int
         +async list_session_episodes(session_id: str, status_filter?: str): List[Episode]
         +async get_episode_details(session_id: str, episode_id: str): Episode
         +async _session_cleanup_loop(): void
         +async _cleanup_inactive_sessions(): void
-        +async _start_permanent_environment(): void
-        +async _finalize_episode_creation(episode_id: str, session_id: str, environment_spec: Any): void
+        +async _start_permanent_environment_async(): void
+        +_schedule_episode_finalization(episode_id: str, finalization_coro: Any): void
+        +_handle_finalization_task_done(episode_id: str, task: asyncio.Task): void
+        +async _finalize_episode_creation(episode_id: str, session_id: str, task_id: str, task: Task, attach_to_episode_id?: str): void
         +async _cleanup_failed_episode_environment(episode_id: str): void
         +async _cleanup_episode_network(episode_id: str): void
         +async _cleanup_episode_network_with_retry(episode_id: str, max_retries?: int, base_delay?: float): bool
@@ -106,21 +110,22 @@ package "SABER Server Core - Current Implementation" {
             +app: FastAPI
             +host: str
             +port: int
-            +server: Optional[uvicorn.Server]
             --
-            +start_server(): void
+            +async start_server(): void
             +shutdown(): void
             --
             **FastAPI Async Endpoints**
-            +POST /session
-            +DELETE /session/{session_id}
-            +GET /session/{session_id}/current-task
-            +GET /session/{session_id}/policy
-            +POST /session/{session_id}/start-episode
-            +GET /benchmark
-            +GET /health
-            +GET /sessions
-            +GET /sessions/stats
+            +POST /api/v1/session
+            +DELETE /api/v1/session/{session_id}
+            +POST /api/v1/session/{session_id}/episodes
+            +GET /api/v1/session/{session_id}/episodes/{episode_id}/status
+            +GET /api/v1/session/{session_id}/episodes/{episode_id}/task
+            +GET /api/v1/session/{session_id}/episodes/{episode_id}/policy
+            +DELETE /api/v1/session/{session_id}/episodes/{episode_id}
+            +GET /api/v1/benchmark/tasks
+            +GET /api/v1/health
+            +GET /api/v1/sessions/stats
+            +WebSocket /api/v1/session/{session_id}/episodes/{episode_id}/transcript
         }
 
         class SessionMCPAPI {
@@ -130,13 +135,13 @@ package "SABER Server Core - Current Implementation" {
             +mcp_server: Optional[FastMCP]
             +tool_generator: MCPToolGenerator
             --
-            +start_mcp_server(): void
-            +shutdown_mcp_server(): void
+            +async start_mcp_server(): void
+            +async shutdown_mcp_server(): void
+            +async _get_headers(): RequestHeaders
+            --
+            **MCP Protocol Handlers**
             +handle_list_tools(): List[MCPTool]
-            +handle_call_tool(): MCPResult
-            +_get_session_from_headers(): Optional[str]
-            +_convert_action_parameters(): Action
-            +_convert_command_result_to_mcp(): List[MCPContent]
+            +handle_call_tool(): MCPToolCallResponse
         }
     }
 
@@ -144,17 +149,24 @@ package "SABER Server Core - Current Implementation" {
         class BenchmarkManager {
             +domain: str
             +config_dir: Path
+            +tasks_dir_path: Path
             +tasks: Dict[str, Task]
-            +config_loader: BenchmarkConfigLoader
             +benchmark_config: Dict[str, Any]
+            +_dependency_graph: Optional[DependencyGraph]
+            +config_loader: BenchmarkConfigLoader
+            +prompt_generator: PromptGenerator
             --
             +get_task(task_id: str): Task
+            +get_single_episode_task(task_id: str): SingleEpisodeTask
             +get_subtask(task_id: str, subtask_id: str): SubTask
             +list_tasks(): List[Dict[str, Any]]
             +get_benchmark_config(): Dict[str, Any]
             +get_episode_config(task_id: str): Dict[str, Any]
-            +list_benchmark_tasks(): List[Dict[str, Any]]
-            +load_tasks_from_yaml(): void
+            +get_benchmark_info(): BenchmarkInfo
+            +get_dependency_config(): Dict[str, Any]
+            +create_single_episode_task(task: Task): SingleEpisodeTask
+            +load_tasks_from_directory(): void
+            +validate_all_task_templates(): void
         }
 
         class Task {
@@ -185,16 +197,24 @@ package "SABER Server Core - Current Implementation" {
             +session_episodes: Dict[str, List[str]]
             +completed_episodes: Dict[str, Episode]
             +episode_configs: Dict[str, Dict[str, Any]]
+            +_time_source: TimeSource
+            +connection_manager: ConnectionManager
+            +transcript_coordinator: TranscriptCoordinator
             --
             +get_episode_by_id(episode_id: str): Optional[Episode]
             +get_session_episodes(session_id: str, include_completed: bool): List[Episode]
             +get_active_episodes_for_session(session_id: str): List[Episode]
             +add_episode_to_session(session_id: str, episode: Episode): void
             +complete_episode(episode_id: str): Optional[Episode]
-            +configure_for_task(episode_id: str, task: Any): void
-            +start_episode(session_id: str, task_id: str, initial_context?: Dict): Episode
+            +_clear_episode_heavy_data(episode: Episode): void
+            +mark_episode_ready(episode_id: str): void
+            +mark_episode_failed_creation(episode_id: str, error_message: str): void
+            +find_available_episode_for_dependency(session_id: str, target_task_id: str, dependent_task_id: str): Optional[str]
+            +async find_available_episode_for_dependency_with_retry(session_id: str, target_task_id: str, dependent_task_id: str, max_wait_seconds?: float, retry_interval?: float, max_retry_interval?: float): Optional[str]
+            +initialize_episode_context(task: SingleEpisodeTask): Dict[str, Any]
+            +async configure_for_task(episode_id: str, task: Task): void
             +step(episode_id: str, action: Action, result: CommandResult): StepResult
-            +end_episode(episode_id: str, reason: str, result?: str): Episode
+            +async end_episode(episode_id: str, reason: EpisodeTerminationReason, submission?: EvalSubmission): Episode
             +attach_episode_to_episode(dependent_id: str, target_id: str): void
             +should_terminate_episode(episode_id: str): tuple[bool, str]
             +cleanup_session(session_id: str): void
@@ -206,103 +226,130 @@ package "SABER Server Core - Current Implementation" {
             +session_id: str
             +task_id: str
             +state: EpisodeState
-            +created_at: datetime
-            +started_at: Optional[datetime]
-            +ended_at: Optional[datetime]
-            +step_count: int
+            +start_time: datetime
+            +end_time: Optional[datetime]
+            +steps: List[Step]
             +context: Dict[str, Any]
-            +termination_reason: Optional[EpisodeTerminationReason]
+            +metadata: Dict[str, Any]
+            +completion_reason: Optional[str]
+            +creation_error: Optional[str]
+            +max_steps: int
+            +submission: Optional[str]
+            +eval_submission: Optional[EvalSubmission]
+            +attached_to_episode_id: Optional[str]
+            +attached_episode_ids: List[str]
+            +_context_lock: asyncio.Lock
             --
-            +to_dict(): Dict[str, Any]
-            +is_active(): bool
-            +can_step(): bool
+            +is_complete: bool {property}
+            +is_ready: bool {property}
+            +duration: Optional[float] {property}
+            +add_step(step: Step): void
+            +async update_context_atomic(updates: Dict[str, Any]): void
+            +get_executed_commands(): List[str]
+            +attach_to_episode(target_episode_id: str): void
+            +add_attached_episode(episode_id: str): void
+            +has_attached_episode_with_task(task_id: str, episodes_by_id: Dict[str, Episode]): bool
+            +with_step_range(start_index: int, end_index: int): Episode
         }
     }
 
     package "Execution Management - Current Implementation" {
         class ExecutionManager {
             +_config_dir: str
+            +_session_manager: Optional[SessionManager]
             +_configuration: Dict[str, Any]
             +_executor_factory: Optional[ExecutorFactory]
             +_sandbox_environment_manager: Optional[SandboxEnvironmentManager]
             +_permanent_environment_manager: Optional[PermanentEnvironmentManager]
+            +_file_copier: Optional[SandboxFileCopier]
             +_active_executions: Dict[str, int]
-            +_max_concurrent_per_episode: int
+            +_max_concurrent_per_episode: int = 3
             +_debug_mode: bool
             --
             +async step(action: Action, context?: Dict): CommandResult
-            +get_executor(executor_type: str, episode_id?: str): DockerExecutor
+            +executor_factory: ExecutorFactory {property}
+            +is_sandbox_ready(): bool
+            +get_executor(executor_type: str, episode_id?: str): CommandExecutor
             +get_available_executors(episode_id?: str): List[str]
             +to_mcp_tools(episode_id?: str): List[Tool]
             +list_commands(episode_id?: str): List[Dict[str, Any]]
             +get_configuration(): Dict[str, Any]
             +get_execution_stats(): Dict[str, Any]
-            +cleanup_episode(episode_id: str, context?: Dict): bool
+            +configure_for_task_async(episode_id: str, task: Task, session_id?: str, target_episode_id?: str): void
+            +async wait_for_episode_healthy(episode_id: str, timeout_seconds?: int): void
+            +async copy_initial_files_to_episode(episode_id: str, task: Task): void
+            +async cleanup_episode(episode_id: str, context?: Dict): bool
             +cleanup_session(session_id: str, context?: Dict): bool
             +cleanup_all_containers(context?: Dict): Dict[str, Any]
             +initialize_permanent_environment_manager(config: Dict): void
             +start_permanent_environment(environment_spec: Any): void
-            +stop_permanent_environment(): void
+            +async stop_permanent_environment(): void
             +is_permanent_environment_running(): bool
-            +is_sandbox_ready(): bool
             +debug_mode(): bool
         }
 
         class SandboxEnvironmentManager {
-            +_docker_client: DockerClient
-            +_active_containers: Dict[str, Container]
-            +_container_configs: Dict[str, Dict[str, Any]]
-            +_network_name: str = "saber-network"
+            +sandbox_config: Dict[str, Any]
+            +_is_ready: bool
+            +active_orchestrators: Dict[str, ComposeOrchestrator]
+            +episode_compose_files: Dict[str, Path]
+            +domain: str
+            +environments_base_path: Path
+            +logging_config: Dict[str, Any]
             --
-            +get_or_create_container(session_id: str, environment_spec: EnvironmentSpec): Container
-            +cleanup_session_containers(session_id: str): void
+            +is_ready(): bool
+            +wait_for_ready(timeout?: int): bool
+            +create_episode_environment_async(episode_id: str, sandbox_environment: str, target_episode_id?: str, session_id?: str): tuple[ComposeOrchestrator, Path]
+            +cleanup_episode_containers(episode_id: str): void
             +cleanup_all_containers(): void
-            +_create_container(session_id: str, environment_spec: EnvironmentSpec): Container
-            +_setup_container_networking(container: Container): void
+            +_get_compose_file_path(sandbox_environment: str): Path
         }
 
         class PermanentEnvironmentManager {
-            +_config: Dict[str, Any]
-            +_docker_client: DockerClient
-            +_permanent_containers: Dict[str, Container]
-            +_startup_commands: List[str]
+            +config: Dict[str, Any]
+            +domain: str
+            +compose_project_name: str
+            +_is_running: bool
+            +_compose_file_path: Optional[Path]
+            +orchestrator: ComposeOrchestrator
             --
-            +start_permanent_environment(): Dict[str, Container]
-            +stop_permanent_environment(): void
+            +start_permanent_environment_from_file(compose_file_path: Path): void
+            +async stop_permanent_environment(): void
+            +is_running(): bool
             +get_container_info(): Dict[str, Dict[str, Any]]
-            +execute_startup_commands(): void
         }
     }
 
     package "Policy Management" {
         class PolicyManager {
             +domain_name: str
-            +domain_policy: PolicyDocument
+            +_episode_policies: Dict[str, PolicyDocument]
             --
-            +get_policy(): PolicyDocument
+            +set_episode_policy(episode_id: str, session_id: str, pre_generated_prompt: str): void
+            +get_policy(episode_id?: str): PolicyDocument
+            +cleanup_episode_policy(episode_id: str): void
+            +async validate_action(action: str): bool
         }
 
         class PolicyDocument {
-            +domain: str
-            +version: str
-            +policy_content: str
-            +guidelines: List[str]
-            +restrictions: List[str]
-            +context_hints: Dict[str, Any]
+            +prompt: str
             --
             +to_dict(): Dict[str, Any]
-            +format_for_agent(context?: Dict): str
         }
     }
 
     package "Evaluation Management" {
         class EvaluationManager {
+            +evaluation_configs: Dict[str, EvaluationConfig]
+            +config_dir: Optional[str]
+            +store: EvaluationStore
             --
-            +log_session_start(session_id: str, client_id: str): void
-            +log_session_end(session_id: str): void
-            +log_episode_start(session_id: str, episode_id: str, task_id: str): void
-            +log_episode_end(session_id: str, episode_id: str, reason: str): void
-            +log_action(session_id: str, action: Action, result: CommandResult): void
+            +configure_for_task(task: Task): void
+            +async log_session_start(session_id: str, client_id: str): void
+            +async log_session_end(session_id: str): void
+            +async log_episode_start(session_id: str, episode_id: str, task_id: str): void
+            +async log_episode_end(session_id: str, episode_id: str, reason: str): void
+            +async log_action(session_id: str, episode_id: str, action: Action, result: CommandResult): void
         }
     }
 }
@@ -343,7 +390,9 @@ note top of SessionManager
 - Coordinates BenchmarkManager, EpisodeManager, ExecutionManager, PolicyManager
 - Supports both ephemeral sandbox and permanent Docker environments
 - Built for horizontal scaling with stateless session design
-- Includes evaluation service for trajectory and performance tracking
+- Episode creation uses Semaphore(3) for controlled concurrency
+- Background finalization with Semaphore(16) for health checks
+- Async permanent environment startup for fast REST API availability
 end note
 
 note right of ClientSession
@@ -360,12 +409,14 @@ note left of ExecutionManager
 **Docker-Based Command Execution**
 - Dual environment support (ephemeral sandbox + persistent permanent)
 - Factory-based executor pattern with custom executor registry
-- Episode-scoped container lifecycle management
+- Episode-scoped container lifecycle via ComposeOrchestrator
+- Static compose files with environment variable substitution
 - Network isolation and comprehensive security validation
 - MCP tool schema generation for dynamic client discovery
 - Concurrent command execution within episodes (max 3 per episode)
 - Debug mode support for container inspection
 - Lazy sandbox initialization for efficiency
+- Async health check waiting via wait_for_episode_healthy()
 end note
 
 note bottom of SessionRestAPI
@@ -393,13 +444,16 @@ end note
 note right of EpisodeManager
 **RL-Style Episode Management**
 - Supports multiple concurrent episodes per session
-- Episode dependency management (attach to parent episodes)
-- Episode lifecycle: created -> running -> completed
+- Episode dependency management with retry logic for race conditions
+- Episode lifecycle: CREATING -> READY -> ACTIVE -> COMPLETED/FAILED_CREATION
 - Step tracking with action/response logging
 - Automatic termination detection (max steps, errors)
 - Episode configuration from task definitions
 - Cleanup on session termination
 - Completed episode history retention
+- Memory management: clears heavy data (transcripts) on completion
+- ConnectionManager for WebSocket support
+- TranscriptCoordinator for real-time sync
 end note
 
 @enduml

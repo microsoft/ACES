@@ -38,9 +38,9 @@ package "Execution Management" {
         +async copy_initial_files_to_episode(episode_id: str, task: Task): void
         +initialize_permanent_environment_manager(config: Dict[str, Any]): void
         +start_permanent_environment(environment_spec: Any): void
-        +stop_permanent_environment(): void
+        +async stop_permanent_environment(): void
         +is_permanent_environment_running(): bool
-        +cleanup_episode(episode_id: str, context?: Dict): bool
+        +async cleanup_episode(episode_id: str, context?: Dict): bool
         +cleanup_session(session_id: str, context?: Dict): bool
         +cleanup_all_containers(context?: Dict): Dict[str, Any]
         +is_sandbox_ready(): bool
@@ -241,9 +241,12 @@ package "Docker Sandbox" <<stereototype S>> {
         --
         +is_ready(): bool
         +wait_for_ready(timeout: int): bool
-        +create_episode_environment(episode_id: str, sandbox_environment: str, target_episode_id?: str): bool
+        +create_episode_environment_async(episode_id: str, sandbox_environment: str, target_episode_id?: str, session_id?: str): tuple[ComposeOrchestrator, Path]
+        +wait_for_episode_healthy(episode_id: str, timeout_seconds?: int, check_interval?: float): void
         +get_episode_environment(episode_id: str): Optional[ComposeOrchestrator]
-        +stop_episode_environment(episode_id: str): bool
+        +async stop_episode_environment(episode_id: str): bool
+        +get_execution_container_name(episode_id: str): Optional[str]
+        +get_episode_status(episode_id: str): Optional[Dict[str, Any]]
         +list_active_episodes(): List[str]
         +get_episode_count(): int
         +get_sandbox_config(): Dict[str, Any]
@@ -251,23 +254,23 @@ package "Docker Sandbox" <<stereototype S>> {
     }
 
     class PermanentEnvironmentManager {
-        +permanent_config: Dict[str, Any]
-        +permanent_services: Dict[str, PermanentService]
-        +permanent_network: DockerNetwork
+        +config: Dict[str, Any]
+        +domain: str
+        +compose_project_name: str
+        +orchestrator: ComposeOrchestrator
+        -_is_running: bool
+        -_compose_file_path: Optional[Path]
         --
-        +start_permanent_services(env_spec: PermanentEnvironmentSpec): void
-        +stop_permanent_services(): void
-        +get_service_endpoints(service_name: str): ServiceEndpoints
-        +connect_sandbox_to_permanent(sandbox_env: ComposeOrchestrator, episode_id: str): void
-        +is_service_healthy(service_name: str): bool
-        +list_permanent_services(): List[str]
-        +get_permanent_network_info(): Dict[str, Any]
+        +start_permanent_environment_from_file(compose_file_path: Path): void
+        +async stop_permanent_environment(): void
+        +is_running(): bool
     }
 
     class ComposeOrchestrator {
         +execution_service_name: Optional[str]
         +episode_id: Optional[str]
         +compose_file_path: Optional[Path]
+        +processed_compose_path: Optional[str]
         +compose_data: Optional[dict]
         +_docker_client: Any
         +config_type: str
@@ -276,7 +279,9 @@ package "Docker Sandbox" <<stereototype S>> {
         +project_name: str
         --
         +start_environment(compose_file_path: str, config: ComposeEnvironmentConfig): subprocess.CompletedProcess
-        +stop_environment(): subprocess.CompletedProcess
+        +start_environment_async(compose_file_path: str, config: ComposeEnvironmentConfig): subprocess.CompletedProcess
+        +wait_for_healthy(timeout?: int, check_interval?: float): bool
+        +async stop_environment(compose_file_path?: Path, episode_id?: str): subprocess.CompletedProcess
         +execute_command(command: str, working_dir?: str, timeout?: float, env_vars?: Dict): CommandResult
         +copy_to_container(source: str, dest: str): bool
         +copy_from_container(source: str, dest: str): bool
@@ -291,15 +296,15 @@ package "Docker Sandbox" <<stereototype S>> {
     }
 
     class ComposeEnvironmentConfig {
-        +episode_id: str
+        +episode_id: Optional[str]
+        +project_name: Optional[str]
         +config_type: str
+        +permanent_network_prefix: Optional[str]
         +target_episode_id: Optional[str]
-        +sandbox_environment: Optional[str]
+        +additional_variables: Optional[Dict[str, str]]
         --
-        +get_project_name(): str
+        +get_project_name(): Optional[str]
         +to_env_dict(): Dict[str, str]
-        +from_sandbox_config(episode_id: str, sandbox_environment: str, target_episode_id?: str): ComposeEnvironmentConfig
-        +from_permanent_config(permanent_environment: str): ComposeEnvironmentConfig
     }
 
     class ComposeHealthChecker {
@@ -307,6 +312,13 @@ package "Docker Sandbox" <<stereototype S>> {
         +wait_for_healthy(containers: List[Container], timeout: int): bool
         +get_service_status(container: Container): str
     }
+}
+
+' Note: The following classes (PermanentEnvironmentSpec, PermanentServiceSpec,
+' NetworkSpec, HealthCheck) are conceptual design elements not yet implemented
+' in the codebase. PermanentEnvironmentManager uses static compose files directly.
+
+package "Future Design (Not Implemented)" <<stereotype C>> {
 
     class PermanentEnvironmentSpec {
         +permanent_services: List[PermanentServiceSpec]
@@ -369,14 +381,16 @@ ExecutorRegistry o-- SQLExecutor : registers
 
 ' Sandbox relationships
 SandboxEnvironmentManager *-- ComposeOrchestrator
-PermanentEnvironmentManager *-- PermanentServiceSpec
+PermanentEnvironmentManager *-- ComposeOrchestrator : uses
 ComposeOrchestrator *-- ComposeHealthChecker
 ComposeOrchestrator ..> ComposeEnvironmentConfig : uses
+DockerExecutor *-- SandboxEnvironmentManager
+ComposeOrchestrator ..> CommandResult
+
+' Future Design relationships (not implemented)
 PermanentEnvironmentSpec *-- PermanentServiceSpec
 PermanentEnvironmentSpec *-- NetworkSpec
 PermanentServiceSpec *-- HealthCheck
-DockerExecutor *-- SandboxEnvironmentManager
-ComposeOrchestrator ..> CommandResult
 
 ' Executor-specific relationships
 BashExecutor *-- SecurityValidator
@@ -436,21 +450,25 @@ Manages ephemeral sandbox environments using static compose files:
 - Static compose file resolution from environments/sandbox directory
 - Episode-specific project naming for Docker Compose
 - ComposeOrchestrator instances per episode
-- Health monitoring across all sandbox services
+- Async environment creation with separate health check wait
+- create_episode_environment_async() returns (orchestrator, compose_path)
+- wait_for_episode_healthy() called separately after Docker starts
 - Episode environment creation with optional network attachment
 - Lazy validation of environments directory
+- get_execution_container_name() for file copy operations
 end note
 
 note bottom of PermanentEnvironmentManager
 **Permanent Environment Manager**
-Manages server-scoped persistent services that remain active across episodes:
+Manages server-scoped persistent services using static compose files:
 - Creates and manages long-lived Docker services on server startup
-- Provides permanent network bridge for cross-episode service sharing
-- Service health monitoring and automatic recovery
-- Service endpoint discovery for connecting sandbox environments
-- Network attachment for episode orchestrators
+- Uses ComposeOrchestrator with static compose file path
+- Domain-specific project naming: {domain}_permanent_environment
+- Permanent network prefix for cross-episode service discovery
 - Graceful shutdown coordination with server lifecycle
-- Persistent storage and configuration management
+- Simple is_running() state tracking
+- start_permanent_environment_from_file() for file-based startup
+- async stop_permanent_environment() for cleanup
 end note
 
 note top of ComposeOrchestrator
@@ -460,6 +478,8 @@ Unified Docker Compose orchestration using static compose files:
 - Static compose file with environment variable substitution
 - Episode-specific project naming for isolation
 - Automatic network injection for episode dependencies
+- start_environment_async() returns immediately, health checks separate
+- wait_for_healthy() called after containers start
 - Execution service identification via labels
 - Per-service health monitoring and log access
 - Command execution in designated execution service

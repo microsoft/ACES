@@ -1,8 +1,8 @@
-@startuml SABER Context Injection Architecture
+@startuml SABER MCP Architecture
 
 !theme plain
 allowmixing
-title SABER Context Injection - Assistant Message & Reasoning Flow
+title SABER MCP Architecture - Native Inspect AI Integration
 
 skinparam class {
     BackgroundColor lightblue
@@ -17,319 +17,209 @@ skinparam component {
     FontSize 10
 }
 
-skinparam sequence {
-    ArrowColor black
-    ActorBorderColor black
-}
-
-package "Context Injection System (saber/inspect_ai/context_injection.py)" {
-
-    class ContextStorage {
-        +assistant_message: Optional[str]
-        +reasoning: Optional[str]
-        --
-        **Thread-Safe Storage**
-        - Uses contextvars for isolation
-        - Per-async-context storage
-        - Automatic cleanup
-    }
-
-    class saber_execute_tools {
-        --
-        **Tool Execution Wrapper**
-        +Intercepts execute_tools()
-        +Extracts assistant message
-        +Extracts reasoning (o1/o3 models)
-        +Stores in ContextStorage
-        +Calls original execute_tools()
-        +Clears context after
-    }
-
-    class saber_tool_params {
-        --
-        **Parameter Injection**
-        +Intercepts tool_params()
-        +Checks if SABER tool
-        +Injects context params:
-          - __saber_assistant_message__
-          - __saber_reasoning__
-        +Calls original tool_params()
-    }
-
-    class extract_assistant_content {
-        --
-        **Content Extraction**
-        +Extracts text from ChatMessageAssistant
-        +Handles string and ContentText[]
-        +Skips ContentReasoning
-        +Sanitizes and truncates (10KB limit)
-    }
-
-    class extract_reasoning_content {
-        --
-        **Reasoning Extraction**
-        +Extracts from reasoning attribute
-        +Extracts from ContentReasoning in list
-        +Checks redaction status
-        +Returns summary if redacted
-        +Sanitizes and truncates
-    }
-
-    class is_saber_mcp_tool {
-        --
-        **Tool Detection**
-        +Checks function name (bash, python, etc.)
-        +Checks _saber_tool attribute
-        +Returns true for SABER tools only
-    }
-
-    note right of is_saber_mcp_tool
-    **SABER Tool Detection**
-
-    Recognizes tools by:
-    - Name matching (bash, python, etc.)
-    - Explicit registration via @saber_tool
-
-    Non-SABER tools don't get context injection
-    (e.g., builtin Inspect AI tools)
-    end note
+skinparam package {
+    BackgroundColor lightyellow
+    BorderColor black
 }
 
 package "Inspect AI Framework" {
-    class execute_tools {
+    class "mcp_server_http()" as mcp_http {
+        +name: str
+        +url: str
+        +headers: Dict[str, str]
+        +timeout: float
         --
-        **Original Function**
-        (patched by saber_execute_tools)
+        **Native MCP Integration**
+        - Standard MCP HTTP client
+        - Automatic tool discovery
+        - Built-in retry logic
     }
 
-    class tool_params {
+    class "ToolSource" as toolsource {
+        +tools(): List[Tool]
         --
-        **Original Function**
-        (patched by saber_tool_params)
-    }
-
-    class ChatMessageAssistant {
-        +content: str | List[Content]
-        +reasoning: Optional[str]
-        --
-        **Agent Messages**
-        Contains what the agent said
-        before calling tools
+        **Tool Provider Protocol**
+        - Lazy evaluation
+        - Called during solver execution
     }
 }
 
-package "SABER MCP Server" {
-    class "MCP Tools" as MCPTools {
-        +bash(command, **context)
-        +python(code, **context)
-        +read_file(path, **context)
-        +write_file(path, content, **context)
+package "SABER Client Integration (saber/inspect_ai/)" {
+
+    class MCPClientFactory {
+        +mcp_url_base: str
+        +domain_slug: str
+        +timeout: float
         --
-        **Receives Context**
-        - __saber_assistant_message__
-        - __saber_reasoning__
+        +create_mcp_client(): Tool
+        --
+        **MCP Client Creation**
+        - Creates mcp_server_http() instances
+        - Injects SABER context headers
+        - Unique naming per sample
+        - Retry logic for transient failures
     }
 
-    note right of MCPTools
-    **Context Usage**
+    class SABERToolSource {
+        +_sandbox_name: str
+        --
+        +tools(): List[Tool]
+        --
+        **Tool Provider**
+        - Implements ToolSource protocol
+        - Retrieves MCP client from sandbox
+        - Lifecycle-aware validation
+        - Returns domain-specific tools
+    }
 
-    Server extracts special params:
-    - Logs assistant message
-    - Logs reasoning content
-    - Uses for evaluation
-    - Removes before execution
+    class SABERSandboxEnvironment {
+        +_mcp_client: Tool
+        +_mcp_factory: MCPClientFactory
+        +_session_id: str
+        +_episode_id: str
+        --
+        +sample_init(): Creates MCP client
+        +sample_cleanup(): Cleans up MCP client
+        --
+        **Sandbox Lifecycle**
+        - Creates MCP client per sample
+        - Manages session/episode context
+    }
 
-    Enables understanding of
-    agent's thought process
-    end note
-}
-
-' Flow relationships
-saber_execute_tools ..> extract_assistant_content : uses
-saber_execute_tools ..> extract_reasoning_content : uses
-saber_execute_tools ..> ContextStorage : stores to
-saber_execute_tools ..> execute_tools : patches
-
-saber_tool_params ..> is_saber_mcp_tool : uses
-saber_tool_params ..> ContextStorage : reads from
-saber_tool_params ..> tool_params : patches
-
-execute_tools ..> tool_params : calls
-execute_tools ..> ChatMessageAssistant : receives
-tool_params ..> MCPTools : injects params
-
-note top of ContextStorage
-**Context Isolation**
-
-Uses Python's contextvars for thread-safe storage:
-- Each async task has isolated context
-- No cross-contamination between concurrent evals
-- Automatic cleanup when task completes
-- Supports concurrent Inspect AI evaluations
-end note
-
-note bottom of saber_execute_tools
-**Execution Flow**
-
-1. Inspect AI calls execute_tools(messages, tools)
-2. saber_execute_tools intercepts
-3. Extracts assistant message from last ChatMessageAssistant
-4. Extracts reasoning if present (o1/o3 models)
-5. Stores in contextvars
-6. Calls original execute_tools()
-7. Returns result
-8. Clears context
-end note
-
-note bottom of saber_tool_params
-**Parameter Injection Flow**
-
-1. Inspect AI calls tool_params(input_dict, func)
-2. saber_tool_params intercepts
-3. Calls original tool_params() first
-4. Checks if func is SABER tool
-5. If yes, retrieves context from ContextStorage
-6. Injects __saber_assistant_message__ param
-7. Injects __saber_reasoning__ param (if present)
-8. Returns enhanced params dict
-9. MCP client sends to SABER server
-end note
-
-@enduml
-        }
-
-        class SessionManagerConfig {
-            +base_url: str
-            +mcp_server_url: str
-            +client_id: str
-            +rest_timeout: float
-            --
-            +from_urls(rest_url, mcp_url): SessionManagerConfig
-        }
-
-        class AgentAssignment {
-            +agent_id: str
-            +task_ids: Optional[List[str]]
-            +agent_kwargs: Dict[str, Any]
-            --
-            +applies_to_task(task_id): bool
-        }
+    class transcript_sync {
+        --
+        +create_transcript_syncing_generate()
+        +_push_transcript_delta()
+        --
+        **Context Synchronization**
+        - Pushes transcripts after generate()
+        - Differential sync (new messages only)
+        - Server has agent context for tools
     }
 }
 
-cloud "SABER Server" {
-    package "Server MCP API" {
-        class SessionMCPAPI {
-            +FastMCP_server_implementation
-            +header_based_session_context
-            +dynamic_tool_registration
-            +episode_specific_executors
-            --
-            +_get_headers(): RequestHeaders
-            +list_tools(): MCPToolListResponse
-            +call_tool(): MCPToolCallResponse
-            +_register_dynamic_tools(): void
-        }
-
-        class ExecutionManager {
-            +executor_factory: ExecutorFactory
-            +sandbox_environment_manager: SandboxEnvironmentManager
-            +episode_based_execution
-            --
-            +step(action, context): CommandResult
-            +get_executor(type, episode_id): DockerExecutor
-            +configure_for_task(): void
-        }
-
-        class RequestHeaders {
-            +session_id: Optional[str]
-            +episode_id: Optional[str]
-            +orchestration_env: OrchestrationEnvironment
-            --
-            +has_session_context: bool
-            +has_episode_context: bool
-        }
-    }
-
-    package "Server REST API" {
-        class SessionRestAPI {
-            +POST /api/v1/session
-            +POST /api/v1/session/{id}/episodes
-            +GET /api/v1/tasks
-            +GET /api/v1/session/{id}/episodes/{ep}/policy
-            +GET /api/v1/session/{id}/episodes/{ep}/task
-            +DELETE /api/v1/session/{id}/episodes/{ep}
-        }
+package "HTTP Headers (saber/models/headers.py)" {
+    class HTTPHeaders <<constants>> {
+        +SESSION_ID = "X-SABER-Session-ID"
+        +EPISODE_ID = "X-SABER-Episode-ID"
+        +TASK_ID = "X-SABER-Task-ID"
+        +ORCHESTRATION_ENV = "X-SABER-Orchestration-Env"
+        --
+        **Request Context Headers**
+        - Passed with every MCP request
+        - Server extracts for routing
+        - Episode-specific tool execution
     }
 }
 
-package "MCP Protocol Flow" {
-    rectangle "Agent Code" as agent
-    rectangle "inspect_ai mcp_server_http" as mcp_http
-    rectangle "Server Tools" as server_tools
-    rectangle "Episode Context" as episode_context
+package "SABER Server MCP API (saber/server/api/)" {
+
+    class SessionMCPAPI {
+        +session_manager: SessionManager
+        +mcp_server: FastMCP
+        +tool_generator: MCPToolGenerator
+        --
+        +_get_headers(): RequestHeaders
+        +list_tools(): MCPToolListResponse
+        +call_tool(): MCPToolCallResponse
+        --
+        **FastMCP Server**
+        - Header-based context extraction
+        - Dynamic tool registration
+        - Episode-specific execution
+    }
+
+    class RequestHeaders {
+        +session_id: Optional[str]
+        +episode_id: Optional[str]
+        +task_id: Optional[str]
+        +orchestration_env: OrchestrationEnvironment
+        --
+        **Parsed Request Context**
+        - Validated on each request
+        - Used for tool routing
+    }
+
+    class MCPToolGenerator {
+        --
+        +generate_tools(): List[MCPToolSchema]
+        --
+        **Tool Schema Generation**
+        - Converts executors to MCP tools
+        - Episode-specific tool sets
+    }
+
+    class ExecutionManager {
+        +executor_factory: ExecutorFactory
+        +sandbox_environment_manager: SandboxEnvironmentManager
+        --
+        +step(action, context): CommandResult
+        +get_executor(type, episode_id): DockerExecutor
+        --
+        **Command Execution**
+        - Episode-scoped sandbox access
+        - Docker container execution
+        - Concurrent execution limits
+    }
 }
 
 ' Relationships
-run_saber_eval_async --> ClientSessionManager : orchestrates
-run_saber_eval_async --> SABERConfig : validates
-ClientSessionManager --> SABERRestClient : delegates REST only
-saber_agent --> mcp_http : uses inspect_ai native MCP
-SABERRestClient --> SessionRestAPI : HTTP requests
-SABERConfig *-- AgentAssignment : contains
-SABERConfig --> SessionManagerConfig : converts to
+MCPClientFactory ..> mcp_http : creates
+MCPClientFactory ..> HTTPHeaders : injects headers
+SABERSandboxEnvironment *-- MCPClientFactory : uses
+SABERSandboxEnvironment --> transcript_sync : uses for context
+SABERToolSource ..> SABERSandboxEnvironment : retrieves MCP client
+SABERToolSource ..|> toolsource : implements
 
-' MCP Protocol Flow
-agent --> mcp_http : inspect_ai native MCP calls
-mcp_http --> SessionMCPAPI : HTTP with headers
-SessionMCPAPI --> RequestHeaders : extracts context
-SessionMCPAPI --> ExecutionManager : delegates with episode_id
-ExecutionManager --> server_tools : episode-specific execution
-episode_context --> mcp_http : context headers
+mcp_http --> SessionMCPAPI : HTTP + headers
+SessionMCPAPI --> RequestHeaders : parses
+SessionMCPAPI --> MCPToolGenerator : uses
+SessionMCPAPI --> ExecutionManager : delegates execution
 
-' inspect_ai Integration
-run_saber_eval_async ..> inspect_ai_fw : compatible interface
-saber_agent ..> inspect_ai_fw : native integration
+note top of MCPClientFactory
+**MCP Client Creation**
 
-note top of run_saber_eval_async
-Current SABER MCP Architecture
-- inspect_ai native MCP integration via mcp_server_http()
-- No custom MCP client implementation needed
-- Header-based session/episode context
-- Episode-specific tool execution
-- Fail-fast configuration validation
-- Multi-agent support via AgentAssignment
-end note
+Creates inspect_ai mcp_server_http() with:
+- Unique name per sample (prevents caching issues)
+- SABER context headers for server routing
+- Configurable timeout for long-running commands
 
-
-
-note bottom of mcp_http
-Inspect AI Native MCP Integration
-- Uses mcp_server_http() function
-- Automatic tool discovery from server
-- Session context via HTTP headers
-- No custom MCP client management
-- Standard MCP protocol compliance
-- Seamless agent integration
+Headers injected:
+- X-SABER-Session-ID
+- X-SABER-Episode-ID
+- X-SABER-Task-ID
+- X-SABER-Orchestration-Env
 end note
 
 note right of SessionMCPAPI
-Server-Side MCP Implementation
-- FastMCP framework
-- Header-based context extraction
-- Dynamic tool registration per episode
-- Episode-specific executor access
-- Concurrent execution limits per episode
-- Fail-fast parameter validation
+**Server-Side MCP Implementation**
+
+Uses FastMCP framework:
+- Extracts context from HTTP headers
+- Routes requests to correct episode
+- Dynamic tool registration per task
+- Episode-specific sandbox execution
+- Concurrent execution limits (3 per episode)
 end note
 
-note left of RequestHeaders
-MCP Context Headers
-- X-SABER-Session-ID: session identifier
-- X-SABER-Episode-ID: episode identifier
-- X-SABER-Orchestration-Env: environment type
-- Required for all MCP tool calls
-- Validated on each request
+note bottom of transcript_sync
+**Context Synchronization**
+
+Replaces deprecated monkey-patch approach:
+- Pushes transcript after each generate() call
+- Server has fresh agent context before tool execution
+- Differential sync (only new messages)
+- Graceful degradation on network failures
+end note
+
+note left of SABERToolSource
+**Lazy Tool Loading**
+
+ToolSource pattern enables:
+- Tools retrieved during solver execution
+- After sandbox lifecycle complete
+- Validates MCP client availability
+- Clear error messages for ordering issues
 end note
 
 @enduml
