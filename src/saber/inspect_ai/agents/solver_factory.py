@@ -6,8 +6,9 @@ debug logging integration, model context management, and per-iteration
 transcript synchronization.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Optional
+from typing import Any
 
 from inspect_ai.model import Model, get_model
 from inspect_ai.model._model import active_model, active_model_context_var
@@ -39,18 +40,18 @@ class SABERExecutionContext:
     continue_prompt: str
 
     # Episode context
-    session_id: Optional[str]
-    episode_id: Optional[str]
-    domain_slug: Optional[str]
-    rest_url: Optional[str]
+    session_id: str | None
+    episode_id: str | None
+    domain_slug: str | None
+    rest_url: str | None
 
     # Task metadata
-    task_id: Optional[str]
-    sample_id: Optional[str]
+    task_id: str | None
+    sample_id: str | None
 
     # Role & transcript coordination
-    role: Optional[str]
-    transcript_config: Optional[dict[str, Any]]
+    role: str | None
+    transcript_config: dict[str, Any] | None
 
     @classmethod
     def from_task_state(cls, state: TaskState) -> "SABERExecutionContext":
@@ -128,17 +129,15 @@ class SABERExecutionContext:
             )
         if not assistant_prompt:
             raise ValueError(
-                "Missing 'assistant_prompt' in sample metadata. "
-                "Ensure the SABER server is providing all four prompts."
+                "Missing 'assistant_prompt' in sample metadata. Ensure the SABER server is providing all four prompts."
             )
         if not submit_prompt:
             raise ValueError(
-                "Missing 'submit_prompt' in sample metadata. " "Ensure the SABER server is providing all four prompts."
+                "Missing 'submit_prompt' in sample metadata. Ensure the SABER server is providing all four prompts."
             )
         if not continue_prompt:
             raise ValueError(
-                "Missing 'continue_prompt' in sample metadata. "
-                "Ensure the SABER server is providing all four prompts."
+                "Missing 'continue_prompt' in sample metadata. Ensure the SABER server is providing all four prompts."
             )
 
         # Resolve REST URL from domain
@@ -187,7 +186,7 @@ class SABERExecutionContext:
         )
 
 
-def _select_model(context: SABERExecutionContext, role_config: Optional[Any]) -> tuple[Model, str]:
+def _select_model(context: SABERExecutionContext, role_config: Any | None) -> tuple[Model, str]:
     """Select model based on role configuration or use default.
 
     Args:
@@ -261,7 +260,7 @@ def _wrap_model_for_transcript_sync(
     # Build WebSocketConfig from YAML - only enabled flags are configurable
     from ...models.rest.websocket_config import PullConfig, PushConfig
 
-    ws_config_kwargs: Dict[str, Any] = {}
+    ws_config_kwargs: dict[str, Any] = {}
 
     # Handle push configuration - only enabled is configurable
     if "push" in websocket_config:
@@ -303,7 +302,7 @@ def _wrap_model_for_transcript_sync(
     return wrapped_model
 
 
-def create_saber_solver(agent_name: str, agent_factory: Callable, role_config: Optional[Any] = None) -> Solver:
+def create_saber_solver(agent_name: str, agent_factory: Callable, role_config: Any | None = None) -> Solver:
     """Create solver with SABER agent that extracts prompts from metadata.
 
     This solver:
@@ -351,7 +350,7 @@ def create_saber_solver(agent_name: str, agent_factory: Callable, role_config: O
                 create_with_prompts = agent_factory()
 
                 # Get submit configuration from role config if available
-                submit_enabled: Optional[bool] = None
+                submit_enabled: bool | None = None
                 if context.role and role_config:
                     try:
                         role_agent_config = role_config.get_config_for_role(context.role)

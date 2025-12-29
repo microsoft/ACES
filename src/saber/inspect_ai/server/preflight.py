@@ -118,7 +118,7 @@ async def run_preflight_check(
             raise PrerequisiteError(
                 "Preflight check cancelled by user (Ctrl+C). "
                 "Some Docker containers may still be cleaning up in the background."
-            )
+            ) from None
 
         if exit_code != 0:
             raise PrerequisiteError(

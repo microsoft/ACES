@@ -3,7 +3,7 @@ Pydantic models for evaluation system.
 """
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -12,11 +12,11 @@ class EvaluationConfig(BaseModel):
     """Configuration for episode evaluation."""
 
     strategy: str = Field(..., description="Evaluation strategy: static or llm_judge")
-    criteria: Dict[str, Any] = Field(..., description="Strategy-specific evaluation criteria")
-    scoring: Dict[str, Any] = Field(default_factory=dict, description="Scoring configuration")
+    criteria: dict[str, Any] = Field(..., description="Strategy-specific evaluation criteria")
+    scoring: dict[str, Any] = Field(default_factory=dict, description="Scoring configuration")
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "EvaluationConfig":
+    def from_dict(cls, data: dict[str, Any]) -> "EvaluationConfig":
         """Create config from task YAML data."""
         return cls(**data)
 
@@ -33,19 +33,19 @@ class EvaluationResult(BaseModel):
     score: float = Field(..., ge=0.0)
     success: bool
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    details: Dict[str, Any] = Field(default_factory=dict)
+    details: dict[str, Any] = Field(default_factory=dict)
 
     # Enhanced submission metadata (from EpisodeEvaluationData)
     submission: str = Field(..., description="Agent submission that was evaluated")
-    executed_commands: List[str] = Field(default_factory=list, description="Commands executed during episode")
-    completion_reason: Optional[str] = Field(None, description="Reason episode completed")
+    executed_commands: list[str] = Field(default_factory=list, description="Commands executed during episode")
+    completion_reason: str | None = Field(None, description="Reason episode completed")
     step_count: int = Field(..., ge=0, description="Number of steps in episode")
 
     # Model and execution metadata
-    model: Optional[str] = Field(None, description="Model name used for the submission")
-    choices: List[Dict[str, Any]] = Field(default_factory=list, description="Model response choices")
-    tokens: Dict[str, Any] = Field(default_factory=dict, description="Token usage information")
-    execution_time: Optional[float] = Field(None, ge=0.0, description="Model execution time in seconds")
+    model: str | None = Field(None, description="Model name used for the submission")
+    choices: list[dict[str, Any]] = Field(default_factory=list, description="Model response choices")
+    tokens: dict[str, Any] = Field(default_factory=dict, description="Token usage information")
+    execution_time: float | None = Field(None, ge=0.0, description="Model execution time in seconds")
 
     @classmethod
     def from_episode_data(
@@ -56,7 +56,7 @@ class EvaluationResult(BaseModel):
         max_score: float,
         score: float,
         success: bool,
-        details: Optional[Dict[str, Any]] = None,
+        details: dict[str, Any] | None = None,
     ) -> "EvaluationResult":
         """Create EvaluationResult from EpisodeEvaluationData with evaluation results."""
         return cls(
@@ -86,17 +86,17 @@ class EpisodeEvaluationData(BaseModel):
     episode_id: str = Field(..., description="Episode identifier")
     task_id: str = Field(..., description="Task identifier")
     submission: str = Field(..., description="Agent submission for evaluation")
-    executed_commands: List[str] = Field(default_factory=list, description="Commands executed during episode")
-    completion_reason: Optional[str] = Field(None, description="Reason episode completed")
+    executed_commands: list[str] = Field(default_factory=list, description="Commands executed during episode")
+    completion_reason: str | None = Field(None, description="Reason episode completed")
     step_count: int = Field(..., ge=0, description="Number of steps in episode")
 
     # Enhanced ModelOutput data (from EvalSubmission)
-    model: Optional[str] = Field(None, description="Model name used")
-    choices: List[Dict[str, Any]] = Field(default_factory=list, description="Model response choices")
-    tokens: Dict[str, Any] = Field(default_factory=dict, description="Token usage information")
-    execution_time: Optional[float] = Field(None, ge=0.0, description="Model execution time in seconds")
+    model: str | None = Field(None, description="Model name used")
+    choices: list[dict[str, Any]] = Field(default_factory=list, description="Model response choices")
+    tokens: dict[str, Any] = Field(default_factory=dict, description="Token usage information")
+    execution_time: float | None = Field(None, ge=0.0, description="Model execution time in seconds")
 
     @classmethod
-    def from_episode_dict(cls, episode_data: Dict[str, Any]) -> "EpisodeEvaluationData":
+    def from_episode_dict(cls, episode_data: dict[str, Any]) -> "EpisodeEvaluationData":
         """Create from episode dictionary data."""
         return cls(**episode_data)

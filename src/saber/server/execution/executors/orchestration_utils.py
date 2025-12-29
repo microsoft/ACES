@@ -7,7 +7,7 @@ in orchestrated multi-agent scenarios.
 Logging category: ``LogCategory.TASK_EXEC``.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 from ....logging_config import LogCategory, get_saber_logger
 from ....models.constants import MetadataKeys
@@ -18,9 +18,9 @@ logger = get_saber_logger(LogCategory.TASK_EXEC, __name__)
 async def resolve_target_episode_id(
     session_manager: Any,
     red_episode_id: str,
-    parameters: Optional[Dict[str, Any]] = None,
-    context: Optional[Dict[str, Any]] = None,
-) -> Optional[str]:
+    parameters: dict[str, Any] | None = None,
+    context: dict[str, Any] | None = None,
+) -> str | None:
     """
     Resolve target episode ID from orchestration metadata.
 

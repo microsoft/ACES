@@ -8,7 +8,7 @@ Logging category: ``LogCategory.DOCKER``.
 """
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any
 
 from ....logging_config import (
     LogCategory,
@@ -41,7 +41,7 @@ class DockerExecutor(CommandExecutor):
     """
 
     def __init__(
-        self, sandbox_manager: SandboxEnvironmentManager, config: Optional[Dict[str, Any]] = None, **kwargs: Any
+        self, sandbox_manager: SandboxEnvironmentManager, config: dict[str, Any] | None = None, **kwargs: Any
     ) -> None:
         """
         Initialize Docker executor.
@@ -65,9 +65,9 @@ class DockerExecutor(CommandExecutor):
     def create_with_config(
         cls,
         sandbox_manager: SandboxEnvironmentManager,
-        config: Optional[Dict[str, Any]] = None,
-        additional_params: Optional[Dict[str, Any]] = None,
-        session_manager: Optional[Any] = None,
+        config: dict[str, Any] | None = None,
+        additional_params: dict[str, Any] | None = None,
+        session_manager: Any | None = None,
         **kwargs: Any,
     ) -> "DockerExecutor":
         """
@@ -168,7 +168,9 @@ class DockerExecutor(CommandExecutor):
                 exc,
                 episode_id=episode_id,
             )
-            raise SandboxExecutionError(f"Failed to clean up execution resources for episode {episode_id}: {exc}")
+            raise SandboxExecutionError(
+                f"Failed to clean up execution resources for episode {episode_id}: {exc}"
+            ) from exc
         else:
             log_operation_success(
                 logger,
@@ -176,7 +178,7 @@ class DockerExecutor(CommandExecutor):
                 episode_id=episode_id,
             )
 
-    def validate_docker_parameters(self, parameters: Dict[str, Any]) -> ValidationResult:
+    def validate_docker_parameters(self, parameters: dict[str, Any]) -> ValidationResult:
         """
         Validate Docker-specific parameters.
 
@@ -204,21 +206,21 @@ class DockerExecutor(CommandExecutor):
 
         return result
 
-    def get_docker_info(self) -> Dict[str, Any]:
+    def get_docker_info(self) -> dict[str, Any]:
         """
         Get Docker-specific configuration information.
 
         Returns:
             Dictionary with Docker configuration details
         """
-        info: Dict[str, Any] = {
+        info: dict[str, Any] = {
             "execution_environment": "docker_container",
             "timeout": self.get_timeout(),
         }
 
         try:
             sandbox_config = self._sandbox_manager.sandbox_config
-            docker_info: Dict[str, Any] = {}
+            docker_info: dict[str, Any] = {}
 
             # Extract relevant Docker configuration
             for key in ["image", "network_mode", "read_only_root", "user", "resource_limits"]:
@@ -237,7 +239,7 @@ class DockerExecutor(CommandExecutor):
 
         return info
 
-    def setup_parameters(self, config: Dict[str, Any]) -> None:
+    def setup_parameters(self, config: dict[str, Any]) -> None:
         """
         Set up Docker executor parameters.
 
@@ -250,7 +252,7 @@ class DockerExecutor(CommandExecutor):
         pass
 
     @abstractmethod
-    async def execute(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> CommandResult:
+    async def execute(self, parameters: dict[str, Any], context: dict[str, Any]) -> CommandResult:
         """
         Execute the command in Docker container.
 
@@ -265,7 +267,7 @@ class DockerExecutor(CommandExecutor):
         """
         pass
 
-    async def __call__(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> CommandResult:
+    async def __call__(self, parameters: dict[str, Any], context: dict[str, Any]) -> CommandResult:
         """
         Call the executor with given parameters and context.
 
@@ -281,7 +283,7 @@ class DockerExecutor(CommandExecutor):
         """
         return await self.execute(parameters, context)
 
-    def validate_parameters(self, parameters: Dict[str, Any]) -> ValidationResult:
+    def validate_parameters(self, parameters: dict[str, Any]) -> ValidationResult:
         """
         Validate parameters for Docker execution.
 

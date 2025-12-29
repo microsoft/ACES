@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import List, Optional
 
 from saber.logging_config import LogCategory, get_saber_logger
 
@@ -30,7 +29,7 @@ class EvaluationStore:
         self,
         result: EvaluationResult,
         session_id: str,
-        golden_answer: Optional[str] = None,
+        golden_answer: str | None = None,
     ) -> None:  # pragma: no cover - interface
         raise NotImplementedError
 
@@ -38,7 +37,7 @@ class EvaluationStore:
         """Retrieve evaluation result by session and episode."""
         raise NotImplementedError
 
-    async def list_by_session(self, session_id: str, task_id: Optional[str] = None) -> List[EvaluationResult]:
+    async def list_by_session(self, session_id: str, task_id: str | None = None) -> list[EvaluationResult]:
         """List evaluation results for session, optionally filtered by task."""
         raise NotImplementedError
 
@@ -72,7 +71,7 @@ class JsonFileEvaluationStore(EvaluationStore):
         self,
         result: EvaluationResult,
         session_id: str,
-        golden_answer: Optional[str] = None,
+        golden_answer: str | None = None,
     ) -> None:
         session_dir = self.base_path / session_id
         task_dir = session_dir / result.task_id
@@ -164,7 +163,7 @@ class JsonFileEvaluationStore(EvaluationStore):
 
         raise EvaluationNotFoundError(f"Evaluation not found for episode: {episode_id} in session: {session_id}")
 
-    async def list_by_session(self, session_id: str, task_id: Optional[str] = None) -> List[EvaluationResult]:
+    async def list_by_session(self, session_id: str, task_id: str | None = None) -> list[EvaluationResult]:
         """
         List evaluation results for session, optionally filtered by task.
 
@@ -221,7 +220,7 @@ class JsonFileEvaluationStore(EvaluationStore):
         session_dir = self.base_path / session_id
         return session_dir.exists() and any(session_dir.iterdir())
 
-    def _load_evaluations_from_dir(self, task_dir: Path) -> List[EvaluationResult]:
+    def _load_evaluations_from_dir(self, task_dir: Path) -> list[EvaluationResult]:
         """Load all evaluations from a task directory."""
         results = []
         for artifact_path in task_dir.glob("*.json"):

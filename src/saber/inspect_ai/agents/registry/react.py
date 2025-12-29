@@ -5,7 +5,8 @@ It extracts prompts from sample metadata and uses SABER's MCP tools.
 """
 
 import asyncio
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any
 
 from inspect_ai.agent import react
 from inspect_ai.agent._agent import AgentState
@@ -128,8 +129,8 @@ def create_agent(**kwargs: Any) -> Callable[..., Any]:
         assistant_prompt: str,
         submit_prompt: str,
         continue_prompt: str,
-        transcript_config: Optional[dict] = None,
-        submit: Optional[bool] = None,
+        transcript_config: dict | None = None,
+        submit: bool | None = None,
     ) -> Any:
         """Inner factory that receives prompts from task execution.
 

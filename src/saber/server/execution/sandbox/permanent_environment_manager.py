@@ -7,7 +7,7 @@ providing lifecycle management for long-running services and networks.
 """
 
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from saber.logging_config import LogCategory, get_saber_logger
 
@@ -26,7 +26,7 @@ class PermanentEnvironmentManager:
     that provide persistent services for all benchmark sessions.
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         """
         Initialize the PermanentEnvironmentManager.
 
@@ -46,7 +46,7 @@ class PermanentEnvironmentManager:
         self.domain = domain
         self.compose_project_name = f"{domain}_permanent_environment"
         self._is_running = False
-        self._compose_file_path: Optional[Path] = None  # Store for parameter-less stop
+        self._compose_file_path: Path | None = None  # Store for parameter-less stop
 
         # Configuration and metadata storage
         # Prefer explicit logs_dir; otherwise, infer from config_dir
@@ -139,7 +139,7 @@ class PermanentEnvironmentManager:
                     "error": str(e),
                 },
             )
-            raise SandboxExecutionError(f"Failed to start permanent environment: {e}")
+            raise SandboxExecutionError(f"Failed to start permanent environment: {e}") from e
 
     async def stop_permanent_environment(self) -> None:
         """
@@ -195,7 +195,7 @@ class PermanentEnvironmentManager:
                     "error": str(e),
                 },
             )
-            raise SandboxExecutionError(f"Failed to stop permanent environment: {e}")
+            raise SandboxExecutionError(f"Failed to stop permanent environment: {e}") from e
 
     def is_running(self) -> bool:
         """

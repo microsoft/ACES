@@ -25,7 +25,7 @@ Logging category: AGENT.
 """
 
 import asyncio
-from typing import Any, ClassVar, Dict, List, Optional
+from typing import Any, ClassVar, Optional
 
 from inspect_ai.model import ChatMessage, Model, ModelOutput
 
@@ -63,7 +63,7 @@ class WebSocketTranscriptSyncingModelWrapper:
     """
 
     # Class-level registry to track wrappers by episode_id for cleanup
-    _wrappers_by_episode: ClassVar[Dict[str, "WebSocketTranscriptSyncingModelWrapper"]] = {}
+    _wrappers_by_episode: ClassVar[dict[str, "WebSocketTranscriptSyncingModelWrapper"]] = {}
 
     @classmethod
     def get_wrapper_for_episode(cls, episode_id: str) -> Optional["WebSocketTranscriptSyncingModelWrapper"]:
@@ -104,7 +104,7 @@ class WebSocketTranscriptSyncingModelWrapper:
         session_id: str,
         episode_id: str,
         rest_url: str,
-        ws_config: Optional[WebSocketConfig] = None,
+        ws_config: WebSocketConfig | None = None,
     ):
         """Initialize WebSocket transcript syncing wrapper.
 
@@ -206,12 +206,12 @@ class WebSocketTranscriptSyncingModelWrapper:
         self._sync.local_checksum = value
 
     @property
-    def _local_messages(self) -> List[ChatMessage]:
+    def _local_messages(self) -> list[ChatMessage]:
         """Get local messages (for backward compatibility)."""
         return self._sync.local_messages
 
     @_local_messages.setter
-    def _local_messages(self, value: List[ChatMessage]) -> None:
+    def _local_messages(self, value: list[ChatMessage]) -> None:
         """Set local messages (for backward compatibility)."""
         self._sync.local_messages = value
 
@@ -226,12 +226,12 @@ class WebSocketTranscriptSyncingModelWrapper:
         return self._connection._ws_url
 
     @property
-    def _listener_task(self) -> Optional[asyncio.Task]:
+    def _listener_task(self) -> asyncio.Task | None:
         """Get listener task (for backward compatibility with tests)."""
         return self._events._listener_task
 
     @_listener_task.setter
-    def _listener_task(self, value: Optional[asyncio.Task]) -> None:
+    def _listener_task(self, value: asyncio.Task | None) -> None:
         """Set listener task (for backward compatibility with tests)."""
         self._events._listener_task = value
 
@@ -275,7 +275,7 @@ class WebSocketTranscriptSyncingModelWrapper:
     async def generate(
         self,
         input: str | list[ChatMessage],
-        tools: Optional[list] = None,
+        tools: list | None = None,
         **kwargs: Any,
     ) -> ModelOutput:
         """Generate with WebSocket-based bidirectional sync.
@@ -449,7 +449,7 @@ class WebSocketTranscriptSyncingModelWrapper:
     # Transcript sync helpers
     # =========================================================================
 
-    async def wait_and_sync_transcript(self) -> List[ChatMessage]:
+    async def wait_and_sync_transcript(self) -> list[ChatMessage]:
         """Wait for server transcript modification and sync, returning updated messages.
 
         This method is used by the AgentContinue callback to get server-injected
@@ -546,7 +546,7 @@ class WebSocketTranscriptSyncingModelWrapper:
         )
         return self._sync.local_messages.copy()
 
-    async def wait_for_injection_and_sync(self) -> List[ChatMessage]:
+    async def wait_for_injection_and_sync(self) -> list[ChatMessage]:
         """Wait for red team injection, then sync transcript.
 
         This method is used by the AgentContinue callback to wait for red team

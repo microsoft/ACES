@@ -6,7 +6,7 @@ Logging category: COMMUNICATION
 Follows SABER fail-fast principles with no defensive programming fallbacks.
 """
 
-from typing import Any, Dict, Optional, cast
+from typing import Any, cast
 
 import aiohttp
 
@@ -85,7 +85,7 @@ class SABERRestClient:
                 )
                 raise Exception(f"Failed to get benchmark info: {response.status} - {error_text}")
 
-    async def health_check(self) -> Dict[str, Any]:
+    async def health_check(self) -> dict[str, Any]:
         """
         Perform health check against the server.
 
@@ -103,7 +103,7 @@ class SABERRestClient:
             async with session.get(url, timeout=self.request_timeout) as response:
                 if response.status == 200:
                     result = await response.json()
-                    return cast(Dict[str, Any], result)
+                    return cast(dict[str, Any], result)
 
                 log_operation_failure(
                     logger,
@@ -195,7 +195,7 @@ class SABERRestClient:
                     details={"session_id": session_id, "episode_id": episode_id, "status_code": response.status},
                 )
 
-    async def list_evaluations(self, session_id: str, task_id: Optional[str] = None) -> EvaluationListResponse:
+    async def list_evaluations(self, session_id: str, task_id: str | None = None) -> EvaluationListResponse:
         """
         List evaluation results for session.
 
@@ -337,7 +337,7 @@ class SABERRestClient:
         self,
         session_id: str,
         episode_id: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Get episode metadata including transcript timestamps.
 
@@ -380,7 +380,7 @@ class SABERRestClient:
                         episode_id=episode_id,
                         context_keys=list(context.keys()),
                     )
-                    return cast(Dict[str, Any], context)
+                    return cast(dict[str, Any], context)
 
                 error_text = await response.text()
                 log_operation_failure(
@@ -399,9 +399,9 @@ class SABERRestClient:
         self,
         session_id: str,
         episode_id: str,
-        messages: list[Dict[str, Any]],
+        messages: list[dict[str, Any]],
         mode: str = "append",
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """
         Push transcript messages to SABER server.
@@ -423,7 +423,7 @@ class SABERRestClient:
             f"{APIEndpoints.EPISODE_TRANSCRIPT.format(session_id=session_id, episode_id=episode_id)}"
         )
 
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "messages": messages,
             "mode": mode,
         }

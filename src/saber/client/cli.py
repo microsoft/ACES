@@ -12,7 +12,7 @@ import sys
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 import click
 import yaml
@@ -20,7 +20,7 @@ import yaml
 from ..logging_config import LoggingConfig, init_logging
 
 
-def load_environment_file(env_file_path: Optional[Path], verbose: bool = False) -> None:
+def load_environment_file(env_file_path: Path | None, verbose: bool = False) -> None:
     """
     Load environment variables from specified .env file.
 
@@ -46,9 +46,11 @@ def load_environment_file(env_file_path: Optional[Path], verbose: bool = False) 
         if verbose:
             click.echo(f"🔐 Loaded environment from {env_file_path}")
     except ImportError:
-        raise ClientConfigError("python-dotenv is required for .env file loading. Install with: uv add python-dotenv")
+        raise ClientConfigError(
+            "python-dotenv is required for .env file loading. Install with: uv add python-dotenv"
+        ) from None
     except Exception as e:
-        raise ClientConfigError(f"Failed to load environment file {env_file_path}: {e}")
+        raise ClientConfigError(f"Failed to load environment file {env_file_path}: {e}") from e
 
 
 class ClientConfigError(Exception):
@@ -57,7 +59,7 @@ class ClientConfigError(Exception):
     pass
 
 
-def load_domain_manifest(domains_root: Path, domain: str) -> Dict[str, Any]:
+def load_domain_manifest(domains_root: Path, domain: str) -> dict[str, Any]:
     """Load and validate domain manifest for client operations."""
     domain_path = domains_root / domain
     manifest_path = domain_path / "domain.yaml"
@@ -69,10 +71,10 @@ def load_domain_manifest(domains_root: Path, domain: str) -> Dict[str, Any]:
         raise ClientConfigError(f"Domain manifest not found: {manifest_path}")
 
     try:
-        with open(manifest_path, "r") as f:
+        with open(manifest_path) as f:
             manifest = yaml.safe_load(f)
     except yaml.YAMLError as e:
-        raise ClientConfigError(f"Invalid YAML in domain manifest {manifest_path}: {e}")
+        raise ClientConfigError(f"Invalid YAML in domain manifest {manifest_path}: {e}") from e
 
     if not isinstance(manifest, dict):
         raise ClientConfigError(f"Domain manifest must be a YAML object: {manifest_path}")
@@ -86,16 +88,16 @@ def load_domain_manifest(domains_root: Path, domain: str) -> Dict[str, Any]:
     return manifest
 
 
-def load_client_config(config_path: Path) -> Dict[str, Any]:
+def load_client_config(config_path: Path) -> dict[str, Any]:
     """Load client configuration file."""
     if not config_path.exists():
         raise ClientConfigError(f"Client configuration not found: {config_path}")
 
     try:
-        with open(config_path, "r") as f:
+        with open(config_path) as f:
             config = yaml.safe_load(f)
     except yaml.YAMLError as e:
-        raise ClientConfigError(f"Invalid YAML in client config {config_path}: {e}")
+        raise ClientConfigError(f"Invalid YAML in client config {config_path}: {e}") from e
 
     if not isinstance(config, dict):
         raise ClientConfigError(f"Client config must be a YAML object: {config_path}")
@@ -104,10 +106,10 @@ def load_client_config(config_path: Path) -> Dict[str, Any]:
 
 
 def validate_client_config_against_manifest(
-    client_config: Dict[str, Any], manifest: Dict[str, Any], config_path: Path, manifest_path: Path
-) -> Dict[str, Any]:
+    client_config: dict[str, Any], manifest: dict[str, Any], config_path: Path, manifest_path: Path
+) -> dict[str, Any]:
     """Validate client configuration against domain manifest capabilities."""
-    validation_result: Dict[str, Any] = {
+    validation_result: dict[str, Any] = {
         "valid": True,
         "errors": [],
         "warnings": [],
@@ -193,8 +195,8 @@ def cli() -> None:
 )
 def validate_config_command(
     config: Path,
-    domain: Optional[str],
-    domains_root: Optional[Path],
+    domain: str | None,
+    domains_root: Path | None,
     verbose: bool,
 ) -> None:
     """Validate client configuration against domain manifest.
@@ -365,8 +367,7 @@ def view_command(
         from inspect_ai._view.view import view
     except ImportError as e:
         click.echo(
-            f"Error: Failed to import inspect_ai view components: {e}\n"
-            "Please ensure inspect-ai is properly installed.",
+            f"Error: Failed to import inspect_ai view components: {e}\nPlease ensure inspect-ai is properly installed.",
             err=True,
         )
         sys.exit(1)
@@ -572,7 +573,7 @@ def eval_command(
     log_file: Path,
     format: str,
     pretty: bool,
-    sample_id: Optional[str],
+    sample_id: str | None,
     max_samples: int,
 ) -> None:
     """Analyze and dump inspect-ai evaluation log files."""
@@ -758,7 +759,7 @@ def dump_samples(log: Any, max_samples: int, pretty: bool) -> None:
             if hasattr(sample, "messages") and sample.messages:
                 console.print(f"\n[bold cyan]🤖 Agent Conversation ({len(sample.messages)} messages)[/bold cyan]")
 
-                for msg_idx, message in enumerate(sample.messages):
+                for _msg_idx, message in enumerate(sample.messages):
                     # Skip system messages for brevity
                     if hasattr(message, "role") and message.role == "system":
                         continue
@@ -920,7 +921,7 @@ def dump_samples(log: Any, max_samples: int, pretty: bool) -> None:
                     if role == "system":
                         continue
 
-                    click.echo(f"\n   {msg_idx+1}. {role.upper()}:")
+                    click.echo(f"\n   {msg_idx + 1}. {role.upper()}:")
                     if content:
                         click.echo(f"      {content[:200]}{'...' if len(content) > 200 else ''}")
 
@@ -981,7 +982,7 @@ def dump_full(log: Any, max_samples: int, pretty: bool) -> None:
 
 
 def setup_client_logging(
-    *, verbose: bool, enable_file: bool, log_dir_override: Optional[Path] = None, domain: Optional[str] = None
+    *, verbose: bool, enable_file: bool, log_dir_override: Path | None = None, domain: str | None = None
 ) -> LoggingConfig:
     """Setup SABER client logging with timestamped log files.
 
@@ -1054,9 +1055,7 @@ def setup_client_logging(
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging")  # type: ignore[misc]
 @click.option("--no-log-file", is_flag=True, help="Disable file logging (console only)")  # type: ignore[misc]
 @click.option("--no-ui", is_flag=True, help="Disable TUI and use rich console output instead")  # type: ignore[misc]
-@click.option(
-    "--validate-config", is_flag=True, help="Validate configuration against domain manifest before running"
-)  # type: ignore[misc]
+@click.option("--validate-config", is_flag=True, help="Validate configuration against domain manifest before running")  # type: ignore[misc]
 # Direct configuration options (alternative to --config file)
 @click.option("--rest-url", type=str, help="SABER server REST API URL")  # type: ignore[misc]
 @click.option("--mcp-url", type=str, help="SABER server MCP URL")  # type: ignore[misc]
@@ -1064,19 +1063,19 @@ def setup_client_logging(
 @click.option("--agent-id", type=str, help="Agent ID")  # type: ignore[misc]
 @click.option("--task-ids", type=str, help="Comma-separated task IDs (or '*' for all)")  # type: ignore[misc]
 def run_command(
-    config: Optional[Path],
-    env_file: Optional[Path],
-    domain: Optional[str],
-    domains_root: Optional[Path],
+    config: Path | None,
+    env_file: Path | None,
+    domain: str | None,
+    domains_root: Path | None,
     verbose: bool,
     no_log_file: bool,
     no_ui: bool,
     validate_config: bool,
-    rest_url: Optional[str],
-    mcp_url: Optional[str],
-    model: Optional[str],
-    agent_id: Optional[str],
-    task_ids: Optional[str],
+    rest_url: str | None,
+    mcp_url: str | None,
+    model: str | None,
+    agent_id: str | None,
+    task_ids: str | None,
 ) -> None:
     """[DEPRECATED] Run SABER evaluation with inspect-ai integration.
 

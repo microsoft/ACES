@@ -18,7 +18,8 @@ Logging category: EVALUATION.
 """
 
 import asyncio
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
+from typing import Any
 
 from inspect_ai.model import ChatMessageSystem, ChatMessageUser, get_model
 from inspect_ai.scorer import Score, Scorer, Target, metric, scorer
@@ -52,7 +53,7 @@ logger = get_saber_logger(LogCategory.EVALUATION, __name__)
 def clean_dict(payload: Any) -> Any:
     """Remove None/False values to prevent server-side type coercion issues."""
     if isinstance(payload, dict):
-        cleaned: Dict[str, Any] = {}
+        cleaned: dict[str, Any] = {}
         for key, value in payload.items():
             if value is None or value is False:
                 continue
@@ -71,7 +72,7 @@ def clean_dict(payload: Any) -> Any:
 class EpisodeContextForTemplate:
     """Helper class to provide episode-like interface for templates."""
 
-    def __init__(self, steps: List[Any]) -> None:
+    def __init__(self, steps: list[Any]) -> None:
         self.steps = steps
 
     def get_step_count(self) -> int:
@@ -81,7 +82,7 @@ class EpisodeContextForTemplate:
 class StepContextForTemplate:
     """Helper class to provide step-like interface for templates."""
 
-    def __init__(self, step_data: Dict[str, Any]) -> None:
+    def __init__(self, step_data: dict[str, Any]) -> None:
         self.step_number = step_data["step_number"]
         self.done = step_data.get("done", False)
         # Create action object
@@ -107,7 +108,7 @@ class StepContextForTemplate:
 class TemplateStringLoader(BaseLoader):
     """Load Jinja2 templates from string content."""
 
-    def __init__(self, templates: Dict[str, str]):
+    def __init__(self, templates: dict[str, str]):
         """
         Initialize template loader.
 
@@ -116,7 +117,7 @@ class TemplateStringLoader(BaseLoader):
         """
         self.templates = templates
 
-    def get_source(self, environment: Any, template: str) -> Tuple[str, Optional[str], Callable[[], bool]]:
+    def get_source(self, environment: Any, template: str) -> tuple[str, str | None, Callable[[], bool]]:
         """
         Get template source.
 
@@ -139,9 +140,12 @@ class TemplateStringLoader(BaseLoader):
 # Metrics
 # ============================================================================
 
+# Default value converter for metrics (module-level to satisfy B008)
+_DEFAULT_VALUE_TO_FLOAT = value_to_float()
+
 
 @metric  # type: ignore[misc]
-def saber_score(to_float: ValueToFloat = value_to_float()) -> Metric:
+def saber_score(to_float: ValueToFloat | None = None) -> Metric:
     """
     Overall SABER evaluation score (submission + subtasks).
 
@@ -150,8 +154,10 @@ def saber_score(to_float: ValueToFloat = value_to_float()) -> Metric:
     Returns:
         Metric function that computes average total score
     """
+    if to_float is None:
+        to_float = _DEFAULT_VALUE_TO_FLOAT
 
-    def metric_fn(scores: List[SampleScore]) -> float:
+    def metric_fn(scores: list[SampleScore]) -> float:
         total = 0.0
         for item in scores:
             total += to_float(item.score.value)
@@ -171,7 +177,7 @@ def submission_score() -> Metric:
         Metric function that computes average submission score
     """
 
-    def metric_fn(scores: List[SampleScore]) -> float:
+    def metric_fn(scores: list[SampleScore]) -> float:
         submission_scores = []
         for sample_score in scores:
             if sample_score.score.metadata:
@@ -195,7 +201,7 @@ def subtask_score() -> Metric:
         Metric function that returns {"subtask_score": avg} or {}
     """
 
-    def metric_fn(scores: List[SampleScore]) -> Dict[str, float]:
+    def metric_fn(scores: list[SampleScore]) -> dict[str, float]:
         subtask_scores = []
         for sample_score in scores:
             if sample_score.score.metadata:
@@ -226,9 +232,9 @@ def per_task_submission_scores() -> Metric:
         Metric function that computes per-task submission scores
     """
 
-    def metric_fn(scores: List[SampleScore]) -> Dict[str, float]:
+    def metric_fn(scores: list[SampleScore]) -> dict[str, float]:
         # Track submission scores by task_id
-        task_submission_scores: Dict[str, List[float]] = {}
+        task_submission_scores: dict[str, list[float]] = {}
 
         for sample_score in scores:
             if not sample_score.score.metadata:
@@ -274,9 +280,9 @@ def per_task_subtask_scores() -> Metric:
         Metric function that computes per-task subtask scores (empty dict if no subtask scoring)
     """
 
-    def metric_fn(scores: List[SampleScore]) -> Dict[str, float]:
+    def metric_fn(scores: list[SampleScore]) -> dict[str, float]:
         # Track subtask scores by task_id
-        task_subtask_scores: Dict[str, List[float]] = {}
+        task_subtask_scores: dict[str, list[float]] = {}
 
         for sample_score in scores:
             if not sample_score.score.metadata:
@@ -324,9 +330,9 @@ def subtask_score_metrics() -> Metric:
         Metric function that computes per-subtask average scores
     """
 
-    def metric_fn(scores: List[SampleScore]) -> Dict[str, float]:
+    def metric_fn(scores: list[SampleScore]) -> dict[str, float]:
         # Track subtask scores by task_id + subtask_id
-        subtask_scores: Dict[str, List[float]] = {}
+        subtask_scores: dict[str, list[float]] = {}
 
         for sample_score in scores:
             if not sample_score.score.metadata:
@@ -548,9 +554,9 @@ def saber_scorer() -> Scorer:
 
             # Step 6: Score steps (if configured)
             total_subtask_score = 0.0
-            step_evaluations: List[List[StepEvaluation]] = []
-            subtask_scores_weighted: Dict[str, float] = {}  # Track weighted subtask scores for total
-            subtask_scores_unweighted: Dict[str, float] = {}  # Track unweighted scores for individual metrics
+            step_evaluations: list[list[StepEvaluation]] = []
+            subtask_scores_weighted: dict[str, float] = {}  # Track weighted subtask scores for total
+            subtask_scores_unweighted: dict[str, float] = {}  # Track unweighted scores for individual metrics
             has_scorable_subtasks = False  # Track if any subtask has a valid evaluation strategy
 
             if subtasks_criteria_list is not None and subtasks_criteria_list != []:
@@ -652,7 +658,7 @@ def saber_scorer() -> Scorer:
                 )
             else:
                 eval_complete_msg = (
-                    f"Client-side evaluation completed: score={total_score:.2f} " f"(submission={submission_score:.2f})"
+                    f"Client-side evaluation completed: score={total_score:.2f} (submission={submission_score:.2f})"
                 )
             logger.info(
                 "Client-side evaluation completed",
@@ -980,12 +986,12 @@ async def _score_submission_llm(
 
 async def _score_all_subtasks(
     steps_data: EpisodeStepsResponse,
-    list_of_all_subtask_criteria: List[SubtaskEvaluationCriteriaResponse],
+    list_of_all_subtask_criteria: list[SubtaskEvaluationCriteriaResponse],
     task_context: Any,
     session_manager: Any,
     state: TaskState,
     submission_data: EpisodeSubmissionResponse,
-) -> Tuple[float, List[float], List[List[StepEvaluation]]]:
+) -> tuple[float, list[float], list[list[StepEvaluation]]]:
     """
     Score all subtasks using their configured evaluation strategies.
 
@@ -1004,8 +1010,8 @@ async def _score_all_subtasks(
         Tuple of (total_subtask_score, individual_scores, all_step_evaluations)
     """
     # Initialize results storage - one entry per subtask in original order
-    all_scores: List[float] = [0.0] * len(list_of_all_subtask_criteria)
-    all_step_evaluations: List[List[StepEvaluation]] = [[] for _ in list_of_all_subtask_criteria]
+    all_scores: list[float] = [0.0] * len(list_of_all_subtask_criteria)
+    all_step_evaluations: list[list[StepEvaluation]] = [[] for _ in list_of_all_subtask_criteria]
 
     logger.info(
         "Starting subtask evaluation",
@@ -1021,8 +1027,8 @@ async def _score_all_subtasks(
 
     # Group subtasks by strategy for efficient processing
     # LLM_JUDGE subtasks will be batched into a single call
-    llm_judge_subtasks: List[Tuple[int, SubtaskEvaluationCriteriaResponse]] = []  # (index, criteria)
-    other_tasks: List[Tuple[int, Any]] = []  # (index, coroutine)
+    llm_judge_subtasks: list[tuple[int, SubtaskEvaluationCriteriaResponse]] = []  # (index, criteria)
+    other_tasks: list[tuple[int, Any]] = []  # (index, coroutine)
 
     for idx, criteria in enumerate(list_of_all_subtask_criteria):
         # Skip subtasks without a configured strategy (informational checkpoints only)
@@ -1062,7 +1068,7 @@ async def _score_all_subtasks(
     # Process non-LLM tasks in parallel
     if other_tasks:
         other_results = await asyncio.gather(*[task for _, task in other_tasks])
-        for (idx, _), (subtask_score, step_evals) in zip(other_tasks, other_results):
+        for (idx, _), (subtask_score, step_evals) in zip(other_tasks, other_results, strict=False):
             all_scores[idx] = subtask_score
             all_step_evaluations[idx] = step_evals
 
@@ -1108,7 +1114,7 @@ async def _score_all_subtasks(
     # Build detailed checkpoint breakdown summary
     checkpoint_summary_lines = ["\n=== Step-Based Checkpoint Evaluation Summary ==="]
 
-    for i, (criteria, subtask_score) in enumerate(zip(list_of_all_subtask_criteria, all_scores)):
+    for i, (criteria, subtask_score) in enumerate(zip(list_of_all_subtask_criteria, all_scores, strict=False)):
         strategy_name = criteria.strategy if criteria.strategy else "SKIP"
         achieved = "✓" if subtask_score > 0 else "✗"
 
@@ -1140,7 +1146,7 @@ async def _score_all_subtasks(
 async def _score_subtask_static(
     steps_data: EpisodeStepsResponse,
     criteria: SubtaskEvaluationCriteriaResponse,
-) -> Tuple[float, List[StepEvaluation]]:
+) -> tuple[float, list[StepEvaluation]]:
     """
     Score steps using static evaluation (pattern matching in outputs).
 
@@ -1218,7 +1224,7 @@ async def _score_subtask_static(
 async def _score_subtask_tool_call(
     steps_data: EpisodeStepsResponse,
     criteria: SubtaskEvaluationCriteriaResponse,
-) -> Tuple[float, List[StepEvaluation]]:
+) -> tuple[float, list[StepEvaluation]]:
     """
     Score steps using tool call evaluation (matching tool names).
 
@@ -1290,7 +1296,7 @@ async def _score_subtask_tool_call(
     return subtask_score, all_graded_steps
 
 
-def _parse_llm_step_evaluations(response_text: str, valid_checkpoint_ids: List[str]) -> Dict[str, List[int]]:
+def _parse_llm_step_evaluations(response_text: str, valid_checkpoint_ids: list[str]) -> dict[str, list[int]]:
     """
     Parse LLM judge response to extract checkpoint completions.
 
@@ -1311,7 +1317,7 @@ def _parse_llm_step_evaluations(response_text: str, valid_checkpoint_ids: List[s
     """
     import re
 
-    completions: Dict[str, List[int]] = {cp_id: [] for cp_id in valid_checkpoint_ids}
+    completions: dict[str, list[int]] = {cp_id: [] for cp_id in valid_checkpoint_ids}
 
     # Check for no completions
     if "NO_COMPLETIONS" in response_text.upper():
@@ -1357,11 +1363,11 @@ def _parse_llm_step_evaluations(response_text: str, valid_checkpoint_ids: List[s
 
 async def _score_subtasks_llm_batch(
     steps_data: EpisodeStepsResponse,
-    llm_criteria_list: List[SubtaskEvaluationCriteriaResponse],
+    llm_criteria_list: list[SubtaskEvaluationCriteriaResponse],
     task_context: Any,
     session_manager: Any,
     state: TaskState,
-) -> List[Tuple[float, List[StepEvaluation]]]:
+) -> list[tuple[float, list[StepEvaluation]]]:
     """
     Score multiple LLM_JUDGE subtasks in a single batched LLM call.
 
@@ -1437,7 +1443,7 @@ async def _score_subtasks_llm_batch(
 
     # Collect all completions across chunks
     valid_checkpoint_ids = [c.subtask_id for c in llm_criteria_list]
-    all_completions: Dict[str, List[int]] = {cp_id: [] for cp_id in valid_checkpoint_ids}
+    all_completions: dict[str, list[int]] = {cp_id: [] for cp_id in valid_checkpoint_ids}
 
     # Initialize judge_response to handle empty steps case
     # If no steps, default to NO_COMPLETIONS (subtask not completed)
@@ -1521,7 +1527,7 @@ async def _score_subtasks_llm_batch(
         )
 
     # Build results for each subtask
-    results: List[Tuple[float, List[StepEvaluation]]] = []
+    results: list[tuple[float, list[StepEvaluation]]] = []
 
     for criteria in llm_criteria_list:
         checkpoint_id = criteria.subtask_id

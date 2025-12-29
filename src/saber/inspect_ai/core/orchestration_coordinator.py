@@ -29,12 +29,12 @@ class SampleRegistration:
 
     sample_id: str
     role: str
-    depends_on_role: Optional[str]
+    depends_on_role: str | None
     order: int
-    episode_id: Optional[str] = None
+    episode_id: str | None = None
     ready_event: asyncio.Event = field(default_factory=asyncio.Event)
     termination_requested: bool = False
-    active_sample: Optional[Any] = None  # Reference to Inspect AI's ActiveSample for interrupt
+    active_sample: Any | None = None  # Reference to Inspect AI's ActiveSample for interrupt
 
 
 @dataclass
@@ -43,12 +43,12 @@ class OrchestrationGroup:
 
     orchestration_id: str
     samples: dict[str, SampleRegistration] = field(default_factory=dict)
-    root_role: Optional[str] = None
-    semaphore: Optional[asyncio.Semaphore] = None
+    root_role: str | None = None
+    semaphore: asyncio.Semaphore | None = None
     terminated: bool = False
 
     # Score coordination fields
-    all_scored_event: Optional[asyncio.Event] = None
+    all_scored_event: asyncio.Event | None = None
     scored_samples: set[str] = field(default_factory=set)
     sample_scores: dict[str, float] = field(default_factory=dict)  # Track scores for logging
 
@@ -87,7 +87,7 @@ class OrchestrationCoordinator:
         orchestration_id: str,
         role: str,
         sample_id: str,
-        semaphore: Optional[asyncio.Semaphore] = None,
+        semaphore: asyncio.Semaphore | None = None,
     ) -> bool:
         """Register a root sample (no dependency).
 
@@ -268,7 +268,7 @@ class OrchestrationCoordinator:
                     "timeout": timeout,
                 },
             )
-            raise TimeoutError(f"Dependency {sample.depends_on_role} did not become ready within {timeout}s")
+            raise TimeoutError(f"Dependency {sample.depends_on_role} did not become ready within {timeout}s") from None
 
         # Check if termination was requested
         if dependency.termination_requested or group.terminated:
@@ -373,7 +373,7 @@ class OrchestrationCoordinator:
             },
         )
 
-    def trigger_termination(self, orchestration_id: str, skip_role: Optional[str] = None) -> list[tuple[str, str]]:
+    def trigger_termination(self, orchestration_id: str, skip_role: str | None = None) -> list[tuple[str, str]]:
         """Trigger cascade termination for entire orchestration.
 
         Marks all samples in the orchestration for termination, interrupts sibling
@@ -456,7 +456,7 @@ class OrchestrationCoordinator:
         self,
         orchestration_id: str,
         role: str,
-        semaphore: Optional[asyncio.Semaphore] = None,
+        semaphore: asyncio.Semaphore | None = None,
     ) -> bool:
         """Cleanup a sample from orchestration.
 

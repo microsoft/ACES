@@ -7,7 +7,7 @@ it in Docker containers with proper security validation.
 Logging category: ``LogCategory.DOCKER``.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 from .....logging_config import (
     LogCategory,
@@ -42,7 +42,7 @@ class PythonExecutor(DockerExecutor):
     }
 
     @classmethod
-    def get_default_config(cls) -> Dict[str, Any]:
+    def get_default_config(cls) -> dict[str, Any]:
         """
         Get default configuration for Python executor.
 
@@ -77,9 +77,9 @@ class PythonExecutor(DockerExecutor):
     def create_with_config(
         cls,
         sandbox_manager: SandboxEnvironmentManager,
-        config: Optional[Dict[str, Any]] = None,
-        additional_params: Optional[Dict[str, Any]] = None,
-        session_manager: Optional[Any] = None,
+        config: dict[str, Any] | None = None,
+        additional_params: dict[str, Any] | None = None,
+        session_manager: Any | None = None,
         **kwargs: Any,
     ) -> "PythonExecutor":
         """
@@ -101,7 +101,7 @@ class PythonExecutor(DockerExecutor):
         return cls(sandbox_manager=sandbox_manager, config=config, **merged_kwargs)
 
     def __init__(
-        self, sandbox_manager: SandboxEnvironmentManager, config: Optional[Dict[str, Any]] = None, **kwargs: Any
+        self, sandbox_manager: SandboxEnvironmentManager, config: dict[str, Any] | None = None, **kwargs: Any
     ) -> None:
         """
         Initialize Python executor.
@@ -124,7 +124,7 @@ class PythonExecutor(DockerExecutor):
         # Set up script templates
         self._script_templates = self._config.get("script_templates", {})
 
-    def setup_parameters(self, config: Dict[str, Any]) -> None:
+    def setup_parameters(self, config: dict[str, Any]) -> None:
         """Set up Python executor parameters."""
         # Python code parameter
         self.add_parameter(
@@ -220,7 +220,7 @@ class PythonExecutor(DockerExecutor):
 
         return result
 
-    def build_python_script(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> str:
+    def build_python_script(self, parameters: dict[str, Any], context: dict[str, Any]) -> str:
         """
         Build the complete Python script from parameters.
 
@@ -256,7 +256,7 @@ class PythonExecutor(DockerExecutor):
 
         return "\n".join(setup_lines) + script
 
-    def get_python_environment(self, episode_id: str) -> Dict[str, Any]:
+    def get_python_environment(self, episode_id: str) -> dict[str, Any]:
         """
         Get Python environment information.
 
@@ -331,7 +331,7 @@ class PythonExecutor(DockerExecutor):
 
             return CommandResult.error_result(error=error_msg, metadata={**metadata, "raw_data": result_data})
 
-    async def execute(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> CommandResult:
+    async def execute(self, parameters: dict[str, Any], context: dict[str, Any]) -> CommandResult:
         """
         Execute Python script in Docker container.
 
@@ -456,7 +456,7 @@ class PythonExecutor(DockerExecutor):
             )
             return CommandResult.error_result(f"Python execution failed: {str(exc)}")
 
-    def validate_parameters(self, parameters: Dict[str, Any]) -> ValidationResult:
+    def validate_parameters(self, parameters: dict[str, Any]) -> ValidationResult:
         """
         Validate parameters for Python execution.
 

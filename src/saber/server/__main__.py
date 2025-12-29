@@ -15,7 +15,7 @@ import signal
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 import yaml
 
@@ -88,7 +88,7 @@ class ServerConfigError(Exception):
     pass
 
 
-def resolve_domains_root(domains_root_arg: Optional[str]) -> Path:
+def resolve_domains_root(domains_root_arg: str | None) -> Path:
     """Resolve domains root directory with fail-fast validation."""
     domains_root = domains_root_arg or os.getenv("SABER_DOMAINS_ROOT")
 
@@ -108,7 +108,7 @@ def resolve_domains_root(domains_root_arg: Optional[str]) -> Path:
     return domains_root_path
 
 
-def load_domain_manifest(domains_root: Path, domain: str) -> Dict[str, Any]:
+def load_domain_manifest(domains_root: Path, domain: str) -> dict[str, Any]:
     """Load and validate domain manifest with fail-fast semantics."""
     domain_path = domains_root / domain
     manifest_path = domain_path / "domain.yaml"
@@ -121,14 +121,14 @@ def load_domain_manifest(domains_root: Path, domain: str) -> Dict[str, Any]:
 
     if not manifest_path.exists():
         raise ServerConfigError(
-            f"Domain manifest not found: {manifest_path}\n" f"Every domain must have a domain.yaml manifest file."
+            f"Domain manifest not found: {manifest_path}\nEvery domain must have a domain.yaml manifest file."
         )
 
     try:
-        with open(manifest_path, "r") as f:
+        with open(manifest_path) as f:
             manifest = yaml.safe_load(f)
     except yaml.YAMLError as e:
-        raise ServerConfigError(f"Invalid YAML in domain manifest {manifest_path}: {e}")
+        raise ServerConfigError(f"Invalid YAML in domain manifest {manifest_path}: {e}") from e
 
     if not isinstance(manifest, dict):
         raise ServerConfigError(f"Domain manifest must be a YAML object, got {type(manifest)}: {manifest_path}")
@@ -137,9 +137,7 @@ def load_domain_manifest(domains_root: Path, domain: str) -> Dict[str, Any]:
     required_fields = ["schemaVersion", "domain"]
     missing_fields = [field for field in required_fields if field not in manifest]
     if missing_fields:
-        raise ServerConfigError(
-            f"Domain manifest missing required fields: {missing_fields}\n" f"Manifest: {manifest_path}"
-        )
+        raise ServerConfigError(f"Domain manifest missing required fields: {missing_fields}\nManifest: {manifest_path}")
 
     domain_info = manifest.get("domain", {})
     if not isinstance(domain_info, dict):
@@ -148,13 +146,13 @@ def load_domain_manifest(domains_root: Path, domain: str) -> Dict[str, Any]:
     manifest_slug = domain_info.get("slug")
     if manifest_slug != domain:
         raise ServerConfigError(
-            f"Domain manifest slug mismatch: expected '{domain}', got '{manifest_slug}'\n" f"Manifest: {manifest_path}"
+            f"Domain manifest slug mismatch: expected '{domain}', got '{manifest_slug}'\nManifest: {manifest_path}"
         )
 
     return manifest
 
 
-def resolve_domain_paths(domains_root: Path, domain: str, manifest: Dict[str, Any]) -> Dict[str, Path]:
+def resolve_domain_paths(domains_root: Path, domain: str, manifest: dict[str, Any]) -> dict[str, Path]:
     """Resolve and validate all domain paths with fail-fast semantics."""
     domain_path = domains_root / domain
 
@@ -194,14 +192,14 @@ def resolve_domain_paths(domains_root: Path, domain: str, manifest: Dict[str, An
                     extra={"event": "directory_created", "path": str(path), "domain": domain},
                 )
             except OSError as e:
-                raise ServerConfigError(f"Failed to create {dir_name}: {path} - {e}")
+                raise ServerConfigError(f"Failed to create {dir_name}: {path} - {e}") from e
 
     return paths
 
 
 async def start_server(args: argparse.Namespace) -> None:
     """Start the SABER server with the given arguments."""
-    session_manager: Optional[SessionManager] = None
+    session_manager: SessionManager | None = None
     shutdown_event = asyncio.Event()
 
     async def shutdown_handler() -> None:

@@ -15,7 +15,7 @@ Logging category: AGENT
 import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from saber.client.client_session import ClientSessionManager
 from saber.logging_config import LogCategory, get_saber_logger
@@ -44,7 +44,7 @@ class CleanupResult:
 
     success: bool
     error_count: int
-    errors: List[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
     semaphore_released: bool = False
     threshold_exceeded: bool = False
 
@@ -107,7 +107,7 @@ class BenchmarkTaskHandler(ABC):
         re-raising. Semaphore leaks are tracked via _cleanup_error_count counter.
         """
         self._semaphore_acquired = False
-        self._acquired_semaphore_ref: Optional[asyncio.Semaphore] = None
+        self._acquired_semaphore_ref: asyncio.Semaphore | None = None
         self._cleanup_error_count = 0
         self._cleanup_lock = asyncio.Lock()
 
@@ -130,7 +130,7 @@ class BenchmarkTaskHandler(ABC):
         benchmark_task: BenchmarkTask,
         session_id: str,
         session_manager: ClientSessionManager,
-        semaphore: Optional[asyncio.Semaphore],
+        semaphore: asyncio.Semaphore | None,
     ) -> HandlerState:
         """Initialize episodes for this benchmark task.
 
@@ -154,7 +154,7 @@ class BenchmarkTaskHandler(ABC):
         state: HandlerState,
         session_id: str,
         session_manager: ClientSessionManager,
-        semaphore: Optional[asyncio.Semaphore],
+        semaphore: asyncio.Semaphore | None,
     ) -> CleanupResult:
         """Clean up episodes for this benchmark task.
 
@@ -190,7 +190,7 @@ class SingleEpisodeTaskHandler(BenchmarkTaskHandler):
         benchmark_task: BenchmarkTask,
         session_id: str,
         session_manager: ClientSessionManager,
-        semaphore: Optional[asyncio.Semaphore],
+        semaphore: asyncio.Semaphore | None,
     ) -> OrchestratedHandlerState:
         """Initialize orchestrated task with multiple episodes.
 
@@ -297,7 +297,7 @@ class SingleEpisodeTaskHandler(BenchmarkTaskHandler):
         state: HandlerState,
         session_id: str,
         session_manager: ClientSessionManager,
-        semaphore: Optional[asyncio.Semaphore],
+        semaphore: asyncio.Semaphore | None,
     ) -> CleanupResult:
         """Clean up single episode and release semaphore.
 
@@ -316,7 +316,7 @@ class SingleEpisodeTaskHandler(BenchmarkTaskHandler):
         Raises:
             RuntimeError: If cleanup error threshold exceeded
         """
-        errors: List[str] = []
+        errors: list[str] = []
         episode_id = state.primary_episode_id
 
         # End episode
@@ -431,7 +431,7 @@ class OrchestratedTaskHandler(BenchmarkTaskHandler):
         benchmark_task: BenchmarkTask,
         session_id: str,
         session_manager: ClientSessionManager,
-        semaphore: Optional[asyncio.Semaphore],
+        semaphore: asyncio.Semaphore | None,
     ) -> OrchestratedHandlerState:
         """Initialize orchestrated task with multiple episodes.
 
@@ -459,7 +459,7 @@ class OrchestratedTaskHandler(BenchmarkTaskHandler):
                 f"See https://github.com/your-repo/issues/XXX for parallel/conditional orchestration roadmap."
             )
 
-        created_episodes: List[Dict[str, Any]] = []
+        created_episodes: list[dict[str, Any]] = []
 
         try:
             # Acquire ONE semaphore slot for entire orchestration lifetime (tracked in instance)
@@ -589,7 +589,7 @@ class OrchestratedTaskHandler(BenchmarkTaskHandler):
         state: HandlerState,
         session_id: str,
         session_manager: ClientSessionManager,
-        semaphore: Optional[asyncio.Semaphore],
+        semaphore: asyncio.Semaphore | None,
     ) -> CleanupResult:
         """Clean up all episodes in orchestration and release semaphore.
 
@@ -608,7 +608,7 @@ class OrchestratedTaskHandler(BenchmarkTaskHandler):
         Raises:
             RuntimeError: If cleanup error threshold exceeded
         """
-        errors: List[str] = []
+        errors: list[str] = []
 
         # End all episodes in orchestration
         for episode_id in state.episode_ids:

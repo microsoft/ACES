@@ -5,7 +5,6 @@ transcript synchronization with separate push and pull configurations.
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 from .websocket_constants import WebSocketDefaults
 
@@ -97,7 +96,7 @@ class WebSocketConfig:
     connection_timeout: float = WebSocketDefaults.CONNECTION_TIMEOUT_SECONDS
 
     # Keepalive
-    ping_interval: Optional[float] = WebSocketDefaults.PING_INTERVAL_SECONDS
+    ping_interval: float | None = WebSocketDefaults.PING_INTERVAL_SECONDS
     pong_timeout: float = WebSocketDefaults.PONG_TIMEOUT_SECONDS
 
     # Reconnection policy

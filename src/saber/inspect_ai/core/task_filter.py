@@ -11,7 +11,7 @@ method when available, falling back to legacy exact/glob matching.
 """
 
 import fnmatch
-from typing import Any, List, Union
+from typing import Any
 
 from inspect_ai._util.error import PrerequisiteError
 
@@ -21,10 +21,10 @@ logger = get_saber_logger(LogCategory.AGENT, __name__)
 
 
 def apply_task_filter(
-    tasks: List[Any],
-    task_filter: Union[str, List[str]],
+    tasks: list[Any],
+    task_filter: str | list[str],
     domain_slug: str,
-) -> List[Any]:
+) -> list[Any]:
     """Apply task filter with exact and glob pattern matching using polymorphic dispatch.
 
     Supports both legacy TaskInfo and new polymorphic BenchmarkTask types.

@@ -12,7 +12,7 @@ import json
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import yaml
 
@@ -38,7 +38,7 @@ class ContainerLoggingManager:
     - Debug information for troubleshooting
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         """
         Initialize the Container Logging Manager.
 
@@ -102,11 +102,11 @@ class ContainerLoggingManager:
 
     def log_compose_config(
         self,
-        compose_config: Dict[str, Any],
+        compose_config: dict[str, Any],
         config_type: str,
         identifier: str,
-        additional_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Optional[str]:
+        additional_metadata: dict[str, Any] | None = None,
+    ) -> str | None:
         """
         Log a docker-compose configuration to persistent storage.
 
@@ -197,7 +197,7 @@ class ContainerLoggingManager:
 
     def log_container_logs(
         self, container_name: str, project_name: str, config_type: str, follow: bool = False, tail_lines: int = 1000
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Collect and log container logs to persistent storage.
 
@@ -321,7 +321,7 @@ class ContainerLoggingManager:
             )
             return None
 
-    def log_all_project_containers(self, project_name: str, config_type: str, tail_lines: int = 1000) -> List[str]:
+    def log_all_project_containers(self, project_name: str, config_type: str, tail_lines: int = 1000) -> list[str]:
         """
         Collect logs for all containers in a docker-compose project.
 
@@ -347,7 +347,7 @@ class ContainerLoggingManager:
             },
         )
 
-        log_paths: List[str] = []
+        log_paths: list[str] = []
         try:
             cmd = ["docker", "compose", "-p", project_name, "ps", "--services"]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
@@ -402,7 +402,7 @@ class ContainerLoggingManager:
         return log_paths
 
     def log_container_lifecycle_event(
-        self, event_type: str, container_info: Dict[str, Any], additional_data: Optional[Dict[str, Any]] = None
+        self, event_type: str, container_info: dict[str, Any], additional_data: dict[str, Any] | None = None
     ) -> None:
         """
         Log container lifecycle events (start, stop, crash, etc.).
@@ -453,7 +453,7 @@ class ContainerLoggingManager:
             )
 
     async def start_background_log_collection(
-        self, project_name: str, config_type: str, services: Optional[List[str]] = None
+        self, project_name: str, config_type: str, services: list[str] | None = None
     ) -> None:
         """
         Start background log collection for a project (non-blocking).
@@ -501,7 +501,7 @@ class ContainerLoggingManager:
             raise
 
     async def _background_log_collector(
-        self, project_name: str, config_type: str, services: Optional[List[str]] = None
+        self, project_name: str, config_type: str, services: list[str] | None = None
     ) -> None:
         """Background task for continuous log collection."""
         operation = "container_background_log_collection"
@@ -604,7 +604,7 @@ class ContainerLoggingManager:
                 days_to_keep=days_to_keep,
             )
 
-    def get_logs_summary(self) -> Dict[str, Any]:
+    def get_logs_summary(self) -> dict[str, Any]:
         """
         Get a summary of collected logs for debugging purposes.
 

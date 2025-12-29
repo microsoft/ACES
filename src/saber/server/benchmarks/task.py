@@ -3,7 +3,7 @@
 Logging category: ``LogCategory.TASK_MANAGER``.
 """
 
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any
 
 from ...logging_config import LogCategory, get_saber_logger
 from .subtask import SubTask
@@ -22,22 +22,22 @@ class Task:
         domain: str,
         title: str,
         description: str,
-        prompts: Dict[str, str],
-        subtasks: Optional[List[SubTask]] = None,
-        initial_context: Optional[Dict[str, Any]] = None,
-        environment: Optional[Union[str, Dict[str, Any]]] = None,
-        allowed_executors: Optional[List[str]] = None,
-        execution_config: Optional[Dict[str, Any]] = None,
-        episode_config: Optional[Dict[str, Any]] = None,
-        benchmark_config: Optional[Dict[str, Any]] = None,
-        submission_evaluation_config: Optional[Dict[str, Any]] = None,
-        step_evaluation_config: Optional[Dict[str, Any]] = None,
+        prompts: dict[str, str],
+        subtasks: list[SubTask] | None = None,
+        initial_context: dict[str, Any] | None = None,
+        environment: str | dict[str, Any] | None = None,
+        allowed_executors: list[str] | None = None,
+        execution_config: dict[str, Any] | None = None,
+        episode_config: dict[str, Any] | None = None,
+        benchmark_config: dict[str, Any] | None = None,
+        submission_evaluation_config: dict[str, Any] | None = None,
+        step_evaluation_config: dict[str, Any] | None = None,
         # Note - step evaluation config is also captured in the subtasks themselves
-        depends_on_task_id: Optional[str] = None,
-        role: Optional[str] = None,
-        initial_files: Optional[Dict[str, str]] = None,
+        depends_on_task_id: str | None = None,
+        role: str | None = None,
+        initial_files: dict[str, str] | None = None,
         is_template: bool = False,
-        dependency_template: Optional[str] = None,
+        dependency_template: str | None = None,
     ):
         """
         Initialize a task.
@@ -171,7 +171,7 @@ class Task:
             },
         )
 
-    def get_subtask_by_id(self, subtask_id: str) -> Optional[SubTask]:
+    def get_subtask_by_id(self, subtask_id: str) -> SubTask | None:
         """
         Get a subtask by its ID.
 
@@ -183,7 +183,7 @@ class Task:
         """
         return self._subtask_map.get(subtask_id)
 
-    def get_all_subtask_ids(self) -> Set[str]:
+    def get_all_subtask_ids(self) -> set[str]:
         """
         Get all subtask IDs for this task.
 
@@ -230,7 +230,7 @@ class Task:
             )
         return int(self.benchmark_config["episode_attempts"])
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Convert task to dictionary representation for serialization.
 

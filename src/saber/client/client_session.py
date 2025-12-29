@@ -7,7 +7,8 @@ MCP tools are now handled natively by inspect_ai via mcp_server_http().
 
 import asyncio
 import random
-from typing import Any, Awaitable, Callable, List, Optional, Tuple
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 import aiohttp
 
@@ -58,7 +59,7 @@ class ClientSessionManager:
         self.base_url = config.base_url.rstrip("/")
         self.client_id = config.client_id
         self.timeout = config.rest_timeout
-        self._current_session_id: Optional[str] = None
+        self._current_session_id: str | None = None
 
         logger.debug(
             "ClientSessionManager initialized",
@@ -69,7 +70,7 @@ class ClientSessionManager:
         self,
         operation_name: str,
         request_func: Callable[[], Awaitable[tuple[int, Any]]],
-        max_retries: Optional[int] = None,
+        max_retries: int | None = None,
     ) -> tuple[int, Any]:
         """
         Execute HTTP request with retry logic for transient failures.
@@ -470,7 +471,7 @@ class ClientSessionManager:
 
         return response
 
-    async def get_policy_response(self, session_id: str, episode_id: str) -> Optional[PolicyResponse]:
+    async def get_policy_response(self, session_id: str, episode_id: str) -> PolicyResponse | None:
         """
         Get policy response for dynamic prompt generation via REST API.
 
@@ -548,7 +549,7 @@ class ClientSessionManager:
             )
             raise
 
-    async def get_available_tasks(self) -> List[TaskInfo]:
+    async def get_available_tasks(self) -> list[TaskInfo]:
         """
         Get available tasks from SABER server.
 
@@ -591,7 +592,7 @@ class ClientSessionManager:
                     )
                     raise Exception(f"Failed to get available tasks: {response.status} - {error_text}")
 
-    async def get_tasks(self, task_ids: List[str]) -> List[TaskInfo]:
+    async def get_tasks(self, task_ids: list[str]) -> list[TaskInfo]:
         """
         Get full task data for specific task IDs.
 
@@ -689,7 +690,7 @@ class ClientSessionManager:
         session_id: str,
         episode_id: str,
         timeout: float = 10.0,
-    ) -> Tuple[bool, str]:
+    ) -> tuple[bool, str]:
         """
         Verify if an episode has actually ended by checking its status.
 
@@ -830,7 +831,7 @@ class ClientSessionManager:
         session_id: str,
         episode_id: str,
         reason: str = "completed",
-        result: Optional[EvalSubmission] = None,
+        result: EvalSubmission | None = None,
         cascade_end_attached_episodes: bool = False,
         max_retries: int = 5,
         initial_backoff: float = 1.0,
@@ -893,7 +894,9 @@ class ClientSessionManager:
                 state = "UNKNOWN"
                 for verify_attempt in range(2):  # 2 attempts max
                     is_ended, state = await self.verify_episode_ended(
-                        session_id, episode_id, timeout=10.0  # Longer timeout for verification
+                        session_id,
+                        episode_id,
+                        timeout=10.0,  # Longer timeout for verification
                     )
 
                     if is_ended or state != "UNKNOWN":
@@ -1085,7 +1088,7 @@ class ClientSessionManager:
         session_id: str,
         episode_id: str,
         reason: str = "completed",
-        result: Optional[EvalSubmission] = None,
+        result: EvalSubmission | None = None,
         cascade_end_attached_episodes: bool = False,
     ) -> None:
         """
@@ -1151,9 +1154,7 @@ class ClientSessionManager:
                             },
                         )
                         # Raise exception so caller knows the operation failed
-                        raise RuntimeError(
-                            f"Failed to end episode {episode_id}: " f"HTTP {response.status} - {error_text}"
-                        )
+                        raise RuntimeError(f"Failed to end episode {episode_id}: HTTP {response.status} - {error_text}")
         except asyncio.TimeoutError:
             # Timeout during episode end - the server likely received and processed the request
             # but the response didn't arrive in time. This is usually not a critical error.
@@ -1288,8 +1289,8 @@ class ClientSessionManager:
                     )
 
     async def get_session_evaluations(
-        self, session_id: str, task_id: Optional[str] = None
-    ) -> List[EvaluationResultResponse]:
+        self, session_id: str, task_id: str | None = None
+    ) -> list[EvaluationResultResponse]:
         """
         Get all evaluation results for a session.
 
@@ -1506,7 +1507,7 @@ class ClientSessionManager:
                         f"Failed to submit override for episode {episode_id}: {response.status} - {error_text}"
                     )
 
-    def get_current_session_id(self) -> Optional[str]:
+    def get_current_session_id(self) -> str | None:
         """Get current session ID."""
         return self._current_session_id
 
@@ -1516,7 +1517,7 @@ class ClientSessionManager:
             raise RuntimeError("No active session - call create_session() first")
         return self._current_session_id
 
-    async def upload_evaluation_file(self, session_id: str, file_path: str, timeout: Optional[float] = None) -> dict:
+    async def upload_evaluation_file(self, session_id: str, file_path: str, timeout: float | None = None) -> dict:
         """
         Upload an evaluation file to the server via REST API.
 
@@ -1714,7 +1715,7 @@ class ClientSessionManager:
 
     async def get_subtask_evaluation_criteria(
         self, session_id: str, episode_id: str
-    ) -> Optional[List[SubtaskEvaluationCriteriaResponse]]:
+    ) -> list[SubtaskEvaluationCriteriaResponse] | None:
         """
         Get subtask evaluation criteria (template paths only, no rendering).
         Returns None if subtask evaluation is not configured for the task.

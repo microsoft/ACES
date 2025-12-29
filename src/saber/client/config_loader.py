@@ -13,7 +13,7 @@ Following SABER's philosophy:
 """
 
 from pathlib import Path
-from typing import Any, Dict, Union
+from typing import Any
 
 import yaml
 
@@ -40,7 +40,7 @@ class RoleConfigLoader:
     """
 
     @staticmethod
-    def load(source: Union[str, Dict, Path]) -> RoleBasedConfig:
+    def load(source: str | dict | Path) -> RoleBasedConfig:
         """Load role configuration from various sources.
 
         Args:
@@ -128,7 +128,7 @@ class RoleConfigLoader:
                 suggestion="Use -T roles_file=path/to/config.yaml with correct path (relative or absolute)",
             )
 
-        with open(file_path, "r") as f:
+        with open(file_path) as f:
             content = f.read()
 
         # Detect format by extension
@@ -148,7 +148,7 @@ class RoleConfigLoader:
                         f"Could not parse {file_path} as YAML or JSON",
                         details={"file_path": str(file_path), "error": str(e)},
                         suggestion="Check file syntax for YAML or JSON errors",
-                    )
+                    ) from e
 
         return RoleBasedConfig(**data)
 
@@ -165,11 +165,11 @@ class RoleConfigLoader:
                 "Invalid JSON in role config",
                 details={"error": str(e), "json_str": json_str[:100]},
                 suggestion="Check for trailing commas, quotes, and braces",
-            )
+            ) from e
 
     @staticmethod
     def merge_with_overrides(
-        base_config: RoleBasedConfig, overrides: Dict[str, Any], strict: bool = True
+        base_config: RoleBasedConfig, overrides: dict[str, Any], strict: bool = True
     ) -> RoleBasedConfig:
         """Merge base config with CLI overrides.
 
@@ -228,8 +228,7 @@ class RoleConfigLoader:
             # Warn if creating new role (possible typo)
             if role not in merged_data["roles"]:
                 logger.warning(
-                    f"Creating new role '{role}' from override. "
-                    f"Existing roles: {list(merged_data['roles'].keys())}",
+                    f"Creating new role '{role}' from override. Existing roles: {list(merged_data['roles'].keys())}",
                     extra={
                         "event": "role_config_new_role",
                         "role": role,

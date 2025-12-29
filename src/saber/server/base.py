@@ -12,7 +12,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -29,8 +29,8 @@ class CommandResult:
     stdout: str
     stderr: str
     execution_time: float
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    _original_data: Optional[Dict[str, Any]] = field(default=None, init=False)
+    metadata: dict[str, Any] = field(default_factory=dict)
+    _original_data: dict[str, Any] | None = field(default=None, init=False)
 
     @property
     def success(self) -> bool:
@@ -38,7 +38,7 @@ class CommandResult:
         return self.exit_code == 0
 
     @property
-    def data(self) -> Dict[str, Any]:
+    def data(self) -> dict[str, Any]:
         """Get command data as dictionary for backward compatibility."""
         # If we have original data from success_result/error_result, prefer that
         if self._original_data is not None:
@@ -48,13 +48,13 @@ class CommandResult:
         return {"exit_code": self.exit_code, "stdout": self.stdout, "stderr": self.stderr}
 
     @property
-    def error(self) -> Optional[str]:
+    def error(self) -> str | None:
         """Get error message if command failed."""
         return self.stderr if not self.success else None
 
     @classmethod
     def success_result(
-        cls, data: Any, execution_time: Optional[float] = None, metadata: Optional[Dict[str, Any]] = None
+        cls, data: Any, execution_time: float | None = None, metadata: dict[str, Any] | None = None
     ) -> "CommandResult":
         """Create a successful command result for backward compatibility."""
         if isinstance(data, dict):
@@ -80,7 +80,7 @@ class CommandResult:
 
     @classmethod
     def error_result(
-        cls, error: str, execution_time: Optional[float] = None, metadata: Optional[Dict[str, Any]] = None
+        cls, error: str, execution_time: float | None = None, metadata: dict[str, Any] | None = None
     ) -> "CommandResult":
         """Create a failed command result for backward compatibility."""
         error_data = {"exit_code": 1, "stdout": "", "stderr": error, "success": False, "error": error}
@@ -97,11 +97,11 @@ class Action(BaseModel):
     """Represents a single action taken by an agent during episode execution."""
 
     tool_name: str = Field(..., description="Name of the tool being executed")
-    parameters: Dict[str, Any] = Field(default_factory=dict, description="Parameters passed to the tool")
-    reasoning: Optional[str] = Field(
+    parameters: dict[str, Any] = Field(default_factory=dict, description="Parameters passed to the tool")
+    reasoning: str | None = Field(
         None, description="Agent's reasoning before taking this action (from reasoning models)"
     )
-    assistant_message: Optional[str] = Field(
+    assistant_message: str | None = Field(
         None, description="Agent's full message before taking this action (planning/explanation)"
     )
     timestamp: datetime = Field(default_factory=_utc_now, description="When the action was initiated")
@@ -113,8 +113,8 @@ class Step(BaseModel):
     step_number: int = Field(..., description="Sequential number of this step in the episode")
     timestamp: datetime = Field(default_factory=_utc_now, description="When the step was completed")
     action: Action = Field(..., description="The action that was taken")
-    response: Dict[str, Any] = Field(..., description="Tool execution result")
-    context_snapshot: Dict[str, Any] = Field(default_factory=dict, description="Context state at this step")
+    response: dict[str, Any] = Field(..., description="Tool execution result")
+    context_snapshot: dict[str, Any] = Field(default_factory=dict, description="Context state at this step")
     done: bool = Field(False, description="Whether the episode ended after this step")
 
 
@@ -139,20 +139,20 @@ class Episode(BaseModel):
     task_id: str = Field(..., description="ID of the task being attempted")
     session_id: str = Field(..., description="ID of the session this episode belongs to")
     start_time: datetime = Field(default_factory=_utc_now, description="When the episode started")
-    end_time: Optional[datetime] = Field(None, description="When the episode ended")
+    end_time: datetime | None = Field(None, description="When the episode ended")
     state: EpisodeState = Field(default=EpisodeState.CREATED, description="Current episode state")
-    steps: List[Step] = Field(default_factory=list, description="Complete history of all steps taken")
-    context: Dict[str, Any] = Field(default_factory=dict, description="Episode context data")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional episode metadata")
-    completion_reason: Optional[str] = Field(None, description="Reason the episode ended")
-    creation_error: Optional[str] = Field(None, description="Error message if episode creation failed")
+    steps: list[Step] = Field(default_factory=list, description="Complete history of all steps taken")
+    context: dict[str, Any] = Field(default_factory=dict, description="Episode context data")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional episode metadata")
+    completion_reason: str | None = Field(None, description="Reason the episode ended")
+    creation_error: str | None = Field(None, description="Error message if episode creation failed")
     max_steps: int = Field(default=10, description="Maximum number of steps allowed for this episode")
-    submission: Optional[str] = Field(None, description="Final submission for evaluation")
-    eval_submission: Optional[EvalSubmission] = Field(None, description="Rich evaluation submission data")
+    submission: str | None = Field(None, description="Final submission for evaluation")
+    eval_submission: EvalSubmission | None = Field(None, description="Rich evaluation submission data")
 
     # Episode dependency tracking fields
-    attached_to_episode_id: Optional[str] = Field(None, description="Episode ID this episode is attached to")
-    attached_episode_ids: List[str] = Field(default_factory=list, description="Episode IDs attached to this episode")
+    attached_to_episode_id: str | None = Field(None, description="Episode ID this episode is attached to")
+    attached_episode_ids: list[str] = Field(default_factory=list, description="Episode IDs attached to this episode")
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -180,7 +180,7 @@ class Episode(BaseModel):
         return self.state in [EpisodeState.READY, EpisodeState.ACTIVE]
 
     @property
-    def duration(self) -> Optional[float]:
+    def duration(self) -> float | None:
         """Get episode duration in seconds."""
         if self.end_time and self.start_time:
             return (self.end_time - self.start_time).total_seconds()
@@ -190,7 +190,7 @@ class Episode(BaseModel):
         """Add a step to the episode history."""
         self.steps.append(step)
 
-    async def update_context_atomic(self, updates: Dict[str, Any]) -> None:
+    async def update_context_atomic(self, updates: dict[str, Any]) -> None:
         """Atomically update multiple context keys (async-safe).
 
         This method ensures thread-safe updates to the episode context dictionary
@@ -202,7 +202,7 @@ class Episode(BaseModel):
         async with self._context_lock:
             self.context.update(updates)
 
-    def get_executed_commands(self) -> List[str]:
+    def get_executed_commands(self) -> list[str]:
         """Get all arguments executed during this episode."""
         commands = []
         for step in self.steps:
@@ -219,7 +219,7 @@ class Episode(BaseModel):
         if episode_id not in self.attached_episode_ids:
             self.attached_episode_ids.append(episode_id)
 
-    def has_attached_episode_with_task(self, task_id: str, episodes_by_id: Dict[str, "Episode"]) -> bool:
+    def has_attached_episode_with_task(self, task_id: str, episodes_by_id: dict[str, "Episode"]) -> bool:
         """Check if this episode already has an attached episode with the specified task_id."""
         for attached_episode_id in self.attached_episode_ids:
             attached_episode = episodes_by_id.get(attached_episode_id)

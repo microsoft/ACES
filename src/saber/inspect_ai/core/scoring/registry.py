@@ -5,8 +5,9 @@ Domains can register their own custom scoring strategies, and the scorer will di
 to the appropriate method based on the evaluation strategy.
 """
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+from typing import Any
 
 from ....logging_config import LogCategory, get_saber_logger
 from ....models.rest.evaluation import (
@@ -41,7 +42,7 @@ SubmissionScorerFunc = Callable[
         Any,  # session_manager
         Any,  # state (TaskState)
     ],
-    Awaitable[Tuple[float, str]],  # Returns (score, explanation)
+    Awaitable[tuple[float, str]],  # Returns (score, explanation)
 ]
 
 SubtaskScorerFunc = Callable[
@@ -53,7 +54,7 @@ SubtaskScorerFunc = Callable[
         Any,  # state (TaskState)
         EpisodeSubmissionResponse,  # submission_data (optional for some strategies)
     ],
-    Awaitable[Tuple[float, List[StepEvaluation]]],  # Returns (score, step_evaluations)
+    Awaitable[tuple[float, list[StepEvaluation]]],  # Returns (score, step_evaluations)
 ]
 
 
@@ -65,9 +66,9 @@ class ScoringRegistry:
     """
 
     # Class-level storage for registered scorers
-    _submission_scorers: Dict[str, SubmissionScorerFunc] = {}
-    _subtask_scorers: Dict[str, SubtaskScorerFunc] = {}
-    _subtask_metadata: Dict[str, ScorerMetadata] = {}  # Metadata for subtask scorers
+    _submission_scorers: dict[str, SubmissionScorerFunc] = {}
+    _subtask_scorers: dict[str, SubtaskScorerFunc] = {}
+    _subtask_metadata: dict[str, ScorerMetadata] = {}  # Metadata for subtask scorers
 
     @classmethod
     def register_submission_scorer(cls, strategy: str, scorer_func: SubmissionScorerFunc) -> None:
@@ -91,7 +92,7 @@ class ScoringRegistry:
 
     @classmethod
     def register_subtask_scorer(
-        cls, strategy: str, scorer_func: SubtaskScorerFunc, metadata: Optional[ScorerMetadata] = None
+        cls, strategy: str, scorer_func: SubtaskScorerFunc, metadata: ScorerMetadata | None = None
     ) -> None:
         """Register a subtask scoring function.
 
@@ -133,9 +134,7 @@ class ScoringRegistry:
         """
         if strategy not in cls._submission_scorers:
             available = ", ".join(cls._submission_scorers.keys())
-            raise KeyError(
-                f"Unknown submission evaluation strategy: '{strategy}'. " f"Available strategies: {available}"
-            )
+            raise KeyError(f"Unknown submission evaluation strategy: '{strategy}'. Available strategies: {available}")
         return cls._submission_scorers[strategy]
 
     @classmethod
@@ -153,7 +152,7 @@ class ScoringRegistry:
         """
         if strategy not in cls._subtask_scorers:
             available = ", ".join(cls._subtask_scorers.keys())
-            raise KeyError(f"Unknown subtask evaluation strategy: '{strategy}'. " f"Available strategies: {available}")
+            raise KeyError(f"Unknown subtask evaluation strategy: '{strategy}'. Available strategies: {available}")
         return cls._subtask_scorers[strategy]
 
     @classmethod
@@ -169,12 +168,12 @@ class ScoringRegistry:
         return cls._subtask_metadata.get(strategy, ScorerMetadata())
 
     @classmethod
-    def list_submission_strategies(cls) -> List[str]:
+    def list_submission_strategies(cls) -> list[str]:
         """List all registered submission scoring strategies."""
         return list(cls._submission_scorers.keys())
 
     @classmethod
-    def list_subtask_strategies(cls) -> List[str]:
+    def list_subtask_strategies(cls) -> list[str]:
         """List all registered subtask scoring strategies."""
         return list(cls._subtask_scorers.keys())
 
@@ -191,7 +190,7 @@ def register_submission_scorer(strategy: str, scorer_func: SubmissionScorerFunc)
 
 
 def register_subtask_scorer(
-    strategy: str, scorer_func: SubtaskScorerFunc, metadata: Optional[ScorerMetadata] = None
+    strategy: str, scorer_func: SubtaskScorerFunc, metadata: ScorerMetadata | None = None
 ) -> None:
     """Register a subtask scoring function.
 

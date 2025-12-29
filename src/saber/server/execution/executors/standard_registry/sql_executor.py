@@ -8,7 +8,7 @@ environment and other SQL-based execution environments.
 Logging category: ``LogCategory.DOCKER``.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .....logging_config import (
     LogCategory,
@@ -49,7 +49,7 @@ class SQLExecutor(DockerExecutor):
     }
 
     @classmethod
-    def get_default_config(cls) -> Dict[str, Any]:
+    def get_default_config(cls) -> dict[str, Any]:
         """
         Get default configuration for SQL executor.
 
@@ -66,9 +66,9 @@ class SQLExecutor(DockerExecutor):
     def create_with_config(
         cls,
         sandbox_manager: SandboxEnvironmentManager,
-        config: Optional[Dict[str, Any]] = None,
-        additional_params: Optional[Dict[str, Any]] = None,
-        session_manager: Optional[Any] = None,
+        config: dict[str, Any] | None = None,
+        additional_params: dict[str, Any] | None = None,
+        session_manager: Any | None = None,
         **kwargs: Any,
     ) -> "SQLExecutor":
         """
@@ -99,8 +99,8 @@ class SQLExecutor(DockerExecutor):
     def __init__(
         self,
         sandbox_manager: SandboxEnvironmentManager,
-        config: Optional[Dict[str, Any]] = None,
-        sql_config: Optional[Dict[str, Any]] = None,
+        config: dict[str, Any] | None = None,
+        sql_config: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
         """
@@ -128,7 +128,7 @@ class SQLExecutor(DockerExecutor):
         # Initialize security validator for SQL queries
         self._security_validator = SecurityValidator()
 
-    def setup_parameters(self, config: Dict[str, Any]) -> None:
+    def setup_parameters(self, config: dict[str, Any]) -> None:
         """Set up SQL executor parameters."""
         # Add parameter for the SQL query
         self.add_parameter(
@@ -162,7 +162,7 @@ class SQLExecutor(DockerExecutor):
             )
         )
 
-    def parse_connection_string(self, connection_string: str) -> Dict[str, str]:
+    def parse_connection_string(self, connection_string: str) -> dict[str, str]:
         """
         Parse a connection string into components.
 
@@ -219,9 +219,9 @@ class SQLExecutor(DockerExecutor):
                 "database": database,
             }
         except Exception as e:
-            raise ValueError(f"Invalid connection string format: {str(e)}")
+            raise ValueError(f"Invalid connection string format: {str(e)}") from e
 
-    def build_mysql_command(self, query: str, connection_info: Dict[str, str]) -> List[str]:
+    def build_mysql_command(self, query: str, connection_info: dict[str, str]) -> list[str]:
         """
         Build the mysql client command for executing the query.
 
@@ -304,7 +304,7 @@ class SQLExecutor(DockerExecutor):
 
         return result
 
-    async def execute(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> CommandResult:
+    async def execute(self, parameters: dict[str, Any], context: dict[str, Any]) -> CommandResult:
         """
         Execute SQL query in Docker container.
 
@@ -531,7 +531,7 @@ class SQLExecutor(DockerExecutor):
         else:
             return "UNKNOWN"
 
-    def validate_parameters(self, parameters: Dict[str, Any]) -> ValidationResult:
+    def validate_parameters(self, parameters: dict[str, Any]) -> ValidationResult:
         """
         Validate parameters including SQL validation.
 

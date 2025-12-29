@@ -9,7 +9,7 @@ Logging category: ``LogCategory.DOCKER``.
 """
 
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .....logging_config import (
     LogCategory,
@@ -51,7 +51,7 @@ class BashExecutor(DockerExecutor):
     }
 
     @classmethod
-    def get_default_config(cls) -> Dict[str, Any]:
+    def get_default_config(cls) -> dict[str, Any]:
         """
         Get default configuration for Bash executor.
 
@@ -66,9 +66,9 @@ class BashExecutor(DockerExecutor):
     def create_with_config(
         cls,
         sandbox_manager: SandboxEnvironmentManager,
-        config: Optional[Dict[str, Any]] = None,
-        additional_params: Optional[Dict[str, Any]] = None,
-        session_manager: Optional[Any] = None,
+        config: dict[str, Any] | None = None,
+        additional_params: dict[str, Any] | None = None,
+        session_manager: Any | None = None,
         **kwargs: Any,
     ) -> "BashExecutor":
         """
@@ -100,8 +100,8 @@ class BashExecutor(DockerExecutor):
     def __init__(
         self,
         sandbox_manager: SandboxEnvironmentManager,
-        config: Optional[Dict[str, Any]] = None,
-        allowed_commands: Optional[List[str]] = None,
+        config: dict[str, Any] | None = None,
+        allowed_commands: list[str] | None = None,
         **kwargs: Any,
     ) -> None:
         """
@@ -121,7 +121,7 @@ class BashExecutor(DockerExecutor):
         # Initialize security validator for this executor
         self._security_validator = SecurityValidator(allowed_commands=allowed_commands)
 
-    def setup_parameters(self, config: Dict[str, Any]) -> None:
+    def setup_parameters(self, config: dict[str, Any]) -> None:
         """Set up Bash executor parameters."""
         # Add parameter for the command
         self.add_parameter(
@@ -135,7 +135,7 @@ class BashExecutor(DockerExecutor):
 
         # Command chaining happens naturally in the shell
 
-    def build_command(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> List[str]:
+    def build_command(self, parameters: dict[str, Any], context: dict[str, Any]) -> list[str]:
         """
         Build the command arguments from the provided command string.
 
@@ -211,7 +211,7 @@ class BashExecutor(DockerExecutor):
 
         return escaped_command
 
-    async def execute(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> CommandResult:
+    async def execute(self, parameters: dict[str, Any], context: dict[str, Any]) -> CommandResult:
         """
         Execute the command-line tool in Docker container.
 
@@ -387,7 +387,7 @@ class BashExecutor(DockerExecutor):
 
             return CommandResult.error_result(error=error_msg, metadata={**metadata, "raw_data": result_data})
 
-    def validate_parameters(self, parameters: Dict[str, Any]) -> ValidationResult:
+    def validate_parameters(self, parameters: dict[str, Any]) -> ValidationResult:
         """
         Validate parameters including security validation for Bash commands.
 

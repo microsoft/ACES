@@ -5,7 +5,7 @@ including extraction of role overrides from kwargs, loading and merging
 configurations, and validation of role model assignments.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 from inspect_ai._util.error import PrerequisiteError
 
@@ -34,14 +34,14 @@ def all_roles_have_models(role_config: RoleBasedConfig) -> bool:
         return True
 
     # Check if all explicit roles have models
-    for role_name, role_conf in role_config.roles.items():
+    for _role_name, role_conf in role_config.roles.items():
         if not role_conf.model:
             return False
 
     return True
 
 
-def extract_role_overrides_from_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+def extract_role_overrides_from_kwargs(kwargs: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Extract role-specific overrides from kwargs.
 
     Looks for kwargs with underscore-separated role names like:
@@ -55,7 +55,7 @@ def extract_role_overrides_from_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Dict
         Dictionary mapping role names to their field overrides
         Example: {"red": {"model": "gpt-4"}, "blue": {"agent": "custom_agent"}}
     """
-    role_overrides: Dict[str, Dict[str, Any]] = {}
+    role_overrides: dict[str, dict[str, Any]] = {}
 
     # Process in a list copy to allow modification during iteration
     for key, value in list(kwargs.items()):
@@ -75,7 +75,7 @@ def extract_role_overrides_from_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Dict
 
 def load_and_merge_role_config(
     roles_source: Any,
-    role_overrides: Dict[str, Dict[str, Any]],
+    role_overrides: dict[str, dict[str, Any]],
     domain_slug: str,
 ) -> RoleBasedConfig:
     """Load role configuration from source and merge with overrides.
@@ -115,11 +115,11 @@ def load_and_merge_role_config(
 
 
 def process_role_configuration(
-    roles_file: Optional[str],
-    roles: Optional[Any],
-    kwargs: Dict[str, Any],
+    roles_file: str | None,
+    roles: Any | None,
+    kwargs: dict[str, Any],
     domain_slug: str,
-) -> Optional[RoleBasedConfig]:
+) -> RoleBasedConfig | None:
     """Process role-based configuration from multiple sources.
 
     Handles role configuration from:

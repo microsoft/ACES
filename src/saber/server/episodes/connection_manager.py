@@ -7,7 +7,6 @@ Logging category: EPISODE
 """
 
 import asyncio
-from typing import Dict, Optional, Set
 
 from fastapi import WebSocket
 
@@ -38,7 +37,7 @@ class ConnectionManager:
 
     def __init__(
         self,
-        episode_manager: Optional[EpisodeManagerProtocol] = None,
+        episode_manager: EpisodeManagerProtocol | None = None,
         time_source: TimeSource | None = None,
     ) -> None:
         """Initialize the ConnectionManager with empty state.
@@ -49,8 +48,8 @@ class ConnectionManager:
         """
         # Map episode_id → set of active WebSocket connections
         # Usually 1 connection per episode
-        self._active_connections: Dict[str, Set[WebSocket]] = {}
-        self._connection_metadata: Dict[WebSocket, ConnectionMetadata] = {}
+        self._active_connections: dict[str, set[WebSocket]] = {}
+        self._connection_metadata: dict[WebSocket, ConnectionMetadata] = {}
         self._lock = asyncio.Lock()
         self._episode_manager = episode_manager  # For cleanup notifications
         self._time_source = time_source or UTCTimeSource()
@@ -59,7 +58,7 @@ class ConnectionManager:
         self,
         episode_id: str,
         websocket: WebSocket,
-        metadata: Optional[Dict[str, str]] = None,
+        metadata: dict[str, str] | None = None,
     ) -> None:
         """
         Register new WebSocket connection for episode.

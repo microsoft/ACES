@@ -9,7 +9,7 @@ All executors must register themselves through this registry.
 
 import importlib.util
 from pathlib import Path
-from typing import Any, Dict, Type
+from typing import Any
 
 from saber.logging_config import LogCategory, get_saber_logger
 
@@ -28,15 +28,15 @@ class ExecutorRegistry:
 
     def __init__(self) -> None:
         """Initialize the executor registry."""
-        self._registered_executors: Dict[str, Type[CommandExecutor]] = {}
-        self._registration_sources: Dict[str, str] = {}  # Track where each executor came from
+        self._registered_executors: dict[str, type[CommandExecutor]] = {}
+        self._registration_sources: dict[str, str] = {}  # Track where each executor came from
         logger.info(
             "Executor registry initialized",
             extra={"event": "executor_registry_initialized"},
         )
 
     def register_executor_class(
-        self, executor_type: str, executor_class: Type[CommandExecutor], source: str = "external"
+        self, executor_type: str, executor_class: type[CommandExecutor], source: str = "external"
     ) -> None:
         """
         Register an executor class.
@@ -127,7 +127,7 @@ class ExecutorRegistry:
             )
             raise
 
-    def load_executors_from_directory(self, directory_path: str) -> Dict[str, str]:
+    def load_executors_from_directory(self, directory_path: str) -> dict[str, str]:
         """
         Load all executor definition files from a directory.
 
@@ -227,7 +227,7 @@ class ExecutorRegistry:
                 },
             )
 
-    def list_registered_executors(self) -> Dict[str, Dict[str, Any]]:
+    def list_registered_executors(self) -> dict[str, dict[str, Any]]:
         """
         List all registered executors with their metadata.
 
@@ -245,7 +245,7 @@ class ExecutorRegistry:
             }
         return result
 
-    def get_executor_class(self, executor_type: str) -> Type[CommandExecutor]:
+    def get_executor_class(self, executor_type: str) -> type[CommandExecutor]:
         """
         Get an executor class by type.
 
@@ -290,7 +290,7 @@ class ExecutorRegistry:
             },
         )
 
-    def _validate_executor_class(self, executor_class: Type[CommandExecutor]) -> None:
+    def _validate_executor_class(self, executor_class: type[CommandExecutor]) -> None:
         """
         Validate that an executor class has the required interface.
 
@@ -315,7 +315,7 @@ class ExecutorRegistry:
 executor_registry = ExecutorRegistry()
 
 
-def register_executor(executor_type: str, executor_class: Type[CommandExecutor], source: str = "external") -> None:
+def register_executor(executor_type: str, executor_class: type[CommandExecutor], source: str = "external") -> None:
     """
     Hook function for registering executors.
 
@@ -351,7 +351,7 @@ def register_executor_from_file(executor_type: str, file_path: str, class_name: 
     executor_registry.register_executor_from_file(executor_type, file_path, class_name)
 
 
-def load_executors_from_directory(directory_path: str) -> Dict[str, str]:
+def load_executors_from_directory(directory_path: str) -> dict[str, str]:
     """
     Hook function for loading all executor definitions from a directory.
 
@@ -371,7 +371,7 @@ def load_executors_from_directory(directory_path: str) -> Dict[str, str]:
     return executor_registry.load_executors_from_directory(directory_path)
 
 
-def get_executor_info() -> Dict[str, Dict[str, Any]]:
+def get_executor_info() -> dict[str, dict[str, Any]]:
     """
     Get information about all registered executors.
 
@@ -381,7 +381,7 @@ def get_executor_info() -> Dict[str, Dict[str, Any]]:
     return executor_registry.list_registered_executors()
 
 
-def get_executor_class(executor_type: str) -> Type[CommandExecutor]:
+def get_executor_class(executor_type: str) -> type[CommandExecutor]:
     """
     Get an executor class by type.
 

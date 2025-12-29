@@ -6,7 +6,6 @@ Docker Compose environment variables and settings.
 """
 
 from dataclasses import dataclass
-from typing import Dict, Optional
 
 
 @dataclass
@@ -19,20 +18,20 @@ class ComposeEnvironmentConfig:
     """
 
     # Episode/project identification
-    episode_id: Optional[str] = None
-    project_name: Optional[str] = None
+    episode_id: str | None = None
+    project_name: str | None = None
 
     # Configuration type (sandbox or permanent)
     config_type: str = "sandbox"
 
     # Network configuration
-    permanent_network_prefix: Optional[str] = None
-    target_episode_id: Optional[str] = None  # Episode to attach to for network sharing
+    permanent_network_prefix: str | None = None
+    target_episode_id: str | None = None  # Episode to attach to for network sharing
 
     # Additional environment variables for compose substitution
-    additional_variables: Optional[Dict[str, str]] = None
+    additional_variables: dict[str, str] | None = None
 
-    def to_env_dict(self) -> Dict[str, str]:
+    def to_env_dict(self) -> dict[str, str]:
         """
         Convert configuration to environment variables dictionary.
 
@@ -64,7 +63,7 @@ class ComposeEnvironmentConfig:
 
         return env_vars
 
-    def get_project_name(self) -> Optional[str]:
+    def get_project_name(self) -> str | None:
         """
         Get the effective project name for Docker Compose.
 

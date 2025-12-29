@@ -10,7 +10,7 @@ Logging category: AGENT.
 """
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from websockets import ClientConnection
@@ -31,7 +31,7 @@ from ...models.rest.websocket_messages import (
 logger = get_saber_logger(LogCategory.AGENT, __name__)
 
 # Type alias for messages that can be either Pydantic models or dicts (for test compatibility)
-WebSocketMessageOrDict = Union[WebSocketServerMessage, Dict[str, Any]]
+WebSocketMessageOrDict = WebSocketServerMessage | dict[str, Any]
 
 
 class WebSocketEventProcessor:
@@ -49,7 +49,7 @@ class WebSocketEventProcessor:
     def __init__(
         self,
         episode_id: str,
-        ws_config: Optional[WebSocketConfig] = None,
+        ws_config: WebSocketConfig | None = None,
     ) -> None:
         """Initialize the event processor.
 
@@ -66,7 +66,7 @@ class WebSocketEventProcessor:
         )
 
         # Listener task - tracks background WebSocket listener
-        self._listener_task: Optional[asyncio.Task[None]] = None
+        self._listener_task: asyncio.Task[None] | None = None
 
         # Shutdown event - set during cleanup to unblock wait_for_injection_event
         self._shutdown_event: asyncio.Event = asyncio.Event()
@@ -461,7 +461,7 @@ class WebSocketEventProcessor:
         # Non-blocking check of event queue
         try:
             # Peek at events in queue without blocking
-            events_to_requeue: List[WebSocketMessageOrDict] = []
+            events_to_requeue: list[WebSocketMessageOrDict] = []
             stuck_detected = False
 
             while not self._event_queue.empty():
@@ -563,7 +563,7 @@ class WebSocketEventProcessor:
         timeout: float,
         max_iterations: int = WebSocketDefaults.MAX_EVENT_DISCARD_ITERATIONS,
         context: str = "",
-    ) -> Optional[WebSocketMessageOrDict]:
+    ) -> WebSocketMessageOrDict | None:
         """Wait for a specific WebSocket message type, re-queuing state events.
 
         IMPORTANT: State events (is_waiting_on_*, transcript_modified) are re-queued

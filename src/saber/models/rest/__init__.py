@@ -4,7 +4,7 @@ SABER REST API Models - HTTP REST endpoint request/response models.
 These models define the HTTP REST API contract between SABER clients and servers.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -100,10 +100,10 @@ class StepResponse(BaseModel):
 
     success: bool = Field(description="Command succeeded")
     output: str = Field(description="Command output to show agent")
-    error: Optional[str] = Field(None, description="Error message if failed")
+    error: str | None = Field(None, description="Error message if failed")
     done: bool = Field(description="Episode complete")
     task_completed: bool = Field(default=False, description="Current task completed")
-    info: Dict[str, Any] = Field(default_factory=dict, description="Additional server info")
+    info: dict[str, Any] = Field(default_factory=dict, description="Additional server info")
 
 
 class SessionCreateResponse(BaseModel):
@@ -123,9 +123,9 @@ class EpisodeContext(BaseModel):
     """Typed episode context data."""
 
     session_id: str = Field(description="Session ID this episode belongs to")
-    task_timeout: Optional[int] = Field(None, description="Task timeout in seconds")
-    max_steps: Optional[int] = Field(None, description="Maximum allowed steps")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional context metadata")
+    task_timeout: int | None = Field(None, description="Task timeout in seconds")
+    max_steps: int | None = Field(None, description="Maximum allowed steps")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional context metadata")
 
 
 class EpisodeTaskResponse(BaseModel):
@@ -136,7 +136,7 @@ class EpisodeTaskResponse(BaseModel):
     description: str = Field(description="Task description")
     episode_id: str = Field(description="Episode identifier")
     episode_context: EpisodeContext = Field(description="Episode context information")
-    initial_context: Optional[Dict[str, Any]] = Field(
+    initial_context: dict[str, Any] | None = Field(
         None, description="Task initial context with target services and configuration"
     )
 
@@ -145,7 +145,7 @@ class PolicyResponse(BaseModel):
     """Response model for policy information."""
 
     prompt: str = Field(description="Policy prompt/guidelines")
-    domain: Optional[str] = Field(None, description="Security domain name")
+    domain: str | None = Field(None, description="Security domain name")
 
 
 class EpisodeCreateResponse(BaseModel):
@@ -156,8 +156,8 @@ class EpisodeCreateResponse(BaseModel):
     session_id: str = Field(description="Session identifier")
     state: str = Field(description="Initial episode state (typically 'creating')")
     message: str = Field(description="Status message")
-    episode_context: Optional[EpisodeContext] = Field(None, description="Episode context with limits and metadata")
-    attached_to_episode_id: Optional[str] = Field(
+    episode_context: EpisodeContext | None = Field(None, description="Episode context with limits and metadata")
+    attached_to_episode_id: str | None = Field(
         None, description="Episode ID this episode is attached to due to dependencies"
     )
 
@@ -171,19 +171,19 @@ class EpisodeStatusResponse(BaseModel):
     state: str = Field(description="Current episode state")
     is_ready: bool = Field(description="Whether episode is ready for execution")
     message: str = Field(description="Status message")
-    creation_error: Optional[str] = Field(None, description="Error message if creation failed")
-    episode_context: Optional[EpisodeContext] = Field(None, description="Episode context (available when ready)")
-    attached_to_episode_id: Optional[str] = Field(None, description="Attached episode ID if applicable")
+    creation_error: str | None = Field(None, description="Error message if creation failed")
+    episode_context: EpisodeContext | None = Field(None, description="Episode context (available when ready)")
+    attached_to_episode_id: str | None = Field(None, description="Attached episode ID if applicable")
 
 
 class EpisodeListResponse(BaseModel):
     """Response model for listing episodes."""
 
     session_id: str = Field(description="Session identifier")
-    active_episodes: List[str] = Field(description="List of active episode IDs")
-    episode_history: List[str] = Field(description="List of completed episode IDs")
-    episode_counts: Dict[str, int] = Field(description="Episode count statistics")
-    task_queue: List[str] = Field(description="Queued tasks for orchestration")
+    active_episodes: list[str] = Field(description="List of active episode IDs")
+    episode_history: list[str] = Field(description="List of completed episode IDs")
+    episode_counts: dict[str, int] = Field(description="Episode count statistics")
+    task_queue: list[str] = Field(description="Queued tasks for orchestration")
 
 
 class ActiveEpisodeInfo(BaseModel):
@@ -194,14 +194,14 @@ class ActiveEpisodeInfo(BaseModel):
     state: str = Field(description="Current episode state")
     step_count: int = Field(description="Number of steps taken")
     start_time: str = Field(description="Episode start time (ISO format)")
-    duration: Optional[float] = Field(None, description="Episode duration in seconds")
+    duration: float | None = Field(None, description="Episode duration in seconds")
 
 
 class ActiveEpisodesResponse(BaseModel):
     """Response model for listing active episodes."""
 
     session_id: str = Field(description="Session identifier")
-    active_episodes: List[ActiveEpisodeInfo] = Field(description="List of active episode details")
+    active_episodes: list[ActiveEpisodeInfo] = Field(description="List of active episode details")
     count: int = Field(description="Number of active episodes")
 
 
@@ -214,11 +214,11 @@ class EpisodeDetailResponse(BaseModel):
     state: str = Field(description="Current episode state")
     step_count: int = Field(description="Number of steps taken")
     start_time: str = Field(description="Episode start time (ISO format)")
-    end_time: Optional[str] = Field(None, description="Episode end time (ISO format)")
-    duration: Optional[float] = Field(None, description="Episode duration in seconds")
-    completion_reason: Optional[str] = Field(None, description="Reason for completion")
-    context: Dict[str, Any] = Field(description="Episode context data")
-    metadata: Dict[str, Any] = Field(description="Episode metadata")
+    end_time: str | None = Field(None, description="Episode end time (ISO format)")
+    duration: float | None = Field(None, description="Episode duration in seconds")
+    completion_reason: str | None = Field(None, description="Reason for completion")
+    context: dict[str, Any] = Field(description="Episode context data")
+    metadata: dict[str, Any] = Field(description="Episode metadata")
 
 
 class ActionExecutionResponse(BaseModel):
@@ -226,15 +226,15 @@ class ActionExecutionResponse(BaseModel):
 
     success: bool = Field(description="Whether the action succeeded")
     data: Any = Field(description="Action result data")
-    execution_time: Optional[float] = Field(None, description="Execution time in seconds")
-    error: Optional[str] = Field(None, description="Error message if failed")
+    execution_time: float | None = Field(None, description="Execution time in seconds")
+    error: str | None = Field(None, description="Error message if failed")
 
 
 class TaskOrchestrationResponse(BaseModel):
     """Response model for task orchestration."""
 
     session_id: str = Field(description="Session identifier")
-    queued_tasks: List[str] = Field(description="List of queued task IDs")
+    queued_tasks: list[str] = Field(description="List of queued task IDs")
     message: str = Field(description="Success message")
 
 
@@ -243,12 +243,12 @@ class HealthResponse(BaseModel):
 
     status: str = Field(description="Health status")
     domain: str = Field(description="Domain name")
-    domain_slug: Optional[str] = Field(default=None, description="Domain slug from manifest")
-    schema_version: Optional[str] = Field(default=None, description="Manifest schema version")
-    capabilities: Optional[Dict[str, Any]] = Field(default=None, description="Domain capabilities from manifest")
-    config_checksum: Optional[str] = Field(default=None, description="Configuration directory checksum")
-    manifest_path: Optional[str] = Field(default=None, description="Path to domain manifest")
-    build_metadata: Optional[Dict[str, Any]] = Field(default=None, description="Build metadata")
+    domain_slug: str | None = Field(default=None, description="Domain slug from manifest")
+    schema_version: str | None = Field(default=None, description="Manifest schema version")
+    capabilities: dict[str, Any] | None = Field(default=None, description="Domain capabilities from manifest")
+    config_checksum: str | None = Field(default=None, description="Configuration directory checksum")
+    manifest_path: str | None = Field(default=None, description="Path to domain manifest")
+    build_metadata: dict[str, Any] | None = Field(default=None, description="Build metadata")
 
 
 class SessionSummary(BaseModel):
@@ -266,7 +266,7 @@ class SessionSummary(BaseModel):
 class SessionListResponse(BaseModel):
     """Response model for listing sessions."""
 
-    sessions: List[SessionSummary] = Field(description="List of session summaries")
+    sessions: list[SessionSummary] = Field(description="List of session summaries")
     total_count: int = Field(description="Total number of sessions")
     active_count: int = Field(description="Number of active sessions")
 
@@ -278,8 +278,8 @@ class SessionStatsResponse(BaseModel):
     active_sessions: int = Field(description="Number of active sessions")
     total_episodes: int = Field(description="Total number of episodes")
     active_episodes: int = Field(description="Number of active episodes")
-    average_session_duration: Optional[float] = Field(None, description="Average session duration")
-    oldest_session_age: Optional[float] = Field(None, description="Age of oldest session in hours")
+    average_session_duration: float | None = Field(None, description="Average session duration")
+    oldest_session_age: float | None = Field(None, description="Age of oldest session in hours")
 
 
 class EpisodeEndResponse(BaseModel):
@@ -294,9 +294,9 @@ class EpisodeEndResponse(BaseModel):
     episode_id: str = Field(description="ID of the episode that ended")
     success: bool = Field(description="Whether the episode completed successfully (based on termination reason)")
     reason: str = Field(description="Reason for episode termination")
-    previous_task_id: Optional[str] = Field(None, description="Task ID of the completed episode")
+    previous_task_id: str | None = Field(None, description="Task ID of the completed episode")
     active_episodes_remaining: int = Field(description="Number of active episodes remaining in session")
-    evaluation_result: Optional[Dict[str, Any]] = Field(
+    evaluation_result: dict[str, Any] | None = Field(
         None, description="Episode evaluation result (None for client-side evaluation)"
     )
 
@@ -315,7 +315,7 @@ class ToolCall(BaseModel):
 
     id: str = Field(description="Tool call identifier")
     function: str = Field(description="Tool/function name")
-    arguments: Dict[str, Any] = Field(description="Tool arguments")
+    arguments: dict[str, Any] = Field(description="Tool arguments")
 
 
 class ChatMessage(BaseModel):
@@ -327,18 +327,18 @@ class ChatMessage(BaseModel):
 
     role: str = Field(description="Message role (user, assistant, system, tool)")
     content: str = Field(default="", description="Message text content")
-    tool_calls: Optional[List[ToolCall]] = Field(None, description="Tool calls (for assistant messages)")
-    tool_call_id: Optional[str] = Field(None, description="Tool call ID (for tool response messages)")
-    name: Optional[str] = Field(None, description="Tool name (for tool response messages)")
-    reasoning: Optional[str] = Field(None, description="Reasoning/chain-of-thought (for assistant messages)")
+    tool_calls: list[ToolCall] | None = Field(None, description="Tool calls (for assistant messages)")
+    tool_call_id: str | None = Field(None, description="Tool call ID (for tool response messages)")
+    name: str | None = Field(None, description="Tool name (for tool response messages)")
+    reasoning: str | None = Field(None, description="Reasoning/chain-of-thought (for assistant messages)")
 
 
 class TranscriptPushRequest(BaseModel):
     """Request model for pushing transcript to server."""
 
-    messages: List[ChatMessage] = Field(description="List of conversation messages")
+    messages: list[ChatMessage] = Field(description="List of conversation messages")
     mode: str = Field(default="replace", description="Push mode: 'replace' (full) or 'append' (differential)")
-    metadata: Dict[str, Any] = Field(
+    metadata: dict[str, Any] = Field(
         default_factory=dict, description="Transcript metadata (step_number, timestamp, source)"
     )
 
@@ -356,10 +356,10 @@ class TranscriptGetResponse(BaseModel):
     """Response model for transcript retrieval."""
 
     episode_id: str = Field(description="Episode identifier")
-    messages: List[ChatMessage] = Field(description="List of conversation messages")
+    messages: list[ChatMessage] = Field(description="List of conversation messages")
     message_count: int = Field(description="Number of messages in transcript")
-    last_updated: Optional[str] = Field(None, description="Last update timestamp (ISO format)")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="Transcript metadata if available")
+    last_updated: str | None = Field(None, description="Last update timestamp (ISO format)")
+    metadata: dict[str, Any] | None = Field(None, description="Transcript metadata if available")
 
 
 # Message injection models (Phase 4: Red Team message injection)
@@ -368,7 +368,7 @@ class MessageInjectRequest(BaseModel):
 
     role: str = Field(description="Message role (typically 'user' for red team injections)")
     content: str = Field(description="Message content to inject")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Optional metadata (injected_by, reason, etc.)")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Optional metadata (injected_by, reason, etc.)")
 
 
 class MessageInjectResponse(BaseModel):
@@ -384,7 +384,7 @@ class PendingMessagesResponse(BaseModel):
     """Response model for retrieving pending injections."""
 
     episode_id: str = Field(description="Episode identifier")
-    messages: List[ChatMessage] = Field(description="List of pending messages to inject")
+    messages: list[ChatMessage] = Field(description="List of pending messages to inject")
     pending_count: int = Field(description="Number of pending messages")
     retrieved_at: str = Field(description="Timestamp when messages were retrieved (ISO format)")
 

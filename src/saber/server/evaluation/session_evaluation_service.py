@@ -7,7 +7,7 @@ Provides session-scoped evaluation retrieval operations with fail-fast behavior.
 No backwards compatibility or defensive programming fallbacks.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from saber.logging_config import LogCategory, get_saber_logger
 
@@ -86,7 +86,7 @@ class SessionEvaluationService:
                 f"Failed to retrieve evaluation for episode {episode_id} in session {session_id}: {e}"
             ) from e
 
-    async def list_session_evaluations(self, session_id: str, task_id: Optional[str] = None) -> List[EvaluationResult]:
+    async def list_session_evaluations(self, session_id: str, task_id: str | None = None) -> list[EvaluationResult]:
         """
         List all evaluations for a session, optionally filtered by task.
 
@@ -129,7 +129,7 @@ class SessionEvaluationService:
             # Wrap unexpected errors in SessionEvaluationError
             raise SessionEvaluationError(f"Failed to list evaluations for session {session_id}: {e}") from e
 
-    async def get_session_summary(self, session_id: str) -> Dict[str, Any]:
+    async def get_session_summary(self, session_id: str) -> dict[str, Any]:
         """
         Get aggregate evaluation summary for session.
 
@@ -153,7 +153,7 @@ class SessionEvaluationService:
 
         try:
             # Get all evaluations for the session
-            evaluations: List[EvaluationResult] = await self.store.list_by_session(session_id)
+            evaluations: list[EvaluationResult] = await self.store.list_by_session(session_id)
 
             if not evaluations:
                 return {
@@ -171,7 +171,7 @@ class SessionEvaluationService:
             average_score = total_score / total_episodes if total_episodes > 0 else 0.0
 
             # Group by task for task-level summaries
-            task_summaries: Dict[str, Dict[str, Any]] = {}
+            task_summaries: dict[str, dict[str, Any]] = {}
             for eval_result in evaluations:
                 task_id = eval_result.task_id
                 if task_id not in task_summaries:

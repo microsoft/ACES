@@ -5,7 +5,7 @@ exchanged between client and server, ensuring type safety and validation.
 """
 
 from enum import Enum
-from typing import Annotated, Any, Dict, List, Literal, Optional, Union
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, TypeAdapter
 
@@ -78,32 +78,32 @@ class TranscriptVersion(BaseModel):
 
     sequence: int = Field(description="Sequential version number", ge=0)
     checksum: str = Field(description="SHA256 checksum of transcript")
-    message_count: Optional[int] = Field(default=None, description="Total message count", ge=0)
-    last_operation: Optional[str] = Field(default=None, description="Last operation")
+    message_count: int | None = Field(default=None, description="Total message count", ge=0)
+    last_operation: str | None = Field(default=None, description="Last operation")
 
 
 class SyncRequestData(BaseModel):
     """Data payload for sync_request messages."""
 
     since_version: int = Field(default=0, description="Last known version", ge=0)
-    client_checksum: Optional[str] = Field(default=None, description="Client checksum for verification")
+    client_checksum: str | None = Field(default=None, description="Client checksum for verification")
 
     # Observer/cross-episode fields (for red team accessing blue team transcript)
-    target_episode_id: Optional[str] = Field(default=None, description="Target episode for cross-episode sync")
-    hide_system_prompt: Optional[bool] = Field(default=None, description="Hide system messages for security")
-    retrieval_mode: Optional[str] = Field(default=None, description="Retrieval mode: full, delta, tail")
-    tail_count: Optional[int] = Field(default=None, description="Number of messages for tail mode", ge=1)
+    target_episode_id: str | None = Field(default=None, description="Target episode for cross-episode sync")
+    hide_system_prompt: bool | None = Field(default=None, description="Hide system messages for security")
+    retrieval_mode: str | None = Field(default=None, description="Retrieval mode: full, delta, tail")
+    tail_count: int | None = Field(default=None, description="Number of messages for tail mode", ge=1)
 
 
 class PushMessageRequestData(BaseModel):
     """Data payload for push_message messages (normal and injection mode)."""
 
-    message: Dict[str, Any] = Field(description="Message to push")
+    message: dict[str, Any] = Field(description="Message to push")
     since_version: int = Field(default=0, ge=0)
-    client_checksum: Optional[str] = Field(default=None)
+    client_checksum: str | None = Field(default=None)
 
     # Injection fields (optional - red team only)
-    target_episode_id: Optional[str] = Field(default=None, description="Target episode for injection")
+    target_episode_id: str | None = Field(default=None, description="Target episode for injection")
     strategy: str = Field(default="append", description="Operation strategy: append or restart")
 
 
@@ -112,23 +112,23 @@ class SyncResponseData(BaseModel):
 
     sync_mode: SyncMode = Field(description="Full or delta sync")
     current_version: TranscriptVersion
-    modified: Optional[bool] = Field(default=None, description="Whether transcript was modified")
-    full_transcript: Optional[List[Dict[str, Any]]] = Field(
+    modified: bool | None = Field(default=None, description="Whether transcript was modified")
+    full_transcript: list[dict[str, Any]] | None = Field(
         default=None, description="Full transcript (when sync_mode=FULL)"
     )
-    delta: Optional[List[Dict[str, Any]]] = Field(default=None, description="Delta messages (when sync_mode=DELTA)")
+    delta: list[dict[str, Any]] | None = Field(default=None, description="Delta messages (when sync_mode=DELTA)")
 
 
 class PushMessageData(BaseModel):
     """Client push message data (both normal and injection)."""
 
-    message: Dict[str, Any]
+    message: dict[str, Any]
     since_version: int = Field(ge=0)
-    client_checksum: Optional[str] = Field(default=None)
+    client_checksum: str | None = Field(default=None)
 
     # Injection fields (red team only)
-    target_episode_id: Optional[str] = Field(default=None, description="Target episode for injection")
-    strategy: Optional[TranscriptOperation] = Field(default=None, description="Operation strategy")
+    target_episode_id: str | None = Field(default=None, description="Target episode for injection")
+    strategy: TranscriptOperation | None = Field(default=None, description="Operation strategy")
 
 
 class PushAckData(BaseModel):
@@ -136,8 +136,8 @@ class PushAckData(BaseModel):
 
     version: int = Field(description="New version after push", ge=0)
     checksum: str = Field(description="New checksum after push")
-    modification_count: Optional[int] = Field(default=None, description="Injection counter", ge=0)
-    target_episode_id: Optional[str] = Field(default=None, description="Target episode for injection")
+    modification_count: int | None = Field(default=None, description="Injection counter", ge=0)
+    target_episode_id: str | None = Field(default=None, description="Target episode for injection")
 
 
 class StateEventData(BaseModel):
@@ -146,7 +146,7 @@ class StateEventData(BaseModel):
     version: int = Field(ge=0)
     operation: TranscriptOperation = Field(description="Operation that caused this event")
     modification_count: int = Field(ge=0)
-    injected_by: Optional[str] = Field(default=None)
+    injected_by: str | None = Field(default=None)
     state: str = Field(description="Current transcript state")
 
 
@@ -154,17 +154,17 @@ class TranscriptErrorData(BaseModel):
     """Transcript error notification data."""
 
     error: TranscriptErrorType
-    state: Optional[str] = Field(default=None)
-    duration_seconds: Optional[float] = Field(default=None)
-    threshold_seconds: Optional[float] = Field(default=None)
-    message: Optional[str] = Field(default=None)
+    state: str | None = Field(default=None)
+    duration_seconds: float | None = Field(default=None)
+    threshold_seconds: float | None = Field(default=None)
+    message: str | None = Field(default=None)
 
 
 class ConnectedData(BaseModel):
     """Connected message data."""
 
     episode_id: str
-    server_version: Optional[str] = Field(default=None)
+    server_version: str | None = Field(default=None)
 
 
 class ConnectionMetadata(BaseModel):
@@ -172,7 +172,7 @@ class ConnectionMetadata(BaseModel):
 
     episode_id: str
     connected_at: str
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 # Message wrapper classes
@@ -231,14 +231,7 @@ class TranscriptErrorMessage(BaseModel):
 # Union type for all possible WebSocket messages sent by server
 # Uses discriminated union on the 'type' field for efficient parsing
 WebSocketServerMessage = Annotated[
-    Union[
-        ConnectedMessage,
-        PongMessage,
-        SyncResponseMessage,
-        PushAckMessage,
-        StateEventMessage,
-        TranscriptErrorMessage,
-    ],
+    ConnectedMessage | PongMessage | SyncResponseMessage | PushAckMessage | StateEventMessage | TranscriptErrorMessage,
     Field(discriminator="type"),
 ]
 

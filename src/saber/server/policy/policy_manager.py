@@ -6,7 +6,7 @@ Logging Category: POLICY
 This is a minimal implementation to support SessionManager development.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -20,7 +20,7 @@ class PolicyDocument(BaseModel):
 
     prompt: str = Field(..., description="Initial prompt for agents")
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "prompt": self.prompt,
@@ -36,7 +36,7 @@ class PolicyManager:
 
     def __init__(self, domain_name: str):
         self.domain_name = domain_name
-        self._episode_policies: Dict[str, PolicyDocument] = {}
+        self._episode_policies: dict[str, PolicyDocument] = {}
         logger.info(
             "Policy manager initialized",
             extra={
@@ -75,7 +75,7 @@ class PolicyManager:
             },
         )
 
-    def get_policy(self, episode_id: Optional[str] = None) -> PolicyDocument:
+    def get_policy(self, episode_id: str | None = None) -> PolicyDocument:
         """
         Get domain policy document for a specific episode.
 

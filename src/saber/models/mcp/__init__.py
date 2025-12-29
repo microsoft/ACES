@@ -6,7 +6,7 @@ These models define the MCP API contract for tool discovery and execution.
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import mcp.types as mcp_types
 from pydantic import BaseModel, Field
@@ -55,11 +55,11 @@ class RequestHeaders:
     multiple return values.
     """
 
-    session_id: Optional[str]
-    episode_id: Optional[str]
+    session_id: str | None
+    episode_id: str | None
     orchestration_env: OrchestrationEnvironment
-    task_id: Optional[str] = None
-    client_id: Optional[str] = None
+    task_id: str | None = None
+    client_id: str | None = None
 
     def __post_init__(self) -> None:
         """Validate the headers after initialization."""
@@ -98,16 +98,16 @@ class MCPPropertySchema(BaseModel):
     model_config = {"extra": "forbid"}
 
     type: str = Field(description="JSON Schema type (string, integer, number, boolean, array, object)")
-    description: Optional[str] = Field(None, description="Property description")
-    title: Optional[str] = Field(None, description="Property title (from JSON Schema)")
-    default: Optional[Any] = Field(None, description="Default value for the property")
-    enum: Optional[List[Any]] = Field(None, description="Allowed values for enum properties")
-    minimum: Optional[Union[int, float]] = Field(None, description="Minimum value for numeric properties")
-    maximum: Optional[Union[int, float]] = Field(None, description="Maximum value for numeric properties")
-    pattern: Optional[str] = Field(None, description="Regex pattern for string properties")
-    items: Optional[Dict[str, Any]] = Field(None, description="Schema for array items (for array type)")
+    description: str | None = Field(None, description="Property description")
+    title: str | None = Field(None, description="Property title (from JSON Schema)")
+    default: Any | None = Field(None, description="Default value for the property")
+    enum: list[Any] | None = Field(None, description="Allowed values for enum properties")
+    minimum: int | float | None = Field(None, description="Minimum value for numeric properties")
+    maximum: int | float | None = Field(None, description="Maximum value for numeric properties")
+    pattern: str | None = Field(None, description="Regex pattern for string properties")
+    items: dict[str, Any] | None = Field(None, description="Schema for array items (for array type)")
 
-    def model_dump(self, **kwargs: Any) -> Dict[str, Any]:
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
         """Override model_dump to exclude None values from JSON schema generation."""
         # Set exclude_none=True by default unless explicitly overridden
         if "exclude_none" not in kwargs:
@@ -119,8 +119,8 @@ class MCPInputSchema(BaseModel):
     """JSON Schema definition for MCP tool input parameters."""
 
     type: str = Field(default="object", description="Schema type (always 'object' for tool parameters)")
-    properties: Dict[str, MCPPropertySchema] = Field(description="Parameter property definitions")
-    required: List[str] = Field(default_factory=list, description="List of required parameter names")
+    properties: dict[str, MCPPropertySchema] = Field(description="Parameter property definitions")
+    required: list[str] = Field(default_factory=list, description="List of required parameter names")
     additional_properties: bool = Field(
         default=False,
         alias="additionalProperties",
@@ -129,7 +129,7 @@ class MCPInputSchema(BaseModel):
 
     model_config = {"populate_by_name": True}
 
-    def model_dump(self, **kwargs: Any) -> Dict[str, Any]:
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
         """Override model_dump to exclude None values from JSON schema generation."""
         # Set exclude_none=True by default unless explicitly overridden
         if "exclude_none" not in kwargs:
@@ -151,15 +151,15 @@ class MCPToolSchema(BaseModel):
 class MCPToolListResponse(BaseModel):
     """Response model for MCP tool listing."""
 
-    tools: List[mcp_types.Tool] = Field(description="Available tools")
-    session_id: Optional[str] = Field(None, description="Session context")
-    episode_id: Optional[str] = Field(None, description="Episode context")
+    tools: list[mcp_types.Tool] = Field(description="Available tools")
+    session_id: str | None = Field(None, description="Session context")
+    episode_id: str | None = Field(None, description="Episode context")
 
 
 class MCPToolCallResponse(BaseModel):
     """Response model for MCP tool execution."""
 
-    content: List[Dict[str, Any]] = Field(description="Tool execution result content")
+    content: list[dict[str, Any]] = Field(description="Tool execution result content")
     isError: bool = Field(default=False, description="Whether the call resulted in an error")
 
 
@@ -167,28 +167,28 @@ class MCPErrorResponse(BaseModel):
     """Response model for MCP errors."""
 
     error: str = Field(description="Error message")
-    details: Optional[Dict[str, Any]] = Field(None, description="Additional error details")
+    details: dict[str, Any] | None = Field(None, description="Additional error details")
 
 
 class MCPToolCallRequest(BaseModel):
     """Request model for MCP tool execution with strict typing."""
 
     tool_name: str = Field(description="Name of the tool to execute")
-    arguments: Dict[str, Any] = Field(
+    arguments: dict[str, Any] = Field(
         default_factory=dict, description="Tool-specific arguments (validated against tool schema)"
     )
     episode_id: str = Field(description="Episode ID for request context")
-    task_id: Optional[str] = Field(None, description="Optional task ID for request context")
-    timeout: Optional[float] = Field(None, description="Optional timeout override for this specific call")
-    context: Optional[Dict[str, str]] = Field(None, description="Additional execution context metadata")
+    task_id: str | None = Field(None, description="Optional task ID for request context")
+    timeout: float | None = Field(None, description="Optional timeout override for this specific call")
+    context: dict[str, str] | None = Field(None, description="Additional execution context metadata")
 
 
 class SessionContext(BaseModel):
     """Session context for MCP requests."""
 
     session_id: str = Field(description="SABER session ID")
-    episode_id: Optional[str] = Field(None, description="SABER episode ID (added when episode starts)")
-    task_id: Optional[str] = Field(None, description="SABER task ID")
+    episode_id: str | None = Field(None, description="SABER episode ID (added when episode starts)")
+    task_id: str | None = Field(None, description="SABER task ID")
     client_id: str = Field(description="Client identifier")
 
 

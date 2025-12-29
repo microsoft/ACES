@@ -22,7 +22,7 @@ import sys
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any
 
 try:
     import websockets
@@ -44,15 +44,15 @@ logger = logging.getLogger(__name__)
 class SyncRequestData:
     """Client sync request data - matches server's SyncRequestData model."""
 
-    since_version: Optional[int] = None
-    client_checksum: Optional[str] = None
+    since_version: int | None = None
+    client_checksum: str | None = None
     # Observer/cross-episode fields (for red team accessing blue team transcript)
-    target_episode_id: Optional[str] = None
-    hide_system_prompt: Optional[bool] = None
-    retrieval_mode: Optional[str] = None  # full, delta, tail
-    tail_count: Optional[int] = None
+    target_episode_id: str | None = None
+    hide_system_prompt: bool | None = None
+    retrieval_mode: str | None = None  # full, delta, tail
+    tail_count: int | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dict, excluding None values."""
         return {k: v for k, v in asdict(self).items() if v is not None}
 
@@ -82,14 +82,14 @@ class SyncRequestMessage:
 class PushMessageData:
     """Client push message data (for injection)."""
 
-    message: Dict[str, Any]
+    message: dict[str, Any]
     since_version: int = 0
-    client_checksum: Optional[str] = None
+    client_checksum: str | None = None
     # Injection fields
-    target_episode_id: Optional[str] = None
-    strategy: Optional[str] = None  # append or restart
+    target_episode_id: str | None = None
+    strategy: str | None = None  # append or restart
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dict, excluding None values."""
         return {k: v for k, v in asdict(self).items() if v is not None}
 
@@ -139,7 +139,7 @@ class WebSocketDaemon:
             if match:
                 rest_base_url = f"http://{match.group(1)}"
         self.rest_base_url = rest_base_url
-        self.websocket: Optional[websockets.WebSocketClientProtocol] = None
+        self.websocket: websockets.WebSocketClientProtocol | None = None
         self.connected = False
         self._pending_responses: dict[str, asyncio.Future] = {}
 
@@ -239,7 +239,7 @@ class WebSocketDaemon:
             return response["data"]
         except asyncio.TimeoutError:
             self._pending_responses.pop(request.id, None)
-            raise TimeoutError(f"Injection timeout after {timeout}s")
+            raise TimeoutError(f"Injection timeout after {timeout}s") from None
 
     async def handle_ipc_request(self, request: web.Request) -> web.Response:
         """Handle IPC HTTP request.
@@ -329,7 +329,7 @@ class WebSocketDaemon:
 
         # Create an event that will be set when we receive the target state
         state_event = asyncio.Event()
-        received_state: Dict[str, Any] = {}
+        received_state: dict[str, Any] = {}
 
         async def listen_for_state():
             """Connect to target's WebSocket and listen for state events."""
@@ -709,7 +709,7 @@ class WebSocketDaemon:
             return response.get("data", {})
         except asyncio.TimeoutError:
             self._pending_responses.pop(request.id, None)
-            raise TimeoutError(f"Sync request timeout after {timeout}s")
+            raise TimeoutError(f"Sync request timeout after {timeout}s") from None
 
     async def handle_transcript(self, request: web.Request) -> web.Response:
         """Handle transcript retrieval IPC request.

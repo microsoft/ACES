@@ -4,10 +4,10 @@ This module handles loading packaged resources using importlib.resources
 with fail-fast principles - no silent fallbacks that mask configuration issues.
 """
 
+from collections.abc import Iterator
 from contextlib import contextmanager
 from importlib.resources import as_file, files
 from pathlib import Path
-from typing import Iterator
 
 from .exceptions import ResourceNotFoundError
 
@@ -46,7 +46,7 @@ def resolve_compose_file(explicit_path: Path | None = None) -> Iterator[Path]:
     # Fail fast - no silent failures
     raise ResourceNotFoundError(
         "docker-compose.yml",
-        "Not found in package resources. " "Ensure SABER is properly installed or provide --compose-file explicitly.",
+        "Not found in package resources. Ensure SABER is properly installed or provide --compose-file explicitly.",
     )
 
 
@@ -83,7 +83,7 @@ def resolve_schema_file(schema_name: str = "domain-manifest.schema.json") -> Ite
     # Fail fast
     raise ResourceNotFoundError(
         f"schema file '{schema_name}'",
-        "Not found in package resources or development environment. " "Ensure SABER is properly installed.",
+        "Not found in package resources or development environment. Ensure SABER is properly installed.",
     )
 
 
@@ -112,7 +112,7 @@ def get_env_example_content() -> str:
     # Fail fast
     raise ResourceNotFoundError(
         "env.example",
-        "Not found in package resources or development environment. " "Ensure SABER is properly installed.",
+        "Not found in package resources or development environment. Ensure SABER is properly installed.",
     )
 
 

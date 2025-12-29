@@ -11,8 +11,8 @@ Key features:
 - Detailed error messages with fix suggestions
 """
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Optional
 
 from ...logging_config import LogCategory, get_saber_logger
 
@@ -100,7 +100,7 @@ def load_domain_agent(
     domain_slug: str,
     domains_root: Path,
     agent_name: str,
-) -> Optional[Callable]:
+) -> Callable | None:
     """Load agent from domain's client folder.
 
     Searches: domains/{domain_slug}/client/{agent_name}.py

@@ -1,7 +1,5 @@
 """Exceptions for the task management system."""
 
-from typing import Optional
-
 
 class TaskManagerException(Exception):
     """Base exception for task manager errors."""
@@ -29,7 +27,7 @@ class SubTaskNotFoundException(TaskManagerException):
 class InvalidTaskDefinitionException(TaskManagerException):
     """Raised when YAML task definition is invalid."""
 
-    def __init__(self, message: str, file_path: Optional[str] = None):
+    def __init__(self, message: str, file_path: str | None = None):
         self.file_path = file_path
         if file_path:
             super().__init__(f"Invalid task definition in {file_path}: {message}")

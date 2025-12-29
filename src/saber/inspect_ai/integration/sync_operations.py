@@ -13,7 +13,7 @@ import asyncio
 import json
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from websockets import ClientConnection
@@ -55,7 +55,7 @@ class TranscriptSyncOperations:
         self,
         episode_id: str,
         event_processor: WebSocketEventProcessor,
-        ws_config: Optional[WebSocketConfig] = None,
+        ws_config: WebSocketConfig | None = None,
     ) -> None:
         """Initialize sync operations.
 
@@ -71,7 +71,7 @@ class TranscriptSyncOperations:
         # Local version tracking
         self._local_version = 0
         self._local_checksum = compute_checksum([])
-        self._local_messages: List[ChatMessage] = []
+        self._local_messages: list[ChatMessage] = []
 
         logger.debug(
             "Created TranscriptSyncOperations",
@@ -103,12 +103,12 @@ class TranscriptSyncOperations:
         self._local_checksum = value
 
     @property
-    def local_messages(self) -> List[ChatMessage]:
+    def local_messages(self) -> list[ChatMessage]:
         """Get current local transcript messages."""
         return self._local_messages
 
     @local_messages.setter
-    def local_messages(self, value: List[ChatMessage]) -> None:
+    def local_messages(self, value: list[ChatMessage]) -> None:
         """Set local transcript messages."""
         self._local_messages = value
 
@@ -117,7 +117,7 @@ class TranscriptSyncOperations:
         websocket: "ClientConnection",
         msg: ChatMessage,
         context: str = "message_push",
-        reconnect_callback: Optional[Any] = None,
+        reconnect_callback: Any | None = None,
     ) -> bool:
         """Push a message to the server with unlimited retry logic.
 
@@ -234,8 +234,8 @@ class TranscriptSyncOperations:
     async def push_tool_results_if_needed(
         self,
         websocket: "ClientConnection",
-        input_messages: List[ChatMessage],
-        reconnect_callback: Optional[Any] = None,
+        input_messages: list[ChatMessage],
+        reconnect_callback: Any | None = None,
     ) -> bool:
         """Push tool results to server if Inspect AI added them to input.
 
@@ -315,7 +315,7 @@ class TranscriptSyncOperations:
     async def request_sync(
         self,
         websocket: "ClientConnection",
-    ) -> Optional[SyncResponseData]:
+    ) -> SyncResponseData | None:
         """Request transcript sync from server.
 
         Sends sync_request and waits for sync_response.
@@ -418,7 +418,7 @@ class TranscriptSyncOperations:
 
         return None
 
-    def apply_sync_response(self, sync_data: SyncResponseData) -> List[ChatMessage]:
+    def apply_sync_response(self, sync_data: SyncResponseData) -> list[ChatMessage]:
         """Apply sync response to local state.
 
         Updates local_messages, local_version, and local_checksum.
@@ -523,10 +523,10 @@ class TranscriptSyncOperations:
 
         return self._local_messages.copy()
 
-    def _analyze_tool_calls_client(self, messages: List[ChatMessage]) -> Dict[str, Any]:
+    def _analyze_tool_calls_client(self, messages: list[ChatMessage]) -> dict[str, Any]:
         """Analyze tool_calls in client-side messages to detect orphaned calls."""
-        all_tool_call_ids: List[str] = []
-        responded_tool_call_ids: List[str] = []
+        all_tool_call_ids: list[str] = []
+        responded_tool_call_ids: list[str] = []
 
         for msg in messages:
             if msg.role == "assistant" and hasattr(msg, "tool_calls") and msg.tool_calls:

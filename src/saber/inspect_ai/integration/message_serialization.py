@@ -6,7 +6,7 @@ ChatMessage objects to/from JSON-safe dictionaries for WebSocket transmission.
 Logging category: AGENT.
 """
 
-from typing import Any, Dict
+from typing import Any
 
 from inspect_ai.model import (
     ChatMessage,
@@ -57,7 +57,7 @@ def is_websocket_closed(websocket: Any) -> bool:
     return True
 
 
-def serialize_message(msg: ChatMessage) -> Dict[str, Any]:
+def serialize_message(msg: ChatMessage) -> dict[str, Any]:
     """Convert ChatMessage to JSON-safe dict.
 
     Args:
@@ -69,7 +69,7 @@ def serialize_message(msg: ChatMessage) -> Dict[str, Any]:
     Raises:
         ValueError: If message type is unknown or unsupported
     """
-    result: Dict[str, Any] = {}
+    result: dict[str, Any] = {}
 
     # Extract role
     if isinstance(msg, ChatMessageSystem):
@@ -127,7 +127,7 @@ def serialize_message(msg: ChatMessage) -> Dict[str, Any]:
     return result
 
 
-def deserialize_message(msg_data: Dict[str, Any]) -> ChatMessage:
+def deserialize_message(msg_data: dict[str, Any]) -> ChatMessage:
     """Convert message dictionary to ChatMessage object.
 
     Inverse of serialize_message() - converts JSON-safe dict back to

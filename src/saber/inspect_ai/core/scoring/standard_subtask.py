@@ -7,7 +7,7 @@ This module provides the standard scoring methods for subtasks:
 - tool_call_count: Count tool executions against threshold
 """
 
-from typing import Any, List, Tuple
+from typing import Any
 
 from inspect_ai.model import ChatMessageSystem, ChatMessageUser, get_model
 from inspect_ai.solver import TaskState
@@ -32,7 +32,7 @@ async def score_subtask_skip(
     session_manager: Any,
     state: TaskState,
     submission_data: EpisodeSubmissionResponse,
-) -> Tuple[float, List[StepEvaluation]]:
+) -> tuple[float, list[StepEvaluation]]:
     """Handle subtasks without evaluation strategy (informational checkpoints).
 
     Args:
@@ -71,7 +71,7 @@ async def score_subtask_skip(
 class EpisodeContextForTemplate:
     """Helper class to provide episode-like interface for templates."""
 
-    def __init__(self, steps: List[Any]) -> None:
+    def __init__(self, steps: list[Any]) -> None:
         self.steps = steps
 
     def get_step_count(self) -> int:
@@ -106,7 +106,7 @@ async def score_subtask_static(
     session_manager: Any,
     state: TaskState,
     submission_data: EpisodeSubmissionResponse,
-) -> Tuple[float, List[StepEvaluation]]:
+) -> tuple[float, list[StepEvaluation]]:
     """Score steps using static evaluation (pattern matching in outputs).
 
     Args:
@@ -199,7 +199,7 @@ async def score_subtask_tool_call(
     session_manager: Any,
     state: TaskState,
     submission_data: EpisodeSubmissionResponse,
-) -> Tuple[float, List[StepEvaluation]]:
+) -> tuple[float, list[StepEvaluation]]:
     """Score steps using tool call evaluation (matching tool names).
 
     Args:
@@ -292,7 +292,7 @@ async def score_subtask_tool_call_count(
     session_manager: Any,
     state: TaskState,
     submission_data: EpisodeSubmissionResponse,
-) -> Tuple[float, List[StepEvaluation]]:
+) -> tuple[float, list[StepEvaluation]]:
     """Score subtask based on tool execution count in steps.
 
     Binary scoring: pass if tool executed >= threshold times, fail otherwise.
@@ -383,7 +383,7 @@ async def score_subtask_llm(
     session_manager: Any,
     state: TaskState,
     submission_data: EpisodeSubmissionResponse,
-) -> Tuple[float, List[StepEvaluation]]:
+) -> tuple[float, list[StepEvaluation]]:
     """Score steps using LLM evaluation.
 
     Args:
@@ -424,7 +424,7 @@ async def score_subtask_llm(
     env = Environment(loader=TemplateStringLoader({"system": system_template, "user": user_template}))
 
     # Chunk steps
-    all_step_evaluations: List[StepEvaluation] = []
+    all_step_evaluations: list[StepEvaluation] = []
     step_chunks = [
         steps_data.steps[i : i + steps_per_message] for i in range(0, len(steps_data.steps), steps_per_message)
     ]
@@ -434,7 +434,7 @@ async def score_subtask_llm(
         extra={"total_steps": len(steps_data.steps), "chunks": len(step_chunks), "event": "step_chunking"},
     )
 
-    for chunk_idx, chunk in enumerate(step_chunks):
+    for _chunk_idx, chunk in enumerate(step_chunks):
         # Build context - create step objects that match template expectations
         step_objects = []
         for step in chunk:

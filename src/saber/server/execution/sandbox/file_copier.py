@@ -12,11 +12,10 @@ import io
 import os
 import tarfile
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Dict, Optional
-
-from docker.errors import APIError, NotFound
+from typing import TYPE_CHECKING
 
 from docker import client as docker_client
+from docker.errors import APIError, NotFound
 from saber.logging_config import LogCategory, get_saber_logger
 
 if TYPE_CHECKING:
@@ -47,7 +46,7 @@ class SandboxFileCopier:
                      Task files specify paths relative to this directory.
         """
         self.base_dir = Path(base_dir).resolve()
-        self._docker_client: Optional["DockerClient"] = None
+        self._docker_client: DockerClient | None = None
 
         logger.info(
             "SandboxFileCopier initialized",
@@ -68,9 +67,9 @@ class SandboxFileCopier:
     async def copy_files_to_episode(
         self,
         episode_id: str,
-        file_mappings: Dict[str, str],
+        file_mappings: dict[str, str],
         container_prefix: str = "default",
-        container_name: Optional[str] = None,
+        container_name: str | None = None,
     ) -> None:
         """
         Copy files into a running episode container.

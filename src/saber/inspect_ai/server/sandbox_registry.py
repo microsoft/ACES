@@ -11,7 +11,7 @@ Complements domain_manager.py:
 """
 
 import threading
-from typing import Any, Dict, Optional
+from typing import Any
 
 from inspect_ai.util import store
 
@@ -37,7 +37,7 @@ class SandboxRegistry:
     """
 
     # Class-level registry: domain_slug -> DomainRegistryEntry
-    _registry: Dict[str, DomainRegistryEntry] = {}
+    _registry: dict[str, DomainRegistryEntry] = {}
     _lock = threading.Lock()
     _episode_mapping_lock = threading.Lock()  # Protects episode_mapping read-modify-write
 
@@ -93,7 +93,7 @@ class SandboxRegistry:
             )
 
     @classmethod
-    def unregister_domain(cls, domain_slug: str) -> Optional[DomainRegistryEntry]:
+    def unregister_domain(cls, domain_slug: str) -> DomainRegistryEntry | None:
         """Remove domain from sandbox registry and return entry.
 
         Args:
@@ -112,7 +112,7 @@ class SandboxRegistry:
             return entry
 
     @classmethod
-    def get_domain_entry(cls, domain_slug: str) -> Optional[DomainRegistryEntry]:
+    def get_domain_entry(cls, domain_slug: str) -> DomainRegistryEntry | None:
         """Get domain entry (thread-safe).
 
         Args:

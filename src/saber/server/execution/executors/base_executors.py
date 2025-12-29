@@ -7,7 +7,7 @@ Logging category: ``LogCategory.TASK_EXEC``.
 """
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ..sandbox.sandbox_environment_manager import SandboxEnvironmentManager
@@ -26,7 +26,7 @@ class CommandExecutor(ABC):
     """
 
     def __init__(
-        self, config: Optional[Dict[str, Any]] = None, session_manager: Optional[Any] = None, *args: Any, **kwargs: Any
+        self, config: dict[str, Any] | None = None, session_manager: Any | None = None, *args: Any, **kwargs: Any
     ) -> None:
         """
         Initialize command executor.
@@ -40,16 +40,16 @@ class CommandExecutor(ABC):
         # Merge provided config with defaults
         default_config = self.get_default_config()
         self._config = {**default_config, **(config or {})}
-        self._parameters: Dict[str, Parameter] = {}
+        self._parameters: dict[str, Parameter] = {}
 
         # Session manager for cross-episode operations
-        self._session_manager: Optional[Any] = session_manager
+        self._session_manager: Any | None = session_manager
 
         # Allow subclasses to set up their specific parameters
         self.setup_parameters(self._config)
 
     @classmethod
-    def get_default_config(cls) -> Dict[str, Any]:
+    def get_default_config(cls) -> dict[str, Any]:
         """
         Get default configuration for this executor type.
 
@@ -66,9 +66,9 @@ class CommandExecutor(ABC):
     def create_with_config(
         cls,
         sandbox_manager: "SandboxEnvironmentManager",
-        config: Optional[Dict[str, Any]] = None,
-        additional_params: Optional[Dict[str, Any]] = None,
-        session_manager: Optional[Any] = None,
+        config: dict[str, Any] | None = None,
+        additional_params: dict[str, Any] | None = None,
+        session_manager: Any | None = None,
         **kwargs: Any,
     ) -> "CommandExecutor":
         """
@@ -103,7 +103,7 @@ class CommandExecutor(ABC):
         )
 
     @abstractmethod
-    def setup_parameters(self, config: Dict[str, Any]) -> None:
+    def setup_parameters(self, config: dict[str, Any]) -> None:
         """
         Set up executor-specific parameters.
 
@@ -119,7 +119,7 @@ class CommandExecutor(ABC):
         pass
 
     @abstractmethod
-    async def execute(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> CommandResult:
+    async def execute(self, parameters: dict[str, Any], context: dict[str, Any]) -> CommandResult:
         """
         Execute the command with given parameters and context.
 
@@ -132,7 +132,7 @@ class CommandExecutor(ABC):
         """
         pass
 
-    async def __call__(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> CommandResult:
+    async def __call__(self, parameters: dict[str, Any], context: dict[str, Any]) -> CommandResult:
         """
         Call the executor with given parameters and context.
 
@@ -168,7 +168,7 @@ class CommandExecutor(ABC):
             return 300.0
         return float(timeout)
 
-    def get_parameters(self) -> Dict[str, Parameter]:
+    def get_parameters(self) -> dict[str, Parameter]:
         """Get the command parameters."""
         return self._parameters.copy()
 
@@ -176,7 +176,7 @@ class CommandExecutor(ABC):
         """Add a parameter to the command."""
         self._parameters[parameter.name] = parameter
 
-    def validate_parameters(self, parameters: Dict[str, Any]) -> ValidationResult:
+    def validate_parameters(self, parameters: dict[str, Any]) -> ValidationResult:
         """
         Validate parameters against the command's parameter definitions.
 
@@ -213,12 +213,12 @@ class CommandExecutor(ABC):
         Returns:
             MCPInputSchema containing typed parameter schema
         """
-        properties: Dict[str, MCPPropertySchema] = {}
-        required: List[str] = []
+        properties: dict[str, MCPPropertySchema] = {}
+        required: list[str] = []
 
         for param_name, param_def in self._parameters.items():
             # Build parameter schema with conditional field setting to avoid None values
-            property_schema_kwargs: Dict[str, Any] = {
+            property_schema_kwargs: dict[str, Any] = {
                 "type": param_def.type.value,
                 "description": param_def.description,
             }

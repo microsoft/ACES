@@ -5,13 +5,13 @@ Custom exception classes for SABER evaluation operations with detailed error con
 Following fail-fast philosophy with actionable error messages.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 class SABEREvaluationError(Exception):
     """Base exception for SABER evaluation errors."""
 
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None, suggestion: Optional[str] = None):
+    def __init__(self, message: str, details: dict[str, Any] | None = None, suggestion: str | None = None):
         """
         Initialize SABER evaluation error with context.
 

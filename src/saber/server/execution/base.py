@@ -7,7 +7,7 @@ and data models used throughout the ExecutionManager command execution system.
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, List, Optional, Union
+from typing import Any
 
 
 class ParameterType(str, Enum):
@@ -30,13 +30,13 @@ class Parameter:
     description: str
     required: bool = True
     default: Any = None
-    enum_values: Optional[List[Any]] = None
-    min_value: Optional[Union[int, float]] = None
-    max_value: Optional[Union[int, float]] = None
-    pattern: Optional[str] = None  # For string validation
-    items: Optional[dict] = None  # For array type validation
+    enum_values: list[Any] | None = None
+    min_value: int | float | None = None
+    max_value: int | float | None = None
+    pattern: str | None = None  # For string validation
+    items: dict | None = None  # For array type validation
 
-    def validate_value(self, value: Any) -> tuple[bool, Optional[str]]:
+    def validate_value(self, value: Any) -> tuple[bool, str | None]:
         """
         Validate a parameter value against this parameter's constraints.
 
@@ -104,16 +104,16 @@ class ValidationResult:
     """Result of validation operations."""
 
     valid: bool
-    errors: List[str] = field(default_factory=list)
-    warnings: List[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
     @classmethod
-    def success(cls, warnings: Optional[List[str]] = None) -> "ValidationResult":
+    def success(cls, warnings: list[str] | None = None) -> "ValidationResult":
         """Create a successful validation result."""
         return cls(valid=True, warnings=warnings or [])
 
     @classmethod
-    def failure(cls, errors: List[str], warnings: Optional[List[str]] = None) -> "ValidationResult":
+    def failure(cls, errors: list[str], warnings: list[str] | None = None) -> "ValidationResult":
         """Create a failed validation result."""
         return cls(valid=False, errors=errors, warnings=warnings or [])
 

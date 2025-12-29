@@ -21,7 +21,7 @@ Priority Fixes Implemented:
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 
 from jinja2 import FileSystemLoader, StrictUndefined, TemplateError, TemplateNotFound
 from jinja2.sandbox import SandboxedEnvironment
@@ -62,13 +62,13 @@ class PromptContext:
     timeout_seconds: int  # Legacy field: maximum timeout across all executors
     max_steps: int
     environment: str
-    subtasks: List[Dict[str, Any]]
-    allowed_executors: List[str]
-    executor_timeouts: Optional[Dict[str, int]] = field(default=None)  # New field: per-executor timeouts
-    initial_context: Optional[Dict[str, Any]] = None
-    initial_files: Optional[Dict[str, str]] = None
+    subtasks: list[dict[str, Any]]
+    allowed_executors: list[str]
+    executor_timeouts: dict[str, int] | None = field(default=None)  # New field: per-executor timeouts
+    initial_context: dict[str, Any] | None = None
+    initial_files: dict[str, str] | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for Jinja2 template rendering."""
         result = {
             "domain": self.domain,
@@ -162,7 +162,7 @@ class PromptGenerator:
             },
         )
 
-    def render_agent_prompts_for_task(self, task: Task) -> Dict[str, str]:
+    def render_agent_prompts_for_task(self, task: Task) -> dict[str, str]:
         """
         Render all prompt types for a specific task.
 
@@ -245,10 +245,10 @@ class PromptGenerator:
             if loader is None:
                 raise TemplateValidationError("No loader configured for template environment")
 
-            visited: Set[str] = set()
-            missing: List[str] = []
+            visited: set[str] = set()
+            missing: list[str] = []
 
-            def _collect(name: str) -> Tuple[str, str]:
+            def _collect(name: str) -> tuple[str, str]:
                 self._assert_safe_template_name(name)
                 source, _, _ = loader.get_source(self.jinja_env, name)
                 return name, source
@@ -290,7 +290,7 @@ class PromptGenerator:
         except TemplateError as e:
             raise TemplateValidationError(f"Template syntax error in {template_file}: {e}") from e
 
-    def validate_all_task_templates(self, tasks: List[Task]) -> None:
+    def validate_all_task_templates(self, tasks: list[Task]) -> None:
         """
         Validate all templates referenced by tasks at startup.
 
@@ -348,7 +348,7 @@ class PromptGenerator:
         Returns:
             PromptContext with all variables needed for template rendering
         """
-        missing: List[str] = []
+        missing: list[str] = []
 
         # Validate execution_config has executors section
         if not (task.execution_config and "executors" in task.execution_config):
@@ -388,7 +388,7 @@ class PromptGenerator:
         subtasks_data = []
         if task.subtasks:
             for subtask in task.subtasks:
-                subtask_dict: Dict[str, Any] = {
+                subtask_dict: dict[str, Any] = {
                     "subtask_id": subtask.subtask_id,
                     "title": subtask.title,
                     "description": subtask.description,
@@ -420,9 +420,9 @@ class PromptGenerator:
     _INCLUDE_RE = re.compile(r"{%\s*include\s*['\"]([^'\"]+)['\"]\s*%}")
     _EXTENDS_RE = re.compile(r"{%\s*extends\s*['\"]([^'\"]+)['\"]\s*%}")
 
-    def _extract_template_dependencies(self, source: str) -> List[str]:
+    def _extract_template_dependencies(self, source: str) -> list[str]:
         """Extract direct include/extends dependencies from a template source string."""
-        deps: Set[str] = set()
+        deps: set[str] = set()
         for regex in (self._INCLUDE_RE, self._EXTENDS_RE):
             for match in regex.findall(source):
                 deps.add(match)
@@ -447,9 +447,9 @@ class PromptGenerator:
         try:
             candidate.relative_to(root)
         except ValueError:
-            raise TemplateValidationError(f"Template path escapes root: {name}")
+            raise TemplateValidationError(f"Template path escapes root: {name}") from None
         # Basic extension allow-list
-        if not candidate.suffix.lower() in {".md", ".txt", ".jinja", ".j2"}:
+        if candidate.suffix.lower() not in {".md", ".txt", ".jinja", ".j2"}:
             raise TemplateValidationError(
                 f"Disallowed template file extension for '{name}'. Allowed: .md,.txt,.jinja,.j2"
             )

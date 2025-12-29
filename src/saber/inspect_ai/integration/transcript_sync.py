@@ -15,7 +15,7 @@ Key features:
 import asyncio
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any
 
 import aiohttp
 from inspect_ai._util.content import ContentReasoning, ContentText
@@ -31,9 +31,9 @@ logger = get_saber_logger(LogCategory.AGENT, __name__)
 
 def create_transcript_syncing_generate(
     original_generate: Generate,
-    session_id: Optional[str],
-    episode_id: Optional[str],
-    rest_url: Optional[str],
+    session_id: str | None,
+    episode_id: str | None,
+    rest_url: str | None,
 ) -> Generate:
     """Create a Generate wrapper that pushes transcript after each model call.
 
@@ -129,7 +129,7 @@ def create_transcript_syncing_generate(
 
 async def push_transcript_if_enabled(
     state: TaskState,
-    metadata: Dict[str, Any],
+    metadata: dict[str, Any],
     get_active_domain_func: Any,
 ) -> None:
     """Helper to push transcript if episode context is available.
@@ -183,7 +183,7 @@ async def push_transcript_if_enabled(
         )
 
 
-def serialize_message(msg: ChatMessage) -> Dict[str, Any]:
+def serialize_message(msg: ChatMessage) -> dict[str, Any]:
     """Convert ChatMessage to JSON-safe dict.
 
     Args:
@@ -197,7 +197,7 @@ def serialize_message(msg: ChatMessage) -> Dict[str, Any]:
     Raises:
         ValueError: If message type is unknown or unsupported
     """
-    result: Dict[str, Any] = {}
+    result: dict[str, Any] = {}
 
     # Extract role
     if isinstance(msg, ChatMessageSystem):
@@ -789,7 +789,7 @@ async def pull_injected_messages(
         )
 
 
-def _deserialize_message(msg_data: Dict[str, Any]) -> ChatMessage:
+def _deserialize_message(msg_data: dict[str, Any]) -> ChatMessage:
     """Convert message dictionary to ChatMessage object.
 
     Inverse of serialize_message() - converts JSON-safe dict back to

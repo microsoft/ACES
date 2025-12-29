@@ -13,7 +13,6 @@ Following SABER best practices:
 """
 
 import re
-from typing import List
 
 from saber.logging_config import LogCategory, get_saber_logger
 
@@ -22,7 +21,7 @@ from .rest.evaluation import StepEvaluation
 logger = get_saber_logger(LogCategory.EVALUATION, __name__)
 
 
-def parse_step_evaluations(judge_response: str, task_id: str) -> List[StepEvaluation]:
+def parse_step_evaluations(judge_response: str, task_id: str) -> list[StepEvaluation]:
     """
     Parse step evaluation results from judge response.
 
@@ -131,11 +130,11 @@ def parse_step_evaluations(judge_response: str, task_id: str) -> List[StepEvalua
 
 
 def calculate_step_evaluation_score(
-    step_evaluations: List[StepEvaluation],
+    step_evaluations: list[StepEvaluation],
     task_id: str,
     max_score: float = 1.0,
     subtasks_with_scores: dict[str, float] | None = None,
-) -> tuple[float, bool, int | None, List[str]]:
+) -> tuple[float, bool, int | None, list[str]]:
     """
     Calculate score and metadata from step evaluations using aggregation scoring.
 
@@ -214,7 +213,7 @@ def calculate_step_evaluation_score(
 def build_step_evaluation_explanation(
     is_correct: bool,
     task_completed_at_step: int | None,
-    subtasks_completed: List[str],
+    subtasks_completed: list[str],
     score_value: float | None = None,
     max_possible_score: float | None = None,
 ) -> str:

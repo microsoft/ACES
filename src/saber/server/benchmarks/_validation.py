@@ -3,7 +3,7 @@
 Extracted from BenchmarkConfigLoader to improve testability and reduce file size.
 """
 
-from typing import Any, Dict
+from typing import Any
 
 from ...models.constants import EVAL_STRATEGY_LLM_JUDGE, EVAL_STRATEGY_STATIC, EVAL_STRATEGY_TOOL_CALL
 from .exceptions import InvalidTaskDefinitionException
@@ -63,7 +63,7 @@ def validate_template_path(template_path: str, field_name: str, task_id: str) ->
         )
 
 
-def validate_submission_evaluation_config(eval_config: Dict[str, Any], task_id: str) -> None:
+def validate_submission_evaluation_config(eval_config: dict[str, Any], task_id: str) -> None:
     """
     Validate submission_evaluation_config.
 
@@ -80,8 +80,7 @@ def validate_submission_evaluation_config(eval_config: Dict[str, Any], task_id: 
     strategy = eval_config.get(FIELD_STRATEGY)
     if not strategy or not isinstance(strategy, str):
         raise InvalidTaskDefinitionException(
-            f"Task '{task_id}': Missing or invalid submission evaluation strategy. "
-            f"Strategy must be a non-empty string."
+            f"Task '{task_id}': Missing or invalid submission evaluation strategy. Strategy must be a non-empty string."
         )
 
     # Validate criteria section
@@ -135,7 +134,7 @@ def validate_submission_evaluation_config(eval_config: Dict[str, Any], task_id: 
         validate_template_path(judge_user_template, FIELD_JUDGE_USER_TEMPLATE, task_id)
 
 
-def validate_step_evaluation_config(eval_config: Dict[str, Any], task_id: str) -> None:
+def validate_step_evaluation_config(eval_config: dict[str, Any], task_id: str) -> None:
     """
     Validate step_evaluation_config.
 

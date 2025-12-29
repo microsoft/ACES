@@ -9,7 +9,7 @@ import asyncio
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import HTTPException, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, field_serializer
@@ -52,20 +52,20 @@ class ClientSession(BaseModel):
     client_id: str = Field(..., description="Client identifier")
 
     # Multi-episode support
-    creating_episode_ids: List[str] = Field(default_factory=list, description="Episodes in creation (holding lock)")
-    active_episode_ids: List[str] = Field(default_factory=list, description="Currently active episode IDs")
-    episode_history: List[str] = Field(
+    creating_episode_ids: list[str] = Field(default_factory=list, description="Episodes in creation (holding lock)")
+    active_episode_ids: list[str] = Field(default_factory=list, description="Currently active episode IDs")
+    episode_history: list[str] = Field(
         default_factory=list, description="All completed episode IDs in chronological order"
     )
 
     # Task orchestration support
-    task_queue: List[str] = Field(default_factory=list, description="Queued tasks for orchestration")
+    task_queue: list[str] = Field(default_factory=list, description="Queued tasks for orchestration")
 
     # Session metadata
     created_at: datetime = Field(default_factory=_utc_now, description="Session creation time")
     last_activity: datetime = Field(default_factory=_utc_now, description="Last activity timestamp")
     is_active: bool = Field(default=True, description="Whether session is active")
-    context: Dict[str, Any] = Field(default_factory=dict, description="Session context data")
+    context: dict[str, Any] = Field(default_factory=dict, description="Session context data")
 
     @field_serializer("created_at", "last_activity")
     def serialize_datetime(self, value: datetime) -> str:
@@ -130,7 +130,7 @@ class ClientSession(BaseModel):
             self.task_queue.append(task_id)
             self.update_activity()
 
-    def get_next_task(self) -> Optional[str]:
+    def get_next_task(self) -> str | None:
         """Get and remove the next task from the queue."""
         if self.task_queue:
             task_id = self.task_queue.pop(0)
@@ -142,7 +142,7 @@ class ClientSession(BaseModel):
         """Check if session has any active or creating episodes."""
         return len(self.creating_episode_ids) > 0 or len(self.active_episode_ids) > 0
 
-    def get_episode_count(self) -> Dict[str, int]:
+    def get_episode_count(self) -> dict[str, int]:
         """Get episode counts for analytics."""
         return {
             "creating": len(self.creating_episode_ids),
@@ -170,8 +170,8 @@ class SessionManager:
         mcp_port: int = 3001,
         session_timeout_minutes: int = 30,
         cleanup_interval_minutes: int = 5,
-        manifest: Optional[Dict[str, Any]] = None,
-        manifest_path: Optional[str] = None,
+        manifest: dict[str, Any] | None = None,
+        manifest_path: str | None = None,
         time_source: TimeSource | None = None,
     ):
         """
@@ -198,8 +198,8 @@ class SessionManager:
         self.mcp_port = mcp_port
         self.session_timeout_minutes = session_timeout_minutes
         self.cleanup_interval_minutes = cleanup_interval_minutes
-        self.active_sessions: Dict[str, ClientSession] = {}
-        self.cleanup_task: Optional[asyncio.Task[None]] = None
+        self.active_sessions: dict[str, ClientSession] = {}
+        self.cleanup_task: asyncio.Task[None] | None = None
         self.shutdown_event = asyncio.Event()
 
         # Semaphore for episode creation to limit concurrent Docker resource usage
@@ -209,15 +209,15 @@ class SessionManager:
         self._episode_creation_lock = asyncio.Semaphore(3)  # Max 3 concurrent episode creations
 
         # Track background finalization tasks for async episode creation
-        self._episode_finalization_tasks: Dict[str, asyncio.Task[None]] = {}
+        self._episode_finalization_tasks: dict[str, asyncio.Task[None]] = {}
         # Semaphore to limit concurrent episode finalizations (health checks, not Docker compose)
         # Note: Docker compose operations are limited by _episode_creation_lock semaphore
         # This semaphore prevents overwhelming the system with concurrent health checks
         self._finalization_semaphore = asyncio.Semaphore(16)  # Max 16 concurrent finalizations
 
         # Track permanent environment startup status
-        self._permanent_env_startup_task: Optional[asyncio.Task[None]] = None
-        self._permanent_env_startup_error: Optional[str] = None
+        self._permanent_env_startup_task: asyncio.Task[None] | None = None
+        self._permanent_env_startup_error: str | None = None
         self._permanent_env_startup_complete = False
 
         # Manifest information for health endpoints
@@ -273,13 +273,13 @@ class SessionManager:
             },
         )
 
-    def get_health_metadata(self) -> Dict[str, Any]:
+    def get_health_metadata(self) -> dict[str, Any]:
         """Get health metadata including manifest information."""
         import hashlib
         import os
         from pathlib import Path
 
-        metadata: Dict[str, Any] = {
+        metadata: dict[str, Any] = {
             "status": "healthy",
             "domain": self.domain_name,
         }
@@ -287,7 +287,7 @@ class SessionManager:
         # Add manifest information if available
         if self.manifest:
             domain_info = self.manifest.get("domain", {})
-            manifest_data: Dict[str, Any] = {
+            manifest_data: dict[str, Any] = {
                 "capabilities": self.manifest.get("capabilities", []),
             }
 
@@ -325,7 +325,7 @@ class SessionManager:
             )
 
         # Add build metadata if available from environment
-        build_metadata: Dict[str, str] = {}
+        build_metadata: dict[str, str] = {}
         for env_var in ["GIT_SHA", "BUILD_TIMESTAMP", "IMAGE_TAG"]:
             value = os.getenv(env_var)
             if value:
@@ -352,7 +352,7 @@ class SessionManager:
 
         return metadata
 
-    def _check_permanent_environment_health(self) -> Dict[str, Any]:
+    def _check_permanent_environment_health(self) -> dict[str, Any]:
         """Check permanent environment health using ComposeHealthChecker.
 
         Returns:
@@ -1375,7 +1375,7 @@ class SessionManager:
                     self.episode_manager.remove_episode_on_error(episode.episode_id, dependency_error)
                     # Remove from creating list on dependency error
                     session.remove_creating_episode(episode.episode_id)
-                    raise ValueError(f"Cannot create episode for task {task_id}: {e}")
+                    raise ValueError(f"Cannot create episode for task {task_id}: {e}") from e
 
                 if available_episode_id:
                     effective_attach_to_episode_id = available_episode_id
@@ -1467,7 +1467,7 @@ class SessionManager:
                 self.episode_manager.remove_episode_on_error(episode.episode_id, e)
                 # Remove from creating list on error
                 session.remove_creating_episode(episode.episode_id)
-                raise HTTPException(status_code=500, detail=f"Failed to start Docker environment: {e}")
+                raise HTTPException(status_code=500, detail=f"Failed to start Docker environment: {e}") from e
 
             # Move from creating to active IMMEDIATELY after Docker starts (health checks will run in background)
             session.move_to_active_episode(episode.episode_id)
@@ -1573,7 +1573,7 @@ class SessionManager:
         session_id: str,
         task_id: str,
         task: Task,
-        attach_to_episode_id: Optional[str] = None,
+        attach_to_episode_id: str | None = None,
     ) -> None:
         """
         Background task that finalizes episode creation after Docker compose.
@@ -1853,7 +1853,7 @@ class SessionManager:
                     },
                 )
 
-    def get_episode_status(self, episode_id: str) -> Optional[Episode]:
+    def get_episode_status(self, episode_id: str) -> Episode | None:
         """
         Get episode for status checking.
 
@@ -1879,7 +1879,7 @@ class SessionManager:
         session_id: str,
         episode_id: str,
         reason: str = EpisodeTerminationReason.COMPLETED,
-        submission: Optional[EvalSubmission] = None,
+        submission: EvalSubmission | None = None,
         cascade_end_attached_episodes: bool = False,
     ) -> EpisodeEndResponse:
         """
@@ -2464,7 +2464,7 @@ class SessionManager:
         # Get episode-specific policy that was configured during start_episode
         return self.policy_manager.get_policy(episode_id)
 
-    async def list_session_episodes(self, session_id: str, status_filter: Optional[str] = None) -> List[Episode]:
+    async def list_session_episodes(self, session_id: str, status_filter: str | None = None) -> list[Episode]:
         """
         List all episodes for a session with optional status filtering.
 
@@ -2615,7 +2615,7 @@ class SessionManager:
     # Server stores results without validation or override logic
     # ============================================================================
 
-    def get_episode_by_id(self, episode_id: str) -> Optional[Episode]:
+    def get_episode_by_id(self, episode_id: str) -> Episode | None:
         """
         Get episode by ID - used by MCP API for episode context.
 
@@ -2736,10 +2736,10 @@ class SessionManager:
                     },
                 )
 
-    def get_session_stats(self) -> Dict[str, Any]:
+    def get_session_stats(self) -> dict[str, Any]:
         """Get statistics about active sessions."""
         current_time = self._time_source.now()
-        stats: Dict[str, Any] = {
+        stats: dict[str, Any] = {
             "total_sessions": len(self.active_sessions),
             "timeout_minutes": self.session_timeout_minutes,
             "cleanup_interval_minutes": self.cleanup_interval_minutes,

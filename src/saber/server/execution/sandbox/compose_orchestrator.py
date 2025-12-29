@@ -11,7 +11,7 @@ import os
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import yaml
 
@@ -42,12 +42,12 @@ class ComposeOrchestrator:
     Handles episode isolation when needed.
     """
 
-    def __init__(self, logging_config: Optional[Dict[str, Any]] = None):
+    def __init__(self, logging_config: dict[str, Any] | None = None):
         """Initialize ComposeOrchestrator with optional container logging."""
-        self.execution_service_name: Optional[str] = None
-        self.episode_id: Optional[str] = None
-        self.compose_file_path: Optional[Path] = None
-        self.compose_data: Optional[dict] = None
+        self.execution_service_name: str | None = None
+        self.episode_id: str | None = None
+        self.compose_file_path: Path | None = None
+        self.compose_data: dict | None = None
         self._docker_client = None
         self.config_type: str = "sandbox"  # Store config type for stop operations
 
@@ -266,7 +266,7 @@ class ComposeOrchestrator:
             )
             # Include stderr in error message for better debugging
             stderr_text = e.stderr.strip() if e.stderr else "(no stderr)"
-            raise RuntimeError(f"Failed to start environment: {e}\n\nDocker output:\n{stderr_text}")
+            raise RuntimeError(f"Failed to start environment: {e}\n\nDocker output:\n{stderr_text}") from e
         except subprocess.TimeoutExpired as e:
             # Log timeout failure
             if self.container_logger:
@@ -292,7 +292,7 @@ class ComposeOrchestrator:
                     "timeout_seconds": e.timeout,
                 },
             )
-            raise RuntimeError(f"Environment start timed out after {e.timeout} seconds")
+            raise RuntimeError(f"Environment start timed out after {e.timeout} seconds") from e
 
     def start_environment_async(
         self, compose_file_path: str, config: ComposeEnvironmentConfig
@@ -458,7 +458,7 @@ class ComposeOrchestrator:
                 error_msg += f"\n\nDocker output:\n{stderr_text}"
             if error_hints:
                 error_msg += f"\n\nHints: {'; '.join(error_hints)}"
-            raise RuntimeError(error_msg)
+            raise RuntimeError(error_msg) from e
 
     def wait_for_healthy(self, compose_file_path: str, timeout_seconds: int = 180, check_interval: float = 2.0) -> None:
         """
@@ -518,7 +518,7 @@ class ComposeOrchestrator:
             },
         )
 
-    def _log_resolved_compose_config(self, compose_file_path: str, env_vars: Dict[str, str]) -> None:
+    def _log_resolved_compose_config(self, compose_file_path: str, env_vars: dict[str, str]) -> None:
         """
         Log the resolved compose configuration with variable substitution.
 
@@ -532,7 +532,7 @@ class ComposeOrchestrator:
             import yaml
 
             # Read the compose file
-            with open(compose_file_path, "r") as f:
+            with open(compose_file_path) as f:
                 compose_content = f.read()
 
             # Resolve variables in the content
@@ -576,7 +576,7 @@ class ComposeOrchestrator:
 
             # Log services and their network connections
             if "services" in resolved_config:
-                service_networks: Dict[str, List[str]] = {}
+                service_networks: dict[str, list[str]] = {}
                 for service_name, service_config in resolved_config["services"].items():
                     if "networks" in service_config:
                         networks = service_config["networks"]
@@ -608,7 +608,7 @@ class ComposeOrchestrator:
             )
 
     def _save_resolved_compose_config(
-        self, compose_file_path: str, resolved_content: str, resolved_config: Dict[str, Any]
+        self, compose_file_path: str, resolved_content: str, resolved_config: dict[str, Any]
     ) -> None:
         """
         Save the resolved compose configuration to disk for debugging and audit purposes.
@@ -673,7 +673,7 @@ class ComposeOrchestrator:
                 },
             )
 
-    def _parse_compose_file(self, compose_file_path: Path) -> Dict[str, Any]:
+    def _parse_compose_file(self, compose_file_path: Path) -> dict[str, Any]:
         """
         Parse compose file and return the data structure.
 
@@ -687,7 +687,7 @@ class ComposeOrchestrator:
             RuntimeError: If compose file cannot be parsed
         """
         try:
-            with open(compose_file_path, "r") as f:
+            with open(compose_file_path) as f:
                 compose_data = yaml.safe_load(f)
 
             # Handle empty or null YAML files
@@ -699,7 +699,7 @@ class ComposeOrchestrator:
 
             return compose_data
         except Exception as e:
-            raise RuntimeError(f"Failed to parse compose file {compose_file_path}: {e}")
+            raise RuntimeError(f"Failed to parse compose file {compose_file_path}: {e}") from e
 
     def _substitute_env_vars(self, value: str) -> str:
         """
@@ -804,10 +804,10 @@ class ComposeOrchestrator:
             RuntimeError: If no execution service found or multiple services marked
         """
         try:
-            with open(compose_file_path, "r") as f:
+            with open(compose_file_path) as f:
                 compose_data = yaml.safe_load(f)
         except Exception as e:
-            raise RuntimeError(f"Failed to parse compose file {compose_file_path}: {e}")
+            raise RuntimeError(f"Failed to parse compose file {compose_file_path}: {e}") from e
 
         # Handle empty or null YAML files
         if compose_data is None:
@@ -854,7 +854,7 @@ class ComposeOrchestrator:
         return execution_services[0]
 
     async def execute_command(
-        self, command: List[str], timeout: int = 30, working_dir: Optional[str] = None
+        self, command: list[str], timeout: int = 30, working_dir: str | None = None
     ) -> CommandResult:
         """
         Execute command in designated execution service container.
@@ -1137,7 +1137,7 @@ class ComposeOrchestrator:
             return None
 
     async def stop_environment(
-        self, compose_file_path: Path, episode_id: Optional[str] = None, project_name: Optional[str] = None
+        self, compose_file_path: Path, episode_id: str | None = None, project_name: str | None = None
     ) -> None:
         """
         Stop environment from compose file (async to avoid blocking event loop).
@@ -1237,7 +1237,7 @@ class ComposeOrchestrator:
                         "episode_id": episode_id,
                     },
                 )
-                raise RuntimeError(error_msg)
+                raise RuntimeError(error_msg) from None
 
             if process.returncode != 0:
                 # Log the failure
@@ -1321,7 +1321,7 @@ class ComposeOrchestrator:
                     "error": str(e),
                 },
             )
-            raise RuntimeError(error_msg)
+            raise RuntimeError(error_msg) from e
 
     def cleanup_episode(self, episode_id: str) -> bool:
         """
@@ -1482,7 +1482,7 @@ class ComposeOrchestrator:
                     "return_code": getattr(e, "returncode", None),
                 },
             )
-            raise RuntimeError(error_msg)
+            raise RuntimeError(error_msg) from e
         except subprocess.TimeoutExpired:
             error_msg = f"Timeout validating compose file {compose_file_path}"
             logger.error(
@@ -1492,10 +1492,10 @@ class ComposeOrchestrator:
                     "compose_file": str(compose_file_path),
                 },
             )
-            raise RuntimeError(error_msg)
+            raise RuntimeError(error_msg) from None
 
     def _inject_episode_network(
-        self, compose_file_path: str, config: ComposeEnvironmentConfig, env_vars: Optional[Dict[str, str]] = None
+        self, compose_file_path: str, config: ComposeEnvironmentConfig, env_vars: dict[str, str] | None = None
     ) -> str:
         """
         Create a processed compose file with episode network injection and environment variable resolution.
@@ -1520,7 +1520,7 @@ class ComposeOrchestrator:
 
         try:
             # Parse the original compose file
-            with open(compose_file_path, "r") as f:
+            with open(compose_file_path) as f:
                 compose_content = f.read()
 
             # First resolve environment variables if provided

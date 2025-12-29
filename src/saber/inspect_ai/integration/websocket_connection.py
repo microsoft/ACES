@@ -41,7 +41,7 @@ class WebSocketConnectionManager:
         self,
         episode_id: str,
         rest_url: str,
-        ws_config: Optional[WebSocketConfig] = None,
+        ws_config: WebSocketConfig | None = None,
     ) -> None:
         """Initialize the connection manager.
 
@@ -55,9 +55,9 @@ class WebSocketConnectionManager:
         self._ws_config = ws_config or WebSocketConfig()
 
         # Connection state
-        self._websocket: Optional["ClientConnection"] = None
+        self._websocket: ClientConnection | None = None
         self._ws_lock = asyncio.Lock()
-        self._listener_task: Optional[asyncio.Task[None]] = None
+        self._listener_task: asyncio.Task[None] | None = None
 
         # Build WebSocket URL
         self._ws_url = self._build_websocket_url(rest_url, episode_id)
@@ -138,7 +138,7 @@ class WebSocketConnectionManager:
 
     async def ensure_connected(
         self,
-        on_connected_callback: Optional[Any] = None,
+        on_connected_callback: Any | None = None,
     ) -> "ClientConnection":
         """Establish WebSocket connection with reconnection support.
 
@@ -189,10 +189,10 @@ class WebSocketConnectionManager:
                     try:
                         timeout_seconds = self._ws_config.push.confirmation_timeout
 
-                        async def _wait_for_connected() -> bool:
-                            assert temp_websocket is not None
+                        async def _wait_for_connected(ws: Any = temp_websocket) -> bool:
+                            assert ws is not None
                             # Use recv() to get exactly one message (the "connected" handshake)
-                            message = await temp_websocket.recv()
+                            message = await ws.recv()
                             data = json.loads(message)
                             if data.get("type") == "connected":
                                 logger.info("WebSocket connected", extra={"episode_id": self._episode_id})
@@ -221,7 +221,7 @@ class WebSocketConnectionManager:
                     except TimeoutError:
                         raise ConnectionError(
                             f"WebSocket confirmation timeout after {self._ws_config.push.confirmation_timeout}s"
-                        )
+                        ) from None
 
                 except Exception as e:
                     # Retry logic
@@ -302,7 +302,7 @@ class WebSocketConnectionManager:
 
         self._websocket = None
 
-    async def force_reconnect(self, on_connected_callback: Optional[Any] = None) -> "ClientConnection":
+    async def force_reconnect(self, on_connected_callback: Any | None = None) -> "ClientConnection":
         """Force close and reconnect.
 
         Useful when connection is in bad state and needs reset.

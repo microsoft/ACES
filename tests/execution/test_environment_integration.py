@@ -33,6 +33,15 @@ def stub_docker_commands():
             stdout = "mock log output\n"
         return subprocess.CompletedProcess(cmd, 0, stdout, "")
 
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        """Mock async subprocess execution."""
+        mock_process = AsyncMock()
+        mock_process.returncode = 0
+        mock_process.communicate = AsyncMock(return_value=(b"", b""))
+        mock_process.wait = AsyncMock(return_value=0)
+        mock_process.kill = Mock()
+        return mock_process
+
     with patch(
         "saber.server.execution.sandbox.compose_health_checker.ComposeHealthChecker.wait_for_all_services_healthy",
         return_value=None,
@@ -42,6 +51,9 @@ def stub_docker_commands():
     ), patch(
         "saber.server.execution.logging.container_logging_manager.subprocess.run",
         side_effect=fake_run,
+    ), patch(
+        "saber.server.execution.sandbox.compose_orchestrator.asyncio.create_subprocess_exec",
+        side_effect=fake_create_subprocess_exec,
     ):
         yield
 

@@ -8,7 +8,8 @@ from executor schemas. It handles the conversion from **kwargs-based functions t
 properly typed functions that the FastMCP library can register.
 """
 
-from typing import Any, Callable, Dict, List, Optional
+from collections.abc import Callable
+from typing import Any, Optional
 
 from saber.logging_config import LogCategory, get_saber_logger
 
@@ -137,8 +138,8 @@ class MCPToolGenerator:
             "int": int,
             "bool": bool,
             "float": float,
-            "List": List,
-            "Dict": Dict,
+            "List": list,
+            "Dict": dict,
             "Any": Any,
         }
 
@@ -185,7 +186,7 @@ class MCPToolGenerator:
                     "function_body": function_body,
                 },
             )
-            raise RuntimeError(f"Dynamic function generation failed for executor '{executor_name}': {e}")
+            raise RuntimeError(f"Dynamic function generation failed for executor '{executor_name}': {e}") from e
 
     def _json_type_to_python_type(self, json_type: str) -> str:
         """
@@ -208,7 +209,7 @@ class MCPToolGenerator:
 
         return type_mapping.get(json_type, "str")
 
-    def _convert_schema_type_to_python(self, param_def: Dict[str, Any]) -> str:
+    def _convert_schema_type_to_python(self, param_def: dict[str, Any]) -> str:
         """
         Convert JSON schema parameter definition to Python type annotation string.
 
@@ -221,7 +222,7 @@ class MCPToolGenerator:
         json_type = param_def.get("type", "string")
         return self._json_type_to_python_type(json_type)
 
-    def _get_default_value(self, param_def: Dict[str, Any]) -> str:
+    def _get_default_value(self, param_def: dict[str, Any]) -> str:
         """
         Get the default value for a parameter as a string suitable for function signature.
 
@@ -268,7 +269,7 @@ class MCPToolGenerator:
             return False
 
         # Check that all properties have valid types
-        for prop_name, prop_def in input_schema.properties.items():
+        for _prop_name, prop_def in input_schema.properties.items():
             if not prop_def.type:
                 return False
             # Ensure type is supported for function generation
@@ -277,7 +278,7 @@ class MCPToolGenerator:
 
         return True
 
-    def validate_mcp_schema(self, mcp_schema: Dict[str, Any]) -> bool:
+    def validate_mcp_schema(self, mcp_schema: dict[str, Any]) -> bool:
         """
         Validate that an MCP schema is suitable for dynamic function generation.
 
@@ -304,7 +305,7 @@ class MCPToolGenerator:
             return False
 
         # Check that all properties have valid types
-        for prop_name, prop_def in properties.items():
+        for _prop_name, prop_def in properties.items():
             if not isinstance(prop_def, dict):
                 return False
             if "type" not in prop_def:

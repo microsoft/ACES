@@ -10,7 +10,7 @@ and encapsulates the business logic for that operation.
 import uuid
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, Optional, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from fastapi import WebSocket
 
@@ -43,7 +43,7 @@ class WebSocketHandlerProtocol(Protocol):
 
     async def handle(
         self,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         websocket: WebSocket,
         episode_id: str,
         coordinator: "TranscriptCoordinator",
@@ -65,7 +65,7 @@ class BaseWebSocketHandler(ABC):
     @abstractmethod
     async def handle(
         self,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         websocket: WebSocket,
         episode_id: str,
         coordinator: "TranscriptCoordinator",
@@ -79,7 +79,7 @@ class PingHandler(BaseWebSocketHandler):
 
     async def handle(
         self,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         websocket: WebSocket,
         episode_id: str,
         coordinator: "TranscriptCoordinator",
@@ -98,7 +98,7 @@ class SyncRequestHandler(BaseWebSocketHandler):
 
     async def handle(
         self,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         websocket: WebSocket,
         episode_id: str,
         coordinator: "TranscriptCoordinator",
@@ -165,7 +165,7 @@ class PushMessageHandler(BaseWebSocketHandler):
 
     async def handle(
         self,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         websocket: WebSocket,
         episode_id: str,
         coordinator: "TranscriptCoordinator",
@@ -273,7 +273,7 @@ class PushMessageHandler(BaseWebSocketHandler):
         target_episode_id: str,
         is_cross_episode: bool,
         strategy: str,
-    ) -> tuple[PushAckData, Optional[StateEventMessage]]:
+    ) -> tuple[PushAckData, StateEventMessage | None]:
         """Build push acknowledgment and optional state event.
 
         Returns:
@@ -281,8 +281,8 @@ class PushMessageHandler(BaseWebSocketHandler):
         """
         target_episode = coordinator.episode_manager.get_episode_by_id(target_episode_id)
 
-        modification_count: Optional[int] = None
-        state_event: Optional[StateEventMessage] = None
+        modification_count: int | None = None
+        state_event: StateEventMessage | None = None
 
         if is_cross_episode and target_episode:
             # Cross-episode push (injection): update modification count
@@ -337,7 +337,7 @@ class WebSocketMessageRouter:
 
     def __init__(self) -> None:
         """Initialize the router with default handlers."""
-        self._handlers: Dict[str, BaseWebSocketHandler] = {
+        self._handlers: dict[str, BaseWebSocketHandler] = {
             WebSocketMessageType.PING: PingHandler(),
             WebSocketMessageType.SYNC_REQUEST: SyncRequestHandler(),
             WebSocketMessageType.PUSH_MESSAGE: PushMessageHandler(),
@@ -345,7 +345,7 @@ class WebSocketMessageRouter:
 
     async def route(
         self,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         websocket: WebSocket,
         episode_id: str,
         coordinator: "TranscriptCoordinator",

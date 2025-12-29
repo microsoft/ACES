@@ -4,7 +4,7 @@ Logging category: TASK_MANAGER.
 """
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ...logging_config import (
     LogCategory,
@@ -52,9 +52,9 @@ class BenchmarkManager:
         self.domain = domain
         self.config_dir = Path(config_dir)
         self.tasks_dir_path = self.config_dir / "tasks"
-        self.tasks: Dict[str, Task] = {}
-        self.benchmark_config: Dict[str, Any] = {}
-        self._dependency_graph: Optional[DependencyGraph] = None  # Cached dependency graph
+        self.tasks: dict[str, Task] = {}
+        self.benchmark_config: dict[str, Any] = {}
+        self._dependency_graph: DependencyGraph | None = None  # Cached dependency graph
 
         # Initialize specialized components
         self.config_loader = BenchmarkConfigLoader(domain)
@@ -195,7 +195,7 @@ class BenchmarkManager:
 
         return graph
 
-    def _assemble_benchmark_tasks(self) -> List[BenchmarkTask]:
+    def _assemble_benchmark_tasks(self) -> list[BenchmarkTask]:
         """Classify and assemble tasks into BenchmarkTask objects.
 
         Uses the cached dependency graph to identify orchestrations and
@@ -204,7 +204,7 @@ class BenchmarkManager:
         Returns:
             List of BenchmarkTask objects (polymorphic)
         """
-        benchmark_tasks: List[BenchmarkTask] = []
+        benchmark_tasks: list[BenchmarkTask] = []
         processed: set[str] = set()
 
         # Create orchestrated tasks for dependency groups
@@ -246,7 +246,7 @@ class BenchmarkManager:
 
         return benchmark_tasks
 
-    def _create_orchestrated_task(self, group: List[str]) -> OrchestratedTask:
+    def _create_orchestrated_task(self, group: list[str]) -> OrchestratedTask:
         """Create OrchestratedTask from a group of task IDs.
 
         Args:
@@ -267,7 +267,7 @@ class BenchmarkManager:
             )
 
         # Build sub-task definitions
-        sub_tasks: List[SubTaskDefinition] = []
+        sub_tasks: list[SubTaskDefinition] = []
 
         # Add root task
         root_prompts = self.prompt_generator.render_agent_prompts_for_task(root_task)
@@ -420,7 +420,7 @@ class BenchmarkManager:
 
         return subtask
 
-    def list_tasks(self) -> List[Dict[str, Any]]:
+    def list_tasks(self) -> list[dict[str, Any]]:
         """
         Get a list of all available tasks (legacy method).
 
@@ -437,7 +437,7 @@ class BenchmarkManager:
             for task in self.tasks.values()
         ]
 
-    def get_benchmark_config(self) -> Dict[str, Any]:
+    def get_benchmark_config(self) -> dict[str, Any]:
         """
         Get the loaded benchmark configuration.
 
@@ -446,7 +446,7 @@ class BenchmarkManager:
         """
         return self.benchmark_config.copy()
 
-    def get_episode_config(self, task_id: str) -> Dict[str, Any]:
+    def get_episode_config(self, task_id: str) -> dict[str, Any]:
         """
         Get episode configuration for a specific task.
 
@@ -470,7 +470,7 @@ class BenchmarkManager:
             "subtask_count": len(task.subtasks),
         }
 
-    def list_benchmark_tasks(self) -> List[Dict[str, Any]]:
+    def list_benchmark_tasks(self) -> list[dict[str, Any]]:
         """
         Get a list of all tasks with their benchmark configuration (legacy method).
 
@@ -501,13 +501,13 @@ class BenchmarkManager:
         Raises:
             TemplateValidationError: If any template or context validation fails
         """
-        operation_context: Dict[str, Any] = {
+        operation_context: dict[str, Any] = {
             "domain": self.domain,
             "task_count": len(self.tasks),
         }
         log_operation_start(logger, "benchmark_template_validation", **operation_context)
 
-        validation_errors: List[Dict[str, Any]] = []
+        validation_errors: list[dict[str, Any]] = []
 
         for task_id, task in self.tasks.items():
             task_context = {
@@ -632,7 +632,7 @@ class BenchmarkManager:
             "Judge prompts are now rendered client-side using the Inspect AI saber_scorer."
         )
 
-    def get_dependency_config(self) -> Dict[str, float]:
+    def get_dependency_config(self) -> dict[str, float]:
         """
         Get dependency resolution configuration from global configuration.
 
@@ -683,7 +683,7 @@ class BenchmarkManager:
             raise FileNotFoundError(f"Template not found: {template_path}")
 
         try:
-            with open(template_file_path, "r", encoding="utf-8") as f:
+            with open(template_file_path, encoding="utf-8") as f:
                 return f.read()
         except Exception as e:
             raise TemplateValidationError(f"Failed to read template {template_path}: {e}") from e

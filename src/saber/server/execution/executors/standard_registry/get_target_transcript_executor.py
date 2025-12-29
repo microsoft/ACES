@@ -14,7 +14,7 @@ Logging category: ``LogCategory.TASK_EXEC``.
 import asyncio
 import json
 import os
-from typing import Any, Dict, Optional
+from typing import Any
 
 from .....logging_config import LogCategory, get_saber_logger
 from ....base import CommandResult
@@ -68,8 +68,8 @@ class GetTargetTranscriptExecutor(DockerExecutor):
     def __init__(
         self,
         sandbox_manager: SandboxEnvironmentManager,
-        config: Optional[Dict[str, Any]] = None,
-        session_manager: Optional[Any] = None,
+        config: dict[str, Any] | None = None,
+        session_manager: Any | None = None,
         **kwargs: Any,
     ):
         """Initialize the get_target_transcript executor."""
@@ -77,7 +77,7 @@ class GetTargetTranscriptExecutor(DockerExecutor):
         self._session_manager = session_manager
 
     @classmethod
-    def get_default_config(cls) -> Dict[str, Any]:
+    def get_default_config(cls) -> dict[str, Any]:
         """Get default configuration for get_target_transcript executor."""
         return {}
 
@@ -85,9 +85,9 @@ class GetTargetTranscriptExecutor(DockerExecutor):
     def create_with_config(
         cls,
         sandbox_manager: SandboxEnvironmentManager,
-        config: Optional[Dict[str, Any]] = None,
-        additional_params: Optional[Dict[str, Any]] = None,
-        session_manager: Optional[Any] = None,
+        config: dict[str, Any] | None = None,
+        additional_params: dict[str, Any] | None = None,
+        session_manager: Any | None = None,
         **kwargs: Any,
     ) -> "GetTargetTranscriptExecutor":
         """
@@ -114,7 +114,7 @@ class GetTargetTranscriptExecutor(DockerExecutor):
             **merged_kwargs,
         )
 
-    def setup_parameters(self, config: Dict[str, Any]) -> None:
+    def setup_parameters(self, config: dict[str, Any]) -> None:
         """
         Set up executor-specific parameters.
 
@@ -187,7 +187,7 @@ class GetTargetTranscriptExecutor(DockerExecutor):
         )
 
     @classmethod
-    def get_parameter_schema(cls) -> Dict[str, Parameter]:
+    def get_parameter_schema(cls) -> dict[str, Parameter]:
         """
         Define the parameter schema for the get_target_transcript executor.
 
@@ -246,8 +246,8 @@ class GetTargetTranscriptExecutor(DockerExecutor):
 
     async def execute(
         self,
-        parameters: Dict[str, Any],
-        context: Dict[str, Any],
+        parameters: dict[str, Any],
+        context: dict[str, Any],
     ) -> CommandResult:
         """
         Execute transcript retrieval via WebSocket daemon.
@@ -357,7 +357,7 @@ class GetTargetTranscriptExecutor(DockerExecutor):
 
     async def _query_transcript_with_retry(
         self, environment: Any, target_episode_id: str, mode: str, tail_count: int, since_version: int
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Query transcript with exponential backoff retry.
 
@@ -395,7 +395,7 @@ class GetTargetTranscriptExecutor(DockerExecutor):
 
     async def _query_transcript_via_ipc(
         self, environment: Any, target_episode_id: str, mode: str, tail_count: int, since_version: int
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Query transcript from daemon via HTTP POST.
 
@@ -410,7 +410,7 @@ class GetTargetTranscriptExecutor(DockerExecutor):
             Dict with success status and transcript data
         """
         try:
-            payload: Dict[str, Any] = {"target_episode_id": target_episode_id, "mode": mode}
+            payload: dict[str, Any] = {"target_episode_id": target_episode_id, "mode": mode}
             if mode == "tail":
                 payload["tail_count"] = tail_count
             elif mode == "delta":
@@ -440,14 +440,14 @@ class GetTargetTranscriptExecutor(DockerExecutor):
             return {"success": False, "error": exec_result.stderr}
 
         try:
-            response: Dict[str, Any] = json.loads(exec_result.stdout)
+            response: dict[str, Any] = json.loads(exec_result.stdout)
             return response
         except json.JSONDecodeError:
             return {"success": False, "error": f"Invalid JSON: {exec_result.stdout}"}
 
     async def _wait_for_user_with_retry(
         self, environment: Any, target_episode_id: str, max_wait_seconds: float
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Wait for WAITING_FOR_USER state with retry logic.
 
@@ -479,7 +479,7 @@ class GetTargetTranscriptExecutor(DockerExecutor):
 
         return result
 
-    async def _wait_for_user(self, environment: Any, target_episode_id: str, max_wait_seconds: float) -> Dict[str, Any]:
+    async def _wait_for_user(self, environment: Any, target_episode_id: str, max_wait_seconds: float) -> dict[str, Any]:
         """
         Wait for WAITING_FOR_USER state via event-driven WebSocket notification.
 
@@ -527,12 +527,12 @@ class GetTargetTranscriptExecutor(DockerExecutor):
             return {"success": False, "error": exec_result.stderr}
 
         try:
-            response: Dict[str, Any] = json.loads(exec_result.stdout)
+            response: dict[str, Any] = json.loads(exec_result.stdout)
             return response
         except json.JSONDecodeError:
             return {"success": False, "error": f"Invalid JSON: {exec_result.stdout}"}
 
-    def _is_retryable_error(self, result: Dict[str, Any]) -> bool:
+    def _is_retryable_error(self, result: dict[str, Any]) -> bool:
         """
         Check if error is transient and should be retried.
 
@@ -548,8 +548,8 @@ class GetTargetTranscriptExecutor(DockerExecutor):
         return any(retry_err in error for retry_err in RETRY_ERRORS)
 
     async def _resolve_target_episode_id(
-        self, parameters: Dict[str, Any], context: Dict[str, Any], red_episode_id: str
-    ) -> Optional[str]:
+        self, parameters: dict[str, Any], context: dict[str, Any], red_episode_id: str
+    ) -> str | None:
         """
         Resolve target episode ID from orchestration metadata.
 

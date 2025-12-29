@@ -13,7 +13,7 @@ import inspect
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 import anyio
 from inspect_ai._util.error import PrerequisiteError
@@ -79,7 +79,7 @@ class SABERSandboxEnvironment:
 
     # Class-level semaphore for episode concurrency control
     # Limits how many episodes can be created/run simultaneously across all domains
-    _episode_semaphore: Optional[asyncio.Semaphore] = None
+    _episode_semaphore: asyncio.Semaphore | None = None
     _max_concurrent_episodes: int = 8  # Default: 8 concurrent episodes
 
     # Backward compatibility: expose SandboxRegistry._registry as class attribute
@@ -97,11 +97,11 @@ class SABERSandboxEnvironment:
         domains_root: Path,
         rest_port: int = 8000,
         mcp_port: int = 8001,
-        compose_template_path: Optional[Path] = None,
+        compose_template_path: Path | None = None,
         mcp_timeout: float = SandboxTimeouts.MCP_CONNECTION_SECONDS,
-        rest_base_url: Optional[str] = None,
-        mcp_url: Optional[str] = None,
-        max_concurrent_episodes: Optional[int] = None,
+        rest_base_url: str | None = None,
+        mcp_url: str | None = None,
+        max_concurrent_episodes: int | None = None,
         enable_debug_logging: bool = False,
     ):
         """Initialize SABER sandbox instance.
@@ -132,21 +132,21 @@ class SABERSandboxEnvironment:
         self._rest_base_url = rest_base_url or f"http://localhost:{rest_port}"
         self._mcp_url = mcp_url or f"http://localhost:{mcp_port}"
 
-        self._episode_id: Optional[str] = None
-        self._task_id: Optional[str] = None
-        self._sample_id: Optional[str] = None
-        self._mcp_client: Optional[Tool] = None
-        self._handler: Optional[Any] = None
-        self._handler_state: Optional[HandlerState] = None
-        self._episode_ids: Optional[list[str]] = None
-        self._primary_episode_id: Optional[str] = None
-        self._session_id: Optional[str] = None
-        self._context: Optional[DomainContext] = None
-        self._session_manager: Optional[ClientSessionManager] = None
-        self._episode_manager: Optional[EpisodeLifecycleManager] = None
+        self._episode_id: str | None = None
+        self._task_id: str | None = None
+        self._sample_id: str | None = None
+        self._mcp_client: Tool | None = None
+        self._handler: Any | None = None
+        self._handler_state: HandlerState | None = None
+        self._episode_ids: list[str] | None = None
+        self._primary_episode_id: str | None = None
+        self._session_id: str | None = None
+        self._context: DomainContext | None = None
+        self._session_manager: ClientSessionManager | None = None
+        self._episode_manager: EpisodeLifecycleManager | None = None
 
     @classmethod
-    def default_concurrency(cls) -> Optional[int]:
+    def default_concurrency(cls) -> int | None:
         """Default max_sandboxes for SABER provider."""
         return get_default_concurrency()
 
@@ -166,7 +166,7 @@ class SABERSandboxEnvironment:
         return SandboxRegistry.clear_stale_ownership(domain_slug, force)
 
     @classmethod
-    def _get_episode_semaphore(cls) -> Optional[asyncio.Semaphore]:
+    def _get_episode_semaphore(cls) -> asyncio.Semaphore | None:
         """Get or create the class-level episode concurrency semaphore.
 
         Returns:
@@ -187,7 +187,7 @@ class SABERSandboxEnvironment:
     @classmethod
     async def task_init_environment(
         cls,
-        config: Optional[BaseModel],
+        config: BaseModel | None,
         metadata: dict[str, str],
     ) -> dict[str, str]:
         """Return environment variables for task initialization (empty for SABER)."""
@@ -197,7 +197,7 @@ class SABERSandboxEnvironment:
     async def task_init(
         cls,
         task_name: str,
-        config: Optional[BaseModel],
+        config: BaseModel | None,
     ) -> None:
         """Initialize SABER domain for task execution.
 
@@ -343,7 +343,7 @@ class SABERSandboxEnvironment:
     async def sample_init(
         cls,
         task_name: str,
-        config: Optional[BaseModel],
+        config: BaseModel | None,
         metadata: dict[str, str],
     ) -> dict[str, "SABERSandboxEnvironment"]:
         """Initialize sandbox environment for sample execution.
@@ -423,7 +423,7 @@ class SABERSandboxEnvironment:
 
         # Extract task information from metadata
         benchmark_task = None
-        task_id: Optional[str] = None
+        task_id: str | None = None
 
         if MetadataKeys.BENCHMARK_TASK in metadata:
             # New polymorphic task format
@@ -442,9 +442,7 @@ class SABERSandboxEnvironment:
         with self._lock:
             entry = self._registry.get(self._domain_slug)
             if not entry:
-                raise SandboxError(
-                    f"Domain '{self._domain_slug}' not initialized. " "Call task_init before sample_init."
-                )
+                raise SandboxError(f"Domain '{self._domain_slug}' not initialized. Call task_init before sample_init.")
             rest_base_url = entry.rest_url
             mcp_url_base = entry.mcp_url
             self._session_id = entry.session_id  # Get shared session from registry
@@ -628,7 +626,7 @@ class SABERSandboxEnvironment:
     async def sample_cleanup(
         cls,
         task_name: str,
-        config: Optional[BaseModel],
+        config: BaseModel | None,
         environments: dict[str, "SABERSandboxEnvironment"],
         interrupted: bool,
     ) -> None:
@@ -806,7 +804,7 @@ class SABERSandboxEnvironment:
     async def task_cleanup(
         cls,
         task_name: str,
-        config: Optional[BaseModel],
+        config: BaseModel | None,
         cleanup: bool = True,
     ) -> None:
         """Cleanup SABER domain after task completion (terminate session, optionally stop domain)."""
@@ -941,7 +939,7 @@ class SABERSandboxEnvironment:
                     },
                 )
 
-    def _deserialize_benchmark_task(self, data: Dict[str, Any]) -> BenchmarkTask:
+    def _deserialize_benchmark_task(self, data: dict[str, Any]) -> BenchmarkTask:
         """Deserialize BenchmarkTask from metadata dict.
 
         Args:
@@ -974,7 +972,7 @@ class SABERSandboxEnvironment:
                 f"Data keys: {list(data.keys())}"
             )
 
-    async def connection(self, *, user: Optional[str] = None) -> Any:
+    async def connection(self, *, user: str | None = None) -> Any:
         """Not supported - use saber_tools() for MCP protocol access."""
         raise NotImplementedError("connection() not supported - use saber_tools() for SABER access via MCP protocol.")
 

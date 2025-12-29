@@ -7,7 +7,7 @@ Protocols enable duck typing with type checking - any object that implements
 the required methods can be used, without requiring inheritance.
 """
 
-from typing import Optional, Protocol
+from typing import Protocol
 
 from ...models.rest.websocket_messages import WebSocketServerMessage
 from ..base import Episode
@@ -21,7 +21,7 @@ class EpisodeManagerProtocol(Protocol):
     concrete class (avoiding circular imports).
     """
 
-    def get_episode_by_id(self, episode_id: str) -> Optional[Episode]:
+    def get_episode_by_id(self, episode_id: str) -> Episode | None:
         """Get episode by ID.
 
         Args:

@@ -15,7 +15,7 @@ import tempfile
 import time
 from importlib.resources import files
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 import yaml
 
@@ -127,7 +127,7 @@ class ManifestLoader:
         if not self.domains_root.exists():
             raise DomainNotFoundError("domains_root", f"Domains root directory does not exist: {self.domains_root}")
 
-    def list_domains(self) -> List[str]:
+    def list_domains(self) -> list[str]:
         """List all available domains."""
         domains = []
         for path in self.domains_root.iterdir():
@@ -135,7 +135,7 @@ class ManifestLoader:
                 domains.append(path.name)
         return sorted(domains)
 
-    def load_manifest(self, domain: str) -> Dict[str, Any]:
+    def load_manifest(self, domain: str) -> dict[str, Any]:
         """Load and validate domain manifest.
 
         Args:
@@ -159,12 +159,12 @@ class ManifestLoader:
 
         # Load YAML
         try:
-            with open(manifest_path, "r") as f:
+            with open(manifest_path) as f:
                 manifest = yaml.safe_load(f)
                 if not isinstance(manifest, dict):
                     raise DomainValidationError(domain, ["Manifest must be a YAML object/dictionary"])
         except yaml.YAMLError as e:
-            raise DomainValidationError(domain, [f"Invalid YAML in manifest: {e}"])
+            raise DomainValidationError(domain, [f"Invalid YAML in manifest: {e}"]) from e
 
         # Validate against schema
         self._validate_schema(manifest, domain)
@@ -174,29 +174,29 @@ class ManifestLoader:
 
         return manifest
 
-    def _validate_schema(self, manifest: Dict[str, Any], domain: str) -> None:
+    def _validate_schema(self, manifest: dict[str, Any], domain: str) -> None:
         """Validate manifest against JSON schema."""
         try:
             import jsonschema
         except ImportError:
             raise DomainValidationError(
                 domain, ["jsonschema package required for validation. Install with: uv add jsonschema"]
-            )
+            ) from None
 
         try:
             with resolve_schema_file() as schema_path:
-                with open(schema_path, "r") as f:
+                with open(schema_path) as f:
                     schema = json.load(f)
         except Exception as e:
-            raise DomainValidationError(domain, [f"Failed to load validation schema: {e}"])
+            raise DomainValidationError(domain, [f"Failed to load validation schema: {e}"]) from e
 
         try:
             jsonschema.validate(manifest, schema)
         except jsonschema.ValidationError as e:
             error_path = " -> ".join(str(p) for p in e.absolute_path)
-            raise DomainValidationError(domain, [f"Schema validation failed at {error_path}: {e.message}"])
+            raise DomainValidationError(domain, [f"Schema validation failed at {error_path}: {e.message}"]) from e
 
-    def _validate_structure(self, domain: str, manifest: Dict[str, Any]) -> None:
+    def _validate_structure(self, domain: str, manifest: dict[str, Any]) -> None:
         """Validate required domain directory structure."""
         domain_path = self.domains_root / domain
         errors = []
@@ -220,7 +220,7 @@ class ManifestLoader:
         # Validate manifest domain slug matches directory name
         manifest_slug = manifest.get("domain", {}).get("slug")
         if manifest_slug != domain:
-            errors.append(f"Domain slug mismatch: manifest declares '{manifest_slug}' " f"but directory is '{domain}'")
+            errors.append(f"Domain slug mismatch: manifest declares '{manifest_slug}' but directory is '{domain}'")
 
         if errors:
             raise DomainValidationError(domain, errors)
@@ -235,13 +235,13 @@ class EnvironmentValidator:
     def generate_environment(
         self,
         domain: str,
-        manifest: Dict[str, Any],
+        manifest: dict[str, Any],
         rest_port: int = 8000,
         mcp_port: int = 8001,
         log_level: str = "INFO",
         skip_image_check: bool = False,
         skip_port_check: bool = False,
-    ) -> Dict[str, str]:
+    ) -> dict[str, str]:
         """Generate and validate environment variables for server-only architecture.
 
         Args:
@@ -303,7 +303,7 @@ class EnvironmentValidator:
         """
         return detect_repo_structure(self.domains_root)
 
-    def _validate_all_images(self, manifest: Dict[str, Any], errors: List[str]) -> None:
+    def _validate_all_images(self, manifest: dict[str, Any], errors: list[str]) -> None:
         """Validate all domain images exist."""
         images_config = manifest.get("images", {})
         if not images_config:
@@ -331,15 +331,12 @@ class EnvironmentValidator:
                 # Keep message lines under 120 chars for flake8
                 slug = manifest.get("domain", {}).get("slug", "<domain>")
                 errors.append(
-                    (
-                        "Docker image '%s' not found.\n"
-                        "  Build with inspect eval: uv run inspect eval domains/%s --model <model> -T build=true\n"
-                        "  Or use saber-domain CLI: uv run saber-domain build %s --build"
-                    )
-                    % (image_tag, slug, slug)
+                    f"Docker image '{image_tag}' not found.\n"
+                    f"  Build with inspect eval: uv run inspect eval domains/{slug} --model <model> -T build=true\n"
+                    f"  Or use saber-domain CLI: uv run saber-domain build {slug} --build"
                 )
 
-    def _validate_base_images(self, errors: List[str]) -> None:
+    def _validate_base_images(self, errors: list[str]) -> None:
         """Validate base images exist."""
         try:
             # Load base images config from package resources
@@ -347,18 +344,15 @@ class EnvironmentValidator:
             with base_images_file.open("r") as f:
                 base_images_config = yaml.safe_load(f)
 
-            for image_name, image_config in base_images_config["images"].items():
+            for _image_name, image_config in base_images_config["images"].items():
                 image_tag = image_config["tag"]
                 if not self._docker_image_exists(image_tag):
                     # Keep message lines under 120 chars for flake8
                     errors.append(
-                        (
-                            "Base image '%s' not found.\n"
-                            "  Build with inspect eval: uv run inspect eval domains/<domain> \
+                        f"Base image '{image_tag}' not found.\n"
+                        "  Build with inspect eval: uv run inspect eval domains/<domain> \
                                 --model <model> -T build=true\n"
-                            "  Or use saber-domain CLI: uv run saber-domain build <domain> --build"
-                        )
-                        % (image_tag,)
+                        "  Or use saber-domain CLI: uv run saber-domain build <domain> --build"
                     )
         except Exception as e:
             errors.append(f"Failed to validate base images: {e}")
@@ -405,7 +399,7 @@ class DockerRunner:
     def build_images(
         self,
         domain: str,
-        manifest: Dict[str, Any],
+        manifest: dict[str, Any],
         domains_root: Path,
         dry_run: bool = False,
         image_filter: str | None = None,
@@ -459,7 +453,7 @@ class DockerRunner:
         # Remove existing domain images for rebuild (only in rebuild mode)
         if rebuild_mode:
             print("🔄 Removing existing domain images for rebuild...")
-            for image_name, image_config in images_to_build.items():
+            for _image_name, image_config in images_to_build.items():
                 if isinstance(image_config, dict):
                     image_tag = image_config.get("tag")
                     if image_tag and self._docker_image_exists(image_tag):
@@ -534,7 +528,7 @@ class DockerRunner:
                 print(f"✓ Successfully built {image_tag}")
                 built_count += 1
             except subprocess.CalledProcessError as e:
-                raise DockerError(f"Failed to build {image_name} image {image_tag}: {e}")
+                raise DockerError(f"Failed to build {image_name} image {image_tag}: {e}") from e
 
         if not dry_run:
             if skipped_count > 0:
@@ -558,7 +552,7 @@ class DockerRunner:
 
         print("🔄 Removing existing base images for rebuild...")
         # Remove all existing base images
-        for image_name, image_config in base_images_config["images"].items():
+        for _image_name, image_config in base_images_config["images"].items():
             image_tag = image_config["tag"]
             if self._docker_image_exists(image_tag):
                 if not dry_run:
@@ -620,7 +614,7 @@ class DockerRunner:
                 raise DockerError(f"Unsupported dockerfile path format: {dockerfile}")
 
     def _build_base_image_from_package(
-        self, image_name: str, image_tag: str, package_path: str, labels: Dict[str, str], dry_run: bool
+        self, image_name: str, image_tag: str, package_path: str, labels: dict[str, str], dry_run: bool
     ) -> None:
         """Build base image from packaged Dockerfile using stdin (no temporary files).
 
@@ -664,21 +658,21 @@ class DockerRunner:
             print(f"✓ Successfully built {image_tag}")
 
         except subprocess.CalledProcessError as e:
-            raise DockerError(f"Failed to build base image {image_tag}: {e}")
+            raise DockerError(f"Failed to build base image {image_tag}: {e}") from e
         except Exception as e:
-            raise DockerError(f"Failed to prepare base image build: {e}")
+            raise DockerError(f"Failed to prepare base image build: {e}") from e
 
-    def _load_base_images_config(self) -> Dict[str, Any]:
+    def _load_base_images_config(self) -> dict[str, Any]:
         """Load base images configuration."""
         try:
             base_images_file = files(saber.domain.package_resources) / "base-images.yaml"
             with base_images_file.open("r") as f:
-                config: Dict[str, Any] = yaml.safe_load(f)
+                config: dict[str, Any] = yaml.safe_load(f)
                 return config
         except Exception as e:
-            raise DockerError(f"Failed to load base images configuration: {e}")
+            raise DockerError(f"Failed to load base images configuration: {e}") from e
 
-    def start_services(self, domain: str, env_vars: Dict[str, str], dry_run: bool = False) -> None:
+    def start_services(self, domain: str, env_vars: dict[str, str], dry_run: bool = False) -> None:
         """Start domain services using docker-compose.
 
         Args:
@@ -750,7 +744,7 @@ class DockerRunner:
             self._wait_for_services(domain, env_vars)
 
         except subprocess.CalledProcessError as e:
-            raise DockerError(f"Failed to start domain {domain}", command=" ".join(cmd), exit_code=e.returncode)
+            raise DockerError(f"Failed to start domain {domain}", command=" ".join(cmd), exit_code=e.returncode) from e
         finally:
             # Clean up temp env file
             try:
@@ -785,9 +779,9 @@ class DockerRunner:
                 raise DockerError(
                     f"Command '{' '.join(cmd)}' failed. Ensure Docker and Docker Compose are installed.",
                     command=" ".join(cmd),
-                )
+                ) from None
 
-    def _add_git_metadata(self, cmd: List[str], domain_path: Path) -> None:
+    def _add_git_metadata(self, cmd: list[str], domain_path: Path) -> None:
         """Add git metadata labels to build command."""
         try:
             git_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=domain_path, text=True).strip()
@@ -796,7 +790,7 @@ class DockerRunner:
             pass
 
     def _show_failure_diagnostics(
-        self, domain: str, env_vars: Dict[str, str], container_name: str, reason: str
+        self, domain: str, env_vars: dict[str, str], container_name: str, reason: str
     ) -> None:
         """Show diagnostic information when server fails to start.
 
@@ -846,7 +840,7 @@ class DockerRunner:
                     error_lines = []
                     warning_lines = []
                     try:
-                        with open(latest_log, "r") as f:
+                        with open(latest_log) as f:
                             for line in f:
                                 line_lower = line.lower()
                                 if (
@@ -993,7 +987,7 @@ class DockerRunner:
         except Exception as e:
             print(f"Warning: Failed to stop permanent environment containers: {e}", flush=True)
 
-    def _wait_for_services(self, domain: str, env_vars: Dict[str, str], timeout: int = 60) -> None:
+    def _wait_for_services(self, domain: str, env_vars: dict[str, str], timeout: int = 60) -> None:
         """Wait for services to be healthy.
 
         Raises:
@@ -1078,11 +1072,11 @@ class DomainOrchestrator:
         self.environment_validator = EnvironmentValidator(domains_root)
         self.docker_runner = DockerRunner(compose_file, domains_root)
 
-    def list_domains(self) -> List[str]:
+    def list_domains(self) -> list[str]:
         """List all available domains."""
         return self.manifest_loader.list_domains()
 
-    def validate_domain(self, domain: str) -> Dict[str, Any]:
+    def validate_domain(self, domain: str) -> dict[str, Any]:
         """Validate domain configuration and return manifest."""
         return self.manifest_loader.load_manifest(domain)
 
@@ -1168,7 +1162,7 @@ class DomainOrchestrator:
             rebuild_mode=rebuild_mode,
         )
 
-    def get_domain_status(self, domain: str) -> Dict[str, Any]:
+    def get_domain_status(self, domain: str) -> dict[str, Any]:
         """Get domain status with full health information."""
         # Load manifest to get environment variables for proper compose context
         try:

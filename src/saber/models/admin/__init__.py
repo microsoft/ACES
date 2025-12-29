@@ -4,8 +4,6 @@ SABER Admin Models - Administrative and debugging models.
 These models are used for system administration, monitoring, and debugging.
 """
 
-from typing import List, Optional
-
 from pydantic import BaseModel, Field
 
 
@@ -21,7 +19,7 @@ class CleanupHistoryEntry(BaseModel):
 class CleanupHistoryResponse(BaseModel):
     """Response model for cleanup history."""
 
-    cleanup_history: List[CleanupHistoryEntry] = Field(description="List of cleanup entries")
+    cleanup_history: list[CleanupHistoryEntry] = Field(description="List of cleanup entries")
     total_cleanups: int = Field(description="Total number of cleanups performed")
 
 
@@ -29,7 +27,7 @@ class SessionCleanupHistoryResponse(BaseModel):
     """Response model for session-specific cleanup history."""
 
     session_id: str = Field(description="Session identifier")
-    cleanup_entries: List[CleanupHistoryEntry] = Field(description="Cleanup entries for this session")
+    cleanup_entries: list[CleanupHistoryEntry] = Field(description="Cleanup entries for this session")
     total_cleanups: int = Field(description="Total cleanups for this session")
 
 
@@ -39,11 +37,11 @@ class ActiveCleanupInfo(BaseModel):
     session_id: str = Field(description="Session being cleaned up")
     cleanup_type: str = Field(description="Type of cleanup operation")
     start_time: str = Field(description="Cleanup start time (ISO format)")
-    progress: Optional[str] = Field(None, description="Cleanup progress information")
+    progress: str | None = Field(None, description="Cleanup progress information")
 
 
 class ActiveCleanupsResponse(BaseModel):
     """Response model for active cleanup operations."""
 
-    active_cleanups: List[ActiveCleanupInfo] = Field(description="List of active cleanup operations")
+    active_cleanups: list[ActiveCleanupInfo] = Field(description="List of active cleanup operations")
     count: int = Field(description="Number of active cleanups")

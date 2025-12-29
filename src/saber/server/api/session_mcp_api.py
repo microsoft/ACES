@@ -11,7 +11,7 @@ Logging category: MCP_API.
 import json
 
 # Forward declaration to avoid circular imports
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
 import mcp.types as mcp_types
 from fastmcp import FastMCP
@@ -50,7 +50,7 @@ class SessionMCPAPI:
         self.session_manager = session_manager
         self.host = host
         self.port = port
-        self.mcp_server: Optional[FastMCP] = None
+        self.mcp_server: FastMCP | None = None
         self.tool_generator = MCPToolGenerator()
 
         logger.info(
@@ -164,7 +164,7 @@ class SessionMCPAPI:
             # Re-raise validation errors as-is
             raise
         except Exception as exc:
-            extras: Dict[str, Any] = {"event": "mcp_headers_parse_failed"}
+            extras: dict[str, Any] = {"event": "mcp_headers_parse_failed"}
             if available_headers is not None:
                 extras["available_headers"] = available_headers
             log_operation_failure(
@@ -402,7 +402,7 @@ class SessionMCPAPI:
             headers = await self._get_headers()
 
             # Get tools from execution manager with episode context
-            executor_tools: List[mcp_types.Tool] = self.session_manager.execution_manager.to_mcp_tools(
+            executor_tools: list[mcp_types.Tool] = self.session_manager.execution_manager.to_mcp_tools(
                 headers.episode_id
             )
 
@@ -454,7 +454,7 @@ class SessionMCPAPI:
             )
             return MCPToolListResponse(tools=[], session_id=None, episode_id=None)
 
-    async def handle_call_tool(self, name: str, arguments: Dict[str, Any]) -> MCPToolCallResponse:
+    async def handle_call_tool(self, name: str, arguments: dict[str, Any]) -> MCPToolCallResponse:
         """
         Handle MCP tool execution using get_http_headers.
 
@@ -582,7 +582,7 @@ class SessionMCPAPI:
             )
 
     async def _handle_end_episode_call(
-        self, arguments: Dict[str, Any], session_id: str, episode_id: str, orchestration_env: OrchestrationEnvironment
+        self, arguments: dict[str, Any], session_id: str, episode_id: str, orchestration_env: OrchestrationEnvironment
     ) -> MCPToolCallResponse:
         """
         Handle the hardcoded end_episode tool call.
@@ -775,7 +775,7 @@ class SessionMCPAPI:
             )
             return None, None
 
-    def _convert_to_action(self, tool_name: str, arguments: Dict[str, Any], episode: "Episode") -> Action:
+    def _convert_to_action(self, tool_name: str, arguments: dict[str, Any], episode: "Episode") -> Action:
         """
         Convert MCP tool call to Action object.
 
@@ -823,7 +823,6 @@ class SessionMCPAPI:
                 extra={
                     "tool_name": tool_name,
                     "event": "action_with_context",
-                    "tool_name": tool_name,
                     "has_assistant_message": assistant_message is not None,
                     "has_reasoning": reasoning is not None,
                 },
@@ -893,7 +892,7 @@ class SessionMCPAPI:
                 extra={"event": "mcp_list_tools_override_fallback"},
             )
 
-    async def _custom_list_tools_handler(self) -> List[mcp_types.Tool]:
+    async def _custom_list_tools_handler(self) -> list[mcp_types.Tool]:
         """
         Custom list_tools handler that provides episode-specific tool filtering.
 

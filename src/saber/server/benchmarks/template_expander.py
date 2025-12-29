@@ -9,7 +9,6 @@ Logging category: TASK_MANAGER
 """
 
 from copy import deepcopy
-from typing import Dict, List
 
 from ...logging_config import LogCategory, get_saber_logger
 from .exceptions import InvalidTaskDefinitionException
@@ -42,7 +41,7 @@ class TemplateExpander:
         """
         self.domain = domain
 
-    def expand_templates(self, tasks: Dict[str, Task]) -> Dict[str, Task]:
+    def expand_templates(self, tasks: dict[str, Task]) -> dict[str, Task]:
         """Expand template references into concrete task instances.
 
         This is the main entry point for template expansion. It:
@@ -70,9 +69,9 @@ class TemplateExpander:
         )
 
         # Phase 1: Identify templates and template-dependent tasks
-        templates: Dict[str, Task] = {}
-        template_dependents: List[Task] = []
-        concrete_tasks: Dict[str, Task] = {}
+        templates: dict[str, Task] = {}
+        template_dependents: list[Task] = []
+        concrete_tasks: dict[str, Task] = {}
 
         for task_id, task in tasks.items():
             if task.is_template:
@@ -152,7 +151,7 @@ class TemplateExpander:
 
         return concrete_tasks
 
-    def _validate_template_references(self, template_dependents: List[Task], templates: Dict[str, Task]) -> None:
+    def _validate_template_references(self, template_dependents: list[Task], templates: dict[str, Task]) -> None:
         """Validate that all template references are valid.
 
         Args:
@@ -234,7 +233,7 @@ class TemplateExpander:
 
         return instance
 
-    def validate_templates(self, tasks: Dict[str, Task]) -> None:
+    def validate_templates(self, tasks: dict[str, Task]) -> None:
         """Validate template definitions for consistency.
 
         Ensures that:

@@ -4,7 +4,7 @@ SABER Core Models - Core business domain models.
 These models represent the core business entities and their relationships.
 """
 
-from typing import Annotated, Any, Dict, List, Optional, Union
+from typing import Annotated, Any
 
 from pydantic import BaseModel, Discriminator, Field
 
@@ -34,10 +34,10 @@ class TaskInfo(BaseModel):
 class PolicyInfo(BaseModel):
     """Domain policy information."""
 
-    domain: Optional[str] = None
-    available_commands: List[str]
+    domain: str | None = None
+    available_commands: list[str]
     guidelines: str
-    constraints: List[str]
+    constraints: list[str]
 
 
 class BenchmarkInfo(BaseModel):
@@ -53,13 +53,13 @@ class BenchmarkInfo(BaseModel):
 
     api_version: str = Field(default="2.0", description="API version for compatibility checks")
     domain: str = Field(..., description="Security domain name")
-    tasks: List[Annotated[Union[SingleEpisodeTask, OrchestratedTask], Discriminator("task_type")]] = Field(
+    tasks: list[Annotated[SingleEpisodeTask | OrchestratedTask, Discriminator("task_type")]] = Field(
         ..., description="Available tasks in the benchmark (polymorphic BenchmarkTask)"
     )
     total_tasks: int = Field(..., description="Total number of unique tasks")
     total_episodes: int = Field(..., description="Total number of episodes across all tasks")
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for API serialization."""
         return {
             "api_version": self.api_version,
@@ -69,7 +69,7 @@ class BenchmarkInfo(BaseModel):
             "total_episodes": self.total_episodes,
         }
 
-    def get_task_by_id(self, task_id: str) -> Union[SingleEpisodeTask, OrchestratedTask, None]:
+    def get_task_by_id(self, task_id: str) -> SingleEpisodeTask | OrchestratedTask | None:
         """Get task info by ID.
 
         Args:
@@ -87,7 +87,7 @@ class BenchmarkInfo(BaseModel):
                 return task
         return None
 
-    def get_task_ids(self) -> List[str]:
+    def get_task_ids(self) -> list[str]:
         """Get list of all task IDs.
 
         Returns:
@@ -106,9 +106,9 @@ class EvalSubmission(BaseModel):
     episode_id: str = Field(..., description="Episode ID for tracking")
     task_id: str = Field(..., description="Task ID for evaluation context")
     model: str = Field(..., description="Model name from ModelOutput.model")
-    choices: List[Dict[str, Any]] = Field(default_factory=list, description="Model choices from ModelOutput.choices")
+    choices: list[dict[str, Any]] = Field(default_factory=list, description="Model choices from ModelOutput.choices")
     submission: str = Field(..., description="Completion text from ModelOutput.completion")
-    tokens: Dict[str, Any] = Field(default_factory=dict, description="Token usage information from ModelOutput.usage")
+    tokens: dict[str, Any] = Field(default_factory=dict, description="Token usage information from ModelOutput.usage")
     time: float = Field(..., description="Execution time from ModelOutput.time")
 
 

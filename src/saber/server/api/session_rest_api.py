@@ -9,7 +9,7 @@ Logging category: REST_API.
 
 # Forward declaration to avoid circular imports
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
@@ -495,14 +495,14 @@ class SessionRestAPI:
                 # Re-raise HTTPException to preserve status codes (404, 422, etc.)
                 raise
             except EvaluationNotFoundError as e:
-                raise HTTPException(status_code=404, detail=str(e))
+                raise HTTPException(status_code=404, detail=str(e)) from e
             except InvalidEvaluationRequestError as e:
-                raise HTTPException(status_code=422, detail=str(e))
+                raise HTTPException(status_code=422, detail=str(e)) from e
             except SessionEvaluationError as e:
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.get(APIEndpoints.EVALUATIONS_LIST, response_model=EvaluationListResponse)
-        async def list_evaluations_endpoint(session_id: str, task_id: Optional[str] = None) -> EvaluationListResponse:
+        async def list_evaluations_endpoint(session_id: str, task_id: str | None = None) -> EvaluationListResponse:
             """List evaluation results for session."""
             try:
                 # Validate session exists first
@@ -539,9 +539,9 @@ class SessionRestAPI:
                 # Re-raise HTTPException to preserve status codes (404, 422, etc.)
                 raise
             except InvalidEvaluationRequestError as e:
-                raise HTTPException(status_code=422, detail=str(e))
+                raise HTTPException(status_code=422, detail=str(e)) from e
             except SessionEvaluationError as e:
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.get(APIEndpoints.EVALUATIONS_SUMMARY, response_model=EvaluationSummaryResponse)
         async def get_evaluation_summary_endpoint(session_id: str) -> EvaluationSummaryResponse:
@@ -557,14 +557,15 @@ class SessionRestAPI:
                 # Re-raise HTTPException to preserve status codes (404, 422, etc.)
                 raise
             except InvalidEvaluationRequestError as e:
-                raise HTTPException(status_code=422, detail=str(e))
+                raise HTTPException(status_code=422, detail=str(e)) from e
             except SessionEvaluationError as e:
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         # Evaluation file upload endpoint
         @self.app.post(APIEndpoints.EVALUATIONS_UPLOAD, response_model=EvaluationFileUploadResponse)
         async def upload_evaluation_file_endpoint(
-            session_id: str, file: UploadFile = File(...)
+            session_id: str,
+            file: UploadFile = File(...),  # noqa: B008
         ) -> EvaluationFileUploadResponse:
             """Upload external evaluation file (.eval) to session directory."""
             log_operation_start(
@@ -788,7 +789,7 @@ class SessionRestAPI:
                     # Replace entire transcript
                     updated_messages = [msg.dict() for msg in transcript_request.messages]
 
-                context_updates: Dict[str, Any] = {
+                context_updates: dict[str, Any] = {
                     MetadataKeys.CLIENT_TRANSCRIPT.value: updated_messages,
                     MetadataKeys.TRANSCRIPT_LAST_PUSHED_AT.value: timestamp,  # Auto-set on push
                 }
@@ -829,7 +830,7 @@ class SessionRestAPI:
                 raise HTTPException(
                     status_code=422,
                     detail={"message": "Validation failed", "errors": exc.errors()},
-                )
+                ) from exc
             except Exception as exc:
                 log_operation_failure(logger, "push_transcript", exc, session_id=session_id, episode_id=episode_id)
                 raise HTTPException(status_code=500, detail=f"Failed to push transcript: {exc}") from exc
@@ -872,7 +873,7 @@ class SessionRestAPI:
                 pending_injections = episode.context.get(MetadataKeys.PENDING_INJECTIONS, [])
                 pending_injections.append(injection_record)
 
-                context_updates: Dict[str, Any] = {
+                context_updates: dict[str, Any] = {
                     MetadataKeys.PENDING_INJECTIONS.value: pending_injections,
                 }
 
@@ -944,7 +945,7 @@ class SessionRestAPI:
                     record["retrieved_at"] = retrieved_at
                     injection_history.append(record)
 
-                context_updates: Dict[str, Any] = {
+                context_updates: dict[str, Any] = {
                     MetadataKeys.PENDING_INJECTIONS.value: [],  # Clear pending
                     MetadataKeys.INJECTION_HISTORY.value: injection_history,  # Update history
                 }
@@ -977,7 +978,7 @@ class SessionRestAPI:
         # ===== Blocking Transcript Solver Endpoints =====
 
         @self.app.get("/api/v1/session/{session_id}/episodes/{episode_id}/transcript/metadata")
-        async def get_transcript_metadata_endpoint(session_id: str, episode_id: str) -> Dict[str, Any]:
+        async def get_transcript_metadata_endpoint(session_id: str, episode_id: str) -> dict[str, Any]:
             """Get transcript metadata including timestamps for change detection.
 
             This endpoint is lightweight and designed for frequent polling by blue team.
@@ -1102,7 +1103,7 @@ class SessionRestAPI:
         @self.app.get(APIEndpoints.EPISODE_SUBTASK_EVALUATION_CRITERIA)
         async def get_subtask_evaluation_criteria_endpoint(
             session_id: str, episode_id: str
-        ) -> List[SubtaskEvaluationCriteriaResponse]:
+        ) -> list[SubtaskEvaluationCriteriaResponse]:
             """Get subtask evaluation criteria (template paths only, no rendering)."""
             log_operation_start(logger, "get_subtask_evaluation_criteria", session_id=session_id, episode_id=episode_id)
             try:

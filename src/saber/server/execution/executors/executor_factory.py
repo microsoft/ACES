@@ -6,7 +6,7 @@ This module provides a factory pattern for creating and managing different types
 of command executors, supporting scaling to many executor types.
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import mcp.types as mcp_types
 
@@ -31,8 +31,8 @@ class ExecutorFactory:
     def __init__(
         self,
         sandbox_manager: SandboxEnvironmentManager,
-        configuration: Optional[Dict[str, Any]] = None,
-        session_manager: Optional[Any] = None,
+        configuration: dict[str, Any] | None = None,
+        session_manager: Any | None = None,
     ):
         """
         Initialize executor factory.
@@ -49,13 +49,13 @@ class ExecutorFactory:
         self._configuration = configuration if configuration is not None else {}
         # Cache executors by (executor_type, episode_id) tuple to support episode-specific configs
         # episode_id=None is used for schema discovery during MCP registration
-        self._executor_instances: Dict[Tuple[str, Optional[str]], CommandExecutor] = {}
+        self._executor_instances: dict[tuple[str, str | None], CommandExecutor] = {}
 
         # Get all available executors from the global registry
         self._all_available_executors = executor_registry.get_available_executors()
 
         # Episode-specific configurations: episode_id -> {allowed_executors, config}
-        self._episode_configurations: Dict[str, Dict[str, Any]] = {}
+        self._episode_configurations: dict[str, dict[str, Any]] = {}
 
         logger.info(
             "Executor factory initialized",
@@ -69,8 +69,8 @@ class ExecutorFactory:
     def register_episode_configuration(
         self,
         episode_id: str,
-        allowed_executors: Optional[List[str]] = None,
-        episode_config: Optional[Dict[str, Any]] = None,
+        allowed_executors: list[str] | None = None,
+        episode_config: dict[str, Any] | None = None,
     ) -> None:
         """
         Register episode-specific executor configuration.
@@ -134,7 +134,9 @@ class ExecutorFactory:
 
         # Clear cached executor instances for this episode
         keys_to_remove = [
-            key for key in self._executor_instances.keys() if key[1] == episode_id  # key is (executor_type, episode_id)
+            key
+            for key in self._executor_instances.keys()
+            if key[1] == episode_id  # key is (executor_type, episode_id)
         ]
         for key in keys_to_remove:
             del self._executor_instances[key]
@@ -149,7 +151,7 @@ class ExecutorFactory:
                 },
             )
 
-    def get_available_executors(self, episode_id: Optional[str] = None) -> List[str]:
+    def get_available_executors(self, episode_id: str | None = None) -> list[str]:
         """
         Get list of available executor types, optionally filtered by episode configuration.
 
@@ -163,7 +165,7 @@ class ExecutorFactory:
             return self._all_available_executors.copy()
 
         if episode_id in self._episode_configurations:
-            allowed_executors: List[str] = self._episode_configurations[episode_id]["allowed_executors"]
+            allowed_executors: list[str] = self._episode_configurations[episode_id]["allowed_executors"]
             return allowed_executors.copy()
 
         logger.warning(
@@ -176,7 +178,7 @@ class ExecutorFactory:
         return self._all_available_executors.copy()
 
     def get_executor(
-        self, executor_type: str, episode_id: Optional[str] = None, force_new: bool = False
+        self, executor_type: str, episode_id: str | None = None, force_new: bool = False
     ) -> CommandExecutor:
         """
         Get or create an executor instance, optionally filtered by episode configuration.
@@ -212,7 +214,7 @@ class ExecutorFactory:
         try:
             executor_class = executor_registry.get_executor_class(executor_type)
         except KeyError:
-            raise ValueError(f"Executor type '{executor_type}' not found in registry")
+            raise ValueError(f"Executor type '{executor_type}' not found in registry") from None
 
         logger.debug(
             "Creating executor instance",
@@ -270,7 +272,7 @@ class ExecutorFactory:
         self._executor_instances[cache_key] = executor_instance
         return executor_instance
 
-    def get_all_mcp_tools(self, episode_id: Optional[str] = None) -> List[mcp_types.Tool]:
+    def get_all_mcp_tools(self, episode_id: str | None = None) -> list[mcp_types.Tool]:
         """
         Get MCP tool definitions for available executors as mcp.types.Tool objects.
 
@@ -353,7 +355,7 @@ class ExecutorFactory:
 
         return tools
 
-    def update_configuration(self, new_configuration: Dict[str, Any]) -> None:
+    def update_configuration(self, new_configuration: dict[str, Any]) -> None:
         """
         Update the factory's configuration and clear cached executors.
 
@@ -388,7 +390,7 @@ class ExecutorFactory:
 
     def cleanup_all_executors(self) -> None:
         """Clean up all executor instances."""
-        for cache_key, executor in self._executor_instances.items():
+        for cache_key, _executor in self._executor_instances.items():
             executor_type, episode_id = cache_key
             try:
                 # Cleanup is handled by the sandbox manager
@@ -413,7 +415,7 @@ class ExecutorFactory:
 
         self._executor_instances.clear()
 
-    def get_executor_info(self) -> Dict[str, Any]:
+    def get_executor_info(self) -> dict[str, Any]:
         """
         Get information about all available executors.
 

@@ -3,7 +3,7 @@
 import asyncio
 import time
 from enum import Enum
-from typing import Any, Dict, List, Literal, Set
+from typing import Any, Literal
 
 from ...logging_config import LogCategory, get_saber_logger
 from ...models.constants import MetadataKeys
@@ -44,7 +44,7 @@ class TranscriptStateMachine:
     """
 
     # Valid state transitions
-    VALID_TRANSITIONS: Dict[TranscriptState, Set[TranscriptState]] = {
+    VALID_TRANSITIONS: dict[TranscriptState, set[TranscriptState]] = {
         TranscriptState.WAITING_FOR_USER: {TranscriptState.WAITING_FOR_ASSISTANT},
         TranscriptState.WAITING_FOR_ASSISTANT: {TranscriptState.WAITING_FOR_TOOLS, TranscriptState.WAITING_FOR_USER},
         TranscriptState.WAITING_FOR_TOOLS: {TranscriptState.WAITING_FOR_USER},
@@ -52,8 +52,8 @@ class TranscriptStateMachine:
 
     def __init__(self) -> None:
         """Initialize state machine with lifecycle management."""
-        self._episode_locks: Dict[str, asyncio.Lock] = {}
-        self._state_timestamps: Dict[str, float] = {}
+        self._episode_locks: dict[str, asyncio.Lock] = {}
+        self._state_timestamps: dict[str, float] = {}
 
     async def on_episode_created(self, episode_id: str) -> None:
         """Lifecycle hook called when episode is created.
@@ -139,7 +139,7 @@ class TranscriptStateMachine:
 
         return self._compute_state(transcript)
 
-    def _compute_state(self, transcript: List[Dict[str, Any]]) -> TranscriptState:
+    def _compute_state(self, transcript: list[dict[str, Any]]) -> TranscriptState:
         """Compute state from transcript messages.
 
         Args:
@@ -154,7 +154,7 @@ class TranscriptStateMachine:
         # Find the last assistant message with tool_calls and check if all are responded to
         # This is more accurate than just looking at the last message
         last_assistant_with_tools_idx = -1
-        pending_tool_call_ids: Set[str] = set()
+        pending_tool_call_ids: set[str] = set()
 
         for i, msg in enumerate(transcript):
             role = msg.get("role")
@@ -197,7 +197,7 @@ class TranscriptStateMachine:
 
         return TranscriptState.WAITING_FOR_USER
 
-    def _is_valid_transcript(self, transcript: List[Dict[str, Any]]) -> bool:
+    def _is_valid_transcript(self, transcript: list[dict[str, Any]]) -> bool:
         """Validate transcript message structure.
 
         Args:
@@ -255,7 +255,7 @@ class TranscriptStateMachine:
         Returns:
             Event type literal (e.g., "is_waiting_on_assistant")
         """
-        event_map: Dict[TranscriptState, StateEventType] = {
+        event_map: dict[TranscriptState, StateEventType] = {
             TranscriptState.WAITING_FOR_USER: "is_waiting_on_user",
             TranscriptState.WAITING_FOR_ASSISTANT: "is_waiting_on_assistant",
             TranscriptState.WAITING_FOR_TOOLS: "is_waiting_on_tools",

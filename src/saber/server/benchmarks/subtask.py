@@ -1,7 +1,5 @@
 """SubTask implementation for task management system."""
 
-from typing import Optional
-
 from pydantic import BaseModel, Field
 
 
@@ -21,15 +19,15 @@ class SubTask(BaseModel):
     title: str = Field(..., description="Human-readable title")
     description: str = Field(..., description="Detailed description of the subtask")
     objective: str = Field(..., description="Primary objective to accomplish")
-    hints: Optional[list[str]] = Field(None, description="Optional hints to guide without spoiling the challenge")
-    subtask_strategy: Optional[str] = Field(
+    hints: list[str] | None = Field(None, description="Optional hints to guide without spoiling the challenge")
+    subtask_strategy: str | None = Field(
         None,
         description=(
             "Optional evaluation strategy override for this subtask "
             "(see StepEvaluationStrategy enum: 'static', 'llm_judge', 'tool_call')"
         ),
     )
-    subtask_criteria: Optional[dict] = Field(
+    subtask_criteria: dict | None = Field(
         None,
         description="Optional evaluation criteria specific to this subtask, used with certain strategies",
     )

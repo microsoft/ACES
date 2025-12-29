@@ -20,7 +20,7 @@ Following SABER's philosophy:
 - No silent data loss during conversion
 """
 
-from typing import Any, Dict, List, Union
+from typing import Any, Union
 
 from inspect_ai.dataset import MemoryDataset, Sample
 
@@ -59,7 +59,7 @@ class SABERDataset(MemoryDataset):
     - Non-orchestrated samples are sliced normally
     """
 
-    def __getitem__(self, index: Union[int, slice]) -> Union[Sample, "MemoryDataset"]:
+    def __getitem__(self, index: int | slice) -> Union[Sample, "MemoryDataset"]:
         """Override slicing to preserve orchestration boundaries."""
         if isinstance(index, int):
             # Single sample access - use parent implementation
@@ -144,7 +144,7 @@ class SABERDataset(MemoryDataset):
         return slice(start, new_stop, step)
 
 
-async def create_saber_dataset(tasks_data: List[BenchmarkTask]) -> SABERDataset:
+async def create_saber_dataset(tasks_data: list[BenchmarkTask]) -> SABERDataset:
     """
     Convert SABER task data to a SABERDataset.
 
@@ -245,15 +245,11 @@ async def create_saber_dataset(tasks_data: List[BenchmarkTask]) -> SABERDataset:
         preview_failures = conversion_errors[:3]
         additional_failures = max(len(conversion_errors) - 3, 0)
         failure_message = (
-            "Failed to convert {count} SABER tasks: {preview}".format(
-                count=len(conversion_errors),
-                preview=preview_failures,
-            )
+            f"Failed to convert {len(conversion_errors)} SABER tasks: {preview_failures}"
             if additional_failures == 0
-            else "Failed to convert {count} SABER tasks: {preview} (and {extra} more)".format(
-                count=len(conversion_errors),
-                preview=preview_failures,
-                extra=additional_failures,
+            else (
+                f"Failed to convert {len(conversion_errors)} SABER tasks: "
+                f"{preview_failures} (and {additional_failures} more)"
             )
         )
         conversion_error = RuntimeError(failure_message)
@@ -345,7 +341,7 @@ def _convert_task_to_sample(task_data: BenchmarkTask, attempt: int = 1) -> Sampl
         # Use first sub-task's prompts as defaults
         first_sub_task = task_data.sub_tasks[0] if task_data.sub_tasks else None
 
-        task_metadata: Dict[str, Any] = {
+        task_metadata: dict[str, Any] = {
             MetadataKeys.BENCHMARK_TASK: task_data.model_dump(),
             MetadataKeys.EXECUTION_MODE: TaskExecutionMode.ORCHESTRATED.value,
             MetadataKeys.ORCHESTRATION_ID: task_data.benchmark_task_id,
@@ -421,7 +417,7 @@ def _convert_benchmark_task_to_sample(benchmark_task: BenchmarkTask, attempt: in
     task_input = f"Title: {benchmark_task.title}\nTask: {benchmark_task.description}"
     task_target = f"Successfully complete the task: {benchmark_task.title or benchmark_task.description}"
 
-    task_metadata: Dict[str, Any] = {
+    task_metadata: dict[str, Any] = {
         MetadataKeys.BENCHMARK_TASK: benchmark_task.model_dump(),
         MetadataKeys.EXECUTION_MODE: TaskExecutionMode.SINGLE.value,
         MetadataKeys.TASK_ID: benchmark_task.task_id,
@@ -501,7 +497,7 @@ def _convert_sub_task_to_sample(
     task_target = f"Successfully complete {sub_task.role} task: {sub_task.title}"
 
     # Metadata includes orchestration coordination info
-    task_metadata: Dict[str, Any] = {
+    task_metadata: dict[str, Any] = {
         MetadataKeys.BENCHMARK_TASK: orchestrated_task.model_dump(),
         MetadataKeys.EXECUTION_MODE: "orchestrated_sub_task",  # NEW mode for multi-sample orchestration
         MetadataKeys.ORCHESTRATION_ID: orchestrated_task.benchmark_task_id,

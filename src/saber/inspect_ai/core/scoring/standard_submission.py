@@ -5,7 +5,7 @@ This module provides the standard scoring methods for task submissions:
 - llm_judge: LLM-based evaluation using judge templates
 """
 
-from typing import Any, Tuple
+from typing import Any
 
 from inspect_ai.model import ChatMessageSystem, ChatMessageUser, get_model
 from inspect_ai.solver import TaskState
@@ -23,7 +23,7 @@ async def score_submission_static(
     criteria: SubmissionEvaluationCriteriaResponse,
     session_manager: Any,
     state: TaskState,
-) -> Tuple[float, str]:
+) -> tuple[float, str]:
     """Static submission scoring using pattern matching.
 
     Args:
@@ -62,7 +62,7 @@ async def score_submission_llm(
     criteria: SubmissionEvaluationCriteriaResponse,
     session_manager: Any,
     state: TaskState,
-) -> Tuple[float, str]:
+) -> tuple[float, str]:
     """LLM-based submission scoring using judge templates.
 
     Args:

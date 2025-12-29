@@ -16,7 +16,7 @@ import time
 from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional, cast
+from typing import Any, cast
 
 __all__ = [
     "init_episode_debug_logger",
@@ -41,10 +41,16 @@ __all__ = [
 ]
 
 # Context variable to track current episode state
-_episode_context: ContextVar[Dict[str, Any]] = ContextVar("episode_debug_context", default={})
+_episode_context: ContextVar[dict[str, Any] | None] = ContextVar("episode_debug_context", default=None)
+
+
+def _get_episode_context() -> dict[str, Any]:
+    """Get the current episode context, returning empty dict if not set."""
+    return _episode_context.get() or {}
+
 
 # Singleton logger instance
-_debug_logger: Optional[logging.Logger] = None
+_debug_logger: logging.Logger | None = None
 _debug_logging_enabled = False
 
 
@@ -114,7 +120,7 @@ def init_episode_debug_logger(log_dir: Path = Path("logs")) -> logging.Logger:
     return _debug_logger
 
 
-def get_episode_debug_logger() -> Optional[logging.Logger]:
+def get_episode_debug_logger() -> logging.Logger | None:
     """Get the episode debug logger, initializing if needed and enabled.
 
     Returns None if debug logging is not enabled.
@@ -133,7 +139,7 @@ def set_episode_context(**context: Any) -> None:
 
 def update_episode_context(**context: Any) -> None:
     """Update episode context with new values."""
-    current = dict(_episode_context.get())
+    current = dict(_get_episode_context())
     current.update(context)
     _episode_context.set(current)
 
@@ -143,13 +149,13 @@ def clear_episode_context() -> None:
     _episode_context.set({})
 
 
-def _format_extra(extra: Optional[Dict[str, Any]]) -> str:
+def _format_extra(extra: dict[str, Any] | None) -> str:
     """Format extra data for logging."""
     if not extra:
         return ""
 
     # Merge with context
-    context = dict(_episode_context.get())
+    context = dict(_get_episode_context())
     merged = {**context, **extra}
 
     if not merged:
@@ -173,7 +179,7 @@ class EpisodeDebugLogger:
         self.component = component
         self.logger = get_episode_debug_logger()
 
-    def _log(self, level: int, msg: str, extra: Optional[Dict[str, Any]] = None) -> None:
+    def _log(self, level: int, msg: str, extra: dict[str, Any] | None = None) -> None:
         """Internal logging method that adds component and formats extra data."""
         if self.logger is None:
             return  # Debug logging not enabled
@@ -260,10 +266,10 @@ def log_agent_execution_start(agent_type: str, **extra: Any) -> None:
     update_episode_context(agent_start_time=time.time(), agent_type=agent_type)
 
 
-def log_agent_execution_complete(result_type: str, steps_executed: Optional[int] = None, **extra: Any) -> None:
+def log_agent_execution_complete(result_type: str, steps_executed: int | None = None, **extra: Any) -> None:
     """Log the completion of agent execution."""
     logger = EpisodeDebugLogger("agent_execution")
-    context = _episode_context.get()
+    context = _get_episode_context()
     start_time = context.get("agent_start_time")
     duration = time.time() - start_time if start_time else None
 
@@ -285,7 +291,7 @@ def log_agent_execution_complete(result_type: str, steps_executed: Optional[int]
 def log_sample_cleanup_called(interrupted: bool, caller: str, **extra: Any) -> None:
     """Log when sample_cleanup is called."""
     logger = EpisodeDebugLogger("sample_cleanup")
-    context = _episode_context.get()
+    context = _get_episode_context()
     sample_init_time = context.get("sample_init_time")
     duration_since_init = time.time() - sample_init_time if sample_init_time else None
 
@@ -308,7 +314,7 @@ def log_sample_cleanup_called(interrupted: bool, caller: str, **extra: Any) -> N
 def log_episode_end_request(reason: str, **extra: Any) -> None:
     """Log when an episode end request is made."""
     logger = EpisodeDebugLogger("episode_end")
-    context = _episode_context.get()
+    context = _get_episode_context()
     sample_init_time = context.get("sample_init_time")
     agent_start_time = context.get("agent_start_time")
     agent_complete_time = context.get("agent_complete_time")
@@ -332,7 +338,7 @@ def log_episode_end_request(reason: str, **extra: Any) -> None:
 def log_episode_end_complete(**extra: Any) -> None:
     """Log when episode end is complete."""
     logger = EpisodeDebugLogger("episode_end")
-    context = _episode_context.get()
+    context = _get_episode_context()
     episode_end_time = context.get("episode_end_time")
     duration = time.time() - episode_end_time if episode_end_time else None
 
@@ -344,7 +350,7 @@ def log_episode_end_complete(**extra: Any) -> None:
     )
 
 
-def log_step_executed(step_number: int, tool_name: Optional[str] = None, **extra: Any) -> None:
+def log_step_executed(step_number: int, tool_name: str | None = None, **extra: Any) -> None:
     """Log when an agent step is executed."""
     logger = EpisodeDebugLogger("step_execution")
 
@@ -362,7 +368,7 @@ def log_step_executed(step_number: int, tool_name: Optional[str] = None, **extra
 
 def increment_step_counter() -> int:
     """Increment and return the current step counter."""
-    context = _episode_context.get()
+    context = _get_episode_context()
     current_step = cast(int, context.get("current_step", 0))
     new_step = current_step + 1
     update_episode_context(current_step=new_step)
@@ -383,7 +389,7 @@ def log_mcp_request(operation: str, **extra: Any) -> None:
 def log_lifecycle_summary() -> None:
     """Log a summary of the episode lifecycle timing."""
     logger = EpisodeDebugLogger("lifecycle_summary")
-    context = _episode_context.get()
+    context = _get_episode_context()
 
     if not context:
         logger.warning("No episode context available for summary")

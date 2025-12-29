@@ -13,7 +13,7 @@ failure immediately raises an exception. No silent failures or fallbacks.
 
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 import yaml
 
@@ -52,7 +52,7 @@ class ComposeHealthChecker:
         if not DOCKER_AVAILABLE:
             raise RuntimeError("Docker package not available. Install with: pip install docker")
 
-        self._docker_client: Optional[Any] = None
+        self._docker_client: Any | None = None
 
     @property
     def docker_client(self) -> Any:
@@ -144,7 +144,7 @@ class ComposeHealthChecker:
             raise ComposeHealthCheckError(
                 f"EPISODE CREATION FAILED: Cannot connect to Docker daemon: {e}. "
                 f"Health checks require Docker connectivity."
-            )
+            ) from e
 
         start_time = time.time()
         last_print_time = 0.0
@@ -233,7 +233,9 @@ class ComposeHealthChecker:
         try:
             final_status = self._check_all_services_health(services, project_name)
         except Exception as e:
-            raise ComposeHealthCheckError(f"Failed to perform final health check after {timeout_seconds}s timeout: {e}")
+            raise ComposeHealthCheckError(
+                f"Failed to perform final health check after {timeout_seconds}s timeout: {e}"
+            ) from e
 
         unhealthy_services = []
         for name, status in final_status.items():
@@ -268,7 +270,7 @@ class ComposeHealthChecker:
 
         raise ComposeHealthCheckError(error_msg)
 
-    def _parse_compose_services(self, compose_file_path: str) -> Dict[str, Dict[str, Any]]:
+    def _parse_compose_services(self, compose_file_path: str) -> dict[str, dict[str, Any]]:
         """
         Parse Docker Compose file to extract service definitions.
 
@@ -294,7 +296,7 @@ class ComposeHealthChecker:
             if not compose_path.exists():
                 raise RuntimeError(f"Compose file not found: {compose_file_path}")
 
-            with open(compose_path, "r") as f:
+            with open(compose_path) as f:
                 compose_content = f.read()
                 logger.debug(
                     "Compose file read",
@@ -307,7 +309,7 @@ class ComposeHealthChecker:
 
                 compose_data = yaml.safe_load(compose_content)
 
-            services: Dict[str, Dict[str, Any]] = compose_data.get("services", {})
+            services: dict[str, dict[str, Any]] = compose_data.get("services", {})
             if not services:
                 raise RuntimeError(f"No services section found in: {compose_file_path}")
 
@@ -325,13 +327,13 @@ class ComposeHealthChecker:
         except Exception as e:
             # Handle YAML parsing errors and other file errors
             if "yaml" in str(type(e)).lower() or "yaml" in str(e).lower():
-                raise RuntimeError(f"Failed to parse compose file {compose_file_path}: {e}")
+                raise RuntimeError(f"Failed to parse compose file {compose_file_path}: {e}") from e
             else:
-                raise RuntimeError(f"Error reading compose file {compose_file_path}: {e}")
+                raise RuntimeError(f"Error reading compose file {compose_file_path}: {e}") from e
 
     def _check_all_services_health(
-        self, services: Dict[str, Dict[str, Any]], project_name: str
-    ) -> Dict[str, Dict[str, Any]]:
+        self, services: dict[str, dict[str, Any]], project_name: str
+    ) -> dict[str, dict[str, Any]]:
         """
         Check health status of all services in the compose environment.
 
@@ -385,8 +387,8 @@ class ComposeHealthChecker:
         return health_status
 
     def _check_service_health(
-        self, service_name: str, service_config: Dict[str, Any], project_name: str
-    ) -> Dict[str, Any]:
+        self, service_name: str, service_config: dict[str, Any], project_name: str
+    ) -> dict[str, Any]:
         """
         Check health status of a single service.
 
@@ -477,7 +479,7 @@ class ComposeHealthChecker:
                     "status": "error",
                 }
 
-    def get_service_health_summary(self, compose_file_path: str, project_name: str) -> Dict[str, Any]:
+    def get_service_health_summary(self, compose_file_path: str, project_name: str) -> dict[str, Any]:
         """
         Get a summary of all service health statuses.
 

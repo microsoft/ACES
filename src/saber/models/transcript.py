@@ -8,12 +8,12 @@ import hashlib
 import json
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from .rest.websocket_messages import SyncMode
 
 
-def compute_checksum(messages: List[Dict[str, Any]]) -> str:
+def compute_checksum(messages: list[dict[str, Any]]) -> str:
     """
     Compute stable SHA256 checksum of transcript for rewrite detection.
 
@@ -107,13 +107,13 @@ class TranscriptSyncRequest:
 
     episode_id: str
     since_version: int = 0
-    client_checksum: Optional[str] = None
-    messages_to_push: Optional[List[Dict[str, Any]]] = None
+    client_checksum: str | None = None
+    messages_to_push: list[dict[str, Any]] | None = None
     strategy: str = SyncStrategy.IMMEDIATE.value
     operation: str = "append"
     # Observer mode parameters
     is_observer: bool = False
-    hide_system_prompt: Optional[bool] = None  # None = use default (True for observers)
+    hide_system_prompt: bool | None = None  # None = use default (True for observers)
     retrieval_mode: str = "full"  # 'full', 'tail', 'delta'
     tail_count: int = 10
 
@@ -151,9 +151,9 @@ class TranscriptSyncResponse:
     """
 
     current_version: TranscriptVersion
-    delta: Optional[List[Dict[str, Any]]] = None
-    full_transcript: Optional[List[Dict[str, Any]]] = None
-    sync_mode: Union[SyncMode, str] = SyncMode.NO_CHANGE
+    delta: list[dict[str, Any]] | None = None
+    full_transcript: list[dict[str, Any]] | None = None
+    sync_mode: SyncMode | str = SyncMode.NO_CHANGE
     modified: bool = False
     blocked: bool = False
     wait_time_seconds: float = 0.0
@@ -165,7 +165,9 @@ class TranscriptSyncResponse:
             try:
                 object.__setattr__(self, "sync_mode", SyncMode(self.sync_mode))
             except ValueError:
-                raise ValueError(f"sync_mode must be one of {[m.value for m in SyncMode]}, got {self.sync_mode}")
+                raise ValueError(
+                    f"sync_mode must be one of {[m.value for m in SyncMode]}, got {self.sync_mode}"
+                ) from None
 
         # Validate consistency
         if self.sync_mode == SyncMode.DELTA and self.delta is None:

@@ -11,7 +11,7 @@ CLIENT-SIDE EVALUATION MIGRATION: Server is now dumb storage only.
 """
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from saber.logging_config import LogCategory, get_saber_logger
 
@@ -37,8 +37,8 @@ class EvaluationManager:
 
     def __init__(
         self,
-        config_dir: Optional[str] = None,
-        store: Optional[Union[EvaluationStore, str, Path]] = None,
+        config_dir: str | None = None,
+        store: EvaluationStore | str | Path | None = None,
     ) -> None:
         """
         Initialize the EvaluationManager.
@@ -48,7 +48,7 @@ class EvaluationManager:
             store: Optional evaluation store or path
         """
         # Remove evaluator instantiation - evaluation happens client-side now
-        self.evaluation_configs: Dict[str, EvaluationConfig] = {}
+        self.evaluation_configs: dict[str, EvaluationConfig] = {}
         self.config_dir = config_dir
 
         # Initialize store with proper typing
@@ -165,7 +165,7 @@ class EvaluationManager:
         max_score: float,
         score: float,
         success: bool,
-        details: Optional[Dict[str, Any]] = None,
+        details: dict[str, Any] | None = None,
     ) -> EvaluationResult:
         """
         Override existing evaluation result with externally provided evaluation data.
@@ -322,6 +322,6 @@ class EvaluationManager:
             },
         )
 
-    async def get_trajectory(self, session_id: str) -> List[Any]:
+    async def get_trajectory(self, session_id: str) -> list[Any]:
         """Get trajectory for a session (legacy stub)."""
         return []

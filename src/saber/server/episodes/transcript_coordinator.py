@@ -12,7 +12,7 @@ Logging category: EPISODE
 
 import asyncio
 import uuid
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Optional
 
 from ...logging_config import LogCategory, get_saber_logger
 from ...models.constants import MetadataKeys
@@ -67,7 +67,7 @@ class TranscriptCoordinator:
         """
         self.episode_manager = episode_manager
         self.connection_manager = connection_manager
-        self._coordination_configs: Dict[str, Dict[str, str]] = {}
+        self._coordination_configs: dict[str, dict[str, str]] = {}
         self._lock = asyncio.Lock()
         self._time_source = time_source or UTCTimeSource()
 
@@ -134,7 +134,7 @@ class TranscriptCoordinator:
             last_operation=last_op,
         )
 
-    def _has_complete_assistant_turn(self, messages: List[Dict[str, Any]]) -> bool:
+    def _has_complete_assistant_turn(self, messages: list[dict[str, Any]]) -> bool:
         """
         Check if the transcript has a complete assistant turn.
 
@@ -182,7 +182,7 @@ class TranscriptCoordinator:
         # Complete if all tool_calls have responses
         return len(tool_call_ids) == 0
 
-    def _analyze_tool_calls(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _analyze_tool_calls(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
         """
         Analyze tool_calls in a transcript to detect orphaned calls.
 
@@ -192,8 +192,8 @@ class TranscriptCoordinator:
         Returns:
             Dict with analysis: total_tool_calls, responded_tool_calls, orphaned_tool_call_ids
         """
-        all_tool_call_ids: List[str] = []
-        responded_tool_call_ids: List[str] = []
+        all_tool_call_ids: list[str] = []
+        responded_tool_call_ids: list[str] = []
 
         for msg in messages:
             if msg.get("role") == "assistant":
@@ -218,7 +218,7 @@ class TranscriptCoordinator:
     async def _is_duplicate_push(
         self,
         episode: "Episode",
-        messages_to_push: List[Dict[str, Any]],
+        messages_to_push: list[dict[str, Any]],
         client_since_version: int,
     ) -> bool:
         """
@@ -261,13 +261,13 @@ class TranscriptCoordinator:
         last_messages = current_transcript[-push_count:]
 
         # Compare each message
-        for pushed, existing in zip(messages_to_push, last_messages):
+        for pushed, existing in zip(messages_to_push, last_messages, strict=False):
             if not self._messages_match(pushed, existing):
                 return False
 
         return True
 
-    def _messages_match(self, msg1: Dict[str, Any], msg2: Dict[str, Any]) -> bool:
+    def _messages_match(self, msg1: dict[str, Any], msg2: dict[str, Any]) -> bool:
         """
         Check if two messages are semantically equivalent.
 
@@ -288,7 +288,7 @@ class TranscriptCoordinator:
             tc2 = msg2.get("tool_calls", []) or []
             if len(tc1) != len(tc2):
                 return False
-            for t1, t2 in zip(tc1, tc2):
+            for t1, t2 in zip(tc1, tc2, strict=False):
                 # Handle case where tool_calls items might be strings or non-dict types
                 if not isinstance(t1, dict) or not isinstance(t2, dict):
                     # Fall back to direct comparison
@@ -312,7 +312,7 @@ class TranscriptCoordinator:
 
         return True
 
-    def _find_safe_initial_transcript(self, messages: List[Dict[str, Any]]) -> Optional[List[Dict[str, Any]]]:
+    def _find_safe_initial_transcript(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
         """
         Find the safe capture point for INITIAL_TRANSCRIPT.
 
@@ -509,8 +509,8 @@ class TranscriptCoordinator:
 
         # Apply retrieval mode
         sync_mode: SyncMode
-        delta: Optional[List[Dict[str, Any]]] = None
-        full_transcript: Optional[List[Dict[str, Any]]] = None
+        delta: list[dict[str, Any]] | None = None
+        full_transcript: list[dict[str, Any]] | None = None
         modified: bool
 
         if request.retrieval_mode == "delta":
@@ -574,7 +574,7 @@ class TranscriptCoordinator:
             wait_time_seconds=wait_time,
         )
 
-    def _filter_for_observer(self, messages: List[Dict[str, Any]], hide_system_prompt: bool) -> List[Dict[str, Any]]:
+    def _filter_for_observer(self, messages: list[dict[str, Any]], hide_system_prompt: bool) -> list[dict[str, Any]]:
         """Apply security filtering for observer access.
 
         When hide_system_prompt=True, only returns messages starting from
@@ -599,7 +599,7 @@ class TranscriptCoordinator:
     async def _push_messages(
         self,
         episode: Episode,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         operation: str = "append",
     ) -> None:
         """
@@ -630,7 +630,7 @@ class TranscriptCoordinator:
             new_msg = messages[0]
             if new_msg.get("role") == "assistant":
                 raw_tool_calls: Any = new_msg.get("tool_calls", [])
-                new_tool_calls: List[Any] = raw_tool_calls if isinstance(raw_tool_calls, list) else []
+                new_tool_calls: list[Any] = raw_tool_calls if isinstance(raw_tool_calls, list) else []
                 if new_tool_calls:
                     new_ids = set()
                     for tc in new_tool_calls:
@@ -842,11 +842,11 @@ class TranscriptCoordinator:
     async def notify_modification(
         self,
         episode_id: str,
-        modified_transcript: List[Dict[str, str]],
-        operation: Union[str, TranscriptOperation],
+        modified_transcript: list[dict[str, str]],
+        operation: str | TranscriptOperation,
         injected_by: str,
-        expected_base_version: Optional[int] = None,
-        expected_base_checksum: Optional[str] = None,
+        expected_base_version: int | None = None,
+        expected_base_checksum: str | None = None,
     ) -> None:
         """
         Called by InjectPromptExecutor when red team modifies transcript.
@@ -883,8 +883,7 @@ class TranscriptCoordinator:
 
             if expected_base_version is not None and current.sequence != expected_base_version:
                 error_msg = (
-                    f"Modification based on stale version. "
-                    f"Expected {expected_base_version}, current {current.sequence}"
+                    f"Modification based on stale version. Expected {expected_base_version}, current {current.sequence}"
                 )
                 logger.error(
                     "Transcript modification validation failed - stale version",
@@ -1037,7 +1036,7 @@ class TranscriptCoordinator:
             timestamp=self._time_source.now().isoformat(),
         )
 
-    def get_episode_state(self, episode_id: str) -> Optional[str]:
+    def get_episode_state(self, episode_id: str) -> str | None:
         """Get current transcript state for an episode.
 
         Args:

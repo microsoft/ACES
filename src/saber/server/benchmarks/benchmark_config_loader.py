@@ -4,7 +4,7 @@ Logging category: CONFIG.
 """
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import yaml
 
@@ -15,8 +15,10 @@ from ...logging_config import (
     log_operation_start,
     log_operation_success,
 )
-from ...models.constants import StepEvaluationStrategy  # noqa: F401
-from ...models.constants import SubmissionEvaluationStrategy  # noqa: F401
+from ...models.constants import (
+    StepEvaluationStrategy,  # noqa: F401
+    SubmissionEvaluationStrategy,  # noqa: F401
+)
 from ._validation import validate_step_evaluation_config, validate_submission_evaluation_config
 from .exceptions import InvalidTaskDefinitionException
 from .subtask import SubTask
@@ -106,7 +108,7 @@ DEFAULT_WEIGHT = 1.0
 DEFAULT_MAX_SCORE = 1.0
 
 
-def deep_merge_dicts(base: Dict[str, Any], override: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def deep_merge_dicts(base: dict[str, Any], override: dict[str, Any] | None) -> dict[str, Any]:
     """
     Deep merge two dictionaries, with override values taking precedence.
 
@@ -148,13 +150,13 @@ class BenchmarkConfigLoader:
             domain: The security domain (e.g., 'webapp_pentest')
         """
         self.domain = domain
-        self.allowed_executors: Optional[list[str]] = None
-        self.benchmark_config: Dict[str, Any] = {}
-        self.global_defaults: Dict[str, Any] = {}
-        self.permanent_environment: Optional[str] = None
-        self.yaml_data: Optional[Dict[str, Any]] = None
+        self.allowed_executors: list[str] | None = None
+        self.benchmark_config: dict[str, Any] = {}
+        self.global_defaults: dict[str, Any] = {}
+        self.permanent_environment: str | None = None
+        self.yaml_data: dict[str, Any] | None = None
 
-    def load_tasks_from_directory(self, tasks_dir_path: str) -> Dict[str, Task]:
+    def load_tasks_from_directory(self, tasks_dir_path: str) -> dict[str, Task]:
         """
         Load and parse YAML task definitions from directory structure into Task objects.
 
@@ -227,7 +229,7 @@ class BenchmarkConfigLoader:
             )
 
             # Load tasks from all files
-            all_tasks: Dict[str, Task] = {}
+            all_tasks: dict[str, Task] = {}
             for task_file in task_files:
                 logger.info(
                     "Loading benchmark task file",
@@ -282,7 +284,7 @@ class BenchmarkConfigLoader:
             log_operation_failure(logger, "benchmark_tasks_directory_load", exc, **operation_context)
             raise
 
-    def load_tasks_from_file(self, tasks_file_path: str) -> Dict[str, Task]:
+    def load_tasks_from_file(self, tasks_file_path: str) -> dict[str, Task]:
         """
         DEPRECATED: Load and parse YAML task definitions from single file into Task objects.
 
@@ -310,7 +312,7 @@ class BenchmarkConfigLoader:
                 log_operation_failure(logger, "benchmark_tasks_file_load", error, **operation_context)
                 raise error
 
-            with open(tasks_path, "r", encoding="utf-8") as file:
+            with open(tasks_path, encoding="utf-8") as file:
                 self.yaml_data = yaml.safe_load(file)
 
             if not isinstance(self.yaml_data, dict):
@@ -370,7 +372,7 @@ class BenchmarkConfigLoader:
                 },
             )
 
-            tasks: Dict[str, Task] = {}
+            tasks: dict[str, Task] = {}
             logger.info(
                 "Parsing tasks from YAML file",
                 extra={
@@ -414,12 +416,12 @@ class BenchmarkConfigLoader:
         except yaml.YAMLError as exc:
             error = InvalidTaskDefinitionException(f"YAML parsing error: {exc}", str(tasks_path))
             log_operation_failure(logger, "benchmark_tasks_file_load", error, **operation_context)
-            raise error
+            raise error from exc
         except InvalidTaskDefinitionException:
             raise
         except Exception as exc:  # pragma: no cover - unexpected errors should fail fast
             log_operation_failure(logger, "benchmark_tasks_file_load", exc, **operation_context)
-            raise InvalidTaskDefinitionException(f"Error loading tasks: {exc}", str(tasks_path))
+            raise InvalidTaskDefinitionException(f"Error loading tasks: {exc}", str(tasks_path)) from exc
 
     def _load_global_config(self, global_config_path: Path) -> None:
         """
@@ -438,7 +440,7 @@ class BenchmarkConfigLoader:
         log_operation_start(logger, "benchmark_global_config_load", **operation_context)
 
         try:
-            with open(global_config_path, "r", encoding="utf-8") as file:
+            with open(global_config_path, encoding="utf-8") as file:
                 global_data = yaml.safe_load(file)
 
             if not isinstance(global_data, dict):
@@ -481,14 +483,14 @@ class BenchmarkConfigLoader:
         except yaml.YAMLError as exc:
             error = InvalidTaskDefinitionException(f"YAML parsing error in global.yaml: {exc}", str(global_config_path))
             log_operation_failure(logger, "benchmark_global_config_load", error, **operation_context)
-            raise error
+            raise error from exc
         except InvalidTaskDefinitionException:
             raise
         except Exception as exc:  # pragma: no cover - unexpected file failures
             log_operation_failure(logger, "benchmark_global_config_load", exc, **operation_context)
-            raise InvalidTaskDefinitionException(f"Error loading global.yaml: {exc}", str(global_config_path))
+            raise InvalidTaskDefinitionException(f"Error loading global.yaml: {exc}", str(global_config_path)) from exc
 
-    def _discover_task_files(self, tasks_dir: Path) -> List[Path]:
+    def _discover_task_files(self, tasks_dir: Path) -> list[Path]:
         """
         Discover all YAML task files in directory, excluding global.yaml and shared.yaml files.
         Supports both flat and hierarchical organization.
@@ -522,7 +524,7 @@ class BenchmarkConfigLoader:
         )
         return task_files
 
-    def _load_tasks_from_single_file(self, task_file_path: Path) -> Dict[str, Task]:
+    def _load_tasks_from_single_file(self, task_file_path: Path) -> dict[str, Task]:
         """
         Load tasks from a single task file. Also loads subtasks and their criteria.
 
@@ -542,7 +544,7 @@ class BenchmarkConfigLoader:
         log_operation_start(logger, "benchmark_task_file_parse", **operation_context)
 
         try:
-            with open(task_file_path, "r", encoding="utf-8") as file:
+            with open(task_file_path, encoding="utf-8") as file:
                 file_data = yaml.safe_load(file)
 
             if not isinstance(file_data, dict):
@@ -631,16 +633,16 @@ class BenchmarkConfigLoader:
                 f"YAML parsing error in {task_file_path}: {exc}", str(task_file_path)
             )
             log_operation_failure(logger, "benchmark_task_file_parse", error, **operation_context)
-            raise error
+            raise error from exc
         except InvalidTaskDefinitionException:
             raise
         except Exception as exc:  # pragma: no cover - fail fast on unexpected errors
             log_operation_failure(logger, "benchmark_task_file_parse", exc, **operation_context)
             raise InvalidTaskDefinitionException(
                 f"Error loading task file {task_file_path}: {exc}", str(task_file_path)
-            )
+            ) from exc
 
-    def _load_shared_config(self, directory: Path) -> Dict[str, Any]:
+    def _load_shared_config(self, directory: Path) -> dict[str, Any]:
         """
         Load shared configuration from shared.yaml in the given directory.
 
@@ -663,7 +665,7 @@ class BenchmarkConfigLoader:
             return {}
 
         try:
-            with open(shared_file, "r", encoding="utf-8") as file:
+            with open(shared_file, encoding="utf-8") as file:
                 shared_data = yaml.safe_load(file)
 
             if not isinstance(shared_data, dict):
@@ -680,11 +682,13 @@ class BenchmarkConfigLoader:
             return shared_data
 
         except yaml.YAMLError as e:
-            raise InvalidTaskDefinitionException(f"YAML parsing error in {shared_file}: {e}", str(shared_file))
+            raise InvalidTaskDefinitionException(f"YAML parsing error in {shared_file}: {e}", str(shared_file)) from e
         except Exception as e:
-            raise InvalidTaskDefinitionException(f"Error loading shared config {shared_file}: {e}", str(shared_file))
+            raise InvalidTaskDefinitionException(
+                f"Error loading shared config {shared_file}: {e}", str(shared_file)
+            ) from e
 
-    def _merge_shared_config(self, task_data: Dict[str, Any], shared_config: Dict[str, Any]) -> Dict[str, Any]:
+    def _merge_shared_config(self, task_data: dict[str, Any], shared_config: dict[str, Any]) -> dict[str, Any]:
         """
         Merge shared configuration into task data with proper precedence.
 
@@ -782,7 +786,7 @@ class BenchmarkConfigLoader:
 
         return merged_data
 
-    def get_allowed_executors(self) -> Optional[list[str]]:
+    def get_allowed_executors(self) -> list[str] | None:
         """
         Get the list of allowed executors from the configuration.
 
@@ -791,7 +795,7 @@ class BenchmarkConfigLoader:
         """
         return self.allowed_executors
 
-    def load_benchmark_config(self) -> Dict[str, Any]:
+    def load_benchmark_config(self) -> dict[str, Any]:
         """
         Get the loaded benchmark configuration.
 
@@ -800,7 +804,7 @@ class BenchmarkConfigLoader:
         """
         return self.benchmark_config.copy()
 
-    def get_permanent_environment(self) -> Optional[str]:
+    def get_permanent_environment(self) -> str | None:
         """
         Get the permanent environment configuration.
 
@@ -809,7 +813,7 @@ class BenchmarkConfigLoader:
         """
         return self.permanent_environment
 
-    def get_global_defaults(self) -> Dict[str, Any]:
+    def get_global_defaults(self) -> dict[str, Any]:
         """
         Get the loaded global defaults configuration.
 
@@ -818,7 +822,7 @@ class BenchmarkConfigLoader:
         """
         return self.global_defaults.copy()
 
-    def get_dependency_config(self) -> Dict[str, float]:
+    def get_dependency_config(self) -> dict[str, float]:
         """
         Get dependency resolution configuration from global defaults.
 
@@ -897,7 +901,7 @@ class BenchmarkConfigLoader:
         for section_name in global_defaults_data:
             if section_name not in valid_sections:
                 raise InvalidTaskDefinitionException(
-                    f"Invalid section '{section_name}' in global_defaults. " f"Valid sections are: {valid_sections}"
+                    f"Invalid section '{section_name}' in global_defaults. Valid sections are: {valid_sections}"
                 )
 
             if section_name != FIELD_PROMPTS and not isinstance(global_defaults_data[section_name], dict):
@@ -969,7 +973,7 @@ class BenchmarkConfigLoader:
             },
         )
 
-    def _validate_dependency_roles(self, tasks: Dict[str, Task]) -> None:
+    def _validate_dependency_roles(self, tasks: dict[str, Task]) -> None:
         """
         Validate role configuration for orchestrated tasks with dependencies.
 
@@ -985,7 +989,7 @@ class BenchmarkConfigLoader:
             InvalidTaskDefinitionException: If role configuration is invalid
         """
         # Build dependency graph
-        task_dependents: Dict[str, List[str]] = {}  # Maps task_id -> list of dependent task_ids
+        task_dependents: dict[str, list[str]] = {}  # Maps task_id -> list of dependent task_ids
 
         for task_id, task in tasks.items():
             if task.depends_on_task_id:
@@ -1006,7 +1010,7 @@ class BenchmarkConfigLoader:
                     f"Task '{dependent_task_ids[0]}' depends on non-existent task '{root_task_id}'"
                 )
 
-    def _parse_task(self, task_data: Dict[str, Any]) -> Task:
+    def _parse_task(self, task_data: dict[str, Any]) -> Task:
         """
         Parse a single task from YAML data.
         Parses subtasks and subtask criteria
@@ -1023,7 +1027,7 @@ class BenchmarkConfigLoader:
             "domain": self.domain,
             "task_id": candidate_task_id,
         }
-        failure_context: Dict[str, Any] = {}
+        failure_context: dict[str, Any] = {}
         log_operation_start(logger, "benchmark_task_parse", **operation_context)
 
         try:
@@ -1141,7 +1145,7 @@ class BenchmarkConfigLoader:
                 if not isinstance(timeout, int) or timeout <= 0:
                     failure_context = {
                         "invalid_field": (
-                            f"{FIELD_EXECUTION_CONFIG}.{FIELD_EXECUTORS}." f"{executor_type}.{FIELD_TIMEOUT}"
+                            f"{FIELD_EXECUTION_CONFIG}.{FIELD_EXECUTORS}.{executor_type}.{FIELD_TIMEOUT}"
                         ),
                         "value": timeout,
                     }
@@ -1159,8 +1163,7 @@ class BenchmarkConfigLoader:
             if FIELD_MAX_STEPS not in episode_config:
                 failure_context = {"missing_field": f"{FIELD_EPISODE_CONFIG}.{FIELD_MAX_STEPS}"}
                 message = (
-                    f"Task '{task_id}' missing required {FIELD_EPISODE_CONFIG}.{FIELD_MAX_STEPS} "
-                    "(no implicit default)"
+                    f"Task '{task_id}' missing required {FIELD_EPISODE_CONFIG}.{FIELD_MAX_STEPS} (no implicit default)"
                 )
                 raise InvalidTaskDefinitionException(message)
             if not isinstance(episode_config[FIELD_MAX_STEPS], int) or episode_config[FIELD_MAX_STEPS] <= 0:
@@ -1231,8 +1234,7 @@ class BenchmarkConfigLoader:
                         if "enabled" in push_config:
                             if not isinstance(push_config["enabled"], bool):
                                 raise InvalidTaskDefinitionException(
-                                    f"Task '{task_id}' {FIELD_TRANSCRIPT_CONFIG}.websocket.push.enabled "
-                                    f"must be boolean"
+                                    f"Task '{task_id}' {FIELD_TRANSCRIPT_CONFIG}.websocket.push.enabled must be boolean"
                                 )
 
                     # Validate pull configuration if present
@@ -1246,8 +1248,7 @@ class BenchmarkConfigLoader:
                         if "enabled" in pull_config:
                             if not isinstance(pull_config["enabled"], bool):
                                 raise InvalidTaskDefinitionException(
-                                    f"Task '{task_id}' {FIELD_TRANSCRIPT_CONFIG}.websocket.pull.enabled "
-                                    f"must be boolean"
+                                    f"Task '{task_id}' {FIELD_TRANSCRIPT_CONFIG}.websocket.pull.enabled must be boolean"
                                 )
 
             task_benchmark_config = task_data.get(FIELD_BENCHMARK_CONFIG, {})
@@ -1270,7 +1271,7 @@ class BenchmarkConfigLoader:
                         f"Task '{task_id}' {FIELD_EPISODE_ATTEMPTS} must be a positive integer, got: {episode_attempts}"
                     )
 
-            merged_benchmark_config: Dict[str, Any] = {}
+            merged_benchmark_config: dict[str, Any] = {}
             merged_benchmark_config = deep_merge_dicts(merged_benchmark_config, global_benchmark_defaults)
             merged_benchmark_config = deep_merge_dicts(merged_benchmark_config, self.benchmark_config)
             merged_benchmark_config = deep_merge_dicts(merged_benchmark_config, task_benchmark_config)
@@ -1414,7 +1415,7 @@ class BenchmarkConfigLoader:
             raise
 
     def _parse_subtask(
-        self, subtask_data: Dict[str, Any], task_id: str, step_evaluation_config: Optional[Dict[str, Any]]
+        self, subtask_data: dict[str, Any], task_id: str, step_evaluation_config: dict[str, Any] | None
     ) -> SubTask:
         """
         Parse a single subtask from YAML data. Parse criteria, weight, max_score.

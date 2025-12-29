@@ -8,7 +8,7 @@ providing lifecycle management for episode-specific environments.
 
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from saber.logging_config import LogCategory, get_saber_logger
 
@@ -27,7 +27,7 @@ class SandboxEnvironmentManager:
     environments using static compose files with environment variable substitution.
     """
 
-    def __init__(self, sandbox_config: Dict[str, Any]):
+    def __init__(self, sandbox_config: dict[str, Any]):
         """
         Initialize sandbox environment manager.
 
@@ -41,8 +41,8 @@ class SandboxEnvironmentManager:
         self._is_ready = False
 
         # Track active orchestrators by episode_id with their compose files
-        self.active_orchestrators: Dict[str, ComposeOrchestrator] = {}
-        self.episode_compose_files: Dict[str, Path] = {}
+        self.active_orchestrators: dict[str, ComposeOrchestrator] = {}
+        self.episode_compose_files: dict[str, Path] = {}
 
         # Extract domain and environments path from config
         self.domain = sandbox_config.get("domain", "excytin_demo")
@@ -142,8 +142,8 @@ class SandboxEnvironmentManager:
         self,
         episode_id: str,
         sandbox_environment: str,
-        target_episode_id: Optional[str] = None,
-        session_id: Optional[str] = None,
+        target_episode_id: str | None = None,
+        session_id: str | None = None,
     ) -> tuple[ComposeOrchestrator, Path]:
         """
         Create episode environment without waiting for health checks.
@@ -187,7 +187,7 @@ class SandboxEnvironmentManager:
             permanent_network_prefix = f"{self.domain}_permanent_environment_"
 
             # Build additional variables for compose substitution
-            additional_vars: Dict[str, str] = {}
+            additional_vars: dict[str, str] = {}
             if session_id:
                 additional_vars["SESSION_ID"] = session_id
                 logger.info(
@@ -237,7 +237,9 @@ class SandboxEnvironmentManager:
                     "error": str(e),
                 },
             )
-            raise SandboxExecutionError(f"Failed to create async sandbox environment for episode {episode_id}: {e}")
+            raise SandboxExecutionError(
+                f"Failed to create async sandbox environment for episode {episode_id}: {e}"
+            ) from e
 
     def wait_for_episode_healthy(
         self, episode_id: str, timeout_seconds: int = 180, check_interval: float = 2.0
@@ -313,9 +315,9 @@ class SandboxEnvironmentManager:
                         "cleanup_error": str(cleanup_error),
                     },
                 )
-            raise SandboxExecutionError(f"Episode {episode_id} environment failed health checks: {e}")
+            raise SandboxExecutionError(f"Episode {episode_id} environment failed health checks: {e}") from e
 
-    def get_episode_environment(self, episode_id: str) -> Optional[ComposeOrchestrator]:
+    def get_episode_environment(self, episode_id: str) -> ComposeOrchestrator | None:
         """
         Retrieve orchestrator for the given episode.
 
@@ -327,7 +329,7 @@ class SandboxEnvironmentManager:
         """
         return self.active_orchestrators.get(episode_id)
 
-    def get_execution_container_name(self, episode_id: str) -> Optional[str]:
+    def get_execution_container_name(self, episode_id: str) -> str | None:
         """
         Get the actual execution container name for an episode.
 
@@ -405,7 +407,7 @@ class SandboxEnvironmentManager:
                     "error": str(e),
                 },
             )
-            raise SandboxExecutionError(f"Failed to stop sandbox environment for episode {episode_id}: {e}")
+            raise SandboxExecutionError(f"Failed to stop sandbox environment for episode {episode_id}: {e}") from e
 
     async def cleanup_all_episodes(self) -> None:
         """
@@ -456,7 +458,7 @@ class SandboxEnvironmentManager:
         """
         return episode_id in self.active_orchestrators
 
-    def get_episode_status(self, episode_id: str) -> Optional[Dict[str, Any]]:
+    def get_episode_status(self, episode_id: str) -> dict[str, Any] | None:
         """
         Get status information for episode environment.
 

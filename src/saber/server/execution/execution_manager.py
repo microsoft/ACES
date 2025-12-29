@@ -9,7 +9,7 @@ Logging category: EXECUTION.
 
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import mcp.types as mcp_types
 
@@ -32,7 +32,7 @@ class ExecutionManager:
     with security validation and Docker isolation. Commands are executed sequentially.
     """
 
-    def __init__(self, config_dir: str, session_manager: Optional[Any] = None):
+    def __init__(self, config_dir: str, session_manager: Any | None = None):
         """
         Initialize ExecutionManager with executor factory and configuration.
 
@@ -44,9 +44,9 @@ class ExecutionManager:
         """
         self._config_dir = config_dir
         self._session_manager = session_manager
-        self._permanent_environment_manager: Optional[PermanentEnvironmentManager] = None
-        self._sandbox_environment_manager: Optional[SandboxEnvironmentManager] = None
-        self._file_copier: Optional[Any] = None  # SandboxFileCopier instance
+        self._permanent_environment_manager: PermanentEnvironmentManager | None = None
+        self._sandbox_environment_manager: SandboxEnvironmentManager | None = None
+        self._file_copier: Any | None = None  # SandboxFileCopier instance
 
         # Check for debug mode from environment variable
         self._debug_mode = os.getenv("SABER_DEBUG_MODE", "false").lower() in ("true", "1", "yes")
@@ -65,13 +65,13 @@ class ExecutionManager:
         if config_dir:
             self._load_custom_executors(config_dir)
 
-        self._configuration: Dict[str, Any] = {}
+        self._configuration: dict[str, Any] = {}
 
         # Executor factory will be created when sandbox manager is available
-        self._executor_factory: Optional[ExecutorFactory] = None
+        self._executor_factory: ExecutorFactory | None = None
 
         # Episode-specific execution tracking for concurrent commands
-        self._active_executions: Dict[str, int] = {}  # episode_id -> count of active executions
+        self._active_executions: dict[str, int] = {}  # episode_id -> count of active executions
         self._max_concurrent_per_episode = 3  # Allow multiple concurrent commands per episode
 
         # Initialize file copier
@@ -226,7 +226,7 @@ class ExecutionManager:
                 config_dir=config_dir,
             )
 
-    async def step(self, action: Action, context: Optional[Dict[str, Any]] = None) -> CommandResult:
+    async def step(self, action: Action, context: dict[str, Any] | None = None) -> CommandResult:
         """
         Execute the action with the appropriate executor.
 
@@ -348,7 +348,7 @@ class ExecutionManager:
                     },
                 )
 
-    def get_executor(self, executor_type: str, episode_id: Optional[str] = None) -> "CommandExecutor":
+    def get_executor(self, executor_type: str, episode_id: str | None = None) -> "CommandExecutor":
         """
         Get a specific executor by type, optionally for a specific episode.
 
@@ -364,7 +364,7 @@ class ExecutionManager:
         """
         return self.executor_factory.get_executor(executor_type, episode_id)
 
-    def _get_episode_executor_factory(self, episode_id: Optional[str] = None) -> ExecutorFactory:
+    def _get_episode_executor_factory(self, episode_id: str | None = None) -> ExecutorFactory:
         """
         Get the executor factory (always returns the single shared factory).
 
@@ -376,7 +376,7 @@ class ExecutionManager:
         """
         return self.executor_factory
 
-    def get_available_executors(self, episode_id: Optional[str] = None) -> List[str]:
+    def get_available_executors(self, episode_id: str | None = None) -> list[str]:
         """
         Get list of available executor types, optionally for a specific episode.
 
@@ -392,8 +392,8 @@ class ExecutionManager:
         self,
         episode_id: str,
         task: Task,
-        session_id: Optional[str] = None,
-        target_episode_id: Optional[str] = None,
+        session_id: str | None = None,
+        target_episode_id: str | None = None,
     ) -> None:
         """
         Configure ExecutionManager for a task/episode WITHOUT waiting for health checks.
@@ -568,7 +568,7 @@ class ExecutionManager:
             },
         )
 
-    def get_execution_container_name(self, episode_id: str) -> Optional[str]:
+    def get_execution_container_name(self, episode_id: str) -> str | None:
         """
         Get the actual execution container name for an episode.
 
@@ -708,7 +708,7 @@ class ExecutionManager:
                     )
                     raise RuntimeError(f"Failed to copy initial files to container: {e}") from e
 
-    def to_mcp_tools(self, episode_id: Optional[str] = None) -> List[mcp_types.Tool]:
+    def to_mcp_tools(self, episode_id: str | None = None) -> list[mcp_types.Tool]:
         """
         Convert available executors to MCP format, optionally filtered by episode configuration.
 
@@ -720,7 +720,7 @@ class ExecutionManager:
         """
         return self.executor_factory.get_all_mcp_tools(episode_id)
 
-    def list_commands(self, episode_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    def list_commands(self, episode_id: str | None = None) -> list[dict[str, Any]]:
         """
         List all available commands from executors, optionally for a specific episode.
 
@@ -759,7 +759,7 @@ class ExecutionManager:
 
         return commands
 
-    def get_configuration(self) -> Dict[str, Any]:
+    def get_configuration(self) -> dict[str, Any]:
         """
         Get the configuration dictionary.
 
@@ -768,7 +768,7 @@ class ExecutionManager:
         """
         return self._configuration
 
-    def get_execution_stats(self) -> Dict[str, Any]:
+    def get_execution_stats(self) -> dict[str, Any]:
         """
         Get statistics about active executions (now episode-based).
 
@@ -783,7 +783,7 @@ class ExecutionManager:
             "episode_execution_counts": self._active_executions.copy(),
         }
 
-    async def cleanup_episode(self, episode_id: str, context: Optional[Dict[str, Any]] = None) -> bool:
+    async def cleanup_episode(self, episode_id: str, context: dict[str, Any] | None = None) -> bool:
         """
         Clean up episode resources including Docker containers (async).
 
@@ -903,7 +903,7 @@ class ExecutionManager:
 
         return cleanup_success
 
-    def initialize_permanent_environment_manager(self, config: Dict[str, Any]) -> None:
+    def initialize_permanent_environment_manager(self, config: dict[str, Any]) -> None:
         """
         Initialize permanent environment manager with unified container lifecycle management.
 
@@ -1025,7 +1025,7 @@ class ExecutionManager:
             return False
         return self._permanent_environment_manager.is_running()
 
-    async def cleanup_all_containers(self, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def cleanup_all_containers(self, context: dict[str, Any] | None = None) -> dict[str, Any]:
         """
         Clean up all containers (ephemeral and permanent) for server shutdown (async).
 
@@ -1106,7 +1106,7 @@ class ExecutionManager:
 
         return result
 
-    def cleanup_session(self, session_id: str, context: Optional[Dict[str, Any]] = None) -> bool:
+    def cleanup_session(self, session_id: str, context: dict[str, Any] | None = None) -> bool:
         """
         Clean up all containers and resources for a specific session.
 

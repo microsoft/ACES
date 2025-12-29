@@ -5,7 +5,7 @@ throughout the inspect_ai integration, improving type safety and developer exper
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from saber.client.client_session import ClientSessionManager
 
@@ -22,7 +22,7 @@ class HandlerState:
     for episode tracking and semaphore management.
     """
 
-    episode_ids: List[str]
+    episode_ids: list[str]
     primary_episode_id: str
     semaphore_acquired: bool
 
@@ -30,7 +30,7 @@ class HandlerState:
         """Check if this state manages multiple episodes."""
         return len(self.episode_ids) > 1
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for backward compatibility.
 
         This allows gradual migration from Dict[str, Any] to typed classes.
@@ -50,16 +50,16 @@ class OrchestratedHandlerState(HandlerState):
     a single task creates multiple episodes that execute together.
     """
 
-    episodes: List[Dict[str, Any]] = field(default_factory=list)
+    episodes: list[dict[str, Any]] = field(default_factory=list)
 
-    def get_episode_by_role(self, role: str) -> Optional[Dict[str, Any]]:
+    def get_episode_by_role(self, role: str) -> dict[str, Any] | None:
         """Find episode info by role."""
         for ep in self.episodes:
             if ep.get("role") == role:
                 return ep
         return None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary including episodes."""
         base = super().to_dict()
         base["episodes"] = self.episodes
@@ -78,7 +78,7 @@ class OrchestrationSubTaskState(HandlerState):
     orchestration_id: str
     sub_task_role: str
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary including orchestration metadata."""
         base = super().to_dict()
         base["orchestration_id"] = self.orchestration_id
@@ -127,7 +127,7 @@ class DomainRegistryEntry:
         """
         return (self.rest_url, self.mcp_url)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for backward compatibility."""
         return {
             "domain_slug": self.domain_slug,
@@ -143,7 +143,7 @@ class DomainRegistryEntry:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "DomainRegistryEntry":
+    def from_dict(cls, data: dict[str, Any]) -> "DomainRegistryEntry":
         """Create from dictionary (for migration from old format)."""
         return cls(
             domain_slug=data["domain_slug"],
@@ -176,7 +176,7 @@ class EpisodeMapping:
     session_id: str
     task_id: str
     sample_id: str
-    attached_to_episode_id: Optional[str] = None
+    attached_to_episode_id: str | None = None
 
     def is_attached(self) -> bool:
         """Check if this episode is attached to another episode."""

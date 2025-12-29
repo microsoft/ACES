@@ -24,7 +24,7 @@ Logging category: ``LogCategory.TASK_EXEC``.
 import asyncio
 import json
 import os
-from typing import Any, Dict, Optional
+from typing import Any
 
 from .....logging_config import LogCategory, get_saber_logger
 from .....models.transcript import TranscriptPushOperation
@@ -83,14 +83,14 @@ class InjectPromptExecutor(DockerExecutor):
     def __init__(
         self,
         sandbox_manager: SandboxEnvironmentManager,
-        config: Optional[Dict[str, Any]] = None,
+        config: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the inject_prompt executor."""
         super().__init__(sandbox_manager=sandbox_manager, config=config, **kwargs)
 
     @classmethod
-    def get_default_config(cls) -> Dict[str, Any]:
+    def get_default_config(cls) -> dict[str, Any]:
         """Get default configuration for inject_prompt executor."""
         return {}
 
@@ -98,8 +98,8 @@ class InjectPromptExecutor(DockerExecutor):
     def create_with_config(
         cls,
         sandbox_manager: SandboxEnvironmentManager,
-        config: Optional[Dict[str, Any]] = None,
-        additional_params: Optional[Dict[str, Any]] = None,
+        config: dict[str, Any] | None = None,
+        additional_params: dict[str, Any] | None = None,
         session_manager: Any = None,
         **kwargs: Any,
     ) -> "InjectPromptExecutor":
@@ -122,7 +122,7 @@ class InjectPromptExecutor(DockerExecutor):
 
         return cls(sandbox_manager=sandbox_manager, config=config, session_manager=session_manager, **merged_kwargs)
 
-    def setup_parameters(self, config: Dict[str, Any]) -> None:
+    def setup_parameters(self, config: dict[str, Any]) -> None:
         """
         Set up executor-specific parameters.
 
@@ -154,7 +154,7 @@ class InjectPromptExecutor(DockerExecutor):
         )
 
     @classmethod
-    def get_parameter_schema(cls) -> Dict[str, Parameter]:
+    def get_parameter_schema(cls) -> dict[str, Parameter]:
         """
         Define the parameter schema for the inject_prompt executor.
 
@@ -196,8 +196,8 @@ class InjectPromptExecutor(DockerExecutor):
 
     async def execute(
         self,
-        parameters: Dict[str, Any],
-        context: Dict[str, Any],
+        parameters: dict[str, Any],
+        context: dict[str, Any],
     ) -> CommandResult:
         """
         Execute prompt injection via WebSocket daemon in red team container.
@@ -432,7 +432,7 @@ class InjectPromptExecutor(DockerExecutor):
 
     async def _wait_for_user_with_retry(
         self, environment: Any, target_episode_id: str, max_wait_seconds: float
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Wait for WAITING_FOR_USER state with exponential backoff retry.
 
@@ -444,7 +444,7 @@ class InjectPromptExecutor(DockerExecutor):
         Returns:
             Dict with success status and state information
         """
-        result: Dict[str, Any] = {"success": False, "error": "Max retries exceeded"}
+        result: dict[str, Any] = {"success": False, "error": "Max retries exceeded"}
 
         for attempt in range(MAX_RETRIES):
             result = await self._wait_for_user(environment, target_episode_id, max_wait_seconds)
@@ -469,7 +469,7 @@ class InjectPromptExecutor(DockerExecutor):
 
         return result
 
-    async def _wait_for_user(self, environment: Any, target_episode_id: str, max_wait_seconds: float) -> Dict[str, Any]:
+    async def _wait_for_user(self, environment: Any, target_episode_id: str, max_wait_seconds: float) -> dict[str, Any]:
         """
         Wait for WAITING_FOR_USER state via event-driven WebSocket notification.
 
@@ -514,12 +514,12 @@ class InjectPromptExecutor(DockerExecutor):
             return {"success": False, "error": exec_result.stderr}
 
         try:
-            response: Dict[str, Any] = json.loads(exec_result.stdout)
+            response: dict[str, Any] = json.loads(exec_result.stdout)
             return response
         except json.JSONDecodeError:
             return {"success": False, "error": f"Invalid JSON: {exec_result.stdout}"}
 
-    def _is_retryable_error(self, result: Dict[str, Any]) -> bool:
+    def _is_retryable_error(self, result: dict[str, Any]) -> bool:
         """
         Check if error is transient and should be retried.
 
@@ -535,8 +535,8 @@ class InjectPromptExecutor(DockerExecutor):
         return any(retry_err in error for retry_err in RETRY_ERRORS)
 
     async def _resolve_target_episode_id(
-        self, parameters: Dict[str, Any], context: Dict[str, Any], red_episode_id: str
-    ) -> Optional[str]:
+        self, parameters: dict[str, Any], context: dict[str, Any], red_episode_id: str
+    ) -> str | None:
         """
         Resolve target episode ID from orchestration metadata.
 

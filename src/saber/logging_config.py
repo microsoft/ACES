@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import warnings
-from collections.abc import MutableMapping
+from collections.abc import Iterator, Mapping, MutableMapping
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, replace
@@ -14,7 +14,7 @@ from enum import Enum
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from threading import Lock
-from typing import Any, Iterator, Mapping, Optional
+from typing import Any
 
 __all__ = [
     "LogCategory",
@@ -93,10 +93,17 @@ DEFAULT_LOG_FILE_NAME = "saber.log"
 DEFAULT_MAX_BYTES = 10 * 1024 * 1024
 DEFAULT_BACKUP_COUNT = 10
 
-_LOG_CONTEXT: ContextVar[dict[str, Any]] = ContextVar("saber_log_context", default={})
+_LOG_CONTEXT: ContextVar[dict[str, Any] | None] = ContextVar("saber_log_context", default=None)
+
+
+def _get_log_context() -> dict[str, Any]:
+    """Get the current log context, returning empty dict if not set."""
+    return _LOG_CONTEXT.get() or {}
+
+
 _LOGGING_LOCK = Lock()
 _LOGGING_INITIALIZED = False
-_ACTIVE_CONFIG: Optional["LoggingConfig"] = None
+_ACTIVE_CONFIG: LoggingConfig | None = None
 
 _RESERVED_EXTRA_KEYS = {
     "category",
@@ -140,7 +147,7 @@ class LoggingConfig:
     backup_count: int = DEFAULT_BACKUP_COUNT
 
     @classmethod
-    def from_env(cls) -> "LoggingConfig":
+    def from_env(cls) -> LoggingConfig:
         """Build a logging configuration using SABER_* environment variables."""
 
         level_name = os.getenv("SABER_LOG_LEVEL", "INFO").strip() or "INFO"
@@ -193,7 +200,7 @@ class SaberLogger(logging.LoggerAdapter):
         supplied_extra = kwargs.pop("extra", None)
         normalized_extra = self._normalize_extra(supplied_extra)
 
-        context_values = dict(_LOG_CONTEXT.get())
+        context_values = dict(_get_log_context())
         context_values.update(normalized_extra)
 
         session_identifier = context_values.get("session_id")
@@ -208,7 +215,7 @@ class SaberLogger(logging.LoggerAdapter):
         kwargs["extra"] = {**metadata, "_structured": context_values}
         return msg, kwargs
 
-    def _normalize_extra(self, extra: Optional[Mapping[str, Any]]) -> dict[str, Any]:
+    def _normalize_extra(self, extra: Mapping[str, Any] | None) -> dict[str, Any]:
         if extra is None:
             return {}
         if not isinstance(extra, Mapping):
@@ -271,7 +278,7 @@ class _SaberJsonFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=False)
 
 
-def init_logging(config: Optional[LoggingConfig] = None, *, force: bool = False) -> LoggingConfig:
+def init_logging(config: LoggingConfig | None = None, *, force: bool = False) -> LoggingConfig:
     """Bootstrap the SABER logging stack.
 
     Args:
@@ -324,10 +331,10 @@ def set_log_context(**context: Any) -> None:
     _LOG_CONTEXT.set(dict(context))
 
 
-def update_log_context(**context: Any) -> Token[dict[str, Any]]:
+def update_log_context(**context: Any) -> Token[dict[str, Any] | None]:
     """Merge new context values into the current logging context."""
 
-    current = dict(_LOG_CONTEXT.get())
+    current = dict(_get_log_context())
     current.update(context)
     return _LOG_CONTEXT.set(current)
 
@@ -367,7 +374,7 @@ def log_session_end(logger: SaberLogger, session_id: str, reason: str | None = N
     logger.info("Session ended", extra=extra)
 
 
-def log_operation_start(logger: SaberLogger, operation: str, session_id: Optional[str] = None, **kwargs: Any) -> None:
+def log_operation_start(logger: SaberLogger, operation: str, session_id: str | None = None, **kwargs: Any) -> None:
     """Log standardized operation start events."""
 
     extra = {"event": "operation_started", "operation": operation}
@@ -378,7 +385,7 @@ def log_operation_start(logger: SaberLogger, operation: str, session_id: Optiona
     logger.info("Operation started", extra=extra)
 
 
-def log_operation_success(logger: SaberLogger, operation: str, session_id: Optional[str] = None, **kwargs: Any) -> None:
+def log_operation_success(logger: SaberLogger, operation: str, session_id: str | None = None, **kwargs: Any) -> None:
     """Log standardized operation success events."""
 
     extra = {"event": "operation_completed", "operation": operation}
@@ -390,7 +397,7 @@ def log_operation_success(logger: SaberLogger, operation: str, session_id: Optio
 
 
 def log_operation_failure(
-    logger: SaberLogger, operation: str, error: Any, session_id: Optional[str] = None, **kwargs: Any
+    logger: SaberLogger, operation: str, error: Any, session_id: str | None = None, **kwargs: Any
 ) -> None:
     """Log standardized operation failure events."""
 
@@ -416,7 +423,7 @@ def log_timeout(
     logger: SaberLogger,
     operation: str,
     timeout: int,
-    session_id: Optional[str] = None,
+    session_id: str | None = None,
     **kwargs: Any,
 ) -> None:
     """Log standardized timeout events."""
@@ -470,9 +477,7 @@ def get_cleanup_logger(module: str) -> SaberLogger:
     return get_saber_logger(LogCategory.CLEANUP, module)
 
 
-def setup_file_logging(
-    logs_directory: Optional[str] = None, enable_file_logging: Optional[bool] = None
-) -> LoggingConfig:
+def setup_file_logging(logs_directory: str | None = None, enable_file_logging: bool | None = None) -> LoggingConfig:
     """Legacy helper retained for backwards compatibility with entry points."""
 
     warnings.warn(
@@ -543,7 +548,7 @@ def _resolve_bool_env(name: str, *, default: bool) -> bool:
     raise ValueError(f"Environment variable {name} must be a boolean value, not '{raw}'.")
 
 
-def _resolve_int_env(name: str, default: int, *, minimum: Optional[int] = None) -> int:
+def _resolve_int_env(name: str, default: int, *, minimum: int | None = None) -> int:
     raw = os.getenv(name)
     if raw is None:
         return default
@@ -556,7 +561,7 @@ def _resolve_int_env(name: str, default: int, *, minimum: Optional[int] = None) 
     return value
 
 
-def _resolve_path_env(name: str) -> Optional[Path]:
+def _resolve_path_env(name: str) -> Path | None:
     raw = os.getenv(name)
     if not raw:
         return None

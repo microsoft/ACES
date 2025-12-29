@@ -7,7 +7,7 @@ This module provides:
 """
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, create_model
 
@@ -73,16 +73,16 @@ def deserialize_config(config: dict[str, Any]) -> BaseModel:
         domains_root=(Path, ...),
         rest_port=(int, 8000),
         mcp_port=(int, 8001),
-        compose_template_path=(Optional[Path], None),
+        compose_template_path=(Path | None, None),
         cleanup=(bool, False),  # Default to False - keep server running
-        max_concurrent_episodes=(Optional[int], None),  # Limit concurrent episodes
+        max_concurrent_episodes=(int | None, None),  # Limit concurrent episodes
         __config__=ConfigDict(frozen=True),
     )
 
     return SABERConfig(**config)
 
 
-def get_default_concurrency() -> Optional[int]:
+def get_default_concurrency() -> int | None:
     """Default max_sandboxes for SABER provider.
 
     Returns None to allow unlimited concurrent sample initialization.

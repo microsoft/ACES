@@ -12,7 +12,7 @@ Key features:
 """
 
 import asyncio
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 from saber.client.client_session import ClientSessionManager
 from saber.logging_config import LogCategory, get_saber_logger
@@ -44,7 +44,7 @@ class OrchestrationInitializer:
         session_id: str,
         session_manager: ClientSessionManager,
         sample_id: str,
-        semaphore: Optional[asyncio.Semaphore],
+        semaphore: asyncio.Semaphore | None,
     ) -> OrchestrationSubTaskState:
         """Initialize episode for an orchestrated sub-task sample.
 
@@ -222,10 +222,10 @@ class OrchestrationInitializer:
 
     async def cleanup_orchestrated_sub_task(
         self,
-        handler_state: Union[Dict[str, Any], OrchestrationSubTaskState],
+        handler_state: dict[str, Any] | OrchestrationSubTaskState,
         session_id: str,
         session_manager: ClientSessionManager,
-        semaphore: Optional[asyncio.Semaphore],
+        semaphore: asyncio.Semaphore | None,
     ) -> None:
         """Cleanup orchestrated sub-task sample with cascade termination.
 

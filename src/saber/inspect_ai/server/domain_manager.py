@@ -15,7 +15,7 @@ Thread Safety:
 """
 
 import threading
-from typing import Any, Dict, Optional
+from typing import Any
 
 from ...logging_config import LogCategory, get_saber_logger
 
@@ -24,11 +24,11 @@ logger = get_saber_logger(LogCategory.AGENT, __name__)
 # Process-wide registry tracking active domains
 # Key: domain_slug
 # Value: Dict with controller, context, ownership, rest_url, mcp_url, etc.
-_active_domains: Dict[str, Dict[str, Any]] = {}
+_active_domains: dict[str, dict[str, Any]] = {}
 _active_domains_lock = threading.Lock()
 
 
-def get_active_domain(domain_slug: str) -> Optional[Dict[str, Any]]:
+def get_active_domain(domain_slug: str) -> dict[str, Any] | None:
     """Get active domain registry entry if exists.
 
     Used by SABERSandboxEnvironment to detect if the factory already

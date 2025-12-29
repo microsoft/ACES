@@ -23,7 +23,7 @@ import asyncio
 import json
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from websockets import ClientConnection
@@ -91,14 +91,14 @@ from ...models.transcript import compute_checksum
 logger = get_saber_logger(LogCategory.AGENT, __name__)
 
 # Type alias for messages that can be either Pydantic models or dicts (for test compatibility)
-WebSocketMessageOrDict = Union[WebSocketServerMessage, Dict[str, Any]]
+WebSocketMessageOrDict = WebSocketServerMessage | dict[str, Any]
 
 
 class _MessageSerializationMixin:
     """Mixin providing message serialization/deserialization utilities."""
 
     @staticmethod
-    def _serialize_message(msg: ChatMessage) -> Dict[str, Any]:
+    def _serialize_message(msg: ChatMessage) -> dict[str, Any]:
         """Convert ChatMessage to JSON-safe dict.
 
         Args:
@@ -110,7 +110,7 @@ class _MessageSerializationMixin:
         Raises:
             ValueError: If message type is unknown or unsupported
         """
-        result: Dict[str, Any] = {}
+        result: dict[str, Any] = {}
 
         # Extract role
         if isinstance(msg, ChatMessageSystem):
@@ -168,7 +168,7 @@ class _MessageSerializationMixin:
         return result
 
     @staticmethod
-    def _deserialize_message(msg_data: Dict[str, Any]) -> ChatMessage:
+    def _deserialize_message(msg_data: dict[str, Any]) -> ChatMessage:
         """Convert message dictionary to ChatMessage object.
 
         Inverse of _serialize_message() - converts JSON-safe dict back to
@@ -265,7 +265,7 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
         session_id: str,
         episode_id: str,
         rest_url: str,
-        ws_config: Optional[WebSocketConfig] = None,
+        ws_config: WebSocketConfig | None = None,
     ):
         """Initialize WebSocket transcript syncing wrapper.
 
@@ -284,17 +284,17 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
         self._ws_config = ws_config or WebSocketConfig()
 
         # WebSocket connection state
-        self._websocket: Optional["ClientConnection"] = None
+        self._websocket: ClientConnection | None = None
         self._ws_lock = asyncio.Lock()
         self._event_queue: asyncio.Queue[WebSocketMessageOrDict] = asyncio.Queue(
             maxsize=self._ws_config.pull.event_queue_max_size
         )
-        self._listener_task: Optional[asyncio.Task[None]] = None
+        self._listener_task: asyncio.Task[None] | None = None
 
         # Local version tracking
         self._local_version = 0
         self._local_checksum = compute_checksum([])
-        self._local_messages: List[ChatMessage] = []
+        self._local_messages: list[ChatMessage] = []
 
         # Flag to skip waiting in generate() after wait_and_sync_transcript() already synced
         self._skip_next_wait = False
@@ -408,10 +408,10 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
                     try:
                         timeout_seconds = self._ws_config.push.confirmation_timeout
 
-                        async def _wait_for_connected() -> bool:
-                            assert temp_websocket is not None  # mypy: temp_websocket is set above
+                        async def _wait_for_connected(ws: Any = temp_websocket) -> bool:
+                            assert ws is not None  # mypy: temp_websocket is set above
                             # Use recv() to get exactly one message (the "connected" handshake)
-                            message = await temp_websocket.recv()
+                            message = await ws.recv()
                             data = json.loads(message)
                             if data.get("type") == "connected":
                                 logger.info("WebSocket connected", extra={"episode_id": self._episode_id})
@@ -439,7 +439,7 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
                     except TimeoutError:
                         raise ConnectionError(
                             f"WebSocket confirmation timeout after {self._ws_config.push.confirmation_timeout}s"
-                        )
+                        ) from None
 
                 except Exception as e:
                     # Retry logic
@@ -643,7 +643,7 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
             await self._ensure_connected()
 
             # Loop until we get a state event, discarding other events
-            for iteration in range(WebSocketDefaults.MAX_EVENT_DISCARD_ITERATIONS):
+            for _iteration in range(WebSocketDefaults.MAX_EVENT_DISCARD_ITERATIONS):
                 # Wait for event from queue (populated by background listener)
                 event_data: WebSocketMessageOrDict = await asyncio.wait_for(
                     self._event_queue.get(), timeout=self._ws_config.pull.event_timeout
@@ -719,7 +719,7 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
         # Non-blocking check of event queue
         try:
             # Peek at events in queue without blocking
-            events_to_requeue: List[WebSocketMessageOrDict] = []
+            events_to_requeue: list[WebSocketMessageOrDict] = []
             stuck_detected = False
 
             while not self._event_queue.empty():
@@ -1001,7 +1001,7 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
         timeout: float,
         max_iterations: int = WebSocketDefaults.MAX_EVENT_DISCARD_ITERATIONS,
         context: str = "",
-    ) -> Optional[WebSocketMessageOrDict]:
+    ) -> WebSocketMessageOrDict | None:
         """Wait for a specific WebSocket message type, re-queuing state events.
 
         Helper method to reduce code duplication when waiting for specific
@@ -1098,7 +1098,7 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
         )
         return None
 
-    async def wait_and_sync_transcript(self) -> List[ChatMessage]:
+    async def wait_and_sync_transcript(self) -> list[ChatMessage]:
         """Wait for server transcript modification and sync, returning updated messages.
 
         This method is used by the AgentContinue callback to get server-injected
@@ -1190,7 +1190,7 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
             )
         else:
             raise RuntimeError(
-                f"Failed to get sync_response after " f"{WebSocketDefaults.MAX_SYNC_RESPONSE_ITERATIONS} iterations"
+                f"Failed to get sync_response after {WebSocketDefaults.MAX_SYNC_RESPONSE_ITERATIONS} iterations"
             )
 
         if response_type == WebSocketMessageType.SYNC_RESPONSE.value:
@@ -1245,7 +1245,7 @@ class WebSocketTranscriptSyncingModelWrapper(_MessageSerializationMixin):
     async def generate(
         self,
         input: str | list[ChatMessage],
-        tools: Optional[list] = None,
+        tools: list | None = None,
         **kwargs: Any,
     ) -> ModelOutput:
         """Generate with WebSocket-based bidirectional sync.

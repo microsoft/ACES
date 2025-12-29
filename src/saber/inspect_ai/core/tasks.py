@@ -17,8 +17,9 @@ Key features:
 
 import logging
 import threading
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any
 
 import anyio
 from inspect_ai import Task
@@ -118,7 +119,7 @@ def _initialize_inspect_logging(domain_slug: str, domains_root: Path, log_level:
 # Process-wide BlockingPortal for running async operations from sync context
 # Store both the context manager and the portal
 _portal_cm: Any = None
-_portal: Optional[anyio.abc.BlockingPortal] = None
+_portal: anyio.abc.BlockingPortal | None = None
 _portal_lock = threading.Lock()
 
 
@@ -145,7 +146,7 @@ def _get_or_create_portal() -> anyio.abc.BlockingPortal:
 def create_domain_task(
     domain_slug: str,
     domains_root: Path,
-    compose_template_path: Optional[Path] = None,
+    compose_template_path: Path | None = None,
     default_agent: str = "react",
 ) -> Callable[..., Task]:
     """Create a task factory callable for a SABER domain.
@@ -179,18 +180,18 @@ def create_domain_task(
     def task_callable(
         rest_port: int = 8000,
         mcp_port: int = 8001,
-        task_filter: Optional[str] = None,
-        agent: Optional[str] = None,
+        task_filter: str | None = None,
+        agent: str | None = None,
         log_level: str = "INFO",
         build: bool = False,
-        rebuild: Optional[str] = None,
+        rebuild: str | None = None,
         rebuild_all: bool = False,
         stop_saber_after: bool = False,
         max_concurrent_episodes: int = 16,
         run_preflight: bool = False,
         enable_debug_logging: bool = False,
-        roles: Optional[Union[str, dict]] = None,
-        roles_file: Optional[str] = None,
+        roles: str | dict | None = None,
+        roles_file: str | None = None,
         **kwargs: Any,
     ) -> Task:
         """Task callable invoked by Inspect AI with CLI parameters.
@@ -294,17 +295,17 @@ async def _start_and_load_tasks(
     domains_root: Path,
     rest_port: int,
     mcp_port: int,
-    task_filter: Optional[str],
+    task_filter: str | None,
     agent_name: str,
     log_level: str,
-    build: Optional[str],
-    rebuild: Optional[str],
-    compose_template_path: Optional[Path],
+    build: str | None,
+    rebuild: str | None,
+    compose_template_path: Path | None,
     stop_saber_after: bool,
     max_concurrent_episodes: int,
     run_preflight: bool,
     enable_debug_logging: bool = False,
-    role_config: Optional[Any] = None,
+    role_config: Any | None = None,
     **kwargs: Any,
 ) -> Task:
     """Start SABER domain and load tasks as dataset.
@@ -345,8 +346,8 @@ async def _start_and_load_tasks(
     Raises:
         PrerequisiteError: On any failure (server start, health, task loading)
     """
-    controller: Optional[DomainController] = None
-    context: Optional[DomainContext] = None
+    controller: DomainController | None = None
+    context: DomainContext | None = None
 
     try:
         # Resolve agent implementation before starting domain
@@ -520,7 +521,7 @@ async def _start_and_load_tasks(
         )
 
         # Check for orchestrated tasks and log info (SABERDataset handles --limit automatically)
-        orchestrations: Dict[str, List[str]] = {}
+        orchestrations: dict[str, list[str]] = {}
         for sample in dataset:
             orch_id = sample.metadata.get(MetadataKeys.ORCHESTRATION_ID) if sample.metadata else None
             if orch_id:
@@ -548,7 +549,7 @@ async def _start_and_load_tasks(
         # The scorer performs client-side evaluation after agent execution
 
         # Check if role_config provides all models (allows bypassing --model requirement)
-        task_model: Optional[str] = None
+        task_model: str | None = None
         if role_config and all_roles_have_models(role_config):
             # All roles have models - use first role's model as Task default
             #

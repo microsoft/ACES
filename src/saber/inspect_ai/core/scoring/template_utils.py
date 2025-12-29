@@ -3,7 +3,7 @@
 Provides helpers for fetching and rendering Jinja2 templates for evaluation.
 """
 
-from typing import Any, Dict
+from typing import Any
 
 from jinja2 import BaseLoader, Environment, TemplateError
 
@@ -15,7 +15,7 @@ logger = get_saber_logger(LogCategory.EVALUATION, __name__)
 class TemplateStringLoader(BaseLoader):
     """Load Jinja2 templates from string content."""
 
-    def __init__(self, templates: Dict[str, str]):
+    def __init__(self, templates: dict[str, str]):
         """Initialize template loader.
 
         Args:
@@ -45,7 +45,7 @@ async def fetch_and_render_template(
     session_manager: Any,
     state: Any,
     template_path: str,
-    context: Dict[str, Any],
+    context: dict[str, Any],
 ) -> str:
     """Fetch template from server and render with Jinja2.
 

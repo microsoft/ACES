@@ -2,7 +2,7 @@
 
 import asyncio
 import time
-from typing import Any, Optional, Set
+from typing import Any
 
 from ...logging_config import LogCategory, get_saber_logger
 from ...models.constants import MetadataKeys
@@ -37,9 +37,9 @@ class StuckStateMonitor:
         self.episode_manager = episode_manager
         self.check_interval = check_interval
         self.stuck_threshold = stuck_threshold
-        self._monitor_task: Optional[asyncio.Task] = None
+        self._monitor_task: asyncio.Task | None = None
         self._running = False
-        self._alerted_episodes: Set[str] = set()  # Track episodes we've already alerted for
+        self._alerted_episodes: set[str] = set()  # Track episodes we've already alerted for
 
     async def start(self) -> None:
         """Start the background monitor."""

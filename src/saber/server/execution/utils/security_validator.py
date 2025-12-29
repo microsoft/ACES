@@ -10,7 +10,6 @@ including pattern detection, argument validation, and path safety checks.
 import re
 import shlex
 from pathlib import Path
-from typing import List, Optional
 
 from ..base import ValidationResult
 from .security_constants import (
@@ -35,7 +34,7 @@ class SecurityValidator:
     including pattern detection, argument validation, and path safety checks.
     """
 
-    def __init__(self, allowed_commands: Optional[List[str]] = None):
+    def __init__(self, allowed_commands: list[str] | None = None):
         """
         Initialize security validator.
 
@@ -114,7 +113,7 @@ class SecurityValidator:
 
         return result
 
-    def validate_arguments(self, args: List[str]) -> ValidationResult:
+    def validate_arguments(self, args: list[str]) -> ValidationResult:
         """
         Validate command arguments for security issues.
 
@@ -180,7 +179,7 @@ class SecurityValidator:
         except (OSError, ValueError):
             return False
 
-    def validate_full_command(self, command_args: List[str]) -> ValidationResult:
+    def validate_full_command(self, command_args: list[str]) -> ValidationResult:
         """
         Perform complete security validation on command and arguments.
 

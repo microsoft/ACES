@@ -13,7 +13,6 @@ Key features:
 import asyncio
 import threading
 import time
-from typing import Optional
 
 import requests  # type: ignore[import-untyped]
 from inspect_ai._util.error import PrerequisiteError
@@ -127,7 +126,7 @@ class EpisodeLifecycleManager:
         session_id: str,
         episode_id: str,
         interrupted: bool = False,
-        submission: Optional[dict] = None,
+        submission: dict | None = None,
     ) -> None:
         """Best-effort cleanup of episode with robust retry logic.
 

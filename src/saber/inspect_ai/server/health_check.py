@@ -6,7 +6,6 @@ with exponential backoff and retry logic to handle server startup delays.
 
 import asyncio
 from pathlib import Path
-from typing import Optional
 
 import aiohttp
 from inspect_ai._util.error import PrerequisiteError
@@ -16,7 +15,7 @@ from ...logging_config import LogCategory, get_saber_logger
 logger = get_saber_logger(LogCategory.AGENT, __name__)
 
 
-def _get_server_log_file_contents(domain: str, domains_root: Optional[Path], tail_lines: int = 50) -> tuple[str, str]:
+def _get_server_log_file_contents(domain: str, domains_root: Path | None, tail_lines: int = 50) -> tuple[str, str]:
     """Read the most recent server log file from the domain's server-logs directory.
 
     Args:
@@ -46,7 +45,7 @@ def _get_server_log_file_contents(domain: str, domains_root: Optional[Path], tai
         log_path = str(most_recent)
 
         # Read the last N lines
-        with open(most_recent, "r", encoding="utf-8", errors="replace") as f:
+        with open(most_recent, encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
             tail = lines[-tail_lines:] if len(lines) > tail_lines else lines
             content = "".join(tail).strip()
@@ -83,7 +82,7 @@ def _extract_error_lines(log_contents: str, max_errors: int = 20) -> str:
 async def wait_for_server_health(
     rest_url: str,
     domain: str = "unknown",
-    domains_root: Optional[Path] = None,
+    domains_root: Path | None = None,
 ) -> None:
     """Wait for SABER server to become healthy, polling indefinitely.
 
@@ -231,7 +230,7 @@ async def wait_for_server_health(
 
                             # Don't keep retrying if startup explicitly failed
                             raise PrerequisiteError(
-                                f"SABER server startup failed.\n" f"REST URL: {rest_url}\n" f"Error: {error_msg}"
+                                f"SABER server startup failed.\nREST URL: {rest_url}\nError: {error_msg}"
                             )
                         else:
                             print(

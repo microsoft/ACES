@@ -6,7 +6,7 @@ Logging Category: EPISODE
 import asyncio
 import time
 from dataclasses import asdict
-from typing import Any, Dict, List, NamedTuple, Optional
+from typing import Any, NamedTuple
 
 from saber.logging_config import LogCategory, get_saber_logger
 
@@ -27,7 +27,7 @@ class StepResult(NamedTuple):
 
     step: Step
     should_terminate: bool
-    termination_reason: Optional[str] = None
+    termination_reason: str | None = None
 
 
 class EpisodeManager:
@@ -45,10 +45,10 @@ class EpisodeManager:
         Args:
             time_source: Time source for getting current time (defaults to UTCTimeSource)
         """
-        self.episodes: Dict[str, Episode] = {}  # episode_id -> Episode
-        self.session_episodes: Dict[str, List[str]] = {}  # session_id -> [episode_ids]
-        self.completed_episodes: Dict[str, Episode] = {}  # episode_id -> completed Episode (for history)
-        self.episode_configs: Dict[str, Dict[str, Any]] = {}  # episode_id -> episode config from task
+        self.episodes: dict[str, Episode] = {}  # episode_id -> Episode
+        self.session_episodes: dict[str, list[str]] = {}  # session_id -> [episode_ids]
+        self.completed_episodes: dict[str, Episode] = {}  # episode_id -> completed Episode (for history)
+        self.episode_configs: dict[str, dict[str, Any]] = {}  # episode_id -> episode config from task
         self._time_source = time_source or UTCTimeSource()
         self.connection_manager = ConnectionManager(
             episode_manager=self, time_source=self._time_source
@@ -57,11 +57,11 @@ class EpisodeManager:
             self, self.connection_manager, time_source=self._time_source
         )  # Transcript coordination
 
-    def get_episode_by_id(self, episode_id: str) -> Optional[Episode]:
+    def get_episode_by_id(self, episode_id: str) -> Episode | None:
         """Get episode by episode ID from active or completed episodes."""
         return self.episodes.get(episode_id) or self.completed_episodes.get(episode_id)
 
-    def get_session_episodes(self, session_id: str, include_completed: bool = False) -> List[Episode]:
+    def get_session_episodes(self, session_id: str, include_completed: bool = False) -> list[Episode]:
         """Get all episodes for a session."""
         episode_ids = self.session_episodes.get(session_id, [])
         episodes = []
@@ -77,7 +77,7 @@ class EpisodeManager:
 
         return episodes
 
-    def get_active_episodes_for_session(self, session_id: str) -> List[Episode]:
+    def get_active_episodes_for_session(self, session_id: str) -> list[Episode]:
         """Get only active episodes for a session."""
         return self.get_session_episodes(session_id, include_completed=False)
 
@@ -89,7 +89,7 @@ class EpisodeManager:
         self.session_episodes[session_id].append(episode.episode_id)
         self.episodes[episode.episode_id] = episode
 
-    def complete_episode(self, episode_id: str) -> Optional[Episode]:
+    def complete_episode(self, episode_id: str) -> Episode | None:
         """Move an episode from active to completed.
 
         Clears heavy data (transcript, step snapshots) to prevent memory leaks
@@ -174,7 +174,7 @@ class EpisodeManager:
 
     def find_available_episode_for_dependency(
         self, session_id: str, target_task_id: str, dependent_task_id: str
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Find an available running episode with the target_task_id that can be attached to.
 
@@ -269,7 +269,7 @@ class EpisodeManager:
         max_wait_seconds: float = 10.0,
         retry_interval: float = 0.5,
         max_retry_interval: float = 2.0,
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Find an available running episode with retry logic to handle race conditions.
 
@@ -525,7 +525,7 @@ class EpisodeManager:
 
         return False, ""
 
-    def initialize_episode_context(self, task: Any) -> Dict[str, Any]:
+    def initialize_episode_context(self, task: Any) -> dict[str, Any]:
         """Initialize episode context from task configuration.
 
         Creates a new context dict with:
@@ -585,7 +585,7 @@ class EpisodeManager:
 
         return isinstance(task, (SingleEpisodeTask, SubTaskDefinition))
 
-    def _initialize_transcript(self, context: Dict[str, Any], task: Any) -> None:
+    def _initialize_transcript(self, context: dict[str, Any], task: Any) -> None:
         """Initialize transcript in episode context from task prompts.
 
         Creates initial transcript with:
@@ -646,8 +646,8 @@ class EpisodeManager:
         self,
         session_id: str,
         task_id: str,
-        initial_context: Optional[Dict[str, Any]] = None,
-        task: Optional[Any] = None,
+        initial_context: dict[str, Any] | None = None,
+        task: Any | None = None,
     ) -> Episode:
         """
         Start a new episode for a session with the provided task.
@@ -785,7 +785,7 @@ class EpisodeManager:
             step=step, should_terminate=will_terminate_after_this_step, termination_reason=termination_reason
         )
 
-    async def end_episode(self, episode_id: str, reason: str, result: Optional[str] = None) -> Episode:
+    async def end_episode(self, episode_id: str, reason: str, result: str | None = None) -> Episode:
         """
         End the specified episode.
 
@@ -907,7 +907,7 @@ class EpisodeManager:
         )
         return episode
 
-    def get_episode_state(self, episode_id: str) -> Optional[EpisodeState]:
+    def get_episode_state(self, episode_id: str) -> EpisodeState | None:
         """
         Get the episode state for a specific episode.
 
@@ -967,7 +967,7 @@ class EpisodeManager:
         if step.done:
             episode.state = EpisodeState.COMPLETED
 
-    def _extract_parameters_from_action(self, action: Action) -> Optional[str]:
+    def _extract_parameters_from_action(self, action: Action) -> str | None:
         """
         Extract actual parameters executed from action.
 
@@ -987,7 +987,7 @@ class EpisodeManager:
         # For any other tools, just return the tool name as fallback
         return action.tool_name
 
-    def _get_episode_progress_info(self, episode: Episode) -> Dict[str, Any]:
+    def _get_episode_progress_info(self, episode: Episode) -> dict[str, Any]:
         """
         Get progress information for an episode.
 

@@ -13,7 +13,7 @@ Component 1 of the SABER sandbox integration (Phase 2).
 import asyncio
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from inspect_ai._util.error import PrerequisiteError
 
@@ -68,7 +68,7 @@ def _create_orchestrator(domains_root: Path) -> Any:
             "Then install SABER in editable mode:\n"
             "  uv pip install -e external/saber\n\n"
             f"Import error: {e}"
-        )
+        ) from e
 
     try:
         # Use SABER's compose file resolution (same as CLI)
@@ -76,8 +76,8 @@ def _create_orchestrator(domains_root: Path) -> Any:
             return DomainOrchestrator(domains_root, compose_path)
     except Exception as e:
         raise PrerequisiteError(
-            f"Failed to create SABER DomainOrchestrator for domains_root={domains_root}\n\n" f"Error: {e}"
-        )
+            f"Failed to create SABER DomainOrchestrator for domains_root={domains_root}\n\nError: {e}"
+        ) from e
 
 
 class DomainController:
@@ -107,7 +107,7 @@ class DomainController:
         self,
         rest_port: int = 8000,
         mcp_port: int = 8001,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Check if a SABER domain is running on the specified ports.
 
         Uses the DomainOrchestrator to check domain status via docker compose.
@@ -145,8 +145,8 @@ class DomainController:
         rest_port: int = 8000,
         mcp_port: int = 8001,
         log_level: str = "INFO",
-        build: Optional[str] = None,
-        rebuild: Optional[str] = None,
+        build: str | None = None,
+        rebuild: str | None = None,
     ) -> DomainContext:
         """Start a SABER domain asynchronously.
 
@@ -284,7 +284,7 @@ class DomainController:
                 },
                 exc_info=True,
             )
-            raise PrerequisiteError(f"Failed to stop SABER domain '{domain}'.\n\n" f"Error: {e}")
+            raise PrerequisiteError(f"Failed to stop SABER domain '{domain}'.\n\nError: {e}") from e
 
 
 async def start_domain(
@@ -293,8 +293,8 @@ async def start_domain(
     rest_port: int = 8000,
     mcp_port: int = 8001,
     log_level: str = "INFO",
-    build: Optional[str] = None,
-    rebuild: Optional[str] = None,
+    build: str | None = None,
+    rebuild: str | None = None,
 ) -> DomainContext:
     """Convenience function to start a SABER domain.
 

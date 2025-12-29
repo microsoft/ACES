@@ -5,7 +5,7 @@ with CLI-generated environment variables - no manual .env file editing required.
 """
 
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 import click
 
@@ -113,9 +113,7 @@ def list_domains(ctx: click.Context, verbose: bool) -> None:
 @click.option("--rest-port", type=int, default=8000, help="REST API port")  # type: ignore[misc]
 @click.option("--mcp-port", type=int, default=8001, help="MCP port")  # type: ignore[misc]
 @click.option("--log-level", default="INFO", help="Logging level")  # type: ignore[misc]
-@click.option(
-    "--verbose", "-v", is_flag=True, help="Enable verbose logging (sets log level to DEBUG)"
-)  # type: ignore[misc]
+@click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging (sets log level to DEBUG)")  # type: ignore[misc]
 @click.option("--dry-run", is_flag=True, help="Show what would be done without executing")  # type: ignore[misc]
 @click.option("--profiles", hidden=True, help="DEPRECATED: Profiles are no longer supported")  # type: ignore[misc]
 @click.pass_context  # type: ignore[misc]
@@ -348,7 +346,7 @@ def status(ctx: click.Context, domain: str | None, watch: bool) -> None:
         ctx.exit(1)
 
 
-def _display_domain_status(domain: str, status_info: Dict[str, Any]) -> None:
+def _display_domain_status(domain: str, status_info: dict[str, Any]) -> None:
     """Display formatted domain status information with health details."""
     running = status_info.get("running", False)
     services = status_info.get("services", [])
@@ -664,7 +662,7 @@ async def _preflight_check_impl(
             orchestrator.validate_domain(domain)
             click.echo("✓ Domain configuration valid")
         except Exception as e:
-            raise DomainError(f"Domain validation failed: {e}")
+            raise DomainError(f"Domain validation failed: {e}") from e
 
         # Phase 2: Discover compose files
         click.echo("📋 Discovering challenge environments...")
@@ -873,7 +871,7 @@ def _test_single_environment(compose_file: Path, timeout: int, verbose: bool) ->
 
     try:
         # Read and process compose file
-        with open(compose_file, "r") as f:
+        with open(compose_file) as f:
             compose_content = f.read()
 
         # Manually resolve environment variables in the compose content
@@ -1025,7 +1023,7 @@ def main() -> None:
         raise click.Abort() from e
     except KeyboardInterrupt:
         click.echo("\nAborted by user", err=True)
-        raise click.Abort()
+        raise click.Abort() from None
 
 
 if __name__ == "__main__":

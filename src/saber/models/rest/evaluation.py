@@ -6,7 +6,7 @@ Follows fail-fast principles with no backwards compatibility.
 """
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -22,7 +22,7 @@ class EvaluationResultResponse(BaseModel):
     score: float = Field(..., ge=0.0)
     success: bool
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    details: Dict[str, Any] = Field(default_factory=dict)
+    details: dict[str, Any] = Field(default_factory=dict)
 
 
 class EvaluationResponse(BaseModel):
@@ -35,10 +35,10 @@ class EvaluationResponse(BaseModel):
 class EvaluationListResponse(BaseModel):
     """List of evaluation results response."""
 
-    evaluations: List[EvaluationResultResponse] = Field(description="List of evaluation results")
+    evaluations: list[EvaluationResultResponse] = Field(description="List of evaluation results")
     total_count: int = Field(description="Total number of evaluations returned")
     session_id: str = Field(description="Session ID for the evaluations")
-    task_filter: Optional[str] = Field(None, description="Task ID filter applied, if any")
+    task_filter: str | None = Field(None, description="Task ID filter applied, if any")
 
 
 class EvaluationSummaryResponse(BaseModel):
@@ -48,7 +48,7 @@ class EvaluationSummaryResponse(BaseModel):
     total_episodes: int = Field(description="Total number of episodes evaluated")
     successful_episodes: int = Field(description="Number of successful episodes")
     average_score: float = Field(description="Average score across all episodes")
-    task_summaries: Dict[str, Dict[str, Any]] = Field(description="Per-task summary statistics")
+    task_summaries: dict[str, dict[str, Any]] = Field(description="Per-task summary statistics")
 
 
 class EvaluationErrorResponse(BaseModel):
@@ -56,9 +56,9 @@ class EvaluationErrorResponse(BaseModel):
 
     error: str = Field(description="Error type")
     message: str = Field(description="Human-readable error message")
-    session_id: Optional[str] = Field(None, description="Session ID if available")
-    episode_id: Optional[str] = Field(None, description="Episode ID if available")
-    details: Optional[Dict[str, Any]] = Field(None, description="Additional error details")
+    session_id: str | None = Field(None, description="Session ID if available")
+    episode_id: str | None = Field(None, description="Episode ID if available")
+    details: dict[str, Any] | None = Field(None, description="Additional error details")
 
 
 class TaskEvaluationContext(BaseModel):
@@ -69,14 +69,14 @@ class TaskEvaluationContext(BaseModel):
     description: str = Field(description="Task description (used as 'question' in LLM evaluation)")
     domain: str = Field(description="Security domain")
     # Add subtasks for step-level evaluation
-    subtasks: List[Dict[str, Any]] = Field(default_factory=list, description="Subtask definitions for step evaluation")
+    subtasks: list[dict[str, Any]] = Field(default_factory=list, description="Subtask definitions for step evaluation")
 
 
 class JudgeMessages(BaseModel):
     """Pre-rendered judge messages for LLM evaluation."""
 
     system_message: str = Field(description="Fully rendered system prompt")
-    user_message: Union[str, List[str]] = Field(
+    user_message: str | list[str] = Field(
         description="Fully rendered user prompt(s) - can be single string or list for chunked evaluation"
     )
     model: str = Field(description="Model to use for evaluation")
@@ -91,7 +91,7 @@ class EvaluationCriteriaResponse(BaseModel):
     task_id: str = Field(description="Task identifier")
 
     # Authoritative submission to evaluate (None for incomplete episodes)
-    submission: Optional[str] = Field(
+    submission: str | None = Field(
         None, description="Exact submission content to evaluate (from server, None for incomplete episodes)"
     )
 
@@ -99,10 +99,10 @@ class EvaluationCriteriaResponse(BaseModel):
     task_context: TaskEvaluationContext = Field(description="Task information for evaluation")
 
     # Evaluation configuration (strategy, criteria, scoring)
-    evaluation_config: Dict[str, Any] = Field(description="Complete evaluation configuration")
+    evaluation_config: dict[str, Any] = Field(description="Complete evaluation configuration")
 
     # Pre-rendered judge messages (for LLM evaluation only)
-    judge_messages: Optional[JudgeMessages] = Field(None, description="Pre-rendered messages for LLM evaluation")
+    judge_messages: JudgeMessages | None = Field(None, description="Pre-rendered messages for LLM evaluation")
 
 
 class StepEvaluation(BaseModel):
@@ -128,30 +128,28 @@ class StepEvaluationResult(BaseModel):
     success: bool = Field(description="Whether main task was completed")
 
     # Step-level evaluation results
-    step_evaluations: List[StepEvaluation] = Field(
+    step_evaluations: list[StepEvaluation] = Field(
         default_factory=list, description="Step-by-step objective completion analysis"
     )
-    task_completed_at_step: Optional[int] = Field(
-        None, description="Step number where main task was completed (if any)"
-    )
-    subtasks_completed: List[str] = Field(default_factory=list, description="List of subtask IDs that were completed")
+    task_completed_at_step: int | None = Field(None, description="Step number where main task was completed (if any)")
+    subtasks_completed: list[str] = Field(default_factory=list, description="List of subtask IDs that were completed")
 
     # Evaluation metadata
     strategy: str = Field(description="Evaluation strategy used")
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    details: Dict[str, Any] = Field(default_factory=dict, description="Additional evaluation details")
+    details: dict[str, Any] = Field(default_factory=dict, description="Additional evaluation details")
 
 
 class EvaluationOverrideRequest(BaseModel):
     """Request model for overriding evaluation results."""
 
-    evaluation_data: Dict[str, Any] = Field(description="Episode evaluation data as EpisodeEvaluationData dict")
+    evaluation_data: dict[str, Any] = Field(description="Episode evaluation data as EpisodeEvaluationData dict")
     strategy: str = Field(..., min_length=1, description="Evaluation strategy used for this result")
     raw_score: float = Field(..., ge=0.0, description="Raw evaluation score")
     max_score: float = Field(..., gt=0.0, description="Maximum possible score")
     score: float = Field(..., ge=0.0, description="Normalized score (0.0 to max_score)")
     success: bool = Field(description="Whether the evaluation was successful")
-    details: Dict[str, Any] = Field(default_factory=dict, description="Additional evaluation details")
+    details: dict[str, Any] = Field(default_factory=dict, description="Additional evaluation details")
 
     def __init__(self, **data: Any) -> None:
         """Initialize with validation of score bounds."""
@@ -191,11 +189,11 @@ class EpisodeStepData(BaseModel):
 
     step_number: int = Field(..., ge=0, description="Step number (0-indexed)")
     tool_name: str = Field(description="Name of the tool executed")
-    tool_input: Dict[str, Any] = Field(description="Input parameters to the tool")
+    tool_input: dict[str, Any] = Field(description="Input parameters to the tool")
     tool_output: str = Field(description="Tool execution output")
     timestamp: datetime = Field(description="When the step was executed")
-    assistant_message: Optional[str] = Field(None, description="Assistant message before tool call")
-    reasoning: Optional[str] = Field(None, description="Assistant reasoning (if available)")
+    assistant_message: str | None = Field(None, description="Assistant message before tool call")
+    reasoning: str | None = Field(None, description="Assistant reasoning (if available)")
 
 
 class EpisodeSubmissionResponse(BaseModel):
@@ -205,9 +203,9 @@ class EpisodeSubmissionResponse(BaseModel):
     episode_id: str = Field(description="Episode identifier")
     task_id: str = Field(description="Task identifier")
     submission: str = Field(description="Agent's final submission content")
-    model: Optional[str] = Field(None, description="Model used for the episode")
-    tokens: Dict[str, int] = Field(default_factory=dict, description="Token usage statistics")
-    execution_time: Optional[float] = Field(None, description="Episode execution time in seconds")
+    model: str | None = Field(None, description="Model used for the episode")
+    tokens: dict[str, int] = Field(default_factory=dict, description="Token usage statistics")
+    execution_time: float | None = Field(None, description="Episode execution time in seconds")
 
 
 class EpisodeStepsResponse(BaseModel):
@@ -216,7 +214,7 @@ class EpisodeStepsResponse(BaseModel):
     session_id: str = Field(description="Session identifier")
     episode_id: str = Field(description="Episode identifier")
     task_id: str = Field(description="Task identifier")
-    steps: List[EpisodeStepData] = Field(description="List of episode steps")
+    steps: list[EpisodeStepData] = Field(description="List of episode steps")
     total_steps: int = Field(description="Total number of steps")
 
 
@@ -229,10 +227,10 @@ class SubmissionEvaluationCriteriaResponse(BaseModel):
     strategy: str = Field(
         description="Submission evaluation strategy (see SubmissionEvaluationStrategy enum): 'static' or 'llm_judge'"
     )
-    criteria: Dict[str, Any] = Field(
+    criteria: dict[str, Any] = Field(
         description="Criteria dict with template CONTENT, golden_answer, model - everything needed for evaluation"
     )
-    scoring: Dict[str, float] = Field(description="Scoring configuration (e.g., max_score)")
+    scoring: dict[str, float] = Field(description="Scoring configuration (e.g., max_score)")
     task_context: TaskEvaluationContext = Field(description="Task context for evaluation")
 
 
@@ -246,7 +244,7 @@ class SubtaskEvaluationCriteriaResponse(BaseModel):
     strategy: str = Field(
         description="Step evaluation strategy (see StepEvaluationStrategy enum): 'static', 'llm_judge', or 'tool_call'"
     )
-    criteria: Dict[str, Any] = Field(
+    criteria: dict[str, Any] = Field(
         description="Criteria dict with template CONTENT, model, steps_per_message - everything needed for evaluation"
     )
     max_score: float = Field(description="Subtask maximum score for scoring")
@@ -273,6 +271,6 @@ class EvaluationResultSubmission(BaseModel):
     max_score: float = Field(..., gt=0.0, description="Maximum possible score")
     score: float = Field(..., ge=0.0, description="Final score")
     success: bool = Field(description="Whether evaluation was successful")
-    details: Dict[str, Any] = Field(
+    details: dict[str, Any] = Field(
         default_factory=dict, description="Evaluation details (submission_score, step_score, etc.)"
     )

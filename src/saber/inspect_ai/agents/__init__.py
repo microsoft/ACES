@@ -12,8 +12,8 @@ Agent Discovery Order:
 Core agents are maintained here for reusability across domains.
 """
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Dict, Optional
 
 from ...logging_config import LogCategory, get_saber_logger
 
@@ -39,7 +39,7 @@ class SABERAgentRegistry:
     the domain's client/ folder.
     """
 
-    _agents: Dict[str, Callable] = {}
+    _agents: dict[str, Callable] = {}
 
     @classmethod
     def register(cls, name: str, agent_factory: Callable) -> None:
@@ -59,7 +59,7 @@ class SABERAgentRegistry:
         logger.info(f"Core agent '{name}' registered", extra={"event": "core_agent_registered", "agent": name})
 
     @classmethod
-    def get(cls, name: str) -> Optional[Callable]:
+    def get(cls, name: str) -> Callable | None:
         """Get a core agent implementation by name.
 
         Args:

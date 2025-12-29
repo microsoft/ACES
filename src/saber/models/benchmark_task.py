@@ -13,10 +13,9 @@ import fnmatch
 import graphlib
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from typing_extensions import Literal
 
 from ..logging_config import LogCategory, get_saber_logger
 
@@ -50,7 +49,7 @@ class SubTaskDefinition(BaseModel):
     """Sub-task within an orchestrated task."""
 
     task_id: str = Field(..., description="Unique task identifier")
-    role: Optional[str] = Field(
+    role: str | None = Field(
         None,
         description=(
             "Role identifier for model/agent assignment. Domain-specific naming: "
@@ -72,7 +71,7 @@ class SubTaskDefinition(BaseModel):
         return self
 
     order: int = Field(..., description="Execution order (0-based)")
-    depends_on_role: Optional[str] = Field(
+    depends_on_role: str | None = Field(
         None, description="Role identifier that this sub-task depends on (establishes execution ordering)"
     )
 
@@ -91,7 +90,7 @@ class SubTaskDefinition(BaseModel):
     continue_prompt: str = Field(..., description="Agent continue prompt (message shown after each step)")
 
     # Transcript coordination (for orchestrated tasks that need transcript synchronization)
-    transcript_config: Optional[Dict[str, Any]] = Field(
+    transcript_config: dict[str, Any] | None = Field(
         default=None, description="Optional transcript coordination configuration"
     )
 
@@ -104,7 +103,7 @@ class BenchmarkTask(BaseModel, ABC):
     """
 
     task_type: str = Field(..., description="Discriminator field for polymorphic deserialization")
-    benchmark_task_id: Optional[str] = Field(
+    benchmark_task_id: str | None = Field(
         None, description="Unique benchmark task identifier (auto-generated if not provided)"
     )
     execution_mode: TaskExecutionMode = Field(..., description="How this task executes")
@@ -113,7 +112,7 @@ class BenchmarkTask(BaseModel, ABC):
     model_config = ConfigDict(use_enum_values=True)
 
     @abstractmethod
-    def get_task_ids(self) -> List[str]:
+    def get_task_ids(self) -> list[str]:
         """Get all underlying SABER task IDs.
 
         Returns:
@@ -182,7 +181,7 @@ class SingleEpisodeTask(BenchmarkTask):
     max_steps: int = Field(..., description="Maximum steps per episode")
 
     # Initial context for episode creation
-    initial_context: Optional[Dict[str, Any]] = Field(
+    initial_context: dict[str, Any] | None = Field(
         default=None, description="Initial context provided when the task starts"
     )
 
@@ -193,7 +192,7 @@ class SingleEpisodeTask(BenchmarkTask):
     continue_prompt: str = Field(..., description="Agent continue prompt (message shown after each step)")
 
     # Transcript coordination (WebSocket coordination for transcript synchronization)
-    transcript_config: Optional[Dict[str, Any]] = Field(
+    transcript_config: dict[str, Any] | None = Field(
         default=None, description="Optional transcript coordination configuration"
     )
 
@@ -204,7 +203,7 @@ class SingleEpisodeTask(BenchmarkTask):
             self.benchmark_task_id = self.task_id
         return self
 
-    def get_task_ids(self) -> List[str]:
+    def get_task_ids(self) -> list[str]:
         """Return single task ID."""
         return [self.task_id]
 
@@ -242,8 +241,8 @@ class OrchestratedTask(BenchmarkTask):
         default=OrchestrationStrategy.SEQUENTIAL_PAIRED,
         description="Orchestration strategy (validated but currently only sequential_paired is implemented)",
     )
-    sub_tasks: List[SubTaskDefinition] = Field(..., description="Sub-tasks in this orchestration")
-    orchestration_config: Dict[str, Any] = Field(default_factory=dict, description="Strategy-specific configuration")
+    sub_tasks: list[SubTaskDefinition] = Field(..., description="Sub-tasks in this orchestration")
+    orchestration_config: dict[str, Any] = Field(default_factory=dict, description="Strategy-specific configuration")
 
     @model_validator(mode="after")
     def validate_subtask_constraints(self) -> "OrchestratedTask":
@@ -265,7 +264,7 @@ class OrchestratedTask(BenchmarkTask):
 
         return self
 
-    def get_task_ids(self) -> List[str]:
+    def get_task_ids(self) -> list[str]:
         """Return all sub-task IDs."""
         return [sub.task_id for sub in self.sub_tasks]
 
@@ -290,9 +289,7 @@ class OrchestratedTask(BenchmarkTask):
             return False
 
         # Check orchestration ID itself
-        if self.benchmark_task_id == pattern or fnmatch.fnmatch(
-            self.benchmark_task_id, pattern
-        ):  # type: ignore[type-var]
+        if self.benchmark_task_id == pattern or fnmatch.fnmatch(self.benchmark_task_id, pattern):  # type: ignore[type-var]
             return True
 
         # Check any sub-task ID (entire orchestration included if any match)
@@ -321,10 +318,10 @@ class DependencyGraph:
 
     def __init__(self) -> None:
         """Initialize empty dependency graph."""
-        self.dependencies: Dict[str, str] = {}  # dependent -> target
-        self.dependents: Dict[str, List[str]] = {}  # target -> [dependents]
-        self.dependency_roots: Set[str] = set()
-        self.all_tasks: Set[str] = set()
+        self.dependencies: dict[str, str] = {}  # dependent -> target
+        self.dependents: dict[str, list[str]] = {}  # target -> [dependents]
+        self.dependency_roots: set[str] = set()
+        self.all_tasks: set[str] = set()
 
     def add_task(self, task_id: str) -> None:
         """Add a task to the graph.
@@ -371,7 +368,7 @@ class DependencyGraph:
         """
         return task_id in self.dependencies
 
-    def get_dependents(self, task_id: str) -> List[str]:
+    def get_dependents(self, task_id: str) -> list[str]:
         """Get list of tasks that depend on the given task.
 
         Args:
@@ -382,7 +379,7 @@ class DependencyGraph:
         """
         return self.dependents.get(task_id, [])
 
-    def get_dependency_target(self, task_id: str) -> Optional[str]:
+    def get_dependency_target(self, task_id: str) -> str | None:
         """Get the task that the given task depends on.
 
         Args:
@@ -402,7 +399,7 @@ class DependencyGraph:
             ValueError: If circular dependencies are detected
         """
         # Build graph for topological sort
-        graph: Dict[str, List[str]] = {task_id: [] for task_id in self.all_tasks}
+        graph: dict[str, list[str]] = {task_id: [] for task_id in self.all_tasks}
         for dependent, target in self.dependencies.items():
             graph[target].append(dependent)
 
@@ -411,7 +408,7 @@ class DependencyGraph:
             # Prepare will raise CycleError if cycles exist
             sorter.prepare()
         except graphlib.CycleError as e:
-            raise ValueError(f"Circular dependency detected in task graph: {e}")
+            raise ValueError(f"Circular dependency detected in task graph: {e}") from e
 
     def validate_no_nested_orchestrations(self) -> None:
         """Validate that orchestrated tasks don't contain other orchestrated tasks.
@@ -430,7 +427,7 @@ class DependencyGraph:
                     f"but also depends on '{target_id}'. Each orchestration must be independent."
                 )
 
-    def get_orchestrated_groups(self) -> List[List[str]]:
+    def get_orchestrated_groups(self) -> list[list[str]]:
         """Get groups of tasks that should be orchestrated together.
 
         Each group contains a root task and its direct dependents, ordered by
@@ -445,7 +442,7 @@ class DependencyGraph:
             groups.append(group)
         return groups
 
-    def get_independent_tasks(self) -> List[str]:
+    def get_independent_tasks(self) -> list[str]:
         """Get tasks that are not part of any orchestration.
 
         Returns:

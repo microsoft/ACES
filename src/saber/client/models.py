@@ -8,7 +8,7 @@ raw dictionaries with proper Pydantic models.
 
 import hashlib
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, root_validator, validator
 
@@ -40,7 +40,7 @@ class AgentCompositeKey:
 
     agent_id: str
     tasks_hash: str
-    role: Optional[str] = None
+    role: str | None = None
 
     def to_string(self) -> str:
         """Convert composite key to string representation.
@@ -84,12 +84,11 @@ class AgentCompositeKey:
             return cls(agent_id=parts[0], role=parts[1], tasks_hash=parts[2])
         else:
             raise ValueError(
-                f"Invalid composite key format: '{key}'. "
-                f"Expected 'agent_id|tasks_hash' or 'agent_id|role|tasks_hash'"
+                f"Invalid composite key format: '{key}'. Expected 'agent_id|tasks_hash' or 'agent_id|role|tasks_hash'"
             )
 
     @staticmethod
-    def create_hash(tasks: List[str]) -> str:
+    def create_hash(tasks: list[str]) -> str:
         """Create consistent hash from task list.
 
         Args:
@@ -103,7 +102,7 @@ class AgentCompositeKey:
         return hashlib.sha256(tasks_str.encode()).hexdigest()[:8]
 
     @classmethod
-    def create(cls, agent_id: str, tasks: List[str], role: Optional[str] = None) -> "AgentCompositeKey":
+    def create(cls, agent_id: str, tasks: list[str], role: str | None = None) -> "AgentCompositeKey":
         """Factory method to create composite key from agent assignment.
 
         Args:
@@ -170,11 +169,11 @@ class AgentAssignment(BaseModel):
     """Agent assignment with role and advanced configuration support."""
 
     id: str = Field(..., description="Agent identifier from registry")
-    model: Optional[str] = Field(default=None, description="Model to use for this agent (overrides global model)")
-    tasks: List[str] = Field(..., description="Task IDs or '*' for wildcard assignment")
-    role: Optional[str] = Field(default=None, description="Role this agent handles in orchestrated tasks")
-    attempts: Optional[int] = Field(default=None, description="Episode attempts override for this agent")
-    kwargs: Dict[str, Any] = Field(default_factory=dict, description="Agent-specific parameters")
+    model: str | None = Field(default=None, description="Model to use for this agent (overrides global model)")
+    tasks: list[str] = Field(..., description="Task IDs or '*' for wildcard assignment")
+    role: str | None = Field(default=None, description="Role this agent handles in orchestrated tasks")
+    attempts: int | None = Field(default=None, description="Episode attempts override for this agent")
+    kwargs: dict[str, Any] = Field(default_factory=dict, description="Agent-specific parameters")
 
     model_config = ConfigDict(extra="forbid")  # Fail fast on unknown fields
 
@@ -196,26 +195,26 @@ class RoleAgentConfig(BaseModel):
 
     agent: str = Field(default="react", description="Agent implementation to use for this role")
 
-    model: Optional[str] = Field(default=None, description="Model to use for this role (overrides global --model)")
+    model: str | None = Field(default=None, description="Model to use for this role (overrides global --model)")
 
-    attempts: Optional[int] = Field(default=None, description="Episode attempts for this role (overrides task default)")
+    attempts: int | None = Field(default=None, description="Episode attempts for this role (overrides task default)")
 
-    submit: Optional[bool] = Field(
+    submit: bool | None = Field(
         default=None,
         description="Whether to enable the submit tool for this role. "
         "Set to False for continuous monitoring agents (like blue team) that should never submit. "
         "Default (None) means submit is enabled.",
     )
 
-    kwargs: Dict[str, Any] = Field(default_factory=dict, description="Additional agent-specific parameters")
+    kwargs: dict[str, Any] = Field(default_factory=dict, description="Additional agent-specific parameters")
 
     # Documentation
-    description: Optional[str] = Field(default=None, description="Human-readable description of this role's purpose")
+    description: str | None = Field(default=None, description="Human-readable description of this role's purpose")
 
     # Future extensions
-    tools: Optional[List[str]] = Field(default=None, description="Role-specific tool restrictions")
+    tools: list[str] | None = Field(default=None, description="Role-specific tool restrictions")
 
-    timeout: Optional[int] = Field(default=None, description="Role-specific timeout in seconds")
+    timeout: int | None = Field(default=None, description="Role-specific timeout in seconds")
 
     model_config = ConfigDict(extra="forbid")  # Fail on unknown fields
 
@@ -226,16 +225,16 @@ class RoleBasedConfig(BaseModel):
     Supports both per-role settings and defaults.
     """
 
-    roles: Dict[str, RoleAgentConfig] = Field(
+    roles: dict[str, RoleAgentConfig] = Field(
         default_factory=dict, description="Configuration for each role (key = role name)"
     )
 
-    defaults: Optional[RoleAgentConfig] = Field(
+    defaults: RoleAgentConfig | None = Field(
         default=None, description="Default configuration for roles not explicitly defined"
     )
 
     @validator("roles")
-    def validate_role_names(cls, v: Dict[str, RoleAgentConfig]) -> Dict[str, RoleAgentConfig]:
+    def validate_role_names(cls, v: dict[str, RoleAgentConfig]) -> dict[str, RoleAgentConfig]:
         """Validate role names are non-empty strings."""
         for role_name in v.keys():
             if not role_name or not isinstance(role_name, str):
@@ -243,15 +242,14 @@ class RoleBasedConfig(BaseModel):
         return v
 
     @root_validator(skip_on_failure=True)
-    def validate_has_configuration(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+    def validate_has_configuration(cls, values: dict[str, Any]) -> dict[str, Any]:
         """Ensure at least one role or defaults is configured."""
         roles = values.get("roles", {})
         defaults = values.get("defaults")
 
         if not roles and not defaults:
             raise ValueError(
-                "RoleBasedConfig must have at least one role defined or defaults. "
-                "Got empty roles dict and no defaults."
+                "RoleBasedConfig must have at least one role defined or defaults. Got empty roles dict and no defaults."
             )
 
         return values
@@ -272,8 +270,7 @@ class RoleBasedConfig(BaseModel):
         if role not in self.roles and not self.defaults:
             available_roles = list(self.roles.keys())
             raise ValueError(
-                f"Role '{role}' not found in configuration and no defaults provided. "
-                f"Available roles: {available_roles}"
+                f"Role '{role}' not found in configuration and no defaults provided. Available roles: {available_roles}"
             )
 
         # Get role-specific config or empty config
@@ -295,7 +292,7 @@ class RoleBasedConfig(BaseModel):
 
         return role_config
 
-    def to_agent_assignments(self) -> List[AgentAssignment]:
+    def to_agent_assignments(self) -> list[AgentAssignment]:
         """Convert role-based config to AgentAssignment list.
 
         Creates one AgentAssignment per role with appropriate settings.
@@ -326,20 +323,20 @@ class AgentInfo(BaseModel):
     name: str = Field(description="Human-readable agent name")
     description: str = Field(description="Agent description")
     version: str = Field(default="1.0.0", description="Agent version")
-    capabilities: List[str] = Field(default_factory=list, description="Agent capabilities")
-    tags: List[str] = Field(default_factory=list, description="Agent tags")
+    capabilities: list[str] = Field(default_factory=list, description="Agent capabilities")
+    tags: list[str] = Field(default_factory=list, description="Agent tags")
 
 
 class SABERTask(BaseModel):
     """Typed SABER task definition."""
 
     id: str = Field(description="Unique task identifier")
-    title: Optional[str] = Field(None, description="Task title")
+    title: str | None = Field(None, description="Task title")
     description: str = Field(description="Task description")
     environment: str = Field(description="Environment description")
-    subtasks: List[Dict[str, Any]] = Field(default_factory=list, description="Task subtasks")
-    success_criteria: Optional[str] = Field(None, description="Success criteria")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional task metadata")
+    subtasks: list[dict[str, Any]] = Field(default_factory=list, description="Task subtasks")
+    success_criteria: str | None = Field(None, description="Success criteria")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional task metadata")
 
 
 class AgentExecutionParams(BaseModel):
@@ -362,7 +359,7 @@ class ContainerExecutionResult(BaseModel):
     execution_time: float = Field(description="Execution time in seconds")
     container_id: str = Field(description="Container identifier")
     termination_reason: str = Field(description="How container terminated")
-    error: Optional[str] = Field(None, description="Error message if failed")
+    error: str | None = Field(None, description="Error message if failed")
     agent_id: str = Field(description="Agent identifier")
     episode_id: str = Field(description="Episode identifier")
 
@@ -380,23 +377,23 @@ class SABERConfig:
     """
 
     # Global model is optional - agents specify their own models
-    model: Optional[str] = None  # Deprecated - use per-agent models instead
-    model_args: Dict[str, Any] = field(default_factory=dict)
+    model: str | None = None  # Deprecated - use per-agent models instead
+    model_args: dict[str, Any] = field(default_factory=dict)
 
     # Session manager configuration (unified REST + MCP)
-    session_config: Optional[SessionManagerConfig] = field(default=None)
+    session_config: SessionManagerConfig | None = field(default=None)
 
     # Task configuration
-    task_ids: Optional[List[str]] = None
+    task_ids: list[str] | None = None
 
     # Multi-agent configuration (required - new format only)
-    agents: List[AgentAssignment] = field(default_factory=list)
+    agents: list[AgentAssignment] = field(default_factory=list)
 
     # Role-based configuration for orchestrated tasks
     role_config: Optional["RoleBasedConfig"] = field(default=None)
 
     # Domain configuration (optional - for logging organization)
-    domain: Optional[str] = field(default=None)
+    domain: str | None = field(default=None)
 
     # Container configuration
     container_timeout: int = 300
@@ -404,7 +401,7 @@ class SABERConfig:
     # Execution configuration
     ui_enabled: bool = True
     log_level: str = "INFO"
-    log_dir: Optional[str] = None
+    log_dir: str | None = None
 
     # Log upload configuration
     log_upload_enabled: bool = True
@@ -418,9 +415,9 @@ class SABERConfig:
     max_parallel_samples: int = 4
 
     # Endpoint configuration for model inference
-    endpoint_timeout: Optional[int] = None  # Model API request timeout in seconds
-    endpoint_max_retries: Optional[int] = None  # Maximum retry attempts for model API
-    endpoint_max_connections: Optional[int] = None  # Maximum concurrent connections to model API
+    endpoint_timeout: int | None = None  # Model API request timeout in seconds
+    endpoint_max_retries: int | None = None  # Maximum retry attempts for model API
+    endpoint_max_connections: int | None = None  # Maximum concurrent connections to model API
 
     @classmethod
     def create(
@@ -428,13 +425,13 @@ class SABERConfig:
         model: str,
         rest_url: str,
         mcp_url: str,
-        agents: List[AgentAssignment],
+        agents: list[AgentAssignment],
         client_id: str = "saber-client",
-        model_args: Optional[Dict[str, Any]] = None,
-        task_ids: Optional[List[str]] = None,
+        model_args: dict[str, Any] | None = None,
+        task_ids: list[str] | None = None,
         log_level: str = "INFO",
-        log_dir: Optional[str] = None,
-        domain: Optional[str] = None,
+        log_dir: str | None = None,
+        domain: str | None = None,
         ui_enabled: bool = True,
         container_timeout: int = 300,
         max_subprocesses: int = 1,
@@ -444,9 +441,9 @@ class SABERConfig:
         log_upload_max_retries: int = 3,
         log_upload_timeout: float = 30.0,
         log_upload_fail_on_error: bool = False,
-        endpoint_timeout: Optional[int] = None,
-        endpoint_max_retries: Optional[int] = None,
-        endpoint_max_connections: Optional[int] = None,
+        endpoint_timeout: int | None = None,
+        endpoint_max_retries: int | None = None,
+        endpoint_max_connections: int | None = None,
     ) -> "SABERConfig":
         """
         Factory method to create SABERConfig with multi-agent assignments.
@@ -569,7 +566,7 @@ class SABERConfig:
                         raise ValueError(f"Task '{task}' assigned to multiple agents")
                     explicit_tasks.add(task)
 
-    def get_agent_assignments(self) -> List[AgentAssignment]:
+    def get_agent_assignments(self) -> list[AgentAssignment]:
         """Get all agent assignments including role-based ones.
 
         Combines:
@@ -590,7 +587,7 @@ class SABERConfig:
 
     # Legacy property accessor with deprecation warning
     @property
-    def agent_assignments(self) -> List[AgentAssignment]:
+    def agent_assignments(self) -> list[AgentAssignment]:
         """
         Legacy property for backwards compatibility (deprecated).
 
