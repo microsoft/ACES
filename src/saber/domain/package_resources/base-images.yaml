@@ -1,21 +1,27 @@
 # SABER Base Images Configuration
 # Defines all base images that domains can extend from
+#
+# When running from repo: builds from docker/ directory
+# When installed as package: pulls from ACR registry
 
 schemaVersion: "1.0.0"
+
+# Container registry for pre-built images (used when not in repo)
+registry: "acr3ambenw4rfvbc.azurecr.io"
 
 images:
   server:
     tag: "saber/server:latest"
-    dockerfile: "package://dockerfiles/Dockerfile.saber_server"
-    context: "."  # Build from temp directory with saber package
+    dockerfile: "docker/Dockerfile.saber_server"
+    registry_image: "saber-server"
     labels:
       saber.component: "base-server"
       saber.type: "base-image"
 
   sandbox:
     tag: "saber/sandbox:latest"
-    dockerfile: "package://dockerfiles/Dockerfile.saber_sandbox"
-    context: "."  # Build from temp directory with saber package
+    dockerfile: "docker/Dockerfile.saber_sandbox"
+    registry_image: "saber-sandbox"
     labels:
       saber.component: "base-sandbox"
       saber.type: "base-image"

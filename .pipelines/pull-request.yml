@@ -1,3 +1,6 @@
+# Dev branch pipeline: Lint and Unit Tests
+# Runs on PRs to dev and pushes to dev
+
 trigger:
   branches:
     include:
@@ -14,13 +17,15 @@ pool:
 variables:
   MAJOR: 0
   MINOR: 2
-  PATCH: pr$(Build.BuildId)
+  PATCH: dev$(Build.BuildId)
+
+name: SABER-Dev-$(MAJOR).$(MINOR).$(PATCH)
 
 stages:
   - stage: Build
     displayName: 'Build and Test'
     jobs:
       - job: BuildAndTest
-        displayName: 'Build, Lint, and Unit Tests'
+        displayName: 'Lint and Unit Tests'
         steps:
           - template: /.pipelines/python-build-test-steps.yml

@@ -141,15 +141,18 @@ class TestDockerRunnerBuildImages:
 
     @patch('saber.domain.orchestrator.subprocess.run')
     @patch('saber.domain.orchestrator.DockerRunner._docker_image_exists')
+    @patch('saber.domain.orchestrator.DockerRunner._ensure_base_images_exist')
     @patch('saber.domain.orchestrator.DockerRunner.ensure_base_images')
     def test_build_missing_images_only(
-        self, mock_ensure_base, mock_exists, mock_subprocess,
+        self, mock_ensure_base, mock_ensure_base_exist, mock_exists, mock_subprocess,
         mock_domains_root, mock_compose_file, mock_manifest
     ):
         """Test building only missing images in build mode."""
         # Simulate some images exist, some don't
+        # Tags are: saber/test_domain/server:latest, saber/test_domain/sandbox:latest,
+        #           saber/test_domain/cookie/target_0:latest, saber/test_domain/cookie/target_1:latest
         def image_exists_side_effect(tag):
-            return "cookie_0" in tag or "server" in tag
+            return "target_0" in tag or "server" in tag
 
         mock_exists.side_effect = image_exists_side_effect
         mock_subprocess.return_value = Mock(returncode=0)
@@ -164,19 +167,20 @@ class TestDockerRunnerBuildImages:
             rebuild_mode=False
         )
 
-        # Should NOT ensure base images in build mode (unless needed)
+        # Should NOT call ensure_base_images (rebuild) in build mode
         mock_ensure_base.assert_not_called()
+        # Should call _ensure_base_images_exist (incremental) in build mode
+        mock_ensure_base_exist.assert_called_once()
 
         # Should NOT remove any existing images (no rmi calls)
         rmi_calls = [c for c in mock_subprocess.call_args_list if 'docker' in str(c) and 'rmi' in str(c)]
         assert len(rmi_calls) == 0
 
-        # Should only build missing images (sandbox, cookie_1)
+        # Should only build missing images (sandbox, cookie/target_1)
         build_calls = [c for c in mock_subprocess.call_args_list if 'docker' in str(c) and 'build' in str(c)]
-        # Actually builds 4 images: server exists, cookie_0 exists, but sandbox and cookie_1 don't exist
-        # However the test setup has 4 images total (server, sandbox, cookie_0, cookie_1)
-        # So it builds the 2 missing ones: sandbox and cookie_1
-        assert len(build_calls) == 4
+        # server and target_0 exist, sandbox and target_1 don't exist
+        # So it builds the 2 missing ones: sandbox and target_1
+        assert len(build_calls) == 2
 
     @patch('saber.domain.orchestrator.subprocess.run')
     @patch('saber.domain.orchestrator.DockerRunner._docker_image_exists')

@@ -206,8 +206,8 @@ class TestCoordinatorStateMachineIntegration:
         coordinator = TranscriptCoordinator(
             episode_manager,
             connection_manager,
-            stuck_check_interval=0.1,
-            stuck_threshold=0.3
+            stuck_check_interval=0.05,
+            stuck_threshold=0.1
         )
 
         # Set up event capture BEFORE starting monitor
@@ -229,8 +229,8 @@ class TestCoordinatorStateMachineIntegration:
 
             await asyncio.sleep(0.02)
 
-            # Wait for stuck detection
-            await asyncio.sleep(0.5)
+            # Wait for stuck detection (threshold + 2 check intervals + buffer)
+            await asyncio.sleep(0.3)
 
             # Verify error event
             errors = [e for e in events if e.type == "transcript_error"]

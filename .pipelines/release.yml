@@ -1,9 +1,15 @@
+# Main branch pipeline: Lint, Unit Tests, and Docker Build/Push
+# Runs on PRs to main and pushes to main
+
 trigger:
   branches:
     include:
-    - main
+      - main
 
-pr: none
+pr:
+  branches:
+    include:
+      - main
 
 pool:
   vmImage: ubuntu-latest
@@ -15,6 +21,22 @@ variables:
 
 name: SABER-Release-$(MAJOR).$(MINOR).$(PATCH)
 
-steps:
-  - template: /.pipelines/python-build-test-steps.yml
-  - template: /.pipelines/python-publish-steps.yml
+stages:
+  - stage: Build
+    displayName: 'Build and Test'
+    jobs:
+      - job: BuildAndTest
+        displayName: 'Lint and Unit Tests'
+        steps:
+          - template: /.pipelines/python-build-test-steps.yml
+
+  - stage: Docker
+    displayName: 'Docker Build and Push'
+    dependsOn: Build
+    condition: succeeded()
+    jobs:
+      - job: DockerBuildPush
+        displayName: 'Build and Push Docker Images'
+        steps:
+          - template: /.pipelines/docker-build-steps.yml
+          - template: /.pipelines/docker-push-steps.yml

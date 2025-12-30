@@ -1,19 +1,20 @@
 steps:
- - task: Docker@2
-   displayName: Docker - Push Server Image
-   inputs:
-     command: push
-     containerRegistry: benchmarking-spear-stg-acr
-     repository: spear-server
-     tags: |
-       $(MAJOR).$(MINOR).$(PATCH)
-       latest
- - task: Docker@2
-   displayName: Docker - Push Runner Image
-   inputs:
-     command: push
-     containerRegistry: benchmarking-spear-stg-acr
-     repository: spear-runner
-     tags: |
-       $(MAJOR).$(MINOR).$(PATCH)
-       latest
+  - task: Docker@2
+    displayName: Docker - Push Server Image
+    inputs:
+      command: push
+      containerRegistry: benchmarking-spear-stg-acr
+      repository: saber-server
+      tags: |
+        $(MAJOR).$(MINOR).$(PATCH)
+        latest
+
+  - task: Docker@2
+    displayName: Docker - Push Sandbox Image
+    inputs:
+      command: push
+      containerRegistry: benchmarking-spear-stg-acr
+      repository: saber-sandbox
+      tags: |
+        $(MAJOR).$(MINOR).$(PATCH)
+        latest
