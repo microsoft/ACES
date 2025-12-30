@@ -1,0 +1,39 @@
+steps:
+ - task: Docker@2
+   displayName: Docker - Build Server Image
+   env:
+     DOCKER_BUILDKIT: '1'
+     ADO_TOKEN: $(System.AccessToken)
+   inputs:
+     command: build
+     repository: spear-server
+     containerRegistry: benchmarking-spear-stg-acr
+     dockerfile: projects/server/Dockerfile
+     buildContext: .
+     arguments: |
+       --secret id=ADO_TOKEN,env=ADO_TOKEN
+       --build-arg FEED_ORG=MSECAIModels
+       --build-arg FEED_PROJECT=Benchmarking
+       --build-arg FEED_NAME=Benchmarking
+     tags: |
+       $(MAJOR).$(MINOR).$(PATCH)
+       latest
+ - task: Docker@2
+   displayName: Docker - Build Runner Image
+   env:
+     DOCKER_BUILDKIT: '1'
+     ADO_TOKEN: $(System.AccessToken)
+   inputs:
+     command: build
+     repository: spear-runner
+     containerRegistry: benchmarking-spear-stg-acr
+     dockerfile: projects/runner/Dockerfile
+     buildContext: .
+     arguments: |
+       --secret id=ADO_TOKEN,env=ADO_TOKEN
+       --build-arg FEED_ORG=MSECAIModels
+       --build-arg FEED_PROJECT=Benchmarking
+       --build-arg FEED_NAME=Benchmarking
+     tags: |
+       $(MAJOR).$(MINOR).$(PATCH)
+       latest

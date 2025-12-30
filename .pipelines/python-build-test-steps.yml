@@ -1,0 +1,52 @@
+parameters:
+  - name: PythonFolder
+    type: string
+    default: $(Build.SourcesDirectory)
+steps:
+  - task: PipAuthenticate@1
+    displayName: 'Pip Authenticate'
+    inputs:
+      artifactFeeds: 'Benchmarking/saber-packages'
+      onlyAddExtraIndex: false
+
+  - script: |
+      pip install --upgrade pip
+      pip install uv
+      uv venv
+      source .venv/bin/activate
+      # Use --no-sources to ignore [tool.uv.sources] git dependency in CI
+      # PIP_INDEX_URL from PipAuthenticate points to Azure Artifacts feed with pypi upstream
+      uv pip install --no-sources -e ".[dev]"
+    displayName: 'Install dependencies'
+
+  - script: |
+      source .venv/bin/activate
+      cd ${{ parameters.PythonFolder }}
+      uv run --no-sources pre-commit run --all-files
+    displayName: 'Lint'
+
+  - script: |
+      source .venv/bin/activate
+      cd ${{ parameters.PythonFolder }}
+      uv run --no-sources coverage run -m pytest tests/ -m "not integration" --junitxml=test-results.xml -q
+    displayName: "Run pytest"
+
+  - script: |
+      source .venv/bin/activate
+      uv run --no-sources coverage xml
+      uv run --no-sources coverage report
+    displayName: 'Generate coverage reports'
+
+  - task: PublishTestResults@2
+    inputs:
+      testResultsFormat: 'JUnit'
+      testResultsFiles: '**/test-results.xml'
+      failTaskOnFailedTests: true
+    displayName: 'Publish test results'
+    condition: always()
+
+  - task: PublishCodeCoverageResults@2
+    inputs:
+      summaryFileLocation: '$(System.DefaultWorkingDirectory)/coverage.xml'
+    displayName: 'Publish code coverage'
+    condition: always()

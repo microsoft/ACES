@@ -1,0 +1,26 @@
+trigger:
+  branches:
+    include:
+      - dev
+
+pr:
+  branches:
+    include:
+      - dev
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  MAJOR: 0
+  MINOR: 2
+  PATCH: pr$(Build.BuildId)
+
+stages:
+  - stage: Build
+    displayName: 'Build and Test'
+    jobs:
+      - job: BuildAndTest
+        displayName: 'Build, Lint, and Unit Tests'
+        steps:
+          - template: /.pipelines/python-build-test-steps.yml

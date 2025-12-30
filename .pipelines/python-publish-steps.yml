@@ -1,0 +1,27 @@
+parameters:
+  - name: PythonFolder
+    type: string
+    default: $(Build.SourcesDirectory)
+
+steps:
+  - script: |
+      source .venv/bin/activate
+      cd ${{ parameters.PythonFolder }}
+      uv pip install build twine
+    displayName: 'Install build and twine'
+
+  - script: |
+      source .venv/bin/activate
+      sed -i 's/version = "0.2.0"/version = "$(MAJOR).$(MINOR).$(PATCH)"/g' pyproject.toml
+      uv build
+    displayName: 'UV build'
+
+  - task: TwineAuthenticate@1
+    inputs:
+      artifactFeed: Benchmarking/saber-packages
+    displayName: 'Twine Authenticate'
+
+  - script: |
+      source .venv/bin/activate
+      twine upload -r saber-packages --config-file $(PYPIRC_PATH) dist/*.whl
+    displayName: 'Upload to feed'
