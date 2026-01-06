@@ -369,6 +369,9 @@ async def _start_and_load_tasks(
             controller = existing["controller"]
             # Don't update registry - already there
 
+        # Check if rebuild requested - need to determine if we should stop existing domain
+        rebuild_requested = build is not None or rebuild is not None
+
         # Perform preflight check - detect already-running SABER instance (other process or ports)
         controller = DomainController(domains_root=Path(domains_root))
         running_domain = await controller.check_running_domain(rest_port, mcp_port)
@@ -376,35 +379,77 @@ async def _start_and_load_tasks(
         if running_domain and not existing:
             # Server running but not in our registry
             if running_domain == domain_slug:
-                # Same domain, different process or manual start - reuse it!
-                logger.info(
-                    f"Found existing SABER domain '{domain_slug}' running externally, reusing it",
-                    extra={
-                        "domain": domain_slug,
-                        "rest_port": rest_port,
-                        "mcp_port": mcp_port,
-                    },
-                )
-                # Create a dummy controller (we won't stop it since we didn't start it)
-                controller = DomainController(domains_root=Path(domains_root))
-                context = DomainContext(
-                    domain=domain_slug,
-                    rest_url=f"http://localhost:{rest_port}",
-                    mcp_url=f"http://localhost:{mcp_port}",
-                    rest_port=rest_port,
-                    mcp_port=mcp_port,
-                    project_slug=domain_slug,
-                    domains_root=Path(domains_root),
-                )
-                # Register it with ownership=False (we didn't start it)
-                register_domain(
-                    domain_slug=domain_slug,
-                    controller=controller,
-                    context=context,
-                    ownership=False,  # Don't stop it on cleanup
-                    rest_port=rest_port,
-                    mcp_port=mcp_port,
-                )
+                # Same domain, different process or manual start
+                if rebuild_requested:
+                    # Rebuild requested - must stop existing domain first
+                    logger.info(
+                        f"Rebuild requested but domain '{domain_slug}' already running. "
+                        "Stopping existing domain to rebuild...",
+                        extra={
+                            "domain": domain_slug,
+                            "rest_port": rest_port,
+                            "mcp_port": mcp_port,
+                        },
+                    )
+                    print(
+                        f"[SABER] Rebuild requested - stopping existing domain '{domain_slug}' first...",
+                        flush=True,
+                    )
+                    # Stop the running domain
+                    await controller.stop(domain_slug)
+                    # Wait for ports to be released (containers may take a moment to fully stop)
+                    import asyncio
+                    import socket
+
+                    def is_port_free(port: int) -> bool:
+                        """Check if a port is free."""
+                        try:
+                            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                                s.bind(("localhost", port))
+                                return True
+                        except OSError:
+                            return False
+
+                    print(f"[SABER] Waiting for ports {rest_port} and {mcp_port} to be released...", flush=True)
+                    for i in range(30):  # Up to 15 seconds
+                        await asyncio.sleep(0.5)
+                        if is_port_free(rest_port) and is_port_free(mcp_port):
+                            print(f"[SABER] Ports released after {(i+1)*0.5:.1f}s", flush=True)
+                            break
+                    else:
+                        print("[SABER] Warning: Ports may still be in use after 15s", flush=True)
+
+                    running_domain = None  # Clear so we start fresh below
+                else:
+                    # No rebuild - reuse existing domain
+                    logger.info(
+                        f"Found existing SABER domain '{domain_slug}' running externally, reusing it",
+                        extra={
+                            "domain": domain_slug,
+                            "rest_port": rest_port,
+                            "mcp_port": mcp_port,
+                        },
+                    )
+                    # Create a dummy controller (we won't stop it since we didn't start it)
+                    controller = DomainController(domains_root=Path(domains_root))
+                    context = DomainContext(
+                        domain=domain_slug,
+                        rest_url=f"http://localhost:{rest_port}",
+                        mcp_url=f"http://localhost:{mcp_port}",
+                        rest_port=rest_port,
+                        mcp_port=mcp_port,
+                        project_slug=domain_slug,
+                        domains_root=Path(domains_root),
+                    )
+                    # Register it with ownership=False (we didn't start it)
+                    register_domain(
+                        domain_slug=domain_slug,
+                        controller=controller,
+                        context=context,
+                        ownership=False,  # Don't stop it on cleanup
+                        rest_port=rest_port,
+                        mcp_port=mcp_port,
+                    )
             else:
                 # Different domain running on these ports - fail!
                 raise PrerequisiteError(

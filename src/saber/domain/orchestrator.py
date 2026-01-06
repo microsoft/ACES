@@ -616,30 +616,31 @@ class DockerRunner:
 
         Priority order:
         1. If in saber repo checkout (docker/ exists): build from docker/
-        2. If external/saber/docker exists (oss_saber with gitsubmodule): build from there
-        3. Otherwise: pull from container registry
-        4. If registry pull fails and external/saber exists: fallback to build
+        2. Try to pull from ACR (fastest for most users)
+        3. If ACR fails and external/saber exists: fallback to local build
         """
         image_tag = image_config["tag"]
         labels = image_config.get("labels", {})
         dockerfile = image_config["dockerfile"]
 
         if self._is_repo_checkout():
-            # Option 1: Build from docker/ directory (saber repo)
+            # Option 1: Build from docker/ directory (saber repo checkout)
             self._build_base_image_from_repo(image_name, image_tag, dockerfile, labels, dry_run)
-        elif self._get_external_saber_path():
-            # Option 2: Build from external/saber/docker (oss_saber with gitsubmodule)
-            self._build_base_image_from_external_saber(image_name, image_tag, dockerfile, labels, dry_run)
         else:
-            # Option 3: Pull from registry (package install)
+            # Option 2: Try ACR first, fallback to local build
             registry = base_images_config.get("registry", "")
             registry_image = image_config.get("registry_image", "")
-            if not registry or not registry_image:
+            if registry and registry_image:
+                # ACR configured - try to pull (will fallback to local build on failure)
+                self._pull_base_image_from_registry(image_name, image_tag, registry, registry_image, dry_run)
+            elif self._get_external_saber_path():
+                # No ACR configured but have local source - build from it
+                self._build_base_image_from_external_saber(image_name, image_tag, dockerfile, labels, dry_run)
+            else:
                 raise DockerError(
                     f"Cannot build {image_name}: not in repo checkout and no registry configured. "
                     "Please run from a git checkout of the saber repository."
                 )
-            self._pull_base_image_from_registry(image_name, image_tag, registry, registry_image, dry_run)
 
     def _get_ado_token(self) -> str:
         """Get ADO token from environment or Azure CLI.
@@ -748,13 +749,35 @@ class DockerRunner:
         except Exception as e:
             raise DockerError(f"Failed to build base image: {e}") from e
 
+    def _is_arm_host(self) -> bool:
+        """Check if running on ARM architecture."""
+        import platform
+
+        machine = platform.machine().lower()
+        return machine in ("arm64", "aarch64")
+
     def _pull_base_image_from_registry(
         self, image_name: str, image_tag: str, registry: str, registry_image: str, dry_run: bool
     ) -> None:
         """Pull base image from container registry and tag locally.
 
-        Falls back to building from external/saber if available and pull fails.
+        Falls back to building from external/saber if available and pull fails,
+        or if we're on ARM and ACR only has amd64 images.
         """
+        # Check if we're on ARM - ACR images are currently amd64 only
+        if self._is_arm_host():
+            external_saber = self._get_external_saber_path()
+            if external_saber:
+                print("⚠️  ARM host detected - building locally instead of pulling amd64 image from ACR")
+                base_images_config = self._load_base_images_config()
+                image_config = base_images_config["images"].get(image_name.replace("saber/", "").split(":")[0], {})
+                dockerfile = image_config.get("dockerfile", f"docker/Dockerfile.saber_{image_name}")
+                labels = image_config.get("labels", {})
+                self._build_base_image_from_external_saber(image_name, image_tag, dockerfile, labels, dry_run)
+                return
+            # No local source, try ACR anyway (will likely fail at runtime)
+            print("⚠️  ARM host detected but no local source available - attempting ACR pull (may not work)")
+
         try:
             remote_image = f"{registry}/{registry_image}:latest"
 
@@ -1088,14 +1111,22 @@ class DockerRunner:
         """
         print("\nStopping all domain containers...", flush=True)
 
-        # Stop the main server containers
+        # Stop the main server containers using project name only.
+        # We don't specify the compose file (-f) because:
+        # 1. docker compose down works by project name alone
+        # 2. Specifying the file causes errors due to variable interpolation
         try:
-            subprocess.run(
-                ["docker", "compose", "-f", str(self.compose_file), "-p", domain, "down"],
+            result = subprocess.run(
+                ["docker", "compose", "-p", domain, "down"],
                 capture_output=True,
+                text=True,
                 timeout=30,
             )
-            print("✓ Server containers stopped", flush=True)
+            if result.returncode == 0:
+                print("✓ Server containers stopped", flush=True)
+            else:
+                # Log the error but don't fail - the containers might already be stopped
+                print(f"Warning: docker compose down returned: {result.stderr.strip()}", flush=True)
         except Exception as e:
             print(f"Warning: Failed to stop server containers: {e}", flush=True)
 
