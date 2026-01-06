@@ -596,28 +596,42 @@ class DockerRunner:
             self._build_or_pull_base_image(image_name, image_config, base_images_config, dry_run)
 
     def _is_repo_checkout(self) -> bool:
-        """Check if we're running from a repo checkout (vs installed package)."""
+        """Check if we're running from a saber repo checkout (vs installed package)."""
         # Check if docker/ directory exists relative to domains_root
         repo_root = self.domains_root.parent
         return (repo_root / "docker").exists()
+
+    def _get_external_saber_path(self) -> Path | None:
+        """Get path to external/saber if it exists (for oss_saber repo with gitsubmodule)."""
+        repo_root = self.domains_root.parent
+        external_saber = repo_root / "external" / "saber"
+        if (external_saber / "docker").exists():
+            return external_saber
+        return None
 
     def _build_or_pull_base_image(
         self, image_name: str, image_config: dict[str, Any], base_images_config: dict[str, Any], dry_run: bool
     ) -> None:
         """Build base image from repo or pull from registry.
 
-        If running from repo checkout: build from docker/ directory
-        If installed as package: pull from container registry
+        Priority order:
+        1. If in saber repo checkout (docker/ exists): build from docker/
+        2. If external/saber/docker exists (oss_saber with gitsubmodule): build from there
+        3. Otherwise: pull from container registry
+        4. If registry pull fails and external/saber exists: fallback to build
         """
         image_tag = image_config["tag"]
         labels = image_config.get("labels", {})
+        dockerfile = image_config["dockerfile"]
 
         if self._is_repo_checkout():
-            # Build from docker/ directory
-            dockerfile = image_config["dockerfile"]
+            # Option 1: Build from docker/ directory (saber repo)
             self._build_base_image_from_repo(image_name, image_tag, dockerfile, labels, dry_run)
+        elif self._get_external_saber_path():
+            # Option 2: Build from external/saber/docker (oss_saber with gitsubmodule)
+            self._build_base_image_from_external_saber(image_name, image_tag, dockerfile, labels, dry_run)
         else:
-            # Pull from registry
+            # Option 3: Pull from registry (package install)
             registry = base_images_config.get("registry", "")
             registry_image = image_config.get("registry_image", "")
             if not registry or not registry_image:
@@ -737,7 +751,10 @@ class DockerRunner:
     def _pull_base_image_from_registry(
         self, image_name: str, image_tag: str, registry: str, registry_image: str, dry_run: bool
     ) -> None:
-        """Pull base image from container registry and tag locally."""
+        """Pull base image from container registry and tag locally.
+
+        Falls back to building from external/saber if available and pull fails.
+        """
         try:
             remote_image = f"{registry}/{registry_image}:latest"
 
@@ -754,7 +771,77 @@ class DockerRunner:
             print(f"✓ Successfully pulled and tagged {image_tag}")
 
         except subprocess.CalledProcessError as e:
-            raise DockerError(f"Failed to pull base image {image_tag}: {e}") from e
+            # Fallback: try to build from external/saber if available
+            external_saber = self._get_external_saber_path()
+            if external_saber:
+                print(f"⚠️  Failed to pull from registry, falling back to local build from {external_saber}")
+                # Load config to get dockerfile path
+                base_images_config = self._load_base_images_config()
+                image_config = base_images_config["images"].get(image_name.replace("saber/", "").split(":")[0], {})
+                dockerfile = image_config.get("dockerfile", f"docker/Dockerfile.saber_{image_name}")
+                labels = image_config.get("labels", {})
+                self._build_base_image_from_external_saber(image_name, image_tag, dockerfile, labels, dry_run)
+            else:
+                raise DockerError(f"Failed to pull base image {image_tag}: {e}") from e
+
+    def _build_base_image_from_external_saber(
+        self, image_name: str, image_tag: str, dockerfile: str, labels: dict[str, str], dry_run: bool
+    ) -> None:
+        """Build base image from external/saber/docker directory (oss_saber with gitsubmodule)."""
+        try:
+            external_saber = self._get_external_saber_path()
+            if not external_saber:
+                raise DockerError("external/saber not found")
+
+            dockerfile_path = external_saber / dockerfile
+
+            if not dockerfile_path.exists():
+                raise DockerError(f"Dockerfile not found: {dockerfile_path}")
+
+            # Get ADO token for private git dependencies
+            ado_token = self._get_ado_token()
+
+            # Prepare build environment
+            env = os.environ.copy()
+            env["DOCKER_BUILDKIT"] = "1"
+            if ado_token:
+                env["ADO_TOKEN"] = ado_token
+
+            cmd = ["docker", "build", "-f", str(dockerfile_path), "-t", image_tag]
+
+            # Pass ADO_TOKEN as secret for git authentication
+            if ado_token:
+                cmd.extend(["--secret", "id=ADO_TOKEN,env=ADO_TOKEN"])
+
+            # Add labels
+            for key, value in labels.items():
+                cmd.extend(["--label", f"{key}={value}"])
+
+            # Build context is external/saber (contains pyproject.toml, uv.lock, src/)
+            cmd.append(str(external_saber))
+
+            if dry_run:
+                print(f"Would build base image {image_name} from external/saber: {' '.join(cmd)}")
+                if ado_token:
+                    print("ADO_TOKEN: [obtained from az CLI or environment]")
+                else:
+                    print("ADO_TOKEN: [not available - private deps may fail]")
+                return
+
+            print(f"Building base image from external/saber: {image_tag}")
+            if ado_token:
+                print("🔑 Using ADO token for private git dependencies")
+            else:
+                print("⚠️  No ADO token available - private git dependencies may fail")
+                print("   Run 'az login' or set ADO_TOKEN environment variable")
+
+            subprocess.run(cmd, check=True, cwd=external_saber, env=env)
+            print(f"✓ Successfully built {image_tag}")
+
+        except subprocess.CalledProcessError as e:
+            raise DockerError(f"Failed to build base image {image_tag}: {e}") from e
+        except Exception as e:
+            raise DockerError(f"Failed to build base image from external/saber: {e}") from e
 
     def _load_base_images_config(self) -> dict[str, Any]:
         """Load base images configuration."""

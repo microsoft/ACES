@@ -490,6 +490,83 @@ class TestImageFiltering:
         assert len(filtered) == 0
 
 
+class TestBaseImageFallback:
+    """Tests for base image building fallback logic."""
+
+    @patch('saber.domain.orchestrator.subprocess.run')
+    @patch('saber.domain.orchestrator.DockerRunner._get_external_saber_path')
+    @patch('saber.domain.orchestrator.DockerRunner._load_base_images_config')
+    def test_pull_fallback_to_external_saber_on_failure(
+        self, mock_load_config, mock_get_external, mock_subprocess,
+        mock_domains_root, mock_compose_file, tmp_path
+    ):
+        """Test that pull failure falls back to external/saber build if available."""
+        # Setup external/saber path
+        external_saber = tmp_path / "external" / "saber"
+        external_saber.mkdir(parents=True)
+        (external_saber / "docker").mkdir()
+        (external_saber / "docker" / "Dockerfile.saber_server").write_text("FROM python:3.11\n")
+        mock_get_external.return_value = external_saber
+
+        # Configure mock to return base images config
+        mock_load_config.return_value = {
+            "images": {
+                "server": {
+                    "dockerfile": "docker/Dockerfile.saber_server",
+                    "labels": {}
+                }
+            }
+        }
+
+        # First call (docker pull) fails, second call (docker build) succeeds
+        def subprocess_side_effect(*args, **kwargs):
+            cmd = args[0] if args else kwargs.get('args', [])
+            if 'pull' in cmd:
+                from subprocess import CalledProcessError
+                raise CalledProcessError(1, cmd)
+            return Mock(returncode=0)
+
+        mock_subprocess.side_effect = subprocess_side_effect
+
+        runner = DockerRunner(mock_compose_file, mock_domains_root)
+
+        # This should not raise - it should fallback to external/saber build
+        runner._pull_base_image_from_registry(
+            "saber/server",
+            "saber/server:latest",
+            "acr.io",
+            "saber-server",
+            dry_run=False
+        )
+
+        # Verify build was called after pull failed
+        build_calls = [c for c in mock_subprocess.call_args_list if 'build' in str(c)]
+        assert len(build_calls) == 1
+
+    @patch('saber.domain.orchestrator.subprocess.run')
+    @patch('saber.domain.orchestrator.DockerRunner._get_external_saber_path')
+    def test_pull_raises_when_no_fallback_available(
+        self, mock_get_external, mock_subprocess,
+        mock_domains_root, mock_compose_file
+    ):
+        """Test that pull failure raises error when no external/saber fallback."""
+        mock_get_external.return_value = None  # No external/saber available
+
+        from subprocess import CalledProcessError
+        mock_subprocess.side_effect = CalledProcessError(1, ['docker', 'pull'])
+
+        runner = DockerRunner(mock_compose_file, mock_domains_root)
+
+        with pytest.raises(DockerError, match="Failed to pull base image"):
+            runner._pull_base_image_from_registry(
+                "saber/server",
+                "saber/server:latest",
+                "acr.io",
+                "saber-server",
+                dry_run=False
+            )
+
+
 class TestBuildModeVsRebuildMode:
     """Tests to verify build mode vs rebuild mode behavior."""
 
