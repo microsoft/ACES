@@ -504,7 +504,13 @@ class DockerRunner:
             labels = image_config.get("labels", {})
 
             # Prepare build command
-            cmd = ["docker", "build", "-f", str(dockerfile_path), "-t", image_tag, str(context_path)]
+            cmd = ["docker", "build", "-f", str(dockerfile_path), "-t", image_tag]
+
+            # Add --no-cache when rebuilding to ensure fresh layers
+            if rebuild_mode:
+                cmd.append("--no-cache")
+
+            cmd.append(str(context_path))
 
             # Add build args
             for key, value in build_args.items():
@@ -567,7 +573,7 @@ class DockerRunner:
         print(f"🔨 Building {len(base_images_config['images'])} base images...")
 
         for image_name, image_config in base_images_config["images"].items():
-            self._build_or_pull_base_image(image_name, image_config, base_images_config, dry_run)
+            self._build_or_pull_base_image(image_name, image_config, base_images_config, dry_run, no_cache=True)
 
     def _ensure_base_images_exist(self, dry_run: bool = False) -> None:
         """Ensure base images exist, building only if missing (incremental).
@@ -593,7 +599,7 @@ class DockerRunner:
         print(f"🔨 Building/pulling {len(missing_images)} missing base image(s)...")
 
         for image_name, image_config in missing_images:
-            self._build_or_pull_base_image(image_name, image_config, base_images_config, dry_run)
+            self._build_or_pull_base_image(image_name, image_config, base_images_config, dry_run, no_cache=False)
 
     def _is_repo_checkout(self) -> bool:
         """Check if we're running from a saber repo checkout (vs installed package)."""
@@ -610,7 +616,12 @@ class DockerRunner:
         return None
 
     def _build_or_pull_base_image(
-        self, image_name: str, image_config: dict[str, Any], base_images_config: dict[str, Any], dry_run: bool
+        self,
+        image_name: str,
+        image_config: dict[str, Any],
+        base_images_config: dict[str, Any],
+        dry_run: bool,
+        no_cache: bool = False,
     ) -> None:
         """Build base image from repo or pull from registry.
 
@@ -618,6 +629,9 @@ class DockerRunner:
         1. If in saber repo checkout (docker/ exists): build from docker/
         2. Try to pull from ACR (fastest for most users)
         3. If ACR fails and external/saber exists: fallback to local build
+
+        Args:
+            no_cache: If True, pass --no-cache to docker build to ensure fresh layers
         """
         image_tag = image_config["tag"]
         labels = image_config.get("labels", {})
@@ -625,7 +639,7 @@ class DockerRunner:
 
         if self._is_repo_checkout():
             # Option 1: Build from docker/ directory (saber repo checkout)
-            self._build_base_image_from_repo(image_name, image_tag, dockerfile, labels, dry_run)
+            self._build_base_image_from_repo(image_name, image_tag, dockerfile, labels, dry_run, no_cache)
         else:
             # Option 2: Try ACR first, fallback to local build
             registry = base_images_config.get("registry", "")
@@ -635,7 +649,7 @@ class DockerRunner:
                 self._pull_base_image_from_registry(image_name, image_tag, registry, registry_image, dry_run)
             elif self._get_external_saber_path():
                 # No ACR configured but have local source - build from it
-                self._build_base_image_from_external_saber(image_name, image_tag, dockerfile, labels, dry_run)
+                self._build_base_image_from_external_saber(image_name, image_tag, dockerfile, labels, dry_run, no_cache)
             else:
                 raise DockerError(
                     f"Cannot build {image_name}: not in repo checkout and no registry configured. "
@@ -681,13 +695,22 @@ class DockerRunner:
         return ""
 
     def _build_base_image_from_repo(
-        self, image_name: str, image_tag: str, dockerfile: str, labels: dict[str, str], dry_run: bool
+        self,
+        image_name: str,
+        image_tag: str,
+        dockerfile: str,
+        labels: dict[str, str],
+        dry_run: bool,
+        no_cache: bool = False,
     ) -> None:
         """Build base image from docker/ directory in repo.
 
         For private ADO git dependencies, authentication is automatically handled via:
         1. ADO_TOKEN environment variable
         2. Azure CLI (az login) credentials
+
+        Args:
+            no_cache: If True, pass --no-cache to docker build to ensure fresh layers
         """
         try:
             repo_root = self.domains_root.parent
@@ -706,6 +729,10 @@ class DockerRunner:
                 env["ADO_TOKEN"] = ado_token
 
             cmd = ["docker", "build", "-f", str(dockerfile_path), "-t", image_tag]
+
+            # Add --no-cache when rebuilding to ensure fresh layers
+            if no_cache:
+                cmd.append("--no-cache")
 
             # Pass ADO_TOKEN as secret for git authentication
             if ado_token:
@@ -808,9 +835,19 @@ class DockerRunner:
                 raise DockerError(f"Failed to pull base image {image_tag}: {e}") from e
 
     def _build_base_image_from_external_saber(
-        self, image_name: str, image_tag: str, dockerfile: str, labels: dict[str, str], dry_run: bool
+        self,
+        image_name: str,
+        image_tag: str,
+        dockerfile: str,
+        labels: dict[str, str],
+        dry_run: bool,
+        no_cache: bool = False,
     ) -> None:
-        """Build base image from external/saber/docker directory (oss_saber with gitsubmodule)."""
+        """Build base image from external/saber/docker directory (oss_saber with gitsubmodule).
+
+        Args:
+            no_cache: If True, pass --no-cache to docker build to ensure fresh layers
+        """
         try:
             external_saber = self._get_external_saber_path()
             if not external_saber:
@@ -831,6 +868,10 @@ class DockerRunner:
                 env["ADO_TOKEN"] = ado_token
 
             cmd = ["docker", "build", "-f", str(dockerfile_path), "-t", image_tag]
+
+            # Add --no-cache when rebuilding to ensure fresh layers
+            if no_cache:
+                cmd.append("--no-cache")
 
             # Pass ADO_TOKEN as secret for git authentication
             if ado_token:

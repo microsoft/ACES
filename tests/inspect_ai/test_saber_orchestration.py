@@ -19,10 +19,8 @@ from saber.models import ExecutionMode
 def cleanup_registry():
     """Clear the registry before and after each test."""
     SABERSandboxEnvironment._registry.clear()
-    SABERSandboxEnvironment._episode_semaphore = None
     yield
     SABERSandboxEnvironment._registry.clear()
-    SABERSandboxEnvironment._episode_semaphore = None
 
 
 @pytest.fixture
@@ -76,7 +74,6 @@ class TestOrchestratedInit:
         instance = SABERSandboxEnvironment(
             domain_slug="test_domain",
             domains_root=Path("/tmp"),
-            max_concurrent_episodes=2,
         )
         instance._session_id = "session_456"
         instance._session_manager = AsyncMock()
@@ -91,7 +88,6 @@ class TestOrchestratedInit:
             primary_episode_id="episode_blue",
             orchestration_id="orch_123",
             sub_task_role="blue",
-            semaphore_acquired=True,
         )
         mock_orch_init.init_orchestrated_sub_task.return_value = mock_handler_state
 
@@ -120,7 +116,6 @@ class TestOrchestratedInit:
         instance._handler_state = OrchestrationSubTaskState(
             episode_ids=["episode_blue"],
             primary_episode_id="episode_blue",
-            semaphore_acquired=False,
             orchestration_id="orch_123",
             sub_task_role="blue",
         )
@@ -159,7 +154,6 @@ class TestOrchestratedIntegration:
         instance = SABERSandboxEnvironment(
             domain_slug="test_domain",
             domains_root=Path("/tmp"),
-            max_concurrent_episodes=2,
         )
         instance._session_id = "session_456"
         instance._session_manager = AsyncMock()
@@ -174,7 +168,6 @@ class TestOrchestratedIntegration:
             primary_episode_id="episode_blue",
             orchestration_id="orch_123",
             sub_task_role="blue",
-            semaphore_acquired=True,
         )
         mock_orch_init.init_orchestrated_sub_task.return_value = mock_handler_state
         mock_orch_init.cleanup_orchestrated_sub_task.return_value = None
@@ -218,7 +211,6 @@ class TestActiveSampleRegistration:
         instance = SABERSandboxEnvironment(
             domain_slug="test_domain",
             domains_root=Path("/tmp"),
-            max_concurrent_episodes=2,
         )
         instance._session_id = "session_456"
         instance._session_manager = AsyncMock()
@@ -231,7 +223,6 @@ class TestActiveSampleRegistration:
             primary_episode_id="episode_blue",
             orchestration_id="orch_123",
             sub_task_role="blue",
-            semaphore_acquired=True,
         )
         mock_orch_init.init_orchestrated_sub_task.return_value = mock_handler_state
         type(instance)._orchestration_initializer = mock_orch_init
@@ -279,7 +270,6 @@ class TestActiveSampleRegistration:
         instance = SABERSandboxEnvironment(
             domain_slug="test_domain",
             domains_root=Path("/tmp"),
-            max_concurrent_episodes=2,
         )
         instance._session_id = "session_456"
         instance._session_manager = AsyncMock()
@@ -292,7 +282,6 @@ class TestActiveSampleRegistration:
             primary_episode_id="episode_blue",
             orchestration_id="orch_123",
             sub_task_role="blue",
-            semaphore_acquired=True,
         )
         mock_orch_init.init_orchestrated_sub_task.return_value = mock_handler_state
         type(instance)._orchestration_initializer = mock_orch_init

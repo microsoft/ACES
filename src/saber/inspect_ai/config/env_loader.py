@@ -75,29 +75,30 @@ def deserialize_config(config: dict[str, Any]) -> BaseModel:
         mcp_port=(int, 8001),
         compose_template_path=(Path | None, None),
         cleanup=(bool, False),  # Default to False - keep server running
-        max_concurrent_episodes=(int | None, None),  # Limit concurrent episodes
         __config__=ConfigDict(frozen=True),
     )
 
     return SABERConfig(**config)
 
 
+# Default concurrency for SABER sandbox (controls --max-samples default)
+DEFAULT_SABER_CONCURRENCY = 8
+
+
 def get_default_concurrency() -> int | None:
     """Default max_sandboxes for SABER provider.
 
-    Returns None to allow unlimited concurrent sample initialization.
+    Returns a sensible default for concurrent sample execution. This value is
+    used by Inspect AI's --max-samples when not explicitly specified.
 
-    CRITICAL: We return None (unlimited) instead of max_concurrent_episodes because:
-    1. Orchestrated tasks need multiple samples to run concurrently (e.g., blue+red)
-    2. SABER's semaphore controls episode concurrency INTERNALLY, not Inspect AI
-    3. If we returned max_concurrent_episodes=1, Inspect AI would queue samples,
-       preventing orchestrated samples from running together
+    Concurrency is controlled at the Inspect AI level via --max-samples:
+    - Each sample corresponds to one SABER episode
+    - Orchestrated tasks (e.g., blue+red) run as separate samples that coordinate
+    - Higher values allow more parallel evaluations but use more resources
 
-    The semaphore in SABERSandboxEnvironment handles the actual concurrency limit
-    at the episode creation level, allowing orchestrated samples to coordinate.
+    Users can override with: --max-samples N
 
     Returns:
-        None (unlimited) to let SABER's internal semaphore handle concurrency
+        Default concurrency limit (8) for balanced resource usage
     """
-    # Always return None - let SABER's internal semaphore handle concurrency
-    return None
+    return DEFAULT_SABER_CONCURRENCY

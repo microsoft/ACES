@@ -161,7 +161,7 @@ class TestEvalRetrySupport:
             mock_handler.initialize = AsyncMock(return_value=HandlerState(
                 episode_ids=["episode_abc"],
                 primary_episode_id="episode_abc",
-                semaphore_acquired=True,
+
             ))
             mock_handler.cleanup = AsyncMock()
             mock_get_handler.return_value = mock_handler
@@ -382,7 +382,7 @@ class TestEvalRetryIntegration:
                     mock_handler.initialize = AsyncMock(return_value=HandlerState(
                         episode_ids=["episode_001"],
                         primary_episode_id="episode_001",
-                        semaphore_acquired=True,
+
                     ))
                     mock_handler.cleanup = AsyncMock()
                     mock_get_handler.return_value = mock_handler

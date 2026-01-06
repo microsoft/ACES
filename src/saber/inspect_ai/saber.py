@@ -6,9 +6,10 @@ and managing per-sample REST sessions and MCP clients for tool execution.
 This module realizes Phase 3 of the SABER sandbox integration, providing lifecycle
 management (task_init, sample_init, sample_cleanup, task_cleanup) with class-level
 domain ownership semantics.
+
+Concurrency is controlled at the Inspect AI level via --max-samples (default: 8).
 """
 
-import asyncio
 import inspect
 import threading
 import time
@@ -75,12 +76,9 @@ class SABERSandboxEnvironment:
 
     Implements Inspect AI sandbox lifecycle hooks to integrate with SABER's domain orchestrator.
     Enforces single ownership per domain, with per-task sessions and per-sample episodes.
-    """
 
-    # Class-level semaphore for episode concurrency control
-    # Limits how many episodes can be created/run simultaneously across all domains
-    _episode_semaphore: asyncio.Semaphore | None = None
-    _max_concurrent_episodes: int = 8  # Default: 8 concurrent episodes
+    Concurrency is controlled at the Inspect AI level via --max-samples (default: 8).
+    """
 
     # Backward compatibility: expose SandboxRegistry._registry as class attribute
     # This allows tests to access SABERSandboxEnvironment._registry directly
@@ -101,7 +99,6 @@ class SABERSandboxEnvironment:
         mcp_timeout: float = SandboxTimeouts.MCP_CONNECTION_SECONDS,
         rest_base_url: str | None = None,
         mcp_url: str | None = None,
-        max_concurrent_episodes: int | None = None,
         enable_debug_logging: bool = False,
     ):
         """Initialize SABER sandbox instance.
@@ -115,8 +112,11 @@ class SABERSandboxEnvironment:
             mcp_timeout: Timeout for MCP operations (default: SandboxTimeouts.MCP_CONNECTION_SECONDS)
             rest_base_url: Override REST base URL (default: http://localhost:{rest_port})
             mcp_url: Override MCP URL (default: http://localhost:{mcp_port})
-            max_concurrent_episodes: Max concurrent episodes (default: 8, None = unlimited)
             enable_debug_logging: Enable detailed episode lifecycle debug logging (default: False)
+
+        Note:
+            Concurrency is controlled via Inspect AI's --max-samples flag (default: 8).
+            Use --max-samples to adjust parallel sample execution.
         """
         self._domain_slug = domain_slug
         self._domains_root = Path(domains_root)
@@ -125,9 +125,6 @@ class SABERSandboxEnvironment:
         self._compose_template_path = compose_template_path
         self._mcp_timeout = mcp_timeout
         self._enable_debug_logging = enable_debug_logging
-
-        if max_concurrent_episodes is not None:
-            type(self)._max_concurrent_episodes = max_concurrent_episodes
 
         self._rest_base_url = rest_base_url or f"http://localhost:{rest_port}"
         self._mcp_url = mcp_url or f"http://localhost:{mcp_port}"
@@ -164,25 +161,6 @@ class SABERSandboxEnvironment:
     def clear_stale_ownership(cls, domain_slug: str, force: bool = False) -> bool:
         """Clear stale ownership for a domain (useful for debugging/recovery)."""
         return SandboxRegistry.clear_stale_ownership(domain_slug, force)
-
-    @classmethod
-    def _get_episode_semaphore(cls) -> asyncio.Semaphore | None:
-        """Get or create the class-level episode concurrency semaphore.
-
-        Returns:
-            Semaphore limiting concurrent episodes, or None if unlimited
-        """
-        if cls._max_concurrent_episodes is None or cls._max_concurrent_episodes <= 0:
-            return None
-
-        if cls._episode_semaphore is None:
-            cls._episode_semaphore = asyncio.Semaphore(cls._max_concurrent_episodes)
-            logger.info(
-                f"Created episode concurrency semaphore (limit: {cls._max_concurrent_episodes})",
-                extra={"max_concurrent_episodes": cls._max_concurrent_episodes},
-            )
-
-        return cls._episode_semaphore
 
     @classmethod
     async def task_init_environment(
@@ -228,14 +206,6 @@ class SABERSandboxEnvironment:
         if enable_debug:
             enable_debug_logging()
             logger.info("Episode lifecycle debug logging enabled")
-
-        max_concurrent_episodes = getattr(config, "max_concurrent_episodes", None)
-        if max_concurrent_episodes is not None:
-            cls._max_concurrent_episodes = max_concurrent_episodes
-            logger.info(
-                f"Set max_concurrent_episodes to {max_concurrent_episodes} from task config",
-                extra={"max_concurrent_episodes": max_concurrent_episodes},
-            )
 
         existing_entry = SandboxRegistry.get_domain_entry(domain_slug)
         if existing_entry:
@@ -384,7 +354,6 @@ class SABERSandboxEnvironment:
             rest_port=getattr(config, "rest_port", 8000),
             mcp_port=getattr(config, "mcp_port", 8001),
             compose_template_path=getattr(config, "compose_template_path", None),
-            max_concurrent_episodes=getattr(config, "max_concurrent_episodes", None),
         )
 
         # Check if this is a completed sample from eval-retry
@@ -475,7 +444,6 @@ class SABERSandboxEnvironment:
                     session_id=self._session_id,
                     session_manager=self._session_manager,
                     sample_id=self._sample_id,
-                    semaphore=self._get_episode_semaphore(),
                 )
                 # Extract episode information from handler state
                 self._episode_ids = self._handler_state.episode_ids
@@ -503,16 +471,12 @@ class SABERSandboxEnvironment:
                 # (OrchestratedTask should not reach here with new dataset creation)
                 self._handler = get_benchmark_task_handler(benchmark_task)  # type: ignore[unreachable]
 
-                # Get semaphore (handler will manage acquire/release)
-                semaphore = self._get_episode_semaphore()
-
                 # Initialize episode(s) using handler
-                # Handler acquires semaphore and creates all needed episodes
+                # Concurrency is controlled by Inspect AI --max-samples (default: 8)
                 self._handler_state = await self._handler.initialize(
                     benchmark_task=benchmark_task,
                     session_id=self._session_id,
                     session_manager=self._session_manager,
-                    semaphore=semaphore,
                 )
 
                 # Extract episode information from handler state
@@ -590,13 +554,11 @@ class SABERSandboxEnvironment:
         except Exception as e:
             # Use handler for cleanup if available
             if self._handler is not None and self._handler_state is not None:
-                semaphore = self._get_episode_semaphore()
                 try:
                     cleanup_result = await self._handler.cleanup(
                         state=self._handler_state,
                         session_id=self._session_id,
                         session_manager=self._session_manager,
-                        semaphore=semaphore,
                     )
                     if cleanup_result.has_errors:
                         logger.warning(
@@ -724,7 +686,6 @@ class SABERSandboxEnvironment:
                         handler_state=self._handler_state,
                         session_id=self._session_id,
                         session_manager=self._session_manager,
-                        semaphore=self._get_episode_semaphore(),
                     )
                 elif (
                     self._handler_state
@@ -739,15 +700,12 @@ class SABERSandboxEnvironment:
                         handler_state=self._handler_state,
                         session_id=self._session_id,
                         session_manager=self._session_manager,
-                        semaphore=self._get_episode_semaphore(),
                     )
                 elif self._handler is not None and self._handler_state is not None:
-                    semaphore = self._get_episode_semaphore()
                     cleanup_result = await self._handler.cleanup(
                         state=self._handler_state,
                         session_id=self._session_id,
                         session_manager=self._session_manager,
-                        semaphore=semaphore,
                     )
                     if cleanup_result.has_errors:
                         logger.warning(

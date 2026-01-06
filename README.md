@@ -10,32 +10,6 @@ SABER provides a modern architecture for evaluating security agents through a du
 
 - **Client Side**: `inspect_ai` integration with async orchestration, agent management, and MCP client for tool access
 - **Server Side**: FastAPI REST API + FastMCP server managing sessions, benchmarks, and Docker-sandboxed execution
-- **Domain Management**: Integrated with `inspect eval` CLI with automatic server lifecycle management via task parameters
-
-The system emphasizes **fail-fast validation**, **type safety with Pydantic**, and **async context managers** for reliable resource management.
-
-## Key Components
-
-### Inspect AI Integration
-- **`SABERSandboxEnvironment`**: Custom sandbox environment implementing task/sample lifecycle hooks
-- **`create_domain_task`**: Factory for creating domain tasks with automatic server management
-- **`saber_tools`**: ToolSource providing lazy access to SABER MCP tools
-- **`SABERAgentRegistry`**: Domain-specific agent discovery and registration
-
-### Server Components
-- **`SessionManager`**: Central orchestrator for multi-session server management
-- **`SessionRestAPI`**: FastAPI endpoints for session and episode management
-- **`SessionMCPAPI`**: FastMCP server for tool discovery and execution
-- **`BenchmarkManager`**: YAML-based task and benchmark configuration
-- **`ExecutionManager`**: Docker sandbox orchestration for secure command execution
-
-### Domain Task Integration
-SABER domains are exposed as `inspect_ai` tasks with automatic lifecycle management:
-- **Automatic startup**: Server starts on first evaluation with health checks
-- **Flexible build modes**: Incremental build, complete rebuild, or selective rebuild via `-T` flags
-- **Task filtering**: Filter to specific scenarios using exact match or glob patterns
-- **Server persistence**: Keep server running between evaluations for faster iteration (default)
-- **Graceful shutdown**: Stop server after evaluation with `-T stop_saber_after=true`
 
 ## Quick Start
 
@@ -176,6 +150,32 @@ uv run inspect eval domains/excytin_demo --model openai/gpt-4 -T task_filter="in
 uv run inspect eval domains/excytin_demo --model openai/gpt-4 -T rest_port=9000 -T mcp_port=9001
 ```
 
+**Concurrency control:**
+
+```bash
+# Inspect AI provides two key concurrency controls:
+# --max-connections: Limits concurrent API calls to the LLM (default 10)
+#                    Use this to avoid rate limiting from your model provider
+# --max-samples:     Limits how many samples/episodes run in parallel (default 8)
+#                    Each sample is an independent evaluation episode with its own sandbox
+
+# Reduce LLM API concurrency (useful for rate-limited endpoints)
+uv run inspect eval domains/excytin_demo --model openai/gpt-4 --max-connections 5
+
+# Run samples sequentially (one at a time) - useful for debugging
+uv run inspect eval domains/excytin_demo --model openai/gpt-4 --max-samples 1
+
+# Run 4 samples in parallel with 20 concurrent LLM connections
+uv run inspect eval domains/excytin_demo --model openai/gpt-4 \
+  --max-samples 4 \
+  --max-connections 20
+
+# Combine with --limit to control total samples evaluated
+uv run inspect eval domains/excytin_demo --model openai/gpt-4 \
+  --limit 10 \
+  --max-samples 4
+```
+
 **Preflight validation:**
 
 ```bash
@@ -213,72 +213,6 @@ docker ps
 # Stop domain containers
 docker stop $(docker ps -q --filter "name=<domain_slug>")
 ```
-
-### Running Evaluations Programmatically
-
-For programmatic evaluation, use the standard `inspect eval()` API:
-
-```python
-from inspect_ai import eval
-
-# Evaluate a domain task directly
-results = eval(
-    "domains/excytin_demo",
-    model="openai/gpt-4",
-    task_args={
-        "task_filter": "incident_*",
-        "build": True,
-        "run_preflight": True,  # Validate environments before evaluation
-        "stop_saber_after": False  # Keep server running
-    }
-)
-
-# Or import the task function directly
-from domains.excytin_demo.excytin_demo import excytin_demo
-
-task = excytin_demo(
-    task_filter="incident_5_*",
-    rest_port=8000,
-    mcp_port=8001,
-    build=True
-)
-
-results = eval(task, model="openai/gpt-4")
-```
-
-For custom integration with SABER tools:
-
-```python
-from inspect_ai import Task, eval
-from inspect_ai.dataset import Sample
-from inspect_ai.solver import generate, use_tools
-from saber.inspect_ai import saber_tools
-
-# Create custom task with SABER sandbox
-task = Task(
-    dataset=[
-        Sample(
-            input="Investigate database breach in incident 5",
-            target="unauthorized access detected",
-            metadata={"task_id": "incident_5_task_1"}  # Required!
-        )
-    ],
-    sandbox=("saber", {
-        "domain_slug": "excytin_demo",
-        "domains_root": "domains",
-        "rest_port": 8000,
-        "mcp_port": 8001
-    }),
-    solver=[
-        use_tools(saber_tools()),  # Access SABER MCP tools
-        generate()
-    ]
-)
-
-results = eval(task, model="openai/gpt-4")
-```
-
-## Development and Contributing
 
 ### Development Setup
 

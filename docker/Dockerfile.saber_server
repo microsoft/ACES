@@ -28,19 +28,16 @@ WORKDIR /app
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
 
-# Install dependencies using uv
+# Install dependencies using pip
 # Uses secret mount for ADO git authentication (System.AccessToken in CI)
-# Note: Replaces MSECAIModels@ prefix with token@ for proper git authentication
 RUN --mount=type=secret,id=ADO_TOKEN,required=false \
     TOKEN="$(cat /run/secrets/ADO_TOKEN 2>/dev/null || echo '')" && \
     if [ -n "$TOKEN" ]; then \
         echo "Setting up ADO git authentication..."; \
-        git config --global url."https://${TOKEN}@dev.azure.com/MSECAIModels/".insteadOf "https://MSECAIModels@dev.azure.com/MSECAIModels/"; \
-    else \
-        echo "WARNING: No ADO_TOKEN found, private git dependencies may fail"; \
+        git config --global url."https://${TOKEN}@dev.azure.com".insteadOf "https://MSECAIModels@dev.azure.com"; \
     fi && \
-    uv pip install --system --no-cache -e . && \
-    git config --global --unset-all url.https://*@dev.azure.com/MSECAIModels/.insteadOf 2>/dev/null || true
+    pip install --no-cache-dir -e . && \
+    (git config --global --unset-all url."https://@dev.azure.com".insteadOf 2>/dev/null || true)
 
 # Create standard directories
 RUN mkdir -p /app/config /app/data /app/logs

@@ -31,7 +31,6 @@ def mock_config():
         mcp_port=(int, 8001),
         compose_template_path=(Path | None, None),
         cleanup=(bool, False),
-        max_concurrent_episodes=(int | None, None),
         enable_debug_logging=(bool, False),
         __config__=ConfigDict(frozen=True),
     )
@@ -41,7 +40,6 @@ def mock_config():
         rest_port=8000,
         mcp_port=8001,
         cleanup=False,
-        max_concurrent_episodes=None,
         enable_debug_logging=False,
     )
 
@@ -50,10 +48,8 @@ def mock_config():
 def cleanup_registry():
     """Clear the registry before and after each test."""
     SABERSandboxEnvironment._registry.clear()
-    SABERSandboxEnvironment._episode_semaphore = None
     yield
     SABERSandboxEnvironment._registry.clear()
-    SABERSandboxEnvironment._episode_semaphore = None
 
 
 class TestTaskInitErrorPaths:
@@ -173,7 +169,6 @@ class TestTaskInitErrorPaths:
             mcp_port=(int, 8001),
             compose_template_path=(Path | None, None),
             cleanup=(bool, False),
-            max_concurrent_episodes=(int | None, None),
             enable_debug_logging=(bool, True),  # Enable debug logging
             __config__=ConfigDict(frozen=True),
         )
@@ -183,7 +178,6 @@ class TestTaskInitErrorPaths:
             rest_port=8000,
             mcp_port=8001,
             cleanup=False,
-            max_concurrent_episodes=None,
             enable_debug_logging=True,
         )
 
@@ -259,7 +253,7 @@ class TestSampleInitPaths:
             mock_handler.initialize = AsyncMock(return_value=HandlerState(
                 episode_ids=["episode_123"],
                 primary_episode_id="episode_123",
-                semaphore_acquired=True,
+
             ))
             mock_handler.cleanup = AsyncMock()
             mock_get_handler.return_value = mock_handler
@@ -330,9 +324,9 @@ class TestTaskCleanupPaths:
 class TestHelperMethods:
     """Test internal helper methods."""
 
-    def test_default_concurrency_returns_none(self):
-        """Test that default_concurrency returns None for unlimited concurrency."""
-        assert SABERSandboxEnvironment.default_concurrency() is None
+    def test_default_concurrency_returns_sensible_default(self):
+        """Test that default_concurrency returns 8 (Inspect AI's default max_sandboxes)."""
+        assert SABERSandboxEnvironment.default_concurrency() == 8
 
     def test_config_files_returns_empty_list(self):
         """Test that config_files returns empty list."""
@@ -358,31 +352,6 @@ class TestHelperMethods:
         """Test that task_init_environment returns empty dict."""
         result = await SABERSandboxEnvironment.task_init_environment(None, {})
         assert result == {}
-
-    def test_get_episode_semaphore_unlimited(self):
-        """Test _get_episode_semaphore with unlimited concurrency."""
-        SABERSandboxEnvironment._max_concurrent_episodes = None
-        semaphore = SABERSandboxEnvironment._get_episode_semaphore()
-        assert semaphore is None
-
-    def test_get_episode_semaphore_creates_semaphore(self):
-        """Test _get_episode_semaphore creates semaphore when limit set."""
-        SABERSandboxEnvironment._max_concurrent_episodes = 5
-        SABERSandboxEnvironment._episode_semaphore = None
-
-        semaphore = SABERSandboxEnvironment._get_episode_semaphore()
-
-        assert semaphore is not None
-        assert isinstance(semaphore, asyncio.Semaphore)
-
-    def test_get_episode_semaphore_reuses_existing(self):
-        """Test _get_episode_semaphore reuses existing semaphore."""
-        SABERSandboxEnvironment._max_concurrent_episodes = 5
-
-        semaphore1 = SABERSandboxEnvironment._get_episode_semaphore()
-        semaphore2 = SABERSandboxEnvironment._get_episode_semaphore()
-
-        assert semaphore1 is semaphore2
 
 
 class TestResetState:

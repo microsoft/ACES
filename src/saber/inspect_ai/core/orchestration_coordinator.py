@@ -9,7 +9,6 @@ The coordinator handles:
 - Dependency tracking and signaling
 - Episode ID coordination across samples
 - Cascade termination of entire orchestration groups
-- Semaphore management for cleanup
 """
 
 import asyncio
@@ -44,7 +43,6 @@ class OrchestrationGroup:
     orchestration_id: str
     samples: dict[str, SampleRegistration] = field(default_factory=dict)
     root_role: str | None = None
-    semaphore: asyncio.Semaphore | None = None
     terminated: bool = False
 
     # Score coordination fields
@@ -87,7 +85,6 @@ class OrchestrationCoordinator:
         orchestration_id: str,
         role: str,
         sample_id: str,
-        semaphore: asyncio.Semaphore | None = None,
     ) -> bool:
         """Register a root sample (no dependency).
 
@@ -95,7 +92,6 @@ class OrchestrationCoordinator:
             orchestration_id: Unique ID for this orchestration group
             role: Role of this sample (e.g., "blue", "red")
             sample_id: Unique sample ID
-            semaphore: Optional semaphore for concurrency control
 
         Returns:
             True if registration succeeded, False otherwise
@@ -105,7 +101,6 @@ class OrchestrationCoordinator:
                 self._orchestrations[orchestration_id] = OrchestrationGroup(
                     orchestration_id=orchestration_id,
                     root_role=role,
-                    semaphore=semaphore,
                 )
 
             group = self._orchestrations[orchestration_id]
@@ -456,17 +451,15 @@ class OrchestrationCoordinator:
         self,
         orchestration_id: str,
         role: str,
-        semaphore: asyncio.Semaphore | None = None,
     ) -> bool:
         """Cleanup a sample from orchestration.
 
         Args:
             orchestration_id: Orchestration ID
             role: Sample's role
-            semaphore: Semaphore (unused, for compatibility)
 
         Returns:
-            True if this is the last sample and semaphore should be released
+            True if this is the last sample and group was removed
         """
         group = self._orchestrations.get(orchestration_id)
         if not group:

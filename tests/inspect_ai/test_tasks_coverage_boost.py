@@ -150,7 +150,7 @@ class TestExternalDomainDetection:
                 rebuild=None,
                 compose_template_path=None,
                 stop_saber_after=False,
-                max_concurrent_episodes=3,
+
                 run_preflight=False,
             )
 
@@ -190,7 +190,7 @@ class TestExternalDomainDetection:
                     rebuild=None,
                     compose_template_path=None,
                     stop_saber_after=False,
-                    max_concurrent_episodes=3,
+
                     run_preflight=False,
                 )
 
@@ -254,7 +254,7 @@ class TestExternalDomainDetection:
                 rebuild=None,
                 compose_template_path=None,
                 stop_saber_after=False,
-                max_concurrent_episodes=3,
+
                 run_preflight=True,  # Enable preflight
             )
 
@@ -262,7 +262,7 @@ class TestExternalDomainDetection:
             mock_preflight.assert_called_once_with(
                 domain_slug="test_domain",
                 domains_root=Path("/test/domains"),
-                concurrency=3,
+                concurrency=8,  # Default concurrency from get_default_concurrency()
                 timeout=180,
             )
 
@@ -379,7 +379,7 @@ class TestOrchestrationLogging:
                 rebuild=None,
                 compose_template_path=None,
                 stop_saber_after=False,
-                max_concurrent_episodes=3,
+
                 run_preflight=False,
             )
 
@@ -431,7 +431,7 @@ class TestCleanupErrorHandling:
                     rebuild=None,
                     compose_template_path=None,
                     stop_saber_after=False,
-                    max_concurrent_episodes=3,
+
                     run_preflight=False,
                 )
 
@@ -469,7 +469,7 @@ class TestCleanupErrorHandling:
                     rebuild=None,
                     compose_template_path=None,
                     stop_saber_after=False,
-                    max_concurrent_episodes=3,
+
                     run_preflight=False,
                 )
 
@@ -498,7 +498,7 @@ class TestCleanupErrorHandling:
                     rebuild=None,
                     compose_template_path=None,
                     stop_saber_after=False,
-                    max_concurrent_episodes=3,
+
                     run_preflight=False,
                 )
 
@@ -571,7 +571,7 @@ class TestRoleConfigWithAllModels:
                 rebuild=None,
                 compose_template_path=None,
                 stop_saber_after=False,
-                max_concurrent_episodes=3,
+
                 run_preflight=False,
                 role_config=role_config,
             )

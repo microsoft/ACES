@@ -187,7 +187,6 @@ def create_domain_task(
         rebuild: str | None = None,
         rebuild_all: bool = False,
         stop_saber_after: bool = False,
-        max_concurrent_episodes: int = 16,
         run_preflight: bool = False,
         enable_debug_logging: bool = False,
         roles: str | dict | None = None,
@@ -212,7 +211,6 @@ def create_domain_task(
             rebuild_all: Remove and rebuild all images (default: False)
             stop_saber_after: Stop SABER domain after task completes (default: False).
                 If False, server stays running for faster re-runs.
-            max_concurrent_episodes: Max concurrent episodes (default: 8, 0 = unlimited)
             run_preflight: Run preflight check on all compose environments before evaluation
                 (default: False). If any environments fail health checks, evaluation aborts.
             enable_debug_logging: Enable detailed episode lifecycle debug logging
@@ -276,7 +274,6 @@ def create_domain_task(
                 rebuild_param,
                 compose_template_path,
                 stop_saber_after,
-                max_concurrent_episodes,
                 run_preflight,
                 enable_debug_logging,
                 role_config_obj,
@@ -302,7 +299,6 @@ async def _start_and_load_tasks(
     rebuild: str | None,
     compose_template_path: Path | None,
     stop_saber_after: bool,
-    max_concurrent_episodes: int,
     run_preflight: bool,
     enable_debug_logging: bool = False,
     role_config: Any | None = None,
@@ -336,8 +332,9 @@ async def _start_and_load_tasks(
         rebuild: Optional rebuild filter
         compose_template_path: Optional compose template
         stop_saber_after: Stop domain after evaluation
-        max_concurrent_episodes: Max concurrent episodes
         run_preflight: Run preflight check on all compose environments before starting
+        enable_debug_logging: Enable detailed episode lifecycle debug logging
+        role_config: Optional role-based configuration for orchestrated tasks
         **kwargs: Additional parameters
 
     Returns:
@@ -467,11 +464,12 @@ async def _start_and_load_tasks(
             # No domain running - start it fresh
 
             # Run preflight check if requested (before starting domain)
+            # Use default concurrency of 8 for preflight environment validation
             if run_preflight:
                 await run_preflight_check(
                     domain_slug=domain_slug,
                     domains_root=domains_root,
-                    concurrency=max_concurrent_episodes,
+                    concurrency=8,  # Default for preflight validation
                     timeout=180,
                 )
 
@@ -630,7 +628,6 @@ async def _start_and_load_tasks(
                     "mcp_port": mcp_port,
                     "compose_template_path": compose_template_path,
                     "cleanup": stop_saber_after,  # Pass cleanup flag to sandbox
-                    "max_concurrent_episodes": max_concurrent_episodes,  # Limit concurrent episode execution
                     "enable_debug_logging": enable_debug_logging,  # Enable detailed lifecycle debug logging
                 },
             ),

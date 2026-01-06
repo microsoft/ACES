@@ -6,12 +6,12 @@ a separate sample coordinated via OrchestrationCoordinator.
 
 Key features:
 - Root vs dependent sample handling
-- Semaphore acquisition for root samples
 - Dependency waiting and episode coordination
 - Cascade termination for cleanup
+
+Concurrency is controlled at the Inspect AI level via --max-samples.
 """
 
-import asyncio
 from typing import Any
 
 from saber.client.client_session import ClientSessionManager
@@ -44,7 +44,6 @@ class OrchestrationInitializer:
         session_id: str,
         session_manager: ClientSessionManager,
         sample_id: str,
-        semaphore: asyncio.Semaphore | None,
     ) -> OrchestrationSubTaskState:
         """Initialize episode for an orchestrated sub-task sample.
 
@@ -52,7 +51,7 @@ class OrchestrationInitializer:
         sub-task (e.g., blue, red) is a separate sample coordinated via OrchestrationCoordinator.
 
         Key behaviors:
-        - Root sample (depends_on_role=None): Acquires semaphore, registers orchestration
+        - Root sample (depends_on_role=None): Registers orchestration
         - Dependent sample: Joins orchestration, waits for dependency to be READY
         - All samples: Create single episode, record episode_id with coordinator
 
@@ -61,10 +60,9 @@ class OrchestrationInitializer:
             session_id: SABER session ID
             session_manager: Client session manager for API calls
             sample_id: Unique sample identifier
-            semaphore: Optional episode concurrency semaphore
 
         Returns:
-            Dict with orchestration metadata (backward compatible)
+            OrchestrationSubTaskState with orchestration metadata
 
         Raises:
             SandboxError: If initialization fails
@@ -76,29 +74,14 @@ class OrchestrationInitializer:
         order = int(metadata[MetadataKeys.ORDER])
 
         coordinator = OrchestrationCoordinator()
-        semaphore_acquired = False
 
         try:
             if depends_on_role is None:
-                # Root sample - acquire semaphore and register orchestration
-                if semaphore:
-                    await semaphore.acquire()
-                    semaphore_acquired = True
-                    logger.debug(
-                        f"Acquired semaphore for root sample {role} in orchestration {orchestration_id}",
-                        extra={
-                            "orchestration_id": orchestration_id,
-                            "role": role,
-                            "semaphore_available": semaphore._value if hasattr(semaphore, "_value") else "unknown",
-                        },
-                    )
-
-                # Register root sample with coordinator
+                # Root sample - register orchestration
                 success = coordinator.register_root_sample(
                     orchestration_id=orchestration_id,
                     role=role,
                     sample_id=sample_id,
-                    semaphore=semaphore,
                 )
 
                 if not success:
@@ -181,7 +164,6 @@ class OrchestrationInitializer:
             handler_state = OrchestrationSubTaskState(
                 episode_ids=[episode_id],
                 primary_episode_id=episode_id,
-                semaphore_acquired=semaphore_acquired,
                 orchestration_id=orchestration_id,
                 sub_task_role=role,
             )
@@ -198,17 +180,6 @@ class OrchestrationInitializer:
             return handler_state
 
         except Exception as e:
-            # Cleanup on failure
-            if semaphore_acquired and semaphore:
-                semaphore.release()
-                logger.debug(
-                    "Released semaphore after orchestrated sub-task init failure",
-                    extra={
-                        "orchestration_id": orchestration_id,
-                        "role": role,
-                    },
-                )
-
             # Trigger cascade termination if orchestration was started
             try:
                 coordinator.trigger_termination(orchestration_id)
@@ -225,7 +196,6 @@ class OrchestrationInitializer:
         handler_state: dict[str, Any] | OrchestrationSubTaskState,
         session_id: str,
         session_manager: ClientSessionManager,
-        semaphore: asyncio.Semaphore | None,
     ) -> None:
         """Cleanup orchestrated sub-task sample with cascade termination.
 
@@ -233,13 +203,11 @@ class OrchestrationInitializer:
         1. Triggers cascade termination (marks all samples in orchestration for cleanup)
         2. Ends all episodes returned by coordinator
         3. Cleans up this sample
-        4. Releases semaphore if this is the last sample
 
         Args:
             handler_state: Dict or OrchestrationSubTaskState (backward compatible)
             session_id: SABER session ID
             session_manager: Client session manager for API calls
-            semaphore: Optional episode concurrency semaphore
 
         Raises:
             SandboxError: If handler state is invalid
@@ -249,7 +217,6 @@ class OrchestrationInitializer:
             handler_state = OrchestrationSubTaskState(
                 episode_ids=handler_state.get("episode_ids", []),
                 primary_episode_id=handler_state.get("primary_episode_id", ""),
-                semaphore_acquired=handler_state.get("semaphore_acquired", False),
                 orchestration_id=handler_state.get("orchestration_id", ""),
                 sub_task_role=handler_state.get("sub_task_role", ""),
             )
@@ -294,30 +261,16 @@ class OrchestrationInitializer:
                     },
                 )
 
-        # Cleanup this sample and check if semaphore should be released
-        should_release = coordinator.cleanup_sample(
+        # Cleanup this sample
+        coordinator.cleanup_sample(
             orchestration_id=orchestration_id,
             role=role,
-            semaphore=semaphore,
         )
-
-        # Release semaphore if this is the last sample
-        if should_release and semaphore:
-            semaphore.release()
-            logger.debug(
-                f"Released semaphore after last sample cleanup in orchestration {orchestration_id}",
-                extra={
-                    "orchestration_id": orchestration_id,
-                    "role": role,
-                    "semaphore_available": semaphore._value if hasattr(semaphore, "_value") else "unknown",
-                },
-            )
 
         logger.info(
             f"Cleaned up orchestrated sub-task {role}",
             extra={
                 "orchestration_id": orchestration_id,
                 "role": role,
-                "semaphore_released": should_release,
             },
         )

@@ -4,7 +4,6 @@ Tests focus on:
 - Unsupported methods (exec, read_file, write_file, connection)
 - _deserialize_benchmark_task
 - config_files, config_deserialize
-- _get_episode_semaphore
 - Error paths and edge cases
 """
 
@@ -235,63 +234,13 @@ class TestDeserializeBenchmarkTask:
             instance._deserialize_benchmark_task(data)
 
 
-class TestGetEpisodeSemaphore:
-    """Test _get_episode_semaphore class method."""
-
-    def test_get_episode_semaphore_returns_none_when_unlimited(self):
-        """Test that semaphore is None when max_concurrent_episodes is None."""
-        SABERSandboxEnvironment._max_concurrent_episodes = None
-        SABERSandboxEnvironment._episode_semaphore = None
-
-        semaphore = SABERSandboxEnvironment._get_episode_semaphore()
-
-        assert semaphore is None
-
-    def test_get_episode_semaphore_returns_none_when_zero(self):
-        """Test that semaphore is None when max_concurrent_episodes is 0."""
-        SABERSandboxEnvironment._max_concurrent_episodes = 0
-        SABERSandboxEnvironment._episode_semaphore = None
-
-        semaphore = SABERSandboxEnvironment._get_episode_semaphore()
-
-        assert semaphore is None
-
-    def test_get_episode_semaphore_creates_semaphore(self):
-        """Test that semaphore is created with configured limit."""
-        import asyncio
-
-        SABERSandboxEnvironment._max_concurrent_episodes = 5
-        SABERSandboxEnvironment._episode_semaphore = None
-
-        semaphore = SABERSandboxEnvironment._get_episode_semaphore()
-
-        assert semaphore is not None
-        assert isinstance(semaphore, asyncio.Semaphore)
-        # Reset for other tests
-        SABERSandboxEnvironment._episode_semaphore = None
-
-    def test_get_episode_semaphore_reuses_existing(self):
-        """Test that existing semaphore is reused."""
-        import asyncio
-
-        SABERSandboxEnvironment._max_concurrent_episodes = 3
-        SABERSandboxEnvironment._episode_semaphore = asyncio.Semaphore(3)
-        existing_semaphore = SABERSandboxEnvironment._episode_semaphore
-
-        semaphore = SABERSandboxEnvironment._get_episode_semaphore()
-
-        assert semaphore is existing_semaphore
-        # Reset for other tests
-        SABERSandboxEnvironment._episode_semaphore = None
-
-
 class TestDefaultConcurrency:
     """Test default_concurrency class method."""
 
-    def test_default_concurrency_returns_none(self):
-        """Test that default_concurrency always returns None."""
+    def test_default_concurrency_returns_default_value(self):
+        """Test that default_concurrency returns the default concurrency value (8)."""
         result = SABERSandboxEnvironment.default_concurrency()
-        assert result is None
+        assert result == 8
 
 
 class TestClearStaleOwnership:
@@ -371,7 +320,6 @@ class TestSampleInitValidation:
             mcp_port=(int, 8001),
             compose_template_path=(Path | None, None),
             cleanup=(bool, False),
-            max_concurrent_episodes=(int | None, None),
             __config__=ConfigDict(frozen=True),
         )
         config = SABERConfig(

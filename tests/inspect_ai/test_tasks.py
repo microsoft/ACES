@@ -163,7 +163,6 @@ class TestStartAndLoadTasks:
                 rebuild=None,
                 compose_template_path=None,
                 stop_saber_after=False,
-                max_concurrent_episodes=3,
                 run_preflight=False,
             )
 
@@ -230,7 +229,6 @@ class TestStartAndLoadTasks:
                 rebuild=None,
                 compose_template_path=None,
                 stop_saber_after=False,
-                max_concurrent_episodes=3,
                 run_preflight=False,
             )
 
@@ -266,7 +264,6 @@ class TestStartAndLoadTasks:
                     rebuild=None,
                     compose_template_path=None,
                     stop_saber_after=False,
-                    max_concurrent_episodes=3,
                     run_preflight=False,
                 )
 
@@ -307,7 +304,6 @@ class TestStartAndLoadTasks:
                     rebuild=None,
                     compose_template_path=None,
                     stop_saber_after=False,
-                    max_concurrent_episodes=3,
                     run_preflight=False,
                 )
 
@@ -371,7 +367,6 @@ class TestPreflightCheck:
                 rebuild=None,
                 compose_template_path=None,
                 stop_saber_after=False,
-                max_concurrent_episodes=3,
                 run_preflight=False,
             )
 
@@ -625,7 +620,6 @@ roles:
                 rebuild=None,
                 compose_template_path=None,
                 stop_saber_after=False,
-                max_concurrent_episodes=3,
                 run_preflight=False,
                 role_config=None,  # Will be loaded from file in task_callable
             )

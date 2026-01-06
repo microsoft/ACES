@@ -19,12 +19,11 @@ class HandlerState:
     """Type-safe handler state for episode lifecycle management.
 
     Base class for all handler state objects, providing common fields and methods
-    for episode tracking and semaphore management.
+    for episode tracking.
     """
 
     episode_ids: list[str]
     primary_episode_id: str
-    semaphore_acquired: bool
 
     def has_multiple_episodes(self) -> bool:
         """Check if this state manages multiple episodes."""
@@ -38,7 +37,6 @@ class HandlerState:
         return {
             "episode_ids": self.episode_ids,
             "primary_episode_id": self.primary_episode_id,
-            "semaphore_acquired": self.semaphore_acquired,
         }
 
 

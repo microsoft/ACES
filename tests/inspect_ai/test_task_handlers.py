@@ -1,8 +1,8 @@
 """
 Unit tests for BenchmarkTaskHandler polymorphic handlers.
 
-Tests the handler pattern for single and orchestrated task execution,
-including semaphore management and episode lifecycle.
+Tests the handler pattern for single and orchestrated task execution
+and episode lifecycle management.
 """
 
 import asyncio
@@ -67,13 +67,11 @@ class TestSingleEpisodeTaskHandler:
     async def test_initialize_single_episode(self, sample_single_task, mock_session_manager):
         """Test initializing a single episode task."""
         handler = SingleEpisodeTaskHandler()
-        semaphore = asyncio.Semaphore(8)
 
         state = await handler.initialize(
             benchmark_task=sample_single_task,
             session_id="session_123",
             session_manager=mock_session_manager,
-            semaphore=semaphore,
         )
 
         # Verify episode was created
@@ -83,32 +81,11 @@ class TestSingleEpisodeTaskHandler:
         # Verify state structure
         assert state.episode_ids == ["episode_123"]
         assert state.primary_episode_id == "episode_123"
-        assert state.semaphore_acquired is True
-
-        # Verify semaphore was acquired
-        assert semaphore._value == 7  # Started at 8, now 7
 
     @pytest.mark.asyncio
-    async def test_initialize_without_semaphore(self, sample_single_task, mock_session_manager):
-        """Test initializing without semaphore (unlimited concurrency)."""
+    async def test_initialize_failure_raises_exception(self, sample_single_task, mock_session_manager):
+        """Test that initialization failure raises exception."""
         handler = SingleEpisodeTaskHandler()
-
-        state = await handler.initialize(
-            benchmark_task=sample_single_task,
-            session_id="session_123",
-            session_manager=mock_session_manager,
-            semaphore=None,
-        )
-
-        # Should still work without semaphore
-        assert state.episode_ids == ["episode_123"]
-        assert state.semaphore_acquired is False
-
-    @pytest.mark.asyncio
-    async def test_initialize_failure_releases_semaphore(self, sample_single_task, mock_session_manager):
-        """Test that semaphore is released when initialization fails."""
-        handler = SingleEpisodeTaskHandler()
-        semaphore = asyncio.Semaphore(8)
 
         # Make create_episode fail
         mock_session_manager.create_episode.side_effect = Exception("Creation failed")
@@ -118,11 +95,7 @@ class TestSingleEpisodeTaskHandler:
                 benchmark_task=sample_single_task,
                 session_id="session_123",
                 session_manager=mock_session_manager,
-                semaphore=semaphore,
             )
-
-        # Semaphore should be released
-        assert semaphore._value == 8  # Back to original
 
     @pytest.mark.asyncio
     async def test_cleanup_single_episode(self, mock_session_manager):
@@ -130,47 +103,31 @@ class TestSingleEpisodeTaskHandler:
         from saber.inspect_ai.core.types import HandlerState
 
         handler = SingleEpisodeTaskHandler()
-        semaphore = asyncio.Semaphore(7)  # Simulate acquired semaphore
-
-        # Simulate handler that has acquired semaphore during initialize()
-        handler._semaphore_acquired = True
-        handler._acquired_semaphore_ref = semaphore
 
         state = HandlerState(
             episode_ids=["episode_123"],
             primary_episode_id="episode_123",
-            semaphore_acquired=True,
         )
 
         result = await handler.cleanup(
             state=state,
             session_id="session_123",
             session_manager=mock_session_manager,
-            semaphore=semaphore,
         )
 
         # Verify cleanup result
         assert isinstance(result, CleanupResult)
         assert result.success is True
         assert result.error_count == 0
-        assert result.semaphore_released is True
         assert result.threshold_exceeded is False
 
         # Verify episode was ended
         mock_session_manager.end_episode.assert_called_once_with("session_123", "episode_123")
 
-        # Verify semaphore was released
-        assert semaphore._value == 8
-
     @pytest.mark.asyncio
     async def test_cleanup_handles_end_episode_failure(self, mock_session_manager):
         """Test that cleanup continues even if end_episode fails."""
         handler = SingleEpisodeTaskHandler()
-        semaphore = asyncio.Semaphore(7)
-
-        # Simulate handler that has acquired semaphore during initialize()
-        handler._semaphore_acquired = True
-        handler._acquired_semaphore_ref = semaphore
 
         # Make end_episode fail
         mock_session_manager.end_episode.side_effect = Exception("End failed")
@@ -180,7 +137,6 @@ class TestSingleEpisodeTaskHandler:
         state = HandlerState(
             episode_ids=["episode_123"],
             primary_episode_id="episode_123",
-            semaphore_acquired=True,
         )
 
         # Should not raise exception (errors tracked in result)
@@ -188,7 +144,6 @@ class TestSingleEpisodeTaskHandler:
             state=state,
             session_id="session_123",
             session_manager=mock_session_manager,
-            semaphore=semaphore,
         )
 
         # Verify cleanup result shows error but still succeeded in cleanup
@@ -197,11 +152,7 @@ class TestSingleEpisodeTaskHandler:
         assert result.error_count == 1
         assert len(result.errors) == 1
         assert "Failed to end episode" in result.errors[0]
-        assert result.semaphore_released is True  # Semaphore still released
         assert result.threshold_exceeded is False
-
-        # Semaphore should still be released
-        assert semaphore._value == 8
 
     @pytest.mark.asyncio
     async def test_type_check_single_episode_handler(self, mock_session_manager):
@@ -225,7 +176,7 @@ class TestSingleEpisodeTaskHandler:
                     instruction_prompt="test",
                     assistant_prompt="test",
                     submit_prompt="test",
-            continue_prompt="",
+                    continue_prompt="",
                 )
             ],
             episode_attempts=1,
@@ -236,7 +187,6 @@ class TestSingleEpisodeTaskHandler:
                 benchmark_task=orchestrated_task,
                 session_id="session_123",
                 session_manager=mock_session_manager,
-                semaphore=None,
             )
 
 
@@ -262,7 +212,7 @@ class TestOrchestratedTaskHandler:
                     instruction_prompt="test",
                     assistant_prompt="test",
                     submit_prompt="test",
-            continue_prompt="",
+                    continue_prompt="",
                 ),
                 SubTaskDefinition(
                     task_id="red_task_1",
@@ -277,7 +227,7 @@ class TestOrchestratedTaskHandler:
                     instruction_prompt="test",
                     assistant_prompt="test",
                     submit_prompt="test",
-            continue_prompt="",
+                    continue_prompt="",
                 ),
             ],
             episode_attempts=1,
@@ -317,13 +267,11 @@ class TestOrchestratedTaskHandler:
     ):
         """Test initializing an orchestrated task creates all episodes."""
         handler = OrchestratedTaskHandler()
-        semaphore = asyncio.Semaphore(8)
 
         state = await handler.initialize(
             benchmark_task=sample_orchestrated_task,
             session_id="session_123",
             session_manager=mock_session_manager_orchestrated,
-            semaphore=semaphore,
         )
 
         # Verify both episodes were created in order
@@ -336,10 +284,6 @@ class TestOrchestratedTaskHandler:
         assert len(state.episode_ids) == 2
         assert state.episode_ids == ["episode_blue", "episode_red"]
         assert state.primary_episode_id == "episode_blue"
-        assert state.semaphore_acquired is True
-
-        # Verify only ONE semaphore slot was acquired for entire orchestration
-        assert semaphore._value == 7  # Started at 8, now 7
 
     @pytest.mark.asyncio
     async def test_initialize_waits_for_each_episode_ready(
@@ -352,7 +296,6 @@ class TestOrchestratedTaskHandler:
             benchmark_task=sample_orchestrated_task,
             session_id="session_123",
             session_manager=mock_session_manager_orchestrated,
-            semaphore=None,
         )
 
         # Verify wait_for_episode_ready was called for each episode
@@ -367,7 +310,6 @@ class TestOrchestratedTaskHandler:
     ):
         """Test that partial episodes are cleaned up when initialization fails."""
         handler = OrchestratedTaskHandler()
-        semaphore = asyncio.Semaphore(8)
 
         # Make second episode creation fail
         mock_session_manager_orchestrated.create_episode = AsyncMock(
@@ -388,24 +330,15 @@ class TestOrchestratedTaskHandler:
                 benchmark_task=sample_orchestrated_task,
                 session_id="session_123",
                 session_manager=mock_session_manager_orchestrated,
-                semaphore=semaphore,
             )
 
         # Verify first episode was cleaned up
         mock_session_manager_orchestrated.end_episode.assert_called_once_with("session_123", "episode_blue")
 
-        # Semaphore should be released
-        assert semaphore._value == 8
-
     @pytest.mark.asyncio
     async def test_cleanup_orchestrated_task(self, mock_session_manager_orchestrated):
         """Test cleaning up an orchestrated task ends all episodes."""
         handler = OrchestratedTaskHandler()
-        semaphore = asyncio.Semaphore(7)  # Simulate acquired semaphore
-
-        # Simulate handler that has acquired semaphore during initialize()
-        handler._semaphore_acquired = True
-        handler._acquired_semaphore_ref = semaphore
 
         from saber.inspect_ai.core.types import OrchestratedHandlerState
 
@@ -416,21 +349,18 @@ class TestOrchestratedTaskHandler:
                 {"episode_id": "episode_red", "task_id": "red_task_1", "role": "red"},
             ],
             primary_episode_id="episode_blue",
-            semaphore_acquired=True,
         )
 
         result = await handler.cleanup(
             state=state,
             session_id="session_123",
             session_manager=mock_session_manager_orchestrated,
-            semaphore=semaphore,
         )
 
         # Verify cleanup result
         assert isinstance(result, CleanupResult)
         assert result.success is True
         assert result.error_count == 0
-        assert result.semaphore_released is True
         assert result.threshold_exceeded is False
 
         # Verify all episodes were ended
@@ -439,18 +369,10 @@ class TestOrchestratedTaskHandler:
         assert calls[0][0] == ("session_123", "episode_blue")
         assert calls[1][0] == ("session_123", "episode_red")
 
-        # Verify semaphore was released AFTER all episodes cleaned up
-        assert semaphore._value == 8
-
     @pytest.mark.asyncio
     async def test_cleanup_continues_on_individual_failures(self, mock_session_manager_orchestrated):
         """Test that cleanup continues even if individual episode ends fail."""
         handler = OrchestratedTaskHandler()
-        semaphore = asyncio.Semaphore(7)
-
-        # Simulate handler that has acquired semaphore during initialize()
-        handler._semaphore_acquired = True
-        handler._acquired_semaphore_ref = semaphore
 
         # Make first episode end fail
         mock_session_manager_orchestrated.end_episode = AsyncMock(
@@ -462,7 +384,6 @@ class TestOrchestratedTaskHandler:
         state = OrchestratedHandlerState(
             episode_ids=["episode_blue", "episode_red"],
             primary_episode_id="episode_blue",
-            semaphore_acquired=True,
         )
 
         # Should not raise exception (errors tracked in result)
@@ -470,7 +391,6 @@ class TestOrchestratedTaskHandler:
             state=state,
             session_id="session_123",
             session_manager=mock_session_manager_orchestrated,
-            semaphore=semaphore,
         )
 
         # Verify cleanup result shows error
@@ -478,14 +398,10 @@ class TestOrchestratedTaskHandler:
         assert result.success is False  # First episode failed
         assert result.error_count == 1
         assert len(result.errors) == 1
-        assert result.semaphore_released is True  # Semaphore still released
         assert result.threshold_exceeded is False
 
         # Should have tried to end both episodes
         assert mock_session_manager_orchestrated.end_episode.call_count == 2
-
-        # Semaphore should still be released
-        assert semaphore._value == 8
 
 
 class TestTaskHandlerFactory:
@@ -528,7 +444,7 @@ class TestTaskHandlerFactory:
                     instruction_prompt="test",
                     assistant_prompt="test",
                     submit_prompt="test",
-            continue_prompt="",
+                    continue_prompt="",
                 )
             ],
             episode_attempts=1,
@@ -546,73 +462,8 @@ class TestTaskHandlerFactory:
             get_benchmark_task_handler(invalid_task)
 
 
-class TestSemaphoreLifecycle:
-    """Test semaphore lifecycle management across handlers."""
-
-    @pytest.mark.asyncio
-    async def test_semaphore_released_on_init_failure_single(self):
-        """Test semaphore is released when single task init fails."""
-        handler = SingleEpisodeTaskHandler()
-        semaphore = asyncio.Semaphore(8)
-        manager = AsyncMock()
-        manager.create_episode = AsyncMock(side_effect=Exception("Failed"))
-
-        task = SingleEpisodeTask(
-            benchmark_task_id="test_1",
-            task_id="test_1",
-            domain="test",
-            title="Test",
-            description="Test",
-            episode_attempts=1,
-            max_steps=10,
-            instruction_prompt="test",
-            assistant_prompt="test",
-            submit_prompt="test",
-            continue_prompt="",
-        )
-
-        with pytest.raises(Exception):
-            await handler.initialize(task, "session_1", manager, semaphore)
-
-        # Semaphore must be released
-        assert semaphore._value == 8
-
-    @pytest.mark.asyncio
-    async def test_semaphore_released_on_init_failure_orchestrated(self):
-        """Test semaphore is released when orchestrated task init fails."""
-        handler = OrchestratedTaskHandler()
-        semaphore = asyncio.Semaphore(8)
-        manager = AsyncMock()
-        manager.create_episode = AsyncMock(side_effect=Exception("Failed"))
-        manager.end_episode = AsyncMock()
-
-        task = OrchestratedTask(
-            benchmark_task_id="orch_1",
-            orchestration_strategy=OrchestrationStrategy.SEQUENTIAL_PAIRED,
-            sub_tasks=[
-                SubTaskDefinition(
-                    task_id="sub_1",
-                    role="test",
-                    order=0,
-                    domain="test",
-                    title="Test",
-                    description="Test",
-                    episode_attempts=1,
-                    max_steps=10,
-                    instruction_prompt="test",
-                    assistant_prompt="test",
-                    submit_prompt="test",
-            continue_prompt="",
-                )
-            ],
-            episode_attempts=1,
-        )
-
-        with pytest.raises(Exception):
-            await handler.initialize(task, "session_1", manager, semaphore)
-
-        # Semaphore must be released
-        assert semaphore._value == 8
+class TestEpisodeLifecycle:
+    """Test episode lifecycle management."""
 
     @pytest.mark.asyncio
     async def test_orchestration_strategy_validation(self):
@@ -637,7 +488,7 @@ class TestSemaphoreLifecycle:
                     instruction_prompt="test",
                     assistant_prompt="test",
                     submit_prompt="test",
-            continue_prompt="",
+                    continue_prompt="",
                 )
             ],
             episode_attempts=1,
@@ -645,23 +496,18 @@ class TestSemaphoreLifecycle:
 
         # Should raise NotImplementedError for unsupported strategy
         with pytest.raises(NotImplementedError, match="not yet implemented"):
-            await handler.initialize(task, "session_1", manager, None)
+            await handler.initialize(task, "session_1", manager)
 
         # Test with CONDITIONAL strategy too
         task.orchestration_strategy = OrchestrationStrategy.CONDITIONAL
         with pytest.raises(NotImplementedError, match="not yet implemented"):
-            await handler.initialize(task, "session_1", manager, None)
+            await handler.initialize(task, "session_1", manager)
 
     @pytest.mark.asyncio
     async def test_cleanup_threshold_exceeded_raises_exception(self):
         """Test that cleanup raises RuntimeError when error threshold is exceeded."""
         handler = SingleEpisodeTaskHandler()
         manager = AsyncMock()
-        semaphore = asyncio.Semaphore(7)
-
-        # Simulate handler that has acquired semaphore
-        handler._semaphore_acquired = True
-        handler._acquired_semaphore_ref = semaphore
 
         # Set error count above threshold (CLEANUP_ERROR_THRESHOLD = 5)
         handler._cleanup_error_count = 6
@@ -671,15 +517,11 @@ class TestSemaphoreLifecycle:
         state = HandlerState(
             episode_ids=["episode_123"],
             primary_episode_id="episode_123",
-            semaphore_acquired=True,
         )
 
         # Should raise RuntimeError when threshold exceeded
         with pytest.raises(RuntimeError, match="Cleanup error threshold exceeded"):
-            await handler.cleanup(state, "session_1", manager, semaphore)
-
-        # Semaphore should still be released even though exception raised
-        assert semaphore._value == 8
+            await handler.cleanup(state, "session_1", manager)
 
     @pytest.mark.asyncio
     async def test_cleanup_result_dataclass_properties(self):
@@ -689,7 +531,6 @@ class TestSemaphoreLifecycle:
             success=True,
             error_count=0,
             errors=[],
-            semaphore_released=True,
             threshold_exceeded=False,
         )
         assert success_result.has_errors is False
@@ -699,7 +540,6 @@ class TestSemaphoreLifecycle:
             success=False,
             error_count=2,
             errors=["Error 1", "Error 2"],
-            semaphore_released=True,
             threshold_exceeded=False,
         )
         assert failure_result.has_errors is True
@@ -710,7 +550,6 @@ class TestSemaphoreLifecycle:
             success=False,
             error_count=6,
             errors=["Error 1", "Error 2", "Error 3", "Error 4", "Error 5", "Error 6"],
-            semaphore_released=True,
             threshold_exceeded=True,
         )
         assert threshold_result.threshold_exceeded is True
@@ -721,7 +560,6 @@ class TestSemaphoreLifecycle:
         """Test that episode creation timeout is handled correctly for single tasks."""
         handler = SingleEpisodeTaskHandler()
         manager = AsyncMock()
-        semaphore = asyncio.Semaphore(8)
 
         # Make create_episode timeout
         manager.create_episode = AsyncMock(side_effect=asyncio.TimeoutError())
@@ -741,17 +579,13 @@ class TestSemaphoreLifecycle:
         )
 
         with pytest.raises(asyncio.TimeoutError):
-            await handler.initialize(task, "session_1", manager, semaphore)
-
-        # Semaphore must be released after timeout
-        assert semaphore._value == 8
+            await handler.initialize(task, "session_1", manager)
 
     @pytest.mark.asyncio
     async def test_orchestrated_episode_creation_timeout(self):
         """Test that episode creation timeout is handled for orchestrated tasks."""
         handler = OrchestratedTaskHandler()
         manager = AsyncMock()
-        semaphore = asyncio.Semaphore(8)
 
         # Make second episode creation timeout
         manager.create_episode = AsyncMock(
@@ -785,7 +619,7 @@ class TestSemaphoreLifecycle:
                     instruction_prompt="test",
                     assistant_prompt="test",
                     submit_prompt="test",
-            continue_prompt="",
+                    continue_prompt="",
                 ),
                 SubTaskDefinition(
                     task_id="task_2",
@@ -799,26 +633,23 @@ class TestSemaphoreLifecycle:
                     instruction_prompt="test",
                     assistant_prompt="test",
                     submit_prompt="test",
-            continue_prompt="",
+                    continue_prompt="",
                 ),
             ],
             episode_attempts=1,
         )
 
         with pytest.raises(asyncio.TimeoutError):
-            await handler.initialize(task, "session_1", manager, semaphore)
+            await handler.initialize(task, "session_1", manager)
 
         # First episode should be cleaned up
         manager.end_episode.assert_called_once_with("session_1", "episode_1")
-        # Semaphore must be released
-        assert semaphore._value == 8
 
     @pytest.mark.asyncio
     async def test_single_episode_cleanup_failure_during_init_rollback(self):
         """Test handling when end_episode fails during initialization rollback."""
         handler = SingleEpisodeTaskHandler()
         manager = AsyncMock()
-        semaphore = asyncio.Semaphore(8)
 
         # Create episode succeeds but wait_for_ready fails
         manager.create_episode = AsyncMock(
@@ -849,21 +680,18 @@ class TestSemaphoreLifecycle:
         )
 
         with pytest.raises(Exception, match="Ready failed"):
-            await handler.initialize(task, "session_1", manager, semaphore)
+            await handler.initialize(task, "session_1", manager)
 
         # end_episode was called but failed
         manager.end_episode.assert_called_once_with("session_1", "episode_123")
         # Cleanup error count should be incremented
         assert handler._cleanup_error_count == 1
-        # Semaphore still released despite cleanup failure
-        assert semaphore._value == 8
 
     @pytest.mark.asyncio
     async def test_orchestrated_cleanup_failure_during_init_rollback(self):
         """Test handling when cleanup fails during orchestrated init rollback."""
         handler = OrchestratedTaskHandler()
         manager = AsyncMock()
-        semaphore = asyncio.Semaphore(8)
 
         # First episode succeeds, second fails
         manager.create_episode = AsyncMock(
@@ -898,7 +726,7 @@ class TestSemaphoreLifecycle:
                     instruction_prompt="test",
                     assistant_prompt="test",
                     submit_prompt="test",
-            continue_prompt="",
+                    continue_prompt="",
                 ),
                 SubTaskDefinition(
                     task_id="task_2",
@@ -912,101 +740,31 @@ class TestSemaphoreLifecycle:
                     instruction_prompt="test",
                     assistant_prompt="test",
                     submit_prompt="test",
-            continue_prompt="",
+                    continue_prompt="",
                 ),
             ],
             episode_attempts=1,
         )
 
         with pytest.raises(Exception, match="Second episode failed"):
-            await handler.initialize(task, "session_1", manager, semaphore)
+            await handler.initialize(task, "session_1", manager)
 
         # Cleanup was attempted
         manager.end_episode.assert_called_once_with("session_1", "episode_1")
         # Cleanup error logged
         assert handler._cleanup_error_count == 1
-        # Semaphore still released
-        assert semaphore._value == 8
-
-    @pytest.mark.asyncio
-    async def test_semaphore_release_failure_single(self):
-        """Test handling when semaphore release itself fails."""
-        handler = SingleEpisodeTaskHandler()
-        manager = AsyncMock()
-        manager.end_episode = AsyncMock()
-
-        # Create a mock semaphore that fails on release
-        semaphore = AsyncMock()
-        semaphore.release = Mock(side_effect=Exception("Semaphore release failed"))
-
-        handler._semaphore_acquired = True
-        handler._acquired_semaphore_ref = semaphore
-
-        from saber.inspect_ai.core.types import HandlerState
-
-        state = HandlerState(
-            episode_ids=["episode_123"],
-            primary_episode_id="episode_123",
-            semaphore_acquired=True,
-        )
-
-        result = await handler.cleanup(state, "session_1", manager, semaphore)
-
-        # Cleanup continues despite semaphore failure
-        assert result.success is False
-        assert len(result.errors) == 1
-        assert "Failed to release semaphore" in result.errors[0]
-        assert result.semaphore_released is False
-
-    @pytest.mark.asyncio
-    async def test_semaphore_release_failure_orchestrated(self):
-        """Test handling when semaphore release fails for orchestrated tasks."""
-        handler = OrchestratedTaskHandler()
-        manager = AsyncMock()
-        manager.end_episode = AsyncMock()
-
-        # Create a mock semaphore that fails on release
-        semaphore = AsyncMock()
-        semaphore.release = Mock(side_effect=Exception("Semaphore release failed"))
-
-        handler._semaphore_acquired = True
-        handler._acquired_semaphore_ref = semaphore
-
-        from saber.inspect_ai.core.types import OrchestratedHandlerState
-
-        state = OrchestratedHandlerState(
-            episode_ids=["episode_1", "episode_2"],
-            episodes=[
-                {"episode_id": "episode_1", "task_id": "task_1", "role": "role1"},
-                {"episode_id": "episode_2", "task_id": "task_2", "role": "role2"},
-            ],
-            primary_episode_id="episode_1",
-            semaphore_acquired=True,
-        )
-
-        result = await handler.cleanup(state, "session_1", manager, semaphore)
-
-        # Episodes cleaned up successfully
-        assert manager.end_episode.call_count == 2
-        # But semaphore release failed
-        assert result.success is False
-        assert "Failed to release semaphore" in result.errors[0]
-        assert result.semaphore_released is False
 
     @pytest.mark.asyncio
     async def test_orchestrated_cleanup_with_warnings(self):
         """Test that orchestrated cleanup logs warnings for non-critical errors."""
         handler = OrchestratedTaskHandler()
         manager = AsyncMock()
-        semaphore = asyncio.Semaphore(7)
 
         # Simulate one cleanup error (below threshold)
         manager.end_episode = AsyncMock(
             side_effect=[Exception("First cleanup failed"), None]
         )
 
-        handler._semaphore_acquired = True
-        handler._acquired_semaphore_ref = semaphore
         handler._cleanup_error_count = 2  # Below threshold of 5
 
         from saber.inspect_ai.core.types import OrchestratedHandlerState
@@ -1018,30 +776,25 @@ class TestSemaphoreLifecycle:
                 {"episode_id": "episode_2", "task_id": "task_2", "role": "role2"},
             ],
             primary_episode_id="episode_1",
-            semaphore_acquired=True,
         )
 
         # Should not raise, just log warnings
-        result = await handler.cleanup(state, "session_1", manager, semaphore)
+        result = await handler.cleanup(state, "session_1", manager)
 
         assert result.success is False
         assert result.error_count == 3  # 2 previous + 1 new
         assert result.threshold_exceeded is False
         assert len(result.errors) == 1  # Only current cleanup error
-        assert result.semaphore_released is True
 
     @pytest.mark.asyncio
     async def test_orchestrated_cleanup_threshold_exceeded(self):
         """Test that orchestrated cleanup raises when threshold exceeded."""
         handler = OrchestratedTaskHandler()
         manager = AsyncMock()
-        semaphore = asyncio.Semaphore(7)
 
         # All cleanups succeed
         manager.end_episode = AsyncMock()
 
-        handler._semaphore_acquired = True
-        handler._acquired_semaphore_ref = semaphore
         handler._cleanup_error_count = 6  # Above threshold of 5
 
         from saber.inspect_ai.core.types import OrchestratedHandlerState
@@ -1053,12 +806,8 @@ class TestSemaphoreLifecycle:
                 {"episode_id": "episode_2", "task_id": "task_2", "role": "role2"},
             ],
             primary_episode_id="episode_1",
-            semaphore_acquired=True,
         )
 
         # Should raise RuntimeError when threshold exceeded
         with pytest.raises(RuntimeError, match="Cleanup error threshold exceeded"):
-            await handler.cleanup(state, "session_1", manager, semaphore)
-
-        # Semaphore should still be released
-        assert semaphore._value == 8
+            await handler.cleanup(state, "session_1", manager)

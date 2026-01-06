@@ -1,7 +1,7 @@
 """Additional tests to boost saber.py coverage to 90%.
 
 Focuses on uncovered error paths and edge cases:
-- max_concurrent_episodes logging
+- Debug logging configuration
 - Domain stop failure during cleanup
 - Handler cleanup errors during sample init
 - MCP cache cleanup paths
@@ -33,7 +33,6 @@ def mock_config():
         mcp_port=(int, 8001),
         compose_template_path=(Path | None, None),
         cleanup=(bool, True),
-        max_concurrent_episodes=(int | None, 8),
         enable_debug_logging=(bool, True),
         __config__=ConfigDict(frozen=True),
     )
@@ -43,7 +42,6 @@ def mock_config():
         rest_port=8000,
         mcp_port=8001,
         cleanup=True,
-        max_concurrent_episodes=8,
         enable_debug_logging=True,
     )
 
@@ -52,48 +50,16 @@ def mock_config():
 def cleanup_registry():
     """Clear the registry before and after each test."""
     SABERSandboxEnvironment._registry.clear()
-    SABERSandboxEnvironment._episode_semaphore = None
     if hasattr(SABERSandboxEnvironment, '_orchestration_initializer'):
         SABERSandboxEnvironment._orchestration_initializer = None
     yield
     SABERSandboxEnvironment._registry.clear()
-    SABERSandboxEnvironment._episode_semaphore = None
     if hasattr(SABERSandboxEnvironment, '_orchestration_initializer'):
         SABERSandboxEnvironment._orchestration_initializer = None
 
 
-class TestMaxConcurrentEpisodesLogging:
-    """Test max_concurrent_episodes configuration and logging."""
-
-    @pytest.mark.asyncio
-    async def test_task_init_logs_max_concurrent_episodes(self, mock_config):
-        """Test that task_init logs when max_concurrent_episodes is set."""
-        # No existing domain
-        with patch('saber.inspect_ai.saber.SandboxRegistry.get_domain_entry') as mock_get:
-            mock_get.return_value = None
-
-            with patch('saber.inspect_ai.saber.get_active_domain') as mock_active:
-                mock_active.return_value = None
-
-                with patch('saber.inspect_ai.saber.DomainController') as mock_controller_class:
-                    mock_controller = MagicMock()
-                    mock_context = MagicMock()
-                    mock_context.rest_url = "http://localhost:8000"
-                    mock_context.mcp_url = "http://localhost:8001"
-                    mock_controller.start = AsyncMock(return_value=mock_context)
-                    mock_controller_class.return_value = mock_controller
-
-                    with patch('saber.inspect_ai.server.session_manager.SessionLifecycleManager.create_session',
-                              new_callable=AsyncMock) as mock_session:
-                        mock_session.return_value = "session_123"
-
-                        with patch('saber.inspect_ai.saber.logger') as mock_logger:
-                            await SABERSandboxEnvironment.task_init("test_task", mock_config)
-
-                            # Verify max_concurrent_episodes was logged
-                            log_calls = [call for call in mock_logger.info.call_args_list
-                                       if "max_concurrent_episodes" in str(call)]
-                            assert len(log_calls) > 0
+class TestDebugLogging:
+    """Test debug logging configuration."""
 
     @pytest.mark.asyncio
     async def test_task_init_enables_debug_logging(self, mock_config):
@@ -168,7 +134,7 @@ class TestHandlerCleanupDuringInitError:
         mock_handler_state = HandlerState(
             episode_ids=["ep1"],
             primary_episode_id="ep1",
-            semaphore_acquired=False,
+
         )
         env._session_id = "session_123"
         env._task_id = "task_123"
@@ -209,16 +175,15 @@ class TestHandlerCleanupDuringInitError:
 
         # Actually test the cleanup path more directly
         # Mock an initialization error scenario
-        with patch.object(env, '_get_episode_semaphore', return_value=None):
-            cleanup_result = CleanupResult(
-                success=False,
-                error_count=1,
-                errors=["Cleanup error"],
-            )
-            env._handler.cleanup = AsyncMock(return_value=cleanup_result)
+        cleanup_result = CleanupResult(
+            success=False,
+            error_count=1,
+            errors=["Cleanup error"],
+        )
+        env._handler.cleanup = AsyncMock(return_value=cleanup_result)
 
-            # Call cleanup which should trigger handler cleanup
-            with patch('saber.inspect_ai.saber.SandboxRegistry.remove_episode_mapping'):
+        # Call cleanup which should trigger handler cleanup
+        with patch('saber.inspect_ai.saber.SandboxRegistry.remove_episode_mapping'):
                 with patch('saber.inspect_ai.saber.log_lifecycle_summary'):
                     with patch('saber.inspect_ai.saber.clear_episode_context'):
                         with patch('saber.inspect_ai.saber.logger') as mock_logger:
@@ -252,7 +217,7 @@ class TestHandlerCleanupDuringInitError:
         mock_handler_state = HandlerState(
             episode_ids=["ep1"],
             primary_episode_id="ep1",
-            semaphore_acquired=False,
+
         )
         env._handler = mock_handler
         env._handler_state = mock_handler_state
@@ -422,7 +387,7 @@ class TestHandlerCleanupWithErrors:
         mock_handler_state = HandlerState(
             episode_ids=["ep1"],
             primary_episode_id="ep1",
-            semaphore_acquired=False,
+
         )
         env._handler = mock_handler
         env._handler_state = mock_handler_state

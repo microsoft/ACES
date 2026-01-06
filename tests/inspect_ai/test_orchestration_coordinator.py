@@ -78,17 +78,6 @@ class TestRegisterRootSample:
 
         assert result is False
 
-    def test_register_root_sample_with_semaphore(self):
-        """Test root sample registration with semaphore."""
-        coordinator = OrchestrationCoordinator()
-        semaphore = asyncio.Semaphore(2)
-
-        result = coordinator.register_root_sample(
-            "orch_123", "blue", "sample_blue", semaphore=semaphore
-        )
-
-        assert result is True
-
 
 class TestRegisterDependentSample:
     """Test register_dependent_sample method."""

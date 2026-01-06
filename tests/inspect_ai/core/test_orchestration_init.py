@@ -1,6 +1,5 @@
 """Tests for orchestration initialization."""
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -57,7 +56,6 @@ class TestOrchestrationInitializer:
         self, initializer, root_metadata, session_manager
     ):
         """Test successful initialization of root sample."""
-        semaphore = asyncio.Semaphore(2)
         sample_id = "sample-root-1"
         session_id = "session-789"
 
@@ -77,7 +75,6 @@ class TestOrchestrationInitializer:
                 session_id=session_id,
                 session_manager=session_manager,
                 sample_id=sample_id,
-                semaphore=semaphore,
             )
 
         # Verify coordinator registration
@@ -85,7 +82,6 @@ class TestOrchestrationInitializer:
             orchestration_id="orch-123",
             role="blue",
             sample_id=sample_id,
-            semaphore=semaphore,
         )
 
         # Verify episode creation
@@ -102,51 +98,14 @@ class TestOrchestrationInitializer:
         # Verify handler state
         assert result.episode_ids == ["episode-abc"]
         assert result.primary_episode_id == "episode-abc"
-        assert result.semaphore_acquired is True
         assert result.orchestration_id == "orch-123"
         assert result.sub_task_role == "blue"
-
-        # Verify semaphore was acquired
-        assert semaphore._value == 1  # Started at 2, acquired 1
-
-    @pytest.mark.asyncio
-    async def test_init_root_sample_no_semaphore(
-        self, initializer, root_metadata, session_manager
-    ):
-        """Test root sample initialization without semaphore."""
-        sample_id = "sample-root-2"
-        session_id = "session-999"
-
-        episode_response = MagicMock()
-        episode_response.episode_id = "episode-xyz"
-        session_manager.create_episode.return_value = episode_response
-
-        with patch("saber.inspect_ai.core.orchestration_init.OrchestrationCoordinator") as mock_coordinator_class:
-            mock_coordinator = MagicMock()
-            mock_coordinator.register_root_sample.return_value = True
-            mock_coordinator.set_episode_id = MagicMock()
-            mock_coordinator_class.return_value = mock_coordinator
-
-            result = await initializer.init_orchestrated_sub_task(
-                metadata=root_metadata,
-                session_id=session_id,
-                session_manager=session_manager,
-                sample_id=sample_id,
-                semaphore=None,  # No semaphore
-            )
-
-        # Should succeed without semaphore
-        assert result.semaphore_acquired is False
-        assert result.orchestration_id == "orch-123"
 
     @pytest.mark.asyncio
     async def test_init_root_sample_registration_failure(
         self, initializer, root_metadata, session_manager
     ):
         """Test failure when root sample registration fails."""
-        semaphore = asyncio.Semaphore(2)
-        initial_value = semaphore._value
-
         with patch("saber.inspect_ai.core.orchestration_init.OrchestrationCoordinator") as mock_coordinator_class:
             mock_coordinator = MagicMock()
             mock_coordinator.register_root_sample.return_value = False  # Failure
@@ -159,14 +118,10 @@ class TestOrchestrationInitializer:
                     session_id="session-id",
                     session_manager=session_manager,
                     sample_id="sample-id",
-                    semaphore=semaphore,
                 )
 
         # Verify error message
         assert "Failed to register root sample" in str(exc_info.value)
-
-        # Verify semaphore was released
-        assert semaphore._value == initial_value
 
         # Verify termination was triggered
         mock_coordinator.trigger_termination.assert_called_once_with("orch-123")
@@ -195,7 +150,6 @@ class TestOrchestrationInitializer:
                 session_id=session_id,
                 session_manager=session_manager,
                 sample_id=sample_id,
-                semaphore=None,
             )
 
         # Verify dependent registration
@@ -222,7 +176,6 @@ class TestOrchestrationInitializer:
         # Verify handler state
         assert result.episode_ids == ["episode-red-abc"]
         assert result.primary_episode_id == "episode-red-abc"
-        assert result.semaphore_acquired is False
         assert result.orchestration_id == "orch-123"
         assert result.sub_task_role == "red"
 
@@ -243,7 +196,6 @@ class TestOrchestrationInitializer:
                     session_id="session-id",
                     session_manager=session_manager,
                     sample_id="sample-id",
-                    semaphore=None,
                 )
 
         # Verify error message
@@ -257,9 +209,6 @@ class TestOrchestrationInitializer:
         self, initializer, root_metadata, session_manager
     ):
         """Test failure during episode creation."""
-        semaphore = asyncio.Semaphore(2)
-        initial_value = semaphore._value
-
         # Make episode creation fail
         session_manager.create_episode.side_effect = Exception("Episode creation failed")
 
@@ -275,14 +224,10 @@ class TestOrchestrationInitializer:
                     session_id="session-id",
                     session_manager=session_manager,
                     sample_id="sample-id",
-                    semaphore=semaphore,
                 )
 
         # Verify error propagation
         assert "Failed to initialize orchestrated sub-task" in str(exc_info.value)
-
-        # Verify semaphore was released
-        assert semaphore._value == initial_value
 
         # Verify termination was triggered
         mock_coordinator.trigger_termination.assert_called_once()
@@ -295,14 +240,9 @@ class TestOrchestrationInitializer:
         handler_state = {
             "episode_ids": ["episode-1"],
             "primary_episode_id": "episode-1",
-            "semaphore_acquired": True,
             "orchestration_id": "orch-cleanup-1",
             "sub_task_role": "blue",
         }
-
-        semaphore = asyncio.Semaphore(2)
-        await semaphore.acquire()  # Simulate acquired semaphore
-        initial_value = semaphore._value
 
         with patch("saber.inspect_ai.core.orchestration_init.OrchestrationCoordinator") as mock_coordinator_class:
             mock_coordinator = MagicMock()
@@ -311,14 +251,13 @@ class TestOrchestrationInitializer:
                 ("blue", "episode-1"),
                 ("red", "episode-2"),
             ]
-            mock_coordinator.cleanup_sample.return_value = True  # Should release semaphore
+            mock_coordinator.cleanup_sample = MagicMock()
             mock_coordinator_class.return_value = mock_coordinator
 
             await initializer.cleanup_orchestrated_sub_task(
                 handler_state=handler_state,
                 session_id="session-cleanup",
                 session_manager=session_manager,
-                semaphore=semaphore,
             )
 
         # Verify termination was triggered with skip_role to avoid self-interrupt
@@ -335,73 +274,7 @@ class TestOrchestrationInitializer:
         mock_coordinator.cleanup_sample.assert_called_once_with(
             orchestration_id="orch-cleanup-1",
             role="blue",
-            semaphore=semaphore,
         )
-
-        # Verify semaphore was released
-        assert semaphore._value == initial_value + 1
-
-    @pytest.mark.asyncio
-    async def test_cleanup_no_semaphore_release(
-        self, initializer, session_manager
-    ):
-        """Test cleanup when semaphore should not be released."""
-        handler_state = {
-            "episode_ids": ["episode-1"],
-            "primary_episode_id": "episode-1",
-            "semaphore_acquired": False,
-            "orchestration_id": "orch-cleanup-2",
-            "sub_task_role": "red",
-        }
-
-        semaphore = asyncio.Semaphore(2)
-        initial_value = semaphore._value
-
-        with patch("saber.inspect_ai.core.orchestration_init.OrchestrationCoordinator") as mock_coordinator_class:
-            mock_coordinator = MagicMock()
-            mock_coordinator.trigger_termination.return_value = [("red", "episode-1")]
-            mock_coordinator.cleanup_sample.return_value = False  # Don't release semaphore
-            mock_coordinator_class.return_value = mock_coordinator
-
-            await initializer.cleanup_orchestrated_sub_task(
-                handler_state=handler_state,
-                session_id="session-cleanup",
-                session_manager=session_manager,
-                semaphore=semaphore,
-            )
-
-        # Verify semaphore was NOT released (value unchanged)
-        assert semaphore._value == initial_value
-
-    @pytest.mark.asyncio
-    async def test_cleanup_no_semaphore(
-        self, initializer, session_manager
-    ):
-        """Test cleanup without semaphore."""
-        handler_state = {
-            "episode_ids": ["episode-1"],
-            "primary_episode_id": "episode-1",
-            "semaphore_acquired": True,
-            "orchestration_id": "orch-cleanup-3",
-            "sub_task_role": "blue",
-        }
-
-        with patch("saber.inspect_ai.core.orchestration_init.OrchestrationCoordinator") as mock_coordinator_class:
-            mock_coordinator = MagicMock()
-            mock_coordinator.trigger_termination.return_value = [("blue", "episode-1")]
-            mock_coordinator.cleanup_sample.return_value = True
-            mock_coordinator_class.return_value = mock_coordinator
-
-            # Should not raise even without semaphore
-            await initializer.cleanup_orchestrated_sub_task(
-                handler_state=handler_state,
-                session_id="session-cleanup",
-                session_manager=session_manager,
-                semaphore=None,
-            )
-
-        # Verify cleanup was still called
-        mock_coordinator.cleanup_sample.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_cleanup_episode_end_failure(
@@ -411,7 +284,6 @@ class TestOrchestrationInitializer:
         handler_state = {
             "episode_ids": ["episode-1"],
             "primary_episode_id": "episode-1",
-            "semaphore_acquired": False,
             "orchestration_id": "orch-cleanup-4",
             "sub_task_role": "blue",
         }
@@ -425,7 +297,7 @@ class TestOrchestrationInitializer:
                 ("blue", "episode-1"),
                 ("red", "episode-2"),
             ]
-            mock_coordinator.cleanup_sample.return_value = False
+            mock_coordinator.cleanup_sample = MagicMock()
             mock_coordinator_class.return_value = mock_coordinator
 
             # Should not raise - errors are logged
@@ -433,7 +305,6 @@ class TestOrchestrationInitializer:
                 handler_state=handler_state,
                 session_id="session-cleanup",
                 session_manager=session_manager,
-                semaphore=None,
             )
 
         # Verify both episodes were attempted
@@ -447,8 +318,6 @@ class TestOrchestrationInitializer:
         self, initializer, root_metadata, session_manager
     ):
         """Test that termination trigger failure during init is logged but doesn't raise."""
-        semaphore = asyncio.Semaphore(2)
-
         session_manager.create_episode.side_effect = Exception("Episode failed")
 
         with patch("saber.inspect_ai.core.orchestration_init.OrchestrationCoordinator") as mock_coordinator_class:
@@ -464,7 +333,6 @@ class TestOrchestrationInitializer:
                     session_id="session-id",
                     session_manager=session_manager,
                     sample_id="sample-id",
-                    semaphore=semaphore,
                 )
 
         # Should have attempted termination despite failure
@@ -496,7 +364,6 @@ class TestCleanupWithSkipRole:
         handler_state = {
             "episode_ids": ["episode-blue"],
             "primary_episode_id": "episode-blue",
-            "semaphore_acquired": False,
             "orchestration_id": "orch-skip-test",
             "sub_task_role": "blue",  # Blue is cleaning up
         }
@@ -507,14 +374,13 @@ class TestCleanupWithSkipRole:
                 ("blue", "episode-blue"),
                 ("red", "episode-red"),
             ]
-            mock_coordinator.cleanup_sample.return_value = False
+            mock_coordinator.cleanup_sample = MagicMock()
             mock_coordinator_class.return_value = mock_coordinator
 
             await initializer.cleanup_orchestrated_sub_task(
                 handler_state=handler_state,
                 session_id="session-skip",
                 session_manager=session_manager,
-                semaphore=None,
             )
 
         # Verify trigger_termination was called with skip_role="blue"
@@ -532,7 +398,6 @@ class TestCleanupWithSkipRole:
         handler_state = OrchestrationSubTaskState(
             episode_ids=["episode-green"],
             primary_episode_id="episode-green",
-            semaphore_acquired=False,
             orchestration_id="orch-state-obj",
             sub_task_role="green",
         )
@@ -540,14 +405,13 @@ class TestCleanupWithSkipRole:
         with patch("saber.inspect_ai.core.orchestration_init.OrchestrationCoordinator") as mock_coordinator_class:
             mock_coordinator = MagicMock()
             mock_coordinator.trigger_termination.return_value = [("green", "episode-green")]
-            mock_coordinator.cleanup_sample.return_value = True
+            mock_coordinator.cleanup_sample = MagicMock()
             mock_coordinator_class.return_value = mock_coordinator
 
             await initializer.cleanup_orchestrated_sub_task(
                 handler_state=handler_state,
                 session_id="session-obj",
                 session_manager=session_manager,
-                semaphore=None,
             )
 
         # Verify trigger_termination was called with skip_role="green"
