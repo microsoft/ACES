@@ -86,9 +86,20 @@ class TestEvaluationManager:
         assert config.criteria["expected_answers"] == ["flag{correct}"]
 
     def test_configure_for_task_missing_config(self, evaluation_manager, task_without_eval):
-        """Test configuration failure when task lacks submission_evaluation_config."""
-        with pytest.raises(EvaluationConfigError, match="missing.*submission_evaluation_config"):
-            evaluation_manager.configure_for_task(task_without_eval)
+        """Test that missing submission_evaluation_config uses default 'none' strategy.
+
+        Tasks without submission_evaluation_config are now allowed and will use
+        a "none" strategy with max_score=0. This supports continuous monitoring
+        agents that don't have a submission-based evaluation.
+        """
+        # Should not raise - defaults to "none" strategy
+        evaluation_manager.configure_for_task(task_without_eval)
+
+        # Verify the default config was applied
+        assert task_without_eval.task_id in evaluation_manager.evaluation_configs
+        config = evaluation_manager.evaluation_configs[task_without_eval.task_id]
+        assert config.strategy == "none"
+        assert config.scoring.get("max_score") == 0.0
 
     def test_configure_for_task_invalid_strategy(self, evaluation_manager):
         """Test that custom strategies are now accepted.

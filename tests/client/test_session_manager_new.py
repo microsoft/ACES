@@ -88,7 +88,7 @@ class TestClientSessionManagerEvaluationFeatures:
         with patch('aiohttp.ClientSession.get') as mock_get:
             mock_response = AsyncMock()
             mock_response.status = 200
-            mock_response.json.return_value = mock_evaluation_criteria.dict()
+            mock_response.json.return_value = mock_evaluation_criteria.model_dump()
             mock_get.return_value.__aenter__.return_value = mock_response
 
             result = await session_manager.get_evaluation_criteria("sess_123", "ep_123")
@@ -119,7 +119,7 @@ class TestClientSessionManagerEvaluationFeatures:
             mock_response = AsyncMock()
             mock_response.status = 200
             # Wrap in evaluation_result key as expected by implementation
-            mock_response.json.return_value = {"evaluation_result": mock_evaluation_result.dict()}
+            mock_response.json.return_value = {"evaluation_result": mock_evaluation_result.model_dump()}
             mock_get.return_value.__aenter__.return_value = mock_response
 
             result = await session_manager.get_episode_evaluation("sess_123", "ep_123")

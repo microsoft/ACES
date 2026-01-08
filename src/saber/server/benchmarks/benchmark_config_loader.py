@@ -1292,14 +1292,11 @@ class BenchmarkConfigLoader:
             submission_evaluation_config = task_data.get(FIELD_SUBMISSION_EVALUATION_CONFIG)
             step_evaluation_config = task_data.get(FIELD_STEP_EVALUATION_CONFIG)
 
-            if not submission_evaluation_config:
-                raise InvalidTaskDefinitionException(
-                    f"Task '{task_id}' missing required {FIELD_SUBMISSION_EVALUATION_CONFIG} section. "
-                    "All tasks MUST have submission evaluation configuration."
-                )
-
-            # Validate submission config
-            validate_submission_evaluation_config(submission_evaluation_config, task_id)
+            # submission_evaluation_config is optional - if not provided, task will use "none" strategy
+            # with max_score=0 (useful for continuous monitoring agents without submission)
+            if submission_evaluation_config:
+                # Validate submission config if present
+                validate_submission_evaluation_config(submission_evaluation_config, task_id)
 
             # step_evaluation_config is optional
             if step_evaluation_config:

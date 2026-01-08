@@ -279,8 +279,8 @@ class RoleBasedConfig(BaseModel):
         # If we have defaults, merge them
         if self.defaults:
             # Create merged config: defaults + role-specific overrides
-            merged_data = self.defaults.dict(exclude_unset=True)
-            merged_data.update(role_config.dict(exclude_unset=True))
+            merged_data = self.defaults.model_dump(exclude_unset=True)
+            merged_data.update(role_config.model_dump(exclude_unset=True))
 
             # Merge kwargs separately (dict merge, not replace)
             if self.defaults.kwargs or role_config.kwargs:

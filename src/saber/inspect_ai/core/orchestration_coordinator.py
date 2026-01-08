@@ -149,61 +149,81 @@ class OrchestrationCoordinator:
             sample_id: Unique sample ID
             depends_on_role: Role this sample depends on
             order: Execution order
-            timeout: Timeout for registration (not used currently)
+            timeout: Timeout waiting for orchestration to be registered by root sample
 
         Returns:
             True if registration succeeded, False otherwise
         """
-        with self._init_lock:
-            if orchestration_id not in self._orchestrations:
+        import asyncio
+
+        start_time = asyncio.get_event_loop().time()
+        poll_interval = 0.1  # Poll every 100ms
+
+        # Wait for orchestration to be registered by root sample
+        while True:
+            with self._init_lock:
+                if orchestration_id in self._orchestrations:
+                    group = self._orchestrations[orchestration_id]
+
+                    # Check if already registered
+                    if role in group.samples:
+                        logger.warning(
+                            f"Sample {role} already registered in orchestration {orchestration_id}",
+                            extra={"orchestration_id": orchestration_id, "role": role},
+                        )
+                        return False
+
+                    # Verify dependency exists
+                    if depends_on_role not in group.samples:
+                        logger.error(
+                            f"Dependency {depends_on_role} not found for sample {role}",
+                            extra={
+                                "orchestration_id": orchestration_id,
+                                "role": role,
+                                "depends_on_role": depends_on_role,
+                            },
+                        )
+                        return False
+
+                    # Register dependent sample
+                    registration = SampleRegistration(
+                        sample_id=sample_id,
+                        role=role,
+                        depends_on_role=depends_on_role,
+                        order=order,
+                    )
+                    group.samples[role] = registration
+
+                    logger.info(
+                        f"Registered dependent sample {role} in orchestration {orchestration_id}",
+                        extra={
+                            "orchestration_id": orchestration_id,
+                            "role": role,
+                            "sample_id": sample_id,
+                            "depends_on_role": depends_on_role,
+                            "order": order,
+                        },
+                    )
+                    return True
+
+            # Check timeout
+            elapsed = asyncio.get_event_loop().time() - start_time
+            if elapsed >= timeout:
                 logger.error(
-                    f"Orchestration {orchestration_id} not found for dependent sample {role}",
+                    f"Timeout waiting for orchestration {orchestration_id} to be registered (waited {elapsed:.1f}s)",
+                    extra={"orchestration_id": orchestration_id, "role": role, "timeout": timeout},
+                )
+                return False
+
+            # Log periodic waiting status
+            if int(elapsed) > 0 and int(elapsed) % 5 == 0:
+                logger.debug(
+                    f"Waiting for orchestration {orchestration_id} to be registered ({elapsed:.1f}s elapsed)",
                     extra={"orchestration_id": orchestration_id, "role": role},
                 )
-                return False
 
-            group = self._orchestrations[orchestration_id]
-
-            # Check if already registered
-            if role in group.samples:
-                logger.warning(
-                    f"Sample {role} already registered in orchestration {orchestration_id}",
-                    extra={"orchestration_id": orchestration_id, "role": role},
-                )
-                return False
-
-            # Verify dependency exists
-            if depends_on_role not in group.samples:
-                logger.error(
-                    f"Dependency {depends_on_role} not found for sample {role}",
-                    extra={
-                        "orchestration_id": orchestration_id,
-                        "role": role,
-                        "depends_on_role": depends_on_role,
-                    },
-                )
-                return False
-
-            # Register dependent sample
-            registration = SampleRegistration(
-                sample_id=sample_id,
-                role=role,
-                depends_on_role=depends_on_role,
-                order=order,
-            )
-            group.samples[role] = registration
-
-            logger.info(
-                f"Registered dependent sample {role} in orchestration {orchestration_id}",
-                extra={
-                    "orchestration_id": orchestration_id,
-                    "role": role,
-                    "sample_id": sample_id,
-                    "depends_on_role": depends_on_role,
-                    "order": order,
-                },
-            )
-            return True
+            # Wait before polling again
+            await asyncio.sleep(poll_interval)
 
     async def wait_for_dependency_ready(
         self,

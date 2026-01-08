@@ -768,7 +768,7 @@ class SessionRestAPI:
                 # Rationale: Transcript is audit/debugging data, clients may push after task completion
 
                 # Check payload size using actual JSON byte length (not sys.getsizeof)
-                messages_json = json.dumps([msg.dict() for msg in transcript_request.messages])
+                messages_json = json.dumps([msg.model_dump() for msg in transcript_request.messages])
                 payload_size = len(messages_json.encode("utf-8"))
                 if payload_size > TranscriptSyncConfig.MAX_PAYLOAD_SIZE_BYTES:
                     max_size = TranscriptSyncConfig.MAX_PAYLOAD_SIZE_BYTES
@@ -784,10 +784,10 @@ class SessionRestAPI:
                 if mode == "append":
                     # Append new messages to existing transcript
                     existing_messages = episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT, [])
-                    updated_messages = existing_messages + [msg.dict() for msg in transcript_request.messages]
+                    updated_messages = existing_messages + [msg.model_dump() for msg in transcript_request.messages]
                 else:
                     # Replace entire transcript
-                    updated_messages = [msg.dict() for msg in transcript_request.messages]
+                    updated_messages = [msg.model_dump() for msg in transcript_request.messages]
 
                 context_updates: dict[str, Any] = {
                     MetadataKeys.CLIENT_TRANSCRIPT.value: updated_messages,
@@ -1045,7 +1045,24 @@ class SessionRestAPI:
                     raise HTTPException(status_code=404, detail="Task not found")
 
                 if not task.submission_evaluation_config:
-                    raise HTTPException(status_code=400, detail="Task has no submission evaluation config")
+                    # Return default "none" strategy that will score as 0
+                    # This allows tasks without submission evaluation (e.g., continuous monitoring agents)
+                    task_context = TaskEvaluationContext(
+                        task_id=task.task_id,
+                        title=task.title,
+                        description=task.description,
+                        domain=task.domain,
+                        subtasks=[],
+                    )
+                    return SubmissionEvaluationCriteriaResponse(
+                        session_id=session_id,
+                        episode_id=episode_id,
+                        task_id=task.task_id,
+                        strategy="none",
+                        criteria={},
+                        scoring={"max_score": 0.0},
+                        task_context=task_context,
+                    )
 
                 task_context = TaskEvaluationContext(
                     task_id=task.task_id,

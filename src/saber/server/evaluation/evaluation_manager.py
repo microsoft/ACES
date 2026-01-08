@@ -82,19 +82,30 @@ class EvaluationManager:
             task: Task to configure evaluation for
 
         Raises:
-            EvaluationConfigError: If task lacks submission_evaluation_config or config is invalid
+            EvaluationConfigError: If config is invalid (but not if missing)
 
         Note:
             Strategy validation happens client-side via the scorer registry.
             The server accepts any strategy string - if no scorer is registered
             for it, the client will fail fast when attempting to score.
+
+            If submission_evaluation_config is not provided, the task will be
+            configured with a "none" strategy that scores as 0. This allows
+            tasks without submission evaluation (e.g., continuous monitoring agents).
         """
         # NEW FORMAT: Check for submission_evaluation_config
         if not hasattr(task, "submission_evaluation_config") or not task.submission_evaluation_config:
-            raise EvaluationConfigError(
-                f"Task {task.task_id} missing required submission_evaluation_config. "
-                "All tasks MUST have submission evaluation configuration."
+            # No submission evaluation config - use default "none" strategy
+            logger.info(
+                "Task has no submission_evaluation_config, using default 'none' strategy (scores as 0)",
+                extra={
+                    "event": "no_submission_eval_config",
+                    "task_id": task.task_id,
+                },
             )
+            config = EvaluationConfig(strategy="none", criteria={}, scoring={"max_score": 0.0})
+            self.evaluation_configs[task.task_id] = config
+            return
 
         try:
             config = EvaluationConfig.from_dict(task.submission_evaluation_config)

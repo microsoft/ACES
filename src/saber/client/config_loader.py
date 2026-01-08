@@ -197,7 +197,7 @@ class RoleConfigLoader:
             'gpt-4'
         """
         # Clone base config
-        merged_data = base_config.dict()
+        merged_data = base_config.model_dump()
 
         # Get valid field names dynamically from RoleAgentConfig
         valid_fields = set(RoleAgentConfig.model_fields.keys())

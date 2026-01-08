@@ -6,7 +6,7 @@ It runs automatically on import to make standard scorers available.
 
 from ....models.constants import StepEvaluationStrategy, SubmissionEvaluationStrategy
 from .registry import ScorerMetadata, register_submission_scorer, register_subtask_scorer
-from .standard_submission import score_submission_llm, score_submission_static
+from .standard_submission import score_submission_llm, score_submission_none, score_submission_static
 from .standard_subtask import (
     score_subtask_llm,
     score_subtask_static,
@@ -20,6 +20,7 @@ def register_standard_scorers() -> None:
     # Register submission scorers
     register_submission_scorer(SubmissionEvaluationStrategy.STATIC, score_submission_static)
     register_submission_scorer(SubmissionEvaluationStrategy.LLM_JUDGE, score_submission_llm)
+    register_submission_scorer("none", score_submission_none)  # No-op scorer for tasks without submission evaluation
 
     # Register subtask scorers with metadata
     # All subtask scorers use consistent 6-parameter signature:

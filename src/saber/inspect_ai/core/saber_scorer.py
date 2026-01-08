@@ -40,7 +40,7 @@ from ...models.rest.evaluation import (
     SubtaskEvaluationCriteriaResponse,
 )
 from ..constants import SandboxTimeouts
-from .scoring import get_submission_scorer
+from .scoring import get_submission_scorer, get_subtask_scorer, get_subtask_scorer_metadata
 
 logger = get_saber_logger(LogCategory.EVALUATION, __name__)
 
@@ -606,7 +606,8 @@ def saber_scorer() -> Scorer:
 
             # Normalize scores to be out of 1.0 instead of max_possible
             normalized_total_score = total_score / max_possible if max_possible > 0 else 0.0
-            normalized_submission_score = submission_score / submission_criteria.scoring.get("max_score", 1.0)
+            submission_max_score = submission_criteria.scoring.get("max_score", 1.0) or 1.0  # Handle 0 or None
+            normalized_submission_score = submission_score / submission_max_score if submission_max_score > 0 else 0.0
 
             # Calculate normalized subtask score (if applicable)
             if has_scorable_subtasks and subtasks_criteria_list:
@@ -1063,7 +1064,28 @@ async def _score_all_subtasks(
             # Collect LLM_JUDGE subtasks for batch processing
             llm_judge_subtasks.append((idx, criteria))
         else:
-            raise RuntimeError(f"Unknown subtask strategy: {criteria.strategy}")
+            # Try to find a custom scorer in the registry
+            try:
+                custom_scorer = get_subtask_scorer(criteria.strategy)
+                scorer_metadata = get_subtask_scorer_metadata(criteria.strategy)
+
+                logger.info(
+                    "Using custom scorer from registry",
+                    extra={
+                        "subtask_id": criteria.subtask_id,
+                        "strategy": criteria.strategy,
+                        "uses_llm": scorer_metadata.uses_llm,
+                        "event": "custom_scorer_found",
+                    },
+                )
+
+                # Call custom scorer directly (avoid closure issues by capturing values immediately)
+                other_tasks.append(
+                    (idx, custom_scorer(steps_data, criteria, task_context, session_manager, state, submission_data))
+                )
+
+            except KeyError as err:
+                raise RuntimeError(f"Unknown subtask strategy: {criteria.strategy}") from err
 
     # Process non-LLM tasks in parallel
     if other_tasks:

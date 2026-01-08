@@ -169,13 +169,50 @@ def create_agent(**kwargs: Any) -> Callable[..., Any]:
 
         # Choose on_continue based on configuration
         # - Server-controlled: Use callback that syncs with server
-        # - Client-controlled: Use string prompt (default Inspect AI behavior)
+        # - Client-controlled with submit: Use string prompt (default Inspect AI behavior)
+        # - Client-controlled without submit: Use callback that always continues with prompt
+        #   (inspect_ai requires callback when submit=False, otherwise agent would terminate)
         on_continue: Any
         if use_server_continue:
             on_continue = _server_controlled_on_continue
             logger.info(
                 "Using server-controlled continue (pull.enabled=True)",
                 extra={"continue_prompt_stored_server_side": True},
+            )
+        elif not submit_enabled:
+            # When submit is disabled, we must use a callback function.
+            # The callback should:
+            # - Return True when tools were called (let model reason about output naturally)
+            # - Return continue_prompt string only when model stops calling tools
+            #   (this nudges it to keep monitoring instead of stopping)
+            async def _no_submit_continue(state: AgentState) -> bool | str:
+                """Continue callback for no-submit agents (continuous monitoring).
+
+                Returns True if tools were called (natural continuation).
+                Returns continue_prompt if no tools called (nudge to keep working).
+                """
+                # Check if the last assistant message had tool calls
+                has_tool_calls = state.output.message.tool_calls if state.output and state.output.message else False
+
+                if has_tool_calls:
+                    # Tools were called - let the model reason naturally about results
+                    logger.debug(
+                        "No-submit continue: tools called, continuing naturally",
+                        extra={"message_count": len(state.messages), "has_tool_calls": True},
+                    )
+                    return True
+                else:
+                    # No tools called - nudge the model to keep monitoring
+                    logger.debug(
+                        "No-submit continue: no tools called, sending continue prompt",
+                        extra={"message_count": len(state.messages), "has_tool_calls": False},
+                    )
+                    return continue_prompt
+
+            on_continue = _no_submit_continue
+            logger.info(
+                "Using no-submit continue callback (submit=False requires callback)",
+                extra={"continue_prompt_length": len(continue_prompt)},
             )
         else:
             on_continue = continue_prompt

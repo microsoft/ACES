@@ -240,3 +240,139 @@ class TestSubmitToolConfiguration:
         call_kwargs = mock_react.call_args.kwargs
         assert call_kwargs["submit"] is True
         assert call_kwargs["prompt"].submit_prompt == "submit"
+
+    @patch("saber.inspect_ai.agents.registry.react.react")
+    @patch("saber.inspect_ai.agents.registry.react.saber_tools")
+    def test_submit_disabled_uses_callback_for_on_continue(self, mock_saber_tools, mock_react):
+        """Test that submit=False uses a callback function for on_continue instead of string.
+
+        When submit is disabled, inspect_ai's react() requires a callback for on_continue,
+        not a string. A string would cause immediate termination when no tool calls are made.
+        """
+        mock_saber_tools.return_value = Mock()
+        mock_react.return_value = Mock()
+
+        agent_factory = create_agent()
+
+        # Disable submit - should use callback instead of string
+        agent_factory("instruction", "assistant", "submit", "my continue prompt", submit=False)
+
+        call_kwargs = mock_react.call_args.kwargs
+        assert call_kwargs["submit"] is False
+        # on_continue should be a callable (async function), not a string
+        assert callable(call_kwargs["on_continue"])
+        assert call_kwargs["on_continue"].__name__ == "_no_submit_continue"
+
+    @patch("saber.inspect_ai.agents.registry.react.react")
+    @patch("saber.inspect_ai.agents.registry.react.saber_tools")
+    def test_submit_enabled_uses_string_for_on_continue(self, mock_saber_tools, mock_react):
+        """Test that submit=True uses the continue prompt string directly."""
+        mock_saber_tools.return_value = Mock()
+        mock_react.return_value = Mock()
+
+        agent_factory = create_agent()
+
+        # Enable submit - should use string directly
+        agent_factory("instruction", "assistant", "submit", "my continue prompt", submit=True)
+
+        call_kwargs = mock_react.call_args.kwargs
+        assert call_kwargs["submit"] is True
+        # on_continue should be the string directly
+        assert call_kwargs["on_continue"] == "my continue prompt"
+        assert isinstance(call_kwargs["on_continue"], str)
+
+
+class TestNoSubmitContinueCallback:
+    """Test cases for the _no_submit_continue callback behavior."""
+
+    @patch("saber.inspect_ai.agents.registry.react.react")
+    @patch("saber.inspect_ai.agents.registry.react.saber_tools")
+    @pytest.mark.asyncio
+    async def test_no_submit_continue_returns_true_when_tools_called(self, mock_saber_tools, mock_react):
+        """Test that _no_submit_continue returns True when tools were called.
+
+        When tools are called, the model should continue naturally to reason
+        about the output without a continue prompt being injected.
+        """
+        mock_saber_tools.return_value = Mock()
+        mock_react.return_value = Mock()
+
+        agent_factory = create_agent()
+
+        continue_prompt = "Keep monitoring the SIEM for security events."
+        agent_factory("instruction", "assistant", "submit", continue_prompt, submit=False)
+
+        # Get the callback that was passed to react
+        call_kwargs = mock_react.call_args.kwargs
+        callback = call_kwargs["on_continue"]
+
+        # Create a mock AgentState with tool calls
+        mock_state = Mock()
+        mock_state.messages = [Mock(), Mock()]
+        mock_state.output = Mock()
+        mock_state.output.message = Mock()
+        mock_state.output.message.tool_calls = [Mock()]  # Has tool calls
+
+        # Call the callback - should return True (natural continuation)
+        result = await callback(mock_state)
+        assert result is True
+
+    @patch("saber.inspect_ai.agents.registry.react.react")
+    @patch("saber.inspect_ai.agents.registry.react.saber_tools")
+    @pytest.mark.asyncio
+    async def test_no_submit_continue_returns_prompt_when_no_tools_called(self, mock_saber_tools, mock_react):
+        """Test that _no_submit_continue returns continue prompt when no tools called.
+
+        When no tools are called, the model needs a nudge to keep monitoring
+        instead of stopping.
+        """
+        mock_saber_tools.return_value = Mock()
+        mock_react.return_value = Mock()
+
+        agent_factory = create_agent()
+
+        continue_prompt = "Keep monitoring the SIEM for security events."
+        agent_factory("instruction", "assistant", "submit", continue_prompt, submit=False)
+
+        # Get the callback that was passed to react
+        call_kwargs = mock_react.call_args.kwargs
+        callback = call_kwargs["on_continue"]
+
+        # Create a mock AgentState without tool calls
+        mock_state = Mock()
+        mock_state.messages = [Mock(), Mock()]
+        mock_state.output = Mock()
+        mock_state.output.message = Mock()
+        mock_state.output.message.tool_calls = []  # No tool calls
+
+        # Call the callback - should return the continue prompt
+        result = await callback(mock_state)
+        assert result == continue_prompt
+
+    @patch("saber.inspect_ai.agents.registry.react.react")
+    @patch("saber.inspect_ai.agents.registry.react.saber_tools")
+    @pytest.mark.asyncio
+    async def test_no_submit_continue_captures_correct_prompt(self, mock_saber_tools, mock_react):
+        """Test that each agent captures its own continue_prompt in the closure."""
+        mock_saber_tools.return_value = Mock()
+        mock_react.return_value = Mock()
+
+        # Create multiple agents with different prompts
+        prompts_and_callbacks = []
+        for i in range(3):
+            agent_factory = create_agent()
+            prompt = f"Continue prompt {i}"
+            agent_factory("instruction", "assistant", "submit", prompt, submit=False)
+            callback = mock_react.call_args.kwargs["on_continue"]
+            prompts_and_callbacks.append((prompt, callback))
+
+        # Verify each callback returns its own prompt (when no tools called)
+        mock_state = Mock()
+        mock_state.messages = []
+        mock_state.output = Mock()
+        mock_state.output.message = Mock()
+        mock_state.output.message.tool_calls = []  # No tool calls
+
+        for expected_prompt, callback in prompts_and_callbacks:
+            result = await callback(mock_state)
+            assert result == expected_prompt

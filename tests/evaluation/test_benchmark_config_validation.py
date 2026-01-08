@@ -153,7 +153,11 @@ tasks:
             os.unlink(temp_path)
 
     def test_missing_evaluation_config(self):
-        """Test that missing evaluation_config causes validation failure."""
+        """Test that missing submission_evaluation_config is now valid.
+
+        Tasks without submission_evaluation_config use "none" strategy with max_score=0.
+        This is useful for continuous monitoring agents that don't submit.
+        """
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
             f.write(_normalize_yaml_with_prompts("""
 domain: "test_domain"
@@ -178,9 +182,12 @@ tasks:
 
         try:
             loader = BenchmarkConfigLoader("test_domain")
-
-            with pytest.raises(InvalidTaskDefinitionException, match="missing required submission_evaluation_config"):
-                loader.load_tasks_from_file(temp_path)
+            # Should succeed without submission_evaluation_config
+            tasks = loader.load_tasks_from_file(temp_path)
+            assert "no_eval_task" in tasks
+            task = tasks["no_eval_task"]
+            # submission_evaluation_config should be None or empty (server will default to "none" strategy)
+            assert not task.submission_evaluation_config  # None or {} both evaluate to False
 
         finally:
             os.unlink(temp_path)

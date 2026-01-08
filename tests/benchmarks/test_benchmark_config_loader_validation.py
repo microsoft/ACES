@@ -564,7 +564,12 @@ tasks:
             Path(temp_path).unlink()
 
     def test_missing_submission_evaluation_config(self):
-        """Test error when submission_evaluation_config is missing."""
+        """Test that missing submission_evaluation_config is allowed.
+
+        Tasks without submission_evaluation_config are now valid and will use
+        a default "none" strategy with max_score=0 at runtime. This supports
+        continuous monitoring agents that don't have submission-based evaluation.
+        """
         yaml_content = """
 domain: test_domain
 
@@ -604,8 +609,12 @@ tasks:
 
         try:
             loader = BenchmarkConfigLoader("test_domain")
-            with pytest.raises(InvalidTaskDefinitionException, match="missing required.*submission_evaluation_config"):
-                loader.load_tasks_from_file(temp_path)
+            # Should not raise - missing submission_evaluation_config is now allowed
+            tasks = loader.load_tasks_from_file(temp_path)
+            assert len(tasks) == 1
+            assert "test_task" in tasks
+            # submission_evaluation_config should be empty/falsy (default applied at runtime)
+            assert not tasks["test_task"].submission_evaluation_config
         finally:
             Path(temp_path).unlink()
 

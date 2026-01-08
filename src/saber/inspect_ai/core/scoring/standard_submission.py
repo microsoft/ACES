@@ -3,6 +3,7 @@
 This module provides the standard scoring methods for task submissions:
 - static: Pattern matching against expected answers
 - llm_judge: LLM-based evaluation using judge templates
+- none: No-op scorer that always returns 0 (for tasks without submission evaluation)
 """
 
 from typing import Any
@@ -16,6 +17,32 @@ from ....models.rest.evaluation import EpisodeSubmissionResponse, SubmissionEval
 from .template_utils import TemplateStringLoader
 
 logger = get_saber_logger(LogCategory.EVALUATION, __name__)
+
+
+async def score_submission_none(
+    submission_data: EpisodeSubmissionResponse,
+    criteria: SubmissionEvaluationCriteriaResponse,
+    session_manager: Any,
+    state: TaskState,
+) -> tuple[float, str]:
+    """No-op submission scoring that always returns 0.
+
+    Used for tasks without submission evaluation (e.g., continuous monitoring agents).
+
+    Args:
+        submission_data: Episode submission data (unused)
+        criteria: Submission evaluation criteria (unused)
+        session_manager: Client session manager (unused)
+        state: Task state (unused)
+
+    Returns:
+        Tuple of (0.0, explanation)
+    """
+    logger.info(
+        "No submission evaluation configured (none strategy)",
+        extra={"event": "submission_none_strategy"},
+    )
+    return 0.0, "submission=0.0 (no submission evaluation configured)"
 
 
 async def score_submission_static(
