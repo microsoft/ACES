@@ -406,6 +406,15 @@ class ComposeHealthChecker:
             # Default Docker Compose naming: {project_name}-{service_name}-1
             container_name = f"{project_name}-{service_name}-1"
 
+        # Check if this is an init container (runs once and exits)
+        # These are marked with saber.service.type=init label
+        labels = service_config.get("labels", [])
+        is_init_container = False
+        if isinstance(labels, list):
+            is_init_container = any("saber.service.type=init" in label for label in labels)
+        elif isinstance(labels, dict):
+            is_init_container = labels.get("saber.service.type") == "init"
+
         try:
             # Get container from Docker
             container = self.docker_client.containers.get(container_name)
@@ -413,6 +422,23 @@ class ComposeHealthChecker:
 
             # Check if container is running
             if container.status != "running":
+                # For init containers, check if they exited successfully (exit code 0)
+                if is_init_container and container.status == "exited":
+                    exit_code = container.attrs.get("State", {}).get("ExitCode", -1)
+                    if exit_code == 0:
+                        return {
+                            "healthy": True,
+                            "reason": "Init container completed successfully (exit code 0)",
+                            "container_name": container_name,
+                            "status": container.status,
+                        }
+                    else:
+                        return {
+                            "healthy": False,
+                            "reason": f"Init container failed (exit code: {exit_code})",
+                            "container_name": container_name,
+                            "status": container.status,
+                        }
                 return {
                     "healthy": False,
                     "reason": f"Container not running (status: {container.status})",
