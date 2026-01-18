@@ -58,6 +58,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+copilot = [
+    # GitHub Copilot agent support (requires Node.js 22+ and Copilot CLI)
+    "github-copilot-sdk>=0.1.13",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
@@ -265,6 +269,8 @@ exclude_lines = [
 
 [dependency-groups]
 dev = [
+    "pytest>=9.0.1",
+    "pytest-asyncio>=1.3.0",
     "types-pyyaml>=6.0.12.20250822",
     "types-requests>=2.32.4.20250913",
 ]

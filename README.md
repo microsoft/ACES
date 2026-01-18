@@ -227,6 +227,47 @@ uv run pytest
 uv run pre-commit install
 ```
 
+### Copilot Agent (Optional)
+
+SABER supports using GitHub Copilot as an agent backend. This requires additional setup:
+
+**Prerequisites:**
+- Node.js 22+ (required by the Copilot CLI)
+- GitHub Copilot subscription
+
+**Installation:**
+
+```bash
+# 1. Install Node.js 22+ using fnm (fast node manager)
+curl -fsSL https://fnm.vercel.app/install | bash
+source ~/.bashrc  # or restart your shell
+fnm install 22
+fnm use 22
+
+# 2. Install the GitHub Copilot CLI globally
+npm install -g @github/copilot
+
+# 3. Verify installation
+copilot --version  # Should show 0.0.384 or later
+
+# 4. Install SABER with copilot extras
+uv sync --extra copilot
+```
+
+**Usage:**
+
+```bash
+# Run evaluation with the Copilot agent
+uv run inspect eval domains/excytin_demo --model openai/azure/gpt-4o -T agent=copilot
+```
+
+**Note:** The Copilot agent uses BYOK (Bring Your Own Key) - it automatically derives API credentials from your Inspect AI model configuration. Your Azure OpenAI/OpenAI/Anthropic credentials from `.env` are passed to the Copilot SDK.
+
+**Troubleshooting:**
+- If `copilot --version` fails, ensure Node.js 22+ is active: `node --version`
+- If using fnm, ensure it's in your PATH: `export PATH="$HOME/.local/share/fnm:$PATH" && eval "$(fnm env)"`
+- The Copilot CLI requires `@github/copilot` npm package, not the VS Code extension
+
 ### Testing and Coverage
 
 **Run unit tests:**
