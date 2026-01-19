@@ -167,11 +167,14 @@ class TestToolsIntegration:
         bash_executor = registry.get_executor("bash")
         docker_info = bash_executor.get_docker_info()
 
-        # Verify the CLI executor has proper Docker configuration
-        assert "docker_config" in docker_info or "execution_environment" in docker_info
+        # Verify the CLI executor has proper Docker configuration - now typed DockerInfo
+        assert hasattr(docker_info, "docker_config") or hasattr(docker_info, "execution_environment")
+        assert docker_info.execution_environment == "docker_container"
 
         # Test that security validation works by attempting to validate a command
-        validation_result = bash_executor.validate_parameters({"command": "echo test"})
+        from saber.server.execution.models import BashParameters
+        params = BashParameters(command="echo test")
+        validation_result = bash_executor.validate_parameters(params)
         assert validation_result.valid is True
 
     def test_mcp_integration(self, registry):

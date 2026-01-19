@@ -9,25 +9,30 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import Awaitable, Callable
-from typing import Any, TYPE_CHECKING
+from typing import Any
 
-from inspect_ai.model import ChatMessageAssistant, ChatMessageUser
+from inspect_ai.model import ChatMessageAssistant
 from inspect_ai.model._model import active_model
-from inspect_ai.solver import TaskState
+from inspect_ai.solver import Solver, TaskState
 from inspect_ai.util import sandbox
 
 from ....logging_config import LogCategory, get_saber_logger
 from ...integration.copilot_tools import (
+    Tool,
     convert_mcp_tools_to_copilot,
     create_submit_tool,
     get_saber_mcp_tools,
-    Tool,
 )
-from .copilot_models import (
+from .models import (
+    AnthropicProviderConfig,
+    AzureProviderConfig,
+    CopilotSessionConfig,
     DefaultUrl,
     DefaultValue,
     EnvVar,
     ModelPrefix,
+    OpenAIProviderConfig,
+    ProviderConfig,
     ProviderType,
 )
 
@@ -36,13 +41,14 @@ logger = get_saber_logger(LogCategory.AGENT, __name__)
 # Try to import Copilot SDK - will fail gracefully if not installed
 try:
     from copilot import CopilotClient
+
     COPILOT_SDK_AVAILABLE = True
 except ImportError:
     COPILOT_SDK_AVAILABLE = False
-    CopilotClient = None  # type: ignore
+    CopilotClient = None
 
 
-def _get_provider_config_from_inspect() -> dict[str, Any] | None:
+def _get_provider_config_from_inspect() -> ProviderConfig | None:
     """Extract provider configuration from the active Inspect AI model.
 
     This derives the BYOK (Bring Your Own Key) provider configuration
@@ -50,7 +56,7 @@ def _get_provider_config_from_inspect() -> dict[str, Any] | None:
     Azure OpenAI, OpenAI, and Anthropic.
 
     Returns:
-        Provider config dict for Copilot SDK, or None if using Copilot auth
+        ProviderConfig subclass instance, or None if using Copilot auth
     """
     model = active_model()
     if model is None:
@@ -101,14 +107,24 @@ def _get_provider_config_from_inspect() -> dict[str, Any] | None:
 
     # Build provider config if we have the required fields
     if provider_type and base_url and api_key:
-        provider_config: dict[str, Any] = {
-            "type": provider_type.value,
-            "base_url": base_url,
-            "api_key": api_key,
-        }
-        # Add Azure-specific options
-        if provider_type == ProviderType.AZURE and api_version:
-            provider_config["azure"] = {"api_version": api_version}
+        provider_config: ProviderConfig
+
+        if provider_type == ProviderType.AZURE:
+            provider_config = AzureProviderConfig(
+                base_url=base_url,
+                api_key=api_key,
+                api_version=api_version or DefaultValue.AZURE_API_VERSION,
+            )
+        elif provider_type == ProviderType.OPENAI:
+            provider_config = OpenAIProviderConfig(
+                base_url=base_url,
+                api_key=api_key,
+            )
+        elif provider_type == ProviderType.ANTHROPIC:
+            provider_config = AnthropicProviderConfig(
+                base_url=base_url,
+                api_key=api_key,
+            )
 
         logger.info(
             "Derived provider config from Inspect AI model",
@@ -138,23 +154,27 @@ class CopilotClientWrapper:
     def __init__(self, options: dict[str, Any] | None = None):
         if not COPILOT_SDK_AVAILABLE:
             raise RuntimeError(
-                "GitHub Copilot SDK is not installed. "
-                "Install it with: pip install github-copilot-sdk"
+                "GitHub Copilot SDK is not installed. " "Install it with: pip install github-copilot-sdk"
             )
-        
+
         # Set up environment for fnm-installed Node.js and Copilot CLI
         opts = options or {}
         env = opts.get("env", dict(os.environ))
-        
+
         # Add fnm to PATH if available
         fnm_path = os.path.expanduser("~/.local/share/fnm")
         if os.path.exists(fnm_path):
             # fnm stores Node versions, find copilot in the active version
             import subprocess
+
             try:
                 # Get fnm environment to find the right Node/npm bin
+                fnm_cmd = (
+                    f'export PATH="{fnm_path}:$PATH" && eval "$(fnm env)" && '
+                    'dirname $(which copilot 2>/dev/null || echo "")'
+                )
                 result = subprocess.run(
-                    ["bash", "-c", f'export PATH="{fnm_path}:$PATH" && eval "$(fnm env)" && dirname $(which copilot 2>/dev/null || echo "")'],
+                    ["bash", "-c", fnm_cmd],
                     capture_output=True,
                     text=True,
                     timeout=5,
@@ -166,7 +186,7 @@ class CopilotClientWrapper:
                     logger.debug(f"Added fnm copilot bin to PATH: {copilot_bin_dir}")
             except (subprocess.TimeoutExpired, subprocess.SubprocessError) as e:
                 logger.debug(f"Could not set up fnm environment: {e}")
-        
+
         opts["env"] = env
         self._client = CopilotClient(opts)
         self._started = False
@@ -295,7 +315,7 @@ def copilot_solver(
 
         Returns:
             Updated TaskState with conversation history
-        
+
         Note:
             This follows the Agent interface (state only) rather than Solver
             interface (state, generate) because SABER's solver_factory calls
@@ -310,7 +330,7 @@ def copilot_solver(
 
             # Get sandbox from Inspect AI context
             sb = sandbox("saber")
-            
+
             # Get MCP tools from sandbox
             mcp_tools = await get_saber_mcp_tools(sb)
             copilot_tools = convert_mcp_tools_to_copilot(mcp_tools, _get_mcp_client(sb))
@@ -350,48 +370,53 @@ def copilot_solver(
             # This is used to restrict Copilot to ONLY these tools (no filesystem access)
             tool_names = [t.name for t in all_tools]
 
-            # Create Copilot session
-            # IMPORTANT: We use available_tools to restrict Copilot to ONLY our tools
-            # This prevents the agent from accessing the local filesystem, reading code, etc.
-            session_config: dict[str, Any] = {
-                "model": model,
-                "tools": all_tools,
-                "available_tools": tool_names,  # Restrict to ONLY our provided tools
-                "system_message": {
-                    "mode": "append",
-                    "content": system_content,
-                },
-                "streaming": streaming,
-            }
-
-            # Add provider configuration - either explicit BYOK or derived from Inspect AI
-            provider_config: dict[str, Any] | None = None
+            # Build provider configuration - either explicit BYOK or derived from Inspect AI
+            provider_config: ProviderConfig | None = None
 
             if provider_type and provider_base_url and provider_api_key:
                 # Use explicitly provided BYOK config
-                provider_config = {
-                    "type": provider_type,
-                    "base_url": provider_base_url,
-                    "api_key": provider_api_key,
-                }
-                # Add Azure-specific options
                 if provider_type == ProviderType.AZURE or provider_type == ProviderType.AZURE.value:
-                    if provider_api_version:
-                        provider_config["azure"] = {"api_version": provider_api_version}
+                    provider_config = AzureProviderConfig(
+                        base_url=provider_base_url,
+                        api_key=provider_api_key,
+                        api_version=provider_api_version or DefaultValue.AZURE_API_VERSION,
+                    )
+                elif provider_type == ProviderType.OPENAI or provider_type == ProviderType.OPENAI.value:
+                    provider_config = OpenAIProviderConfig(
+                        base_url=provider_base_url,
+                        api_key=provider_api_key,
+                    )
+                elif provider_type == ProviderType.ANTHROPIC or provider_type == ProviderType.ANTHROPIC.value:
+                    provider_config = AnthropicProviderConfig(
+                        base_url=provider_base_url,
+                        api_key=provider_api_key,
+                    )
 
-                logger.info(
-                    "Using explicit BYOK provider configuration",
-                    extra={
-                        "provider_type": provider_type,
-                        "base_url": provider_base_url[:50] + "..." if len(provider_base_url) > 50 else provider_base_url,
-                    },
-                )
+                if provider_config:
+                    logger.info(
+                        "Using explicit BYOK provider configuration",
+                        extra={
+                            "provider_type": provider_type,
+                            "base_url": provider_base_url[:50] + "..."
+                            if len(provider_base_url) > 50
+                            else provider_base_url,
+                        },
+                    )
             else:
                 # Try to derive from Inspect AI's active model
                 provider_config = _get_provider_config_from_inspect()
 
-            if provider_config:
-                session_config["provider"] = provider_config
+            # Create strongly-typed session config
+            # IMPORTANT: We use available_tools to restrict Copilot to ONLY our tools
+            # This prevents the agent from accessing the local filesystem, reading code, etc.
+            session_config = CopilotSessionConfig.create(
+                model=model,
+                tools=all_tools,
+                system_content=system_content,
+                streaming=streaming,
+                system_mode="append",
+                provider=provider_config,
+            )
 
             logger.info(
                 "Creating Copilot session with restricted tools",
@@ -399,12 +424,12 @@ def copilot_solver(
                     "model": model,
                     "tool_count": len(all_tools),
                     "tool_names": tool_names,
-                    "using_byok": "provider" in session_config,
+                    "using_byok": provider_config is not None,
                     "tools_restricted": True,  # available_tools limits to only our tools
                 },
             )
 
-            session = await client.create_session(session_config)
+            session = await client.create_session(session_config.to_dict())
 
             # Run agent loop
             submitted = False

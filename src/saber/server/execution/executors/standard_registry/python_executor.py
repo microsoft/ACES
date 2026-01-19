@@ -7,7 +7,12 @@ it in Docker containers with proper security validation.
 Logging category: ``LogCategory.DOCKER``.
 """
 
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ...session_manager import SessionManager
 
 from .....logging_config import (
     LogCategory,
@@ -17,8 +22,9 @@ from .....logging_config import (
     log_operation_success,
 )
 from ....base import CommandResult
-from ...base import Parameter, ParameterType, ValidationResult
+from ...base import ExecutionContext, ExecutorParameters, Parameter, ParameterType, PythonParameters, ValidationResult
 from ...exceptions import SandboxExecutionError
+from ...models import ExecutorConfig, PythonExecutorConfig
 from ...sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 from ..docker_executor import DockerExecutor
 
@@ -42,15 +48,21 @@ class PythonExecutor(DockerExecutor):
     }
 
     @classmethod
-    def get_default_config(cls) -> dict[str, Any]:
+    def get_parameters_class(cls) -> type[ExecutorParameters]:
+        """Get the parameter dataclass type for this executor."""
+        return PythonParameters
+
+    @classmethod
+    def get_default_config(cls) -> PythonExecutorConfig:
         """
         Get default configuration for Python executor.
 
         Returns:
-            Dictionary containing Python executor default configuration
+            PythonExecutorConfig with Python executor defaults
         """
-        return {
-            "allowed_modules": [
+        return PythonExecutorConfig(
+            timeout=600.0,  # Python scripts may take longer
+            allowed_modules=[
                 "os",
                 "sys",
                 "json",
@@ -69,25 +81,24 @@ class PythonExecutor(DockerExecutor):
                 "hashlib",
                 "subprocess",
             ],
-            "script_templates": {},
-            "timeout": 600.0,  # Python scripts may take longer
-        }
+            script_templates={},
+        )
 
     @classmethod
     def create_with_config(
         cls,
         sandbox_manager: SandboxEnvironmentManager,
-        config: dict[str, Any] | None = None,
+        config: ExecutorConfig | None = None,
         additional_params: dict[str, Any] | None = None,
-        session_manager: Any | None = None,
+        session_manager: SessionManager | None = None,
         **kwargs: Any,
-    ) -> "PythonExecutor":
+    ) -> PythonExecutor:
         """
         Create Python executor with standardized configuration interface.
 
         Args:
             sandbox_manager: Required sandbox manager for Docker execution
-            config: Python-specific configuration dictionary
+            config: Typed PythonExecutorConfig
             additional_params: Additional parameters (not used for Python executor)
             **kwargs: Additional keyword arguments
 
@@ -101,30 +112,30 @@ class PythonExecutor(DockerExecutor):
         return cls(sandbox_manager=sandbox_manager, config=config, **merged_kwargs)
 
     def __init__(
-        self, sandbox_manager: SandboxEnvironmentManager, config: dict[str, Any] | None = None, **kwargs: Any
+        self, sandbox_manager: SandboxEnvironmentManager, config: ExecutorConfig | None = None, **kwargs: Any
     ) -> None:
         """
         Initialize Python executor.
 
         Args:
             sandbox_manager: Required sandbox manager for Docker execution
-            config: Python-specific configuration
+            config: Executor configuration
             **kwargs: Additional arguments passed to parent
         """
         super().__init__(sandbox_manager=sandbox_manager, config=config, **kwargs)
 
-        # Set up allowed modules (security feature) - must be explicitly configured
-        if "allowed_modules" not in self._config:
-            raise SandboxExecutionError("allowed_modules must be explicitly configured for Python executor")
+        # Use typed config
+        typed_config = self._config if isinstance(self._config, PythonExecutorConfig) else self.get_default_config()
 
-        self._allowed_modules = self._config["allowed_modules"]
-        if not isinstance(self._allowed_modules, list):
-            raise SandboxExecutionError("allowed_modules must be a list of module names")
+        # Set up allowed modules (security feature)
+        self._allowed_modules = typed_config.allowed_modules
+        if not self._allowed_modules:
+            raise SandboxExecutionError("allowed_modules must be configured for Python executor")
 
         # Set up script templates
-        self._script_templates = self._config.get("script_templates", {})
+        self._script_templates = typed_config.script_templates
 
-    def setup_parameters(self, config: dict[str, Any]) -> None:
+    def setup_parameters(self, config: ExecutorConfig) -> None:
         """Set up Python executor parameters."""
         # Python code parameter
         self.add_parameter(
@@ -136,8 +147,9 @@ class PythonExecutor(DockerExecutor):
             )
         )
 
-        # Template parameter for common patterns
-        script_templates = config.get("script_templates", {})
+        # Template parameter for common patterns - use typed config
+        typed_config = config if isinstance(config, PythonExecutorConfig) else self.get_default_config()
+        script_templates = typed_config.script_templates
         self.add_parameter(
             Parameter(
                 name="template",
@@ -220,19 +232,18 @@ class PythonExecutor(DockerExecutor):
 
         return result
 
-    def build_python_script(self, parameters: dict[str, Any], context: dict[str, Any]) -> str:
+    def _build_python_script(self, params: PythonParameters) -> str:
         """
         Build the complete Python script from parameters.
 
         Args:
-            parameters: Execution parameters
-            context: Execution context
+            params: Typed Python execution parameters
 
         Returns:
             Complete Python script as string
         """
-        code = str(parameters["code"])  # Ensure code is a string
-        template = parameters.get("template")
+        code = str(params.code)  # Ensure code is a string
+        template = params.template
 
         script: str
         if template and template in self._script_templates:
@@ -331,28 +342,23 @@ class PythonExecutor(DockerExecutor):
 
             return CommandResult.error_result(error=error_msg, metadata={**metadata, "raw_data": result_data})
 
-    async def execute(self, parameters: dict[str, Any], context: dict[str, Any]) -> CommandResult:
+    async def execute(self, params: PythonParameters, context: ExecutionContext) -> CommandResult:
         """
         Execute Python script in Docker container.
 
         Args:
-            parameters: Execution parameters including code
-            context: Execution context including episode_id
+            params: Strongly-typed Python parameters
+            context: Strongly-typed execution context
 
         Returns:
             CommandResult with execution results
         """
         try:
-            # Extract episode ID
-            episode_id = context.get("episode_id")
-            if not episode_id:
-                raise SandboxExecutionError("episode_id required in context for Python execution")
-
             # Get Docker environment
-            environment = self.get_episode_environment(episode_id)
+            environment = self.get_episode_environment(context.episode_id)
 
             # Validate Python code
-            code_validation = self.validate_python_code(parameters["code"])
+            code_validation = self.validate_python_code(params.code)
             if not code_validation.valid:
                 return CommandResult.error_result(
                     error=f"Python code validation failed: {', '.join(code_validation.errors)}"
@@ -365,27 +371,27 @@ class PythonExecutor(DockerExecutor):
                         "Python code validation warning",
                         extra={
                             "event": "python_code_warning",
-                            "episode_id": episode_id,
+                            "episode_id": context.episode_id,
                             "warning": warning,
                         },
                     )
 
             # Build Python script
-            script_content = self.build_python_script(parameters, context)
+            script_content = self._build_python_script(params)
 
             # Write script to temporary file in container
-            script_path = f"/tmp/script_{episode_id}.py"
+            script_path = f"/tmp/script_{context.episode_id}.py"
 
             # Create script file using echo (simple approach)
-            working_dir = parameters.get("working_dir", "/workspace")
+            working_dir = params.working_dir
             timeout = int(self.get_timeout())
             log_operation_start(
                 logger,
                 "python_script_execution",
-                episode_id=episode_id,
+                episode_id=context.episode_id,
                 timeout_seconds=timeout,
                 working_dir=working_dir,
-                has_template=bool(parameters.get("template")),
+                has_template=bool(params.template),
             )
             create_script_cmd = ["sh", "-c", f"cd {working_dir} && cat > {script_path} << 'EOF'\n{script_content}\nEOF"]
             create_result = await environment.execute_command(command=create_script_cmd, timeout=timeout)
@@ -395,7 +401,7 @@ class PythonExecutor(DockerExecutor):
                     logger,
                     "python_script_execution",
                     RuntimeError("failed_to_create_script"),
-                    episode_id=episode_id,
+                    episode_id=context.episode_id,
                     step="create_script",
                     exit_code=create_result.exit_code,
                 )
@@ -403,7 +409,7 @@ class PythonExecutor(DockerExecutor):
                     "Failed to create Python script in container",
                     extra={
                         "event": "python_script_creation_failed",
-                        "episode_id": episode_id,
+                        "episode_id": context.episode_id,
                         "exit_code": create_result.exit_code,
                         "stderr_preview": create_result.stderr[:200],
                     },
@@ -417,7 +423,7 @@ class PythonExecutor(DockerExecutor):
             log_operation_success(
                 logger,
                 "python_script_execution",
-                episode_id=episode_id,
+                episode_id=context.episode_id,
                 exit_code=result.exit_code,
                 execution_time=result.execution_time,
             )
@@ -432,7 +438,7 @@ class PythonExecutor(DockerExecutor):
             tool_result.metadata.update(
                 {
                     "container_id": container_id,
-                    "episode_id": episode_id,
+                    "episode_id": context.episode_id,
                     "execution_time": result.execution_time,
                 }
             )
@@ -444,24 +450,24 @@ class PythonExecutor(DockerExecutor):
                 logger,
                 "python_script_execution",
                 exc,
-                episode_id=context.get("episode_id"),
+                episode_id=context.episode_id,
             )
             logger.error(
                 "Python script execution error",
                 extra={
                     "event": "python_script_execution_error",
-                    "episode_id": context.get("episode_id"),
+                    "episode_id": context.episode_id,
                     "error": str(exc),
                 },
             )
             return CommandResult.error_result(f"Python execution failed: {str(exc)}")
 
-    def validate_parameters(self, parameters: dict[str, Any]) -> ValidationResult:
+    def validate_parameters(self, parameters: PythonParameters) -> ValidationResult:
         """
         Validate parameters for Python execution.
 
         Args:
-            parameters: Parameters to validate
+            parameters: Typed PythonParameters to validate
 
         Returns:
             ValidationResult with comprehensive validation
@@ -469,20 +475,12 @@ class PythonExecutor(DockerExecutor):
         # Run base Docker validation
         result = super().validate_parameters(parameters)
 
-        # Add Python-specific validation
-        if "code" in parameters:
-            code_validation = self.validate_python_code(parameters["code"])
+        # Add Python-specific validation using typed params
+        code = parameters.code
+        if code:
+            code_validation = self.validate_python_code(code)
             result.errors.extend(code_validation.errors)
             result.warnings.extend(code_validation.warnings)
-
-        # Validate requirements
-        requirements = parameters.get("requirements", [])
-        if requirements and not isinstance(requirements, list):
-            result.add_error("requirements must be a list of strings")
-        elif requirements:
-            for req in requirements:
-                if not isinstance(req, str):
-                    result.add_error(f"requirement must be string, got: {type(req)}")
 
         return result
 

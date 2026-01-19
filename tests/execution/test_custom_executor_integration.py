@@ -35,23 +35,42 @@ class TestCustomExecutorIntegration:
             executor_file = temp_path / "test_integration_executor.py"
             executor_code = '''
 from typing import Any, Dict, Optional
+from dataclasses import dataclass
 from saber.server.base import CommandResult
-from saber.server.execution.base import Parameter, ParameterType
+from saber.server.execution.base import Parameter, ParameterType, ExecutionContext, ExecutorConfig
 from saber.server.execution.executors.executor_registry import register_executor
 from saber.server.execution.executors.docker_executor import DockerExecutor
 from saber.server.execution.sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 
-class TestIntegrationExecutor(DockerExecutor):
+
+@dataclass(frozen=True, slots=True)
+class TestIntegrationParams:
+    """Parameters for test integration executor."""
+    test_input: str
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "TestIntegrationParams":
+        test_input = data.get("test_input")
+        if not test_input:
+            raise ValueError("test_input is required")
+        return cls(test_input=test_input)
+
+
+class TestIntegrationExecutor(DockerExecutor[TestIntegrationParams]):
     """Test executor for integration testing."""
 
-    def __init__(self, sandbox_manager: SandboxEnvironmentManager, config: Optional[Dict[str, Any]] = None, session_manager: Optional[Any] = None):
+    def __init__(self, sandbox_manager: SandboxEnvironmentManager, config: Optional[ExecutorConfig] = None, session_manager: Optional[Any] = None):
         super().__init__(sandbox_manager, config=config, session_manager=session_manager)
 
     @classmethod
-    def get_default_config(cls) -> Dict[str, Any]:
-        return {"timeout": 30.0, "test_param": "integration_test"}
+    def get_default_config(cls) -> ExecutorConfig:
+        return ExecutorConfig(timeout=30.0)
 
-    def setup_parameters(self, config: Dict[str, Any]) -> None:
+    @classmethod
+    def get_parameters_class(cls):
+        return TestIntegrationParams
+
+    def setup_parameters(self, config: ExecutorConfig) -> None:
         self.add_parameter(
             Parameter(
                 name="test_input",
@@ -61,9 +80,9 @@ class TestIntegrationExecutor(DockerExecutor):
             )
         )
 
-    async def execute(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> CommandResult:
+    async def execute(self, params: TestIntegrationParams, context: ExecutionContext) -> CommandResult:
         return CommandResult.success_result(
-            output=f"Integration test executed with: {parameters.get('test_input', 'none')}"
+            output=f"Integration test executed with: {params.test_input}"
         )
 
     def to_mcp_schema(self) -> Dict[str, Any]:
@@ -131,20 +150,44 @@ register_executor("integration_test", TestIntegrationExecutor, "test")
             executor_file = temp_path / "schema_test_executor.py"
             executor_code = """
 from typing import Any, Dict, Optional
+from dataclasses import dataclass
 from saber.server.base import CommandResult
-from saber.server.execution.base import Parameter, ParameterType
+from saber.server.execution.base import Parameter, ParameterType, ExecutionContext, ExecutorConfig
 from saber.server.execution.executors.executor_registry import register_executor
 from saber.server.execution.executors.docker_executor import DockerExecutor
 
-class SchemaTestExecutor(DockerExecutor):
+
+@dataclass(frozen=True, slots=True)
+class SchemaTestParams:
+    required_param: str
+    optional_param: int = 42
+    boolean_param: bool = True
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "SchemaTestParams":
+        required_param = data.get("required_param")
+        if not required_param:
+            raise ValueError("required_param is required")
+        return cls(
+            required_param=required_param,
+            optional_param=data.get("optional_param", 42),
+            boolean_param=data.get("boolean_param", True),
+        )
+
+
+class SchemaTestExecutor(DockerExecutor[SchemaTestParams]):
     def __init__(self, sandbox_manager, config=None, session_manager=None):
         super().__init__(sandbox_manager, config=config, session_manager=session_manager)
 
     @classmethod
-    def get_default_config(cls):
-        return {"timeout": 45.0}
+    def get_default_config(cls) -> ExecutorConfig:
+        return ExecutorConfig(timeout=45.0)
 
-    def setup_parameters(self, config):
+    @classmethod
+    def get_parameters_class(cls):
+        return SchemaTestParams
+
+    def setup_parameters(self, config: ExecutorConfig) -> None:
         self.add_parameter(
             Parameter(
                 name="required_param",
@@ -174,7 +217,7 @@ class SchemaTestExecutor(DockerExecutor):
             )
         )
 
-    async def execute(self, parameters, context):
+    async def execute(self, params: SchemaTestParams, context: ExecutionContext) -> CommandResult:
         return CommandResult.success_result(output="Schema test executed")
 
     def to_mcp_schema(self):
@@ -311,18 +354,32 @@ register_executor("schema_test", SchemaTestExecutor)
 
             executor_file = temp_path / "factory_test_executor.py"
             executor_code = """
+from dataclasses import dataclass
+from saber.server.execution.base import ExecutionContext, ExecutorConfig
 from saber.server.execution.executors.executor_registry import register_executor
 from saber.server.execution.executors.docker_executor import DockerExecutor
 
-class FactoryTestExecutor(DockerExecutor):
-    @classmethod
-    def get_default_config(cls):
-        return {"timeout": 60.0, "custom_setting": "factory_test"}
 
-    def setup_parameters(self, config):
+@dataclass(frozen=True, slots=True)
+class FactoryTestParams:
+    @classmethod
+    def from_dict(cls, data: dict) -> "FactoryTestParams":
+        return cls()
+
+
+class FactoryTestExecutor(DockerExecutor[FactoryTestParams]):
+    @classmethod
+    def get_default_config(cls) -> ExecutorConfig:
+        return ExecutorConfig(timeout=60.0)
+
+    @classmethod
+    def get_parameters_class(cls):
+        return FactoryTestParams
+
+    def setup_parameters(self, config: ExecutorConfig) -> None:
         pass
 
-    async def execute(self, parameters, context):
+    async def execute(self, params: FactoryTestParams, context: ExecutionContext):
         from saber.server.base import CommandResult
         return CommandResult.success_result(output="Factory test")
 
@@ -371,7 +428,9 @@ register_executor("factory_test", FactoryTestExecutor)
                 executor_info = factory.get_executor_info()
                 assert "factory_test" in executor_info["available_types"]
                 assert "factory_test" in executor_info["configurations"]
-                assert executor_info["configurations"]["factory_test"]["custom_setting"] == "factory_test"
+                # Check that config is now a typed ExecutorConfig object
+                factory_config = executor_info["configurations"]["factory_test"]
+                assert factory_config.timeout == 60.0
 
 
 if __name__ == "__main__":

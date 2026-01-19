@@ -729,11 +729,11 @@ class TestCopilotProviderAutoDerivation:
                 config = _get_provider_config_from_inspect()
 
             assert config is not None
-            assert config["type"] == "azure"
+            assert config.provider_type.value == "azure"
             # Azure base_url includes deployment path for Copilot SDK
-            assert config["base_url"] == "https://my-resource.openai.azure.com/openai/deployments/gpt-4o"
-            assert config["api_key"] == "test-api-key"
-            assert config["azure"]["api_version"] == "2024-02-15-preview"
+            assert config.base_url == "https://my-resource.openai.azure.com/openai/deployments/gpt-4o"
+            assert config.api_key == "test-api-key"
+            assert config.api_version == "2024-02-15-preview"
 
     def test_get_provider_config_from_inspect_openai(self):
         """Test deriving OpenAI provider config from Inspect AI active model."""
@@ -749,9 +749,9 @@ class TestCopilotProviderAutoDerivation:
             config = _get_provider_config_from_inspect()
 
             assert config is not None
-            assert config["type"] == "openai"
-            assert config["base_url"] == "https://api.openai.com/v1"
-            assert config["api_key"] == "sk-test-key"
+            assert config.provider_type.value == "openai"
+            assert config.base_url == "https://api.openai.com/v1"
+            assert config.api_key == "sk-test-key"
 
     def test_get_provider_config_from_inspect_anthropic(self):
         """Test deriving Anthropic provider config from Inspect AI active model."""
@@ -767,9 +767,9 @@ class TestCopilotProviderAutoDerivation:
             config = _get_provider_config_from_inspect()
 
             assert config is not None
-            assert config["type"] == "anthropic"
-            assert config["base_url"] == "https://api.anthropic.com"
-            assert config["api_key"] == "sk-ant-test"
+            assert config.provider_type.value == "anthropic"
+            assert config.base_url == "https://api.anthropic.com"
+            assert config.api_key == "sk-ant-test"
 
     def test_get_provider_config_no_active_model(self):
         """Test that None is returned when no active model."""
@@ -806,8 +806,8 @@ class TestCopilotProviderAutoDerivation:
                 config = _get_provider_config_from_inspect()
 
             assert config is not None
-            assert config["type"] == "azure"
+            assert config.provider_type.value == "azure"
             # Azure base_url includes deployment path for Copilot SDK
-            assert config["base_url"] == "https://env-resource.openai.azure.com/openai/deployments/gpt-4o"
-            assert config["api_key"] == "env-api-key"
-            assert config["azure"]["api_version"] == "2025-03-01-preview"
+            assert config.base_url == "https://env-resource.openai.azure.com/openai/deployments/gpt-4o"
+            assert config.api_key == "env-api-key"
+            assert config.api_version == "2025-03-01-preview"

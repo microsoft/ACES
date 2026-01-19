@@ -8,7 +8,12 @@ environment and other SQL-based execution environments.
 Logging category: ``LogCategory.DOCKER``.
 """
 
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ...session_manager import SessionManager
 
 from .....logging_config import (
     LogCategory,
@@ -18,8 +23,8 @@ from .....logging_config import (
     log_operation_success,
 )
 from ....base import CommandResult
-from ...base import Parameter, ParameterType, ValidationResult
-from ...exceptions import SandboxExecutionError
+from ...base import ExecutionContext, ExecutorParameters, Parameter, ParameterType, SqlParameters, ValidationResult
+from ...models import ExecutorConfig, SqlExecutorConfig
 from ...sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 from ...utils.security_validator import SecurityValidator
 from ..docker_executor import DockerExecutor
@@ -49,34 +54,35 @@ class SQLExecutor(DockerExecutor):
     }
 
     @classmethod
-    def get_default_config(cls) -> dict[str, Any]:
+    def get_parameters_class(cls) -> type[ExecutorParameters]:
+        """Get the parameter dataclass type for this executor."""
+        return SqlParameters
+
+    @classmethod
+    def get_default_config(cls) -> SqlExecutorConfig:
         """
         Get default configuration for SQL executor.
 
         Returns:
-            Dictionary containing SQL executor default configuration
+            SqlExecutorConfig with SQL executor defaults
         """
-        return {
-            "timeout": 60.0,
-            "max_rows": 1000,
-            "allow_schema_queries": True,
-        }
+        return SqlExecutorConfig(timeout=60.0, max_rows=1000, allow_schema_queries=True)
 
     @classmethod
     def create_with_config(
         cls,
         sandbox_manager: SandboxEnvironmentManager,
-        config: dict[str, Any] | None = None,
+        config: ExecutorConfig | None = None,
         additional_params: dict[str, Any] | None = None,
-        session_manager: Any | None = None,
+        session_manager: SessionManager | None = None,
         **kwargs: Any,
-    ) -> "SQLExecutor":
+    ) -> SQLExecutor:
         """
         Create SQL executor with standardized configuration interface.
 
         Args:
             sandbox_manager: Required sandbox manager for Docker execution
-            config: SQL-specific configuration dictionary
+            config: Typed SqlExecutorConfig
             additional_params: Additional parameters (e.g., sql_config)
             **kwargs: Additional keyword arguments
 
@@ -99,7 +105,7 @@ class SQLExecutor(DockerExecutor):
     def __init__(
         self,
         sandbox_manager: SandboxEnvironmentManager,
-        config: dict[str, Any] | None = None,
+        config: ExecutorConfig | None = None,
         sql_config: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
@@ -108,7 +114,7 @@ class SQLExecutor(DockerExecutor):
 
         Args:
             sandbox_manager: Required sandbox manager for Docker execution
-            config: SQL configuration dictionary
+            config: Typed SQL executor configuration
             sql_config: SQL-specific configuration (connection string, etc.)
             **kwargs: Additional arguments passed to parent
 
@@ -122,13 +128,15 @@ class SQLExecutor(DockerExecutor):
 
         # Extract connection string or defaults
         self._connection_string = self._sql_config.get("connection_string", "mysql://root:admin@localhost:3306/mysql")
-        self._allow_schema_queries = self._config.get("allow_schema_queries", True)
-        self._max_rows = self._config.get("max_rows", 1000)
+        # Use typed config fields
+        typed_config = self._config if isinstance(self._config, SqlExecutorConfig) else self.get_default_config()
+        self._allow_schema_queries = typed_config.allow_schema_queries
+        self._max_rows = typed_config.max_rows
 
         # Initialize security validator for SQL queries
         self._security_validator = SecurityValidator()
 
-    def setup_parameters(self, config: dict[str, Any]) -> None:
+    def setup_parameters(self, config: ExecutorConfig) -> None:
         """Set up SQL executor parameters."""
         # Add parameter for the SQL query
         self.add_parameter(
@@ -150,8 +158,8 @@ class SQLExecutor(DockerExecutor):
             )
         )
 
-        # Get max_rows from config instead of using self._max_rows since the attribute may not be initialized yet
-        max_rows = config.get("max_rows", 1000)
+        # Get max_rows from config if it's SqlExecutorConfig
+        max_rows = config.max_rows if isinstance(config, SqlExecutorConfig) else 1000
         self.add_parameter(
             Parameter(
                 name="max_rows",
@@ -304,7 +312,7 @@ class SQLExecutor(DockerExecutor):
 
         return result
 
-    async def execute(self, parameters: dict[str, Any], context: dict[str, Any]) -> CommandResult:
+    async def execute(self, params: SqlParameters, context: ExecutionContext) -> CommandResult:
         """
         Execute SQL query in Docker container.
 
@@ -312,50 +320,26 @@ class SQLExecutor(DockerExecutor):
         in the container (e.g., mysql client for MySQL databases).
 
         Args:
-            parameters: Tool parameters (must include 'query')
-            context: Execution context including episode_id
+            params: Strongly-typed SQL parameters
+            context: Strongly-typed execution context
 
         Returns:
             CommandResult with execution results
 
         Note:
-            Security validation is performed at this executor level before execution.
+            Security validation is performed at ExecutionManager level before execution.
             All execution happens in Docker containers.
         """
         try:
-            # Validate parameters including SQL validation
-            validation_result = self.validate_parameters(parameters)
-            if not validation_result.valid:
-                return CommandResult.error_result(
-                    error=f"Parameter validation failed: {', '.join(validation_result.errors)}"
-                )
-
-            # Extract episode ID from context
-            episode_id = context.get("episode_id")
-            if not episode_id:
-                raise SandboxExecutionError("episode_id required in context for SQL execution")
-
-            # Log any security warnings with structured context
-            if validation_result.warnings:
-                for warning in validation_result.warnings:
-                    logger.warning(
-                        "SQL query validation warning",
-                        extra={
-                            "event": "sql_query_warning",
-                            "episode_id": episode_id,
-                            "warning": warning,
-                        },
-                    )
-
             # Get Docker environment for episode
-            environment = self.get_episode_environment(episode_id)
+            environment = self.get_episode_environment(context.episode_id)
             timeout = int(self.get_timeout())
 
             # Get SQL query
-            query = parameters.get("query", "").strip()
+            query = params.query.strip()
 
             # Get connection string (parameter overrides default)
-            connection_string = parameters.get("connection_string", self._connection_string)
+            connection_string = params.connection_string or self._connection_string
 
             # Parse connection string
             connection_info = self.parse_connection_string(connection_string)
@@ -370,7 +354,7 @@ class SQLExecutor(DockerExecutor):
             log_operation_start(
                 logger,
                 "sql_query_execution",
-                episode_id=episode_id,
+                episode_id=context.episode_id,
                 timeout_seconds=timeout,
                 database=connection_info["database"],
                 query_preview=query[:100],
@@ -383,7 +367,7 @@ class SQLExecutor(DockerExecutor):
                 log_operation_success(
                     logger,
                     "sql_query_execution",
-                    episode_id=episode_id,
+                    episode_id=context.episode_id,
                     exit_code=result.exit_code,
                     execution_time=result.execution_time,
                 )
@@ -393,7 +377,7 @@ class SQLExecutor(DockerExecutor):
                         "SQL query timed out",
                         extra={
                             "event": "sql_query_timeout",
-                            "episode_id": episode_id,
+                            "episode_id": context.episode_id,
                             "timeout_seconds": timeout,
                             "query_preview": query[:50],
                             "error": str(exc),
@@ -404,7 +388,7 @@ class SQLExecutor(DockerExecutor):
                         "SQL query execution raised exception",
                         extra={
                             "event": "sql_query_exception",
-                            "episode_id": episode_id,
+                            "episode_id": context.episode_id,
                             "error": str(exc),
                         },
                     )
@@ -420,7 +404,7 @@ class SQLExecutor(DockerExecutor):
             tool_result.metadata.update(
                 {
                     "container_id": container_id,
-                    "episode_id": episode_id,
+                    "episode_id": context.episode_id,
                     "execution_time": result.execution_time,
                     "query": query,
                     "database": connection_info["database"],
@@ -434,13 +418,13 @@ class SQLExecutor(DockerExecutor):
                 logger,
                 "sql_query_execution",
                 exc,
-                episode_id=context.get("episode_id"),
+                episode_id=context.episode_id,
             )
             logger.error(
                 "SQL query execution error",
                 extra={
                     "event": "sql_query_execution_error",
-                    "episode_id": context.get("episode_id"),
+                    "episode_id": context.episode_id,
                     "error": str(exc),
                 },
             )
@@ -531,12 +515,12 @@ class SQLExecutor(DockerExecutor):
         else:
             return "UNKNOWN"
 
-    def validate_parameters(self, parameters: dict[str, Any]) -> ValidationResult:
+    def validate_parameters(self, parameters: SqlParameters) -> ValidationResult:
         """
         Validate parameters including SQL validation.
 
         Args:
-            parameters: Tool parameters to validate
+            parameters: Typed SqlParameters to validate
 
         Returns:
             ValidationResult with validation details
@@ -547,7 +531,7 @@ class SQLExecutor(DockerExecutor):
             return basic_validation
 
         # Extract query for SQL validation
-        query = parameters.get("query", "")
+        query = parameters.query
         if not query or not isinstance(query, str):
             return ValidationResult.failure(["Query parameter is required and must be a string"])
 
@@ -562,7 +546,7 @@ class SQLExecutor(DockerExecutor):
                 basic_validation.add_warning(warning)
 
         # If connection string is provided, validate it
-        connection_string = parameters.get("connection_string")
+        connection_string = parameters.connection_string
         if connection_string:
             try:
                 self.parse_connection_string(connection_string)

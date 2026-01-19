@@ -7,19 +7,34 @@ security validation capabilities.
 Logging category: EXECUTION.
 """
 
+from __future__ import annotations
+
 import os
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import mcp.types as mcp_types
 
 from ...logging_config import get_execution_logger, log_operation_failure, log_operation_start, log_operation_success
 from ..base import Action, CommandResult
 from ..benchmarks.task import Task
+from .base import (
+    CleanupResult,
+    CommandInfo,
+    ExecutionContext,
+    ExecutionStats,
+    ExecutorMetadata,
+    PermanentEnvironmentConfig,
+    SandboxConfig,
+)
 from .executors.base_executors import CommandExecutor
 from .executors.executor_factory import ExecutorFactory
+from .sandbox.file_copier import SandboxFileCopier
 from .sandbox.permanent_environment_manager import PermanentEnvironmentManager
 from .sandbox.sandbox_environment_manager import SandboxEnvironmentManager
+
+if TYPE_CHECKING:
+    from ..session_manager import SessionManager
 
 logger = get_execution_logger(__name__)
 
@@ -32,7 +47,7 @@ class ExecutionManager:
     with security validation and Docker isolation. Commands are executed sequentially.
     """
 
-    def __init__(self, config_dir: str, session_manager: Any | None = None):
+    def __init__(self, config_dir: str, session_manager: SessionManager | None = None):
         """
         Initialize ExecutionManager with executor factory and configuration.
 
@@ -43,10 +58,10 @@ class ExecutionManager:
         Task-specific configuration will be provided when sessions are created.
         """
         self._config_dir = config_dir
-        self._session_manager = session_manager
+        self._session_manager: SessionManager | None = session_manager
         self._permanent_environment_manager: PermanentEnvironmentManager | None = None
         self._sandbox_environment_manager: SandboxEnvironmentManager | None = None
-        self._file_copier: Any | None = None  # SandboxFileCopier instance
+        self._file_copier: SandboxFileCopier | None = None
 
         # Check for debug mode from environment variable
         self._debug_mode = os.getenv("SABER_DEBUG_MODE", "false").lower() in ("true", "1", "yes")
@@ -234,50 +249,53 @@ class ExecutionManager:
 
         Args:
             action: Action object containing command and parameters
-            context: Optional execution context (should include episode_id)
+            context: Optional execution context dict (will be converted to ExecutionContext)
 
         Returns:
             CommandResult with execution results
         """
         # Get episode_id from context for episode-specific executor and concurrency tracking
-        episode_id = context.get("episode_id") if context else None
+        raw_context = context or {}
+        episode_id = raw_context.get("episode_id")
 
-        # Track concurrent executions per episode
-        if episode_id:
-            current_count = self._active_executions.get(episode_id, 0)
-            if current_count >= self._max_concurrent_per_episode:
-                error_msg = (
-                    f"Too many concurrent executions for episode {episode_id} "
-                    f"({current_count}/{self._max_concurrent_per_episode})"
-                )
-                logger.warning(
-                    "Episode concurrency limit reached",
-                    extra={
-                        "event": "episode_concurrency_limit",
-                        "episode_id": episode_id,
-                        "current": current_count,
-                        "limit": self._max_concurrent_per_episode,
-                    },
-                )
-                return CommandResult.error_result(error=error_msg)
-
-            # Increment active execution count for episode
-            self._active_executions[episode_id] = current_count + 1
-            logger.debug(
-                "Episode execution count incremented",
-                extra={
-                    "event": "episode_execution_count_incremented",
-                    "episode_id": episode_id,
-                    "active_executions": self._active_executions[episode_id],
-                },
-            )
-        else:
+        # Validate episode_id is present
+        if not episode_id:
             logger.warning(
                 "Episode ID missing for execution step",
                 extra={"event": "episode_id_missing_for_step"},
             )
+            return CommandResult.error_result(error="episode_id is required in execution context")
 
-        session_id = context.get("session_id") if context else None
+        # Track concurrent executions per episode
+        current_count = self._active_executions.get(episode_id, 0)
+        if current_count >= self._max_concurrent_per_episode:
+            error_msg = (
+                f"Too many concurrent executions for episode {episode_id} "
+                f"({current_count}/{self._max_concurrent_per_episode})"
+            )
+            logger.warning(
+                "Episode concurrency limit reached",
+                extra={
+                    "event": "episode_concurrency_limit",
+                    "episode_id": episode_id,
+                    "current": current_count,
+                    "limit": self._max_concurrent_per_episode,
+                },
+            )
+            return CommandResult.error_result(error=error_msg)
+
+        # Increment active execution count for episode
+        self._active_executions[episode_id] = current_count + 1
+        logger.debug(
+            "Episode execution count incremented",
+            extra={
+                "event": "episode_execution_count_incremented",
+                "episode_id": episode_id,
+                "active_executions": self._active_executions[episode_id],
+            },
+        )
+
+        session_id = raw_context.get("session_id")
         log_operation_start(
             logger,
             "execute_action",
@@ -293,8 +311,28 @@ class ExecutionManager:
             # Use action parameters directly - no mapping needed
             parameters = action.parameters.copy()
 
-            # Validate parameters first
-            validation_result = executor.validate_parameters(parameters)
+            # Convert raw dict context to strongly-typed ExecutionContext
+            execution_context = ExecutionContext.from_dict(raw_context)
+
+            # Convert dict parameters to strongly-typed parameter dataclass
+            # This is the boundary where untyped MCP data becomes typed
+            try:
+                params_class = executor.get_parameters_class()
+                typed_params = params_class.from_dict(parameters)
+            except (ValueError, TypeError) as e:
+                logger.warning(
+                    "Parameter conversion failed",
+                    extra={
+                        "event": "parameter_conversion_failed",
+                        "episode_id": episode_id,
+                        "tool_name": action.tool_name,
+                        "error": str(e),
+                    },
+                )
+                return CommandResult.error_result(error=f"Parameter conversion failed: {e}")
+
+            # Validate typed parameters
+            validation_result = executor.validate_parameters(typed_params)
             if not validation_result.valid:
                 logger.warning(
                     "Executor parameter validation failed",
@@ -310,9 +348,7 @@ class ExecutionManager:
                 )
 
             # Execute using the appropriate executor with callable interface
-            # This is now truly async and non-blocking
-            execution_context = context or {}
-            result = await executor(parameters, execution_context)
+            result = await executor(typed_params, execution_context)
             log_operation_success(
                 logger,
                 "execute_action",
@@ -348,7 +384,7 @@ class ExecutionManager:
                     },
                 )
 
-    def get_executor(self, executor_type: str, episode_id: str | None = None) -> "CommandExecutor":
+    def get_executor(self, executor_type: str, episode_id: str | None = None) -> CommandExecutor:
         """
         Get a specific executor by type, optionally for a specific episode.
 
@@ -585,8 +621,6 @@ class ExecutionManager:
 
     def _initialize_file_copier(self) -> None:
         """Initialize the file copier for copying files to execution containers."""
-        from .sandbox.file_copier import SandboxFileCopier
-
         # Server base directory is parent of config directory
         server_base_dir = Path(self._config_dir).parent
         self._file_copier = SandboxFileCopier(base_dir=server_base_dir)
@@ -720,7 +754,7 @@ class ExecutionManager:
         """
         return self.executor_factory.get_all_mcp_tools(episode_id)
 
-    def list_commands(self, episode_id: str | None = None) -> list[dict[str, Any]]:
+    def list_commands(self, episode_id: str | None = None) -> list[CommandInfo]:
         """
         List all available commands from executors, optionally for a specific episode.
 
@@ -728,23 +762,21 @@ class ExecutionManager:
             episode_id: Optional episode ID to get episode-specific commands
 
         Returns:
-            List of command definitions
+            List of CommandInfo objects describing available commands
         """
-        commands = []
+        commands: list[CommandInfo] = []
 
         for executor_type in self.executor_factory.get_available_executors(episode_id):
             try:
                 executor = self.executor_factory.get_executor(executor_type, episode_id)
-                metadata = getattr(executor, "_executor_metadata", {})
+                raw_metadata = getattr(executor, "_executor_metadata", {})
+                metadata = ExecutorMetadata.from_dict(raw_metadata)
 
-                command_info = {
-                    "executor_type": executor_type,
-                    "name": metadata.get("name", f"{executor_type}_command"),
-                    "description": metadata.get("description", f"{executor_type.title()} executor"),
-                    "domain": metadata.get("domain", "general"),
-                    "security_level": metadata.get("security_level", "medium"),
-                    "parameters": list(executor.get_parameters().keys()),
-                }
+                command_info = CommandInfo.from_executor(
+                    executor_type=executor_type,
+                    metadata=metadata,
+                    parameters=list(executor.get_parameters().keys()),
+                )
 
                 commands.append(command_info)
 
@@ -768,20 +800,20 @@ class ExecutionManager:
         """
         return self._configuration
 
-    def get_execution_stats(self) -> dict[str, Any]:
+    def get_execution_stats(self) -> ExecutionStats:
         """
         Get statistics about active executions (now episode-based).
 
         Returns:
-            Dictionary with execution statistics
+            ExecutionStats with execution statistics
         """
         total_active = sum(self._active_executions.values())
-        return {
-            "total_active_executions": total_active,
-            "active_episodes": len(self._active_executions),
-            "max_concurrent_per_episode": self._max_concurrent_per_episode,
-            "episode_execution_counts": self._active_executions.copy(),
-        }
+        return ExecutionStats(
+            total_active_executions=total_active,
+            active_episodes=len(self._active_executions),
+            max_concurrent_per_episode=self._max_concurrent_per_episode,
+            episode_execution_counts=self._active_executions.copy(),
+        )
 
     async def cleanup_episode(self, episode_id: str, context: dict[str, Any] | None = None) -> bool:
         """
@@ -903,32 +935,35 @@ class ExecutionManager:
 
         return cleanup_success
 
-    def initialize_permanent_environment_manager(self, config: dict[str, Any]) -> None:
+    def initialize_permanent_environment_manager(self, config: PermanentEnvironmentConfig | dict[str, Any]) -> None:
         """
         Initialize permanent environment manager with unified container lifecycle management.
 
         Args:
-            config: Configuration dictionary for permanent environment settings
+            config: Configuration for permanent environment settings (typed or dict for backward compatibility)
         """
         try:
-            # Initialize sandbox manager now that we have the domain
-            domain = config.get("domain", "excytin_demo")
+            # Convert dict to typed config if needed
+            if isinstance(config, dict):
+                typed_config = PermanentEnvironmentConfig.from_dict(config)
+            else:
+                typed_config = config
 
             log_operation_start(
                 logger,
                 "initialize_permanent_environment_manager",
-                domain=domain,
+                domain=typed_config.domain,
             )
 
             # Calculate correct server directory (parent of config directory)
             server_dir = Path(self._config_dir).parent
 
-            sandbox_config = {
-                "domain": domain,
-                "config_dir": self._config_dir,  # Pass config_dir for proper path resolution
-                "logs_dir": str(server_dir / "logs"),  # Logs go to server/logs, not server/config/logs
-                "enable_container_logging": True,
-            }
+            sandbox_config = SandboxConfig(
+                domain=typed_config.domain,
+                config_dir=self._config_dir,  # Pass config_dir for proper path resolution
+                logs_dir=str(server_dir / "logs"),  # Logs go to server/logs, not server/config/logs
+                enable_container_logging=True,
+            )
 
             if self._sandbox_environment_manager is None:
                 self._sandbox_environment_manager = SandboxEnvironmentManager(sandbox_config)
@@ -940,25 +975,26 @@ class ExecutionManager:
                     "Sandbox environment manager initialized",
                     extra={
                         "event": "sandbox_manager_initialized",
-                        "domain": domain,
+                        "domain": typed_config.domain,
                     },
                 )
 
-            # Initialize permanent environment manager
-            self._permanent_environment_manager = PermanentEnvironmentManager(config)
+            # Initialize permanent environment manager (still takes dict for now)
+            self._permanent_environment_manager = PermanentEnvironmentManager(typed_config.to_dict())
 
             log_operation_success(
                 logger,
                 "initialize_permanent_environment_manager",
-                domain=domain,
+                domain=typed_config.domain,
             )
 
         except Exception as exc:
+            domain = config.domain if isinstance(config, PermanentEnvironmentConfig) else config.get("domain")
             log_operation_failure(
                 logger,
                 "initialize_permanent_environment_manager",
                 exc,
-                domain=config.get("domain"),
+                domain=domain,
             )
             raise
 
@@ -1025,7 +1061,7 @@ class ExecutionManager:
             return False
         return self._permanent_environment_manager.is_running()
 
-    async def cleanup_all_containers(self, context: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def cleanup_all_containers(self, context: dict[str, Any] | None = None) -> CleanupResult:
         """
         Clean up all containers (ephemeral and permanent) for server shutdown (async).
 
@@ -1033,7 +1069,7 @@ class ExecutionManager:
             context: Additional context for debugging
 
         Returns:
-            Dictionary with cleanup results
+            CleanupResult with cleanup results
         """
         log_operation_start(
             logger,
@@ -1075,12 +1111,11 @@ class ExecutionManager:
             )
             permanent_success = False
 
-        result = {
-            "ephemeral_episodes_cleaned": ephemeral_episodes_cleaned,
-            "permanent_environment_stopped": permanent_success,
-            "total_cleanup_success": ephemeral_success and permanent_success,
-            "context": context,
-        }
+        result = CleanupResult(
+            ephemeral_episodes_cleaned=ephemeral_episodes_cleaned,
+            permanent_environment_stopped=permanent_success,
+            total_cleanup_success=ephemeral_success and permanent_success,
+        )
 
         logger.info(
             "Full cleanup completed",
@@ -1088,11 +1123,11 @@ class ExecutionManager:
                 "event": "full_cleanup_completed",
                 "ephemeral_episodes_cleaned": ephemeral_episodes_cleaned,
                 "permanent_environment_stopped": permanent_success,
-                "total_cleanup_success": result["total_cleanup_success"],
+                "total_cleanup_success": result.total_cleanup_success,
             },
         )
 
-        if result["total_cleanup_success"]:
+        if result.total_cleanup_success:
             log_operation_success(
                 logger,
                 "cleanup_all_containers",
@@ -1178,12 +1213,12 @@ class ExecutionManager:
         """
         return self._debug_mode
 
-    def set_session_manager(self, session_manager: Any) -> None:
+    def set_session_manager(self, session_manager: SessionManager) -> None:
         """
-        Set or update the session manager.
+        Set the session manager for cross-episode operations.
 
         Args:
-            session_manager: SessionManager instance for cross-episode operations
+            session_manager: The session manager to use
         """
         self._session_manager = session_manager
         # Update executor factory if it exists

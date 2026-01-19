@@ -6,71 +6,121 @@ This module provides the base CommandExecutor class for implementing custom comm
 Logging category: ``LogCategory.TASK_EXEC``.
 """
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Generic
 
 if TYPE_CHECKING:
+    from ...session_manager import SessionManager
     from ..sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 
 from ....logging_config import LogCategory, get_saber_logger
 from ....models import MCPInputSchema, MCPPropertySchema
 from ...base import CommandResult
-from ..base import Parameter, ValidationResult
+from ..base import ExecutionContext, ExecutorParameters, P, Parameter, ValidationResult
+from ..models import ExecutorConfig
 
 logger = get_saber_logger(LogCategory.TASK_EXEC, __name__)
 
 
-class CommandExecutor(ABC):
+def normalize_context(context: ExecutionContext | dict[str, Any]) -> ExecutionContext:
+    """
+    Normalize context to ExecutionContext type.
+
+    Provides backward compatibility for tests and code that still pass dict contexts.
+
+    Args:
+        context: Either an ExecutionContext instance or a dict
+
+    Returns:
+        ExecutionContext instance
+    """
+    if isinstance(context, ExecutionContext):
+        return context
+    return ExecutionContext.from_dict(context)
+
+
+def normalize_parameters(
+    params: P | dict[str, Any],
+    params_class: type[P],
+) -> P:
+    """
+    Normalize parameters to the expected parameter dataclass type.
+
+    Provides backward compatibility for tests and code that still pass dict parameters.
+
+    Args:
+        params: Either a parameter dataclass instance or a dict
+        params_class: The parameter dataclass class to convert to
+
+    Returns:
+        Parameter dataclass instance
+    """
+    if isinstance(params, params_class):
+        return params
+    if isinstance(params, dict):
+        return params_class.from_dict(params)
+    # Already correct type (could be a subclass)
+    if isinstance(params, ExecutorParameters):
+        return params
+    raise TypeError(f"Expected {params_class.__name__} or dict, got {type(params).__name__}")
+
+
+class CommandExecutor(ABC, Generic[P]):
     """
     Base implementation for command executors with common functionality.
+
+    Type parameter P is the executor's specific parameter dataclass type.
     """
 
     def __init__(
-        self, config: dict[str, Any] | None = None, session_manager: Any | None = None, *args: Any, **kwargs: Any
+        self,
+        config: ExecutorConfig | None = None,
+        session_manager: SessionManager | None = None,
+        *args: Any,
+        **kwargs: Any,
     ) -> None:
         """
         Initialize command executor.
 
         Args:
-            config: Executor configuration dictionary
+            config: Typed executor configuration
             session_manager: Optional session manager for cross-episode operations
             *args: Additional positional arguments
             **kwargs: Additional keyword arguments
         """
-        # Merge provided config with defaults
-        default_config = self.get_default_config()
-        self._config = {**default_config, **(config or {})}
+        # Use provided config or get default from subclass
+        self._config = config if config is not None else self.get_default_config()
         self._parameters: dict[str, Parameter] = {}
 
         # Session manager for cross-episode operations
-        self._session_manager: Any | None = session_manager
+        self._session_manager: SessionManager | None = session_manager
 
         # Allow subclasses to set up their specific parameters
         self.setup_parameters(self._config)
 
     @classmethod
-    def get_default_config(cls) -> dict[str, Any]:
+    def get_default_config(cls) -> ExecutorConfig:
         """
         Get default configuration for this executor type.
 
         Subclasses should override this method to provide their specific default configurations.
 
         Returns:
-            Dictionary containing default configuration values
+            ExecutorConfig with default values
         """
-        return {
-            "timeout": 300.0,  # Default 5 minutes
-        }
+        return ExecutorConfig(timeout=300.0)
 
     @classmethod
     def create_with_config(
         cls,
-        sandbox_manager: "SandboxEnvironmentManager",
-        config: dict[str, Any] | None = None,
+        sandbox_manager: SandboxEnvironmentManager,
+        config: ExecutorConfig | None = None,
         additional_params: dict[str, Any] | None = None,
-        session_manager: Any | None = None,
+        session_manager: SessionManager | None = None,
         **kwargs: Any,
-    ) -> "CommandExecutor":
+    ) -> CommandExecutor[P]:
         """
         Generic factory method for creating executor instances with standardized configuration.
 
@@ -103,7 +153,7 @@ class CommandExecutor(ABC):
         )
 
     @abstractmethod
-    def setup_parameters(self, config: dict[str, Any]) -> None:
+    def setup_parameters(self, config: ExecutorConfig) -> None:
         """
         Set up executor-specific parameters.
 
@@ -118,21 +168,35 @@ class CommandExecutor(ABC):
         """
         pass
 
+    @classmethod
     @abstractmethod
-    async def execute(self, parameters: dict[str, Any], context: dict[str, Any]) -> CommandResult:
+    def get_parameters_class(cls) -> type[ExecutorParameters]:
+        """
+        Get the parameter dataclass type for this executor.
+
+        This is used by ExecutionManager to convert dict → typed params
+        before calling execute().
+
+        Returns:
+            The parameter dataclass class (e.g., BashParameters)
+        """
+        pass
+
+    @abstractmethod
+    async def execute(self, parameters: P, context: ExecutionContext) -> CommandResult:
         """
         Execute the command with given parameters and context.
 
         Args:
-            parameters: Command-specific parameters
-            context: Execution context (episode_id, task_id, etc.)
+            parameters: Strongly-typed parameter dataclass instance
+            context: Strongly-typed execution context
 
         Returns:
             CommandResult containing execution results
         """
         pass
 
-    async def __call__(self, parameters: dict[str, Any], context: dict[str, Any]) -> CommandResult:
+    async def __call__(self, parameters: P, context: ExecutionContext) -> CommandResult:
         """
         Call the executor with given parameters and context.
 
@@ -140,8 +204,8 @@ class CommandExecutor(ABC):
         instead of executor.execute(parameters, context).
 
         Args:
-            parameters: Command-specific parameters
-            context: Execution context (episode_id, task_id, etc.)
+            parameters: Strongly-typed parameter dataclass instance
+            context: Strongly-typed execution context
 
         Returns:
             CommandResult containing execution results
@@ -155,18 +219,7 @@ class CommandExecutor(ABC):
         Returns:
             Timeout in seconds from configuration
         """
-        timeout = self._config.get("timeout")
-        if timeout is None:
-            logger.warning(
-                "Executor timeout missing; using default",
-                extra={
-                    "event": "executor_timeout_default",
-                    "executor_type": self.__class__.__name__,
-                    "default_timeout": 300.0,
-                },
-            )
-            return 300.0
-        return float(timeout)
+        return self._config.timeout
 
     def get_parameters(self) -> dict[str, Parameter]:
         """Get the command parameters."""
@@ -176,33 +229,30 @@ class CommandExecutor(ABC):
         """Add a parameter to the command."""
         self._parameters[parameter.name] = parameter
 
-    def validate_parameters(self, parameters: dict[str, Any]) -> ValidationResult:
+    def validate_parameters(self, parameters: P) -> ValidationResult:
         """
-        Validate parameters against the command's parameter definitions.
+        Validate typed parameters against the command's parameter definitions.
 
         Args:
-            parameters: Parameters to validate
+            parameters: Strongly-typed parameter dataclass instance
 
         Returns:
             ValidationResult
         """
         result = ValidationResult.success()
 
-        # Check for required parameters
+        # Check for required parameters and type validation
         for param_name, param_def in self._parameters.items():
-            if param_def.required and param_name not in parameters:
+            param_value = getattr(parameters, param_name, None)
+
+            if param_def.required and param_value is None:
                 result.add_error(f"Required parameter '{param_name}' is missing")
                 continue
 
-            if param_name in parameters:
-                is_valid, error_msg = param_def.validate_value(parameters[param_name])
+            if param_value is not None:
+                is_valid, error_msg = param_def.validate_value(param_value)
                 if not is_valid and error_msg:
                     result.add_error(error_msg)
-
-        # Check for unknown parameters
-        for param_name in parameters:
-            if param_name not in self._parameters:
-                result.add_warning(f"Unknown parameter '{param_name}' will be ignored")
 
         return result
 

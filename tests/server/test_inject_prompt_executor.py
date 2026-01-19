@@ -366,19 +366,19 @@ class TestInjectPromptExecutorConfiguration:
 
     def test_get_default_config(self):
         """Test default configuration values."""
+        from saber.server.execution.models import ExecutorConfig
         config = InjectPromptExecutor.get_default_config()
 
-        # Default config is empty for this executor
-        assert isinstance(config, dict)
+        # Default config is a typed ExecutorConfig
+        assert isinstance(config, ExecutorConfig)
 
     def test_create_with_config(self):
         """Test create_with_config factory method."""
         mock_sandbox, _ = create_mock_sandbox_manager()
-        custom_config = {}
 
         executor = InjectPromptExecutor.create_with_config(
             sandbox_manager=mock_sandbox,
-            config=custom_config
+            config=None
         )
 
         assert executor is not None

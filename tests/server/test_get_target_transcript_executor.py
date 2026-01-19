@@ -152,10 +152,8 @@ class TestGetTargetTranscriptExecutorParameterValidation:
         parameters = {}
         context = {}  # Missing episode_id
 
-        result = await executor.execute(parameters, context)
-
-        assert result.success is False
-        assert "Missing episode_id" in result.error
+        with pytest.raises(ValueError, match="episode_id is required"):
+            await executor.execute(parameters, context)
 
 
 class TestGetTargetTranscriptExecutorTargetResolution:

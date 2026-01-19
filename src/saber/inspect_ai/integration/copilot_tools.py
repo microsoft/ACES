@@ -6,14 +6,15 @@ Tool format, enabling SABER sandbox tools to be used by the Copilot agent.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, List
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from ...logging_config import LogCategory, get_saber_logger
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
 
 if TYPE_CHECKING:
-    from typing import Awaitable, Union
+    pass
 
 # Type aliases for Copilot SDK types (avoid hard dependency at import time)
 # The actual types are imported from copilot SDK when functions are called
@@ -43,10 +44,10 @@ class Tool:
 
 def _python_type_to_json_schema(type_name: str) -> str:
     """Convert Python type name to JSON Schema type.
-    
+
     Args:
         type_name: Python type name (e.g., 'str', 'int', 'bool')
-        
+
     Returns:
         JSON Schema type string
     """
@@ -82,17 +83,17 @@ def mcp_tool_to_copilot_tool(inspect_tool: Any, mcp_client: Any) -> Tool:
         or getattr(inspect_tool, "__name__", None)  # Function-style
         or "unknown_tool"
     )
-    
+
     # Get description - handle both styles
     tool_description = (
         getattr(inspect_tool, "description", None)  # MCP-style
         or getattr(inspect_tool, "__doc__", None)  # Function-style
         or f"Execute {tool_name}"
     )
-    
+
     # Get input schema - handle MCP-style first, then try to build from annotations
     input_schema = getattr(inspect_tool, "inputSchema", None) or getattr(inspect_tool, "input_schema", None)
-    
+
     if input_schema is None and hasattr(inspect_tool, "__annotations__"):
         # Build a simple schema from function annotations
         props = {}
@@ -111,7 +112,7 @@ def mcp_tool_to_copilot_tool(inspect_tool: Any, mcp_client: Any) -> Tool:
             }
 
     logger.debug(
-        f"Converting tool to Copilot tool",
+        "Converting tool to Copilot tool",
         extra={
             "tool_name": tool_name,
             "has_schema": input_schema is not None,
@@ -121,8 +122,10 @@ def mcp_tool_to_copilot_tool(inspect_tool: Any, mcp_client: Any) -> Tool:
     # Determine if this is a callable (inspect_ai tool) or an MCP tool object
     # MCP tool objects have a .name attribute explicitly set, functions have __name__
     # We check if the tool has .name as an instance attribute (not from __name__)
-    is_mcp_style = hasattr(inspect_tool, "name") and not hasattr(type(inspect_tool), "__call__") or (
-        hasattr(inspect_tool, "name") and inspect_tool.name != getattr(inspect_tool, "__name__", None)
+    is_mcp_style = (
+        hasattr(inspect_tool, "name")
+        and not callable(type(inspect_tool))
+        or (hasattr(inspect_tool, "name") and inspect_tool.name != getattr(inspect_tool, "__name__", None))
     )
     is_callable_tool = not is_mcp_style and callable(inspect_tool)
 
@@ -138,7 +141,7 @@ def mcp_tool_to_copilot_tool(inspect_tool: Any, mcp_client: Any) -> Tool:
         arguments = invocation.get("arguments", {})
 
         logger.info(
-            f"Executing tool via Copilot bridge",
+            "Executing tool via Copilot bridge",
             extra={
                 "tool_name": tool_name,
                 "tool_call_id": invocation.get("tool_call_id"),
@@ -152,6 +155,7 @@ def mcp_tool_to_copilot_tool(inspect_tool: Any, mcp_client: Any) -> Tool:
                 # Call the inspect_ai tool directly
                 # The tool is a callable that may be sync or async
                 import asyncio
+
                 if asyncio.iscoroutinefunction(inspect_tool):
                     result = await inspect_tool(**arguments)
                 else:
@@ -160,7 +164,7 @@ def mcp_tool_to_copilot_tool(inspect_tool: Any, mcp_client: Any) -> Tool:
             else:
                 # MCP-style tool - call via mcp_client
                 result = await mcp_client.call_tool(tool_name, arguments)
-                
+
                 # Extract text content from MCP result
                 text_content = ""
                 if hasattr(result, "content") and result.content:
@@ -171,12 +175,12 @@ def mcp_tool_to_copilot_tool(inspect_tool: Any, mcp_client: Any) -> Tool:
                         elif isinstance(content_item, str):
                             text_parts.append(content_item)
                     text_content = "\n".join(text_parts)
-                
+
                 # Check for error
                 is_error = getattr(result, "isError", False) or getattr(result, "is_error", False)
                 if is_error:
                     logger.warning(
-                        f"MCP tool returned error",
+                        "MCP tool returned error",
                         extra={"tool_name": tool_name, "error": text_content[:200]},
                     )
                     return {
@@ -186,7 +190,7 @@ def mcp_tool_to_copilot_tool(inspect_tool: Any, mcp_client: Any) -> Tool:
                     }
 
             logger.debug(
-                f"Tool completed",
+                "Tool completed",
                 extra={"tool_name": tool_name, "result_length": len(text_content)},
             )
 
@@ -197,7 +201,7 @@ def mcp_tool_to_copilot_tool(inspect_tool: Any, mcp_client: Any) -> Tool:
 
         except Exception as e:
             logger.error(
-                f"Exception executing Inspect AI tool",
+                "Exception executing Inspect AI tool",
                 extra={"tool_name": tool_name, "error": str(e)},
                 exc_info=True,
             )
@@ -215,7 +219,7 @@ def mcp_tool_to_copilot_tool(inspect_tool: Any, mcp_client: Any) -> Tool:
     )
 
 
-def convert_mcp_tools_to_copilot(mcp_tools: List[Any], mcp_client: Any) -> List[Tool]:
+def convert_mcp_tools_to_copilot(mcp_tools: list[Any], mcp_client: Any) -> list[Tool]:
     """Convert a list of MCP tools to Copilot SDK Tools.
 
     Args:
@@ -286,7 +290,7 @@ def create_submit_tool(submission_handler: Callable[[str], Any]) -> Tool:
 
         except Exception as e:
             logger.error(
-                f"Error submitting answer",
+                "Error submitting answer",
                 extra={"error": str(e)},
                 exc_info=True,
             )
@@ -317,7 +321,7 @@ def create_submit_tool(submission_handler: Callable[[str], Any]) -> Tool:
     )
 
 
-async def get_saber_mcp_tools(sandbox: Any) -> List[Any]:
+async def get_saber_mcp_tools(sandbox: Any) -> list[Any]:
     """Get MCP tools from SABER sandbox.
 
     Retrieves the list of available tools from the sandbox's MCP client.
@@ -337,9 +341,7 @@ async def get_saber_mcp_tools(sandbox: Any) -> List[Any]:
         actual_sandbox = sandbox._sandbox
 
     if actual_sandbox._mcp_client is None:
-        raise RuntimeError(
-            "SABER MCP client not available. Ensure sample_init() has completed."
-        )
+        raise RuntimeError("SABER MCP client not available. Ensure sample_init() has completed.")
 
     try:
         # Get tools from MCP server

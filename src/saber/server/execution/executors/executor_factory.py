@@ -6,15 +6,21 @@ This module provides a factory pattern for creating and managing different types
 of command executors, supporting scaling to many executor types.
 """
 
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
 
 import mcp.types as mcp_types
 
 from saber.logging_config import LogCategory, get_saber_logger
 
+from ..models import EpisodeConfiguration
 from ..sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 from .base_executors import CommandExecutor
 from .executor_registry import executor_registry
+
+if TYPE_CHECKING:
+    from ...session_manager import SessionManager
 
 logger = get_saber_logger(LogCategory.EXECUTION, __name__)
 
@@ -32,7 +38,7 @@ class ExecutorFactory:
         self,
         sandbox_manager: SandboxEnvironmentManager,
         configuration: dict[str, Any] | None = None,
-        session_manager: Any | None = None,
+        session_manager: SessionManager | None = None,
     ):
         """
         Initialize executor factory.
@@ -43,7 +49,7 @@ class ExecutorFactory:
             session_manager: Optional session manager for cross-episode access (injected into executors)
         """
         self._sandbox_manager = sandbox_manager
-        self._session_manager = session_manager
+        self._session_manager: SessionManager | None = session_manager
         # Store configuration by reference so updates to the dict are reflected
         # This allows ExecutionManager to update config after factory creation
         self._configuration = configuration if configuration is not None else {}
@@ -54,8 +60,8 @@ class ExecutorFactory:
         # Get all available executors from the global registry
         self._all_available_executors = executor_registry.get_available_executors()
 
-        # Episode-specific configurations: episode_id -> {allowed_executors, config}
-        self._episode_configurations: dict[str, dict[str, Any]] = {}
+        # Episode-specific configurations: episode_id -> EpisodeConfiguration
+        self._episode_configurations: dict[str, EpisodeConfiguration] = {}
 
         logger.info(
             "Executor factory initialized",
@@ -99,11 +105,11 @@ class ExecutorFactory:
             # If no specific allowed executors, allow all
             valid_allowed_executors = self._all_available_executors.copy()
 
-        # Store episode configuration
-        self._episode_configurations[episode_id] = {
-            "allowed_executors": valid_allowed_executors,
-            "config": episode_config or {},
-        }
+        # Store episode configuration using typed class
+        self._episode_configurations[episode_id] = EpisodeConfiguration(
+            allowed_executors=valid_allowed_executors,
+            config=episode_config or {},
+        )
 
         logger.info(
             "Episode executor configuration registered",
@@ -164,9 +170,9 @@ class ExecutorFactory:
         if episode_id is None:
             return self._all_available_executors.copy()
 
-        if episode_id in self._episode_configurations:
-            allowed_executors: list[str] = self._episode_configurations[episode_id]["allowed_executors"]
-            return allowed_executors.copy()
+        episode_config = self._episode_configurations.get(episode_id)
+        if episode_config is not None:
+            return episode_config.allowed_executors.copy()
 
         logger.warning(
             "Episode configuration missing; returning all executors",
@@ -226,32 +232,31 @@ class ExecutorFactory:
             },
         )
 
-        # Get the executor class's default configuration
+        # Get the executor class's typed default configuration
         default_config = executor_class.get_default_config()
 
-        # Get episode-specific configuration if available, otherwise use factory-level config
-        episode_config = {}
-        if episode_id and episode_id in self._episode_configurations:
-            episode_config = self._episode_configurations[episode_id].get("config", {})
+        # Collect runtime overrides from episode and factory config
+        # Priority: episode config > factory config > defaults
+        episode_config_dict: dict[str, Any] = {}
+        episode_configuration = self._episode_configurations.get(episode_id) if episode_id else None
+        if episode_configuration is not None:
+            episode_config_dict = episode_configuration.config
 
-        # Look for executor-specific config: episode config > factory config > defaults
-        # First check episode-level executors section
-        episode_executors = episode_config.get("executors", {})
-        executor_config_from_episode = episode_executors.get(executor_type, {})
+        # Get executor-specific overrides from episode and factory configs
+        episode_executors = episode_config_dict.get("executors", {})
+        executor_overrides_episode = episode_executors.get(executor_type, {})
 
-        # Then check factory-level executors section (fallback)
         factory_executors = self._configuration.get("executors", {})
-        executor_config_from_factory = factory_executors.get(executor_type, self._configuration.get(executor_type, {}))
+        executor_overrides_factory = factory_executors.get(executor_type, self._configuration.get(executor_type, {}))
 
-        # Merge: defaults < factory config < episode config
-        executor_config = {**executor_config_from_factory, **executor_config_from_episode}
+        # Merge overrides: factory < episode (episode takes precedence)
+        merged_overrides = {**executor_overrides_factory, **executor_overrides_episode}
 
-        # Merge with defaults, giving preference to executor-specific config
-        # No global timeout override - each executor must specify its own timeout
-        merged_config = {**default_config, **executor_config}
+        # Apply overrides to typed config - no dict conversion needed
+        typed_config = default_config.with_overrides(merged_overrides)
 
         # Prepare additional parameters for specific executor needs
-        additional_params = {}
+        additional_params: dict[str, Any] = {}
 
         # Add CLI-specific parameters if needed
         if executor_type == "cli":
@@ -263,7 +268,7 @@ class ExecutorFactory:
         # All executors must have create_with_config classmethod
         executor_instance = executor_class.create_with_config(
             sandbox_manager=self._sandbox_manager,
-            config=merged_config,
+            config=typed_config,
             additional_params=additional_params,
             session_manager=self._session_manager,
         )
@@ -283,7 +288,7 @@ class ExecutorFactory:
         Returns:
             List of mcp.types.Tool objects ready for FastMCP consumption
         """
-        tools = []
+        tools: list[mcp_types.Tool] = []
 
         # Determine which executors to include
         if episode_id is None:
@@ -295,8 +300,8 @@ class ExecutorFactory:
             )
             allowed_executors = list(self._all_available_executors)
         else:
-            episode_config = self._episode_configurations.get(episode_id)
-            if episode_config is None:
+            episode_configuration = self._episode_configurations.get(episode_id)
+            if episode_configuration is None:
                 logger.warning(
                     "Episode configuration missing for MCP tools; returning all tools",
                     extra={
@@ -306,13 +311,12 @@ class ExecutorFactory:
                 )
                 allowed_executors = list(self._all_available_executors)
             else:
-                # Derive allowed_executors from stored episode configuration
-                # Check for explicit allowed_executors first (backwards compat)
-                # Then check for executors section keys
-                if "allowed_executors" in episode_config:
-                    allowed_executors = episode_config.get("allowed_executors", [])
-                elif "executors" in episode_config and episode_config["executors"]:
-                    allowed_executors = list(episode_config["executors"].keys())
+                # Use typed EpisodeConfiguration's allowed_executors
+                # Fall back to checking executors section in config dict
+                if episode_configuration.allowed_executors:
+                    allowed_executors = episode_configuration.allowed_executors.copy()
+                elif episode_configuration.config.get("executors"):
+                    allowed_executors = list(episode_configuration.config["executors"].keys())
                 else:
                     allowed_executors = []
 

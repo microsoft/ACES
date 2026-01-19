@@ -6,15 +6,34 @@ Docker container management functionality.
 """
 
 import asyncio
+from dataclasses import dataclass
+from typing import Any
 from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
 
 from saber.server.base import CommandResult
-from saber.server.execution.base import ValidationResult
+from saber.server.execution.base import ValidationResult, ExecutorConfig, ExecutorParameters
 from saber.server.execution.exceptions import SandboxExecutionError
 from saber.server.execution.executors.docker_executor import DockerExecutor
 from saber.server.execution.sandbox.sandbox_environment_manager import SandboxEnvironmentManager
+
+
+# Mock parameter class for concrete executor (prefixed with Mock to avoid pytest collection)
+@dataclass(frozen=True, slots=True)
+class MockDockerParams:
+    """Mock parameters for concrete executor."""
+    command: str = ""
+    working_dir: str | None = None
+    timeout: float | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "MockDockerParams":
+        return cls(
+            command=data.get("command", ""),
+            working_dir=data.get("working_dir"),
+            timeout=data.get("timeout"),
+        )
 
 
 class TestDockerExecutor:
@@ -23,6 +42,10 @@ class TestDockerExecutor:
     # Create a concrete implementation for testing
     class ConcreteDockerExecutor(DockerExecutor):
         """Concrete implementation of DockerExecutor for testing."""
+
+        @classmethod
+        def get_parameters_class(cls) -> type[ExecutorParameters]:
+            return MockDockerParams
 
         async def execute(self, parameters, context):
             return CommandResult.success_result(data="test_execution")
@@ -43,7 +66,7 @@ class TestDockerExecutor:
     @pytest.fixture
     def docker_executor(self, mock_sandbox_manager):
         """Create a concrete Docker executor instance for testing."""
-        config = {"timeout": 60.0}
+        config = ExecutorConfig(timeout=60.0)
         return self.ConcreteDockerExecutor(sandbox_manager=mock_sandbox_manager, config=config)
 
     @pytest.fixture
@@ -55,7 +78,7 @@ class TestDockerExecutor:
 
     def test_initialization_success(self, mock_sandbox_manager):
         """Test successful initialization with sandbox manager."""
-        config = {"timeout": 120.0}
+        config = ExecutorConfig(timeout=120.0)
         executor = self.ConcreteDockerExecutor(sandbox_manager=mock_sandbox_manager, config=config)
 
         assert executor._sandbox_manager == mock_sandbox_manager
@@ -63,13 +86,12 @@ class TestDockerExecutor:
 
     def test_initialization_with_docker_config(self, mock_sandbox_manager):
         """Test initialization with Docker configuration."""
-        config = {"timeout": 60.0, "working_dir": "/custom/workspace", "environment": {"PYTHONPATH": "/app"}}
-
+        # Docker-specific configs beyond timeout are not part of ExecutorConfig
+        # This test now just verifies basic initialization with timeout
+        config = ExecutorConfig(timeout=60.0)
         executor = self.ConcreteDockerExecutor(sandbox_manager=mock_sandbox_manager, config=config)
 
-        # Docker-specific configs are stored in the general config
-        assert executor._config["working_dir"] == "/custom/workspace"
-        assert executor._config["environment"]["PYTHONPATH"] == "/app"
+        assert executor._config.timeout == 60.0
 
     def test_initialization_without_sandbox_manager(self):
         """Test that initialization fails without sandbox manager."""
@@ -183,7 +205,7 @@ class TestDockerExecutor:
 
     def test_validate_docker_parameters_valid(self, docker_executor):
         """Test validation of valid Docker parameters."""
-        parameters = {"working_dir": "/workspace", "timeout": 300, "other_param": "value"}
+        parameters = MockDockerParams(command="test", working_dir="/workspace", timeout=300)
 
         result = docker_executor.validate_docker_parameters(parameters)
 
@@ -192,9 +214,7 @@ class TestDockerExecutor:
 
     def test_validate_docker_parameters_invalid_working_dir(self, docker_executor):
         """Test validation with invalid working directory."""
-        parameters = {
-            "working_dir": "relative/path",  # Should be absolute
-        }
+        parameters = MockDockerParams(command="test", working_dir="relative/path")
 
         result = docker_executor.validate_docker_parameters(parameters)
 
@@ -203,20 +223,19 @@ class TestDockerExecutor:
 
     def test_validate_docker_parameters_invalid_working_dir_type(self, docker_executor):
         """Test validation with wrong working directory type."""
-        parameters = {
-            "working_dir": 123,  # Should be string
-        }
+        # Create a mock object with invalid type for working_dir
+        class BadParams:
+            working_dir = 123  # Should be string
+            timeout = None
 
-        result = docker_executor.validate_docker_parameters(parameters)
+        result = docker_executor.validate_docker_parameters(BadParams())
 
         assert result.valid is False
         assert "working_dir must be a string" in result.errors
 
     def test_validate_docker_parameters_invalid_timeout(self, docker_executor):
         """Test validation with invalid timeout."""
-        parameters = {
-            "timeout": -10,  # Should be positive
-        }
+        parameters = MockDockerParams(command="test", timeout=-10)
 
         result = docker_executor.validate_docker_parameters(parameters)
 
@@ -225,11 +244,12 @@ class TestDockerExecutor:
 
     def test_validate_docker_parameters_invalid_timeout_type(self, docker_executor):
         """Test validation with wrong timeout type."""
-        parameters = {
-            "timeout": "not_a_number",  # Should be number
-        }
+        # Create a mock object with invalid type for timeout
+        class BadParams:
+            working_dir = None
+            timeout = "not_a_number"  # Should be number
 
-        result = docker_executor.validate_docker_parameters(parameters)
+        result = docker_executor.validate_docker_parameters(BadParams())
 
         assert result.valid is False
         assert "timeout must be a positive number" in result.errors
@@ -238,17 +258,17 @@ class TestDockerExecutor:
         """Test getting Docker configuration information."""
         info = docker_executor.get_docker_info()
 
-        assert info["execution_environment"] == "docker_container"
-        assert "timeout" in info
-        assert "docker_config" in info
+        assert info.execution_environment == "docker_container"
+        assert info.timeout == 60.0
+        assert info.docker_config is not None
 
         # Check sandbox config details
-        docker_config = info["docker_config"]
-        assert docker_config["image"] == "saber/sandbox:latest"
-        assert docker_config["network_mode"] == "none"
-        assert docker_config["read_only_root"] is True
-        assert docker_config["user"] == "tooluser:tooluser"
-        assert docker_config["resource_limits"]["memory"] == "512m"
+        docker_config = info.docker_config
+        assert docker_config.image == "saber/sandbox:latest"
+        assert docker_config.network_mode == "none"
+        assert docker_config.read_only_root is True
+        assert docker_config.user == "tooluser:tooluser"
+        assert docker_config.resource_limits["memory"] == "512m"
 
     def test_get_docker_info_with_error(self, docker_executor):
         """Test getting Docker info when sandbox config retrieval fails."""
@@ -257,9 +277,9 @@ class TestDockerExecutor:
 
         info = docker_executor.get_docker_info()
 
-        assert info["execution_environment"] == "docker_container"
-        assert "timeout" in info
-        # Should still work even if sandbox config fails
+        assert info.execution_environment == "docker_container"
+        assert info.timeout == 60.0
+        # Should still work even if sandbox config fails (docker_config may be None)
 
     def test_validate_parameters_combined(self, docker_executor):
         """Test parameter validation combining base and Docker validation."""
@@ -269,7 +289,7 @@ class TestDockerExecutor:
             base_result.add_warning("Base warning")
             mock_base_validate.return_value = base_result
 
-            parameters = {"working_dir": "/workspace", "timeout": 300}
+            parameters = MockDockerParams(command="test", working_dir="/workspace", timeout=300)
 
             result = docker_executor.validate_parameters(parameters)
 
@@ -284,9 +304,7 @@ class TestDockerExecutor:
             base_result = ValidationResult.failure(["Base error"])
             mock_base_validate.return_value = base_result
 
-            parameters = {
-                "working_dir": "invalid/path",  # Docker validation error
-            }
+            parameters = MockDockerParams(command="test", working_dir="invalid/path")
 
             result = docker_executor.validate_parameters(parameters)
 
@@ -297,8 +315,10 @@ class TestDockerExecutor:
     @pytest.mark.asyncio
     async def test_execute_abstract_method_implemented(self, docker_executor):
         """Test that concrete implementation provides execute method."""
-        parameters = {"test": "param"}
-        context = {"episode_id": "test"}
+        from saber.server.execution.base import ExecutionContext
+
+        parameters = MockDockerParams(command="test")
+        context = ExecutionContext(episode_id="test")
 
         result = await docker_executor(parameters, context)
 

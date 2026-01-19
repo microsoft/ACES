@@ -8,8 +8,13 @@ before execution.
 Logging category: ``LogCategory.DOCKER``.
 """
 
+from __future__ import annotations
+
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ...session_manager import SessionManager
 
 from .....logging_config import (
     LogCategory,
@@ -19,8 +24,8 @@ from .....logging_config import (
     log_operation_success,
 )
 from ....base import CommandResult
-from ...base import Parameter, ParameterType, ValidationResult
-from ...exceptions import SandboxExecutionError
+from ...base import BashParameters, ExecutionContext, ExecutorParameters, Parameter, ParameterType, ValidationResult
+from ...models import BashExecutorConfig, ExecutorConfig
 from ...sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 from ...utils.security_validator import SecurityValidator
 from ..docker_executor import DockerExecutor
@@ -51,32 +56,38 @@ class BashExecutor(DockerExecutor):
     }
 
     @classmethod
-    def get_default_config(cls) -> dict[str, Any]:
+    def get_parameters_class(cls) -> type[ExecutorParameters]:
+        """Get the parameter dataclass type for this executor."""
+        return BashParameters
+
+    @classmethod
+    def get_default_config(cls) -> BashExecutorConfig:
         """
         Get default configuration for Bash executor.
 
         Returns:
-            Dictionary containing Bash executor default configuration
+            BashExecutorConfig with default values
         """
-        return {
-            "timeout": 60.0,  # 🔥 REDUCED TIMEOUT FOR TESTING: Was 300.0, now 60.0 to verify timeout behavior
-        }
+        return BashExecutorConfig(
+            timeout=60.0,  # Reduced timeout for testing
+            allowed_commands=[],
+        )
 
     @classmethod
     def create_with_config(
         cls,
         sandbox_manager: SandboxEnvironmentManager,
-        config: dict[str, Any] | None = None,
+        config: ExecutorConfig | None = None,
         additional_params: dict[str, Any] | None = None,
-        session_manager: Any | None = None,
+        session_manager: SessionManager | None = None,
         **kwargs: Any,
-    ) -> "BashExecutor":
+    ) -> BashExecutor:
         """
         Create Bash executor with standardized configuration interface.
 
         Args:
             sandbox_manager: Required sandbox manager for Docker execution
-            config: Bash-specific configuration dictionary
+            config: Typed BashExecutorConfig
             additional_params: Additional parameters (e.g., allowed_commands)
             session_manager: Optional session manager for cross-episode operations
             **kwargs: Additional keyword arguments
@@ -85,9 +96,8 @@ class BashExecutor(DockerExecutor):
             Configured Bash executor instance
         """
         merged_kwargs = {**kwargs}
-
         # Extract Bash-specific parameters from additional_params
-        allowed_commands = None
+        allowed_commands: list[str] | None = None
         if additional_params:
             allowed_commands = additional_params.get("allowed_commands")
             # Remove from kwargs since it's a specific parameter
@@ -95,12 +105,16 @@ class BashExecutor(DockerExecutor):
                 additional_params = {k: v for k, v in additional_params.items() if k != "allowed_commands"}
             merged_kwargs.update(additional_params)
 
+        # If config has allowed_commands and none provided via additional_params, use config's
+        if config is not None and allowed_commands is None and isinstance(config, BashExecutorConfig):
+            allowed_commands = config.allowed_commands if config.allowed_commands else None
+
         return cls(sandbox_manager=sandbox_manager, config=config, allowed_commands=allowed_commands, **merged_kwargs)
 
     def __init__(
         self,
         sandbox_manager: SandboxEnvironmentManager,
-        config: dict[str, Any] | None = None,
+        config: ExecutorConfig | None = None,
         allowed_commands: list[str] | None = None,
         **kwargs: Any,
     ) -> None:
@@ -109,7 +123,7 @@ class BashExecutor(DockerExecutor):
 
         Args:
             sandbox_manager: Required sandbox manager for Docker execution
-            config: Bash configuration dictionary
+            config: Typed BashExecutorConfig
             allowed_commands: Optional list of allowed commands for security validation
             **kwargs: Additional arguments passed to parent
 
@@ -121,7 +135,7 @@ class BashExecutor(DockerExecutor):
         # Initialize security validator for this executor
         self._security_validator = SecurityValidator(allowed_commands=allowed_commands)
 
-    def setup_parameters(self, config: dict[str, Any]) -> None:
+    def setup_parameters(self, config: ExecutorConfig) -> None:
         """Set up Bash executor parameters."""
         # Add parameter for the command
         self.add_parameter(
@@ -135,7 +149,7 @@ class BashExecutor(DockerExecutor):
 
         # Command chaining happens naturally in the shell
 
-    def build_command(self, parameters: dict[str, Any], context: dict[str, Any]) -> list[str]:
+    def _build_command(self, params: BashParameters) -> list[str]:
         """
         Build the command arguments from the provided command string.
 
@@ -144,8 +158,7 @@ class BashExecutor(DockerExecutor):
         for curl commands to prevent parameter interpretation issues.
 
         Args:
-            parameters: Tool parameters including the command string
-            context: Execution context
+            params: Typed bash parameters
 
         Returns:
             List of command arguments ready for Docker execution
@@ -153,7 +166,7 @@ class BashExecutor(DockerExecutor):
         Raises:
             ValueError: If command string is invalid or empty
         """
-        command_str = parameters["command"].strip()
+        command_str = params.command.strip()
 
         if not command_str:
             raise ValueError("Command string cannot be empty")
@@ -211,7 +224,7 @@ class BashExecutor(DockerExecutor):
 
         return escaped_command
 
-    async def execute(self, parameters: dict[str, Any], context: dict[str, Any]) -> CommandResult:
+    async def execute(self, params: BashParameters, context: ExecutionContext) -> CommandResult:
         """
         Execute the command-line tool in Docker container.
 
@@ -219,67 +232,42 @@ class BashExecutor(DockerExecutor):
         are present in the command string. No additional parameters are required.
 
         Args:
-            parameters: Tool parameters (must include 'command')
-            context: Execution context including episode_id
+            params: Strongly-typed bash parameters
+            context: Strongly-typed execution context
 
         Returns:
             CommandResult with execution results
 
         Note:
-            Security validation is performed at this executor level before execution.
+            Security validation is performed at ExecutionManager level before execution.
             All execution happens in Docker containers. Command sequences (semicolons,
             pipes, redirects, etc.) are handled naturally by the shell.
         """
         try:
-            # Validate parameters including security validation
-            validation_result = self.validate_parameters(parameters)
-            if not validation_result.valid:
-                return CommandResult.error_result(
-                    error=f"Parameter validation failed: {', '.join(validation_result.errors)}"
-                )
-
-            # Extract episode ID from context
-            episode_id = context.get("episode_id")
-            if not episode_id:
-                raise SandboxExecutionError("episode_id required in context for Docker execution")
-
-            # Log any security warnings after we know the episode context
-            if validation_result.warnings:
-                for warning in validation_result.warnings:
-                    logger.warning(
-                        "Bash command security warning",
-                        extra={
-                            "event": "bash_command_security_warning",
-                            "episode_id": episode_id,
-                            "warning": warning,
-                        },
-                    )
-
             # Get Docker environment for episode
-            environment = self.get_episode_environment(episode_id)
+            environment = self.get_episode_environment(context.episode_id)
             timeout = int(self.get_timeout())
 
             # 🔥 BASH TIMEOUT LOGGING: Log command start with timeout info
-            command_str = parameters.get("command", "")
-            command_preview = command_str[:100]
+            command_preview = params.command[:100]
             log_operation_start(
                 logger,
                 "bash_command_execution",
-                episode_id=episode_id,
+                episode_id=context.episode_id,
                 timeout_seconds=timeout,
                 command_preview=command_preview,
-                command_length=len(command_str),
+                command_length=len(params.command),
             )
 
             # Execute command via shell (shell handles all command sequences naturally)
-            command_args = self.build_command(parameters, context)
+            command_args = self._build_command(params)
 
             try:
                 result = await environment.execute_command(command=command_args, timeout=timeout)
                 log_operation_success(
                     logger,
                     "bash_command_execution",
-                    episode_id=episode_id,
+                    episode_id=context.episode_id,
                     exit_code=result.exit_code,
                     execution_time=result.execution_time,
                 )
@@ -289,9 +277,9 @@ class BashExecutor(DockerExecutor):
                         "Bash command timed out",
                         extra={
                             "event": "bash_command_timeout",
-                            "episode_id": episode_id,
+                            "episode_id": context.episode_id,
                             "timeout_seconds": timeout,
-                            "command_preview": command_str[:50],
+                            "command_preview": params.command[:50],
                             "error": str(e),
                         },
                     )
@@ -300,7 +288,7 @@ class BashExecutor(DockerExecutor):
                         "Bash command execution raised exception",
                         extra={
                             "event": "bash_command_exception",
-                            "episode_id": episode_id,
+                            "episode_id": context.episode_id,
                             "error": str(e),
                         },
                     )
@@ -316,7 +304,7 @@ class BashExecutor(DockerExecutor):
             tool_result.metadata.update(
                 {
                     "container_id": container_id,
-                    "episode_id": episode_id,
+                    "episode_id": context.episode_id,
                     "execution_time": result.execution_time,
                 }
             )
@@ -328,13 +316,13 @@ class BashExecutor(DockerExecutor):
                 logger,
                 "bash_command_execution",
                 e,
-                episode_id=context.get("episode_id"),
+                episode_id=context.episode_id,
             )
             logger.error(
                 "Docker command execution error",
                 extra={
                     "event": "bash_command_execution_error",
-                    "episode_id": context.get("episode_id"),
+                    "episode_id": context.episode_id,
                     "error": str(e),
                 },
             )
@@ -387,12 +375,12 @@ class BashExecutor(DockerExecutor):
 
             return CommandResult.error_result(error=error_msg, metadata={**metadata, "raw_data": result_data})
 
-    def validate_parameters(self, parameters: dict[str, Any]) -> ValidationResult:
+    def validate_parameters(self, parameters: BashParameters) -> ValidationResult:
         """
         Validate parameters including security validation for Bash commands.
 
         Args:
-            parameters: Tool parameters to validate
+            parameters: Typed BashParameters to validate
 
         Returns:
             ValidationResult with validation details
@@ -403,7 +391,7 @@ class BashExecutor(DockerExecutor):
             return basic_validation
 
         # Extract command for security validation
-        command = parameters.get("command", "")
+        command = parameters.command
         if not command or not isinstance(command, str):
             return ValidationResult.failure(["Command parameter is required and must be a string"])
 

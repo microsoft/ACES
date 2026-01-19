@@ -130,10 +130,10 @@ class TestExecutionManagerCleanup:
         mock_sandbox_manager.cleanup_all_episodes.assert_called_once()
         mock_permanent_manager.stop_permanent_environment.assert_called_once()
 
-        # Verify result structure
-        assert "ephemeral_episodes_cleaned" in result
-        assert "permanent_environment_stopped" in result
-        assert "total_cleanup_success" in result
+        # Verify result structure - now a CleanupResult typed object
+        assert hasattr(result, "ephemeral_episodes_cleaned")
+        assert hasattr(result, "permanent_environment_stopped")
+        assert hasattr(result, "total_cleanup_success")
 
     @pytest.mark.asyncio
     async def test_cleanup_all_containers_no_permanent_manager(self, execution_manager, mock_sandbox_manager):
@@ -148,7 +148,7 @@ class TestExecutionManagerCleanup:
         mock_sandbox_manager.cleanup_all_episodes.assert_called_once()
 
         # Verify result indicates permanent environment was "stopped" (no-op)
-        assert result["permanent_environment_stopped"] is True
+        assert result.permanent_environment_stopped is True
 
     @pytest.mark.asyncio
     async def test_stop_permanent_environment_success(self, execution_manager, mock_permanent_manager):

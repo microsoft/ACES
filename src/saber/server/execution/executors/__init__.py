@@ -3,8 +3,15 @@ Executor implementations for command execution.
 """
 
 # Import standard registry to ensure executors are registered
-from . import standard_registry  # noqa: F401
+# Import copilot registry for GitHub Copilot CLI-compatible executors
+from . import (
+    copilot_registry,  # noqa: F401
+    standard_registry,  # noqa: F401
+)
 from .base_executors import CommandExecutor
+
+# Re-export the copilot executors
+from .copilot_registry import CreateExecutor, EditExecutor, GrepExecutor, ViewExecutor
 from .docker_executor import DockerExecutor
 from .executor_factory import ExecutorFactory
 
@@ -29,6 +36,11 @@ __all__ = [
     "BashExecutor",
     "PythonExecutor",
     # "SQLExecutor",  # temporarily removed
+    # Copilot-compatible executors
+    "ViewExecutor",
+    "CreateExecutor",
+    "EditExecutor",
+    "GrepExecutor",
     "ExecutorFactory",
     "executor_registry",
     "register_executor",

@@ -91,8 +91,9 @@ networks:
         assert len(manager.episode_compose_files) == 0
 
     def test_init_default_domain(self):
-        """Test initialization with default domain when not specified."""
-        config = {}
+        """Test initialization with domain specified."""
+        # Domain is now required in sandbox config
+        config = {"domain": "excytin_demo"}
 
         manager = SandboxEnvironmentManager(config)
 

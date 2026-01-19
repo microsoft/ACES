@@ -18,10 +18,14 @@ from ....logging_config import (
     log_operation_success,
 )
 from ...base import CommandResult
-from ..base import ValidationResult
+from ..base import ExecutionContext, P, ValidationResult
 from ..exceptions import SandboxExecutionError
+from ..models import DockerConfig, DockerInfo, ExecutorConfig
 from ..sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 from .base_executors import CommandExecutor
+
+# Re-export for convenience
+__all__ = ["DockerExecutor"]
 
 if TYPE_CHECKING:
     from ..sandbox.compose_orchestrator import ComposeOrchestrator
@@ -29,7 +33,7 @@ if TYPE_CHECKING:
 logger = get_saber_logger(LogCategory.DOCKER, __name__)
 
 
-class DockerExecutor(CommandExecutor):
+class DockerExecutor(CommandExecutor[P]):
     """
     Abstract base class for Docker-based command executors.
 
@@ -38,17 +42,20 @@ class DockerExecutor(CommandExecutor):
     - Container health checks
     - Docker configuration validation
     - Post-execution cleanup
+
+    Type Parameters:
+        P: The typed parameters class for this executor
     """
 
     def __init__(
-        self, sandbox_manager: SandboxEnvironmentManager, config: dict[str, Any] | None = None, **kwargs: Any
+        self, sandbox_manager: SandboxEnvironmentManager, config: ExecutorConfig | None = None, **kwargs: Any
     ) -> None:
         """
         Initialize Docker executor.
 
         Args:
             sandbox_manager: Required sandbox manager for Docker execution
-            config: Executor configuration dictionary
+            config: Typed executor configuration
             **kwargs: Additional arguments passed to parent
 
         Raises:
@@ -65,7 +72,7 @@ class DockerExecutor(CommandExecutor):
     def create_with_config(
         cls,
         sandbox_manager: SandboxEnvironmentManager,
-        config: dict[str, Any] | None = None,
+        config: ExecutorConfig | None = None,
         additional_params: dict[str, Any] | None = None,
         session_manager: Any | None = None,
         **kwargs: Any,
@@ -78,7 +85,7 @@ class DockerExecutor(CommandExecutor):
 
         Args:
             sandbox_manager: Required sandbox manager for Docker execution
-            config: Executor-specific configuration dictionary
+            config: Typed executor configuration
             additional_params: Additional parameters specific to this executor type
             session_manager: Optional session manager for cross-episode operations
             **kwargs: Additional keyword arguments
@@ -178,12 +185,12 @@ class DockerExecutor(CommandExecutor):
                 episode_id=episode_id,
             )
 
-    def validate_docker_parameters(self, parameters: dict[str, Any]) -> ValidationResult:
+    def validate_docker_parameters(self, parameters: P) -> ValidationResult:
         """
         Validate Docker-specific parameters.
 
         Args:
-            parameters: Parameters to validate
+            parameters: Typed parameters to validate
 
         Returns:
             ValidationResult with Docker-specific validation
@@ -191,7 +198,7 @@ class DockerExecutor(CommandExecutor):
         result = ValidationResult.success()
 
         # Validate working directory if specified
-        working_dir = parameters.get("working_dir")
+        working_dir = getattr(parameters, "working_dir", None)
         if working_dir is not None:
             if not isinstance(working_dir, str):
                 result.add_error("working_dir must be a string")
@@ -199,35 +206,31 @@ class DockerExecutor(CommandExecutor):
                 result.add_error("working_dir must be an absolute path")
 
         # Validate timeout
-        timeout = parameters.get("timeout")
+        timeout = getattr(parameters, "timeout", None)
         if timeout is not None:
             if not isinstance(timeout, (int, float)) or timeout <= 0:
                 result.add_error("timeout must be a positive number")
 
         return result
 
-    def get_docker_info(self) -> dict[str, Any]:
+    def get_docker_info(self) -> DockerInfo:
         """
         Get Docker-specific configuration information.
 
         Returns:
-            Dictionary with Docker configuration details
+            DockerInfo with Docker configuration details
         """
-        info: dict[str, Any] = {
-            "execution_environment": "docker_container",
-            "timeout": self.get_timeout(),
-        }
+        docker_config: DockerConfig | None = None
 
         try:
             sandbox_config = self._sandbox_manager.sandbox_config
-            docker_info: dict[str, Any] = {}
-
-            # Extract relevant Docker configuration
-            for key in ["image", "network_mode", "read_only_root", "user", "resource_limits"]:
-                if key in sandbox_config:
-                    docker_info[key] = sandbox_config[key]
-
-            info["docker_config"] = docker_info
+            docker_config = DockerConfig(
+                image=sandbox_config.get("image"),
+                network_mode=sandbox_config.get("network_mode"),
+                read_only_root=sandbox_config.get("read_only_root"),
+                user=sandbox_config.get("user"),
+                resource_limits=sandbox_config.get("resource_limits"),
+            )
         except Exception as exc:
             logger.warning(
                 "Could not retrieve Docker configuration",
@@ -237,9 +240,13 @@ class DockerExecutor(CommandExecutor):
                 },
             )
 
-        return info
+        return DockerInfo(
+            execution_environment="docker_container",
+            timeout=self.get_timeout(),
+            docker_config=docker_config,
+        )
 
-    def setup_parameters(self, config: dict[str, Any]) -> None:
+    def setup_parameters(self, config: ExecutorConfig) -> None:
         """
         Set up Docker executor parameters.
 
@@ -247,27 +254,27 @@ class DockerExecutor(CommandExecutor):
         Subclasses should override this method to define their specific parameters.
 
         Args:
-            config: The merged configuration dictionary
+            config: The typed executor configuration
         """
         pass
 
     @abstractmethod
-    async def execute(self, parameters: dict[str, Any], context: dict[str, Any]) -> CommandResult:
+    async def execute(self, parameters: P, context: ExecutionContext) -> CommandResult:
         """
         Execute the command in Docker container.
 
         Subclasses must implement this method to define their specific execution logic.
 
         Args:
-            parameters: Command-specific parameters
-            context: Execution context including episode_id
+            parameters: Typed command-specific parameters
+            context: Strongly-typed execution context
 
         Returns:
             CommandResult with execution results
         """
         pass
 
-    async def __call__(self, parameters: dict[str, Any], context: dict[str, Any]) -> CommandResult:
+    async def __call__(self, parameters: P, context: ExecutionContext) -> CommandResult:
         """
         Call the executor with given parameters and context.
 
@@ -275,22 +282,22 @@ class DockerExecutor(CommandExecutor):
         instead of executor.execute(parameters, context).
 
         Args:
-            parameters: Command-specific parameters
-            context: Execution context including episode_id
+            parameters: Typed command-specific parameters
+            context: Strongly-typed execution context
 
         Returns:
             CommandResult with execution results
         """
         return await self.execute(parameters, context)
 
-    def validate_parameters(self, parameters: dict[str, Any]) -> ValidationResult:
+    def validate_parameters(self, parameters: P) -> ValidationResult:
         """
         Validate parameters for Docker execution.
 
         Combines base parameter validation with Docker-specific validation.
 
         Args:
-            parameters: Parameters to validate
+            parameters: Typed parameters to validate
 
         Returns:
             ValidationResult with comprehensive validation results

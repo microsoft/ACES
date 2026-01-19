@@ -373,8 +373,8 @@ class TestExecutorFactory:
         # Verify configuration storage
         assert len(executor_factory._episode_configurations) == 4
         pentest_config = executor_factory._episode_configurations["pentest-episode-1"]
-        assert pentest_config["allowed_executors"] == ["bash"]
-        assert pentest_config["config"]["timeout"] == 300.0
+        assert pentest_config.allowed_executors == ["bash"]
+        assert pentest_config.config["timeout"] == 300.0
 
         # Test partial cleanup - unregister some episodes
         executor_factory.unregister_episode_configuration("pentest-episode-1")

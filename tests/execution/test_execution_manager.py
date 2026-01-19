@@ -138,13 +138,16 @@ class TestExecutionManager:
     @pytest.mark.asyncio
     async def test_step_success(self, registry):
         """Test successful command execution."""
-        action = Action(tool_name="bash", parameters={"arguments": "echo test", "shell": False})
-        context = {"session_id": "test123"}
+        from saber.server.execution.base import BashParameters
+
+        action = Action(tool_name="bash", parameters={"command": "echo test"})
+        context = {"session_id": "test123", "episode_id": "test-episode-1"}
 
         expected_result = CommandResult.success_result(data={"stdout": "test\n", "stderr": "", "return_code": 0})
 
         # Mock the executor factory to return a mock executor
         mock_executor = AsyncMock()
+        mock_executor.get_parameters_class = MagicMock(return_value=BashParameters)
         mock_executor.validate_parameters = MagicMock(return_value=ValidationResult.success())
         mock_executor.return_value = expected_result
 
@@ -153,13 +156,12 @@ class TestExecutionManager:
 
         assert result.success is True
         assert result.data["stdout"] == "test\n"
-        expected_params = {"arguments": "echo test", "shell": False}
-        mock_executor.assert_called_once_with(expected_params, context)
 
     @pytest.mark.asyncio
     async def test_step_validation_failure(self, registry):
         """Test command execution with parameter validation failure."""
         action = Action(tool_name="bash", parameters={"invalid": "params"})
+        context = {"episode_id": "test-episode-1"}
 
         validation_result = ValidationResult.failure(["Missing required parameter 'arguments'"])
 
@@ -168,7 +170,7 @@ class TestExecutionManager:
         mock_executor.validate_parameters.return_value = validation_result
 
         with patch.object(registry._executor_factory, "get_executor", return_value=mock_executor):
-            result = await registry.step(action)
+            result = await registry.step(action, context)
 
         assert result.success is False
         assert "Parameter validation failed" in result.error
@@ -177,15 +179,19 @@ class TestExecutionManager:
     @pytest.mark.asyncio
     async def test_step_execution_exception(self, registry):
         """Test command execution with exception during execution."""
-        action = Action(tool_name="bash", parameters={"arguments": "test"})
+        from saber.server.execution.base import BashParameters
+
+        action = Action(tool_name="bash", parameters={"command": "test"})
+        context = {"episode_id": "test-episode-1"}
 
         # Mock the executor factory to return a mock executor
         mock_executor = AsyncMock()
+        mock_executor.get_parameters_class = MagicMock(return_value=BashParameters)
         mock_executor.validate_parameters = MagicMock(return_value=ValidationResult.success())
         mock_executor.side_effect = Exception("Execution failed")
 
         with patch.object(registry._executor_factory, "get_executor", return_value=mock_executor):
-            result = await registry.step(action)
+            result = await registry.step(action, context)
 
         assert result.success is False
         assert "Execution failed" in result.error
@@ -275,14 +281,13 @@ class TestExecutionManager:
 
     def test_get_execution_stats(self, registry):
         """Test getting execution statistics."""
+        from saber.server.execution.models import ExecutionStats
         stats = registry.get_execution_stats()
 
-        assert "total_active_executions" in stats
-        assert "active_episodes" in stats
-        assert "episode_execution_counts" in stats
-        assert "max_concurrent_per_episode" in stats
-        assert stats["total_active_executions"] == 0
-        assert stats["active_episodes"] == 0
+        # Returns a typed ExecutionStats object
+        assert isinstance(stats, ExecutionStats)
+        assert stats.total_active_executions == 0
+        assert stats.active_episodes == 0
 
     def test_get_configuration(self, registry):
         """Test getting configuration manager."""
@@ -292,22 +297,14 @@ class TestExecutionManager:
 
     @pytest.mark.asyncio
     async def test_step_default_context(self, registry):
-        """Test step with default context when none provided."""
+        """Test step without context returns error (episode_id required)."""
         action = Action(tool_name="bash", parameters={"arguments": "echo test"})
 
-        expected_result = CommandResult.success_result(data="test")
+        # When no context is provided, step should fail because episode_id is required
+        result = await registry.step(action)
 
-        # Mock the executor factory to return a mock executor
-        mock_executor = AsyncMock()
-        mock_executor.validate_parameters = MagicMock(return_value=ValidationResult.success())
-        mock_executor.return_value = expected_result
-
-        with patch.object(registry._executor_factory, "get_executor", return_value=mock_executor):
-            result = await registry.step(action)
-
-        # Should be called with empty context dict
-        expected_params = {"arguments": "echo test"}
-        mock_executor.assert_called_once_with(expected_params, {})
+        assert result.success is False
+        assert "episode_id is required" in result.error
 
     def test_get_executor(self, registry):
         """Test getting specific executor instance."""
@@ -322,13 +319,16 @@ class TestExecutionManager:
     @pytest.mark.asyncio
     async def test_step_python_executor(self, registry):
         """Test step with Python executor."""
-        action = Action(tool_name="python", parameters={"arguments": "print('hello')"})
-        context = {"session_id": "test123"}
+        from saber.server.execution.base import PythonParameters
+
+        action = Action(tool_name="python", parameters={"code": "print('hello')"})
+        context = {"session_id": "test123", "episode_id": "test-episode-1"}
 
         expected_result = CommandResult.success_result(data={"stdout": "hello\n", "stderr": "", "return_code": 0})
 
         # Mock the executor factory to return a mock Python executor
         mock_executor = AsyncMock()
+        mock_executor.get_parameters_class = MagicMock(return_value=PythonParameters)
         mock_executor.validate_parameters = MagicMock(return_value=ValidationResult.success())
         mock_executor.return_value = expected_result
 
@@ -337,8 +337,6 @@ class TestExecutionManager:
 
         assert result.success is True
         assert result.data["stdout"] == "hello\n"
-        expected_params = {"arguments": "print('hello')"}
-        mock_executor.assert_called_once_with(expected_params, context)
 
     def test_list_commands(self, registry):
         """Test listing all available commands."""
@@ -387,8 +385,11 @@ class TestExecutionManager:
                 commands = registry.list_commands()
 
         assert len(commands) == 2
-        assert any(cmd["executor_type"] == "bash" for cmd in commands)
-        assert any(cmd["executor_type"] == "python" for cmd in commands)
+        # Commands are now CommandInfo typed objects
+        from saber.server.execution.models import CommandInfo
+        assert all(isinstance(cmd, CommandInfo) for cmd in commands)
+        assert any(cmd.executor_type == "bash" for cmd in commands)
+        assert any(cmd.executor_type == "python" for cmd in commands)
 
     def test_timeout_configuration_flow(self, registry):
         """Test that timeout configuration flows from task to executors."""

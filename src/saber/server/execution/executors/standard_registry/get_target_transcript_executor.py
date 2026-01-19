@@ -11,15 +11,22 @@ where red team needs to observe blue team's conversation.
 Logging category: ``LogCategory.TASK_EXEC``.
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ...session_manager import SessionManager
 
 from .....logging_config import LogCategory, get_saber_logger
 from ....base import CommandResult
-from ...base import Parameter, ParameterType
+from ...base import ExecutionContext, ExecutorParameters, GetTargetTranscriptParameters, Parameter, ParameterType
+from ...models import ExecutorConfig
 from ...sandbox.sandbox_environment_manager import SandboxEnvironmentManager
+from ..base_executors import normalize_context, normalize_parameters
 from ..docker_executor import DockerExecutor
 from ..orchestration_utils import resolve_target_episode_id
 
@@ -65,11 +72,16 @@ class GetTargetTranscriptExecutor(DockerExecutor):
         "description": "Get target team transcript with wait-for-user detection",
     }
 
+    @classmethod
+    def get_parameters_class(cls) -> type[ExecutorParameters]:
+        """Get the parameter dataclass type for this executor."""
+        return GetTargetTranscriptParameters
+
     def __init__(
         self,
         sandbox_manager: SandboxEnvironmentManager,
-        config: dict[str, Any] | None = None,
-        session_manager: Any | None = None,
+        config: ExecutorConfig | None = None,
+        session_manager: SessionManager | None = None,
         **kwargs: Any,
     ):
         """Initialize the get_target_transcript executor."""
@@ -77,19 +89,19 @@ class GetTargetTranscriptExecutor(DockerExecutor):
         self._session_manager = session_manager
 
     @classmethod
-    def get_default_config(cls) -> dict[str, Any]:
+    def get_default_config(cls) -> ExecutorConfig:
         """Get default configuration for get_target_transcript executor."""
-        return {}
+        return ExecutorConfig(timeout=300.0)
 
     @classmethod
     def create_with_config(
         cls,
         sandbox_manager: SandboxEnvironmentManager,
-        config: dict[str, Any] | None = None,
+        config: ExecutorConfig | None = None,
         additional_params: dict[str, Any] | None = None,
         session_manager: Any | None = None,
         **kwargs: Any,
-    ) -> "GetTargetTranscriptExecutor":
+    ) -> GetTargetTranscriptExecutor:
         """
         Create get_target_transcript executor with standardized configuration interface.
 
@@ -114,7 +126,7 @@ class GetTargetTranscriptExecutor(DockerExecutor):
             **merged_kwargs,
         )
 
-    def setup_parameters(self, config: dict[str, Any]) -> None:
+    def setup_parameters(self, config: ExecutorConfig) -> None:
         """
         Set up executor-specific parameters.
 
@@ -246,8 +258,8 @@ class GetTargetTranscriptExecutor(DockerExecutor):
 
     async def execute(
         self,
-        parameters: dict[str, Any],
-        context: dict[str, Any],
+        parameters: GetTargetTranscriptParameters | dict[str, Any],
+        context: ExecutionContext | dict[str, Any],
     ) -> CommandResult:
         """
         Execute transcript retrieval via WebSocket daemon.
@@ -259,42 +271,33 @@ class GetTargetTranscriptExecutor(DockerExecutor):
         4. Return result to agent
 
         Args:
-            parameters: Retrieval configuration with mode, tail_count, etc.
-            context: Execution context with episode_id and session_id
+            parameters: Transcript retrieval parameters (or dict for backward compatibility)
+            context: Execution context (ExecutionContext or dict for backward compatibility)
 
         Returns:
             CommandResult with transcript messages and metadata
         """
+        # Normalize inputs for backward compatibility
+        ctx = normalize_context(context)
+        p = normalize_parameters(parameters, GetTargetTranscriptParameters)
         try:
-            red_episode_id = context.get("episode_id")
-            if not red_episode_id:
-                return CommandResult.error_result("get_target_transcript: Missing episode_id")
-
-            environment = self.get_episode_environment(red_episode_id)
-            target_episode_id = await self._resolve_target_episode_id(parameters, context, red_episode_id)
+            environment = self.get_episode_environment(ctx.episode_id)
+            target_episode_id = await self._resolve_target_episode_id(ctx)
 
             if not target_episode_id:
                 return CommandResult.error_result(
                     "get_target_transcript: Could not resolve target_episode_id from orchestration metadata"
                 )
 
-            # Extract and validate parameters
-            wait_for_user = parameters.get("wait_for_user", True)
-            max_wait = parameters.get("max_wait_seconds", 120.0)
-            retrieval_mode = parameters.get("retrieval_mode", "full")
-            tail_count = parameters.get("tail_count", 10)
-            since_version = parameters.get("since_version", 0)
-            include_metadata = parameters.get("include_metadata", True)
-
             # Validate parameters
-            if retrieval_mode not in ["full", "delta", "tail"]:
-                return CommandResult.error_result(f"get_target_transcript: Invalid retrieval_mode: {retrieval_mode}")
-            if tail_count < 1 or tail_count > MAX_TAIL_COUNT:
+            if p.retrieval_mode not in ["full", "delta", "tail"]:
+                return CommandResult.error_result(f"get_target_transcript: Invalid retrieval_mode: {p.retrieval_mode}")
+            if p.tail_count < 1 or p.tail_count > MAX_TAIL_COUNT:
                 return CommandResult.error_result(f"get_target_transcript: tail_count must be 1-{MAX_TAIL_COUNT}")
 
             # Event-driven wait for WAITING_FOR_USER state
-            if wait_for_user:
-                wait_result = await self._wait_for_user_with_retry(environment, target_episode_id, max_wait)
+            if p.wait_for_user:
+                wait_result = await self._wait_for_user_with_retry(environment, target_episode_id, p.max_wait_seconds)
                 if not wait_result.get("success"):
                     return CommandResult.error_result(
                         f"get_target_transcript: Failed to wait: {wait_result.get('error')}"
@@ -302,7 +305,7 @@ class GetTargetTranscriptExecutor(DockerExecutor):
 
             # Query transcript via daemon IPC with retry
             result = await self._query_transcript_with_retry(
-                environment, target_episode_id, retrieval_mode, tail_count, since_version
+                environment, target_episode_id, p.retrieval_mode, p.tail_count, p.since_version
             )
 
             if not result.get("success"):
@@ -310,13 +313,13 @@ class GetTargetTranscriptExecutor(DockerExecutor):
 
             # Build result data
             messages = result.get("messages", [])
-            result_data = {
+            result_data: dict[str, Any] = {
                 "messages": messages,
                 "message_count": len(messages),
-                "retrieval_mode": retrieval_mode,
+                "retrieval_mode": p.retrieval_mode,
             }
 
-            if include_metadata:
+            if p.include_metadata:
                 result_data["metadata"] = {
                     "current_version": result.get("current_version", 0),
                     "full_transcript_length": result.get("full_transcript_length", 0),
@@ -327,9 +330,9 @@ class GetTargetTranscriptExecutor(DockerExecutor):
                 "Red team retrieved transcript",
                 extra={
                     "event": "transcript_retrieved",
-                    "red_episode_id": red_episode_id,
+                    "red_episode_id": ctx.episode_id,
                     "target_episode_id": target_episode_id,
-                    "retrieval_mode": retrieval_mode,
+                    "retrieval_mode": p.retrieval_mode,
                     "message_count": len(messages),
                 },
             )
@@ -348,7 +351,7 @@ class GetTargetTranscriptExecutor(DockerExecutor):
                 "Transcript retrieval failed",
                 extra={
                     "event": "transcript_retrieval_failed",
-                    "episode_id": context.get("episode_id"),
+                    "episode_id": ctx.episode_id,
                     "error": str(e),
                     "error_type": type(e).__name__,
                 },
@@ -547,16 +550,12 @@ class GetTargetTranscriptExecutor(DockerExecutor):
         error = str(result.get("error", "")).lower()
         return any(retry_err in error for retry_err in RETRY_ERRORS)
 
-    async def _resolve_target_episode_id(
-        self, parameters: dict[str, Any], context: dict[str, Any], red_episode_id: str
-    ) -> str | None:
+    async def _resolve_target_episode_id(self, context: ExecutionContext) -> str | None:
         """
         Resolve target episode ID from orchestration metadata.
 
         Args:
-            parameters: Execution parameters (unused)
-            context: Execution context (unused)
-            red_episode_id: Red team's episode ID
+            context: Typed execution context
 
         Returns:
             Target episode ID or None if not resolvable
@@ -565,16 +564,27 @@ class GetTargetTranscriptExecutor(DockerExecutor):
             logger.error(
                 "Session manager not available",
                 extra={
-                    "red_episode_id": red_episode_id,
+                    "red_episode_id": context.episode_id,
                 },
             )
             return None
 
+        # Convert context to dict for resolve_target_episode_id utility
+        context_dict = {
+            "episode_id": context.episode_id,
+            "session_id": context.session_id,
+            "task_id": context.task_id,
+            "target_episode_ids": context.target_episode_ids,
+            "role": context.role,
+        }
+        if context.extra:
+            context_dict.update(context.extra)
+
         return await resolve_target_episode_id(
             session_manager=self._session_manager,
-            red_episode_id=red_episode_id,
-            parameters=parameters,
-            context=context,
+            red_episode_id=context.episode_id,
+            parameters={},  # Parameters no longer needed
+            context=context_dict,
         )
 
 

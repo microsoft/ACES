@@ -219,7 +219,7 @@ class TestInjectPromptExecutorIPC:
 
         # Assert
         assert result.success is False
-        assert "Missing required field: message" in result.error
+        assert "message" in result.error.lower() and "required" in result.error.lower()
 
     @pytest.mark.asyncio
     async def test_executor_validates_invalid_strategy(self, mock_sandbox_manager, mock_session_manager, red_episode):
@@ -254,7 +254,7 @@ class TestInjectPromptExecutorIPC:
 
     @pytest.mark.asyncio
     async def test_executor_handles_missing_context(self, mock_sandbox_manager, mock_session_manager):
-        """Test executor handles missing episode_id or session_id."""
+        """Test executor handles missing episode_id in context."""
         # Arrange
         executor = InjectPromptExecutor(
             sandbox_manager=mock_sandbox_manager,
@@ -269,7 +269,7 @@ class TestInjectPromptExecutorIPC:
 
         # Assert
         assert result.success is False
-        assert "Missing episode_id or session_id" in result.error
+        assert "episode_id" in result.error.lower()
 
     @pytest.mark.asyncio
     async def test_executor_resolves_target_episode_id(self, mock_sandbox_manager, mock_session_manager, red_episode):

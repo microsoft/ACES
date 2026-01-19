@@ -21,6 +21,8 @@ Simplified to two strategies:
 Logging category: ``LogCategory.TASK_EXEC``.
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import os
@@ -29,8 +31,10 @@ from typing import Any
 from .....logging_config import LogCategory, get_saber_logger
 from .....models.transcript import TranscriptPushOperation
 from ....base import CommandResult
-from ...base import Parameter, ParameterType
+from ...base import ExecutionContext, ExecutorParameters, InjectPromptParameters, Parameter, ParameterType
+from ...models import ExecutorConfig
 from ...sandbox.sandbox_environment_manager import SandboxEnvironmentManager
+from ..base_executors import normalize_context, normalize_parameters
 from ..docker_executor import DockerExecutor
 from ..orchestration_utils import resolve_target_episode_id
 
@@ -80,29 +84,34 @@ class InjectPromptExecutor(DockerExecutor):
         "description": "Inject adversarial prompts into target agent context and observe the response.",
     }
 
+    @classmethod
+    def get_parameters_class(cls) -> type[ExecutorParameters]:
+        """Get the parameter dataclass type for this executor."""
+        return InjectPromptParameters
+
     def __init__(
         self,
         sandbox_manager: SandboxEnvironmentManager,
-        config: dict[str, Any] | None = None,
+        config: ExecutorConfig | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the inject_prompt executor."""
         super().__init__(sandbox_manager=sandbox_manager, config=config, **kwargs)
 
     @classmethod
-    def get_default_config(cls) -> dict[str, Any]:
+    def get_default_config(cls) -> ExecutorConfig:
         """Get default configuration for inject_prompt executor."""
-        return {}
+        return ExecutorConfig(timeout=300.0)
 
     @classmethod
     def create_with_config(
         cls,
         sandbox_manager: SandboxEnvironmentManager,
-        config: dict[str, Any] | None = None,
+        config: ExecutorConfig | None = None,
         additional_params: dict[str, Any] | None = None,
         session_manager: Any = None,
         **kwargs: Any,
-    ) -> "InjectPromptExecutor":
+    ) -> InjectPromptExecutor:
         """
         Create inject_prompt executor with standardized configuration interface.
 
@@ -122,12 +131,12 @@ class InjectPromptExecutor(DockerExecutor):
 
         return cls(sandbox_manager=sandbox_manager, config=config, session_manager=session_manager, **merged_kwargs)
 
-    def setup_parameters(self, config: dict[str, Any]) -> None:
+    def setup_parameters(self, config: ExecutorConfig) -> None:
         """
         Set up executor-specific parameters.
 
         Args:
-            config: The merged configuration dictionary
+            config: The executor configuration
         """
         # Define message parameter
         self.add_parameter(
@@ -196,8 +205,8 @@ class InjectPromptExecutor(DockerExecutor):
 
     async def execute(
         self,
-        parameters: dict[str, Any],
-        context: dict[str, Any],
+        parameters: InjectPromptParameters | dict[str, Any],
+        context: ExecutionContext | dict[str, Any],
     ) -> CommandResult:
         """
         Execute prompt injection via WebSocket daemon in red team container.
@@ -212,55 +221,54 @@ class InjectPromptExecutor(DockerExecutor):
         team to iteratively refine their attack strategy.
 
         Args:
-            parameters: Injection config (message, strategy)
-            context: Execution context (episode_id, session_id)
+            parameters: Injection parameters (InjectPromptParameters or dict for backward compat)
+            context: Execution context (ExecutionContext or dict for backward compatibility)
 
         Returns:
             CommandResult with injection status and target's response
         """
+        # Normalize inputs for backward compatibility
         try:
-            # Extract context
-            red_episode_id = context.get("episode_id")
-            session_id = context.get("session_id")
+            ctx = normalize_context(context)
+        except ValueError as e:
+            return CommandResult.error_result(f"Invalid context: {e}")
 
-            if not red_episode_id or not session_id:
-                return CommandResult.error_result("Missing episode_id or session_id in execution context")
+        try:
+            p = normalize_parameters(parameters, InjectPromptParameters)
+        except ValueError as e:
+            return CommandResult.error_result(f"Invalid parameters: {e}")
+        try:
+            # Validate context
+            if not ctx.session_id:
+                return CommandResult.error_result("Missing session_id in execution context")
 
             # Get Docker environment for episode
-            environment = self.get_episode_environment(red_episode_id)
+            environment = self.get_episode_environment(ctx.episode_id)
 
             # Resolve target episode ID from orchestration metadata
-            target_episode_id = await self._resolve_target_episode_id(parameters, context, red_episode_id)
+            target_episode_id = await self._resolve_target_episode_id(ctx)
 
             if not target_episode_id:
                 return CommandResult.error_result("Could not resolve target_episode_id from orchestration metadata")
 
-            # Get injection parameters
-            message = parameters.get("message", "")
-            strategy = parameters.get("strategy", TranscriptPushOperation.APPEND.value)
-            max_wait = parameters.get("max_wait_seconds", 120.0)
-
-            if not message:
-                return CommandResult.error_result("Missing required field: message")
-
             # Validate strategy - only append and restart are valid
             valid_strategies = [s.value for s in TranscriptPushOperation]
-            if strategy not in valid_strategies:
-                return CommandResult.error_result(f"Invalid strategy: {strategy}. Valid: {', '.join(valid_strategies)}")
+            if p.strategy not in valid_strategies:
+                return CommandResult.error_result(
+                    f"Invalid strategy: {p.strategy}. Valid: {', '.join(valid_strategies)}"
+                )
 
             # Wait for target to be in WAITING_FOR_USER state before injecting
-            wait_for_user = parameters.get("wait_for_user", True)
-
-            if wait_for_user:
+            if p.wait_for_user:
                 logger.info(
                     "Waiting for target agent WAITING_FOR_USER state before injection",
                     extra={
                         "event": "inject_wait_for_user_start",
                         "target_episode_id": target_episode_id,
-                        "max_wait_seconds": max_wait,
+                        "max_wait_seconds": p.max_wait_seconds,
                     },
                 )
-                wait_result = await self._wait_for_user_with_retry(environment, target_episode_id, max_wait)
+                wait_result = await self._wait_for_user_with_retry(environment, target_episode_id, p.max_wait_seconds)
                 if not wait_result.get("success"):
                     return CommandResult.error_result(
                         f"inject_prompt: Target not ready - {wait_result.get('error', 'wait_for_user failed')}"
@@ -277,25 +285,25 @@ class InjectPromptExecutor(DockerExecutor):
             # Build IPC request payload for inject_and_wait
             ipc_payload = {
                 "target_episode_id": target_episode_id,
-                "message": message,
-                "strategy": strategy,
-                "max_wait_seconds": max_wait,
+                "message": p.message,
+                "strategy": p.strategy,
+                "max_wait_seconds": p.max_wait_seconds,
             }
 
             # Send to daemon via IPC using curl - use inject_and_wait endpoint
             ipc_url = f"http://localhost:{DAEMON_PORT}/inject_and_wait"
 
             # Calculate timeout: max_wait + buffer for injection and network overhead
-            curl_timeout = int(max_wait + TIMEOUT_BUFFER_CURL + 30)  # +30 for injection overhead
-            env_timeout = int(max_wait + TIMEOUT_BUFFER_ENV + 30)
+            curl_timeout = int(p.max_wait_seconds + TIMEOUT_BUFFER_CURL + 30)  # +30 for injection overhead
+            env_timeout = int(p.max_wait_seconds + TIMEOUT_BUFFER_ENV + 30)
 
             logger.info(
                 "Sending inject_and_wait request",
                 extra={
                     "event": "inject_and_wait_start",
                     "target_episode_id": target_episode_id,
-                    "strategy": strategy,
-                    "max_wait_seconds": max_wait,
+                    "strategy": p.strategy,
+                    "max_wait_seconds": p.max_wait_seconds,
                 },
             )
 
@@ -368,7 +376,7 @@ class InjectPromptExecutor(DockerExecutor):
                     {
                         "message": status_msg,
                         "target_episode_id": target_episode_id,
-                        "strategy": strategy,
+                        "strategy": p.strategy,
                         "injection_version": injection_version,
                         "final_version": final_version,
                         "response_messages": response_messages,
@@ -380,7 +388,7 @@ class InjectPromptExecutor(DockerExecutor):
                         "injection_version": injection_version,
                         "final_version": final_version,
                         "response_count": response_count,
-                        "strategy": strategy,
+                        "strategy": p.strategy,
                     },
                 )
             else:
@@ -391,7 +399,7 @@ class InjectPromptExecutor(DockerExecutor):
                 "Injection execution failed",
                 extra={
                     "event": "injection_failed",
-                    "episode_id": context.get("episode_id"),
+                    "episode_id": ctx.episode_id,
                     "error": str(e),
                     "error_type": type(e).__name__,
                 },
@@ -534,25 +542,32 @@ class InjectPromptExecutor(DockerExecutor):
         error = str(result.get("error", "")).lower()
         return any(retry_err in error for retry_err in RETRY_ERRORS)
 
-    async def _resolve_target_episode_id(
-        self, parameters: dict[str, Any], context: dict[str, Any], red_episode_id: str
-    ) -> str | None:
+    async def _resolve_target_episode_id(self, context: ExecutionContext) -> str | None:
         """
         Resolve target episode ID from orchestration metadata.
 
         Args:
-            parameters: Execution parameters (unused)
-            context: Execution context (unused)
-            red_episode_id: Red team's episode ID
+            context: Typed execution context
 
         Returns:
             Target episode ID or None if not resolvable
         """
+        # Convert context to dict for resolve_target_episode_id utility
+        context_dict = {
+            "episode_id": context.episode_id,
+            "session_id": context.session_id,
+            "task_id": context.task_id,
+            "target_episode_ids": context.target_episode_ids,
+            "role": context.role,
+        }
+        if context.extra:
+            context_dict.update(context.extra)
+
         return await resolve_target_episode_id(
             session_manager=self._session_manager,
-            red_episode_id=red_episode_id,
-            parameters=parameters,
-            context=context,
+            red_episode_id=context.episode_id,
+            parameters={},
+            context=context_dict,
         )
 
 

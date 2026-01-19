@@ -6,6 +6,8 @@ This module manages Docker sandbox environments using static compose files,
 providing lifecycle management for episode-specific environments.
 """
 
+from __future__ import annotations
+
 import time
 from pathlib import Path
 from typing import Any
@@ -13,6 +15,7 @@ from typing import Any
 from saber.logging_config import LogCategory, get_saber_logger
 
 from ..exceptions import SandboxExecutionError
+from ..models import LoggingConfig, SandboxConfig
 from .compose_orchestrator import ComposeOrchestrator
 from .environment_config import ComposeEnvironmentConfig
 
@@ -27,53 +30,61 @@ class SandboxEnvironmentManager:
     environments using static compose files with environment variable substitution.
     """
 
-    def __init__(self, sandbox_config: dict[str, Any]):
+    def __init__(self, sandbox_config: SandboxConfig | dict[str, Any]):
         """
         Initialize sandbox environment manager.
 
         Args:
-            sandbox_config: Configuration dictionary for sandbox environments
+            sandbox_config: Configuration for sandbox environments (typed or dict for backward compatibility)
 
         Raises:
             SandboxExecutionError: If configuration is invalid
         """
-        self.sandbox_config = sandbox_config
+        # Convert dict to typed config if needed
+        if isinstance(sandbox_config, dict):
+            try:
+                self._config = SandboxConfig.from_dict(sandbox_config)
+            except ValueError as e:
+                raise SandboxExecutionError(f"Invalid sandbox configuration: {e}") from e
+            # Keep raw dict for backward compat
+            self._raw_config = sandbox_config
+        else:
+            self._config = sandbox_config
+            self._raw_config = sandbox_config.to_dict()
+
         self._is_ready = False
 
         # Track active orchestrators by episode_id with their compose files
         self.active_orchestrators: dict[str, ComposeOrchestrator] = {}
         self.episode_compose_files: dict[str, Path] = {}
 
-        # Extract domain and environments path from config
-        self.domain = sandbox_config.get("domain", "excytin_demo")
+        # Use typed config fields
+        self.domain = self._config.domain
 
         # Build base path for sandbox environments (validation happens lazily during episode creation)
-        # Use config_dir if provided, otherwise fall back to relative path
-        config_dir = sandbox_config.get("config_dir")
-        if config_dir:
+        if self._config.config_dir:
             # Inside container: /app/config/environments/sandbox
-            self.environments_base_path = Path(config_dir) / "environments" / "sandbox"
+            self.environments_base_path = Path(self._config.config_dir) / "environments" / "sandbox"
         else:
             # Relative path for development: domains/{domain}/server/config/environments/sandbox
             self.environments_base_path = Path(f"domains/{self.domain}/server/config/environments/sandbox")
 
         # Setup logging directory for container logging
-        # Prefer explicit logs_dir; otherwise, infer from config_dir
-        if "logs_dir" in sandbox_config:
-            logs_dir = Path(sandbox_config["logs_dir"])
-        elif "config_dir" in sandbox_config:
-            logs_dir = Path(sandbox_config["config_dir"]) / "logs"
+        if self._config.logs_dir:
+            logs_dir = Path(self._config.logs_dir)
+        elif self._config.config_dir:
+            logs_dir = Path(self._config.config_dir) / "logs"
         else:
             logs_dir = Path.cwd() / "logs"
 
         logs_dir.mkdir(parents=True, exist_ok=True)
 
-        # Store logging configuration for orchestrators
-        self.logging_config = {
-            "logs_directory": str(logs_dir),
-            "domain": sandbox_config.get("domain", "unknown"),
-            "enable_logging": sandbox_config.get("enable_logging", True),
-        }
+        # Store logging configuration for orchestrators (as typed config)
+        self._logging_config = LoggingConfig(
+            logs_directory=str(logs_dir),
+            domain=self._config.domain,
+            enable_logging=self._config.enable_logging,
+        )
 
         logger.info(
             "Sandbox environment manager initialized",
@@ -85,6 +96,16 @@ class SandboxEnvironmentManager:
             },
         )
         self._is_ready = True
+
+    @property
+    def sandbox_config(self) -> dict[str, Any]:
+        """Return raw config dict for backward compatibility."""
+        return self._raw_config
+
+    @property
+    def logging_config(self) -> dict[str, str | bool]:
+        """Return logging config as dict for backward compatibility."""
+        return self._logging_config.to_dict()
 
     def is_ready(self) -> bool:
         """

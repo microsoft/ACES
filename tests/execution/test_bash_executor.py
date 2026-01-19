@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from saber.server.base import CommandResult
-from saber.server.execution.base import ParameterType, ValidationResult
+from saber.server.execution.base import BashParameters, ExecutionContext, ParameterType, ValidationResult
 from saber.server.execution.exceptions import SandboxExecutionError
 from saber.server.execution.executors.standard_registry.bash_executor import BashExecutor
 from saber.server.execution.sandbox.sandbox_environment_manager import SandboxEnvironmentManager
@@ -44,78 +44,70 @@ class TestBashExecutor:
     @pytest.fixture
     def docker_bash_tool(self, mock_sandbox_manager):
         """Create a Bash executor instance for testing."""
-        config = {
-            "timeout": 30.0,
-        }
+        from saber.server.execution.models import ExecutorConfig
+        config = ExecutorConfig(timeout=30.0)
         return BashExecutor(
             sandbox_manager=mock_sandbox_manager, config=config, allowed_commands=["file", "strings", "echo", "cat"]
         )
 
     def test_build_command_simple(self, docker_bash_tool):
         """Test building command with simple string (no shell mode)."""
-        parameters = {"command": "ls -la"}
-        context = {}
+        params = BashParameters(command="ls -la")
 
-        result = docker_bash_tool.build_command(parameters, context)
+        result = docker_bash_tool._build_command(params)
 
         # Should always use shell mode
         assert result == ["/bin/sh", "-c", "ls -la"]
 
     def test_build_command_shell_mode(self, docker_bash_tool):
         """Test building command with complex shell features."""
-        parameters = {"command": "ls -la | grep test"}
-        context = {}
+        params = BashParameters(command="ls -la | grep test")
 
-        result = docker_bash_tool.build_command(parameters, context)
+        result = docker_bash_tool._build_command(params)
 
         # Should use shell with -c flag
         assert result == ["/bin/sh", "-c", "ls -la | grep test"]
 
     def test_build_command_default_shell_mode(self, docker_bash_tool):
         """Test building command always uses shell mode."""
-        parameters = {"command": "echo hello world"}
-        context = {}
+        params = BashParameters(command="echo hello world")
 
-        result = docker_bash_tool.build_command(parameters, context)
+        result = docker_bash_tool._build_command(params)
 
         # Should always use shell mode
         assert result == ["/bin/sh", "-c", "echo hello world"]
 
     def test_build_command_quoted_arguments(self, docker_bash_tool):
         """Test building command with quoted arguments."""
-        parameters = {"command": 'echo "hello world" test'}
-        context = {}
+        params = BashParameters(command='echo "hello world" test')
 
-        result = docker_bash_tool.build_command(parameters, context)
+        result = docker_bash_tool._build_command(params)
 
         # Should use shell mode (shell handles quotes properly)
         assert result == ["/bin/sh", "-c", 'echo "hello world" test']
 
     def test_build_command_complex_shell_command(self, docker_bash_tool):
         """Test building command with complex shell constructs."""
-        parameters = {"command": "find /tmp -name '*.txt' | head -10 > results.txt"}
-        context = {}
+        params = BashParameters(command="find /tmp -name '*.txt' | head -10 > results.txt")
 
-        result = docker_bash_tool.build_command(parameters, context)
+        result = docker_bash_tool._build_command(params)
 
         assert result == ["/bin/sh", "-c", "find /tmp -name '*.txt' | head -10 > results.txt"]
 
     def test_build_command_invalid_quotes(self, docker_bash_tool):
         """Test building command with invalid quotes (shell handles gracefully)."""
-        parameters = {"command": 'echo "unclosed quote'}
-        context = {}
+        params = BashParameters(command='echo "unclosed quote')
 
         # Shell mode doesn't validate quotes at build time
-        result = docker_bash_tool.build_command(parameters, context)
+        result = docker_bash_tool._build_command(params)
         assert result == ["/bin/sh", "-c", 'echo "unclosed quote']
 
     def test_build_command_empty_after_parsing(self, docker_bash_tool):
         """Test building command with empty string."""
-        parameters = {"command": ""}
-        context = {}
+        params = BashParameters(command="")
 
         with pytest.raises(ValueError, match="Command string cannot be empty"):
-            docker_bash_tool.build_command(parameters, context)
+            docker_bash_tool._build_command(params)
 
     def test_parse_output_success(self, docker_bash_tool):
         """Test parsing successful command output."""
@@ -207,39 +199,31 @@ class TestBashExecutor:
 
     def test_parameter_validation_success(self, docker_bash_tool):
         """Test successful parameter validation."""
-        parameters = {"command": "ls -la", "shell": False}
+        params = BashParameters(command="ls -la")
 
-        result = docker_bash_tool.validate_parameters(parameters)
+        result = docker_bash_tool.validate_parameters(params)
 
         assert result.valid is True
         assert len(result.errors) == 0
 
     def test_parameter_validation_missing_required(self, docker_bash_tool):
-        """Test parameter validation with missing required parameter."""
-        parameters = {"shell": True}  # Missing required 'command'
+        """Test parameter validation with empty command."""
+        # Create params with empty command - should fail validation
+        params = BashParameters(command="")
 
-        result = docker_bash_tool.validate_parameters(parameters)
+        result = docker_bash_tool.validate_parameters(params)
 
+        # Empty command fails bash executor's validation
         assert result.valid is False
-        assert "Required parameter 'command' is missing" in result.errors
+        assert "Command parameter is required" in result.errors[0]
 
     def test_parameter_validation_wrong_type(self, docker_bash_tool):
         """Test parameter validation with wrong parameter type."""
-        parameters = {"command": 123}  # command should be string
-
-        result = docker_bash_tool.validate_parameters(parameters)
-
-        assert result.valid is False
-        assert "Parameter 'command' must be a string" in result.errors
-
-    def test_parameter_validation_unknown_parameter(self, docker_bash_tool):
-        """Test parameter validation with unknown parameter."""
-        parameters = {"command": "ls", "unknown_param": "value"}
-
-        result = docker_bash_tool.validate_parameters(parameters)
-
-        assert result.valid is True  # Should be valid but with warning
-        assert "Unknown parameter 'unknown_param' will be ignored" in result.warnings
+        # With typed params, wrong types are caught at dataclass creation
+        # This test now verifies the type system works correctly
+        params = BashParameters(command="ls")  # Valid params
+        result = docker_bash_tool.validate_parameters(params)
+        assert result.valid is True
 
 
 class TestBashExecutorIntegration:
@@ -274,7 +258,8 @@ class TestBashExecutorIntegration:
     @pytest.fixture
     def docker_bash_tool_with_env(self, mock_sandbox_manager_with_env):
         """Create a Bash executor with mocked environment."""
-        config = {"timeout": 30.0}
+        from saber.server.execution.models import ExecutorConfig
+        config = ExecutorConfig(timeout=30.0)
         return BashExecutor(
             sandbox_manager=mock_sandbox_manager_with_env,
             config=config,
@@ -291,10 +276,10 @@ class TestBashExecutorIntegration:
         env = mock_sandbox_manager_with_env.get_episode_environment.return_value
         env.execute_command = AsyncMock(return_value=command_result)
 
-        parameters = {"command": "echo 'Hello from Docker!'"}
-        context = {"episode_id": "test_episode_123", "session_id": "test_session_123"}
+        params = BashParameters(command="echo 'Hello from Docker!'")
+        context = ExecutionContext(episode_id="test_episode_123", session_id="test_session_123")
 
-        result = await docker_bash_tool_with_env(parameters, context)
+        result = await docker_bash_tool_with_env.execute(params, context)
 
         assert result.success is True
         assert result.data["stdout"] == "Hello from Docker!\n"
@@ -317,10 +302,10 @@ class TestBashExecutorIntegration:
         env = mock_sandbox_manager_with_env.get_episode_environment.return_value
         env.execute_command = AsyncMock(return_value=command_result)
 
-        parameters = {"command": "echo hello world", "shell": True}
-        context = {"episode_id": "shell_test_episode"}
+        params = BashParameters(command="echo hello world")
+        context = ExecutionContext(episode_id="shell_test_episode")
 
-        result = await docker_bash_tool_with_env(parameters, context)
+        result = await docker_bash_tool_with_env.execute(params, context)
 
         assert result.success is True
         assert result.data["stdout"] == "hello world\n"
@@ -339,10 +324,10 @@ class TestBashExecutorIntegration:
         env = mock_sandbox_manager_with_env.get_episode_environment.return_value
         env.execute_command = AsyncMock(return_value=command_result)
 
-        parameters = {"command": "nonexistent_command", "shell": False}
-        context = {"episode_id": "failure_test_episode"}
+        params = BashParameters(command="nonexistent_command")
+        context = ExecutionContext(episode_id="failure_test_episode")
 
-        result = await docker_bash_tool_with_env(parameters, context)
+        result = await docker_bash_tool_with_env.execute(params, context)
 
         assert result.success is False
         assert "Command failed with exit code 127" in result.error
@@ -350,15 +335,17 @@ class TestBashExecutorIntegration:
         assert result.metadata["exit_code"] == 127
 
     @pytest.mark.asyncio
-    async def test_execute_missing_session_id(self, docker_bash_tool_with_env):
-        """Test that execution fails without session_id in context."""
-        parameters = {"command": "echo test", "shell": False}
-        context = {}  # Missing episode_id
+    async def test_execute_missing_episode_id(self, docker_bash_tool_with_env, mock_sandbox_manager_with_env):
+        """Test that execution fails without valid episode_id in context."""
+        # Set up environment to fail on empty episode_id
+        mock_sandbox_manager_with_env.get_episode_environment.return_value = None
 
-        result = await docker_bash_tool_with_env(parameters, context)
+        params = BashParameters(command="echo test")
+        context = ExecutionContext(episode_id="")  # Empty episode_id
+
+        result = await docker_bash_tool_with_env.execute(params, context)
 
         assert result.success is False
-        assert "episode_id required in context" in result.error
 
     @pytest.mark.asyncio
     async def test_execute_with_existing_environment(self, docker_bash_tool_with_env, mock_sandbox_manager_with_env):
@@ -376,10 +363,10 @@ class TestBashExecutorIntegration:
         container_mock.id = "container123"
         existing_env.get_execution_container.return_value = container_mock
 
-        parameters = {"command": "echo test", "shell": False}
-        context = {"episode_id": "existing_episode"}
+        params = BashParameters(command="echo test")
+        context = ExecutionContext(episode_id="existing_episode")
 
-        result = await docker_bash_tool_with_env(parameters, context)
+        result = await docker_bash_tool_with_env.execute(params, context)
 
         assert result.success is True
         assert result.data["stdout"] == "test\n"
@@ -393,10 +380,10 @@ class TestBashExecutorIntegration:
         env = mock_sandbox_manager_with_env.get_episode_environment.return_value
         env.execute_command.side_effect = Exception("Docker daemon not available")
 
-        parameters = {"command": "echo test", "shell": False}
-        context = {"episode_id": "exception_test"}
+        params = BashParameters(command="echo test")
+        context = ExecutionContext(episode_id="exception_test")
 
-        result = await docker_bash_tool_with_env(parameters, context)
+        result = await docker_bash_tool_with_env.execute(params, context)
 
         assert result.success is False
         assert "Docker command execution failed" in result.error

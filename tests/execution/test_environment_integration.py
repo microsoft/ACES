@@ -532,10 +532,10 @@ services:
         os.chdir(temp_directory)
 
         try:
-            # Should use default domain when not specified
-            config = {}
+            # Domain is now required - test that it works when provided
+            config = {"domain": "excytin_demo"}
             manager = SandboxEnvironmentManager(config)
-            assert manager.domain == "excytin_demo"  # Updated to match the actual default
+            assert manager.domain == "excytin_demo"
         finally:
             # Restore original working directory
             os.chdir(original_cwd)

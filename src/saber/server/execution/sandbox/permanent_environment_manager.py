@@ -6,12 +6,15 @@ This module manages Docker permanent environments that persist across all sessio
 providing lifecycle management for long-running services and networks.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 from typing import Any
 
 from saber.logging_config import LogCategory, get_saber_logger
 
 from ..exceptions import SandboxExecutionError
+from ..models import LoggingConfig, PermanentEnvironmentConfig
 from .compose_orchestrator import ComposeOrchestrator
 from .environment_config import ComposeEnvironmentConfig
 
@@ -26,48 +29,51 @@ class PermanentEnvironmentManager:
     that provide persistent services for all benchmark sessions.
     """
 
-    def __init__(self, config: dict[str, Any]):
+    def __init__(self, config: PermanentEnvironmentConfig | dict[str, Any]):
         """
         Initialize the PermanentEnvironmentManager.
 
         Args:
-            config: Configuration dictionary for permanent environment settings
+            config: Configuration for permanent environment settings (typed or dict for backward compatibility)
 
         Raises:
             SandboxExecutionError: If permanent environment configuration is invalid
         """
-        self.config = config
+        # Convert dict to typed config if needed
+        if isinstance(config, dict):
+            try:
+                self._config = PermanentEnvironmentConfig.from_dict(config)
+            except ValueError as e:
+                raise SandboxExecutionError(f"Invalid permanent environment configuration: {e}") from e
+            self._raw_config = config
+        else:
+            self._config = config
+            self._raw_config = config.to_dict()
 
-        # Extract domain with fail-fast validation
-        domain = config.get("domain")
-        if not domain:
-            raise SandboxExecutionError("Domain must be specified in permanent environment configuration")
-
-        self.domain = domain
-        self.compose_project_name = f"{domain}_permanent_environment"
+        self.domain = self._config.domain
+        self.compose_project_name = f"{self.domain}_permanent_environment"
         self._is_running = False
         self._compose_file_path: Path | None = None  # Store for parameter-less stop
 
-        # Configuration and metadata storage
-        # Prefer explicit logs_dir; otherwise, infer from config_dir
-        if "logs_dir" in config:
-            logs_dir = Path(config["logs_dir"])
-        elif "config_dir" in config:
-            logs_dir = Path(config["config_dir"]) / "logs"
+        # Setup logging directory
+        if self._config.logs_dir:
+            logs_dir = Path(self._config.logs_dir)
+        elif self._config.config_dir:
+            logs_dir = Path(self._config.config_dir) / "logs"
         else:
             logs_dir = Path.cwd() / "logs"
 
         logs_dir.mkdir(parents=True, exist_ok=True)
 
-        # Prepare config for container logging manager (to be passed to orchestrator)
-        logging_config = {
-            "logs_directory": str(logs_dir),
-            "domain": config.get("domain", "unknown"),
-            "enable_logging": config.get("enable_logging", True),
-        }
+        # Create typed logging config
+        self._logging_config = LoggingConfig(
+            logs_directory=str(logs_dir),
+            domain=self._config.domain,
+            enable_logging=self._config.enable_logging,
+        )
 
-        # Initialize orchestrator with logging
-        self.orchestrator = ComposeOrchestrator(logging_config=logging_config)
+        # Initialize orchestrator with logging (pass as dict for compatibility)
+        self.orchestrator = ComposeOrchestrator(logging_config=self._logging_config.to_dict())
 
         logger.info(
             "Permanent environment manager initialized",
@@ -78,6 +84,11 @@ class PermanentEnvironmentManager:
                 "logs_directory": str(logs_dir),
             },
         )
+
+    @property
+    def config(self) -> dict[str, Any]:
+        """Return raw config dict for backward compatibility."""
+        return self._raw_config
 
     def start_permanent_environment_from_file(self, compose_file_path: Path) -> None:
         """

@@ -9,6 +9,89 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+# Re-export typed models for convenience
+from .models import (
+    BashExecutorConfig,
+    BashParameters,
+    CleanupResult,
+    CommandInfo,
+    CreateExecutorConfig,
+    CreateParameters,
+    DockerConfig,
+    DockerInfo,
+    EditExecutorConfig,
+    EditParameters,
+    EpisodeConfiguration,
+    ExecutionContext,
+    ExecutionStats,
+    ExecutorConfig,
+    ExecutorMetadata,
+    ExecutorParameters,
+    GetTargetTranscriptParameters,
+    GlobExecutorConfig,
+    GlobParameters,
+    GrepExecutorConfig,
+    GrepParameters,
+    InjectPromptParameters,
+    LoggingConfig,
+    P,
+    PermanentEnvironmentConfig,
+    PythonExecutorConfig,
+    PythonParameters,
+    ResourceLimitsDocker,
+    SandboxConfig,
+    SqlExecutorConfig,
+    SqlParameters,
+    ViewExecutorConfig,
+    ViewParameters,
+)
+
+__all__ = [
+    # Typed execution models
+    "ExecutionContext",
+    "ExecutorConfig",
+    "ExecutorParameters",
+    "P",
+    # Executor-specific config classes
+    "ViewExecutorConfig",
+    "GrepExecutorConfig",
+    "GlobExecutorConfig",
+    "SqlExecutorConfig",
+    "PythonExecutorConfig",
+    "BashExecutorConfig",
+    "EditExecutorConfig",
+    "CreateExecutorConfig",
+    # Parameter dataclasses
+    "EditParameters",
+    "ViewParameters",
+    "CreateParameters",
+    "GrepParameters",
+    "GlobParameters",
+    "BashParameters",
+    "PythonParameters",
+    "SqlParameters",
+    "InjectPromptParameters",
+    "GetTargetTranscriptParameters",
+    # Docker configuration types
+    "DockerConfig",
+    "DockerInfo",
+    "ResourceLimitsDocker",
+    # Manager configuration types
+    "SandboxConfig",
+    "LoggingConfig",
+    "PermanentEnvironmentConfig",
+    "EpisodeConfiguration",
+    # Result/info types
+    "ExecutorMetadata",
+    "ExecutionStats",
+    "CommandInfo",
+    "CleanupResult",
+    # Legacy parameter system (still used for MCP schema generation)
+    "Parameter",
+    "ParameterType",
+    "ValidationResult",
+]
+
 
 class ParameterType(str, Enum):
     """Supported parameter types for command parameters."""
