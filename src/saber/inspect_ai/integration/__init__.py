@@ -25,6 +25,8 @@ from .copilot_tools import (
     Tool as CopilotTool,
 )
 from .copilot_tools import (
+    ToolCallRecord,
+    ToolCallTracker,
     convert_mcp_tools_to_copilot,
     create_submit_tool,
     get_saber_mcp_tools,
@@ -56,4 +58,7 @@ __all__ = [
     "convert_mcp_tools_to_copilot",
     "create_submit_tool",
     "get_saber_mcp_tools",
+    # Tool call tracking for transcripts
+    "ToolCallTracker",
+    "ToolCallRecord",
 ]

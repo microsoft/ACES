@@ -1,0 +1,642 @@
+[
+  {
+    "type": "session.start",
+    "data": {
+      "sessionId": "5adf99a4-a94d-491f-a0e9-43a8e330834c",
+      "version": 1,
+      "producer": "copilot-agent",
+      "copilotVersion": "0.0.388",
+      "startTime": "2026-01-21T02:33:49.108Z",
+      "selectedModel": "gpt-4o",
+      "context": {
+        "cwd": "/home/kyledeprow/repos/oss_saber_dev/external/saber",
+        "gitRoot": "/home/kyledeprow/repos/oss_saber_dev/external/saber",
+        "branch": "copilot_test"
+      }
+    },
+    "id": "9ab2a589-4a38-44f1-aa32-0729aa0aef43",
+    "timestamp": "2026-01-21T02:33:49.124Z",
+    "parentId": null
+  },
+  {
+    "type": "pending_messages.modified",
+    "data": {},
+    "id": "c559a407-a957-46d4-84b6-438bcde638bc",
+    "timestamp": "2026-01-21T02:33:49.128Z",
+    "parentId": "9ab2a589-4a38-44f1-aa32-0729aa0aef43",
+    "ephemeral": true
+  },
+  {
+    "type": "pending_messages.modified",
+    "data": {},
+    "id": "8b75753f-7807-4a21-b040-e93857d8679e",
+    "timestamp": "2026-01-21T02:33:49.128Z",
+    "parentId": "c559a407-a957-46d4-84b6-438bcde638bc",
+    "ephemeral": true
+  },
+  {
+    "type": "user.message",
+    "data": {
+      "content": "What is 2 + 2? Answer briefly.",
+      "transformedContent": "<current_datetime>2026-01-21T02:33:49.187Z</current_datetime>\n\nWhat is 2 + 2? Answer briefly.",
+      "attachments": []
+    },
+    "id": "34b5a5ca-8a3e-40cf-a563-1c0e5d88e5ae",
+    "timestamp": "2026-01-21T02:33:49.187Z",
+    "parentId": "8b75753f-7807-4a21-b040-e93857d8679e"
+  },
+  {
+    "type": "assistant.turn_start",
+    "data": {
+      "turnId": "0"
+    },
+    "id": "22d82d7d-4971-4120-b4fd-57cc26fba713",
+    "timestamp": "2026-01-21T02:33:49.189Z",
+    "parentId": "34b5a5ca-8a3e-40cf-a563-1c0e5d88e5ae"
+  },
+  {
+    "type": "session.usage_info",
+    "data": {
+      "tokenLimit": 90000,
+      "currentTokens": 6906,
+      "messagesLength": 2
+    },
+    "id": "67df8732-17a0-4a42-ad12-f58828eeb609",
+    "timestamp": "2026-01-21T02:33:49.968Z",
+    "parentId": "22d82d7d-4971-4120-b4fd-57cc26fba713",
+    "ephemeral": true
+  },
+  {
+    "type": "assistant.message_delta",
+    "data": {
+      "messageId": "36e84ecc-65ee-4da4-9a06-50d16e52c2de",
+      "deltaContent": "4",
+      "totalResponseSizeBytes": 1
+    },
+    "id": "38b7f041-438c-49bf-81c8-c3aade29bedc",
+    "timestamp": "2026-01-21T02:33:52.594Z",
+    "parentId": "67df8732-17a0-4a42-ad12-f58828eeb609",
+    "ephemeral": true
+  },
+  {
+    "type": "assistant.usage",
+    "data": {
+      "model": "gpt-4o",
+      "inputTokens": 6371,
+      "outputTokens": 3,
+      "cacheReadTokens": 6016,
+      "cacheWriteTokens": 0,
+      "cost": 1,
+      "duration": 2634,
+      "initiator": "user",
+      "apiCallId": "chatcmpl-D0IKWOOY6dVh0uKbvahNgWR5srzlq",
+      "quotaSnapshots": {}
+    },
+    "id": "c4d6d48f-4dd4-4dba-9177-9788ae3b8f9b",
+    "timestamp": "2026-01-21T02:33:52.603Z",
+    "parentId": "38b7f041-438c-49bf-81c8-c3aade29bedc",
+    "ephemeral": true
+  },
+  {
+    "type": "assistant.message",
+    "data": {
+      "messageId": "36e84ecc-65ee-4da4-9a06-50d16e52c2de",
+      "content": "4",
+      "toolRequests": []
+    },
+    "id": "ccfff5a9-4aea-4499-9cde-c813779b0631",
+    "timestamp": "2026-01-21T02:33:52.610Z",
+    "parentId": "c4d6d48f-4dd4-4dba-9177-9788ae3b8f9b"
+  },
+  {
+    "type": "assistant.turn_end",
+    "data": {
+      "turnId": "0"
+    },
+    "id": "29335815-60d8-4b60-bd84-29a2ce952a1b",
+    "timestamp": "2026-01-21T02:33:52.616Z",
+    "parentId": "ccfff5a9-4aea-4499-9cde-c813779b0631"
+  },
+  {
+    "type": "session.idle",
+    "data": {},
+    "id": "e6c61268-3b77-4adc-9fa6-24a7b8e7a9ad",
+    "timestamp": "2026-01-21T02:33:52.617Z",
+    "parentId": "29335815-60d8-4b60-bd84-29a2ce952a1b",
+    "ephemeral": true
+  },
+  {
+    "type": "pending_messages.modified",
+    "data": {},
+    "id": "118e356e-59ed-459d-a2c4-340d8fe022da",
+    "timestamp": "2026-01-21T02:33:52.626Z",
+    "parentId": "e6c61268-3b77-4adc-9fa6-24a7b8e7a9ad",
+    "ephemeral": true
+  },
+  {
+    "type": "pending_messages.modified",
+    "data": {},
+    "id": "cb0331e1-e6d2-4e33-b365-34ee130c89d8",
+    "timestamp": "2026-01-21T02:33:52.626Z",
+    "parentId": "118e356e-59ed-459d-a2c4-340d8fe022da",
+    "ephemeral": true
+  },
+  {
+    "type": "user.message",
+    "data": {
+      "content": "Please use the echo tool to echo 'Hello World'",
+      "transformedContent": "<current_datetime>2026-01-21T02:33:52.661Z</current_datetime>\n\nPlease use the echo tool to echo 'Hello World'",
+      "attachments": []
+    },
+    "id": "425ad2ca-7fe0-4dd1-8f15-6b1deaecc00b",
+    "timestamp": "2026-01-21T02:33:52.661Z",
+    "parentId": "cb0331e1-e6d2-4e33-b365-34ee130c89d8"
+  },
+  {
+    "type": "assistant.turn_start",
+    "data": {
+      "turnId": "0"
+    },
+    "id": "a636777f-b476-470b-a48e-f516da1bbec0",
+    "timestamp": "2026-01-21T02:33:52.661Z",
+    "parentId": "425ad2ca-7fe0-4dd1-8f15-6b1deaecc00b"
+  },
+  {
+    "type": "session.usage_info",
+    "data": {
+      "tokenLimit": 90000,
+      "currentTokens": 6949,
+      "messagesLength": 4
+    },
+    "id": "1b8e4fcb-cd8c-4031-93a9-1457e9b5fada",
+    "timestamp": "2026-01-21T02:33:52.699Z",
+    "parentId": "a636777f-b476-470b-a48e-f516da1bbec0",
+    "ephemeral": true
+  },
+  {
+    "type": "assistant.usage",
+    "data": {
+      "model": "gpt-4o",
+      "inputTokens": 6414,
+      "outputTokens": 15,
+      "cacheReadTokens": 6016,
+      "cacheWriteTokens": 0,
+      "cost": 1,
+      "duration": 1187,
+      "initiator": "user",
+      "apiCallId": "chatcmpl-D0IKXZA03ZDIT70C4itc2i8TGGxRK",
+      "quotaSnapshots": {}
+    },
+    "id": "ad57b28f-c326-46fc-b204-46aa06477afb",
+    "timestamp": "2026-01-21T02:33:53.886Z",
+    "parentId": "1b8e4fcb-cd8c-4031-93a9-1457e9b5fada",
+    "ephemeral": true
+  },
+  {
+    "type": "assistant.message",
+    "data": {
+      "messageId": "440fcc05-5467-4628-8108-02d4457021de",
+      "content": "",
+      "toolRequests": [
+        {
+          "toolCallId": "call_5wvlUs3058Yd6AoEY8WjslPQ",
+          "name": "echo",
+          "arguments": {
+            "message": "Hello World"
+          },
+          "type": "function"
+        }
+      ]
+    },
+    "id": "3f36d9c1-7386-4f02-bd92-6177450a9d29",
+    "timestamp": "2026-01-21T02:33:53.887Z",
+    "parentId": "ad57b28f-c326-46fc-b204-46aa06477afb"
+  },
+  {
+    "type": "tool.execution_start",
+    "data": {
+      "toolCallId": "call_5wvlUs3058Yd6AoEY8WjslPQ",
+      "toolName": "echo",
+      "arguments": {
+        "message": "Hello World"
+      }
+    },
+    "id": "9ec5075d-85aa-4f36-86dd-229397625895",
+    "timestamp": "2026-01-21T02:33:53.888Z",
+    "parentId": "3f36d9c1-7386-4f02-bd92-6177450a9d29"
+  },
+  {
+    "type": "tool.execution_complete",
+    "data": {
+      "toolCallId": "call_5wvlUs3058Yd6AoEY8WjslPQ",
+      "success": true,
+      "result": {
+        "content": "{\"echoed\": \"Hello World\", \"timestamp\": \"2026-01-20T20:33:53.891809\"}"
+      },
+      "toolTelemetry": {}
+    },
+    "id": "48197ca6-9e74-4dc5-afab-51bb90e93520",
+    "timestamp": "2026-01-21T02:33:53.893Z",
+    "parentId": "9ec5075d-85aa-4f36-86dd-229397625895"
+  },
+  {
+    "type": "assistant.turn_end",
+    "data": {
+      "turnId": "0"
+    },
+    "id": "9c74ba7b-b8fa-4302-9f78-e2dc0e533ceb",
+    "timestamp": "2026-01-21T02:33:53.893Z",
+    "parentId": "48197ca6-9e74-4dc5-afab-51bb90e93520"
+  },
+  {
+    "type": "assistant.turn_start",
+    "data": {
+      "turnId": "1"
+    },
+    "id": "5e3cb5cf-9024-4275-a093-40278772bfd5",
+    "timestamp": "2026-01-21T02:33:53.893Z",
+    "parentId": "9c74ba7b-b8fa-4302-9f78-e2dc0e533ceb"
+  },
+  {
+    "type": "session.usage_info",
+    "data": {
+      "tokenLimit": 90000,
+      "currentTokens": 6994,
+      "messagesLength": 6
+    },
+    "id": "d753860e-f2d7-4813-a4f7-3c0d032b5a15",
+    "timestamp": "2026-01-21T02:33:53.923Z",
+    "parentId": "5e3cb5cf-9024-4275-a093-40278772bfd5",
+    "ephemeral": true
+  },
+  {
+    "type": "assistant.message_delta",
+    "data": {
+      "messageId": "8eddf67e-1cc9-4c5a-8bf1-7d13461eb23a",
+      "deltaContent": "Hello",
+      "totalResponseSizeBytes": 5
+    },
+    "id": "cdda8ca1-87d3-4aed-b0bb-b2c4bec24d2b",
+    "timestamp": "2026-01-21T02:33:55.082Z",
+    "parentId": "d753860e-f2d7-4813-a4f7-3c0d032b5a15",
+    "ephemeral": true
+  },
+  {
+    "type": "assistant.message_delta",
+    "data": {
+      "messageId": "8eddf67e-1cc9-4c5a-8bf1-7d13461eb23a",
+      "deltaContent": " World",
+      "totalResponseSizeBytes": 11
+    },
+    "id": "d7f5d6be-fd24-4a78-9320-599c1b68d81c",
+    "timestamp": "2026-01-21T02:33:55.082Z",
+    "parentId": "cdda8ca1-87d3-4aed-b0bb-b2c4bec24d2b",
+    "ephemeral": true
+  },
+  {
+    "type": "assistant.usage",
+    "data": {
+      "model": "gpt-4o",
+      "inputTokens": 6463,
+      "outputTokens": 4,
+      "cacheReadTokens": 6400,
+      "cacheWriteTokens": 0,
+      "cost": 1,
+      "duration": 1163,
+      "initiator": "agent",
+      "apiCallId": "chatcmpl-D0IKYibDlQ199JnbbOdknmrGu11Qs",
+      "quotaSnapshots": {}
+    },
+    "id": "c9748484-e291-4db4-92e2-3a43e16dabb6",
+    "timestamp": "2026-01-21T02:33:55.086Z",
+    "parentId": "d7f5d6be-fd24-4a78-9320-599c1b68d81c",
+    "ephemeral": true
+  },
+  {
+    "type": "assistant.message",
+    "data": {
+      "messageId": "8eddf67e-1cc9-4c5a-8bf1-7d13461eb23a",
+      "content": "Hello World",
+      "toolRequests": []
+    },
+    "id": "30847d7c-d36c-42b4-a6cd-6b23ec9bb62c",
+    "timestamp": "2026-01-21T02:33:55.086Z",
+    "parentId": "c9748484-e291-4db4-92e2-3a43e16dabb6"
+  },
+  {
+    "type": "assistant.turn_end",
+    "data": {
+      "turnId": "1"
+    },
+    "id": "d88bc690-887f-492d-a6b4-c120a74139c2",
+    "timestamp": "2026-01-21T02:33:55.086Z",
+    "parentId": "30847d7c-d36c-42b4-a6cd-6b23ec9bb62c"
+  },
+  {
+    "type": "session.idle",
+    "data": {},
+    "id": "1f06b85f-c384-45cd-8e60-3fdf4e307721",
+    "timestamp": "2026-01-21T02:33:55.086Z",
+    "parentId": "d88bc690-887f-492d-a6b4-c120a74139c2",
+    "ephemeral": true
+  },
+  {
+    "type": "pending_messages.modified",
+    "data": {},
+    "id": "8527f65e-39a8-4137-8f76-b3ab5cae740a",
+    "timestamp": "2026-01-21T02:33:55.090Z",
+    "parentId": "1f06b85f-c384-45cd-8e60-3fdf4e307721",
+    "ephemeral": true
+  },
+  {
+    "type": "pending_messages.modified",
+    "data": {},
+    "id": "52bd1d1e-05af-4e8c-b609-ff07c7e8ee2c",
+    "timestamp": "2026-01-21T02:33:55.090Z",
+    "parentId": "8527f65e-39a8-4137-8f76-b3ab5cae740a",
+    "ephemeral": true
+  },
+  {
+    "type": "user.message",
+    "data": {
+      "content": "What was my first question?",
+      "transformedContent": "<current_datetime>2026-01-21T02:33:55.111Z</current_datetime>\n\nWhat was my first question?",
+      "attachments": []
+    },
+    "id": "531bc316-64e3-4627-8913-2205836dbf8d",
+    "timestamp": "2026-01-21T02:33:55.111Z",
+    "parentId": "52bd1d1e-05af-4e8c-b609-ff07c7e8ee2c"
+  },
+  {
+    "type": "assistant.turn_start",
+    "data": {
+      "turnId": "0"
+    },
+    "id": "8895582d-4420-44c6-a65d-d8557cfea903",
+    "timestamp": "2026-01-21T02:33:55.111Z",
+    "parentId": "531bc316-64e3-4627-8913-2205836dbf8d"
+  },
+  {
+    "type": "session.usage_info",
+    "data": {
+      "tokenLimit": 90000,
+      "currentTokens": 7033,
+      "messagesLength": 8
+    },
+    "id": "fbe0bd29-3500-4c8d-8131-3450d6e86a42",
+    "timestamp": "2026-01-21T02:33:55.132Z",
+    "parentId": "8895582d-4420-44c6-a65d-d8557cfea903",
+    "ephemeral": true
+  },
+  {
+    "type": "assistant.message_delta",
+    "data": {
+      "messageId": "85b3dc44-2ea8-44aa-9652-e25027ec1c72",
+      "deltaContent": "Your",
+      "totalResponseSizeBytes": 4
+    },
+    "id": "b6843524-aeb2-4c47-bb4e-77bb6ce9129f",
+    "timestamp": "2026-01-21T02:33:56.309Z",
+    "parentId": "fbe0bd29-3500-4c8d-8131-3450d6e86a42",
+    "ephemeral": true
+  },
+  {
+    "type": "assistant.message_delta",
+    "data": {
+      "messageId": "85b3dc44-2ea8-44aa-9652-e25027ec1c72",
+      "deltaContent": " first",
+      "totalResponseSizeBytes": 10
+    },
+    "id": "50889455-f1ed-4026-b28e-d2d6d353e780",
+    "timestamp": "2026-01-21T02:33:56.314Z",
+    "parentId": "b6843524-aeb2-4c47-bb4e-77bb6ce9129f",
+    "ephemeral": true
+  },
+  {
+    "type": "assistant.message_delta",
+    "data": {
+      "messageId": "85b3dc44-2ea8-44aa-9652-e25027ec1c72",
+      "deltaContent": " question",
+      "totalResponseSizeBytes": 19
+    },
+    "id": "389e02ed-3258-4f68-82e3-b30fb5f5a8a0",
+    "timestamp": "2026-01-21T02:33:56.319Z",
+    "parentId": "50889455-f1ed-4026-b28e-d2d6d353e780",
+    "ephemeral": true
+  },
+  {
+    "type": "assistant.message_delta",
+    "data": {
+      "messageId": "85b3dc44-2ea8-44aa-9652-e25027ec1c72",
+      "deltaContent": " was",
+      "totalResponseSizeBytes": 23
+    },
+    "id": "97930492-a4ff-4a5c-8995-baa85ab0837d",
+    "timestamp": "2026-01-21T02:33:56.319Z",
+    "parentId": "389e02ed-3258-4f68-82e3-b30fb5f5a8a0",
+    "ephemeral": true
+  },
+  {
+    "type": "assistant.message_delta",
+    "data": {
+      "messageId": "85b3dc44-2ea8-44aa-9652-e25027ec1c72",
+      "deltaContent": ":",
+      "totalResponseSizeBytes": 24
+    },
+    "id": "af28155d-107c-4d25-bbac-27e4f8881138",
+    "timestamp": "2026-01-21T02:33:56.319Z",
+    "parentId": "97930492-a4ff-4a5c-8995-baa85ab0837d",
+    "ephemeral": true
+  },
+  {
+    "type": "assistant.message_delta",
+    "data": {
+      "messageId": "85b3dc44-2ea8-44aa-9652-e25027ec1c72",
+      "deltaContent": " \"",
+      "totalResponseSizeBytes": 26
+    },
+    "id": "995a9fe2-0d10-4754-a9e8-a9676105a943",
+    "timestamp": "2026-01-21T02:33:56.319Z",
+    "parentId": "af28155d-107c-4d25-bbac-27e4f8881138",
+    "ephemeral": true
+  },
+  {
+    "type": "assistant.message_delta",
+    "data": {
+      "messageId": "85b3dc44-2ea8-44aa-9652-e25027ec1c72",
+      "deltaContent": "What",
+      "totalResponseSizeBytes": 30
+    },
+    "id": "53b92031-51b9-4a7b-8e6d-d4ff41ad6600",
+    "timestamp": "2026-01-21T02:33:56.319Z",
+    "parentId": "995a9fe2-0d10-4754-a9e8-a9676105a943",
+    "ephemeral": true
+  },
+  {
+    "type": "assistant.message_delta",
+    "data": {
+      "messageId": "85b3dc44-2ea8-44aa-9652-e25027ec1c72",
+      "deltaContent": " is",
+      "totalResponseSizeBytes": 33
+    },
+    "id": "3476782b-f748-49fb-a14f-a4980786a63a",
+    "timestamp": "2026-01-21T02:33:56.320Z",
+    "parentId": "53b92031-51b9-4a7b-8e6d-d4ff41ad6600",
+    "ephemeral": true
+  },
+  {
+    "type": "assistant.message_delta",
+    "data": {
+      "messageId": "85b3dc44-2ea8-44aa-9652-e25027ec1c72",
+      "deltaContent": " ",
+      "totalResponseSizeBytes": 34
+    },
+    "id": "2199acce-5a78-42b9-914f-c4ae61a02bfc",
+    "timestamp": "2026-01-21T02:33:56.320Z",
+    "parentId": "3476782b-f748-49fb-a14f-a4980786a63a",
+    "ephemeral": true
+  },
+  {
+    "type": "assistant.message_delta",
+    "data": {
+      "messageId": "85b3dc44-2ea8-44aa-9652-e25027ec1c72",
+      "deltaContent": "2",
+      "totalResponseSizeBytes": 35
+    },
+    "id": "5cb35221-6b2c-4e0f-9c73-8d4f5433dc51",
+    "timestamp": "2026-01-21T02:33:56.320Z",
+    "parentId": "2199acce-5a78-42b9-914f-c4ae61a02bfc",
+    "ephemeral": true
+  },
+  {
+    "type": "assistant.message_delta",
+    "data": {
+      "messageId": "85b3dc44-2ea8-44aa-9652-e25027ec1c72",
+      "deltaContent": " +",
+      "totalResponseSizeBytes": 37
+    },
+    "id": "08970266-ed6d-4e7e-ad76-bbf3e9266d3c",
+    "timestamp": "2026-01-21T02:33:56.320Z",
+    "parentId": "5cb35221-6b2c-4e0f-9c73-8d4f5433dc51",
+    "ephemeral": true
+  },
+  {
+    "type": "assistant.message_delta",
+    "data": {
+      "messageId": "85b3dc44-2ea8-44aa-9652-e25027ec1c72",
+      "deltaContent": " ",
+      "totalResponseSizeBytes": 38
+    },
+    "id": "b8c890c4-eac6-4671-a1e7-161bee62fe26",
+    "timestamp": "2026-01-21T02:33:56.321Z",
+    "parentId": "08970266-ed6d-4e7e-ad76-bbf3e9266d3c",
+    "ephemeral": true
+  },
+  {
+    "type": "assistant.message_delta",
+    "data": {
+      "messageId": "85b3dc44-2ea8-44aa-9652-e25027ec1c72",
+      "deltaContent": "2",
+      "totalResponseSizeBytes": 39
+    },
+    "id": "164d2237-9cc9-483f-9e0f-736263a9cc0f",
+    "timestamp": "2026-01-21T02:33:56.321Z",
+    "parentId": "b8c890c4-eac6-4671-a1e7-161bee62fe26",
+    "ephemeral": true
+  },
+  {
+    "type": "assistant.message_delta",
+    "data": {
+      "messageId": "85b3dc44-2ea8-44aa-9652-e25027ec1c72",
+      "deltaContent": "?",
+      "totalResponseSizeBytes": 40
+    },
+    "id": "d7e9dcc1-dba3-47a4-9f43-08715f52bfdb",
+    "timestamp": "2026-01-21T02:33:56.321Z",
+    "parentId": "164d2237-9cc9-483f-9e0f-736263a9cc0f",
+    "ephemeral": true
+  },
+  {
+    "type": "assistant.message_delta",
+    "data": {
+      "messageId": "85b3dc44-2ea8-44aa-9652-e25027ec1c72",
+      "deltaContent": " Answer",
+      "totalResponseSizeBytes": 47
+    },
+    "id": "44034171-33b4-4f01-b611-144ea7f0c734",
+    "timestamp": "2026-01-21T02:33:56.321Z",
+    "parentId": "d7e9dcc1-dba3-47a4-9f43-08715f52bfdb",
+    "ephemeral": true
+  },
+  {
+    "type": "assistant.message_delta",
+    "data": {
+      "messageId": "85b3dc44-2ea8-44aa-9652-e25027ec1c72",
+      "deltaContent": " briefly",
+      "totalResponseSizeBytes": 55
+    },
+    "id": "9c27da5a-a21f-4eec-a776-7479dedb3881",
+    "timestamp": "2026-01-21T02:33:56.321Z",
+    "parentId": "44034171-33b4-4f01-b611-144ea7f0c734",
+    "ephemeral": true
+  },
+  {
+    "type": "assistant.message_delta",
+    "data": {
+      "messageId": "85b3dc44-2ea8-44aa-9652-e25027ec1c72",
+      "deltaContent": ".\"",
+      "totalResponseSizeBytes": 57
+    },
+    "id": "dca476d4-ba03-47e6-ad69-6035992a3cdb",
+    "timestamp": "2026-01-21T02:33:56.321Z",
+    "parentId": "9c27da5a-a21f-4eec-a776-7479dedb3881",
+    "ephemeral": true
+  },
+  {
+    "type": "assistant.usage",
+    "data": {
+      "model": "gpt-4o",
+      "inputTokens": 6502,
+      "outputTokens": 19,
+      "cacheReadTokens": 6272,
+      "cacheWriteTokens": 0,
+      "cost": 1,
+      "duration": 1206,
+      "initiator": "user",
+      "apiCallId": "chatcmpl-D0IKZfZItGAfy2ODm9Lz8TUrQHOAp",
+      "quotaSnapshots": {}
+    },
+    "id": "a30481c0-75bd-4c72-a76c-30e101d29df2",
+    "timestamp": "2026-01-21T02:33:56.338Z",
+    "parentId": "dca476d4-ba03-47e6-ad69-6035992a3cdb",
+    "ephemeral": true
+  },
+  {
+    "type": "assistant.message",
+    "data": {
+      "messageId": "85b3dc44-2ea8-44aa-9652-e25027ec1c72",
+      "content": "Your first question was: \"What is 2 + 2? Answer briefly.\"",
+      "toolRequests": []
+    },
+    "id": "4c8d82a3-9aa5-44fe-a9b4-ca4208e9dbf1",
+    "timestamp": "2026-01-21T02:33:56.338Z",
+    "parentId": "a30481c0-75bd-4c72-a76c-30e101d29df2"
+  },
+  {
+    "type": "assistant.turn_end",
+    "data": {
+      "turnId": "0"
+    },
+    "id": "a586d0e7-0731-4add-aab8-42fb741b3d60",
+    "timestamp": "2026-01-21T02:33:56.338Z",
+    "parentId": "4c8d82a3-9aa5-44fe-a9b4-ca4208e9dbf1"
+  },
+  {
+    "type": "session.idle",
+    "data": {},
+    "id": "cd1aa7ce-233c-4971-a26e-e47737ff33d1",
+    "timestamp": "2026-01-21T02:33:56.338Z",
+    "parentId": "a586d0e7-0731-4add-aab8-42fb741b3d60",
+    "ephemeral": true
+  }
+]

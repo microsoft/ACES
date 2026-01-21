@@ -107,7 +107,8 @@ include = [
 allow-direct-references = true
 
 [tool.uv.sources]
-inspect-ai = { git = "https://MSECAIModels@dev.azure.com/MSECAIModels/Benchmarking/_git/inspect_ai", branch = "dev/saber_integration" }
+# Use local inspect_ai with SABER patches (call_tool method for Copilot integration)
+inspect-ai = { path = "../inspect_ai", editable = true }
 
 [tool.hatch.build.targets.sdist]
 include = [

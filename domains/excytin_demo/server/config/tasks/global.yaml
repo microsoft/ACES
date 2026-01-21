@@ -14,6 +14,8 @@ global_defaults:
         timeout: 30
       python:
         timeout: 30
+      copilot:
+        timeout: 30
 
   episode_config:
     max_steps: 15

@@ -17,7 +17,7 @@ from saber.logging_config import LogCategory, get_saber_logger
 from ..models import EpisodeConfiguration
 from ..sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 from .base_executors import CommandExecutor
-from .executor_registry import executor_registry
+from .executor_registry import executor_registry, expand_executor_list, is_executor_group
 
 if TYPE_CHECKING:
     from ...session_manager import SessionManager
@@ -83,12 +83,21 @@ class ExecutorFactory:
 
         Args:
             episode_id: Episode identifier
-            allowed_executors: List of executor types allowed for this episode
+            allowed_executors: List of executor types or group names allowed for this episode.
+                Group names (e.g., "copilot", "standard") are expanded to their constituent
+                executor types.
             episode_config: Episode-specific execution configuration
         """
-        # Validate allowed executors
+        # Expand any executor groups in the allowed list
         if allowed_executors is not None:
-            invalid_executors = [ex for ex in allowed_executors if ex not in self._all_available_executors]
+            # Expand groups to their constituent executor types
+            expanded_executors = expand_executor_list(allowed_executors)
+
+            # Track which groups were expanded for logging
+            groups_expanded = [ex for ex in allowed_executors if is_executor_group(ex)]
+
+            # Validate expanded executors
+            invalid_executors = [ex for ex in expanded_executors if ex not in self._all_available_executors]
             if invalid_executors:
                 logger.warning(
                     "Invalid executor types provided for episode",
@@ -100,7 +109,19 @@ class ExecutorFactory:
                     },
                 )
             # Filter to only valid executors
-            valid_allowed_executors = [ex for ex in allowed_executors if ex in self._all_available_executors]
+            valid_allowed_executors = [ex for ex in expanded_executors if ex in self._all_available_executors]
+
+            if groups_expanded:
+                logger.debug(
+                    "Executor groups expanded for episode configuration",
+                    extra={
+                        "event": "executor_factory_groups_expanded",
+                        "episode_id": episode_id,
+                        "original_list": allowed_executors,
+                        "groups_expanded": groups_expanded,
+                        "expanded_list": valid_allowed_executors,
+                    },
+                )
         else:
             # If no specific allowed executors, allow all
             valid_allowed_executors = self._all_available_executors.copy()

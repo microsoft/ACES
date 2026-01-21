@@ -5,6 +5,16 @@ Logging Category: EXECUTION
 This module provides a unified registration system for all executors,
 both standard framework executors and user-defined custom executors.
 All executors must register themselves through this registry.
+
+Executor Groups:
+    The registry supports "executor groups" which are named collections of
+    executors that can be referenced in configuration files. For example,
+    specifying "copilot" in execution_config.executors will include all
+    executors registered under the "copilot" group.
+
+    Built-in groups:
+    - "copilot": GitHub Copilot CLI-compatible executors (view, create, edit, grep, glob)
+    - "standard": Standard SABER executors (bash, python)
 """
 
 import importlib.util
@@ -24,12 +34,18 @@ class ExecutorRegistry:
 
     Provides a unified system for registering both standard framework executors
     and user-defined custom executors. All executors must register through this system.
+
+    Also supports "executor groups" - named collections of executors that can be
+    referenced in configuration files for convenience (e.g., "copilot" includes
+    all Copilot-compatible executors).
     """
 
     def __init__(self) -> None:
         """Initialize the executor registry."""
         self._registered_executors: dict[str, type[CommandExecutor]] = {}
         self._registration_sources: dict[str, str] = {}  # Track where each executor came from
+        self._executor_groups: dict[str, set[str]] = {}  # Group name -> set of executor types
+        self._group_sources: dict[str, str] = {}  # Track where each group came from
         logger.info(
             "Executor registry initialized",
             extra={"event": "executor_registry_initialized"},
@@ -73,6 +89,138 @@ class ExecutorRegistry:
                 "executor_class": executor_class.__name__,
             },
         )
+
+    def register_executor_group(self, group_name: str, executor_types: list[str], source: str = "external") -> None:
+        """
+        Register a named group of executors.
+
+        Executor groups allow configuration files to specify a single group name
+        (e.g., "copilot") instead of listing individual executors.
+
+        Args:
+            group_name: Name of the group (e.g., "copilot", "standard")
+            executor_types: List of executor type strings in this group
+            source: Source description for tracking/debugging
+
+        Raises:
+            RuntimeError: If group_name is already registered
+        """
+        if group_name in self._executor_groups:
+            existing_source = self._group_sources.get(group_name, "unknown")
+            raise RuntimeError(f"Executor group '{group_name}' is already registered from source: {existing_source}")
+
+        self._executor_groups[group_name] = set(executor_types)
+        self._group_sources[group_name] = source
+
+        logger.info(
+            "Executor group registered",
+            extra={
+                "event": "executor_group_registered",
+                "group_name": group_name,
+                "executor_types": executor_types,
+                "source": source,
+            },
+        )
+
+    def add_executor_to_group(self, group_name: str, executor_type: str) -> None:
+        """
+        Add an executor to an existing group.
+
+        Args:
+            group_name: Name of the group to add to
+            executor_type: Executor type to add
+
+        Raises:
+            KeyError: If group doesn't exist
+        """
+        if group_name not in self._executor_groups:
+            raise KeyError(f"Executor group '{group_name}' not found")
+
+        self._executor_groups[group_name].add(executor_type)
+        logger.debug(
+            "Executor added to group",
+            extra={
+                "event": "executor_added_to_group",
+                "group_name": group_name,
+                "executor_type": executor_type,
+            },
+        )
+
+    def get_group_executors(self, group_name: str) -> list[str]:
+        """
+        Get all executor types in a group.
+
+        Args:
+            group_name: Name of the group
+
+        Returns:
+            List of executor types in the group
+
+        Raises:
+            KeyError: If group doesn't exist
+        """
+        if group_name not in self._executor_groups:
+            raise KeyError(
+                f"Executor group '{group_name}' not found. Available groups: {list(self._executor_groups.keys())}"
+            )
+        return list(self._executor_groups[group_name])
+
+    def is_executor_group(self, name: str) -> bool:
+        """
+        Check if a name refers to an executor group.
+
+        Args:
+            name: Name to check
+
+        Returns:
+            True if name is a registered group, False otherwise
+        """
+        return name in self._executor_groups
+
+    def expand_executor_list(self, executor_names: list[str]) -> list[str]:
+        """
+        Expand a list of executor names, replacing group names with their members.
+
+        This is the main entry point for configuration parsing. It takes a mixed
+        list of executor names and group names, and returns a flat list of
+        individual executor names.
+
+        Args:
+            executor_names: List of executor names and/or group names
+
+        Returns:
+            Flat list of individual executor names (deduplicated, preserves order)
+
+        Example:
+            >>> registry.expand_executor_list(["copilot", "bash"])
+            ["view", "create", "edit", "grep", "glob", "bash"]
+        """
+        expanded: list[str] = []
+        seen: set[str] = set()
+
+        for name in executor_names:
+            if self.is_executor_group(name):
+                # Expand group to individual executors
+                for executor_type in self.get_group_executors(name):
+                    if executor_type not in seen:
+                        expanded.append(executor_type)
+                        seen.add(executor_type)
+            else:
+                # Individual executor
+                if name not in seen:
+                    expanded.append(name)
+                    seen.add(name)
+
+        return expanded
+
+    def get_available_groups(self) -> list[str]:
+        """
+        Get list of all registered executor groups.
+
+        Returns:
+            List of group names
+        """
+        return list(self._executor_groups.keys())
 
     def register_executor_from_file(self, executor_type: str, file_path: str, class_name: str) -> None:
         """
@@ -402,3 +550,91 @@ def get_available_executors() -> list[str]:
         List of executor type strings
     """
     return executor_registry.get_available_executors()
+
+
+def register_executor_group(group_name: str, executor_types: list[str], source: str = "external") -> None:
+    """
+    Hook function for registering an executor group.
+
+    Executor groups allow configuration files to specify a single group name
+    (e.g., "copilot") instead of listing individual executors.
+
+    Args:
+        group_name: Name of the group (e.g., "copilot", "standard")
+        executor_types: List of executor type strings in this group
+        source: Source description for tracking
+
+    Example:
+        from saber.server.execution.executors.executor_registry import register_executor_group
+
+        register_executor_group("copilot", ["view", "create", "edit", "grep", "glob"], "copilot_registry")
+    """
+    executor_registry.register_executor_group(group_name, executor_types, source)
+
+
+def add_executor_to_group(group_name: str, executor_type: str) -> None:
+    """
+    Hook function to add an executor to an existing group.
+
+    Args:
+        group_name: Name of the group to add to
+        executor_type: Executor type to add
+    """
+    executor_registry.add_executor_to_group(group_name, executor_type)
+
+
+def get_group_executors(group_name: str) -> list[str]:
+    """
+    Get all executor types in a group.
+
+    Args:
+        group_name: Name of the group
+
+    Returns:
+        List of executor types in the group
+    """
+    return executor_registry.get_group_executors(group_name)
+
+
+def expand_executor_list(executor_names: list[str]) -> list[str]:
+    """
+    Expand a list of executor names, replacing group names with their members.
+
+    This is the main entry point for configuration parsing. It takes a mixed
+    list of executor names and group names, and returns a flat list of
+    individual executor names.
+
+    Args:
+        executor_names: List of executor names and/or group names
+
+    Returns:
+        Flat list of individual executor names
+
+    Example:
+        >>> expand_executor_list(["copilot", "bash"])
+        ["view", "create", "edit", "grep", "glob", "bash"]
+    """
+    return executor_registry.expand_executor_list(executor_names)
+
+
+def get_available_groups() -> list[str]:
+    """
+    Get list of all registered executor groups.
+
+    Returns:
+        List of group names
+    """
+    return executor_registry.get_available_groups()
+
+
+def is_executor_group(name: str) -> bool:
+    """
+    Check if a name refers to an executor group.
+
+    Args:
+        name: Name to check
+
+    Returns:
+        True if name is a registered group, False otherwise
+    """
+    return executor_registry.is_executor_group(name)
