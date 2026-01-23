@@ -1,7 +1,20 @@
 """Copilot agent implementation for SABER.
 
-This module provides the Copilot agent that uses GitHub Copilot CLI
+This module provides the Copilot agent that uses GitHub Copilot SDK
 as the reasoning engine for SABER benchmark tasks.
+
+Key Design:
+- Uses SDK events (not raw message hacks) for capturing transcripts
+- Clean OOP design with separate classes for event capture and session management
+- Modular helper functions for provider config and tool setup
+
+Transcript Capture Notes:
+- The SDK defines assistant.reasoning and assistant.intent event types, but the
+  Copilot server does not currently send them for gpt-4o or gpt-5 models.
+- GPT-5 uses a built-in `report_intent` tool to report intent before tool calls.
+  We capture these as reasoning/intent messages for the transcript.
+- All assistant.message content (including explanatory text) is captured.
+- Tool calls and results are fully captured.
 """
 
 from __future__ import annotations
@@ -9,13 +22,19 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
 from inspect_ai.event._model import ModelEvent
 from inspect_ai.event._tool import ToolEvent
 from inspect_ai.log._transcript import transcript
-from inspect_ai.model import ChatMessageAssistant, ChatMessageSystem, ChatMessageTool, ChatMessageUser
+from inspect_ai.model import (
+    ChatMessageAssistant,
+    ChatMessageSystem,
+    ChatMessageTool,
+    ChatMessageUser,
+)
 from inspect_ai.model._chat_message import ToolCall, ToolCallError
 from inspect_ai.model._generate_config import GenerateConfig
 from inspect_ai.model._model import active_model
@@ -32,10 +51,10 @@ from ...integration.copilot_tools import (
     get_saber_mcp_tools,
 )
 from .models import (
+    REPORT_INTENT_TOOL,
     AnthropicProviderConfig,
     AzureProviderConfig,
     CopilotSessionConfig,
-    DefaultUrl,
     DefaultValue,
     EnvVar,
     ModelPrefix,
@@ -46,7 +65,7 @@ from .models import (
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
 
-# Try to import Copilot SDK - will fail gracefully if not installed
+# Check SDK availability
 try:
     from copilot import CopilotClient
 
@@ -56,385 +75,501 @@ except ImportError:
     CopilotClient = None
 
 
-# ==============================================================================
-# COPILOT SDK WORKAROUND: Raw Message Retrieval
-# ==============================================================================
-#
-# CONTEXT:
-# The Copilot SDK v0.0.388 has a bug in session_event_from_dict() that causes
-# session.get_messages() to fail with an AssertionError when parsing the "context"
-# field. The SDK expects "context" to be a string or None, but the server sends
-# it as a dict containing git/workspace info.
-#
-# ERROR:
-#   File "copilot/generated/session_events.py", line 388, in from_dict
-#     context = from_union([from_str, from_none], obj.get("context"))
-#   AssertionError
-#
-# WORKAROUND:
-# We bypass the broken parsing by making a raw JSON-RPC request directly to the
-# Copilot CLI server. This returns the raw event dicts before the broken
-# session_event_from_dict() is applied, allowing us to extract the conversation
-# history ourselves.
-#
-# WHY THIS MATTERS:
-# When the model calls tools, the SDK's event handler receives an assistant.message
-# event with NO text content - only tool_requests. The model's "thinking" is not
-# exposed. By retrieving the full conversation history after each turn, we can:
-# 1. Get all assistant messages (text and tool calls) in order
-# 2. Reconstruct the full transcript for Inspect AI evaluation
-# 3. Not rely on broken streaming events that may miss content
-#
-# This workaround should be removed once the SDK is fixed.
-# Tracking: https://github.com/github/copilot-sdk/issues/XXX (if filed)
-# ==============================================================================
+# =============================================================================
+# Event Capture Classes
+# =============================================================================
 
 
-async def _get_raw_session_messages(
-    session: Any,
-    timeout: float = 5.0,
-    retries: int = 1,
-) -> list[dict[str, Any]]:
-    """Get raw message events from Copilot session, bypassing broken SDK parsing.
+@dataclass
+class CapturedMessage:
+    """A captured message from the Copilot session."""
 
-    This is a WORKAROUND for Copilot SDK v0.0.388 where session.get_messages()
-    fails due to a parsing bug with the "context" field.
+    message_id: str | None
+    content: str
+    message_type: str  # "text", "tool_call", "reasoning", "intent"
+    tool_call_id: str | None = None
+    tool_name: str | None = None
+    tool_arguments: dict[str, Any] | None = None
 
-    Args:
-        session: CopilotSession instance
-        timeout: Timeout in seconds for each attempt (default 5s, reduced for responsiveness)
-        retries: Number of retry attempts on failure (default 1)
 
-    Returns:
-        List of raw event dicts from the session history
+@dataclass
+class CapturedToolResult:
+    """A captured tool execution result."""
 
-    Note:
-        This accesses private SDK internals (_client.request) and may break
-        in future SDK versions. Remove this workaround when SDK is fixed.
+    tool_call_id: str | None
+    result: str
+
+
+@dataclass
+class AssistantMessageGroup:
+    """A group of content from a single assistant.message event.
+
+    In the Copilot SDK, each assistant.message event can contain:
+    - Intent (from report_intent tool)
+    - Text content (the assistant's explanation)
+    - Multiple tool_calls (actions to take)
+
+    These should be rendered together, not split apart.
     """
-    for attempt in range(retries + 1):
+
+    message_id: str | None
+    intent: str | None = None
+    text: str | None = None
+    tool_calls: list[CapturedMessage] = field(default_factory=list)
+    # tool_call_id -> result mapping
+    tool_results: dict[str, str] = field(default_factory=dict)
+
+    def all_results_received(self) -> bool:
+        """Check if we have results for all tool calls."""
+        if not self.tool_calls:
+            return True
+        return all(tc.tool_call_id in self.tool_results for tc in self.tool_calls)
+
+
+@dataclass
+class TurnCapture:
+    """Captured data from a single conversation turn.
+
+    Tracks message groups to maintain proper association between
+    assistant text/intent and their tool calls/results.
+    """
+
+    events: list[dict[str, Any]] = field(default_factory=list)
+    # Ordered list of message groups (each from one assistant.message event)
+    message_groups: list[AssistantMessageGroup] = field(default_factory=list)
+    # Legacy: tool_results for backward compatibility
+    tool_results: list[CapturedToolResult] = field(default_factory=list)
+    # Map tool_call_id -> message_group for quick lookup when results arrive
+    _tool_call_to_group: dict[str, AssistantMessageGroup] = field(default_factory=dict)
+
+    def has_content(self) -> bool:
+        """Check if any content was captured this turn."""
+        return bool(self.message_groups)
+
+    def get_all_text_content(self) -> list[str]:
+        """Get all text content in order."""
+        content = []
+        for group in self.message_groups:
+            if group.intent:
+                content.append(group.intent)
+            if group.text:
+                content.append(group.text)
+        return content
+
+    # Convenience properties for backward compatibility
+    @property
+    def assistant_messages(self) -> list[CapturedMessage]:
+        return [CapturedMessage(g.message_id, g.text or "", "text") for g in self.message_groups if g.text]
+
+    @property
+    def reasoning_messages(self) -> list[CapturedMessage]:
+        return [CapturedMessage(g.message_id, g.intent or "", "intent") for g in self.message_groups if g.intent]
+
+    @property
+    def tool_calls(self) -> list[CapturedMessage]:
+        result = []
+        for g in self.message_groups:
+            result.extend(g.tool_calls)
+        return result
+
+    def format_transcript(self, system_message: str = "", user_prompt: str = "") -> str:
+        """Format a clean transcript showing the conversation flow.
+
+        Format:
+        <system>...</system>
+        <user>...</user>
+        <assistant>
+          [Intent] ...
+          reasoning text...
+        </assistant>
+        <tool name="bash" call_id="...">
+          command: ls -la
+        </tool>
+        <tool_result call_id="...">
+          output...
+        </tool_result>
+        ...
+
+        Args:
+            system_message: Optional system message to include
+            user_prompt: Optional user prompt to include
+
+        Returns:
+            Formatted transcript string
+        """
+        lines = []
+
+        # System message
+        if system_message:
+            lines.append("<system>")
+            # Truncate long system messages
+            if len(system_message) > 500:
+                lines.append(f"  {system_message[:500]}...")
+            else:
+                for line in system_message.split("\n"):
+                    lines.append(f"  {line}")
+            lines.append("</system>")
+
+        # User prompt
+        if user_prompt:
+            lines.append("\n<user>")
+            for line in user_prompt.split("\n"):
+                lines.append(f"  {line}")
+            lines.append("</user>")
+
+        # Process message groups - each group keeps intent/text/tool_calls together
+        for group in self.message_groups:
+            # Collect assistant content for this group
+            assistant_parts = []
+
+            if group.intent:
+                assistant_parts.append(group.intent)
+
+            if group.text:
+                # Wrap long content
+                text_lines = []
+                for line in group.text.split("\n"):
+                    if len(line) > 100:
+                        text_lines.append(f"{line[:100]}...")
+                    else:
+                        text_lines.append(line)
+                assistant_parts.append("\n".join(text_lines))
+
+            # Output assistant block if there's content
+            if assistant_parts:
+                lines.append("\n<assistant>")
+                for part in assistant_parts:
+                    for line in part.split("\n"):
+                        lines.append(f"  {line}")
+                lines.append("</assistant>")
+
+            # Output tool calls with their results interleaved
+            for tc in group.tool_calls:
+                call_id = tc.tool_call_id or ""
+                lines.append(f'\n<tool name="{tc.tool_name}" call_id="{call_id}">')
+                if tc.tool_arguments:
+                    for k, v in tc.tool_arguments.items():
+                        v_str = str(v)
+                        if len(v_str) > 100:
+                            v_str = v_str[:100] + "..."
+                        lines.append(f"  {k}: {v_str}")
+                lines.append("</tool>")
+
+                # Immediately add the result for this tool call
+                if call_id in group.tool_results:
+                    result = group.tool_results[call_id]
+                    lines.append(f'\n<tool_result call_id="{call_id}">')
+                    # Truncate long results
+                    if len(result) > 300:
+                        result = result[:300] + "...(truncated)"
+                    for line in result.split("\n")[:10]:  # Max 10 lines
+                        lines.append(f"  {line}")
+                    if result.count("\n") > 10:
+                        lines.append("  ...(more lines)")
+                    lines.append("</tool_result>")
+
+        return "\n".join(lines)
+
+
+class EventCapture:
+    """Captures events from a Copilot session via the SDK event system.
+
+    This class registers as an event handler on the session and captures
+    all relevant events (assistant messages, reasoning, tool calls, tool results).
+    This approach uses the official SDK event API rather than raw message hacks.
+    """
+
+    def __init__(self, debug_all_events: bool = False) -> None:
+        self._current_turn = TurnCapture()
+        self._idle_event = asyncio.Event()
+        self._error: Exception | None = None
+        self._unsubscribe: Callable[[], None] | None = None
+        self._debug_all_events = debug_all_events
+        # Track seen message IDs to avoid duplicates
+        self._seen_message_ids: set[str] = set()
+
+    def attach(self, session: Any) -> None:
+        """Attach to a session and start capturing events."""
+        self._unsubscribe = session.on(self._on_event)
+
+    def detach(self) -> None:
+        """Detach from the session."""
+        if self._unsubscribe:
+            self._unsubscribe()
+            self._unsubscribe = None
+
+    def reset_turn(self) -> TurnCapture:
+        """Reset for a new turn, returning the previous turn's data."""
+        previous = self._current_turn
+        self._current_turn = TurnCapture()
+        self._idle_event.clear()
+        self._error = None
+        # Don't clear _seen_message_ids - we want to track across turns
+        return previous
+
+    async def wait_for_idle(self, timeout: float) -> None:
+        """Wait for the session to become idle."""
         try:
-            # Access the internal client to make a raw JSON-RPC request
-            # The session._client is the CopilotClient which can make requests
-            raw_response = await asyncio.wait_for(
-                session._client.request("session.getMessages", {"sessionId": session.session_id}),
-                timeout=timeout,
-            )
-            events: list[dict[str, Any]] = raw_response.get("events", [])
-            if attempt > 0:
-                logger.debug(
-                    f"Raw message retrieval succeeded on attempt {attempt + 1}",
-                    extra={"attempt": attempt + 1, "event_count": len(events)},
-                )
-            return events
+            await asyncio.wait_for(self._idle_event.wait(), timeout=timeout)
         except asyncio.TimeoutError:
-            if attempt < retries:
+            logger.warning(f"Timeout waiting for session idle after {timeout}s")
+
+        if self._error:
+            raise self._error
+
+    @property
+    def current_turn(self) -> TurnCapture:
+        """Get the current turn's captured data."""
+        return self._current_turn
+
+    def _on_event(self, event: Any) -> None:
+        """Handle events from the Copilot session."""
+        if not event:
+            return
+
+        # Get event type string
+        event_type = str(event.type.value) if hasattr(event.type, "value") else str(event.type)
+
+        # Record all events with their data for debugging
+        event_record = {
+            "type": event_type,
+            "timestamp": datetime.now().isoformat(),
+        }
+
+        # Get event data
+        data = getattr(event, "data", None)
+
+        # Log ALL events at debug level so we can see what's happening
+        if self._debug_all_events and data:
+            # Extract common fields for debugging
+            data_fields = {}
+            for attr in ["content", "message_id", "tool_requests", "intent", "reasoning", "summary"]:
+                val = getattr(data, attr, None)
+                if val:
+                    data_fields[attr] = str(val)[:200] if isinstance(val, str) else str(val)[:200]
+            if data_fields:
+                logger.info(f"Event {event_type}: {data_fields}")
+
+        self._current_turn.events.append(event_record)
+
+        if not data:
+            # Handle control events without data
+            if event_type == "session.idle":
+                logger.debug("Session idle event received")
+                self._idle_event.set()
+            return
+
+        # Route to specific handler based on event type
+        if event_type == "assistant.message":
+            self._handle_assistant_message(data)
+        elif event_type == "assistant.reasoning":
+            self._handle_reasoning(data)
+        elif event_type == "assistant.intent":
+            self._handle_intent(data)
+        elif event_type == "assistant.turn_end":
+            self._handle_turn_end(data)
+        elif event_type == "tool.execution_complete":
+            self._handle_tool_result(data)
+        elif event_type == "session.idle":
+            logger.debug("Session idle event received")
+            self._idle_event.set()
+        elif event_type == "session.error":
+            error_msg = getattr(data, "message", str(data))
+            self._error = Exception(f"Session error: {error_msg}")
+            self._idle_event.set()
+
+    def _handle_assistant_message(self, data: Any) -> None:
+        """Handle assistant.message event.
+
+        Each assistant.message event is a unit containing:
+        - Optional intent (from report_intent tool)
+        - Optional text content
+        - Optional tool calls
+
+        We create an AssistantMessageGroup for each event to keep
+        these elements together for proper transcript rendering.
+        """
+        message_id = getattr(data, "message_id", None)
+        content = getattr(data, "content", None)
+        tool_requests = getattr(data, "tool_requests", None)
+
+        # Check for duplicates based on message_id
+        if message_id and message_id in self._seen_message_ids:
+            logger.debug(f"Skipping duplicate message {message_id}")
+            return
+        if message_id:
+            self._seen_message_ids.add(message_id)
+
+        # Create a new message group for this assistant.message event
+        group = AssistantMessageGroup(message_id=message_id)
+
+        # Extract intent from report_intent tool call
+        if tool_requests:
+            for tr in tool_requests:
+                tool_name = getattr(tr, "name", None)
+                tool_arguments = getattr(tr, "arguments", None)
+
+                if tool_name == REPORT_INTENT_TOOL:
+                    intent_text = tool_arguments.get("intent", "") if tool_arguments else ""
+                    if intent_text:
+                        group.intent = f"[Intent] {intent_text}"
+                        logger.info(
+                            "Captured intent from report_intent tool",
+                            extra={"intent": intent_text},
+                        )
+
+        # Capture text content
+        if content:
+            group.text = content
+            logger.info(
+                "Captured assistant text message",
+                extra={"content_preview": content[:100], "message_id": message_id},
+            )
+
+        # Capture tool calls (excluding report_intent)
+        if tool_requests:
+            for tr in tool_requests:
+                tool_name = getattr(tr, "name", None)
+                tool_arguments = getattr(tr, "arguments", None)
+                tool_call_id = getattr(tr, "tool_call_id", None)
+
+                # Skip report_intent - already captured as intent above
+                if tool_name == REPORT_INTENT_TOOL:
+                    continue
+
+                msg = CapturedMessage(
+                    message_id=message_id,
+                    content="",
+                    message_type="tool_call",
+                    tool_call_id=tool_call_id,
+                    tool_name=tool_name,
+                    tool_arguments=tool_arguments,
+                )
+                group.tool_calls.append(msg)
+                # Map tool_call_id to this group for result lookup
+                if tool_call_id:
+                    self._current_turn._tool_call_to_group[tool_call_id] = group
                 logger.debug(
-                    f"Timeout ({timeout}s) getting raw messages, retrying... (attempt {attempt + 1}/{retries + 1})",
-                    extra={"attempt": attempt + 1, "timeout": timeout},
-                )
-                await asyncio.sleep(0.2)
-        except Exception as e:
-            # Don't log at warning level - this is expected when session is closing
-            logger.debug(
-                f"Failed to get raw session messages: {type(e).__name__}: {e}",
-                extra={"error": str(e), "error_type": type(e).__name__, "attempt": attempt + 1},
-            )
-            break
-
-    return []
-
-
-async def _poll_raw_messages_background(
-    session: Any,
-    all_raw_assistant_messages: list[dict[str, Any]],
-    stop_event: asyncio.Event,
-    poll_interval: float = 2.0,
-) -> None:
-    """Background task to periodically poll for raw messages during session execution.
-
-    This runs in parallel with send_and_wait() to capture messages while the session
-    is still active. The session becomes unresponsive after send_and_wait() returns,
-    so we need to get messages DURING execution.
-
-    Args:
-        session: CopilotSession instance
-        all_raw_assistant_messages: List to append captured messages to (shared state)
-        stop_event: Event to signal when to stop polling
-        poll_interval: Seconds between polls (default 2.0)
-    """
-    seen_message_ids: set[str] = set()
-    poll_count = 0
-
-    while not stop_event.is_set():
-        try:
-            # Short timeout since we're running in background
-            raw_events = await _get_raw_session_messages(session, timeout=3.0, retries=0)
-
-            if raw_events:
-                poll_count += 1
-                # Extract new assistant messages
-                for evt in raw_events:
-                    if evt.get("type") == "assistant.message":
-                        data = evt.get("data", {})
-                        msg_id = data.get("messageId", "")
-
-                        # Skip if we've already seen this message
-                        if msg_id and msg_id in seen_message_ids:
-                            continue
-
-                        if msg_id:
-                            seen_message_ids.add(msg_id)
-
-                        content = data.get("content", "")
-                        tool_requests = data.get("toolRequests", [])
-
-                        if content or tool_requests:
-                            msg_data = {
-                                "message_id": msg_id,
-                                "content": content,
-                                "tool_requests": tool_requests,
-                            }
-                            all_raw_assistant_messages.append(msg_data)
-                            logger.debug(
-                                "Background poll captured assistant message",
-                                extra={
-                                    "poll_count": poll_count,
-                                    "has_content": bool(content),
-                                    "tool_count": len(tool_requests),
-                                    "total_messages": len(all_raw_assistant_messages),
-                                },
-                            )
-
-            # Wait for next poll or stop signal
-            try:
-                await asyncio.wait_for(stop_event.wait(), timeout=poll_interval)
-                break  # Stop event was set
-            except asyncio.TimeoutError:
-                pass  # Continue polling
-
-        except Exception as e:
-            # Don't crash on errors - just log and continue
-            logger.debug(f"Background poll error: {e}")
-            try:
-                await asyncio.wait_for(stop_event.wait(), timeout=poll_interval)
-                break
-            except asyncio.TimeoutError:
-                pass
-
-    logger.debug(
-        "Background message polling stopped",
-        extra={
-            "poll_count": poll_count,
-            "total_messages_captured": len(all_raw_assistant_messages),
-        },
-    )
-
-
-def _extract_assistant_messages_from_raw(
-    raw_events: list[dict[str, Any]],
-    since_index: int = 0,
-) -> tuple[list[dict[str, Any]], int]:
-    """Extract assistant messages from raw SDK events.
-
-    Parses raw event dicts to extract assistant.message events, handling both
-    text responses and tool-calling responses.
-
-    Args:
-        raw_events: List of raw event dicts from _get_raw_session_messages()
-        since_index: Only process events at or after this index (for incremental)
-
-    Returns:
-        Tuple of (list of assistant message dicts, new index for next call)
-
-    Each message dict contains:
-        - message_id: str - unique message identifier
-        - content: str - text content (empty string for tool-only messages)
-        - tool_requests: list[dict] - tool calls made (empty list for text-only)
-
-    Note:
-        When the model calls tools, content is empty string "". This is standard
-        OpenAI API behavior - the tool call IS the response, there's no separate
-        "thinking" text exposed.
-    """
-    messages = []
-
-    for i, evt in enumerate(raw_events):
-        if i < since_index:
-            continue
-
-        if evt.get("type") == "assistant.message":
-            data = evt.get("data", {})
-            message_id = data.get("messageId", "")
-            content = data.get("content", "")  # Empty string for tool-calling turns
-            tool_requests = data.get("toolRequests", [])
-
-            # Include messages that have content OR tool_requests (or both)
-            if content or tool_requests:
-                messages.append(
-                    {
-                        "message_id": message_id,
-                        "content": content,
-                        "tool_requests": tool_requests,
-                    }
+                    "Captured tool call",
+                    extra={"tool_name": tool_name, "arguments": tool_arguments},
                 )
 
-    return messages, len(raw_events)
+        # Only add group if it has content
+        if group.intent or group.text or group.tool_calls:
+            self._current_turn.message_groups.append(group)
 
+    def _handle_reasoning(self, data: Any) -> None:
+        """Handle assistant.reasoning event - captures model's thinking.
 
-def _extract_user_messages_from_raw(
-    raw_events: list[dict[str, Any]],
-    since_index: int = 0,
-) -> list[str]:
-    """Extract user message content from raw SDK events.
+        Creates a standalone message group for reasoning.
+        """
+        content = getattr(data, "content", None)
+        message_id = getattr(data, "reasoning_id", None) or getattr(data, "message_id", None)
 
-    Args:
-        raw_events: List of raw event dicts
-        since_index: Only process events at or after this index
+        if content:
+            group = AssistantMessageGroup(
+                message_id=message_id,
+                text=f"[Reasoning] {content}",
+            )
+            self._current_turn.message_groups.append(group)
+            logger.info(
+                "Captured assistant reasoning",
+                extra={"content_preview": content[:100], "message_id": message_id},
+            )
 
-    Returns:
-        List of user message content strings
-    """
-    messages = []
+    def _handle_intent(self, data: Any) -> None:
+        """Handle assistant.intent event - captures model's intent before tool calls.
 
-    for i, evt in enumerate(raw_events):
-        if i < since_index:
-            continue
+        Creates a standalone message group for intent (if not from report_intent tool).
+        """
+        intent = getattr(data, "intent", None) or getattr(data, "content", None)
+        message_id = getattr(data, "message_id", None)
 
-        if evt.get("type") == "user.message":
-            content = evt.get("data", {}).get("content", "")
-            if content:
-                messages.append(content)
+        if intent:
+            group = AssistantMessageGroup(
+                message_id=message_id,
+                intent=f"[Intent] {intent}",
+            )
+            self._current_turn.message_groups.append(group)
+            logger.info(
+                "Captured assistant intent",
+                extra={"content_preview": intent[:100], "message_id": message_id},
+            )
 
-    return messages
+    def _handle_turn_end(self, data: Any) -> None:
+        """Handle assistant.turn_end event - may contain summary or content."""
+        content = getattr(data, "content", None) or getattr(data, "summary", None)
+        message_id = getattr(data, "message_id", None)
 
+        if content:
+            # Only add if not already captured
+            existing_contents = {g.text for g in self._current_turn.message_groups if g.text}
+            if content not in existing_contents:
+                group = AssistantMessageGroup(
+                    message_id=message_id,
+                    text=content,
+                )
+                self._current_turn.message_groups.append(group)
+                logger.info(
+                    "Captured content from turn_end",
+                    extra={"content_preview": content[:100]},
+                )
 
-# ==============================================================================
-# END COPILOT SDK WORKAROUND
-# ==============================================================================
+    def _handle_tool_result(self, data: Any) -> None:
+        """Handle tool.execution_complete event.
 
+        Associates the result with its corresponding tool call in the message group.
+        """
+        tool_call_id = getattr(data, "tool_call_id", None)
+        result_str = str(getattr(data, "result", ""))
 
-def _get_provider_config_from_inspect() -> ProviderConfig | None:
-    """Extract provider configuration from the active Inspect AI model.
-
-    This derives the BYOK (Bring Your Own Key) provider configuration
-    automatically from the model configured for Inspect AI, including
-    Azure OpenAI, OpenAI, and Anthropic.
-
-    Returns:
-        ProviderConfig subclass instance, or None if using Copilot auth
-    """
-    model = active_model()
-    if model is None:
-        logger.debug("No active Inspect AI model, using Copilot default auth")
-        return None
-
-    api = model.api
-    model_name = api.model_name
-
-    # Detect provider type from model name prefix or API class
-    provider_type: ProviderType | None = None
-    base_url: str | None = None
-    api_key: str | None = None
-    api_version: str | None = None
-
-    # Check for Azure OpenAI (model name starts with "openai/azure/" or "azure/")
-    if model_name.startswith(ModelPrefix.AZURE_OPENAI) or model_name.startswith(ModelPrefix.AZURE):
-        provider_type = ProviderType.AZURE
-        # Get base URL from API or environment
-        base_url = getattr(api, "base_url", None) or getattr(api, "endpoint_url", None)
-        if not base_url:
-            base_url = os.environ.get(EnvVar.AZUREAI_OPENAI_BASE_URL) or os.environ.get(EnvVar.AZURE_OPENAI_BASE_URL)
-        # Get API key from API or environment
-        api_key = getattr(api, "api_key", None)
-        if not api_key:
-            api_key = os.environ.get(EnvVar.AZUREAI_OPENAI_API_KEY) or os.environ.get(EnvVar.AZURE_OPENAI_API_KEY)
-        # Get API version
-        api_version = os.environ.get(EnvVar.AZUREAI_OPENAI_API_VERSION) or os.environ.get(
-            EnvVar.OPENAI_API_VERSION, DefaultValue.AZURE_API_VERSION
+        # Add to legacy list for backward compatibility
+        result = CapturedToolResult(
+            tool_call_id=tool_call_id,
+            result=result_str,
         )
-        # Extract deployment name from model name (e.g., "openai/azure/gpt-4o" -> "gpt-4o")
-        # and construct full Azure deployment URL
-        deployment_name = model_name.split("/")[-1]
-        if base_url and not base_url.endswith("/openai/deployments/"):
-            base_url = base_url.rstrip("/") + f"/openai/deployments/{deployment_name}"
+        self._current_turn.tool_results.append(result)
 
-    # Check for standard OpenAI
-    elif model_name.startswith(ModelPrefix.OPENAI) or hasattr(api, "__class__") and "OpenAI" in api.__class__.__name__:
-        provider_type = ProviderType.OPENAI
-        base_url = getattr(api, "base_url", None) or DefaultUrl.OPENAI
-        api_key = getattr(api, "api_key", None) or os.environ.get(EnvVar.OPENAI_API_KEY)
+        # Associate result with its message group
+        if tool_call_id and tool_call_id in self._current_turn._tool_call_to_group:
+            group = self._current_turn._tool_call_to_group[tool_call_id]
+            group.tool_results[tool_call_id] = result_str
+            logger.debug(f"Associated tool result with group {group.message_id}")
 
-    # Check for Anthropic
-    elif model_name.startswith(ModelPrefix.ANTHROPIC) or "claude" in model_name.lower():
-        provider_type = ProviderType.ANTHROPIC
-        base_url = getattr(api, "base_url", None) or DefaultUrl.ANTHROPIC
-        api_key = getattr(api, "api_key", None) or os.environ.get(EnvVar.ANTHROPIC_API_KEY)
+        logger.debug(f"Captured tool result for {tool_call_id}")
 
-    # Build provider config if we have the required fields
-    if provider_type and base_url and api_key:
-        provider_config: ProviderConfig
 
-        if provider_type == ProviderType.AZURE:
-            provider_config = AzureProviderConfig(
-                base_url=base_url,
-                api_key=api_key,
-                api_version=api_version or DefaultValue.AZURE_API_VERSION,
-            )
-        elif provider_type == ProviderType.OPENAI:
-            provider_config = OpenAIProviderConfig(
-                base_url=base_url,
-                api_key=api_key,
-            )
-        elif provider_type == ProviderType.ANTHROPIC:
-            provider_config = AnthropicProviderConfig(
-                base_url=base_url,
-                api_key=api_key,
-            )
-
-        logger.info(
-            "Derived provider config from Inspect AI model",
-            extra={
-                "provider_type": provider_type.value,
-                "model_name": model_name,
-                "base_url": base_url[:50] + "..." if len(base_url) > 50 else base_url,
-            },
-        )
-        return provider_config
-
-    logger.debug(
-        "Could not derive provider config from model",
-        extra={"model_name": model_name, "has_base_url": bool(base_url), "has_api_key": bool(api_key)},
-    )
-    return None
+# =============================================================================
+# Client Wrapper
+# =============================================================================
 
 
 class CopilotClientWrapper:
-    """Wrapper around CopilotClient that handles SDK availability.
+    """Wrapper around CopilotClient that handles SDK availability and setup."""
 
-    This wrapper provides a consistent interface whether or not the
-    Copilot SDK is installed, allowing for better testing and graceful
-    degradation.
-    """
-
-    def __init__(self, options: dict[str, Any] | None = None):
+    def __init__(self, options: dict[str, Any] | None = None) -> None:
         if not COPILOT_SDK_AVAILABLE:
             raise RuntimeError(
                 "GitHub Copilot SDK is not installed. " "Install it with: pip install github-copilot-sdk"
             )
 
-        # Set up environment for fnm-installed Node.js and Copilot CLI
         opts = options or {}
         env = opts.get("env", dict(os.environ))
 
         # Add fnm to PATH if available
+        env = self._setup_fnm_path(env)
+        opts["env"] = env
+
+        self._client = CopilotClient(opts)
+        self._started = False
+
+    def _setup_fnm_path(self, env: dict[str, str]) -> dict[str, str]:
+        """Set up fnm path for Node.js access."""
         fnm_path = os.path.expanduser("~/.local/share/fnm")
         if os.path.exists(fnm_path):
-            # fnm stores Node versions, find copilot in the active version
             import subprocess
 
             try:
-                # Get fnm environment to find the right Node/npm bin
                 fnm_cmd = (
                     f'export PATH="{fnm_path}:$PATH" && eval "$(fnm env)" && '
                     'dirname $(which copilot 2>/dev/null || echo "")'
@@ -453,9 +588,7 @@ class CopilotClientWrapper:
             except (subprocess.TimeoutExpired, subprocess.SubprocessError) as e:
                 logger.debug(f"Could not set up fnm environment: {e}")
 
-        opts["env"] = env
-        self._client = CopilotClient(opts)
-        self._started = False
+        return env
 
     async def start(self) -> None:
         """Start the Copilot CLI server."""
@@ -473,6 +606,239 @@ class CopilotClientWrapper:
         return await self._client.create_session(config)
 
 
+# =============================================================================
+# Provider Configuration
+# =============================================================================
+
+
+def get_provider_config_from_inspect() -> ProviderConfig | None:
+    """Extract provider configuration from the active Inspect AI model.
+
+    Returns:
+        ProviderConfig subclass instance, or None if using Copilot auth
+    """
+    model = active_model()
+    if model is None:
+        logger.debug("No active Inspect AI model, using Copilot default auth")
+        return None
+
+    api = model.api
+    model_name = api.model_name
+
+    logger.info(
+        "Checking active model for provider config",
+        extra={
+            "model_name": model_name,
+            "api_class": api.__class__.__name__,
+            "has_base_url": hasattr(api, "base_url"),
+            "has_api_key": hasattr(api, "api_key"),
+        },
+    )
+
+    provider_type: ProviderType | None = None
+    base_url: str | None = None
+    api_key: str | None = None
+    api_version: str | None = None
+
+    # Azure OpenAI
+    if model_name.startswith(ModelPrefix.AZURE_OPENAI) or model_name.startswith(ModelPrefix.AZURE):
+        provider_type = ProviderType.AZURE
+        base_url = getattr(api, "base_url", None) or getattr(api, "endpoint_url", None)
+        if not base_url:
+            base_url = os.environ.get(EnvVar.AZUREAI_OPENAI_BASE_URL) or os.environ.get(EnvVar.AZURE_OPENAI_BASE_URL)
+        api_key = (
+            getattr(api, "api_key", None)
+            or os.environ.get(EnvVar.AZUREAI_OPENAI_API_KEY)
+            or os.environ.get(EnvVar.AZURE_OPENAI_API_KEY)
+        )
+        api_version = os.environ.get(EnvVar.AZUREAI_OPENAI_API_VERSION) or os.environ.get(
+            EnvVar.OPENAI_API_VERSION, DefaultValue.AZURE_API_VERSION
+        )
+        deployment_name = model_name.split("/")[-1]
+        if base_url and "/openai/deployments/" not in base_url:
+            base_url = base_url.rstrip("/") + f"/openai/deployments/{deployment_name}"
+
+    # Standard OpenAI
+    elif model_name.startswith(ModelPrefix.OPENAI) or (
+        hasattr(api, "__class__") and "OpenAI" in api.__class__.__name__
+    ):
+        provider_type = ProviderType.OPENAI
+        base_url = getattr(api, "base_url", None) or "https://api.openai.com/v1"
+        api_key = getattr(api, "api_key", None) or os.environ.get(EnvVar.OPENAI_API_KEY)
+
+    # Anthropic
+    elif model_name.startswith(ModelPrefix.ANTHROPIC) or "claude" in model_name.lower():
+        provider_type = ProviderType.ANTHROPIC
+        base_url = getattr(api, "base_url", None) or "https://api.anthropic.com"
+        api_key = getattr(api, "api_key", None) or os.environ.get(EnvVar.ANTHROPIC_API_KEY)
+
+    # Build provider config
+    if provider_type and base_url and api_key:
+        config: AzureProviderConfig | OpenAIProviderConfig | AnthropicProviderConfig
+        if provider_type == ProviderType.AZURE:
+            config = AzureProviderConfig(
+                base_url=base_url,
+                api_key=api_key,
+                api_version=api_version or DefaultValue.AZURE_API_VERSION,
+            )
+        elif provider_type == ProviderType.OPENAI:
+            config = OpenAIProviderConfig(base_url=base_url, api_key=api_key)
+        else:  # provider_type == ProviderType.ANTHROPIC
+            config = AnthropicProviderConfig(base_url=base_url, api_key=api_key)
+
+        logger.info(
+            "Derived provider config from Inspect AI model",
+            extra={
+                "provider_type": provider_type.value,
+                "model_name": model_name,
+            },
+        )
+        return config
+
+    return None
+
+
+def build_provider_config(
+    provider_type: str | None,
+    provider_base_url: str | None,
+    provider_api_key: str | None,
+    provider_api_version: str | None,
+) -> ProviderConfig | None:
+    """Build provider config from explicit parameters or derive from Inspect AI."""
+    if provider_type and provider_base_url and provider_api_key:
+        if provider_type == ProviderType.AZURE or provider_type == "azure":
+            return AzureProviderConfig(
+                base_url=provider_base_url,
+                api_key=provider_api_key,
+                api_version=provider_api_version or DefaultValue.AZURE_API_VERSION,
+            )
+        elif provider_type == ProviderType.OPENAI or provider_type == "openai":
+            return OpenAIProviderConfig(
+                base_url=provider_base_url,
+                api_key=provider_api_key,
+            )
+        elif provider_type == ProviderType.ANTHROPIC or provider_type == "anthropic":
+            return AnthropicProviderConfig(
+                base_url=provider_base_url,
+                api_key=provider_api_key,
+            )
+
+    # Fall back to deriving from Inspect AI
+    return get_provider_config_from_inspect()
+
+
+# =============================================================================
+# Tool Setup
+# =============================================================================
+
+
+def get_mcp_client(sb: Any) -> Any:
+    """Extract MCP client from sandbox."""
+    actual_sandbox = sb
+    if hasattr(sb, "_sandbox"):
+        actual_sandbox = sb._sandbox
+    return actual_sandbox._mcp_client
+
+
+async def setup_tools(
+    sb: Any,
+    tool_tracker: ToolCallTracker,
+    submit_enabled: bool,
+) -> list[Tool]:
+    """Set up all tools for the Copilot session."""
+    mcp_tools = await get_saber_mcp_tools(sb)
+    copilot_tools = convert_mcp_tools_to_copilot(mcp_tools, get_mcp_client(sb), tool_tracker)
+
+    all_tools: list[Tool] = list(copilot_tools)
+    if submit_enabled:
+        submit_tool = create_submit_tool(tool_tracker)
+        all_tools.append(submit_tool)
+        logger.debug("Added submit tool")
+
+    return all_tools
+
+
+# =============================================================================
+# Transcript Recording
+# =============================================================================
+
+
+def build_system_message(
+    assistant_prompt: str,
+    instruction_prompt: str,
+    submit_prompt: str,
+    submit_enabled: bool,
+) -> str:
+    """Build the system message content."""
+    parts = []
+    if assistant_prompt:
+        parts.append(assistant_prompt)
+    if instruction_prompt:
+        parts.append(f"\n\n## Task Instructions\n\n{instruction_prompt}")
+    if submit_prompt and submit_enabled:
+        parts.append(f"\n\n## Submission Guidelines\n\n{submit_prompt}")
+    return "".join(parts)
+
+
+def record_model_event(
+    state: TaskState,
+    model: str,
+    input_messages: list[Any],
+    assistant_content: str,
+    tool_calls: list[ToolCall],
+) -> None:
+    """Record a ModelEvent to the transcript."""
+    assistant_message = ChatMessageAssistant(
+        content=assistant_content,
+        tool_calls=tool_calls if tool_calls else None,
+    )
+
+    model_output = ModelOutput(
+        model=model,
+        choices=[
+            ChatCompletionChoice(
+                message=assistant_message,
+                stop_reason="tool_calls" if tool_calls else "stop",
+            )
+        ],
+        usage=ModelUsage(),
+    )
+
+    model_event = ModelEvent(
+        model=model,
+        input=input_messages,
+        tools=[],
+        tool_choice="auto",
+        config=GenerateConfig(),
+        output=model_output,
+        completed=datetime.now(timezone.utc),
+    )
+    transcript()._event(model_event)
+
+
+def record_tool_events(tool_records: list[Any]) -> None:
+    """Record ToolEvents to the transcript."""
+    for tc in tool_records:
+        error_obj = None
+        if tc.is_error:
+            error_obj = ToolCallError(type="unknown", message=tc.result)
+
+        tool_event = ToolEvent(
+            id=tc.tool_call_id,
+            function=tc.tool_name,
+            arguments=tc.arguments,
+            result=tc.result,
+            error=error_obj,
+            completed=datetime.now(timezone.utc),
+        )
+        transcript()._event(tool_event)
+
+
+# =============================================================================
+# Main Solver
+# =============================================================================
+
+
 def copilot_solver(
     instruction_prompt: str,
     assistant_prompt: str,
@@ -484,37 +850,22 @@ def copilot_solver(
     transcript_config: dict[str, Any] | None = None,
     streaming: bool = False,
     timeout: float = 60.0,
-    # Provider configuration for BYOK (Bring Your Own Key)
-    provider_type: str | None = None,  # ProviderType.AZURE, OPENAI, or ANTHROPIC
-    provider_base_url: str | None = None,  # API endpoint URL
-    provider_api_key: str | None = None,  # API key
-    provider_api_version: str | None = None,  # Azure API version (e.g., '2024-02-15-preview')
+    provider_type: str | None = None,
+    provider_base_url: str | None = None,
+    provider_api_key: str | None = None,
+    provider_api_version: str | None = None,
 ) -> Callable[[TaskState], Awaitable[TaskState]]:
-    """SABER solver using GitHub Copilot CLI as the reasoning engine.
+    """SABER solver using GitHub Copilot SDK as the reasoning engine.
 
     This solver creates a Copilot session with SABER's MCP tools registered,
     allowing the Copilot agent to interact with the sandbox environment.
-
-    Provider Configuration:
-        The solver automatically derives API credentials from Inspect AI's
-        active model configuration. If you run with `--model openai/azure/gpt-4o`,
-        the Azure OpenAI endpoint and API key will be extracted from environment
-        variables (AZUREAI_OPENAI_BASE_URL, AZUREAI_OPENAI_API_KEY) and passed
-        to the Copilot SDK.
-
-        Supported providers:
-        - Azure OpenAI: model names starting with "openai/azure/" or "azure/"
-        - OpenAI: model names starting with "openai/"
-        - Anthropic: model names starting with "anthropic/" or containing "claude"
-
-        You can also explicitly override with provider_* parameters.
 
     Args:
         instruction_prompt: The main task instructions for the agent
         assistant_prompt: System prompt defining assistant behavior
         submit_prompt: Instructions about task submission
         continue_prompt: Message shown after each step to guide the agent
-        model: Copilot model to use (default: gpt-4o)
+        model: Copilot model to use (default: gpt-5, which provides intent via report_intent tool)
         max_turns: Maximum conversation turns before stopping (default: 50)
         submit: Whether to enable the submit tool (default: True)
         transcript_config: Optional transcript synchronization config
@@ -527,39 +878,6 @@ def copilot_solver(
 
     Returns:
         Solver function for Inspect AI
-
-    Example - Automatic from Inspect AI:
-        # Just run with Inspect's --model flag, credentials auto-derived:
-        # uv run inspect eval ... --model openai/azure/gpt-4o
-
-    Example - Explicit BYOK override:
-        # Azure OpenAI
-        copilot_solver(
-            ...,
-            provider_type="azure",
-            provider_base_url="https://your-resource.openai.azure.com",
-            provider_api_key="your-api-key",
-            provider_api_version="2024-02-15-preview",
-            model="gpt-4o",
-        )
-
-        # OpenAI direct
-        copilot_solver(
-            ...,
-            provider_type="openai",
-            provider_base_url="https://api.openai.com/v1",
-            provider_api_key="sk-...",
-            model="gpt-4o",
-        )
-
-        # Anthropic
-        copilot_solver(
-            ...,
-            provider_type="anthropic",
-            provider_base_url="https://api.anthropic.com",
-            provider_api_key="sk-ant-...",
-            model="claude-sonnet-4",
-        )
     """
     submit_enabled = submit if submit is not None else True
 
@@ -569,131 +887,33 @@ def copilot_solver(
             "model": model,
             "max_turns": max_turns,
             "submit_enabled": submit_enabled,
-            "instruction_length": len(instruction_prompt),
         },
     )
 
     async def solve(state: TaskState) -> TaskState:
-        """Execute the Copilot agent loop.
-
-        Args:
-            state: Current task state with metadata and messages
-
-        Returns:
-            Updated TaskState with conversation history
-
-        Note:
-            This follows the Agent interface (state only) rather than Solver
-            interface (state, generate) because SABER's solver_factory calls
-            agent(state) directly without the generate parameter.
-        """
-        # Initialize Copilot client
+        """Execute the Copilot agent loop."""
         client = CopilotClientWrapper({"auto_start": True})
-
-        # Create tool call tracker for transcript visibility
         tool_tracker = ToolCallTracker()
+        # Enable debug_all_events to see what events the SDK is sending
+        event_capture = EventCapture(debug_all_events=True)
 
         try:
             await client.start()
             logger.debug("Copilot client started")
 
-            # Get sandbox from Inspect AI context
+            # Get sandbox and set up tools
             sb = sandbox("saber")
 
-            # Get MCP tools from sandbox with tracker
-            mcp_tools = await get_saber_mcp_tools(sb)
-            copilot_tools = convert_mcp_tools_to_copilot(mcp_tools, _get_mcp_client(sb), tool_tracker)
-
-            # Create submission handler that marks task as submitted
-            async def handle_submission(answer: str) -> None:
-                """Handle answer submission."""
-                state.store.set("submitted", True)
-                state.store.set("submission_answer", answer)
-
-                # If sandbox has submit method, call it
-                actual_sandbox = sb
-                if hasattr(sb, "_sandbox"):
-                    actual_sandbox = sb._sandbox
-
-                if hasattr(actual_sandbox, "submit_answer"):
-                    await actual_sandbox.submit_answer(answer)
-
-                logger.info(
-                    "Answer submitted via Copilot agent",
-                    extra={"answer_length": len(answer)},
-                )
-
-            # Add submit tool if enabled (with tracker)
-            all_tools: list[Tool] = list(copilot_tools)
-            if submit_enabled:
-                submit_tool = create_submit_tool(handle_submission, tool_tracker)
-                all_tools.append(submit_tool)
-                logger.debug("Added submit_answer tool")
-
-            # Build system message - include assistant prompt, instructions, and submit prompt
-            # This mirrors how the react agent builds its prompt via AgentPrompt
-            system_parts = []
-            if assistant_prompt:
-                system_parts.append(assistant_prompt)
-            if instruction_prompt:
-                system_parts.append(f"\n\n## Task Instructions\n\n{instruction_prompt}")
-            if submit_prompt and submit_enabled:
-                system_parts.append(f"\n\n## Submission Guidelines\n\n{submit_prompt}")
-            system_content = "".join(system_parts)
-
-            logger.debug(
-                "Built system content for Copilot session",
-                extra={
-                    "assistant_prompt_length": len(assistant_prompt) if assistant_prompt else 0,
-                    "instruction_prompt_length": len(instruction_prompt) if instruction_prompt else 0,
-                    "submit_prompt_length": len(submit_prompt) if submit_prompt else 0,
-                    "total_system_length": len(system_content),
-                },
-            )
-
-            # Get the list of tool names we're providing
-            # This is used to restrict Copilot to ONLY these tools (no filesystem access)
+            all_tools = await setup_tools(sb, tool_tracker, submit_enabled)
             tool_names = [t.name for t in all_tools]
 
-            # Build provider configuration - either explicit BYOK or derived from Inspect AI
-            provider_config: ProviderConfig | None = None
+            # Build session config
+            system_content = build_system_message(assistant_prompt, instruction_prompt, submit_prompt, submit_enabled)
 
-            if provider_type and provider_base_url and provider_api_key:
-                # Use explicitly provided BYOK config
-                if provider_type == ProviderType.AZURE or provider_type == ProviderType.AZURE.value:
-                    provider_config = AzureProviderConfig(
-                        base_url=provider_base_url,
-                        api_key=provider_api_key,
-                        api_version=provider_api_version or DefaultValue.AZURE_API_VERSION,
-                    )
-                elif provider_type == ProviderType.OPENAI or provider_type == ProviderType.OPENAI.value:
-                    provider_config = OpenAIProviderConfig(
-                        base_url=provider_base_url,
-                        api_key=provider_api_key,
-                    )
-                elif provider_type == ProviderType.ANTHROPIC or provider_type == ProviderType.ANTHROPIC.value:
-                    provider_config = AnthropicProviderConfig(
-                        base_url=provider_base_url,
-                        api_key=provider_api_key,
-                    )
+            provider_config = build_provider_config(
+                provider_type, provider_base_url, provider_api_key, provider_api_version
+            )
 
-                if provider_config:
-                    logger.info(
-                        "Using explicit BYOK provider configuration",
-                        extra={
-                            "provider_type": provider_type,
-                            "base_url": provider_base_url[:50] + "..."
-                            if len(provider_base_url) > 50
-                            else provider_base_url,
-                        },
-                    )
-            else:
-                # Try to derive from Inspect AI's active model
-                provider_config = _get_provider_config_from_inspect()
-
-            # Create strongly-typed session config
-            # IMPORTANT: We use available_tools to restrict Copilot to ONLY our tools
-            # This prevents the agent from accessing the local filesystem, reading code, etc.
             session_config = CopilotSessionConfig.create(
                 model=model,
                 tools=all_tools,
@@ -704,631 +924,193 @@ def copilot_solver(
             )
 
             logger.info(
-                "Creating Copilot session with restricted tools",
+                "Creating Copilot session",
                 extra={
                     "model": model,
                     "tool_count": len(all_tools),
                     "tool_names": tool_names,
                     "using_byok": provider_config is not None,
-                    "tools_restricted": True,  # available_tools limits to only our tools
                 },
             )
 
             session = await client.create_session(session_config.to_dict())
+            event_capture.attach(session)
 
-            # Track assistant messages and reasoning received during the session
-            # The Copilot SDK emits events for assistant reasoning/thinking
-            assistant_messages_this_turn: list[str] = []
-            assistant_reasoning_this_turn: list[str] = []
-
-            # Track delta content for streaming events
-            current_message_deltas: list[str] = []
-            current_reasoning_deltas: list[str] = []
-
-            def on_session_event(event: Any) -> None:
-                """Capture assistant messages and reasoning from Copilot events."""
-                nonlocal current_message_deltas, current_reasoning_deltas
-
-                if not event:
-                    return
-
-                # Get event type safely
-                event_type = "unknown"
-                if hasattr(event, "type"):
-                    event_type = str(event.type.value) if hasattr(event.type, "value") else str(event.type)
-
-                # Log ALL events at INFO level during debugging
-                logger.info(
-                    f"Copilot event received: {event_type}",
-                    extra={
-                        "event_type": event_type,
-                        "has_data": hasattr(event, "data") and event.data is not None,
-                    },
-                )
-
-                # Only process events with data
-                if not hasattr(event, "data") or event.data is None:
-                    return
-
-                data = event.data
-
-                # Log all data fields for debugging
-                data_fields = {
-                    attr: getattr(data, attr, None)
-                    for attr in [
-                        "content",
-                        "delta_content",
-                        "summary",
-                        "message_id",
-                        "turn_id",
-                        "reasoning_id",
-                        "tool_name",
-                        "arguments",
-                        "tool_call_id",
-                        "result",
-                        "text",
-                        "message",
-                    ]
-                    if hasattr(data, attr) and getattr(data, attr, None)
-                }
-                if data_fields:
-                    # For debugging - log ALL event types with their data
-                    logger.info(
-                        f"Event {event_type} data fields",
-                        extra={"fields": {k: str(v)[:200] if v else None for k, v in data_fields.items()}},
-                    )
-
-                if event_type == "assistant.message":
-                    content = getattr(data, "content", None)
-                    if content:
-                        # Always append - we'll deduplicate later if needed
-                        # Don't deduplicate here as we might miss legitimate separate messages
-                        logger.info(
-                            "EVENT: assistant.message received with content",
-                            extra={
-                                "content_length": len(content),
-                                "content_preview": content[:200],
-                                "current_list_size": len(assistant_messages_this_turn),
-                            },
-                        )
-                        assistant_messages_this_turn.append(content)
-                    else:
-                        # No content - this is likely a tool-calling message
-                        # Check for tool_requests which contain the model's decision
-                        tool_requests = getattr(data, "tool_requests", None)
-                        if tool_requests:
-                            # The model's "message" is the tool call decision
-                            # We can construct a description of what tools are being called
-                            tool_desc = ", ".join([f"{tr.name}({tr.arguments})" for tr in tool_requests])
-                            logger.info(
-                                "EVENT: assistant.message with tool_requests (no text content)",
-                                extra={"tool_requests": tool_desc[:200]},
-                            )
-                            # Don't add this as a text message - the tool call IS the message
-                        else:
-                            logger.debug("assistant.message event has no content and no tool_requests")
-
-                elif event_type == "assistant.intent":
-                    # Capture the assistant's intent/reasoning before tool calls
-                    intent = getattr(data, "intent", None)
-                    if intent:
-                        logger.info(
-                            "EVENT: assistant.intent received",
-                            extra={"intent_length": len(intent), "intent_preview": intent[:200]},
-                        )
-                        # Add intent as a reasoning message
-                        assistant_reasoning_this_turn.append(intent)
-
-                elif event_type == "assistant.message_delta":
-                    # Streaming delta - accumulate
-                    delta = getattr(data, "delta_content", None) or getattr(data, "content", None)
-                    if delta:
-                        current_message_deltas.append(delta)
-                        logger.debug(f"Accumulated message delta: {len(delta)} chars")
-
-                elif event_type == "assistant.reasoning":
-                    content = getattr(data, "content", None)
-                    if content:
-                        assistant_reasoning_this_turn.append(content)
-                        logger.info(
-                            "Captured assistant reasoning",
-                            extra={"content_length": len(content), "content_preview": content[:200]},
-                        )
-                    else:
-                        logger.debug("assistant.reasoning event has no content (deltas may follow)")
-
-                elif event_type == "assistant.reasoning_delta":
-                    # Streaming delta - accumulate
-                    delta = getattr(data, "delta_content", None) or getattr(data, "content", None)
-                    if delta:
-                        current_reasoning_deltas.append(delta)
-                        logger.debug(f"Accumulated reasoning delta: {len(delta)} chars")
-
-                elif event_type == "assistant.turn_end":
-                    # Turn ended - finalize accumulated deltas if any
-                    # NOTE: We might get the same content from both deltas AND assistant.message event
-                    # So we deduplicate here by checking if it's already in the list
-                    if current_message_deltas:
-                        full_message = "".join(current_message_deltas)
-                        if full_message:
-                            # Only add if not already captured by assistant.message event
-                            if full_message not in assistant_messages_this_turn:
-                                assistant_messages_this_turn.append(full_message)
-                                logger.info(
-                                    "Finalized streamed message from deltas (new)",
-                                    extra={"content_length": len(full_message)},
-                                )
-                            else:
-                                logger.debug(
-                                    "Finalized streamed message from deltas (already captured by event)",
-                                    extra={"content_length": len(full_message)},
-                                )
-                        current_message_deltas.clear()
-
-                    if current_reasoning_deltas:
-                        full_reasoning = "".join(current_reasoning_deltas)
-                        if full_reasoning and full_reasoning not in assistant_reasoning_this_turn:
-                            assistant_reasoning_this_turn.append(full_reasoning)
-                            logger.info(
-                                "Finalized streamed reasoning from deltas",
-                                extra={"content_length": len(full_reasoning)},
-                            )
-                        current_reasoning_deltas.clear()
-
-                    # Also check for content/summary in turn_end itself
-                    content = getattr(data, "content", None) or getattr(data, "summary", None)
-                    if content and content not in assistant_messages_this_turn:
-                        assistant_messages_this_turn.append(content)
-                        logger.info(
-                            "Captured content from turn_end",
-                            extra={"content_length": len(content)},
-                        )
-
-                elif event_type == "assistant.turn_start":
-                    # New turn starting - clear delta accumulators
-                    current_message_deltas.clear()
-                    current_reasoning_deltas.clear()
-                    logger.debug("Turn started - cleared delta accumulators")
-
-            # Register single handler for all events
-            unsubscribe = session.on(on_session_event)
-
-            # Build the proper message order for the transcript
-            # Inspect AI samples come with messages already in state.messages (e.g., user task, assistant prompts)
-            # We need to prepend our system message at the start, keeping the existing messages
-            #
-            # Expected order: system -> existing sample messages (inspect_assistant, user_1) -> instruction
-            existing_messages = list(state.messages)  # Make a copy
+            # Set up initial state messages
+            # Note: We don't copy state.messages (which contains sample.input as a user message)
+            # because instruction_prompt already contains the full task context.
+            # Including both would be redundant noise for the model.
             state.messages.clear()
-
-            # Add system message FIRST
             state.messages.append(ChatMessageSystem(content=system_content))
-            logger.debug(
-                "Added system message to transcript",
-                extra={"content_length": len(system_content)},
-            )
-
-            # Then add all existing messages from the sample (task description, assistant prompt, etc.)
-            for msg in existing_messages:
-                state.messages.append(msg)
-            logger.debug(
-                "Added existing sample messages to transcript",
-                extra={"message_count": len(existing_messages)},
-            )
 
             # Run agent loop
             submitted = False
             turn = 0
             consecutive_timeouts = 0
-            max_consecutive_timeouts = 3  # Stop after 3 consecutive timeouts
-
-            # Cache of all raw assistant messages captured by background poller
-            # This is part of the SDK workaround - see _poll_raw_messages_background()
-            all_raw_assistant_messages: list[dict[str, Any]] = []
+            max_consecutive_timeouts = 3
 
             while turn < max_turns and not submitted and consecutive_timeouts < max_consecutive_timeouts:
-                # Determine prompt for this turn
                 prompt = instruction_prompt if turn == 0 else continue_prompt
-
-                # Add user message for this turn to transcript
                 state.messages.append(ChatMessageUser(content=prompt))
 
-                # Capture the input messages for ModelEvent
-                # For turn 0: Include all context (system, sample messages, instruction)
-                # For subsequent turns: Only include the new prompt to avoid duplication in viewer
-                # The SDK maintains full conversation context internally
+                # Build input messages for ModelEvent
                 if turn == 0:
-                    # First turn - include full context
-                    input_messages_for_event = list(state.messages)
+                    input_messages = list(state.messages)
                 else:
-                    # Subsequent turns - only include the new user prompt
-                    # The SDK has full history, but we don't want to duplicate in the viewer
-                    input_messages_for_event = [ChatMessageUser(content=prompt)]
+                    input_messages = [ChatMessageUser(content=prompt)]
 
                 logger.debug(
                     f"Sending turn {turn + 1}",
-                    extra={
-                        "turn": turn + 1,
-                        "max_turns": max_turns,
-                        "prompt_type": "instruction" if turn == 0 else "continue",
-                        "input_message_count": len(input_messages_for_event),
-                    },
+                    extra={"turn": turn + 1, "max_turns": max_turns},
                 )
 
-                # ==============================================================
-                # SDK WORKAROUND: Background polling for raw messages
-                # ==============================================================
-                # The session becomes unresponsive AFTER send_and_wait() returns,
-                # so we must capture raw messages DURING execution.
-                # Start a background task that polls for raw messages while
-                # send_and_wait() is running.
-                # ==============================================================
-                stop_polling = asyncio.Event()
-                poll_task = asyncio.create_task(
-                    _poll_raw_messages_background(
-                        session=session,
-                        all_raw_assistant_messages=all_raw_assistant_messages,
-                        stop_event=stop_polling,
-                        poll_interval=2.0,
-                    )
-                )
+                # Reset capture for this turn
+                event_capture.reset_turn()
 
-                # Send message and wait for response
-                response = None
+                # Send message using send() and wait via events
                 timed_out = False
                 try:
-                    # Clear messages from previous turn
-                    assistant_messages_this_turn.clear()
-                    assistant_reasoning_this_turn.clear()
-
-                    response = await asyncio.wait_for(
-                        session.send_and_wait({"prompt": prompt}, timeout=timeout),
-                        timeout=timeout + 5,  # Extra buffer for cleanup
-                    )
-
+                    await session.send({"prompt": prompt})
+                    await event_capture.wait_for_idle(timeout=timeout)
                 except asyncio.TimeoutError:
                     timed_out = True
                     consecutive_timeouts += 1
                     logger.warning(
-                        f"Turn {turn + 1} timed out after {timeout}s "
-                        f"({consecutive_timeouts}/{max_consecutive_timeouts} consecutive)",
-                        extra={"turn": turn + 1, "consecutive_timeouts": consecutive_timeouts},
+                        f"Turn {turn + 1} timed out",
+                        extra={"consecutive_timeouts": consecutive_timeouts},
                     )
-                finally:
-                    # Stop the background polling task
-                    stop_polling.set()
-                    # Give it a moment to finish gracefully
-                    try:
-                        await asyncio.wait_for(poll_task, timeout=1.0)
-                    except asyncio.TimeoutError:
-                        poll_task.cancel()
-                        try:
-                            await poll_task
-                        except asyncio.CancelledError:
-                            pass
-                # ==============================================================
-                # END BACKGROUND POLLING
-                # ==============================================================
+                except Exception as e:
+                    logger.error(f"Error during turn {turn + 1}: {e}")
+                    timed_out = True
+                    consecutive_timeouts += 1
 
-                # Log the response object for debugging
-                if response:
-                    resp_type = (
-                        str(response.type.value)
-                        if hasattr(response, "type") and hasattr(response.type, "value")
-                        else str(getattr(response, "type", "unknown"))
-                    )
-                    resp_data = response.data if hasattr(response, "data") else None
-                    resp_content = getattr(resp_data, "content", None) if resp_data else None
-                    resp_summary = getattr(resp_data, "summary", None) if resp_data else None
-                    resp_transformed = getattr(resp_data, "transformed_content", None) if resp_data else None
+                # Get captured data
+                turn_data = event_capture.current_turn
 
-                    logger.info(
-                        f"Response from send_and_wait: type={resp_type}",
-                        extra={
-                            "has_data": resp_data is not None,
-                            "content": resp_content[:300] if resp_content else None,
-                            "summary": resp_summary[:300] if resp_summary else None,
-                            "transformed_content": resp_transformed[:300] if resp_transformed else None,
-                        },
-                    )
-                else:
-                    logger.info("Response from send_and_wait is None")
-
-                # ==============================================================
-                # SDK WORKAROUND: Process raw messages captured by background poller
-                # ==============================================================
-                # The background polling task captured raw messages DURING execution.
-                # Now we process them to merge with event-captured content.
-                # This is more reliable than post-turn retrieval which times out.
-                # ==============================================================
-                if all_raw_assistant_messages:
-                    logger.info(
-                        f"Turn {turn + 1} - background poller captured "
-                        f"{len(all_raw_assistant_messages)} raw assistant message(s)",
-                        extra={
-                            "total_cached_messages": len(all_raw_assistant_messages),
-                            "messages": [
-                                {
-                                    "has_content": bool(m["content"]),
-                                    "content_preview": m["content"][:100] if m["content"] else "",
-                                    "tool_count": len(m["tool_requests"]),
-                                }
-                                for m in all_raw_assistant_messages
-                            ],
-                        },
-                    )
-
-                    # Merge raw messages with event-captured messages
-                    # Raw messages are authoritative - use them to fill gaps
-                    for raw_msg in all_raw_assistant_messages:
-                        content = raw_msg["content"]
-                        if content and content not in assistant_messages_this_turn:
-                            assistant_messages_this_turn.append(content)
-                            logger.debug(
-                                "Added assistant content from raw history (not captured by events)",
-                                extra={"content_preview": content[:100]},
-                            )
-                else:
-                    # No raw messages captured - rely on event-based capture
-                    logger.warning(
-                        f"Turn {turn + 1} - no raw messages from background poller, using event-based capture only",
-                        extra={
-                            "event_captured_count": len(assistant_messages_this_turn),
-                        },
-                    )
-                # ==============================================================
-                # END SDK WORKAROUND
-                # ==============================================================
-                # ==============================================================
-                # END SDK WORKAROUND
-                # ==============================================================
-
-                # ALWAYS record tool calls and messages, even on timeout
-                # Tool calls happen during send_and_wait and are tracked separately
-
-                # Log what we captured during this turn for debugging
                 logger.info(
-                    f"Turn {turn + 1} - captured content before processing",
+                    f"Turn {turn + 1} captured",
                     extra={
-                        "reasoning_count": len(assistant_reasoning_this_turn),
-                        "reasoning_contents": [r[:100] for r in assistant_reasoning_this_turn],
-                        "message_count": len(assistant_messages_this_turn),
-                        "message_contents": [m[:100] for m in assistant_messages_this_turn],
+                        "event_count": len(turn_data.events),
+                        "message_groups": len(turn_data.message_groups),
+                        "text_messages": len(turn_data.assistant_messages),
+                        "reasoning_messages": len(turn_data.reasoning_messages),
+                        "tool_calls": len(turn_data.tool_calls),
+                        "tool_results": len(turn_data.tool_results),
                     },
                 )
 
-                # First, add any assistant reasoning captured during this turn
-                # This shows the agent's thinking process
-                for reasoning_content in assistant_reasoning_this_turn:
-                    state.messages.append(ChatMessageAssistant(content=reasoning_content))
-                    logger.info(
-                        "Added captured assistant reasoning to transcript",
-                        extra={"content_length": len(reasoning_content), "content_preview": reasoning_content[:100]},
-                    )
+                # Log formatted transcript for this turn
+                turn_transcript = turn_data.format_transcript(
+                    system_message="" if turn > 0 else system_content,
+                    user_prompt=prompt,
+                )
+                logger.debug(f"Turn {turn + 1} transcript:\n{turn_transcript}")
 
-                # Add assistant messages captured during this turn
-                for msg_content in assistant_messages_this_turn:
-                    # Skip if same as reasoning (avoid duplicates)
-                    if msg_content not in assistant_reasoning_this_turn:
-                        state.messages.append(ChatMessageAssistant(content=msg_content))
-                        logger.info(
-                            "Added captured assistant message to transcript",
-                            extra={"content_length": len(msg_content), "content_preview": msg_content[:100]},
-                        )
+                # Process message groups in order
+                # Each group represents one assistant.message event with its
+                # intent, text, tool_calls, and tool_results kept together
+                all_content_parts = []
 
-                # Collect tool calls from tracker and add to transcript
-                # These are the tools that were called during this turn
-                tool_calls_this_turn = tool_tracker.get_and_clear()
-                if tool_calls_this_turn:
-                    # Build ToolCall objects for the assistant message
-                    tool_call_objects = []
-                    for tc in tool_calls_this_turn:
-                        tool_call_objects.append(
+                for group in turn_data.message_groups:
+                    group_content_parts = []
+
+                    # Add intent if present
+                    if group.intent:
+                        group_content_parts.append(group.intent)
+                        logger.info(f"Added intent to transcript: {group.intent[:100]}...")
+
+                    # Add text if present
+                    if group.text:
+                        group_content_parts.append(group.text)
+
+                    # Build combined content for this group
+                    group_content = "\n\n".join(group_content_parts)
+
+                    if group.tool_calls:
+                        # This group has tool calls - output as assistant message with tool_calls
+                        tool_call_objects = [
                             ToolCall(
-                                id=tc.tool_call_id,
-                                function=tc.tool_name,
-                                arguments=tc.arguments,
+                                id=tc.tool_call_id or "",
+                                function=tc.tool_name or "",
+                                arguments=tc.tool_arguments or {},
                                 type="function",
                             )
-                        )
+                            for tc in group.tool_calls
+                        ]
+                        state.messages.append(ChatMessageAssistant(content=group_content, tool_calls=tool_call_objects))
 
-                    # Add assistant message with tool calls to state.messages
-                    state.messages.append(
-                        ChatMessageAssistant(
-                            content="",  # Tool calls don't have separate content
-                            tool_calls=tool_call_objects,
-                        )
-                    )
-
-                    # Add tool response messages to state.messages
-                    # Note: ToolEvent recording is done later, AFTER ModelEvent for correct transcript order
-                    for tc in tool_calls_this_turn:
-                        # Build error object if this was an error
-                        error_obj = None
-                        if tc.is_error:
-                            error_obj = ToolCallError(type="unknown", message=tc.result)
-
-                        state.messages.append(
-                            ChatMessageTool(
-                                content=tc.result,
-                                tool_call_id=tc.tool_call_id,
-                                error=error_obj,
+                        # Add tool results
+                        for tc in group.tool_calls:
+                            result = group.tool_results.get(tc.tool_call_id or "", "")
+                            state.messages.append(
+                                ChatMessageTool(
+                                    content=result,
+                                    tool_call_id=tc.tool_call_id or "",
+                                )
                             )
-                        )
+                    elif group_content:
+                        # No tool calls - just text/intent
+                        state.messages.append(ChatMessageAssistant(content=group_content))
 
-                    logger.info(
-                        f"Added {len(tool_calls_this_turn)} tool calls to state.messages",
-                        extra={
-                            "turn": turn + 1,
-                            "tool_names": [tc.tool_name for tc in tool_calls_this_turn],
-                            "timed_out": timed_out,
-                        },
+                    if group_content_parts:
+                        all_content_parts.extend(group_content_parts)
+
+                # Build tool_call_objects for ModelEvent (all tool calls)
+                tool_call_objects = [
+                    ToolCall(
+                        id=tc.tool_call_id or "",
+                        function=tc.tool_name or "",
+                        arguments=tc.tool_arguments or {},
+                        type="function",
+                    )
+                    for tc in turn_data.tool_calls
+                ]
+
+                # Get tool call records from tracker (for recording ToolEvents)
+                tool_records = tool_tracker.get_and_clear()
+
+                # Record ModelEvent
+                assistant_content = "\n\n".join(all_content_parts)
+                record_model_event(
+                    state,
+                    model if model != DefaultValue.MODEL else "copilot",
+                    input_messages,
+                    assistant_content,
+                    tool_call_objects,
+                )
+
+                # Record ToolEvents
+                if tool_records:
+                    record_tool_events(tool_records)
+                    logger.debug(
+                        f"Recorded {len(tool_records)} tool events",
+                        extra={"tool_names": [tc.tool_name for tc in tool_records]},
                     )
 
-                # Also capture the final response content if different from what we captured
-                if response and hasattr(response, "data") and hasattr(response.data, "content"):
-                    content = response.data.content
-                    # Only add if we didn't already capture this message
-                    all_captured = set(assistant_messages_this_turn) | set(assistant_reasoning_this_turn)
-                    if content and content not in all_captured:
-                        assistant_messages_this_turn.append(content)
-                        state.messages.append(ChatMessageAssistant(content=content))
-                        logger.info(
-                            "Added final response content to transcript",
-                            extra={"content_length": len(content), "content_preview": content[:200]},
-                        )
-                    # Reset timeout counter on successful response
+                # Reset timeout counter on success
+                if not timed_out and turn_data.has_content():
                     consecutive_timeouts = 0
 
-                # NOTE: session.get_messages() is broken in copilot SDK 0.0.388 due to a parsing
-                # bug with the "context" field. We rely on events captured via on_session_event()
-                # and the response object from send_and_wait() instead.
-                #
-                # Assistant content sources (in order of reliability):
-                # 1. response.data.content - the final message from send_and_wait
-                # 2. assistant.message events - captured via on_session_event
-                # 3. assistant.message_delta events - streaming chunks (accumulated at turn_end)
-                # 4. assistant.reasoning events - reasoning/thinking content
-
-                # Log what we captured this turn
-                logger.info(
-                    f"Turn {turn + 1} captured assistant content",
-                    extra={
-                        "reasoning_count": len(assistant_reasoning_this_turn),
-                        "message_count": len(assistant_messages_this_turn),
-                        "total_reasoning_chars": sum(len(r) for r in assistant_reasoning_this_turn),
-                        "total_message_chars": sum(len(m) for m in assistant_messages_this_turn),
-                    },
-                )
-
-                # Record ModelEvent for this turn FIRST
-                # This captures the model's decision (including tool calls) before tool execution
-                # Correct transcript order: ModelEvent (model response) -> ToolEvent (tool execution)
-                turn_end_time = datetime.now(timezone.utc)
-
-                # Build the assistant message with all content from this turn
-                all_assistant_content = "\n\n".join(assistant_reasoning_this_turn + assistant_messages_this_turn)
-
-                # Build tool calls for ModelEvent (if any)
-                assistant_tool_calls = []
-                if tool_calls_this_turn:
-                    for tc in tool_calls_this_turn:
-                        assistant_tool_calls.append(
-                            ToolCall(
-                                id=tc.tool_call_id,
-                                function=tc.tool_name,
-                                arguments=tc.arguments,
-                                type="function",
+                # Check for submission - look for "submit" tool call
+                # This matches inspect_ai's react pattern: detect submit tool, extract answer
+                for tc in turn_data.tool_calls:
+                    if tc.tool_name == "submit":
+                        answer = (tc.tool_arguments or {}).get("answer", "")
+                        if answer:
+                            # Set state.output.completion like inspect_ai's react agent does
+                            state.output.completion = answer
+                            submitted = True
+                            logger.info(
+                                "Submission detected via submit tool",
+                                extra={"answer_length": len(answer)},
                             )
-                        )
-
-                # Create the assistant message for the ModelOutput
-                assistant_message = ChatMessageAssistant(
-                    content=all_assistant_content or "",
-                    tool_calls=assistant_tool_calls if assistant_tool_calls else None,
-                )
-
-                # Build model output
-                model_output = ModelOutput(
-                    model=model if model != DefaultValue.MODEL else "copilot",
-                    choices=[
-                        ChatCompletionChoice(
-                            message=assistant_message,
-                            stop_reason="tool_calls" if assistant_tool_calls else "stop",
-                        )
-                    ],
-                    usage=ModelUsage(),  # We don't have usage info from Copilot SDK
-                )
-
-                # Record ModelEvent FIRST - this shows the model's response and decision to call tools
-                # Use input_messages_for_event which captures the full conversation history
-                # up to and including the user prompt for this turn (before the response)
-                model_event = ModelEvent(
-                    model=model if model != DefaultValue.MODEL else "copilot",
-                    input=input_messages_for_event,
-                    tools=[],  # Could populate with ToolInfo if needed
-                    tool_choice="auto",
-                    config=GenerateConfig(),
-                    output=model_output,
-                    completed=turn_end_time,
-                )
-                transcript()._event(model_event)
-
-                logger.debug(
-                    "Recorded ModelEvent for turn",
-                    extra={
-                        "turn": turn + 1,
-                        "input_message_count": len(input_messages_for_event),
-                        "output_length": len(all_assistant_content) if all_assistant_content else 0,
-                        "tool_calls": len(assistant_tool_calls),
-                    },
-                )
-
-                # Record ToolEvents AFTER ModelEvent - this shows the actual tool execution results
-                for tc in tool_calls_this_turn:
-                    # Build error object if this was an error
-                    error_obj = None
-                    if tc.is_error:
-                        error_obj = ToolCallError(type="unknown", message=tc.result)
-
-                    tool_event = ToolEvent(
-                        id=tc.tool_call_id,
-                        function=tc.tool_name,
-                        arguments=tc.arguments,
-                        result=tc.result,
-                        error=error_obj,
-                        completed=datetime.now(timezone.utc),
-                    )
-                    transcript()._event(tool_event)
-
-                if tool_calls_this_turn:
-                    logger.debug(
-                        f"Recorded {len(tool_calls_this_turn)} ToolEvents after ModelEvent",
-                        extra={
-                            "turn": turn + 1,
-                            "tool_names": [tc.tool_name for tc in tool_calls_this_turn],
-                        },
-                    )
-
-                # Check if submitted
-                submitted = state.store.get("submitted") or False
+                            break
 
                 turn += 1
 
-            # ==============================================================
-            # SDK WORKAROUND: Final transcript reconciliation
-            # ==============================================================
-            # Log all raw assistant messages we captured during the session.
-            # This provides a complete audit trail even if individual turn
-            # retrievals had issues.
-            # ==============================================================
-            if all_raw_assistant_messages:
-                logger.info(
-                    f"SDK workaround: captured {len(all_raw_assistant_messages)} total raw "
-                    "assistant messages across all turns",
-                    extra={
-                        "total_messages": len(all_raw_assistant_messages),
-                        "messages_with_content": sum(1 for m in all_raw_assistant_messages if m["content"]),
-                        "messages_with_tools": sum(1 for m in all_raw_assistant_messages if m["tool_requests"]),
-                        "sample_contents": [
-                            m["content"][:100] if m["content"] else f"[{len(m['tool_requests'])} tool calls]"
-                            for m in all_raw_assistant_messages[:5]  # First 5 for logging
-                        ],
-                    },
-                )
-            else:
-                logger.warning(
-                    "SDK workaround: no raw assistant messages were captured during session "
-                    "(background poller may have failed)",
-                )
-            # ==============================================================
-            # END SDK WORKAROUND
-            # ==============================================================
-
-            # Clean up session
+            # Cleanup
+            event_capture.detach()
             try:
-                # Unsubscribe from events
-                unsubscribe()
                 await session.destroy()
             except Exception as e:
                 logger.warning(f"Error destroying session: {e}")
@@ -1343,14 +1125,9 @@ def copilot_solver(
             )
 
         except Exception as e:
-            logger.error(
-                f"Error in Copilot solver: {e}",
-                exc_info=True,
-            )
+            logger.error(f"Error in Copilot solver: {e}", exc_info=True)
             raise
-
         finally:
-            # Always stop client
             await client.stop()
             logger.debug("Copilot client stopped")
 
@@ -1359,60 +1136,19 @@ def copilot_solver(
     return solve
 
 
-def _get_mcp_client(sandbox: Any) -> Any:
-    """Extract MCP client from sandbox for tool execution.
-
-    Args:
-        sandbox: SABERSandboxEnvironment (possibly wrapped in proxy)
-
-    Returns:
-        MCP client instance
-    """
-    actual_sandbox = sandbox
-    if hasattr(sandbox, "_sandbox"):
-        actual_sandbox = sandbox._sandbox
-
-    return actual_sandbox._mcp_client
+# =============================================================================
+# Agent Factory
+# =============================================================================
 
 
 def create_agent(**kwargs: Any) -> Callable[..., Any]:
     """Create a Copilot agent with SABER integration.
 
-    This agent uses the GitHub Copilot CLI as the reasoning engine,
-    with SABER's MCP tools registered for sandbox interaction.
-
     Args:
-        **kwargs: Additional parameters passed to copilot_solver()
-            - model: Copilot model to use (default: gpt-4o)
-            - max_turns: Maximum conversation turns (default: 50)
-            - streaming: Enable streaming responses (default: False)
-            - timeout: Per-turn timeout in seconds (default: 60.0)
-            - provider_type: 'openai', 'azure', or 'anthropic' for BYOK
-            - provider_base_url: API endpoint URL for BYOK
-            - provider_api_key: API key for BYOK
-            - provider_api_version: Azure API version (e.g., '2024-02-15-preview')
+        **kwargs: Parameters passed to copilot_solver()
 
     Returns:
         Factory function that receives prompts from task execution
-
-    Usage:
-        # In domain configuration:
-        roles:
-          red:
-            agent: copilot
-            model: gpt-4o
-
-        # BYOK with Azure OpenAI:
-        roles:
-          red:
-            agent: copilot
-            model: gpt-4o
-            provider_type: azure
-            provider_base_url: https://your-resource.openai.azure.com
-            provider_api_key: ${AZURE_OPENAI_API_KEY}
-            provider_api_version: 2024-02-15-preview
-
-        # The factory is called by solver_factory with runtime prompts
     """
 
     def create_with_prompts(
@@ -1423,23 +1159,12 @@ def create_agent(**kwargs: Any) -> Callable[..., Any]:
         transcript_config: dict[str, Any] | None = None,
         submit: bool | None = None,
     ) -> Solver:
-        """Inner factory that receives prompts from task execution.
-
-        Args:
-            instruction_prompt: The main instructions for the agent
-            assistant_prompt: Assistant behavior prompt
-            submit_prompt: Instructions about submission
-            continue_prompt: Message shown after each step
-            transcript_config: Optional transcript configuration dict
-            submit: Whether to enable the submit tool (default: True)
-        """
+        """Inner factory that receives prompts from task execution."""
         logger.debug(
             "Creating Copilot agent with prompts",
             extra={
                 "instruction_length": len(instruction_prompt),
                 "assistant_length": len(assistant_prompt),
-                "submit_length": len(submit_prompt),
-                "continue_length": len(continue_prompt),
                 "submit_enabled": submit if submit is not None else True,
             },
         )

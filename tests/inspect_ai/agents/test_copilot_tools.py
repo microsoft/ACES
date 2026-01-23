@@ -233,16 +233,15 @@ class TestConvertAllMCPTools:
 
 
 class TestCreateSubmitTool:
-    """Test cases for the submit_answer tool creation."""
+    """Test cases for the submit tool creation."""
 
     def test_create_submit_tool_returns_tool(self):
         """Test that create_submit_tool returns a valid Tool."""
         from saber.inspect_ai.integration.copilot_tools import create_submit_tool
 
-        mock_submission_handler = AsyncMock()
-        tool = create_submit_tool(mock_submission_handler)
+        tool = create_submit_tool()
 
-        assert tool.name == "submit_answer"
+        assert tool.name == "submit"
         assert "final answer" in tool.description.lower() or "submit" in tool.description.lower()
         assert callable(tool.handler)
 
@@ -250,8 +249,7 @@ class TestCreateSubmitTool:
         """Test that submit tool requires an answer parameter."""
         from saber.inspect_ai.integration.copilot_tools import create_submit_tool
 
-        mock_submission_handler = AsyncMock()
-        tool = create_submit_tool(mock_submission_handler)
+        tool = create_submit_tool()
 
         assert tool.parameters is not None
         assert "properties" in tool.parameters
@@ -259,42 +257,41 @@ class TestCreateSubmitTool:
         assert "answer" in tool.parameters.get("required", [])
 
     @pytest.mark.asyncio
-    async def test_submit_tool_handler_calls_submission_handler(self):
-        """Test that submit tool calls the provided submission handler."""
+    async def test_submit_tool_handler_returns_answer(self):
+        """Test that submit tool returns the answer directly (inspect_ai pattern)."""
         from saber.inspect_ai.integration.copilot_tools import create_submit_tool
 
-        mock_submission_handler = AsyncMock(return_value=True)
-        tool = create_submit_tool(mock_submission_handler)
+        tool = create_submit_tool()
 
         invocation = {
             "session_id": "test-session",
             "tool_call_id": "call-123",
-            "tool_name": "submit_answer",
+            "tool_name": "submit",
             "arguments": {"answer": "The flag is CTF{secret}"},
         }
 
         result = await tool.handler(invocation)
 
-        mock_submission_handler.assert_called_once_with("The flag is CTF{secret}")
+        # Should return the answer directly (like inspect_ai's native submit)
         assert result["resultType"] == "success"
+        assert result["textResultForLlm"] == "The flag is CTF{secret}"
 
     @pytest.mark.asyncio
     async def test_submit_tool_handler_with_empty_answer(self):
         """Test submit tool handles empty answer gracefully."""
         from saber.inspect_ai.integration.copilot_tools import create_submit_tool
 
-        mock_submission_handler = AsyncMock(return_value=True)
-        tool = create_submit_tool(mock_submission_handler)
+        tool = create_submit_tool()
 
         invocation = {
             "session_id": "test-session",
             "tool_call_id": "call-123",
-            "tool_name": "submit_answer",
+            "tool_name": "submit",
             "arguments": {"answer": ""},
         }
 
         result = await tool.handler(invocation)
 
-        # Should still call handler with empty string
-        mock_submission_handler.assert_called_once_with("")
+        # Should handle empty answer gracefully
         assert result["resultType"] == "success"
+        assert result["textResultForLlm"] == ""

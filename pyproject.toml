@@ -44,7 +44,7 @@ dependencies = [
     "websockets>=11.0.0",
     "aiohttp>=3.12.15",
     "python-dotenv>=1.1.1",
-    "openai>=1.101.0",
+    "openai>=2.8.0",
     "click>=8.0.0",
     "tabulate>=0.9.0",
     "jinja2>=3.1.0",
@@ -55,12 +55,17 @@ dependencies = [
     # inspect-ai dependency managed via tool.uv.sources for flexible installation
     "inspect-ai",
     "azure-identity>=1.25.1",
+    "anthropic",
 ]
 
 [project.optional-dependencies]
 copilot = [
     # GitHub Copilot agent support (requires Node.js 22+ and Copilot CLI)
-    "github-copilot-sdk>=0.1.13",
+    "github-copilot-sdk>=0.1.16",
+]
+claude-code = [
+    # Claude Code agent support (requires Anthropic API key)
+    "claude-code-sdk>=0.0.25",
 ]
 dev = [
     "pytest>=7.0.0",
@@ -106,9 +111,9 @@ include = [
 [tool.hatch.metadata]
 allow-direct-references = true
 
-[tool.uv.sources]
-# Use local inspect_ai with SABER patches (call_tool method for Copilot integration)
-inspect-ai = { path = "../inspect_ai", editable = true }
+# Note: inspect-ai source is defined in the root pyproject.toml to avoid conflicts
+# [tool.uv.sources]
+# inspect-ai = { path = "../inspect_ai", editable = true }
 
 [tool.hatch.build.targets.sdist]
 include = [

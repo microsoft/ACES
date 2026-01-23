@@ -7,7 +7,7 @@ Tool format, enabling SABER sandbox tools to be used by the Copilot agent.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -110,7 +110,7 @@ class Tool:
         self,
         name: str,
         description: str,
-        handler: Callable[[ToolInvocation], Any],
+        handler: Callable[[ToolInvocation], Awaitable[ToolResult]],
         parameters: dict[str, Any] | None = None,
     ):
         self.name = name
@@ -505,17 +505,15 @@ def convert_mcp_tools_to_copilot(
 
 
 def create_submit_tool(
-    submission_handler: Callable[[str], Any],
     tracker: ToolCallTracker | None = None,
 ) -> Tool:
-    """Create the submit_answer tool for SABER task completion.
+    """Create the submit tool for task completion.
 
-    This tool allows the Copilot agent to submit its final answer,
-    triggering SABER's evaluation and scoring pipeline.
+    This tool follows inspect_ai's native submit pattern - it simply returns
+    the answer. The agent loop is responsible for detecting submission and
+    setting state.output.completion to the answer for scoring.
 
     Args:
-        submission_handler: Async function that handles answer submission.
-                           Called with the answer string.
         tracker: Optional ToolCallTracker to record calls for transcript visibility
 
     Returns:
@@ -525,74 +523,50 @@ def create_submit_tool(
     async def handler(invocation: ToolInvocation) -> ToolResult:
         """Handle answer submission.
 
+        Simply returns the answer - the agent loop handles setting
+        state.output.completion for scoring (matching inspect_ai's pattern).
+
         Args:
             invocation: Tool invocation with answer in arguments
 
         Returns:
-            ToolResult indicating success/failure
+            ToolResult with the answer
         """
         arguments = invocation.get("arguments", {})
         answer = arguments.get("answer", "")
 
         logger.info(
-            "Submitting answer via Copilot agent",
+            "Submit tool called",
             extra={
                 "tool_call_id": invocation.get("tool_call_id"),
                 "answer_length": len(answer),
             },
         )
 
-        try:
-            await submission_handler(answer)
-
-            result_text = "Answer submitted successfully. The task is now complete."
-
-            # Record submission in tracker for transcript
-            if tracker:
-                tracker.record_call(
-                    tool_name="submit_answer",
-                    arguments={"answer": answer},
-                    result=result_text,
-                    is_error=False,
-                    tool_call_id=invocation.get("tool_call_id"),
-                )
-
-            return {
-                "textResultForLlm": result_text,
-                "resultType": "success",
-                "sessionLog": f"Submitted answer: {answer[:100]}{'...' if len(answer) > 100 else ''}",
-            }
-
-        except Exception as e:
-            logger.error(
-                "Error submitting answer",
-                extra={"error": str(e)},
-                exc_info=True,
+        # Record submission in tracker for transcript
+        if tracker:
+            tracker.record_call(
+                tool_name="submit",
+                arguments={"answer": answer},
+                result=answer,
+                is_error=False,
+                tool_call_id=invocation.get("tool_call_id"),
             )
-            error_text = "Failed to submit answer. Please try again."
 
-            # Record error in tracker for transcript
-            if tracker:
-                tracker.record_call(
-                    tool_name="submit_answer",
-                    arguments={"answer": answer},
-                    result=error_text,
-                    is_error=True,
-                    tool_call_id=invocation.get("tool_call_id"),
-                )
-
-            return {
-                "textResultForLlm": error_text,
-                "resultType": "failure",
-                "error": str(e),
-            }
+        # Return the answer directly (like inspect_ai's submit tool)
+        # The agent loop will detect this and set state.output.completion
+        return {
+            "textResultForLlm": answer,
+            "resultType": "success",
+        }
 
     return Tool(
-        name="submit_answer",
+        name="submit",
         description=(
             "Submit your final answer to complete the task. "
-            "Use this tool when you have finished analyzing the problem and have a solution. "
-            "Your answer should be comprehensive and address all aspects of the task."
+            "Use this tool ONCE when you have finished analyzing the problem and have a definitive solution. "
+            "Your answer should be concise and directly address the question asked. "
+            "Do NOT call this tool multiple times - only submit once with your final answer."
         ),
         handler=handler,
         parameters={

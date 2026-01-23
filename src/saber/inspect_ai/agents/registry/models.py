@@ -62,7 +62,8 @@ class DefaultValue(str, Enum):
     """Default configuration values."""
 
     AZURE_API_VERSION = "2025-03-01-preview"
-    MODEL = "gpt-4o"
+    # Use gpt-5 as default since it provides better transcript data via report_intent tool
+    MODEL = "gpt-5"
 
 
 # Copilot SDK supported models
@@ -74,6 +75,10 @@ class CopilotModel(str, Enum):
     CLAUDE_SONNET_4 = "claude-sonnet-4"
     CLAUDE_SONNET_4_5 = "claude-sonnet-4.5"
     CLAUDE_HAIKU_4_5 = "claude-haiku-4.5"
+
+
+# Copilot built-in tool name constants
+REPORT_INTENT_TOOL = "report_intent"
 
 
 # =============================================================================
@@ -231,7 +236,9 @@ class CopilotSessionConfig:
         tools: List of Tool objects available to the agent
         available_tools: List of tool names to restrict the agent to.
                         IMPORTANT: This prevents Copilot from accessing
-                        built-in tools like filesystem access.
+                        built-in tools like filesystem access. We always
+                        include 'report_intent' to capture GPT-5's intent
+                        for better transcripts.
         system_message: System message configuration
         streaming: Whether to enable streaming responses
         provider: Optional BYOK provider configuration
@@ -310,7 +317,9 @@ class CopilotSessionConfig:
         return cls(
             model=model,
             tools=tools,
-            available_tools=[t.name for t in tools],
+            # Include report_intent to allow GPT-5 to report its intent/reasoning
+            # This is a Copilot built-in tool that doesn't need a handler
+            available_tools=[t.name for t in tools] + [REPORT_INTENT_TOOL],
             system_message=SystemMessageConfig(
                 content=system_content,
                 mode=system_mode,
@@ -328,6 +337,8 @@ __all__ = [
     "DefaultUrl",
     "DefaultValue",
     "CopilotModel",
+    # Constants
+    "REPORT_INTENT_TOOL",
     # Provider configs
     "ProviderConfig",
     "OpenAIProviderConfig",

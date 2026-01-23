@@ -261,18 +261,49 @@ uv sync --extra copilot
 uv run inspect eval domains/excytin_demo --model openai/azure/gpt-4o -T agent=copilot
 ```
 
-**Note:** The Copilot agent uses BYOK (Bring Your Own Key) - it automatically derives API credentials from your Inspect AI model configuration. Your Azure OpenAI/OpenAI/Anthropic credentials from `.env` are passed to the Copilot SDK.
+### Claude Code Agent (Optional)
 
-**Troubleshooting:**
-- If `copilot --version` fails, ensure Node.js 22+ is active: `node --version`
-- If using fnm, ensure it's in your PATH: `export PATH="$HOME/.local/share/fnm:$PATH" && eval "$(fnm env)"`
-- The Copilot CLI requires `@github/copilot` npm package, not the VS Code extension
+SABER supports using Claude Code as an agent backend. This uses Anthropic's Claude Code SDK for agentic tool use.
+
+**Prerequisites:**
+- Node.js 18+ (required by the Claude Code CLI)
+- Anthropic API key with Claude Code access
+
+**Installation:**
+
+```bash
+# 1. Install Node.js 18+ using fnm (fast node manager) if not already installed
+curl -fsSL https://fnm.vercel.app/install | bash
+source ~/.bashrc  # or restart your shell
+fnm install 22
+fnm use 22
+
+# 2. Install the Claude Code CLI globally
+npm install -g @anthropic-ai/claude-code
+
+# 3. Verify CLI installation
+claude --version  # Should show 2.x.x (Claude Code)
+
+# 4. Install SABER with claude-code extras
+uv sync --extra claude-code
+
+# 5. Set your Anthropic API key
+export ANTHROPIC_API_KEY=your-api-key-here
+# Or add to your .env file:
+# ANTHROPIC_API_KEY=your-api-key-here
+
+# 6. Verify Python SDK installation
+uv run python -c "from claude_code_sdk import query; print('✅ Claude Code SDK installed')"
+```
 
 ### Testing and Coverage
 
 **Run unit tests:**
 
 ```bash
+# Setup environment
+uv sync --all-extras
+
 # Run all tests
 uv run pytest
 

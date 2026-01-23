@@ -619,6 +619,10 @@ async def _start_and_load_tasks(
                     "default_from_role": first_role,
                 },
             )
+        # NOTE: We intentionally do NOT set task_model = f"agent/{agent_name}" here anymore.
+        # This was overriding the --model flag from the command line.
+        # Instead, we let Inspect AI use whatever model the user specified via --model.
+        # The agent solver will use active_model() to get the actual model for BYOK config.
 
         task = Task(
             dataset=dataset,

@@ -20,6 +20,7 @@ from ...models.rest.websocket_config import WebSocketConfig
 from ..constants import InspectStoreKeys
 from ..integration.model_wrapper import WebSocketTranscriptSyncingModelWrapper
 from ..server.domain_manager import get_active_domain
+from .registry.models import ModelPrefix
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
 
@@ -186,7 +187,7 @@ class SABERExecutionContext:
         )
 
 
-def _select_model(context: SABERExecutionContext, role_config: Any | None) -> tuple[Model, str]:
+def _select_model(context: SABERExecutionContext, role_config: Any | None, agent_name: str) -> tuple[Model, str]:
     """Select model based on role configuration or use default.
 
     Args:
@@ -222,8 +223,33 @@ def _select_model(context: SABERExecutionContext, role_config: Any | None) -> tu
                 },
             )
 
-    # Use default model
-    return active_model(), "default"
+    # Get the actual model from active_model() - this will be the model from --model flag
+    # or whatever Inspect AI has configured
+    model = active_model()
+    if model is not None:
+        actual_model_name = model.api.model_name
+        # Check if this is a real model (not a fake agent model)
+        if any(actual_model_name.startswith(prefix.value) for prefix in ModelPrefix):
+            logger.info(
+                "Using model from --model flag for provider config",
+                extra={"agent": agent_name, "model_name": actual_model_name},
+            )
+            return model, actual_model_name
+        # Also check if it's NOT an agent/ model (fallback)
+        elif not actual_model_name.startswith("agent/"):
+            logger.info(
+                "Using non-agent model from active_model()",
+                extra={"agent": agent_name, "model_name": actual_model_name},
+            )
+            return model, actual_model_name
+
+    # Fall back to agent name as model identifier when no real model specified
+    model_identifier = f"agent/{agent_name}"
+    logger.info(
+        "Using agent name as model identifier (no real model specified via --model)",
+        extra={"agent": agent_name, "model_identifier": model_identifier},
+    )
+    return active_model(), model_identifier
 
 
 def _wrap_model_for_transcript_sync(
@@ -332,7 +358,7 @@ def create_saber_solver(agent_name: str, agent_factory: Callable, role_config: A
             context.log_summary(agent_name)
 
             # Select model (role-specific or default)
-            model_to_use, model_name = _select_model(context, role_config)
+            model_to_use, model_name = _select_model(context, role_config, agent_name)
 
             # Wrap model for transcript synchronization
             model_to_use = _wrap_model_for_transcript_sync(model_to_use, model_name, context, state)
