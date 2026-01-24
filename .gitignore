@@ -61,3 +61,7 @@ bin/
 .cache/
 .local/
 worktrees/
+
+# AI Assistant directories
+**/.github
+**/.claude
