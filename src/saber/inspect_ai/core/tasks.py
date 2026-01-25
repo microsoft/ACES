@@ -189,6 +189,7 @@ def create_domain_task(
         enable_debug_logging: bool = False,
         roles: str | dict | None = None,
         roles_file: str | None = None,
+        skills_dir: str | None = None,
         **kwargs: Any,
     ) -> Task:
         """Task callable invoked by Inspect AI with CLI parameters.
@@ -222,6 +223,11 @@ def create_domain_task(
                 - 'configs/saber_dual_roles.yaml' (relative to current directory)
                 - '/absolute/path/to/roles.yaml'
                 This is the preferred method for file-based configs (simpler than roles parameter).
+            skills_dir: Path(s) to directory containing Copilot skill files (optional).
+                Skills are markdown files with YAML frontmatter that provide
+                contextual knowledge/instructions to guide agent behavior.
+                Multiple directories can be specified as comma-separated paths.
+                Only applicable for 'copilot' agent type.
             **kwargs: Additional parameters passed through (may include role overrides like red_model=...)
 
         Returns:
@@ -283,6 +289,7 @@ def create_domain_task(
                 run_preflight,
                 enable_debug_logging,
                 role_config_obj,
+                skills_dir,
             )
         except Exception as e:
             # Ensure we have a clean error message
@@ -307,6 +314,7 @@ async def _start_and_load_tasks(
     run_preflight: bool,
     enable_debug_logging: bool = False,
     role_config: Any | None = None,
+    skills_dir: str | None = None,
     **kwargs: Any,
 ) -> Task:
     """Start SABER domain and load tasks as dataset.
@@ -339,6 +347,8 @@ async def _start_and_load_tasks(
         run_preflight: Run preflight check on all compose environments before starting
         enable_debug_logging: Enable detailed episode lifecycle debug logging
         role_config: Optional role-based configuration for orchestrated tasks
+        skills_dir: Optional path(s) to directory containing Copilot skill files.
+            Multiple directories can be specified as comma-separated paths.
         **kwargs: Additional parameters
 
     Returns:
@@ -588,7 +598,7 @@ async def _start_and_load_tasks(
                 },
             )
         # Create solver with the resolved agent and role_config for model selection
-        saber_solver = create_saber_solver(agent_name, agent_factory, role_config)
+        saber_solver = create_saber_solver(agent_name, agent_factory, role_config, skills_dir)
 
         # Construct Task with SABERDataset, sandbox config, solver, and scorer
         # The SABERDataset automatically handles orchestration-aware slicing

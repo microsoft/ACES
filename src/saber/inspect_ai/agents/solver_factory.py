@@ -328,7 +328,12 @@ def _wrap_model_for_transcript_sync(
     return wrapped_model
 
 
-def create_saber_solver(agent_name: str, agent_factory: Callable, role_config: Any | None = None) -> Solver:
+def create_saber_solver(
+    agent_name: str,
+    agent_factory: Callable,
+    role_config: Any | None = None,
+    skills_dir: str | None = None,
+) -> Solver:
     """Create solver with SABER agent that extracts prompts from metadata.
 
     This solver:
@@ -341,6 +346,7 @@ def create_saber_solver(agent_name: str, agent_factory: Callable, role_config: A
         agent_name: Name of the agent implementation
         agent_factory: Callable that creates the agent with prompts
         role_config: Optional role-based configuration for model selection
+        skills_dir: Optional path to directory containing Copilot skill files
 
     Returns:
         Solver that runs SABER agent with dynamic prompts
@@ -403,6 +409,7 @@ def create_saber_solver(agent_name: str, agent_factory: Callable, role_config: A
                     continue_prompt=context.continue_prompt,
                     transcript_config=context.transcript_config,
                     submit=submit_enabled,
+                    skill_directories=[p.strip() for p in skills_dir.split(",")] if skills_dir else None,
                 )
 
                 # Execute agent - it will use the wrapped model internally

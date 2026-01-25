@@ -854,6 +854,7 @@ def copilot_solver(
     provider_base_url: str | None = None,
     provider_api_key: str | None = None,
     provider_api_version: str | None = None,
+    skill_directories: list[str] | None = None,
 ) -> Callable[[TaskState], Awaitable[TaskState]]:
     """SABER solver using GitHub Copilot SDK as the reasoning engine.
 
@@ -875,6 +876,9 @@ def copilot_solver(
         provider_base_url: Override API endpoint URL
         provider_api_key: Override API key
         provider_api_version: Override Azure API version
+        skill_directories: Optional list of directories containing skill files.
+            Skills are markdown files with YAML frontmatter that provide
+            contextual knowledge/instructions to guide agent behavior.
 
     Returns:
         Solver function for Inspect AI
@@ -887,6 +891,7 @@ def copilot_solver(
             "model": model,
             "max_turns": max_turns,
             "submit_enabled": submit_enabled,
+            "skill_directories": skill_directories,
         },
     )
 
@@ -921,6 +926,7 @@ def copilot_solver(
                 streaming=streaming,
                 system_mode="append",
                 provider=provider_config,
+                skill_directories=skill_directories,
             )
 
             logger.info(
@@ -1158,6 +1164,7 @@ def create_agent(**kwargs: Any) -> Callable[..., Any]:
         continue_prompt: str,
         transcript_config: dict[str, Any] | None = None,
         submit: bool | None = None,
+        skill_directories: list[str] | None = None,
     ) -> Solver:
         """Inner factory that receives prompts from task execution."""
         logger.debug(
@@ -1176,6 +1183,7 @@ def create_agent(**kwargs: Any) -> Callable[..., Any]:
             continue_prompt=continue_prompt,
             transcript_config=transcript_config,
             submit=submit,
+            skill_directories=skill_directories,
             **kwargs,
         )
 

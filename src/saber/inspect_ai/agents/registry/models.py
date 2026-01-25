@@ -267,6 +267,7 @@ class CopilotSessionConfig:
     system_message: SystemMessageConfig
     streaming: bool = False
     provider: ProviderConfig | None = None
+    skill_directories: list[str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary format expected by Copilot SDK.
@@ -285,6 +286,9 @@ class CopilotSessionConfig:
         if self.provider is not None:
             result["provider"] = self.provider.to_dict()
 
+        if self.skill_directories is not None:
+            result["skill_directories"] = self.skill_directories
+
         return result
 
     @classmethod
@@ -297,6 +301,7 @@ class CopilotSessionConfig:
         streaming: bool = False,
         system_mode: Literal["append", "replace"] = "append",
         provider: ProviderConfig | None = None,
+        skill_directories: list[str] | None = None,
     ) -> CopilotSessionConfig:
         """Factory method for creating a session config.
 
@@ -310,6 +315,7 @@ class CopilotSessionConfig:
             streaming: Enable streaming responses
             system_mode: How to apply system message ('append' or 'replace')
             provider: Optional BYOK provider configuration
+            skill_directories: Optional list of directories containing skill files
 
         Returns:
             Configured CopilotSessionConfig instance
@@ -326,6 +332,7 @@ class CopilotSessionConfig:
             ),
             streaming=streaming,
             provider=provider,
+            skill_directories=skill_directories,
         )
 
 
