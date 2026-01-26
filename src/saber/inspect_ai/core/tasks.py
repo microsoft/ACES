@@ -190,6 +190,7 @@ def create_domain_task(
         roles: str | dict | None = None,
         roles_file: str | None = None,
         skills_dir: str | None = None,
+        agent_persona: str | None = None,
         **kwargs: Any,
     ) -> Task:
         """Task callable invoked by Inspect AI with CLI parameters.
@@ -227,6 +228,9 @@ def create_domain_task(
                 Skills are markdown files with YAML frontmatter that provide
                 contextual knowledge/instructions to guide agent behavior.
                 Multiple directories can be specified as comma-separated paths.
+                Only applicable for 'copilot' agent type.
+            agent_persona: Path to a custom agent YAML file that defines the agent persona.
+                The file should contain agent_name, system_prompt, and optionally tools.
                 Only applicable for 'copilot' agent type.
             **kwargs: Additional parameters passed through (may include role overrides like red_model=...)
 
@@ -290,6 +294,7 @@ def create_domain_task(
                 enable_debug_logging,
                 role_config_obj,
                 skills_dir,
+                agent_persona,
             )
         except Exception as e:
             # Ensure we have a clean error message
@@ -315,6 +320,7 @@ async def _start_and_load_tasks(
     enable_debug_logging: bool = False,
     role_config: Any | None = None,
     skills_dir: str | None = None,
+    agent_persona: str | None = None,
     **kwargs: Any,
 ) -> Task:
     """Start SABER domain and load tasks as dataset.
@@ -598,7 +604,7 @@ async def _start_and_load_tasks(
                 },
             )
         # Create solver with the resolved agent and role_config for model selection
-        saber_solver = create_saber_solver(agent_name, agent_factory, role_config, skills_dir)
+        saber_solver = create_saber_solver(agent_name, agent_factory, role_config, skills_dir, agent_persona)
 
         # Construct Task with SABERDataset, sandbox config, solver, and scorer
         # The SABERDataset automatically handles orchestration-aware slicing

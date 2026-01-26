@@ -8,19 +8,19 @@ transcript synchronization.
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
 
 from inspect_ai.model import Model, get_model
 from inspect_ai.model._model import active_model, active_model_context_var
 from inspect_ai.solver import Generate, Solver, TaskState, solver
 
+from ...client.models import RoleBasedConfig
 from ...logging_config import LogCategory, get_saber_logger
 from ...models.constants import MetadataKeys
-from ...models.rest.websocket_config import WebSocketConfig
+from ...models.rest.websocket_config import PullConfig, PushConfig, WebSocketConfig
 from ..constants import InspectStoreKeys
 from ..integration.model_wrapper import WebSocketTranscriptSyncingModelWrapper
 from ..server.domain_manager import get_active_domain
-from .registry.models import ModelPrefix
+from .registry.models import AgentPromptKwargs, AgentType, ModelPrefix, TranscriptConfig
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
 
@@ -52,7 +52,7 @@ class SABERExecutionContext:
 
     # Role & transcript coordination
     role: str | None
-    transcript_config: dict[str, Any] | None
+    transcript_config: TranscriptConfig | None
 
     @classmethod
     def from_task_state(cls, state: TaskState) -> "SABERExecutionContext":
@@ -187,7 +187,9 @@ class SABERExecutionContext:
         )
 
 
-def _select_model(context: SABERExecutionContext, role_config: Any | None, agent_name: str) -> tuple[Model, str]:
+def _select_model(
+    context: SABERExecutionContext, role_config: RoleBasedConfig | None, agent_name: str
+) -> tuple[Model, str]:
     """Select model based on role configuration or use default.
 
     Args:
@@ -284,23 +286,30 @@ def _wrap_model_for_transcript_sync(
     websocket_config = context.transcript_config.get("websocket", {}) if context.transcript_config else {}
 
     # Build WebSocketConfig from YAML - only enabled flags are configurable
-    from ...models.rest.websocket_config import PullConfig, PushConfig
-
-    ws_config_kwargs: dict[str, Any] = {}
+    push_config: PushConfig | None = None
+    pull_config: PullConfig | None = None
 
     # Handle push configuration - only enabled is configurable
     if "push" in websocket_config:
         push_dict = websocket_config["push"]
         if "enabled" in push_dict:
-            ws_config_kwargs["push"] = PushConfig(enabled=push_dict["enabled"])
+            push_config = PushConfig(enabled=push_dict["enabled"])
 
     # Handle pull configuration - only enabled is configurable
     if "pull" in websocket_config:
         pull_dict = websocket_config["pull"]
         if "enabled" in pull_dict:
-            ws_config_kwargs["pull"] = PullConfig(enabled=pull_dict["enabled"])
+            pull_config = PullConfig(enabled=pull_dict["enabled"])
 
-    ws_config = WebSocketConfig(**ws_config_kwargs)
+    # Build WebSocketConfig with explicit args instead of kwargs dict
+    if push_config and pull_config:
+        ws_config = WebSocketConfig(push=push_config, pull=pull_config)
+    elif push_config:
+        ws_config = WebSocketConfig(push=push_config)
+    elif pull_config:
+        ws_config = WebSocketConfig(pull=pull_config)
+    else:
+        ws_config = WebSocketConfig()
 
     wrapped_model = WebSocketTranscriptSyncingModelWrapper(
         base_model=model,
@@ -330,9 +339,10 @@ def _wrap_model_for_transcript_sync(
 
 def create_saber_solver(
     agent_name: str,
-    agent_factory: Callable,
-    role_config: Any | None = None,
+    agent_factory: Callable[[], Callable[..., Solver]],
+    role_config: RoleBasedConfig | None = None,
     skills_dir: str | None = None,
+    agent_persona: str | None = None,
 ) -> Solver:
     """Create solver with SABER agent that extracts prompts from metadata.
 
@@ -347,6 +357,7 @@ def create_saber_solver(
         agent_factory: Callable that creates the agent with prompts
         role_config: Optional role-based configuration for model selection
         skills_dir: Optional path to directory containing Copilot skill files
+        agent_persona: Optional path to custom agent YAML file for 'copilot' agent
 
     Returns:
         Solver that runs SABER agent with dynamic prompts
@@ -402,15 +413,23 @@ def create_saber_solver(
                             extra={"role": context.role},
                         )
 
-                agent = create_with_prompts(
-                    instruction_prompt=context.instruction_prompt,
-                    assistant_prompt=context.assistant_prompt,
-                    submit_prompt=context.submit_prompt,
-                    continue_prompt=context.continue_prompt,
-                    transcript_config=context.transcript_config,
-                    submit=submit_enabled,
-                    skill_directories=[p.strip() for p in skills_dir.split(",")] if skills_dir else None,
-                )
+                # Build agent kwargs - only include skill_directories for agents that support it
+                agent_kwargs: AgentPromptKwargs = {
+                    "instruction_prompt": context.instruction_prompt,
+                    "assistant_prompt": context.assistant_prompt,
+                    "submit_prompt": context.submit_prompt,
+                    "continue_prompt": context.continue_prompt,
+                    "transcript_config": context.transcript_config,
+                    "submit": submit_enabled,
+                }
+                if AgentType.supports_skill_directories(agent_name):
+                    agent_kwargs["skill_directories"] = (
+                        [p.strip() for p in skills_dir.split(",")] if skills_dir else None
+                    )
+                if AgentType.supports_agent_persona(agent_name):
+                    agent_kwargs["agent_persona"] = agent_persona
+
+                agent = create_with_prompts(**agent_kwargs)
 
                 # Execute agent - it will use the wrapped model internally
                 # The wrapper will push transcripts after each model.generate() call

@@ -10,10 +10,37 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 if TYPE_CHECKING:
     from ..integration.copilot_tools import Tool
+    from .custom_agent import CustomAgentConfig
+
+
+class TranscriptWebSocketConfig(TypedDict, total=False):
+    """WebSocket configuration for transcript sync."""
+
+    push: dict[str, bool]
+    pull: dict[str, bool]
+
+
+class TranscriptConfig(TypedDict, total=False):
+    """Transcript configuration from task metadata."""
+
+    websocket: TranscriptWebSocketConfig
+
+
+class AgentPromptKwargs(TypedDict, total=False):
+    """Kwargs passed to agent create_with_prompts factory."""
+
+    instruction_prompt: str
+    assistant_prompt: str
+    submit_prompt: str
+    continue_prompt: str
+    transcript_config: TranscriptConfig | None
+    submit: bool | None
+    skill_directories: list[str] | None
+    agent_persona: str | None
 
 
 class ProviderType(str, Enum):
@@ -22,6 +49,34 @@ class ProviderType(str, Enum):
     AZURE = "azure"
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
+
+
+class AgentType(str, Enum):
+    """Supported SABER agent types."""
+
+    REACT = "react"
+    COPILOT = "copilot"
+    CLAUDE_CODE = "claude_code"
+
+    @classmethod
+    def supports_skill_directories(cls, agent_name: str) -> bool:
+        """Check if an agent type supports skill_directories parameter."""
+        return agent_name in (cls.COPILOT.value, cls.CLAUDE_CODE.value)
+
+    @classmethod
+    def supports_agent_persona(cls, agent_name: str) -> bool:
+        """Check if an agent type supports agent_persona parameter.
+
+        Currently only the Copilot agent supports custom agent personas
+        via the custom_agents configuration.
+
+        Args:
+            agent_name: Name of the agent type to check.
+
+        Returns:
+            True if the agent supports agent_persona, False otherwise.
+        """
+        return agent_name == cls.COPILOT.value
 
 
 class ModelPrefix(str, Enum):
@@ -93,12 +148,22 @@ class ProviderConfig(ABC):
     This abstract base class defines the common interface for all
     BYOK (Bring Your Own Key) provider configurations.
 
+    Supports both API key and bearer token authentication:
+    - api_key: Traditional API key authentication
+    - bearer_token: Entra ID / OAuth token authentication (takes precedence over api_key)
+
     Note: Uses kw_only=True to allow derived classes to have fields
     with default values without violating dataclass field ordering rules.
     """
 
     base_url: str
-    api_key: str
+    api_key: str | None = None
+    bearer_token: str | None = None  # Entra ID token, takes precedence over api_key
+
+    def __post_init__(self) -> None:
+        """Validate that at least one auth method is provided."""
+        if not self.api_key and not self.bearer_token:
+            raise ValueError("Either api_key or bearer_token must be provided")
 
     @property
     @abstractmethod
@@ -112,11 +177,16 @@ class ProviderConfig(ABC):
         Returns:
             Dictionary with provider configuration
         """
-        return {
+        result: dict[str, Any] = {
             "type": self.provider_type.value,
             "base_url": self.base_url,
-            "api_key": self.api_key,
         }
+        # bearer_token takes precedence over api_key
+        if self.bearer_token:
+            result["bearer_token"] = self.bearer_token
+        elif self.api_key:
+            result["api_key"] = self.api_key
+        return result
 
 
 @dataclass(kw_only=True)
@@ -160,12 +230,19 @@ class AzureProviderConfig(ProviderConfig):
     """Azure OpenAI provider configuration.
 
     Extends the base provider config with Azure-specific options
-    like API version.
+    like API version. Supports both API key and Entra ID (bearer token) auth.
 
-    Example:
+    Example with API key:
         config = AzureProviderConfig(
             base_url="https://your-resource.openai.azure.com/openai/deployments/gpt-4o",
             api_key="your-api-key",
+            api_version="2024-02-15-preview",
+        )
+
+    Example with Entra ID (bearer token):
+        config = AzureProviderConfig(
+            base_url="https://your-resource.openai.azure.com/openai/deployments/gpt-4o",
+            bearer_token="eyJ0eXAi...",  # Token from DefaultAzureCredential
             api_version="2024-02-15-preview",
         )
     """
@@ -268,6 +345,7 @@ class CopilotSessionConfig:
     streaming: bool = False
     provider: ProviderConfig | None = None
     skill_directories: list[str] | None = None
+    custom_agents: list[CustomAgentConfig] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary format expected by Copilot SDK.
@@ -289,6 +367,9 @@ class CopilotSessionConfig:
         if self.skill_directories is not None:
             result["skill_directories"] = self.skill_directories
 
+        if self.custom_agents is not None:
+            result["custom_agents"] = [agent.to_sdk_dict() for agent in self.custom_agents]
+
         return result
 
     @classmethod
@@ -302,6 +383,7 @@ class CopilotSessionConfig:
         system_mode: Literal["append", "replace"] = "append",
         provider: ProviderConfig | None = None,
         skill_directories: list[str] | None = None,
+        custom_agents: list[CustomAgentConfig] | None = None,
     ) -> CopilotSessionConfig:
         """Factory method for creating a session config.
 
@@ -316,6 +398,7 @@ class CopilotSessionConfig:
             system_mode: How to apply system message ('append' or 'replace')
             provider: Optional BYOK provider configuration
             skill_directories: Optional list of directories containing skill files
+            custom_agents: Optional list of custom agent persona configurations
 
         Returns:
             Configured CopilotSessionConfig instance
@@ -333,6 +416,7 @@ class CopilotSessionConfig:
             streaming=streaming,
             provider=provider,
             skill_directories=skill_directories,
+            custom_agents=custom_agents,
         )
 
 

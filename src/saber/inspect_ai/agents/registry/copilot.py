@@ -43,6 +43,7 @@ from inspect_ai.solver import Solver, TaskState
 from inspect_ai.util import sandbox
 
 from ....logging_config import LogCategory, get_saber_logger
+from ...integration.agent_transcript_sync import AgentTranscriptSync
 from ...integration.copilot_tools import (
     Tool,
     ToolCallTracker,
@@ -614,6 +615,10 @@ class CopilotClientWrapper:
 def get_provider_config_from_inspect() -> ProviderConfig | None:
     """Extract provider configuration from the active Inspect AI model.
 
+    Supports both API key and Entra ID (bearer token) authentication.
+    For Azure, if no API key is found but a token_provider exists (from
+    DefaultAzureCredential via az login), it will use bearer token auth.
+
     Returns:
         ProviderConfig subclass instance, or None if using Copilot auth
     """
@@ -625,6 +630,9 @@ def get_provider_config_from_inspect() -> ProviderConfig | None:
     api = model.api
     model_name = api.model_name
 
+    # Check for token_provider (Entra ID auth from inspect_ai)
+    token_provider = getattr(api, "token_provider", None)
+
     logger.info(
         "Checking active model for provider config",
         extra={
@@ -632,12 +640,14 @@ def get_provider_config_from_inspect() -> ProviderConfig | None:
             "api_class": api.__class__.__name__,
             "has_base_url": hasattr(api, "base_url"),
             "has_api_key": hasattr(api, "api_key"),
+            "has_token_provider": token_provider is not None,
         },
     )
 
     provider_type: ProviderType | None = None
     base_url: str | None = None
     api_key: str | None = None
+    bearer_token: str | None = None
     api_version: str | None = None
 
     # Azure OpenAI
@@ -646,11 +656,25 @@ def get_provider_config_from_inspect() -> ProviderConfig | None:
         base_url = getattr(api, "base_url", None) or getattr(api, "endpoint_url", None)
         if not base_url:
             base_url = os.environ.get(EnvVar.AZUREAI_OPENAI_BASE_URL) or os.environ.get(EnvVar.AZURE_OPENAI_BASE_URL)
+
+        # Try API key first
         api_key = (
             getattr(api, "api_key", None)
             or os.environ.get(EnvVar.AZUREAI_OPENAI_API_KEY)
             or os.environ.get(EnvVar.AZURE_OPENAI_API_KEY)
         )
+
+        # If no API key, try Entra ID token provider (from inspect_ai's DefaultAzureCredential)
+        if not api_key and token_provider is not None:
+            try:
+                bearer_token = token_provider()
+                logger.info(
+                    "Using Entra ID bearer token from inspect_ai token_provider",
+                    extra={"model_name": model_name},
+                )
+            except Exception as e:
+                logger.warning(f"Failed to get bearer token from token_provider: {e}")
+
         api_version = os.environ.get(EnvVar.AZUREAI_OPENAI_API_VERSION) or os.environ.get(
             EnvVar.OPENAI_API_VERSION, DefaultValue.AZURE_API_VERSION
         )
@@ -672,13 +696,14 @@ def get_provider_config_from_inspect() -> ProviderConfig | None:
         base_url = getattr(api, "base_url", None) or "https://api.anthropic.com"
         api_key = getattr(api, "api_key", None) or os.environ.get(EnvVar.ANTHROPIC_API_KEY)
 
-    # Build provider config
-    if provider_type and base_url and api_key:
+    # Build provider config (supports both api_key and bearer_token)
+    if provider_type and base_url and (api_key or bearer_token):
         config: AzureProviderConfig | OpenAIProviderConfig | AnthropicProviderConfig
         if provider_type == ProviderType.AZURE:
             config = AzureProviderConfig(
                 base_url=base_url,
                 api_key=api_key,
+                bearer_token=bearer_token,
                 api_version=api_version or DefaultValue.AZURE_API_VERSION,
             )
         elif provider_type == ProviderType.OPENAI:
@@ -691,6 +716,7 @@ def get_provider_config_from_inspect() -> ProviderConfig | None:
             extra={
                 "provider_type": provider_type.value,
                 "model_name": model_name,
+                "auth_method": "bearer_token" if bearer_token else "api_key",
             },
         )
         return config
@@ -765,19 +791,25 @@ async def setup_tools(
 
 def build_system_message(
     assistant_prompt: str,
-    instruction_prompt: str,
     submit_prompt: str,
     submit_enabled: bool,
 ) -> str:
-    """Build the system message content."""
+    """Build the system message content to append to Copilot's default preamble.
+
+    With system_mode='append', Copilot SDK provides its CLI foundation prompt
+    (environment context, tool instructions, security guardrails) and our content
+    is appended after. We include:
+    - assistant_prompt: SABER's assistant behavior instructions
+    - submit_prompt: Instructions for task submission
+
+    The instruction_prompt (task details) goes in the user message instead.
+    """
     parts = []
     if assistant_prompt:
         parts.append(assistant_prompt)
-    if instruction_prompt:
-        parts.append(f"\n\n## Task Instructions\n\n{instruction_prompt}")
     if submit_prompt and submit_enabled:
-        parts.append(f"\n\n## Submission Guidelines\n\n{submit_prompt}")
-    return "".join(parts)
+        parts.append(submit_prompt)
+    return "\n\n".join(parts)
 
 
 def record_model_event(
@@ -855,6 +887,7 @@ def copilot_solver(
     provider_api_key: str | None = None,
     provider_api_version: str | None = None,
     skill_directories: list[str] | None = None,
+    agent_persona: str | None = None,
 ) -> Callable[[TaskState], Awaitable[TaskState]]:
     """SABER solver using GitHub Copilot SDK as the reasoning engine.
 
@@ -879,6 +912,9 @@ def copilot_solver(
         skill_directories: Optional list of directories containing skill files.
             Skills are markdown files with YAML frontmatter that provide
             contextual knowledge/instructions to guide agent behavior.
+        agent_persona: Optional path to an agent.md file defining a custom agent persona.
+            The file contains YAML frontmatter with agent metadata and markdown content
+            with the agent's system prompt.
 
     Returns:
         Solver function for Inspect AI
@@ -913,20 +949,53 @@ def copilot_solver(
             tool_names = [t.name for t in all_tools]
 
             # Build session config
-            system_content = build_system_message(assistant_prompt, instruction_prompt, submit_prompt, submit_enabled)
+            # Note: instruction_prompt is NOT included in system message - it goes in the user message.
+            # With append mode, Copilot SDK provides its default preamble and we append our behavioral prompts.
+            system_content = build_system_message(assistant_prompt, submit_prompt, submit_enabled)
 
             provider_config = build_provider_config(
                 provider_type, provider_base_url, provider_api_key, provider_api_version
             )
+
+            # Load custom agent persona if provided
+            custom_agents_list: list | None = None
+            if agent_persona:
+                from .custom_agent import CustomAgentConfig, map_tools_to_saber, parse_agent_file
+
+                metadata, prompt_content = parse_agent_file(agent_persona)
+
+                # Map tools if specified in agent file
+                mapped_tools: list[str] | None = None
+                if metadata.tools and metadata.tools.allowed:
+                    mapped_tools = map_tools_to_saber(metadata.tools.allowed)
+
+                custom_agent = CustomAgentConfig(
+                    name=metadata.name.lower().replace(" ", "-"),
+                    display_name=metadata.name,
+                    description=metadata.description,
+                    prompt=prompt_content,
+                    tools=mapped_tools,
+                    infer=True,
+                )
+                custom_agents_list = [custom_agent]
+
+                logger.info(
+                    "Loaded custom agent persona",
+                    extra={
+                        "agent_name": custom_agent.name,
+                        "tool_count": len(mapped_tools) if mapped_tools else "all",
+                    },
+                )
 
             session_config = CopilotSessionConfig.create(
                 model=model,
                 tools=all_tools,
                 system_content=system_content,
                 streaming=streaming,
-                system_mode="append",
+                system_mode="append",  # Use 'append' to preserve Copilot's default preamble with guardrails
                 provider=provider_config,
                 skill_directories=skill_directories,
+                custom_agents=custom_agents_list,
             )
 
             logger.info(
@@ -942,12 +1011,19 @@ def copilot_solver(
             session = await client.create_session(session_config.to_dict())
             event_capture.attach(session)
 
+            # Use instruction_prompt as the initial user message
+            # This contains the task details (what to do) while system message
+            # contains behavioral guidance (how to behave)
+            initial_user_prompt = instruction_prompt
+
             # Set up initial state messages
-            # Note: We don't copy state.messages (which contains sample.input as a user message)
-            # because instruction_prompt already contains the full task context.
-            # Including both would be redundant noise for the model.
             state.messages.clear()
             state.messages.append(ChatMessageSystem(content=system_content))
+
+            # Initialize transcript sync for SABER server
+            # This uses the WebSocketTranscriptSyncingModelWrapper created by solver_factory
+            transcript_sync = AgentTranscriptSync(state)
+            await transcript_sync.initialize()
 
             # Run agent loop
             submitted = False
@@ -956,7 +1032,7 @@ def copilot_solver(
             max_consecutive_timeouts = 3
 
             while turn < max_turns and not submitted and consecutive_timeouts < max_consecutive_timeouts:
-                prompt = instruction_prompt if turn == 0 else continue_prompt
+                prompt = initial_user_prompt if turn == 0 else continue_prompt
                 state.messages.append(ChatMessageUser(content=prompt))
 
                 # Build input messages for ModelEvent
@@ -986,6 +1062,36 @@ def copilot_solver(
                         extra={"consecutive_timeouts": consecutive_timeouts},
                     )
                 except Exception as e:
+                    error_str = str(e).lower()
+                    # Check for fatal auth/authorization errors - fail fast instead of retrying
+                    if any(
+                        pattern in error_str
+                        for pattern in [
+                            "authorization error",
+                            "authentication",
+                            "401",
+                            "403",
+                            "/login",
+                            "key based authentication is disabled",
+                            "access denied",
+                            "unauthorized",
+                            "invalid api key",
+                            "invalid_api_key",
+                        ]
+                    ):
+                        logger.error(
+                            f"Fatal authentication/authorization error during turn {turn + 1}: {e}",
+                            extra={"error_type": "auth_error"},
+                        )
+                        raise RuntimeError(
+                            f"Copilot SDK authentication failed: {e}\n\n"
+                            "Possible causes:\n"
+                            "  1. API key authentication is disabled on your Azure resource (use Entra ID instead)\n"
+                            "  2. Invalid or expired API key\n"
+                            "  3. Missing or invalid bearer token\n"
+                            "  4. Run 'az login' to refresh your Azure credentials"
+                        ) from e
+
                     logger.error(f"Error during turn {turn + 1}: {e}")
                     timed_out = True
                     consecutive_timeouts += 1
@@ -1112,6 +1218,10 @@ def copilot_solver(
                             )
                             break
 
+                # Sync transcript to SABER server after each turn
+                # This pushes all new messages (user prompt, assistant response, tool results)
+                await transcript_sync.sync_state_messages(state)
+
                 turn += 1
 
             # Cleanup
@@ -1127,6 +1237,7 @@ def copilot_solver(
                     "turns": turn,
                     "submitted": submitted,
                     "message_count": len(state.messages),
+                    "transcript_sync_enabled": transcript_sync.is_enabled,
                 },
             )
 
@@ -1165,6 +1276,7 @@ def create_agent(**kwargs: Any) -> Callable[..., Any]:
         transcript_config: dict[str, Any] | None = None,
         submit: bool | None = None,
         skill_directories: list[str] | None = None,
+        agent_persona: str | None = None,
     ) -> Solver:
         """Inner factory that receives prompts from task execution."""
         logger.debug(
@@ -1184,6 +1296,7 @@ def create_agent(**kwargs: Any) -> Callable[..., Any]:
             transcript_config=transcript_config,
             submit=submit,
             skill_directories=skill_directories,
+            agent_persona=agent_persona,
             **kwargs,
         )
 
