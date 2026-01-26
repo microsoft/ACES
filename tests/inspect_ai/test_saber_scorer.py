@@ -30,14 +30,11 @@ from saber.inspect_ai.core.saber_scorer import (
     _score_submission,
     _score_submission_llm,
     _score_submission_static,
-    _score_subtask_static,
-    _score_subtask_tool_call,
     _score_subtasks_llm_batch,
     clean_dict,
     per_task_submission_scores,
     per_task_subtask_scores,
     saber_score,
-    saber_scorer,
     submission_score,
     subtask_score,
     subtask_score_metrics,
@@ -965,303 +962,6 @@ class TestParseLLMStepEvaluations:
         result = _parse_llm_step_evaluations(response, valid_ids)
         assert result["checkpoint_1"] == [5]
 
-
-class TestScoreSubtaskStatic:
-    """Test cases for _score_subtask_static."""
-
-    @pytest.mark.asyncio
-    async def test_static_subtask_finds_match_in_output(self, task_context):
-        """Test static subtask scoring finds expected output."""
-        steps_data = EpisodeStepsResponse(
-            session_id="session1",
-            episode_id="ep1",
-            task_id="task1",
-            steps=[
-                EpisodeStepData(
-                    step_number=1,
-                    tool_name="bash",
-                    tool_input={"command": "ls"},
-                    tool_output="file1.txt\nfile2.txt\nconfig.yaml",
-                    timestamp=datetime.now(timezone.utc),
-                )
-            ],
-            total_steps=1,
-        )
-        criteria = SubtaskEvaluationCriteriaResponse(
-            session_id="session1",
-            episode_id="ep1",
-            task_id="task1",
-            subtask_id="subtask1",
-            title="Find config",
-            description="Locate config file",
-            objective="Find config.yaml",
-            strategy=StepEvaluationStrategy.STATIC,
-            criteria={"expected_outputs": ["config.yaml"]},
-            max_score=1.0,
-            weight=1.0,
-            task_context=task_context,
-        )
-
-        score, evaluations = await _score_subtask_static(steps_data, criteria)
-        assert score == 1.0
-        # Note: Current implementation breaks before appending the matching step
-        # so evaluations list is empty when match is found
-        assert len(evaluations) == 0
-
-    @pytest.mark.asyncio
-    async def test_static_subtask_no_match(self, task_context):
-        """Test static subtask scoring with no match."""
-        steps_data = EpisodeStepsResponse(
-            session_id="session1",
-            episode_id="ep1",
-            task_id="task1",
-            steps=[
-                EpisodeStepData(
-                    step_number=1,
-                    tool_name="bash",
-                    tool_input={},
-                    tool_output="nothing here",
-                    timestamp=datetime.now(timezone.utc),
-                )
-            ],
-            total_steps=1,
-        )
-        criteria = SubtaskEvaluationCriteriaResponse(
-            session_id="session1",
-            episode_id="ep1",
-            task_id="task1",
-            subtask_id="subtask1",
-            title="Test",
-            description="Test",
-            objective="Test",
-            strategy=StepEvaluationStrategy.STATIC,
-            criteria={"expected_outputs": ["config.yaml"]},
-            max_score=1.0,
-            weight=1.0,
-            task_context=task_context,
-        )
-
-        score, evaluations = await _score_subtask_static(steps_data, criteria)
-        assert score == 0.0
-        assert all(not e.completed for e in evaluations)
-
-    @pytest.mark.asyncio
-    async def test_static_subtask_multiple_expected_outputs(self, task_context):
-        """Test static subtask with multiple expected outputs."""
-        steps_data = EpisodeStepsResponse(
-            session_id="session1",
-            episode_id="ep1",
-            task_id="task1",
-            steps=[
-                EpisodeStepData(
-                    step_number=1,
-                    tool_name="bash",
-                    tool_input={},
-                    tool_output="found secret.key",
-                    timestamp=datetime.now(timezone.utc),
-                )
-            ],
-            total_steps=1,
-        )
-        criteria = SubtaskEvaluationCriteriaResponse(
-            session_id="session1",
-            episode_id="ep1",
-            task_id="task1",
-            subtask_id="subtask1",
-            title="Test",
-            description="Test",
-            objective="Test",
-            strategy=StepEvaluationStrategy.STATIC,
-            criteria={"expected_outputs": ["config.yaml", "secret.key", "data.json"]},
-            max_score=1.0,
-            weight=1.0,
-            task_context=task_context,
-        )
-
-        score, evaluations = await _score_subtask_static(steps_data, criteria)
-        assert score == 1.0
-
-    @pytest.mark.asyncio
-    async def test_static_subtask_empty_expected_outputs(self, task_context):
-        """Test static subtask with empty expected_outputs returns 0."""
-        steps_data = EpisodeStepsResponse(
-            session_id="session1",
-            episode_id="ep1",
-            task_id="task1",
-            steps=[],
-            total_steps=0,
-        )
-        criteria = SubtaskEvaluationCriteriaResponse(
-            session_id="session1",
-            episode_id="ep1",
-            task_id="task1",
-            subtask_id="subtask1",
-            title="Test",
-            description="Test",
-            objective="Test",
-            strategy=StepEvaluationStrategy.STATIC,
-            criteria={"expected_outputs": []},
-            max_score=1.0,
-            weight=1.0,
-            task_context=task_context,
-        )
-
-        score, evaluations = await _score_subtask_static(steps_data, criteria)
-        assert score == 0.0
-        assert evaluations == []
-
-
-class TestScoreSubtaskToolCall:
-    """Test cases for _score_subtask_tool_call."""
-
-    @pytest.mark.asyncio
-    async def test_tool_call_subtask_finds_expected_tool(self, task_context):
-        """Test tool call subtask scoring finds expected tool."""
-        steps_data = EpisodeStepsResponse(
-            session_id="session1",
-            episode_id="ep1",
-            task_id="task1",
-            steps=[
-                EpisodeStepData(
-                    step_number=1,
-                    tool_name="bash",
-                    tool_input={"command": "ls"},
-                    tool_output="files",
-                    timestamp=datetime.now(timezone.utc),
-                ),
-                EpisodeStepData(
-                    step_number=2,
-                    tool_name="python",
-                    tool_input={"code": "print('hi')"},
-                    tool_output="hi",
-                    timestamp=datetime.now(timezone.utc),
-                ),
-            ],
-            total_steps=2,
-        )
-        criteria = SubtaskEvaluationCriteriaResponse(
-            session_id="session1",
-            episode_id="ep1",
-            task_id="task1",
-            subtask_id="subtask1",
-            title="Use Python",
-            description="Execute Python code",
-            objective="Call python tool",
-            strategy=StepEvaluationStrategy.TOOL_CALL,
-            criteria={"expected_tools": ["python"]},
-            max_score=1.0,
-            weight=1.0,
-            task_context=task_context,
-        )
-
-        score, evaluations = await _score_subtask_tool_call(steps_data, criteria)
-        assert score == 1.0
-        assert len(evaluations) == 2
-        assert evaluations[1].completed is True
-
-    @pytest.mark.asyncio
-    async def test_tool_call_subtask_no_match(self, task_context):
-        """Test tool call subtask with no matching tool."""
-        steps_data = EpisodeStepsResponse(
-            session_id="session1",
-            episode_id="ep1",
-            task_id="task1",
-            steps=[
-                EpisodeStepData(
-                    step_number=1,
-                    tool_name="bash",
-                    tool_input={},
-                    tool_output="",
-                    timestamp=datetime.now(timezone.utc),
-                )
-            ],
-            total_steps=1,
-        )
-        criteria = SubtaskEvaluationCriteriaResponse(
-            session_id="session1",
-            episode_id="ep1",
-            task_id="task1",
-            subtask_id="subtask1",
-            title="Test",
-            description="Test",
-            objective="Test",
-            strategy=StepEvaluationStrategy.TOOL_CALL,
-            criteria={"expected_tools": ["python"]},
-            max_score=1.0,
-            weight=1.0,
-            task_context=task_context,
-        )
-
-        score, evaluations = await _score_subtask_tool_call(steps_data, criteria)
-        assert score == 0.0
-        assert all(not e.completed for e in evaluations)
-
-    @pytest.mark.asyncio
-    async def test_tool_call_subtask_multiple_expected_tools(self, task_context):
-        """Test tool call subtask with multiple expected tools."""
-        steps_data = EpisodeStepsResponse(
-            session_id="session1",
-            episode_id="ep1",
-            task_id="task1",
-            steps=[
-                EpisodeStepData(
-                    step_number=1,
-                    tool_name="docker",
-                    tool_input={},
-                    tool_output="",
-                    timestamp=datetime.now(timezone.utc),
-                )
-            ],
-            total_steps=1,
-        )
-        criteria = SubtaskEvaluationCriteriaResponse(
-            session_id="session1",
-            episode_id="ep1",
-            task_id="task1",
-            subtask_id="subtask1",
-            title="Test",
-            description="Test",
-            objective="Test",
-            strategy=StepEvaluationStrategy.TOOL_CALL,
-            criteria={"expected_tools": ["docker", "kubectl", "helm"]},
-            max_score=1.0,
-            weight=1.0,
-            task_context=task_context,
-        )
-
-        score, evaluations = await _score_subtask_tool_call(steps_data, criteria)
-        assert score == 1.0
-
-    @pytest.mark.asyncio
-    async def test_tool_call_subtask_empty_expected_tools(self, task_context):
-        """Test tool call subtask with empty expected_tools returns 0."""
-        steps_data = EpisodeStepsResponse(
-            session_id="session1",
-            episode_id="ep1",
-            task_id="task1",
-            steps=[],
-            total_steps=0,
-        )
-        criteria = SubtaskEvaluationCriteriaResponse(
-            session_id="session1",
-            episode_id="ep1",
-            task_id="task1",
-            subtask_id="subtask1",
-            title="Test",
-            description="Test",
-            objective="Test",
-            strategy=StepEvaluationStrategy.TOOL_CALL,
-            criteria={"expected_tools": []},
-            max_score=1.0,
-            weight=1.0,
-            task_context=task_context,
-        )
-
-        score, evaluations = await _score_subtask_tool_call(steps_data, criteria)
-        assert score == 0.0
-        assert evaluations == []
-
-
 class TestScoreSubtasksLLMBatch:
     """Test cases for _score_subtasks_llm_batch."""
 
@@ -1670,13 +1370,14 @@ class TestScoreAllSubtasks:
             tokens={},
         )
 
-        total_score, individual_scores, evaluations = await _score_all_subtasks(
+        total_score, individual_scores, evaluations, checkpoint_summary = await _score_all_subtasks(
             steps_data, criteria_list, Mock(description="Test", domain="test"), Mock(), Mock(), submission_data
         )
 
         assert total_score == 1.0
         assert individual_scores == [1.0]
         assert len(evaluations) == 1
+        assert isinstance(checkpoint_summary, str)
 
     @pytest.mark.asyncio
     async def test_score_all_subtasks_multiple_subtasks(self, task_context):
@@ -1744,13 +1445,14 @@ class TestScoreAllSubtasks:
             tokens={},
         )
 
-        total_score, individual_scores, evaluations = await _score_all_subtasks(
+        total_score, individual_scores, evaluations, checkpoint_summary = await _score_all_subtasks(
             steps_data, criteria_list, Mock(description="Test", domain="test"), Mock(), Mock(), submission_data
         )
 
         assert total_score == 2.0
         assert individual_scores == [1.0, 1.0]
         assert len(evaluations) == 2
+        assert isinstance(checkpoint_summary, str)
 
     @pytest.mark.asyncio
     async def test_score_all_subtasks_skips_empty_strategy(self, task_context):
@@ -1789,13 +1491,14 @@ class TestScoreAllSubtasks:
             tokens={},
         )
 
-        total_score, individual_scores, evaluations = await _score_all_subtasks(
+        total_score, individual_scores, evaluations, checkpoint_summary = await _score_all_subtasks(
             steps_data, criteria_list, Mock(description="Test"), Mock(), Mock(), submission_data
         )
 
         assert total_score == 0.0
         assert individual_scores == [0.0]
         assert evaluations == [[]]
+        assert isinstance(checkpoint_summary, str)
 
     @pytest.mark.asyncio
     async def test_score_all_subtasks_unknown_strategy_raises_error(self, task_context):

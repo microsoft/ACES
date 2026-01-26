@@ -265,9 +265,6 @@ class MCPToolGenerator:
 
         # Validate input schema
         input_schema = mcp_schema.inputSchema
-        if not input_schema.properties:
-            return False
-
         # Check that all properties have valid types
         for _prop_name, prop_def in input_schema.properties.items():
             if not prop_def.type:
