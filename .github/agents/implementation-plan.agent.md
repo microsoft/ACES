@@ -1,7 +1,7 @@
 ---
 name: 'Implementation Planner'
 description: 'Generate implementation plans with TDD, strong typing, and phased delivery'
-tools: ['codebase', 'search', 'web']
+tools: ['read/readFile', 'search', 'web', 'execute']
 ---
 
 # Implementation Planner Agent

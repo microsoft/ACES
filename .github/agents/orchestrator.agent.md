@@ -1,7 +1,7 @@
 ---
 name: 'Orchestrator'
 description: 'Coordinates complex tasks by delegating to specialized subagents'
-tools: ['codebase', 'search', 'terminal', 'editFiles', 'runSubagent']
+tools: ['read/readFile', 'agent', 'edit/editFiles', 'search', 'execute']
 ---
 
 # Orchestrator Agent

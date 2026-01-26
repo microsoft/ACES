@@ -1,7 +1,7 @@
 ---
 name: 'Implementer'
 description: 'Implements features following TDD, strong typing, and clean code principles'
-tools: ['codebase', 'search', 'terminal', 'editFiles']
+tools: ['read/readFile', 'edit/editFiles', 'search', 'execute']
 ---
 
 # Implementer Agent
@@ -80,9 +80,9 @@ from typing import Annotated
 
 class MyConfig(BaseModel):
     """Description of what this config represents."""
-    
+
     model_config = ConfigDict(frozen=True)
-    
+
     name: Annotated[str, Field(min_length=1)]
     count: Annotated[int, Field(ge=0)]
 ```
@@ -93,9 +93,9 @@ from pydantic import BaseModel, ConfigDict
 
 class FeatureResponse(BaseModel):
     """Response model for feature endpoint."""
-    
+
     model_config = ConfigDict(frozen=True)
-    
+
     id: str
     status: str
     # All fields typed, no dict[str, Any]
@@ -128,11 +128,11 @@ class TestMyConfig:
     def test_valid_config(self):
         config = MyConfig(name="test", count=5)
         assert config.name == "test"
-    
+
     def test_invalid_name_raises(self):
         with pytest.raises(ValueError):
             MyConfig(name="", count=5)
-    
+
     def test_negative_count_raises(self):
         with pytest.raises(ValueError):
             MyConfig(name="test", count=-1)

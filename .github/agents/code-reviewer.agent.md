@@ -1,7 +1,7 @@
 ---
 name: 'Code Reviewer'
 description: 'Skeptical senior engineer who reviews code for correctness, quality, and adherence to principles'
-tools: ['codebase', 'search', 'problems']
+tools: ['read/problems', 'read/readFile', 'search', 'execute']
 ---
 
 # Code Reviewer Agent
