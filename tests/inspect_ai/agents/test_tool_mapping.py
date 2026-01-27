@@ -39,22 +39,22 @@ class TestClaudeToSaberToolMap:
         assert CLAUDE_TO_SABER_TOOL_MAP["Bash"] == "bash"
 
     def test_read_maps_correctly(self):
-        """Test Read -> read_file mapping."""
+        """Test Read -> view mapping."""
         from saber.inspect_ai.agents.registry.custom_agent import CLAUDE_TO_SABER_TOOL_MAP
 
-        assert CLAUDE_TO_SABER_TOOL_MAP["Read"] == "read_file"
+        assert CLAUDE_TO_SABER_TOOL_MAP["Read"] == "view"
 
     def test_write_maps_correctly(self):
-        """Test Write -> write_file mapping."""
+        """Test Write -> write mapping."""
         from saber.inspect_ai.agents.registry.custom_agent import CLAUDE_TO_SABER_TOOL_MAP
 
-        assert CLAUDE_TO_SABER_TOOL_MAP["Write"] == "write_file"
+        assert CLAUDE_TO_SABER_TOOL_MAP["Write"] == "write"
 
     def test_edit_maps_correctly(self):
-        """Test Edit -> edit_file mapping."""
+        """Test Edit -> edit mapping."""
         from saber.inspect_ai.agents.registry.custom_agent import CLAUDE_TO_SABER_TOOL_MAP
 
-        assert CLAUDE_TO_SABER_TOOL_MAP["Edit"] == "edit_file"
+        assert CLAUDE_TO_SABER_TOOL_MAP["Edit"] == "edit"
 
     def test_webfetch_maps_correctly(self):
         """Test WebFetch -> fetch_webpage mapping."""
@@ -81,10 +81,10 @@ class TestClaudeToSaberToolMap:
         assert CLAUDE_TO_SABER_TOOL_MAP["Glob"] == "glob"
 
     def test_ls_maps_correctly(self):
-        """Test LS -> list_dir mapping."""
+        """Test LS -> view mapping (view handles directories)."""
         from saber.inspect_ai.agents.registry.custom_agent import CLAUDE_TO_SABER_TOOL_MAP
 
-        assert CLAUDE_TO_SABER_TOOL_MAP["LS"] == "list_dir"
+        assert CLAUDE_TO_SABER_TOOL_MAP["LS"] == "view"
 
     def test_skill_maps_to_none(self):
         """Test Skill -> None mapping (handled via skill_directories)."""
@@ -110,7 +110,7 @@ class TestMapToolsToSaber:
         claude_tools = ["Bash", "Read", "Write", "Edit"]
         result = map_tools_to_saber(claude_tools)
 
-        assert result == ["bash", "read_file", "write_file", "edit_file"]
+        assert result == ["bash", "view", "write", "edit"]
 
     def test_map_all_tools(self):
         """Test mapping all known Claude tools."""
@@ -131,14 +131,14 @@ class TestMapToolsToSaber:
 
         expected = [
             "bash",
-            "read_file",
-            "write_file",
-            "edit_file",
+            "view",
+            "write",
+            "edit",
             "fetch_webpage",
             "web_search",
             "grep",
             "glob",
-            "list_dir",
+            "view",
         ]
         assert result == expected
 
@@ -157,7 +157,7 @@ class TestMapToolsToSaber:
         result = map_tools_to_saber(claude_tools)
 
         # Skill should be filtered out because it maps to None
-        assert result == ["bash", "read_file"]
+        assert result == ["bash", "view"]
         assert "Skill" not in result
         assert None not in result
 
@@ -168,7 +168,7 @@ class TestMapToolsToSaber:
         claude_tools = ["Read", "Bash", "Write"]
         result = map_tools_to_saber(claude_tools)
 
-        assert result == ["read_file", "bash", "write_file"]
+        assert result == ["view", "bash", "write"]
 
     def test_unknown_tool_kept_as_is(self):
         """Test that unknown tools are kept with their original name."""
@@ -189,11 +189,11 @@ class TestMapToolsToSaber:
         from saber.inspect_ai.agents.registry.custom_agent import map_tools_to_saber
 
         # If user specifies SABER tool names directly, they should work
-        saber_tools = ["bash", "read_file", "write_file"]
+        saber_tools = ["bash", "view", "write"]
         result = map_tools_to_saber(saber_tools)
 
         # They pass through as-is (not in mapping, so kept original)
-        assert result == ["bash", "read_file", "write_file"]
+        assert result == ["bash", "view", "write"]
 
     def test_mixed_claude_and_mcp_tools(self):
         """Test mixing Claude tools with MCP-style tools."""
@@ -209,7 +209,7 @@ class TestMapToolsToSaber:
 
         expected = [
             "bash",
-            "read_file",
+            "view",
             "mcp__agent-orchestrator__run_agent",
             "mcp__agent-orchestrator__get_agent_status",
         ]
@@ -227,7 +227,7 @@ class TestMapToolsToSaberEdgeCases:
         result = map_tools_to_saber(claude_tools)
 
         # Duplicates are preserved
-        assert result == ["bash", "bash", "read_file"]
+        assert result == ["bash", "bash", "view"]
 
     def test_case_sensitive_mapping(self):
         """Test that mapping is case-sensitive."""
@@ -252,4 +252,4 @@ class TestMapToolsToSaberEdgeCases:
         from saber.inspect_ai.agents.registry.custom_agent import map_tools_to_saber
 
         result = map_tools_to_saber(["Skill", "Bash", "Skill", "Read", "Skill"])
-        assert result == ["bash", "read_file"]
+        assert result == ["bash", "view"]

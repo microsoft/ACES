@@ -11,6 +11,7 @@ import asyncio
 import io
 import os
 import tarfile
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
@@ -33,6 +34,27 @@ MAX_DIRECTORY_BYTES = 200 * 1024 * 1024  # 200 MiB per directory copy
 EXECUTABLE_SUFFIXES = {".sh", ""}
 EXECUTABLE_MODE = 0o755
 REGULAR_FILE_MODE = 0o644
+
+
+@dataclass(frozen=True)
+class FileUploadResult:
+    """Result of a dynamic file upload operation.
+
+    Attributes:
+        success: Whether the upload completed successfully.
+        source_path: The source path that was uploaded (relative to base_dir).
+        destination_path: The destination path in the container.
+        bytes_copied: Number of bytes copied.
+        is_directory: Whether the source was a directory.
+        error_message: Error message if the upload failed.
+    """
+
+    success: bool
+    source_path: str
+    destination_path: str
+    bytes_copied: int
+    is_directory: bool
+    error_message: str | None
 
 
 class SandboxFileCopier:
@@ -188,6 +210,255 @@ class SandboxFileCopier:
                     "file_count": success_count,
                 },
             )
+
+    async def copy_file_to_episode_dynamic(
+        self,
+        episode_id: str,
+        source_path: str,
+        destination_path: str,
+        container_name: str | None = None,
+        container_prefix: str = "default",
+    ) -> FileUploadResult:
+        """
+        Copy a single file or directory to an episode container dynamically.
+
+        This method is designed for runtime file uploads via REST API, with full
+        validation and size limit enforcement.
+
+        Args:
+            episode_id: The episode ID (used to construct container name if not provided).
+            source_path: Path relative to base_dir to copy from.
+            destination_path: Absolute path inside the container.
+            container_name: Optional full container name override.
+            container_prefix: Container name prefix if container_name not provided.
+
+        Returns:
+            FileUploadResult with success status and bytes copied.
+
+        Raises:
+            NotFound: If the container is not found.
+            FileNotFoundError: If the source file/directory does not exist.
+            ValueError: If paths are invalid or size limits exceeded.
+        """
+        log_extra = {
+            "event": "dynamic_file_upload_start",
+            "episode_id": episode_id,
+            "source_path": source_path,
+            "destination_path": destination_path,
+        }
+
+        logger.info("Dynamic file upload starting", extra=log_extra)
+
+        # Validate source path (must be relative)
+        source_resolved = self._resolve_source_path(source_path)
+
+        # Check for symlinks
+        if source_resolved.is_symlink():
+            raise ValueError(f"Symlinks are not allowed in sandbox provisioning: {source_resolved}")
+
+        # Validate destination path (must be absolute) - validates and raises if invalid
+        self._validate_and_normalize_container_path(destination_path)
+
+        # Determine if source is a directory
+        is_directory = source_resolved.is_dir()
+
+        # Calculate size and enforce limits
+        if is_directory:
+            bytes_to_copy = self._calculate_directory_size(source_resolved)
+            self._enforce_directory_size_limit(bytes_to_copy, source_resolved)
+        else:
+            bytes_to_copy = source_resolved.stat().st_size
+            self._enforce_file_size_limit(bytes_to_copy, source_resolved)
+
+        # Build container name
+        if container_name is None:
+            container_name = f"{container_prefix}-{episode_id}"
+
+        # Get container
+        try:
+            container = await asyncio.to_thread(self.docker_client.containers.get, container_name)
+            logger.debug(
+                "Container found for dynamic upload",
+                extra={
+                    "event": "dynamic_upload_container_found",
+                    "container_name": container_name,
+                    "container_id": container.id[:12],
+                },
+            )
+        except NotFound as e:
+            logger.error(
+                "Container not found for dynamic upload",
+                extra={
+                    "event": "dynamic_upload_container_not_found",
+                    "episode_id": episode_id,
+                    "container_name": container_name,
+                    "error": str(e),
+                },
+            )
+            raise NotFound(f"Container '{container_name}' not found. Cannot copy files.") from e
+
+        # Copy the file/directory
+        await asyncio.to_thread(
+            self._copy_single_file_or_directory,
+            container,
+            destination_path,
+            source_path,
+            episode_id,
+        )
+
+        logger.info(
+            "Dynamic file upload completed",
+            extra={
+                "event": "dynamic_file_upload_success",
+                "episode_id": episode_id,
+                "source_path": source_path,
+                "destination_path": destination_path,
+                "bytes_copied": bytes_to_copy,
+                "is_directory": is_directory,
+            },
+        )
+
+        return FileUploadResult(
+            success=True,
+            source_path=source_path,
+            destination_path=destination_path,
+            bytes_copied=bytes_to_copy,
+            is_directory=is_directory,
+            error_message=None,
+        )
+
+    async def upload_tar_to_container(
+        self,
+        episode_id: str,
+        tar_data: bytes,
+        destination_path: str,
+        container_name: str,
+    ) -> FileUploadResult:
+        """
+        Upload a tar archive directly to a container.
+
+        This method takes raw tar archive bytes and extracts them to the specified
+        destination path in the container. Unlike copy_file_to_episode_dynamic,
+        this method does not require the source to exist on the server filesystem.
+
+        Args:
+            episode_id: The episode ID (for logging).
+            tar_data: Raw bytes of a tar archive.
+            destination_path: Absolute path inside the container where tar will be extracted.
+            container_name: Full container name.
+
+        Returns:
+            FileUploadResult with success status and bytes copied.
+
+        Raises:
+            NotFound: If the container is not found.
+            ValueError: If destination path is invalid.
+        """
+        from io import BytesIO
+
+        from docker.errors import NotFound
+
+        log_extra = {
+            "event": "tar_upload_start",
+            "episode_id": episode_id,
+            "tar_size_bytes": len(tar_data),
+            "destination_path": destination_path,
+            "container_name": container_name,
+        }
+
+        logger.info("Tar upload starting", extra=log_extra)
+
+        # Validate destination path
+        dest_container_path = self._validate_and_normalize_container_path(destination_path)
+
+        # Get container
+        try:
+            container = await asyncio.to_thread(self.docker_client.containers.get, container_name)
+            logger.debug(
+                "Container found for tar upload",
+                extra={
+                    "event": "tar_upload_container_found",
+                    "container_name": container_name,
+                    "container_id": container.id[:12],
+                },
+            )
+        except NotFound as e:
+            logger.error(
+                "Container not found for tar upload",
+                extra={
+                    "event": "tar_upload_container_not_found",
+                    "episode_id": episode_id,
+                    "container_name": container_name,
+                    "error": str(e),
+                },
+            )
+            raise NotFound(f"Container '{container_name}' not found. Cannot upload tar.") from e
+
+        # Ensure destination directory exists
+        dest_dir = dest_container_path.as_posix()
+        self._ensure_directory_exists(container, dest_dir, episode_id)
+
+        # Upload tar archive directly to container
+        try:
+            tar_stream = BytesIO(tar_data)
+            await asyncio.to_thread(container.put_archive, dest_dir, tar_stream)
+
+            logger.info(
+                "Tar upload completed",
+                extra={
+                    "event": "tar_upload_success",
+                    "episode_id": episode_id,
+                    "destination_path": destination_path,
+                    "bytes_copied": len(tar_data),
+                },
+            )
+
+            return FileUploadResult(
+                success=True,
+                source_path="<tar_data>",
+                destination_path=destination_path,
+                bytes_copied=len(tar_data),
+                is_directory=True,  # Tar archives typically contain directories
+                error_message=None,
+            )
+
+        except Exception as e:
+            logger.error(
+                "Tar upload failed",
+                extra={
+                    "event": "tar_upload_failed",
+                    "episode_id": episode_id,
+                    "destination_path": destination_path,
+                    "error": str(e),
+                },
+            )
+            return FileUploadResult(
+                success=False,
+                source_path="<tar_data>",
+                destination_path=destination_path,
+                bytes_copied=0,
+                is_directory=True,
+                error_message=str(e),
+            )
+
+    def _calculate_directory_size(self, directory: Path) -> int:
+        """Calculate total size of all files in a directory recursively."""
+        total_bytes = 0
+        for root, dirs, files in os.walk(directory, followlinks=False):
+            current_dir = Path(root)
+            # Check for symlinks
+            if current_dir.is_symlink():
+                raise ValueError(f"Symlinks are not allowed in sandbox provisioning: {current_dir}")
+            for dir_name in dirs:
+                dir_path = current_dir / dir_name
+                if dir_path.is_symlink():
+                    raise ValueError(f"Symlinks are not allowed in sandbox provisioning: {dir_path}")
+            for file_name in files:
+                file_path = current_dir / file_name
+                if file_path.is_symlink():
+                    raise ValueError(f"Symlinks are not allowed in sandbox provisioning: {file_path}")
+                total_bytes += file_path.stat().st_size
+        return total_bytes
 
     def _copy_single_file_or_directory(
         self,
@@ -462,7 +733,12 @@ class SandboxFileCopier:
         if source_rel.is_absolute():
             raise ValueError(f"Source path '{source_rel_path}' must be relative to the base directory")
 
-        candidate = (self.base_dir / source_rel).resolve()
+        # Check the unresolved path first to detect symlinks
+        unresolved_candidate = self.base_dir / source_rel
+        if unresolved_candidate.is_symlink():
+            raise ValueError(f"Symlinks are not allowed in sandbox provisioning: {unresolved_candidate}")
+
+        candidate = unresolved_candidate.resolve()
 
         if not self._is_within_base_dir(candidate):
             raise ValueError(f"Source path '{source_rel_path}' must be relative to the base directory")

@@ -27,14 +27,14 @@ from pydantic import BaseModel, ConfigDict, Field
 # Tool name mapping from Claude Code tools to SABER MCP tools
 CLAUDE_TO_SABER_TOOL_MAP: dict[str, str | None] = {
     "Bash": "bash",
-    "Read": "read_file",
-    "Write": "write_file",
-    "Edit": "edit_file",
+    "Read": "view",
+    "Write": "write",
+    "Edit": "edit",
     "WebFetch": "fetch_webpage",
     "WebSearch": "web_search",
     "Grep": "grep",
     "Glob": "glob",
-    "LS": "list_dir",
+    "LS": "view",
     # Skills are handled via skill_directories parameter, not as individual tools
     "Skill": None,
 }
@@ -123,6 +123,10 @@ class AgentFileMetadata(BaseModel):
     max_turns: int | None = Field(
         default=None,
         description="Maximum number of conversation turns",
+    )
+    skill_directories: list[str] | None = Field(
+        default=None,
+        description="Directories containing skill files to load",
     )
 
 

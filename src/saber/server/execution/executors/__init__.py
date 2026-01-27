@@ -11,7 +11,7 @@ from . import (
 from .base_executors import CommandExecutor
 
 # Re-export the copilot executors
-from .copilot_registry import COPILOT_EXECUTOR_TYPES, CreateExecutor, EditExecutor, GrepExecutor, ViewExecutor
+from .copilot_registry import COPILOT_EXECUTOR_TYPES, EditExecutor, GrepExecutor, ViewExecutor, WriteExecutor
 from .docker_executor import DockerExecutor
 from .executor_factory import ExecutorFactory
 
@@ -44,7 +44,7 @@ __all__ = [
     # "SQLExecutor",  # temporarily removed
     # Copilot-compatible executors
     "ViewExecutor",
-    "CreateExecutor",
+    "WriteExecutor",
     "EditExecutor",
     "GrepExecutor",
     "ExecutorFactory",

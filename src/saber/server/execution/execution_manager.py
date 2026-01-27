@@ -29,7 +29,7 @@ from .base import (
 )
 from .executors.base_executors import CommandExecutor
 from .executors.executor_factory import ExecutorFactory
-from .sandbox.file_copier import SandboxFileCopier
+from .sandbox.file_copier import FileUploadResult, SandboxFileCopier
 from .sandbox.permanent_environment_manager import PermanentEnvironmentManager
 from .sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 
@@ -87,7 +87,10 @@ class ExecutionManager:
 
         # Episode-specific execution tracking for concurrent commands
         self._active_executions: dict[str, int] = {}  # episode_id -> count of active executions
-        self._max_concurrent_per_episode = 3  # Allow multiple concurrent commands per episode
+        # Increased from 3 to 8 to handle parallel tool calls from modern LLM agents (GPT-5, etc.)
+        # TODO: Implement semaphore queue to queue excess calls instead of rejecting them
+        # See docs/plans/semaphore-queue-implementation.md for full implementation plan
+        self._max_concurrent_per_episode = int(os.getenv("SABER_MAX_CONCURRENT_PER_EPISODE", "8"))
 
         # Initialize file copier
         self._initialize_file_copier()
@@ -741,6 +744,84 @@ class ExecutionManager:
                         },
                     )
                     raise RuntimeError(f"Failed to copy initial files to container: {e}") from e
+
+    async def upload_tar_to_episode(
+        self,
+        episode_id: str,
+        tar_data: bytes,
+        destination_path: str,
+        container_name: str | None = None,
+    ) -> FileUploadResult:
+        """
+        Upload a tar archive directly to an episode's execution container.
+
+        This method extracts the provided tar archive to the specified destination
+        path in the container. The tar archive is provided as bytes, allowing
+        clients to upload content from any location without server filesystem access.
+
+        Args:
+            episode_id: The episode ID.
+            tar_data: Raw bytes of a tar archive to extract.
+            destination_path: Absolute path inside the container where tar will be extracted.
+            container_name: Optional container name override (uses execution container if not provided).
+
+        Returns:
+            FileUploadResult with success status and bytes copied.
+
+        Raises:
+            RuntimeError: If file copier is not initialized or container cannot be determined.
+            ValueError: If destination path is invalid.
+            NotFound: If the container is not found.
+        """
+
+        if not self._file_copier:
+            raise RuntimeError("File copier not initialized")
+
+        # Determine the container name
+        if container_name is None:
+            container_name = self.get_execution_container_name(episode_id)
+            if not container_name:
+                raise RuntimeError(
+                    f"Cannot determine execution container name for episode {episode_id}. "
+                    "Ensure sandbox environment is running and configured properly."
+                )
+
+        log_operation_start(
+            logger,
+            "upload_tar_to_episode",
+            episode_id=episode_id,
+            tar_size_bytes=len(tar_data),
+            destination_path=destination_path,
+            container_name=container_name,
+        )
+
+        try:
+            result = await self._file_copier.upload_tar_to_container(
+                episode_id=episode_id,
+                tar_data=tar_data,
+                destination_path=destination_path,
+                container_name=container_name,
+            )
+
+            log_operation_success(
+                logger,
+                "upload_tar_to_episode",
+                episode_id=episode_id,
+                destination_path=destination_path,
+                bytes_copied=result.bytes_copied,
+            )
+
+            return result
+
+        except Exception as e:
+            log_operation_failure(
+                logger,
+                "upload_tar_to_episode",
+                e,
+                episode_id=episode_id,
+                destination_path=destination_path,
+            )
+            raise
 
     def to_mcp_tools(self, episode_id: str | None = None) -> list[mcp_types.Tool]:
         """

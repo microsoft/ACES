@@ -288,21 +288,20 @@ class TestMessageConstruction:
     """Test that messages are constructed without redundancy."""
 
     def test_build_system_message_includes_all_parts(self):
-        """Test system message includes assistant, instruction, and submit prompts."""
+        """Test system message includes assistant and submit prompts.
+
+        Note: instruction_prompt now goes in the user message, not system message.
+        """
         from saber.inspect_ai.agents.registry.copilot import build_system_message
 
         result = build_system_message(
             assistant_prompt="You are a security analyst.",
-            instruction_prompt="Investigate the incident.",
             submit_prompt="Submit your findings.",
             submit_enabled=True,
         )
 
         assert "You are a security analyst." in result
-        assert "Investigate the incident." in result
         assert "Submit your findings." in result
-        assert "## Task Instructions" in result
-        assert "## Submission Guidelines" in result
 
     def test_build_system_message_excludes_submit_when_disabled(self):
         """Test submit section excluded when submit_enabled=False."""
@@ -310,15 +309,12 @@ class TestMessageConstruction:
 
         result = build_system_message(
             assistant_prompt="You are a security analyst.",
-            instruction_prompt="Investigate the incident.",
             submit_prompt="Submit your findings.",
             submit_enabled=False,
         )
 
         assert "You are a security analyst." in result
-        assert "Investigate the incident." in result
         assert "Submit your findings." not in result
-        assert "## Submission Guidelines" not in result
 
     def test_build_system_message_handles_empty_prompts(self):
         """Test system message handles empty prompts gracefully."""
@@ -326,14 +322,12 @@ class TestMessageConstruction:
 
         result = build_system_message(
             assistant_prompt="",
-            instruction_prompt="Just the instructions.",
             submit_prompt="",
             submit_enabled=True,
         )
 
-        assert "Just the instructions." in result
-        # Empty submit_prompt should not add section
-        assert "## Submission Guidelines" not in result
+        # Empty prompts should result in empty message
+        assert result == ""
 
 
 # =============================================================================

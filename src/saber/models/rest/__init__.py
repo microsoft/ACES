@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 # Import REST configuration and endpoints
 from .config import TranscriptSyncConfig
 from .endpoints import APIEndpoints
+from .file_upload import FileUploadRequest, FileUploadResponse
 from .websocket_config import PullConfig, PushConfig, WebSocketConfig
 from .websocket_constants import WebSocketCloseCode, WebSocketDefaults
 
@@ -92,6 +93,9 @@ __all__ = [
     "MessageInjectRequest",
     "MessageInjectResponse",
     "PendingMessagesResponse",
+    # File upload models
+    "FileUploadRequest",
+    "FileUploadResponse",
 ]
 
 

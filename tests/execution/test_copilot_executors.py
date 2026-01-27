@@ -22,7 +22,7 @@ from saber.server.execution.base import (
 from saber.server.execution.models import ExecutorConfig
 from saber.server.execution.exceptions import SandboxExecutionError
 from saber.server.execution.executors.copilot_registry.view_executor import ViewExecutor
-from saber.server.execution.executors.copilot_registry.create_executor import CreateExecutor
+from saber.server.execution.executors.copilot_registry.write_executor import WriteExecutor
 from saber.server.execution.executors.copilot_registry.edit_executor import EditExecutor
 from saber.server.execution.executors.copilot_registry.grep_executor import GrepExecutor
 from saber.server.execution.sandbox.sandbox_environment_manager import SandboxEnvironmentManager
@@ -147,8 +147,8 @@ class TestViewExecutor:
         assert "path" in schema.required
 
 
-class TestCreateExecutor:
-    """Test cases for Create executor - creates new files."""
+class TestWriteExecutor:
+    """Test cases for Write executor - writes new files."""
 
     @pytest.fixture
     def mock_sandbox_manager(self):
@@ -158,18 +158,18 @@ class TestCreateExecutor:
         return manager
 
     @pytest.fixture
-    def create_executor(self, mock_sandbox_manager):
-        """Create a CreateExecutor instance for testing."""
-        return CreateExecutor(sandbox_manager=mock_sandbox_manager)
+    def write_executor(self, mock_sandbox_manager):
+        """Create a WriteExecutor instance for testing."""
+        return WriteExecutor(sandbox_manager=mock_sandbox_manager)
 
-    def test_metadata(self, create_executor):
+    def test_metadata(self, write_executor):
         """Test executor has correct metadata."""
-        assert create_executor._executor_metadata["name"] == "create"
-        assert "Create" in create_executor._executor_metadata["description"]
+        assert write_executor._executor_metadata["name"] == "write"
+        assert "Write" in write_executor._executor_metadata["description"]
 
-    def test_parameters_defined(self, create_executor):
+    def test_parameters_defined(self, write_executor):
         """Test that required parameters are defined."""
-        params = create_executor.get_parameters()
+        params = write_executor.get_parameters()
 
         assert "path" in params
         assert params["path"].required is True
@@ -179,11 +179,11 @@ class TestCreateExecutor:
         assert params["file_text"].required is False
         assert params["file_text"].type == ParameterType.STRING
 
-    def test_build_command_with_content(self, create_executor):
-        """Test building command for creating a file with content."""
+    def test_build_command_with_content(self, write_executor):
+        """Test building command for writing a file with content."""
         params = CreateParameters(path="/workspace/new_file.py", file_text="print('hello')")
 
-        result = create_executor._build_command(params)
+        result = write_executor._build_command(params)
 
         assert result[0] == "/bin/sh"
         assert result[1] == "-c"
@@ -194,40 +194,40 @@ class TestCreateExecutor:
         # Should use base64 for safe content handling
         assert "base64 -d" in result[2]
 
-    def test_build_command_empty_file(self, create_executor):
-        """Test building command for creating an empty file."""
+    def test_build_command_empty_file(self, write_executor):
+        """Test building command for writing an empty file."""
         params = CreateParameters(path="/workspace/empty.txt", file_text="")
 
-        result = create_executor._build_command(params)
+        result = write_executor._build_command(params)
 
         # Should use touch for empty files
         assert "touch" in result[2]
 
-    def test_build_command_special_characters(self, create_executor):
+    def test_build_command_special_characters(self, write_executor):
         """Test content with special shell characters is handled safely."""
         params = CreateParameters(
             path="/workspace/script.sh",
             file_text='#!/bin/bash\necho "$HOME"\nif [ -f "test" ]; then echo "yes"; fi'
         )
 
-        result = create_executor._build_command(params)
+        result = write_executor._build_command(params)
 
         # Should use base64 encoding to safely pass content
         assert "base64 -d" in result[2]
 
-    def test_parameter_validation_missing_path(self, create_executor):
+    def test_parameter_validation_missing_path(self, write_executor):
         """Test validation fails when path is missing - handled at from_dict conversion."""
         # With typed params, missing required fields are caught at conversion time
         # So we test that a valid CreateParameters passes validation
         params = CreateParameters(path="/workspace/file.txt", file_text="content")
-        result = create_executor.validate_parameters(params)
+        result = write_executor.validate_parameters(params)
         assert result.valid is True
 
-    def test_parameter_validation_valid(self, create_executor):
+    def test_parameter_validation_valid(self, write_executor):
         """Test validation succeeds with valid parameters."""
         params = CreateParameters(path="/workspace/file.txt", file_text="content")
 
-        result = create_executor.validate_parameters(params)
+        result = write_executor.validate_parameters(params)
 
         assert result.valid is True
 
@@ -492,9 +492,9 @@ class TestCopilotExecutorIntegration:
         assert result.success is False
 
     @pytest.mark.asyncio
-    async def test_create_execute_success(self, mock_sandbox_manager_with_env, mock_docker_environment):
-        """Test successful file creation."""
-        create_executor = CreateExecutor(sandbox_manager=mock_sandbox_manager_with_env)
+    async def test_write_execute_success(self, mock_sandbox_manager_with_env, mock_docker_environment):
+        """Test successful file writing."""
+        write_executor = WriteExecutor(sandbox_manager=mock_sandbox_manager_with_env)
 
         mock_docker_environment.execute_command = AsyncMock(
             return_value=CommandResult(
@@ -507,14 +507,14 @@ class TestCopilotExecutorIntegration:
 
         params = CreateParameters(path="/workspace/new_file.py", file_text="# New file")
         context = ExecutionContext(episode_id="test_episode_123")
-        result = await create_executor.execute(params, context=context)
+        result = await write_executor.execute(params, context=context)
 
         assert result.success is True
 
     @pytest.mark.asyncio
-    async def test_create_execute_file_exists(self, mock_sandbox_manager_with_env, mock_docker_environment):
-        """Test creating file that already exists fails."""
-        create_executor = CreateExecutor(sandbox_manager=mock_sandbox_manager_with_env)
+    async def test_write_execute_file_exists(self, mock_sandbox_manager_with_env, mock_docker_environment):
+        """Test writing file that already exists fails."""
+        write_executor = WriteExecutor(sandbox_manager=mock_sandbox_manager_with_env)
 
         mock_docker_environment.execute_command = AsyncMock(
             return_value=CommandResult(
@@ -527,7 +527,7 @@ class TestCopilotExecutorIntegration:
 
         params = CreateParameters(path="/workspace/existing.py", file_text="content")
         context = ExecutionContext(episode_id="test_episode_123")
-        result = await create_executor.execute(params, context=context)
+        result = await write_executor.execute(params, context=context)
 
         assert result.success is False
 

@@ -1,13 +1,13 @@
 """
-Create executor for GitHub Copilot CLI compatibility.
+Write executor for GitHub Copilot CLI compatibility.
 
-This executor implements the 'create' tool interface expected by the GitHub Copilot CLI agent.
-It creates new files with specified content, matching the exact schema from the
+This executor implements the 'write' tool interface expected by the GitHub Copilot CLI agent.
+It writes new files with specified content, matching the exact schema from the
 @github/copilot v0.0.384 package.
 
 Schema (verified against actual CLI source):
-    path: string           - Full absolute path to file to create. File MUST NOT exist.
-    file_text?: string     - The content of the file to be created.
+    path: string           - Full absolute path to file to write. File MUST NOT exist.
+    file_text?: string     - The content of the file to be written.
 
 Logging category: ``LogCategory.DOCKER``.
 """
@@ -36,23 +36,23 @@ from ..docker_executor import DockerExecutor
 logger = get_saber_logger(LogCategory.DOCKER, __name__)
 
 
-class CreateExecutor(DockerExecutor):
+class WriteExecutor(DockerExecutor):
     """
-    Docker-based create executor for creating new files.
+    Docker-based write executor for writing new files.
 
-    Implements the Copilot CLI 'create' tool interface for creating files
+    Implements the Copilot CLI 'write' tool interface for writing files
     with specified content. The file must not already exist.
 
     Features:
-    - Create files with specified content
+    - Write files with specified content
     - Automatic parent directory creation
     - Verification that file doesn't already exist
     - Safe content encoding handling
     """
 
     _executor_metadata = {
-        "name": "create",
-        "description": "Create a new file with specified content. The file MUST NOT already exist.",
+        "name": "write",
+        "description": "Write a new file with specified content. The file MUST NOT already exist.",
     }
 
     @classmethod
@@ -62,7 +62,7 @@ class CreateExecutor(DockerExecutor):
 
     @classmethod
     def get_default_config(cls) -> CreateExecutorConfig:
-        """Get default configuration for Create executor."""
+        """Get default configuration for Write executor."""
         return CreateExecutorConfig(timeout=30.0)
 
     @classmethod
@@ -73,7 +73,7 @@ class CreateExecutor(DockerExecutor):
         additional_params: dict[str, Any] | None = None,
         session_manager: SessionManager | None = None,
         **kwargs: Any,
-    ) -> CreateExecutor:
+    ) -> WriteExecutor:
         """Create executor with standardized configuration interface."""
         merged_kwargs = {**kwargs}
         if additional_params:
@@ -92,11 +92,11 @@ class CreateExecutor(DockerExecutor):
         config: ExecutorConfig | None = None,
         **kwargs: Any,
     ) -> None:
-        """Initialize Create executor."""
+        """Initialize Write executor."""
         super().__init__(sandbox_manager=sandbox_manager, config=config, **kwargs)
 
     def setup_parameters(self, config: ExecutorConfig) -> None:
-        """Set up Create executor parameters matching Copilot CLI schema."""
+        """Set up Write executor parameters matching Copilot CLI schema."""
         self.add_parameter(
             Parameter(
                 name="path",

@@ -121,19 +121,19 @@ class DefaultValue(str, Enum):
     MODEL = "gpt-5"
 
 
-# Copilot SDK supported models
-class CopilotModel(str, Enum):
-    """Models supported by the Copilot SDK."""
+class CopilotBuiltInTools(str, Enum):
+    """Built-in tools provided by the Copilot SDK.
 
-    GPT_4O = "gpt-4o"
-    GPT_5 = "gpt-5"
-    CLAUDE_SONNET_4 = "claude-sonnet-4"
-    CLAUDE_SONNET_4_5 = "claude-sonnet-4.5"
-    CLAUDE_HAIKU_4_5 = "claude-haiku-4.5"
+    These tools are handled by the SDK itself and don't require
+    custom tool handlers. They must be included in availableTools
+    to be accessible to the agent.
+    """
 
+    REPORT_INTENT = "report_intent"
+    """Allows GPT-5 to report its intent/reasoning for better transcripts."""
 
-# Copilot built-in tool name constants
-REPORT_INTENT_TOOL = "report_intent"
+    SKILL = "skill"
+    """Loads skill content from skillDirectories when called by the agent."""
 
 
 # =============================================================================
@@ -356,7 +356,9 @@ class CopilotSessionConfig:
         result: dict[str, Any] = {
             "model": self.model,
             "tools": self.tools,
+            # Note: SDK expects snake_case 'available_tools'
             "available_tools": self.available_tools,
+            # Note: SDK expects snake_case 'system_message'
             "system_message": self.system_message.to_dict(),
             "streaming": self.streaming,
         }
@@ -365,9 +367,11 @@ class CopilotSessionConfig:
             result["provider"] = self.provider.to_dict()
 
         if self.skill_directories is not None:
+            # Note: SDK expects snake_case 'skill_directories'
             result["skill_directories"] = self.skill_directories
 
         if self.custom_agents is not None:
+            # Note: SDK expects snake_case 'custom_agents'
             result["custom_agents"] = [agent.to_sdk_dict() for agent in self.custom_agents]
 
         return result
@@ -403,12 +407,20 @@ class CopilotSessionConfig:
         Returns:
             Configured CopilotSessionConfig instance
         """
+        # Build list of available tools
+        # Include report_intent to allow GPT-5 to report its intent/reasoning
+        # This is a Copilot built-in tool that doesn't need a handler
+        available = [t.name for t in tools] + [CopilotBuiltInTools.REPORT_INTENT.value]
+
+        # Include 'skill' tool when skill_directories is provided
+        # The skill tool is a Copilot SDK built-in that loads skill content
+        if skill_directories:
+            available.append(CopilotBuiltInTools.SKILL.value)
+
         return cls(
             model=model,
             tools=tools,
-            # Include report_intent to allow GPT-5 to report its intent/reasoning
-            # This is a Copilot built-in tool that doesn't need a handler
-            available_tools=[t.name for t in tools] + [REPORT_INTENT_TOOL],
+            available_tools=available,
             system_message=SystemMessageConfig(
                 content=system_content,
                 mode=system_mode,
@@ -427,9 +439,7 @@ __all__ = [
     "EnvVar",
     "DefaultUrl",
     "DefaultValue",
-    "CopilotModel",
-    # Constants
-    "REPORT_INTENT_TOOL",
+    "CopilotBuiltInTools",
     # Provider configs
     "ProviderConfig",
     "OpenAIProviderConfig",

@@ -3,6 +3,9 @@
 This module tests the skill_directories feature added to CopilotSessionConfig:
 1. to_dict() serialization behavior (include/exclude based on None)
 2. create() factory method parameter support
+
+Note: The SDK expects camelCase keys ('skillDirectories', 'availableTools')
+while the Python dataclass uses snake_case ('skill_directories', 'available_tools').
 """
 
 import pytest
@@ -37,7 +40,8 @@ class TestCopilotSessionConfigToDict:
 
         result = config.to_dict()
 
-        assert "skill_directories" not in result
+        # SDK expects camelCase 'skillDirectories'
+        assert "skillDirectories" not in result
         # Verify other expected fields are present
         assert "model" in result
         assert result["model"] == "gpt-5"
@@ -50,8 +54,9 @@ class TestCopilotSessionConfigToDict:
 
         result = config.to_dict()
 
-        assert "skill_directories" in result
-        assert result["skill_directories"] == ["/path/to/skills", "/another/skills/dir"]
+        # SDK expects camelCase 'skillDirectories'
+        assert "skillDirectories" in result
+        assert result["skillDirectories"] == ["/path/to/skills", "/another/skills/dir"]
 
     def test_skill_directories_single_path_in_output(self) -> None:
         """When skill_directories has a single path, it should be properly included."""
@@ -59,8 +64,9 @@ class TestCopilotSessionConfigToDict:
 
         result = config.to_dict()
 
-        assert "skill_directories" in result
-        assert result["skill_directories"] == ["/single/path"]
+        # SDK expects camelCase 'skillDirectories'
+        assert "skillDirectories" in result
+        assert result["skillDirectories"] == ["/single/path"]
 
     def test_skill_directories_empty_list_in_output(self) -> None:
         """When skill_directories is an empty list, the field SHOULD be in output.
@@ -71,8 +77,9 @@ class TestCopilotSessionConfigToDict:
 
         result = config.to_dict()
 
-        assert "skill_directories" in result
-        assert result["skill_directories"] == []
+        # SDK expects camelCase 'skillDirectories'
+        assert "skillDirectories" in result
+        assert result["skillDirectories"] == []
 
 
 class TestCopilotSessionConfigCreate:
@@ -87,8 +94,8 @@ class TestCopilotSessionConfigCreate:
         )
 
         assert config.skill_directories is None
-        # Verify to_dict doesn't include it
-        assert "skill_directories" not in config.to_dict()
+        # Verify to_dict doesn't include it (SDK expects camelCase)
+        assert "skillDirectories" not in config.to_dict()
 
     def test_create_with_skill_directories(self) -> None:
         """create() with skill_directories should set the value correctly."""
@@ -100,10 +107,12 @@ class TestCopilotSessionConfigCreate:
         )
 
         assert config.skill_directories == ["/path/to/skills"]
-        # Verify to_dict includes it
+        # Verify to_dict includes it (SDK expects camelCase)
         result = config.to_dict()
-        assert "skill_directories" in result
-        assert result["skill_directories"] == ["/path/to/skills"]
+        assert "skillDirectories" in result
+        assert result["skillDirectories"] == ["/path/to/skills"]
+        # Verify 'skill' tool is added to availableTools when skill_directories provided
+        assert "skill" in result["availableTools"]
 
     def test_create_with_multiple_skill_directories(self) -> None:
         """create() with multiple skill_directories should preserve all paths."""
@@ -117,7 +126,8 @@ class TestCopilotSessionConfigCreate:
         )
 
         assert config.skill_directories == skill_paths
-        assert config.to_dict()["skill_directories"] == skill_paths
+        # SDK expects camelCase 'skillDirectories'
+        assert config.to_dict()["skillDirectories"] == skill_paths
 
     def test_create_with_empty_skill_directories(self) -> None:
         """create() with empty list should set empty list (not None)."""
@@ -129,8 +139,8 @@ class TestCopilotSessionConfigCreate:
         )
 
         assert config.skill_directories == []
-        # Empty list should still be in output
-        assert "skill_directories" in config.to_dict()
+        # Empty list should still be in output (SDK expects camelCase)
+        assert "skillDirectories" in config.to_dict()
 
     def test_create_preserves_other_parameters_with_skill_directories(self) -> None:
         """create() with skill_directories should not affect other parameters."""

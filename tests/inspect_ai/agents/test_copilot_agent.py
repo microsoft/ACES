@@ -62,6 +62,7 @@ class TestCopilotAgentCreation:
             transcript_config=None,
             submit=None,
             skill_directories=None,
+            agent_persona=None,
         )
         assert result == mock_solver
 
@@ -137,7 +138,10 @@ class TestCopilotSolver:
             "sample_id": "sample-1",
         }
         state.messages = []
+        # Mock the store with proper _store attribute for logging
         state.store = Mock()
+        state.store._store = {}  # Mock _store for logging
+        state.store._store = {}  # Empty dict to be iterable
         state.store.get = Mock(return_value=None)
         state.store.set = Mock()
         return state
@@ -472,6 +476,7 @@ class TestCopilotSolverConfiguration:
 
         state = Mock()
         state.store = Mock()
+        state.store._store = {}  # Mock _store for logging
         state.store.get = Mock(return_value=True)
         state.messages = []
 
@@ -525,6 +530,7 @@ class TestCopilotSolverConfiguration:
 
         state = Mock()
         state.store = Mock()
+        state.store._store = {}  # Mock _store for logging
         state.store.get = Mock(return_value=False)  # Never submitted
         state.messages = []
 
@@ -595,6 +601,7 @@ class TestCopilotSolverTranscriptHandling:
 
         state = Mock()
         state.store = Mock()
+        state.store._store = {}  # Mock _store for logging
         call_count = [0]
         def get_side_effect(k):
             if k == "submitted":
@@ -728,6 +735,7 @@ class TestCopilotSolverBYOK:
 
         state = Mock()
         state.store = Mock()
+        state.store._store = {}  # Mock _store for logging
         call_count = [0]
         def get_side_effect(k):
             if k == "submitted":
@@ -804,6 +812,7 @@ class TestCopilotSolverBYOK:
 
         state = Mock()
         state.store = Mock()
+        state.store._store = {}  # Mock _store for logging
         call_count = [0]
         def get_side_effect(k):
             if k == "submitted":

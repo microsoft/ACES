@@ -728,6 +728,112 @@ class SessionRestAPI:
                 log_operation_failure(logger, "get_episode_steps", exc, session_id=session_id, episode_id=episode_id)
                 raise HTTPException(status_code=500, detail=f"Failed to get episode steps: {exc}") from exc
 
+        # NOTE: File upload endpoint disabled - agent directory upload no longer used
+        # @self.app.post(APIEndpoints.EPISODE_FILES, response_model=FileUploadResponse)
+        # async def upload_file_to_episode_endpoint(
+        #     session_id: str, episode_id: str, upload_request: FileUploadRequest
+        # ) -> FileUploadResponse:
+        #     """Upload a tar archive to the episode's sandbox container.
+        #
+        #     This endpoint accepts a base64-encoded tar archive and extracts it
+        #     to the specified destination path in the episode container.
+        #
+        #     Args:
+        #         session_id: The session identifier.
+        #         episode_id: The episode identifier.
+        #         upload_request: The file upload request with tar_data, destination_path,
+        #                        and optional container_name override.
+        #
+        #     Returns:
+        #         FileUploadResponse with upload details including bytes copied.
+        #
+        #     Raises:
+        #         404: Episode not found or container not found.
+        #         422: Episode not ready, invalid paths, or invalid tar data.
+        #         500: Docker API error or internal failure.
+        #     """
+        #     from docker.errors import APIError as DockerAPIError
+        #     from docker.errors import NotFound as DockerNotFound
+        #
+        #     log_operation_start(
+        #         logger,
+        #         "upload_file_to_episode",
+        #         session_id=session_id,
+        #         episode_id=episode_id,
+        #         tar_size_bytes=len(upload_request.tar_data),
+        #         destination_path=upload_request.destination_path,
+        #         container_name=upload_request.container_name,
+        #     )
+        #
+        #     try:
+        #         # Check episode exists
+        #         episode = self.session_manager.get_episode_by_id(episode_id)
+        #         if not episode:
+        #             raise HTTPException(status_code=404, detail=f"Episode {episode_id} not found")
+        #
+        #         # Check episode is ready (has running container)
+        #         if not episode.is_ready:
+        #             raise HTTPException(
+        #                 status_code=422,
+        #                 detail=f"Episode {episode_id} is not ready. Current state: {episode.state.value}",
+        #             )
+        #
+        #         # Decode tar data and call execution manager
+        #         tar_bytes = upload_request.get_tar_bytes()
+        #         result = await self.session_manager.execution_manager.upload_tar_to_episode(
+        #             episode_id=episode_id,
+        #             tar_data=tar_bytes,
+        #             destination_path=upload_request.destination_path,
+        #             container_name=upload_request.container_name,
+        #         )
+        #
+        #         # Check if the upload failed
+        #         if not result.success:
+        #             raise HTTPException(
+        #                 status_code=500,
+        #                 detail=f"File upload failed: {result.error_message}",
+        #             )
+        #
+        #         log_operation_success(
+        #             logger,
+        #             "upload_file_to_episode",
+        #             session_id=session_id,
+        #             episode_id=episode_id,
+        #             destination_path=result.destination_path,
+        #             bytes_copied=result.bytes_copied,
+        #         )
+        #
+        #         return FileUploadResponse(
+        #             message="File uploaded successfully",
+        #             session_id=session_id,
+        #             episode_id=episode_id,
+        #             destination_path=result.destination_path,
+        #             bytes_copied=result.bytes_copied,
+        #         )
+        #
+        #     except HTTPException:
+        #         raise
+        #     except DockerNotFound as exc:
+        #         log_operation_failure(
+        #             logger, "upload_file_to_episode", exc, session_id=session_id, episode_id=episode_id
+        #         )
+        #         raise HTTPException(status_code=404, detail=f"Container not found: {exc}") from exc
+        #     except ValueError as exc:
+        #         log_operation_failure(
+        #             logger, "upload_file_to_episode", exc, session_id=session_id, episode_id=episode_id
+        #         )
+        #         raise HTTPException(status_code=422, detail=str(exc)) from exc
+        #     except (RuntimeError, DockerAPIError) as exc:
+        #         log_operation_failure(
+        #             logger, "upload_file_to_episode", exc, session_id=session_id, episode_id=episode_id
+        #         )
+        #         raise HTTPException(status_code=500, detail=f"File upload failed: {exc}") from exc
+        #     except Exception as exc:
+        #         log_operation_failure(
+        #             logger, "upload_file_to_episode", exc, session_id=session_id, episode_id=episode_id
+        #         )
+        #         raise HTTPException(status_code=500, detail=f"Failed to upload file: {exc}") from exc
+
         @self.app.post(APIEndpoints.EPISODE_TRANSCRIPT)
         async def push_transcript_endpoint(
             session_id: str, episode_id: str, transcript_request: TranscriptPushRequest

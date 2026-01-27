@@ -28,6 +28,7 @@ class APIEndpoints:
         "/api/v1/session/{session_id}/episodes/{episode_id}/subtask-evaluation-criteria"
     )
     EPISODE_EVALUATION = "/api/v1/session/{session_id}/episodes/{episode_id}/evaluation"
+    EPISODE_FILES = "/api/v1/session/{session_id}/episodes/{episode_id}/files"
 
     # Evaluation endpoints
     EVALUATION_BY_EPISODE = "/api/v1/session/{session_id}/evaluations/{episode_id}"

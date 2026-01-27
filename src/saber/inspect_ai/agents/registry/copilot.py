@@ -24,7 +24,7 @@ import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from inspect_ai.event._model import ModelEvent
 from inspect_ai.event._tool import ToolEvent
@@ -52,9 +52,9 @@ from ...integration.copilot_tools import (
     get_saber_mcp_tools,
 )
 from .models import (
-    REPORT_INTENT_TOOL,
     AnthropicProviderConfig,
     AzureProviderConfig,
+    CopilotBuiltInTools,
     CopilotSessionConfig,
     DefaultValue,
     EnvVar,
@@ -410,7 +410,7 @@ class EventCapture:
                 tool_name = getattr(tr, "name", None)
                 tool_arguments = getattr(tr, "arguments", None)
 
-                if tool_name == REPORT_INTENT_TOOL:
+                if tool_name == CopilotBuiltInTools.REPORT_INTENT:
                     intent_text = tool_arguments.get("intent", "") if tool_arguments else ""
                     if intent_text:
                         group.intent = f"[Intent] {intent_text}"
@@ -435,7 +435,7 @@ class EventCapture:
                 tool_call_id = getattr(tr, "tool_call_id", None)
 
                 # Skip report_intent - already captured as intent above
-                if tool_name == REPORT_INTENT_TOOL:
+                if tool_name == CopilotBuiltInTools.REPORT_INTENT:
                     continue
 
                 msg = CapturedMessage(
@@ -935,8 +935,7 @@ def copilot_solver(
         """Execute the Copilot agent loop."""
         client = CopilotClientWrapper({"auto_start": True})
         tool_tracker = ToolCallTracker()
-        # Enable debug_all_events to see what events the SDK is sending
-        event_capture = EventCapture(debug_all_events=True)
+        event_capture = EventCapture()
 
         try:
             await client.start()
@@ -952,15 +951,20 @@ def copilot_solver(
             # Note: instruction_prompt is NOT included in system message - it goes in the user message.
             # With append mode, Copilot SDK provides its default preamble and we append our behavioral prompts.
             system_content = build_system_message(assistant_prompt, submit_prompt, submit_enabled)
+            system_mode: Literal["append", "replace"] = "append"
 
             provider_config = build_provider_config(
                 provider_type, provider_base_url, provider_api_key, provider_api_version
             )
 
             # Load custom agent persona if provided
-            custom_agents_list: list | None = None
+            # When a persona is supplied, we use 'replace' mode to fully override Copilot's defaults
+            # with the persona's prompt, giving full control to the persona author
+            persona_skill_directories: list[str] | None = None
             if agent_persona:
-                from .custom_agent import CustomAgentConfig, map_tools_to_saber, parse_agent_file
+                from pathlib import Path
+
+                from .custom_agent import map_tools_to_saber, parse_agent_file
 
                 metadata, prompt_content = parse_agent_file(agent_persona)
 
@@ -969,33 +973,36 @@ def copilot_solver(
                 if metadata.tools and metadata.tools.allowed:
                     mapped_tools = map_tools_to_saber(metadata.tools.allowed)
 
-                custom_agent = CustomAgentConfig(
-                    name=metadata.name.lower().replace(" ", "-"),
-                    display_name=metadata.name,
-                    description=metadata.description,
-                    prompt=prompt_content,
-                    tools=mapped_tools,
-                    infer=True,
-                )
-                custom_agents_list = [custom_agent]
+                # Resolve skill_directories relative to the agent.md file location
+                if metadata.skill_directories:
+                    agent_dir = Path(agent_persona).parent
+                    persona_skill_directories = [str((agent_dir / sd).resolve()) for sd in metadata.skill_directories]
+
+                # Replace system prompt with persona content for full control
+                system_content = prompt_content
+                system_mode = "replace"
 
                 logger.info(
-                    "Loaded custom agent persona",
+                    "Loaded custom agent persona (replacing system prompt)",
                     extra={
-                        "agent_name": custom_agent.name,
+                        "agent_name": metadata.name,
                         "tool_count": len(mapped_tools) if mapped_tools else "all",
+                        "system_mode": system_mode,
+                        "skill_directories": persona_skill_directories,
                     },
                 )
+
+            # Use skill_directories from persona if available, otherwise use CLI parameter
+            effective_skill_directories = persona_skill_directories or skill_directories
 
             session_config = CopilotSessionConfig.create(
                 model=model,
                 tools=all_tools,
                 system_content=system_content,
                 streaming=streaming,
-                system_mode="append",  # Use 'append' to preserve Copilot's default preamble with guardrails
+                system_mode=system_mode,
                 provider=provider_config,
-                skill_directories=skill_directories,
-                custom_agents=custom_agents_list,
+                skill_directories=effective_skill_directories,
             )
 
             logger.info(
@@ -1004,7 +1011,10 @@ def copilot_solver(
                     "model": model,
                     "tool_count": len(all_tools),
                     "tool_names": tool_names,
+                    "available_tools": session_config.available_tools,
+                    "skill_directories": effective_skill_directories,
                     "using_byok": provider_config is not None,
+                    "system_mode": system_mode,
                 },
             )
 

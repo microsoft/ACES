@@ -61,7 +61,7 @@ class TestCopilotSessionConfigCustomAgents:
             display_name="Test Agent",
             description="A test agent",
             prompt="You are a test agent.",
-            tools=["bash", "read_file"],
+            tools=["bash", "view"],
             infer=True,
         )
 
@@ -79,14 +79,15 @@ class TestCopilotSessionConfigCustomAgents:
 
         result = config.to_dict()
 
-        assert "custom_agents" in result
-        assert len(result["custom_agents"]) == 1
-        assert result["custom_agents"][0]["name"] == "test-agent"
-        assert result["custom_agents"][0]["displayName"] == "Test Agent"
-        assert result["custom_agents"][0]["description"] == "A test agent"
-        assert result["custom_agents"][0]["prompt"] == "You are a test agent."
-        assert result["custom_agents"][0]["tools"] == ["bash", "read_file"]
-        assert result["custom_agents"][0]["infer"] is True
+        # SDK expects camelCase 'customAgents'
+        assert "customAgents" in result
+        assert len(result["customAgents"]) == 1
+        assert result["customAgents"][0]["name"] == "test-agent"
+        assert result["customAgents"][0]["displayName"] == "Test Agent"
+        assert result["customAgents"][0]["description"] == "A test agent"
+        assert result["customAgents"][0]["prompt"] == "You are a test agent."
+        assert result["customAgents"][0]["tools"] == ["bash", "view"]
+        assert result["customAgents"][0]["infer"] is True
 
     def test_session_config_with_multiple_custom_agents(self):
         """Test that to_dict() handles multiple custom agents."""
@@ -122,10 +123,11 @@ class TestCopilotSessionConfigCustomAgents:
 
         result = config.to_dict()
 
-        assert len(result["custom_agents"]) == 2
-        assert result["custom_agents"][0]["name"] == "agent-1"
-        assert result["custom_agents"][1]["name"] == "agent-2"
-        assert result["custom_agents"][1]["tools"] == ["bash"]
+        # SDK expects camelCase 'customAgents'
+        assert len(result["customAgents"]) == 2
+        assert result["customAgents"][0]["name"] == "agent-1"
+        assert result["customAgents"][1]["name"] == "agent-2"
+        assert result["customAgents"][1]["tools"] == ["bash"]
 
 
 class TestCopilotSessionConfigCreate:
@@ -176,8 +178,9 @@ class TestCopilotSessionConfigCreate:
         assert config.custom_agents[0].name == "red-team-agent"
 
         result = config.to_dict()
-        assert "custom_agents" in result
-        assert result["custom_agents"][0]["name"] == "red-team-agent"
+        # SDK expects camelCase 'customAgents'
+        assert "customAgents" in result
+        assert result["customAgents"][0]["name"] == "red-team-agent"
 
 
 class TestAgentTypeSupportsAgentPersona:
