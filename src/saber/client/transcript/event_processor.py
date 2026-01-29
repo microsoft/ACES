@@ -552,24 +552,24 @@ class WebSocketEventProcessor:
         timeout: float,
         max_iterations: int = WebSocketDefaults.MAX_EVENT_DISCARD_ITERATIONS,
         context: str = "",
+        preserve_state_events: bool = True,
     ) -> WebSocketMessageOrDict | None:
-        """Wait for a specific WebSocket message type, re-queuing state events.
-
-        IMPORTANT: State events (is_waiting_on_*, transcript_modified) are re-queued
-        rather than discarded, since they may be needed by wait_for_state_event()
-        which runs after this method returns. This prevents race conditions where
-        injections arrive while we're waiting for push_ack.
+        """Wait for a specific WebSocket message type.
 
         Args:
             expected_type: The WebSocketMessageType to wait for
             timeout: Timeout in seconds for each queue get
             max_iterations: Maximum iterations to discard non-matching events
             context: Context string for logging (e.g., "tool_result_push")
+            preserve_state_events: If True (default), re-queue state events so they
+                can be consumed later by wait_for_state_event(). Set to False for
+                push-only contexts (like Copilot agent) that don't need to process
+                state events - this avoids queue buildup and iteration limits.
 
         Returns:
             The matching message, or None if max_iterations exceeded or timeout
         """
-        # State event types that should be preserved (re-queued) instead of discarded
+        # State event types that should be preserved (re-queued) when preserve_state_events=True
         state_event_types = {
             WebSocketMessageType.IS_WAITING_ON_USER.value,
             WebSocketMessageType.IS_WAITING_ON_ASSISTANT.value,
@@ -578,11 +578,7 @@ class WebSocketEventProcessor:
             WebSocketMessageType.TRANSCRIPT_ERROR.value,
         }
 
-        # Track iterations where we actually discard events (not re-queue)
-        # Re-queued state events shouldn't count against the limit since they're preserved
-        discarded_count = 0
-
-        for iteration in range(max_iterations * 10):  # Allow more total iterations
+        for iteration in range(max_iterations):
             try:
                 response = await asyncio.wait_for(
                     self._event_queue.get(),
@@ -594,12 +590,8 @@ class WebSocketEventProcessor:
 
                 if response_type == expected_type.value:
                     return response
-                elif response_type in state_event_types:
-                    # Re-queue state events - they may be needed by wait_for_state_event()
-                    # This prevents race conditions where injections arrive during push_ack wait
-                    # NOTE: Re-queued events don't count against max_iterations since we're
-                    # preserving them, not discarding. This prevents livelock when the server
-                    # sends many state events (e.g., during Copilot bulk transcript push).
+                elif preserve_state_events and response_type in state_event_types:
+                    # Re-queue state events for later consumption by wait_for_state_event()
                     try:
                         self._event_queue.put_nowait(response)
                         logger.debug(
@@ -620,35 +612,18 @@ class WebSocketEventProcessor:
                                 "response_type": response_type,
                             },
                         )
-                        discarded_count += 1
                 else:
-                    # Non-state, non-matching event - safe to discard
-                    discarded_count += 1
+                    # Discard non-matching event (or state event when preserve_state_events=False)
                     logger.debug(
-                        f"Discarding non-matching event while waiting for {expected_type.value}",
+                        f"Discarding event while waiting for {expected_type.value}",
                         extra={
                             "episode_id": self._episode_id,
                             "response_type": response_type,
                             "expected_type": expected_type.value,
                             "iteration": iteration,
-                            "discarded_count": discarded_count,
                             "context": context,
                         },
                     )
-
-                # Only enforce max_iterations on actually discarded events
-                if discarded_count >= max_iterations:
-                    logger.warning(
-                        f"Max discarded events exceeded waiting for {expected_type.value}",
-                        extra={
-                            "episode_id": self._episode_id,
-                            "max_iterations": max_iterations,
-                            "discarded_count": discarded_count,
-                            "total_iterations": iteration + 1,
-                            "context": context,
-                        },
-                    )
-                    return None
 
             except asyncio.TimeoutError:
                 logger.warning(
@@ -661,13 +636,11 @@ class WebSocketEventProcessor:
                 )
                 return None
 
-        # Safety limit reached (shouldn't normally happen)
         logger.warning(
-            f"Safety iteration limit exceeded waiting for {expected_type.value}",
+            f"Max iterations exceeded waiting for {expected_type.value}",
             extra={
                 "episode_id": self._episode_id,
                 "max_iterations": max_iterations,
-                "discarded_count": discarded_count,
                 "context": context,
             },
         )

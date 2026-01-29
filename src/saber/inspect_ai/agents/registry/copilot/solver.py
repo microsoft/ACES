@@ -18,9 +18,9 @@ import asyncio
 import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal
 
-from inspect_ai.model._model import active_model
+from inspect_ai.model._model import ModelName, active_model, record_and_check_model_usage
 from inspect_ai.solver import Solver, TaskState
 from inspect_ai.util import sandbox
 
@@ -40,6 +40,11 @@ from .models import (
     CopilotSessionConfig,
     DefaultValue,
 )
+from .session_events import (
+    SessionEventContext,
+    TokenUsage,
+    create_event_callback,
+)
 from .tools import (
     Tool,
     ToolCallTracker,
@@ -49,24 +54,6 @@ from .tools import (
 )
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
-
-
-class CopilotSDKEvent(Protocol):
-    """Protocol for Copilot SDK events.
-
-    The SDK event has a `.type` attribute with a `.value` property,
-    and optionally a `.data` attribute with event-specific data.
-    """
-
-    @property
-    def type(self) -> object:
-        """Event type with .value property."""
-        ...
-
-    @property
-    def data(self) -> object | None:
-        """Event data (optional, varies by event type)."""
-        ...
 
 
 # Check SDK availability
@@ -80,6 +67,39 @@ except ImportError:
 
 
 # =============================================================================
+# Auth Error Detection
+# =============================================================================
+
+# Patterns that indicate fatal authentication/authorization errors
+# These should cause immediate failure rather than retry
+AUTH_ERROR_PATTERNS: tuple[str, ...] = (
+    "authorization error",
+    "authentication",
+    "401",
+    "403",
+    "/login",
+    "key based authentication is disabled",
+    "access denied",
+    "unauthorized",
+    "invalid api key",
+    "invalid_api_key",
+)
+
+
+def is_auth_error(error: Exception) -> bool:
+    """Check if an exception indicates an authentication/authorization error.
+
+    Args:
+        error: The exception to check
+
+    Returns:
+        True if the error appears to be auth-related
+    """
+    error_str = str(error).lower()
+    return any(pattern in error_str for pattern in AUTH_ERROR_PATTERNS)
+
+
+# =============================================================================
 # Session Tracker
 # =============================================================================
 
@@ -88,52 +108,44 @@ except ImportError:
 class SessionTracker:
     """Minimal tracker for session state during execution.
 
-    Tracks only what's needed for the session loop:
-    - idle_event: Set when session becomes idle (turn complete)
-    - submitted: Set by submit tool handler when answer is submitted
-    - submit_answer: The submitted answer (for state.output.completion)
-    - session_id: Captured from session.start for events.jsonl path
+    Uses SessionEventContext for event handling via the dispatcher pattern,
+    but adds submission tracking which is specific to the SABER workflow.
     """
 
-    idle_event: asyncio.Event = field(default_factory=asyncio.Event)
+    # Event context handles: idle_event, session_id, errors, token_usage
+    event_context: SessionEventContext = field(default_factory=lambda: SessionEventContext(asyncio.Event()))
+
+    # Submission tracking (specific to SABER workflow)
     submitted: bool = False
     submit_answer: str | None = None
-    session_id: str | None = None
-    _error: Exception | None = field(default=None, repr=False)
 
-    def on_event(self, event: CopilotSDKEvent | None) -> None:
-        """Handle SDK events - only care about idle and session start.
+    @property
+    def idle_event(self) -> asyncio.Event:
+        """Access to the idle event for waiting."""
+        return self.event_context.idle_event
 
-        Args:
-            event: Copilot SDK event object
+    @property
+    def session_id(self) -> str | None:
+        """Access to the session ID."""
+        return self.event_context.session_id
+
+    @session_id.setter
+    def session_id(self, value: str | None) -> None:
+        """Set the session ID."""
+        self.event_context.session_id = value
+
+    @property
+    def token_usage(self) -> TokenUsage:
+        """Access to token usage accumulator."""
+        return self.event_context.token_usage
+
+    def get_event_callback(self) -> Any:
+        """Get the event callback for use with session.on().
+
+        Returns:
+            Callback function compatible with Copilot SDK session.on()
         """
-        if not event:
-            return
-
-        event_type = str(event.type.value) if hasattr(event.type, "value") else str(event.type)
-        logger.debug(f"SessionTracker received event: {event_type}")
-
-        if event_type == "session.idle":
-            self.idle_event.set()
-        elif event_type == "session.start":
-            data = getattr(event, "data", None)
-            logger.debug(f"session.start data: {data}, type: {type(data)}")
-            if data:
-                # Try multiple attribute names for session ID
-                self.session_id = (
-                    getattr(data, "session_id", None)
-                    or getattr(data, "sessionId", None)
-                    or (data.get("session_id") if isinstance(data, dict) else None)
-                    or (data.get("sessionId") if isinstance(data, dict) else None)
-                )
-                logger.info(f"Session started with ID: {self.session_id}")
-                if not self.session_id:
-                    logger.warning(f"Could not extract session_id from data: {data}")
-        elif event_type == "session.error":
-            data = getattr(event, "data", None)
-            error_msg = getattr(data, "message", str(data)) if data else "Unknown error"
-            self._error = Exception(f"Session error: {error_msg}")
-            self.idle_event.set()
+        return create_event_callback(self.event_context)
 
     async def wait_for_idle(self, timeout: float) -> None:
         """Wait for session to become idle.
@@ -146,16 +158,17 @@ class SessionTracker:
             Exception: If session error occurred
         """
         try:
-            await asyncio.wait_for(self.idle_event.wait(), timeout=timeout)
+            await asyncio.wait_for(self.event_context.idle_event.wait(), timeout=timeout)
         except asyncio.TimeoutError:
             logger.warning(f"Timeout waiting for session idle after {timeout}s")
             raise
 
-        if self._error:
-            raise self._error
+        error = self.event_context.get_error()
+        if error:
+            raise error
 
         # Reset for next turn
-        self.idle_event.clear()
+        self.event_context.idle_event.clear()
 
     def set_submission(self, answer: str) -> None:
         """Mark submission and store the answer.
@@ -295,7 +308,8 @@ def copilot_solver(
     submit_prompt: str,
     continue_prompt: str,
     model: str = DefaultValue.MODEL,
-    max_turns: int = 50,
+    max_turns: int = 1000,
+    max_consecutive_timeouts: int = 3,
     submit: bool | None = None,
     transcript_config: dict[str, Any] | None = None,
     streaming: bool = False,
@@ -323,7 +337,8 @@ def copilot_solver(
         submit_prompt: Instructions about task submission
         continue_prompt: Message shown after each step to guide the agent
         model: Copilot model to use (default: gpt-5)
-        max_turns: Maximum conversation turns before stopping (default: 50)
+        max_turns: Maximum conversation turns before stopping (default: 1000)
+        max_consecutive_timeouts: Stop after this many consecutive timeouts (default: 3)
         submit: Whether to enable the submit tool (default: True)
         transcript_config: Optional transcript synchronization config
         streaming: Whether to enable streaming responses (default: False)
@@ -455,7 +470,7 @@ def copilot_solver(
             )
 
             session = await client.create_session(session_config.to_dict())
-            session.on(session_tracker.on_event)
+            session.on(session_tracker.get_event_callback())
             logger.info("Copilot session created")
 
             # Try to get session_id directly from session object (in case session.start event was missed)
@@ -486,7 +501,6 @@ def copilot_solver(
             # Run agent loop
             turn = 0
             consecutive_timeouts = 0
-            max_consecutive_timeouts = 3
 
             while (
                 turn < max_turns and not session_tracker.submitted and consecutive_timeouts < max_consecutive_timeouts
@@ -511,23 +525,8 @@ def copilot_solver(
                         extra={"consecutive_timeouts": consecutive_timeouts},
                     )
                 except Exception as e:
-                    error_str = str(e).lower()
                     # Check for fatal auth/authorization errors - fail fast instead of retrying
-                    if any(
-                        pattern in error_str
-                        for pattern in [
-                            "authorization error",
-                            "authentication",
-                            "401",
-                            "403",
-                            "/login",
-                            "key based authentication is disabled",
-                            "access denied",
-                            "unauthorized",
-                            "invalid api key",
-                            "invalid_api_key",
-                        ]
-                    ):
+                    if is_auth_error(e):
                         logger.error(
                             f"Fatal authentication/authorization error during turn {turn + 1}: {e}",
                             extra={"error_type": "auth_error"},
@@ -631,6 +630,38 @@ def copilot_solver(
             if session_tracker.submit_answer:
                 state.output.completion = session_tracker.submit_answer
 
+            # Set token usage from accumulated assistant.usage events
+            if session_tracker.token_usage.has_usage():
+                usage = session_tracker.token_usage.to_model_usage()
+                state.output.usage = usage
+
+                # Also record usage in Inspect AI's stats system so it appears in .eval file
+                # Use ModelName to get the full model spec (e.g., "openai/azure/gpt-5.2")
+                # ModelName.__str__ returns "{api}/{name}" which matches how generate() records usage
+                active = active_model()
+                stats_model_name = str(ModelName(active)) if active else actual_model
+                logger.info(
+                    "Recording model usage to Inspect AI stats",
+                    extra={
+                        "stats_model_name": stats_model_name,
+                        "active_model_type": type(active).__name__ if active else None,
+                        "model_name_api": ModelName(active).api if active else None,
+                        "model_name_name": ModelName(active).name if active else None,
+                        "fallback_actual_model": actual_model,
+                    },
+                )
+                record_and_check_model_usage(stats_model_name, usage)
+
+                logger.info(
+                    "Token usage recorded",
+                    extra={
+                        "model": stats_model_name,
+                        "input_tokens": session_tracker.token_usage.input_tokens,
+                        "output_tokens": session_tracker.token_usage.output_tokens,
+                        "total_tokens": session_tracker.token_usage.total_tokens,
+                    },
+                )
+
             # Single transcript sync at end
             logger.debug(
                 f"Before transcript sync: {len(state.messages)} messages, "
@@ -638,18 +669,6 @@ def copilot_solver(
             )
             sync_result = await transcript_sync.sync_state_messages(state)
             logger.debug(f"Transcript sync result: {sync_result}")
-
-            # Debug: Log first few messages to verify they're populated
-            for i, msg in enumerate(state.messages[:5]):
-                content_preview = ""
-                if hasattr(msg, "content") and msg.content:
-                    content_preview = msg.content[:100] + "..." if len(msg.content) > 100 else msg.content
-                tool_calls_count = len(msg.tool_calls) if hasattr(msg, "tool_calls") and msg.tool_calls else 0
-                content_len = len(msg.content) if hasattr(msg, "content") and msg.content else 0
-                logger.debug(
-                    f"Message[{i}]: role={msg.role}, content_len={content_len}, "
-                    f"tool_calls={tool_calls_count}, preview={content_preview[:50]}"
-                )
 
             logger.info(
                 "Copilot solver completed",

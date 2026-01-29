@@ -169,11 +169,15 @@ class TranscriptSyncOperations:
                 )
 
                 # Wait for push acknowledgment
+                # For agent_manual_push (Copilot), don't preserve state events - it's push-only
+                # and doesn't need to process injections. This avoids queue buildup.
+                preserve_state = context != "agent_manual_push"
                 ack_response = await self._events.wait_for_message_type(
                     expected_type=WebSocketMessageType.PUSH_ACK,
                     timeout=self._ws_config.push.confirmation_timeout,
                     max_iterations=WebSocketDefaults.MAX_ACK_WAIT_ITERATIONS,
                     context=context,
+                    preserve_state_events=preserve_state,
                 )
 
                 if ack_response:

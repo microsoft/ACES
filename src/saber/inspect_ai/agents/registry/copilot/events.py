@@ -49,6 +49,7 @@ class ToolRequest(BaseModel):
     name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
     type: Literal["function"] = "function"
+    description: str | None = None  # Optional description of what the tool call does
 
 
 class SessionStartData(BaseModel):
@@ -402,14 +403,21 @@ def events_to_chat_messages(
                     for tr in event.data.toolRequests
                 ]
 
+            # Use the assistant content, or fall back to tool request descriptions
+            assistant_content = event.data.content
+            if not assistant_content and event.data.toolRequests:
+                descriptions = [tr.description for tr in event.data.toolRequests if tr.description]
+                if descriptions:
+                    assistant_content = "; ".join(descriptions)
+
             messages.append(
                 ChatMessageAssistant(
-                    content=event.data.content,
+                    content=assistant_content,
                     tool_calls=tool_calls,
                 )
             )
             logger.debug(
-                f"Added AssistantMessage, content length: {len(event.data.content)}, "
+                f"Added AssistantMessage, content length: {len(assistant_content)}, "
                 f"tool_calls: {len(tool_calls) if tool_calls else 0}"
             )
 
@@ -474,10 +482,10 @@ def events_to_model_events(
 
     logger.debug(f"Converting {len(events)} Copilot events to ModelEvents")
 
-    # Get existing tool events from transcript to use their timestamps
+    # Get existing tool events from transcript (in order)
     trans = transcript()
     tool_events = [e for e in trans._events if getattr(e, "event", None) == "tool"]
-    tool_event_index = 0
+    tool_event_index = 0  # Track which tool event we're matching to
 
     logger.debug(f"Found {len(tool_events)} existing tool events in transcript")
 
@@ -490,7 +498,8 @@ def events_to_model_events(
     tool_results: dict[str, str] = {}  # tool_call_id -> result content
 
     model_event_count = 0
-    created_model_events: list[ModelEvent] = []
+    created_model_events: list[tuple[ModelEvent, int]] = []  # (event, num_tool_calls)
+    last_tool_timestamp: datetime | None = None
 
     for event in events:
         if isinstance(event, UserMessageEvent):
@@ -527,9 +536,18 @@ def events_to_model_events(
                 ]
                 num_tool_calls = len(tool_calls)
 
+            # Use the assistant content, or fall back to the first tool request's description
+            # This provides meaningful context when the assistant doesn't include a text message
+            assistant_content = event.data.content
+            if not assistant_content and event.data.toolRequests:
+                # Collect all descriptions from tool requests
+                descriptions = [tr.description for tr in event.data.toolRequests if tr.description]
+                if descriptions:
+                    assistant_content = "; ".join(descriptions)
+
             # Create assistant message
             assistant_message = ChatMessageAssistant(
-                content=event.data.content,
+                content=assistant_content,
                 tool_calls=tool_calls,
                 model=model_name,
             )
@@ -548,18 +566,7 @@ def events_to_model_events(
                 ],
             )
 
-            # Get timestamp from the next tool event (if available) and set model event
-            # timestamp to be slightly before it, so model events appear before tools
-            timestamp = datetime.now()
-            if tool_event_index < len(tool_events):
-                next_tool_event = tool_events[tool_event_index]
-                if hasattr(next_tool_event, "timestamp") and next_tool_event.timestamp:
-                    # Set model event timestamp to 1ms before the tool event
-                    timestamp = next_tool_event.timestamp - timedelta(milliseconds=1)
-                # Advance the tool event index by the number of tool calls in this turn
-                tool_event_index += num_tool_calls
-
-            # Create and emit ModelEvent
+            # Create ModelEvent with placeholder timestamp (will be set later)
             model_event = ModelEvent(
                 model=model_name,
                 role=None,
@@ -568,24 +575,73 @@ def events_to_model_events(
                 tool_choice="auto",
                 config=GenerateConfig(),  # Default config
                 output=output,
-                timestamp=timestamp,
+                timestamp=datetime.now(),  # Placeholder, will be updated
             )
 
-            created_model_events.append(model_event)
+            created_model_events.append((model_event, num_tool_calls))
             model_event_count += 1
 
             logger.debug(
                 f"Created ModelEvent #{model_event_count}: "
                 f"input_msgs={len(accumulated_input)}, "
-                f"tool_calls={num_tool_calls}, "
-                f"timestamp={timestamp.isoformat() if timestamp else 'None'}"
+                f"tool_calls={num_tool_calls}"
             )
 
             # Add assistant message to accumulated input for next turn
             accumulated_input.append(assistant_message)
 
+    # Now assign timestamps to model events based on their corresponding tool events
+    # Process in order to maintain correct sequencing
+    #
+    # Strategy:
+    # 1. First model event (system + user message) should come BEFORE all tool events
+    # 2. Model events WITH tool calls should come just BEFORE their corresponding tool events
+    # 3. Model events WITHOUT tool calls (e.g., final summary) should come AFTER the preceding
+    #    tool events but BEFORE the next tool event (if any)
+
+    # Find the earliest tool event timestamp to place the first model event before it
+    earliest_tool_timestamp: datetime | None = None
+    if tool_events:
+        earliest_tool_timestamp = min(
+            (e.timestamp for e in tool_events if hasattr(e, "timestamp") and e.timestamp),
+            default=None,
+        )
+
+    for model_idx, (model_event, num_tool_calls) in enumerate(created_model_events):
+        if model_idx == 0:
+            # First model event - place it BEFORE all tool events
+            if earliest_tool_timestamp:
+                # Place 10ms before the first tool event to ensure it's first
+                model_event.timestamp = earliest_tool_timestamp - timedelta(milliseconds=10)
+            # If no tool events, keep the placeholder timestamp
+        elif num_tool_calls > 0 and tool_event_index < len(tool_events):
+            # This model event has tool calls - set timestamp before the first tool event
+            next_tool = tool_events[tool_event_index]
+            if hasattr(next_tool, "timestamp") and next_tool.timestamp:
+                model_event.timestamp = next_tool.timestamp - timedelta(milliseconds=1)
+                last_tool_timestamp = (
+                    tool_events[tool_event_index + num_tool_calls - 1].timestamp
+                    if tool_event_index + num_tool_calls <= len(tool_events)
+                    else next_tool.timestamp
+                )
+            tool_event_index += num_tool_calls
+        elif num_tool_calls == 0:
+            # This model event has NO tool calls (e.g., final summary)
+            # Place it AFTER the last tool event but BEFORE the next model event's tools
+            if last_tool_timestamp:
+                # Place it 0.5ms after the last tool event
+                model_event.timestamp = last_tool_timestamp + timedelta(microseconds=500)
+            elif tool_event_index < len(tool_events):
+                # Place it just before the next tool event (with more margin)
+                next_tool = tool_events[tool_event_index]
+                if hasattr(next_tool, "timestamp") and next_tool.timestamp:
+                    model_event.timestamp = next_tool.timestamp - timedelta(milliseconds=2)
+
+        ts_str = model_event.timestamp.isoformat() if model_event.timestamp else "None"
+        logger.debug(f"Set timestamp for model event #{model_idx}: {ts_str}")
+
     # Add all model events to transcript
-    for model_event in created_model_events:
+    for model_event, _ in created_model_events:
         trans._event(model_event)
 
     # Sort transcript events by timestamp to properly interleave model events with tool events
