@@ -174,13 +174,7 @@ class ConnectionManager:
             episode_id: Target episode to broadcast to
             message: Typed WebSocket message (TranscriptModifiedMessage, ConnectedMessage, etc.)
         """
-        msg_type = message.type if hasattr(message, "type") else "unknown"
-
         if episode_id not in self._active_connections:
-            logger.debug(
-                "No active connections for broadcast",
-                extra={"episode_id": episode_id, "message_type": msg_type},
-            )
             return
 
         # Track disconnected connections for cleanup

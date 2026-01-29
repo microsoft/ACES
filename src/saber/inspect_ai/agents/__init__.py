@@ -82,7 +82,10 @@ def _register_core_agents() -> None:
         logger.debug("No registry directory found, skipping agent auto-registration")
         return
 
+    import importlib
+
     # Look for Python files in the registry directory (excluding __init__.py)
+    # These are legacy single-file agents - new agents should be in subdirectories
     for agent_file in agents_dir.glob("*.py"):
         if agent_file.name.startswith("_"):
             continue
@@ -92,22 +95,52 @@ def _register_core_agents() -> None:
         try:
             # Dynamically import the module
             module_name = f"saber.inspect_ai.agents.registry.{agent_name}"
-            import importlib
-
             module = importlib.import_module(module_name)
 
             # Look for create_agent function
             if hasattr(module, "create_agent"):
                 SABERAgentRegistry.register(agent_name, module.create_agent)
                 logger.debug(f"Auto-registered core agent from {agent_file.name}", extra={"agent": agent_name})
-            else:
-                logger.warning(
-                    f"Agent file {agent_file.name} missing create_agent() function", extra={"file": str(agent_file)}
-                )
+            # else: file is a utility module (tools.py, models.py, etc.), not an agent - skip silently
         except Exception as e:
             logger.warning(
                 f"Failed to auto-register agent from {agent_file.name}: {e}",
                 extra={"file": str(agent_file), "error": str(e)},
+            )
+
+    # Also look for subdirectories (packages) with __init__.py that export create_agent
+    for agent_dir in agents_dir.iterdir():
+        if not agent_dir.is_dir():
+            continue
+        if agent_dir.name.startswith("_"):
+            continue
+        if not (agent_dir / "__init__.py").exists():
+            continue
+
+        agent_name = agent_dir.name
+
+        # Skip if already registered (e.g., from a .py file)
+        if SABERAgentRegistry.get(agent_name) is not None:
+            continue
+
+        try:
+            # Dynamically import the package
+            module_name = f"saber.inspect_ai.agents.registry.{agent_name}"
+            module = importlib.import_module(module_name)
+
+            # Look for create_agent function
+            if hasattr(module, "create_agent"):
+                SABERAgentRegistry.register(agent_name, module.create_agent)
+                logger.debug(f"Auto-registered core agent from {agent_dir.name}/", extra={"agent": agent_name})
+            else:
+                logger.debug(
+                    f"Agent package {agent_dir.name}/ missing create_agent() function",
+                    extra={"dir": str(agent_dir)},
+                )
+        except Exception as e:
+            logger.warning(
+                f"Failed to auto-register agent from {agent_dir.name}/: {e}",
+                extra={"dir": str(agent_dir), "error": str(e)},
             )
 
 

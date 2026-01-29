@@ -27,4 +27,4 @@ repos:
     hooks:
       - id: mypy
         files: ^src/
-        additional_dependencies: [pydantic, types-PyYAML, types-click]
+        additional_dependencies: [pydantic, types-PyYAML, types-click, types-requests]

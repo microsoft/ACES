@@ -38,7 +38,6 @@ from datetime import datetime
 from typing import Any
 
 from inspect_ai.agent._agent import AgentState
-from inspect_ai.log._transcript import transcript
 from inspect_ai.model._chat_message import (
     ChatMessage,
     ChatMessageAssistant,
@@ -49,10 +48,14 @@ from inspect_ai.model._chat_message import (
 from inspect_ai.model._model_output import ChatCompletionChoice, ModelOutput, ModelUsage
 from inspect_ai.tool import ToolCall
 from inspect_ai.tool._tool_call import ToolCallError
-from inspect_ai.util import sandbox
 
-from ....logging_config import LogCategory, get_saber_logger
-from ...integration.tools import saber_tools
+from .....logging_config import LogCategory, get_saber_logger
+from ....integration.tools import saber_tools
+from ..tools import (
+    get_saber_mcp_url_and_headers,
+    record_model_event,
+    record_tool_event_from_call,
+)
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
 
@@ -269,54 +272,6 @@ def _create_tool_result_message(
 # =============================================================================
 
 
-def _get_saber_sandbox() -> Any:
-    """Get the SABER sandbox instance.
-
-    Returns:
-        The actual SABERSandboxEnvironment instance (unwrapped from proxy if needed)
-    """
-    sb = sandbox("saber")
-    # Unwrap proxy if needed
-    return sb._sandbox if hasattr(sb, "_sandbox") else sb
-
-
-def _get_saber_mcp_url_and_headers() -> tuple[str, dict[str, str]]:
-    """Get the SABER MCP URL and headers from the sandbox.
-
-    Returns:
-        Tuple of (mcp_url, headers_dict)
-    """
-    actual_sandbox = _get_saber_sandbox()
-
-    # Get the MCP URL from sandbox
-    mcp_url = f"{actual_sandbox._mcp_url}/mcp"
-
-    # Build headers from sandbox session info
-    # These are the same headers that SABER's MCP factory uses
-    headers = {}
-    if actual_sandbox._session_id:
-        headers["X-SABER-Session-ID"] = actual_sandbox._session_id
-    if actual_sandbox._primary_episode_id:
-        headers["X-SABER-Episode-ID"] = actual_sandbox._primary_episode_id
-    if actual_sandbox._task_id:
-        headers["X-SABER-Task-ID"] = actual_sandbox._task_id
-    headers["X-SABER-Orchestration-Env"] = "inspect_ai"
-    headers["Accept"] = "application/json, text/event-stream"
-    headers["Content-Type"] = "application/json"
-
-    logger.debug(
-        "SABER MCP configuration",
-        extra={
-            "mcp_url": mcp_url,
-            "headers": list(headers.keys()),
-            "session_id": actual_sandbox._session_id,
-            "episode_id": actual_sandbox._primary_episode_id,
-        },
-    )
-
-    return mcp_url, headers
-
-
 async def _get_saber_tool_names() -> list[str]:
     """Get the list of SABER tool names from the sandbox.
 
@@ -330,71 +285,6 @@ async def _get_saber_tool_names() -> list[str]:
     except Exception as e:
         logger.warning(f"Could not get SABER tool names: {e}")
         return []
-
-
-# =============================================================================
-# Transcript Recording
-# =============================================================================
-
-
-def _record_model_event(
-    input_messages: list[ChatMessage],
-    output: ModelOutput,
-    model_name: str,
-    config: dict[str, Any] | None = None,
-) -> None:
-    """Record a ModelEvent in the transcript.
-
-    Args:
-        input_messages: The input messages sent to the model
-        output: The model's output
-        model_name: Name of the model
-        config: Optional generation config
-    """
-    from inspect_ai.event._model import ModelEvent
-    from inspect_ai.model._generate_config import GenerateConfig
-
-    event = ModelEvent(
-        model=model_name,
-        input=input_messages,
-        tools=[],  # Tools are MCP-based, not passed directly
-        tool_choice="auto",
-        config=GenerateConfig(**(config or {})),
-        output=output,
-        completed=datetime.now(),
-    )
-    transcript()._event(event)
-
-
-def _record_tool_event(
-    tool_call: ToolCall,
-    result: str | dict[str, Any],
-    is_error: bool = False,
-    message_id: str | None = None,
-) -> None:
-    """Record a ToolEvent in the transcript.
-
-    Args:
-        tool_call: The tool call that was executed
-        result: The result of the tool execution
-        is_error: Whether the execution resulted in an error
-        message_id: Optional ID of the associated ChatMessageTool
-    """
-    from inspect_ai.event._tool import ToolEvent
-
-    content = result if isinstance(result, str) else str(result)
-    error = ToolCallError("unknown", content) if is_error else None
-
-    event = ToolEvent(
-        id=tool_call.id,
-        function=tool_call.function,
-        arguments=tool_call.arguments,
-        result=content,
-        error=error,
-        completed=datetime.now(),
-        message_id=message_id,
-    )
-    transcript()._event(event)
 
 
 # =============================================================================
@@ -464,7 +354,7 @@ async def _run_claude_code_agent(
         state.messages.insert(0, ChatMessageSystem(content=system_prompt))
 
     # Get SABER MCP URL and headers from sandbox
-    mcp_url, mcp_headers = _get_saber_mcp_url_and_headers()
+    mcp_url, mcp_headers = get_saber_mcp_url_and_headers()
 
     # Create HTTP MCP server config for Claude Code CLI
     # The CLI will connect to SABER's MCP server via HTTP (POST + SSE response)
@@ -567,7 +457,6 @@ async def _run_claude_code_agent(
     # Set up debug logging to file
     # The SDK requires both debug-to-stderr in extra_args AND a file object in debug_stderr
     import os
-    from datetime import datetime
 
     log_dir = os.environ.get("SABER_CLAUDE_CODE_LOG_DIR", "logs/claude_code")
     os.makedirs(log_dir, exist_ok=True)
@@ -639,10 +528,10 @@ async def _run_claude_code_agent(
 
                     if model_output:
                         # Record ModelEvent in transcript
-                        _record_model_event(
+                        record_model_event(
+                            model=model_name,
                             input_messages=list(state.messages[:-1]),
                             output=model_output,
-                            model_name=model_name,
                         )
                         state.output = model_output
 
@@ -674,7 +563,7 @@ async def _run_claude_code_agent(
 
                                 # Record ToolEvent in transcript
                                 if tool_call:
-                                    _record_tool_event(
+                                    record_tool_event_from_call(
                                         tool_call=tool_call,
                                         result=content,
                                         is_error=is_error,

@@ -432,12 +432,16 @@ def saber_scorer() -> Scorer:
         """
         try:
             # Log scorer invocation for debugging
+            sample_id_for_log = (
+                state.metadata.get(MetadataKeys.SAMPLE_ID, "unknown") if state and state.metadata else "unknown"
+            )
+
             logger.info(
                 "Scorer invoked",
                 extra={
                     "event": "scorer_invoked",
-                    "state_is_none": state is None,
-                    "state_messages_is_none": state.messages is None if state else "state_is_none",
+                    "sample_id": sample_id_for_log,
+                    "has_completion": bool(state and state.output and state.output.completion),
                 },
             )
 
@@ -454,6 +458,15 @@ def saber_scorer() -> Scorer:
             episode_mapping = task_store.get("saber_episode_mapping", {})
             current_episode = episode_mapping.get(sample_id)
             episode_id = current_episode.episode_id if current_episode else None
+
+            logger.debug(
+                "Scorer context extracted",
+                extra={
+                    "sample_id": sample_id,
+                    "episode_id": episode_id,
+                    "session_id": session_id,
+                },
+            )
 
             # Validate SABER context (fail-fast)
             if not session_manager:
@@ -956,17 +969,19 @@ async def _score_submission_llm(
         },
     )
 
-    # Execute LLM
-    state.messages.clear()
-    state.messages.append(ChatMessageSystem(content=system_message))
-    state.messages.append(ChatMessageUser(content=user_message))
+    # Execute LLM with separate message list to preserve state.messages from solver
+    # IMPORTANT: Do NOT modify state.messages - it contains the solver's conversation history
+    scorer_messages = [
+        ChatMessageSystem(content=system_message),
+        ChatMessageUser(content=user_message),
+    ]
 
     model = get_model(model_name)
-    response = await model.generate(state.messages)
-    state.output = response  # Update state with LLM response
+    response = await model.generate(scorer_messages)
+    # Note: Not updating state.output to preserve solver's output
 
     # Parse response (expect CORRECT/INCORRECT)
-    judge_response = state.output.completion.upper()
+    judge_response = response.completion.upper()
     max_score = criteria.scoring.get("max_score", 1.0)
 
     # Check for INCORRECT first (since INCORRECT contains CORRECT as substring)
@@ -1379,17 +1394,19 @@ async def _score_subtasks_llm_batch(
             },
         )
 
-        # Execute LLM (single call for all subtasks)
-        state.messages.clear()
-        state.messages.append(ChatMessageSystem(content=system_message))
-        state.messages.append(ChatMessageUser(content=user_message))
+        # Execute LLM with separate message list to preserve state.messages from solver
+        # IMPORTANT: Do NOT modify state.messages - it contains the solver's conversation history
+        scorer_messages = [
+            ChatMessageSystem(content=system_message),
+            ChatMessageUser(content=user_message),
+        ]
 
         model = get_model(model_name)
-        response = await model.generate(state.messages)
-        state.output = response
+        response = await model.generate(scorer_messages)
+        # Note: Not updating state.output to preserve solver's output
 
         # Parse LLM response
-        judge_response = state.output.completion
+        judge_response = response.completion
         chunk_completions = _parse_llm_step_evaluations(judge_response, valid_checkpoint_ids)
 
         # Merge chunk completions into all_completions

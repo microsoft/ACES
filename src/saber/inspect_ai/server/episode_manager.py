@@ -14,7 +14,7 @@ import asyncio
 import threading
 import time
 
-import requests  # type: ignore[import-untyped]
+import requests
 from inspect_ai._util.error import PrerequisiteError
 from inspect_ai.util import store
 

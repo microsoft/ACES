@@ -13,7 +13,7 @@ Key features:
 import threading
 
 import aiohttp
-import requests  # type: ignore[import-untyped]
+import requests
 from inspect_ai._util.error import PrerequisiteError
 
 from saber.logging_config import LogCategory, get_saber_logger

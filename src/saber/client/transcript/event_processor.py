@@ -555,9 +555,10 @@ class WebSocketEventProcessor:
     ) -> WebSocketMessageOrDict | None:
         """Wait for a specific WebSocket message type, re-queuing state events.
 
-        IMPORTANT: State events (is_waiting_on_*, transcript_modified) are collected
-        and re-queued at the END rather than immediately, to prevent infinite loops
-        where we keep reading the same re-queued events.
+        IMPORTANT: State events (is_waiting_on_*, transcript_modified) are re-queued
+        rather than discarded, since they may be needed by wait_for_state_event()
+        which runs after this method returns. This prevents race conditions where
+        injections arrive while we're waiting for push_ack.
 
         Args:
             expected_type: The WebSocketMessageType to wait for
@@ -577,42 +578,32 @@ class WebSocketEventProcessor:
             WebSocketMessageType.TRANSCRIPT_ERROR.value,
         }
 
-        # Collect state events to re-queue at the end (not immediately, to avoid loops)
-        preserved_state_events: list[WebSocketMessageOrDict] = []
-        result: WebSocketMessageOrDict | None = None
+        # Track iterations where we actually discard events (not re-queue)
+        # Re-queued state events shouldn't count against the limit since they're preserved
+        discarded_count = 0
 
-        try:
-            for iteration in range(max_iterations):
-                try:
-                    response = await asyncio.wait_for(
-                        self._event_queue.get(),
-                        timeout=timeout,
-                    )
+        for iteration in range(max_iterations * 10):  # Allow more total iterations
+            try:
+                response = await asyncio.wait_for(
+                    self._event_queue.get(),
+                    timeout=timeout,
+                )
 
-                    # Handle both Pydantic models and dicts (for test compatibility)
-                    response_type = response.type if hasattr(response, "type") else response.get("type")
+                # Handle both Pydantic models and dicts (for test compatibility)
+                response_type = response.type if hasattr(response, "type") else response.get("type")
 
-                    if response_type == expected_type.value:
-                        result = response
-                        return result
-                    elif response_type in state_event_types:
-                        # Preserve state events to re-queue later (don't immediately re-queue)
-                        preserved_state_events.append(response)
+                if response_type == expected_type.value:
+                    return response
+                elif response_type in state_event_types:
+                    # Re-queue state events - they may be needed by wait_for_state_event()
+                    # This prevents race conditions where injections arrive during push_ack wait
+                    # NOTE: Re-queued events don't count against max_iterations since we're
+                    # preserving them, not discarding. This prevents livelock when the server
+                    # sends many state events (e.g., during Copilot bulk transcript push).
+                    try:
+                        self._event_queue.put_nowait(response)
                         logger.debug(
-                            f"Preserving state event while waiting for {expected_type.value}",
-                            extra={
-                                "episode_id": self._episode_id,
-                                "response_type": response_type,
-                                "expected_type": expected_type.value,
-                                "iteration": iteration,
-                                "context": context,
-                                "preserved_count": len(preserved_state_events),
-                            },
-                        )
-                    else:
-                        # Non-state, non-matching event - safe to discard
-                        logger.debug(
-                            f"Discarding non-matching event while waiting for {expected_type.value}",
+                            f"Re-queued state event while waiting for {expected_type.value}",
                             extra={
                                 "episode_id": self._episode_id,
                                 "response_type": response_type,
@@ -621,40 +612,66 @@ class WebSocketEventProcessor:
                                 "context": context,
                             },
                         )
-                except asyncio.TimeoutError:
-                    logger.warning(
-                        f"Timeout waiting for {expected_type.value}",
+                    except asyncio.QueueFull:
+                        logger.warning(
+                            "Event queue full, dropping state event",
+                            extra={
+                                "episode_id": self._episode_id,
+                                "response_type": response_type,
+                            },
+                        )
+                        discarded_count += 1
+                else:
+                    # Non-state, non-matching event - safe to discard
+                    discarded_count += 1
+                    logger.debug(
+                        f"Discarding non-matching event while waiting for {expected_type.value}",
                         extra={
                             "episode_id": self._episode_id,
-                            "timeout": timeout,
+                            "response_type": response_type,
+                            "expected_type": expected_type.value,
+                            "iteration": iteration,
+                            "discarded_count": discarded_count,
+                            "context": context,
+                        },
+                    )
+
+                # Only enforce max_iterations on actually discarded events
+                if discarded_count >= max_iterations:
+                    logger.warning(
+                        f"Max discarded events exceeded waiting for {expected_type.value}",
+                        extra={
+                            "episode_id": self._episode_id,
+                            "max_iterations": max_iterations,
+                            "discarded_count": discarded_count,
+                            "total_iterations": iteration + 1,
                             "context": context,
                         },
                     )
                     return None
 
-            logger.warning(
-                f"Max iterations exceeded waiting for {expected_type.value}",
-                extra={
-                    "episode_id": self._episode_id,
-                    "max_iterations": max_iterations,
-                    "context": context,
-                },
-            )
-            return None
-        finally:
-            # Re-queue preserved state events so they're not lost
-            for event in preserved_state_events:
-                try:
-                    self._event_queue.put_nowait(event)
-                except asyncio.QueueFull:
-                    event_type = event.type if hasattr(event, "type") else event.get("type")
-                    logger.warning(
-                        "Event queue full, dropping preserved state event",
-                        extra={
-                            "episode_id": self._episode_id,
-                            "response_type": event_type,
-                        },
-                    )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"Timeout waiting for {expected_type.value}",
+                    extra={
+                        "episode_id": self._episode_id,
+                        "timeout": timeout,
+                        "context": context,
+                    },
+                )
+                return None
+
+        # Safety limit reached (shouldn't normally happen)
+        logger.warning(
+            f"Safety iteration limit exceeded waiting for {expected_type.value}",
+            extra={
+                "episode_id": self._episode_id,
+                "max_iterations": max_iterations,
+                "discarded_count": discarded_count,
+                "context": context,
+            },
+        )
+        return None
 
     def drain_queue(self) -> None:
         """Drain the event queue to release message references."""

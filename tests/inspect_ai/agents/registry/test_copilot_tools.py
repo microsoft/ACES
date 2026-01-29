@@ -13,7 +13,7 @@ class TestMCPToCopilotToolConversion:
 
     def test_convert_simple_mcp_tool_to_copilot_tool(self):
         """Test converting a simple MCP tool with basic parameters."""
-        from saber.inspect_ai.integration.copilot_tools import mcp_tool_to_copilot_tool
+        from saber.inspect_ai.agents.registry.copilot.tools import mcp_tool_to_copilot_tool
 
         # Create mock MCP tool
         mcp_tool = Mock()
@@ -42,7 +42,7 @@ class TestMCPToCopilotToolConversion:
 
     def test_convert_mcp_tool_preserves_schema(self):
         """Test that conversion preserves complex JSON schemas."""
-        from saber.inspect_ai.integration.copilot_tools import mcp_tool_to_copilot_tool
+        from saber.inspect_ai.agents.registry.copilot.tools import mcp_tool_to_copilot_tool
 
         mcp_tool = Mock()
         mcp_tool.name = "file_edit"
@@ -69,7 +69,7 @@ class TestMCPToCopilotToolConversion:
 
     def test_convert_mcp_tool_without_schema(self):
         """Test converting MCP tool with no input schema."""
-        from saber.inspect_ai.integration.copilot_tools import mcp_tool_to_copilot_tool
+        from saber.inspect_ai.agents.registry.copilot.tools import mcp_tool_to_copilot_tool
 
         # Use spec=[] to prevent auto-mocking of attributes
         mcp_tool = Mock(spec=["name", "description", "inputSchema"])
@@ -86,7 +86,7 @@ class TestMCPToCopilotToolConversion:
     @pytest.mark.asyncio
     async def test_tool_handler_calls_mcp_client(self):
         """Test that the Copilot tool handler correctly calls MCP client."""
-        from saber.inspect_ai.integration.copilot_tools import mcp_tool_to_copilot_tool
+        from saber.inspect_ai.agents.registry.copilot.tools import mcp_tool_to_copilot_tool
 
         mcp_tool = Mock()
         mcp_tool.name = "bash"
@@ -131,7 +131,7 @@ class TestMCPToCopilotToolConversion:
     @pytest.mark.asyncio
     async def test_tool_handler_handles_mcp_error(self):
         """Test that handler properly handles MCP tool errors."""
-        from saber.inspect_ai.integration.copilot_tools import mcp_tool_to_copilot_tool
+        from saber.inspect_ai.agents.registry.copilot.tools import mcp_tool_to_copilot_tool
 
         mcp_tool = Mock()
         mcp_tool.name = "bash"
@@ -166,7 +166,7 @@ class TestMCPToCopilotToolConversion:
     @pytest.mark.asyncio
     async def test_tool_handler_handles_exception(self):
         """Test that handler catches and reports exceptions."""
-        from saber.inspect_ai.integration.copilot_tools import mcp_tool_to_copilot_tool
+        from saber.inspect_ai.agents.registry.copilot.tools import mcp_tool_to_copilot_tool
 
         mcp_tool = Mock()
         mcp_tool.name = "bash"
@@ -198,7 +198,7 @@ class TestConvertAllMCPTools:
     @pytest.mark.asyncio
     async def test_convert_multiple_tools(self):
         """Test converting a list of MCP tools."""
-        from saber.inspect_ai.integration.copilot_tools import convert_mcp_tools_to_copilot
+        from saber.inspect_ai.agents.registry.copilot.tools import convert_mcp_tools_to_copilot
 
         # Create multiple mock MCP tools
         tool1 = Mock()
@@ -224,7 +224,7 @@ class TestConvertAllMCPTools:
     @pytest.mark.asyncio
     async def test_convert_empty_tools_list(self):
         """Test converting an empty list of tools."""
-        from saber.inspect_ai.integration.copilot_tools import convert_mcp_tools_to_copilot
+        from saber.inspect_ai.agents.registry.copilot.tools import convert_mcp_tools_to_copilot
 
         mock_mcp_client = AsyncMock()
         copilot_tools = convert_mcp_tools_to_copilot([], mock_mcp_client)
@@ -237,7 +237,7 @@ class TestCreateSubmitTool:
 
     def test_create_submit_tool_returns_tool(self):
         """Test that create_submit_tool returns a valid Tool."""
-        from saber.inspect_ai.integration.copilot_tools import create_submit_tool
+        from saber.inspect_ai.agents.registry.copilot.tools import create_submit_tool
 
         tool = create_submit_tool()
 
@@ -247,7 +247,7 @@ class TestCreateSubmitTool:
 
     def test_submit_tool_has_answer_parameter(self):
         """Test that submit tool requires an answer parameter."""
-        from saber.inspect_ai.integration.copilot_tools import create_submit_tool
+        from saber.inspect_ai.agents.registry.copilot.tools import create_submit_tool
 
         tool = create_submit_tool()
 
@@ -259,7 +259,7 @@ class TestCreateSubmitTool:
     @pytest.mark.asyncio
     async def test_submit_tool_handler_returns_answer(self):
         """Test that submit tool returns the answer directly (inspect_ai pattern)."""
-        from saber.inspect_ai.integration.copilot_tools import create_submit_tool
+        from saber.inspect_ai.agents.registry.copilot.tools import create_submit_tool
 
         tool = create_submit_tool()
 
@@ -279,7 +279,7 @@ class TestCreateSubmitTool:
     @pytest.mark.asyncio
     async def test_submit_tool_handler_with_empty_answer(self):
         """Test submit tool handles empty answer gracefully."""
-        from saber.inspect_ai.integration.copilot_tools import create_submit_tool
+        from saber.inspect_ai.agents.registry.copilot.tools import create_submit_tool
 
         tool = create_submit_tool()
 

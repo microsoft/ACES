@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from ...logging_config import LogCategory, get_saber_logger
+from saber.logging_config import LogCategory, get_saber_logger
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
 
@@ -506,15 +506,17 @@ def convert_mcp_tools_to_copilot(
 
 def create_submit_tool(
     tracker: ToolCallTracker | None = None,
+    session_tracker: Any | None = None,
 ) -> Tool:
     """Create the submit tool for task completion.
 
     This tool follows inspect_ai's native submit pattern - it simply returns
-    the answer. The agent loop is responsible for detecting submission and
-    setting state.output.completion to the answer for scoring.
+    the answer. When a session_tracker is provided, it sets the submitted flag
+    directly, allowing the agent loop to exit immediately.
 
     Args:
         tracker: Optional ToolCallTracker to record calls for transcript visibility
+        session_tracker: Optional SessionTracker to set submitted flag on
 
     Returns:
         Copilot SDK Tool for submitting answers
@@ -523,8 +525,8 @@ def create_submit_tool(
     async def handler(invocation: ToolInvocation) -> ToolResult:
         """Handle answer submission.
 
-        Simply returns the answer - the agent loop handles setting
-        state.output.completion for scoring (matching inspect_ai's pattern).
+        Sets the submission flag on session_tracker if provided, and returns
+        the answer to the agent.
 
         Args:
             invocation: Tool invocation with answer in arguments
@@ -536,12 +538,18 @@ def create_submit_tool(
         answer = arguments.get("answer", "")
 
         logger.info(
-            "Submit tool called",
+            "Submit tool handler invoked",
             extra={
                 "tool_call_id": invocation.get("tool_call_id"),
-                "answer_length": len(answer),
+                "answer_length": len(answer) if answer else 0,
+                "has_session_tracker": session_tracker is not None,
             },
         )
+
+        # Set submission on session tracker (signals agent loop to exit)
+        if session_tracker is not None and hasattr(session_tracker, "set_submission"):
+            session_tracker.set_submission(answer)
+            logger.info("Submission flag set on session tracker")
 
         # Record submission in tracker for transcript
         if tracker:
@@ -553,8 +561,6 @@ def create_submit_tool(
                 tool_call_id=invocation.get("tool_call_id"),
             )
 
-        # Return the answer directly (like inspect_ai's submit tool)
-        # The agent loop will detect this and set state.output.completion
         return {
             "textResultForLlm": answer,
             "resultType": "success",

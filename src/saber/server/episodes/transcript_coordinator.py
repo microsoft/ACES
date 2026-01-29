@@ -197,8 +197,7 @@ class TranscriptCoordinator:
 
         for msg in messages:
             if msg.get("role") == "assistant":
-                # Handle explicit None from LLM (tool_calls: null) and missing key
-                tool_calls = msg.get("tool_calls") or []
+                tool_calls = msg.get("tool_calls", [])
                 for tc in tool_calls:
                     if tc.get("id"):
                         all_tool_call_ids.append(tc["id"])
@@ -417,8 +416,8 @@ class TranscriptCoordinator:
         if request.messages_to_push:
             is_duplicate = await self._is_duplicate_push(episode, request.messages_to_push, request.since_version)
             if is_duplicate:
-                logger.debug(
-                    "Skipping duplicate push (client retry detected)",
+                logger.info(
+                    "[IDEMPOTENCY] Skipping duplicate push (client retry detected)",
                     extra={
                         "episode_id": episode.episode_id,
                         "since_version": request.since_version,
@@ -615,13 +614,12 @@ class TranscriptCoordinator:
         current_version = episode.context.get(MetadataKeys.TRANSCRIPT_VERSION, 0)
 
         logger.debug(
-            "_push_messages called",
+            "Push messages called",
             extra={
                 "episode_id": episode.episode_id,
                 "operation": operation,
                 "existing_count": len(existing),
                 "new_message_count": len(messages),
-                "current_version": current_version,
             },
         )
 
@@ -655,7 +653,6 @@ class TranscriptCoordinator:
                                 extra={
                                     "episode_id": episode.episode_id,
                                     "duplicate_tool_call_ids": list(overlap),
-                                    "existing_count": len(existing),
                                 },
                             )
                             # Don't add the duplicate - return without modifying transcript
@@ -665,41 +662,13 @@ class TranscriptCoordinator:
         # Apply operation to compute new transcript
         if operation == TranscriptPushOperation.APPEND.value:
             updated_messages = existing + messages
-            logger.debug(
-                "APPEND operation - extending existing transcript",
-                extra={
-                    "episode_id": episode.episode_id,
-                    "result_count": len(updated_messages),
-                },
-            )
 
         elif operation == TranscriptPushOperation.RESTART.value:
             # Reset to initial transcript (system->user) then append new messages
             initial = episode.context.get(MetadataKeys.INITIAL_TRANSCRIPT, [])
-            initial_tool_calls_info = self._analyze_tool_calls(initial) if initial else {}
-            logger.debug(
-                "RESTART operation - analyzing INITIAL_TRANSCRIPT",
-                extra={
-                    "episode_id": episode.episode_id,
-                    "initial_transcript_count": len(initial),
-                    "initial_roles": [m.get("role") for m in initial] if initial else [],
-                    "initial_tool_calls_info": initial_tool_calls_info,
-                },
-            )
             if initial:
                 # Use a copy of initial transcript to avoid mutation
                 updated_messages = list(initial) + messages
-                result_tool_calls_info = self._analyze_tool_calls(updated_messages)
-                logger.debug(
-                    "RESTART result transcript",
-                    extra={
-                        "episode_id": episode.episode_id,
-                        "result_count": len(updated_messages),
-                        "result_roles": [m.get("role") for m in updated_messages],
-                        "result_tool_calls_info": result_tool_calls_info,
-                        "has_orphaned_tool_calls": result_tool_calls_info.get("orphaned_tool_call_ids", []) != [],
-                    },
-                )
             else:
                 # Fallback: if no initial transcript, just use the new messages
                 logger.warning(
@@ -712,21 +681,11 @@ class TranscriptCoordinator:
             # Fallback to append for unknown operations
             logger.warning(
                 f"Unknown operation '{operation}', falling back to append",
-                extra={"episode_id": episode.episode_id, "operation": operation},
+                extra={"episode_id": episode.episode_id},
             )
             updated_messages = existing + messages
 
         new_version = current_version + 1  # Always increment (monotonic)
-
-        logger.debug(
-            "Updating episode context with new transcript",
-            extra={
-                "episode_id": episode.episode_id,
-                "new_version": new_version,
-                "updated_message_count": len(updated_messages),
-                "last_message_role": updated_messages[-1].get("role") if updated_messages else "none",
-            },
-        )
 
         # Capture initial transcript after first COMPLETE assistant turn.
         # "Complete" means the assistant message doesn't have pending tool_calls,
@@ -735,55 +694,22 @@ class TranscriptCoordinator:
         initial = episode.context.get(MetadataKeys.INITIAL_TRANSCRIPT, [])
         initial_has_complete_assistant = self._has_complete_assistant_turn(initial)
 
-        # Debug: analyze current initial transcript for tool_calls
-        initial_tool_calls_info = self._analyze_tool_calls(initial) if initial else {}
-        logger.debug(
-            "INITIAL_TRANSCRIPT analysis before capture check",
-            extra={
-                "episode_id": episode.episode_id,
-                "initial_message_count": len(initial),
-                "initial_has_complete_assistant": initial_has_complete_assistant,
-                "initial_tool_calls_info": initial_tool_calls_info,
-            },
-        )
-
         if not initial_has_complete_assistant:
             updated_has_complete = self._has_complete_assistant_turn(updated_messages)
-            logger.debug(
-                "Checking updated transcript for complete assistant turn",
-                extra={
-                    "episode_id": episode.episode_id,
-                    "updated_has_complete_assistant": updated_has_complete,
-                    "updated_tool_calls_info": self._analyze_tool_calls(updated_messages),
-                },
-            )
             # Check if the updated transcript now has a complete assistant turn
             if updated_has_complete:
                 # Find the safe capture point: everything up to and including
                 # the first complete assistant turn
                 capture_point = self._find_safe_initial_transcript(updated_messages)
                 if capture_point:
-                    capture_tool_calls_info = self._analyze_tool_calls(capture_point)
                     await episode.update_context_atomic({MetadataKeys.INITIAL_TRANSCRIPT: capture_point})
                     logger.debug(
                         "Captured initial transcript with complete assistant turn",
                         extra={
                             "episode_id": episode.episode_id,
                             "message_count": len(capture_point),
-                            "message_roles": [m.get("role") for m in capture_point],
-                            "capture_tool_calls_info": capture_tool_calls_info,
                         },
                     )
-                else:
-                    logger.warning(
-                        "_find_safe_initial_transcript returned None despite complete turn",
-                        extra={"episode_id": episode.episode_id},
-                    )
-            else:
-                logger.debug(
-                    "Skipping INITIAL_TRANSCRIPT capture - no complete assistant turn yet",
-                    extra={"episode_id": episode.episode_id},
-                )
 
         await episode.update_context_atomic(
             {

@@ -8,6 +8,9 @@ from unittest.mock import AsyncMock, Mock, MagicMock, patch, PropertyMock
 from typing import Any
 import asyncio
 
+# Import the tools module to ensure it's loaded before patching
+import saber.inspect_ai.agents.registry.tools  # noqa: F401
+
 
 # Module-level fixture to mock sandbox() from inspect_ai.util
 @pytest.fixture(autouse=True)
@@ -16,8 +19,9 @@ def mock_sandbox_function():
     mock_sb = Mock()
     mock_sb._sandbox = Mock()
     mock_sb._sandbox._mcp_client = Mock()
-    with patch("saber.inspect_ai.agents.registry.copilot.sandbox", return_value=mock_sb):
-        yield mock_sb
+    with patch("saber.inspect_ai.agents.registry.tools.sandbox", return_value=mock_sb):
+        with patch("saber.inspect_ai.agents.registry.copilot.solver.sandbox", return_value=mock_sb):
+            yield mock_sb
 
 
 class TestCopilotAgentCreation:
@@ -37,7 +41,7 @@ class TestCopilotAgentCreation:
         agent_factory = create_agent(max_turns=10, model="gpt-4o")
         assert callable(agent_factory)
 
-    @patch("saber.inspect_ai.agents.registry.copilot.copilot_solver")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.copilot_solver")
     def test_create_agent_calls_copilot_solver_with_prompts(self, mock_copilot_solver):
         """Test that the returned factory calls copilot_solver with prompts."""
         from saber.inspect_ai.agents.registry.copilot import create_agent
@@ -66,7 +70,7 @@ class TestCopilotAgentCreation:
         )
         assert result == mock_solver
 
-    @patch("saber.inspect_ai.agents.registry.copilot.copilot_solver")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.copilot_solver")
     def test_create_agent_passes_kwargs_to_solver(self, mock_copilot_solver):
         """Test that create_agent passes kwargs to copilot_solver."""
         from saber.inspect_ai.agents.registry.copilot import create_agent
@@ -80,7 +84,7 @@ class TestCopilotAgentCreation:
         assert call_kwargs.get("max_turns") == 20
         assert call_kwargs.get("model") == "gpt-4o"
 
-    @patch("saber.inspect_ai.agents.registry.copilot.copilot_solver")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.copilot_solver")
     def test_create_agent_with_transcript_config(self, mock_copilot_solver):
         """Test that transcript config is passed through."""
         from saber.inspect_ai.agents.registry.copilot import create_agent
@@ -94,7 +98,7 @@ class TestCopilotAgentCreation:
         call_kwargs = mock_copilot_solver.call_args.kwargs
         assert call_kwargs.get("transcript_config") == transcript_config
 
-    @patch("saber.inspect_ai.agents.registry.copilot.copilot_solver")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.copilot_solver")
     def test_create_agent_with_submit_disabled(self, mock_copilot_solver):
         """Test that submit=False disables the submit tool."""
         from saber.inspect_ai.agents.registry.copilot import create_agent
@@ -161,18 +165,18 @@ class TestCopilotSolver:
         assert callable(solver)
 
     @pytest.mark.asyncio
-    @patch("saber.inspect_ai.agents.registry.copilot.EventCapture")
-    @patch("saber.inspect_ai.agents.registry.copilot.CopilotClientWrapper")
-    @patch("saber.inspect_ai.agents.registry.copilot.get_saber_mcp_tools")
-    @patch("saber.inspect_ai.agents.registry.copilot.convert_mcp_tools_to_copilot")
-    @patch("saber.inspect_ai.agents.registry.copilot.create_submit_tool")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.SessionTracker")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.CopilotClientWrapper")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.get_saber_mcp_tools")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.convert_mcp_tools_to_copilot")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.create_submit_tool")
     async def test_copilot_solver_creates_client_and_session(
         self,
         mock_create_submit,
         mock_convert_tools,
         mock_get_mcp_tools,
         mock_client_wrapper_class,
-        mock_event_capture_class,
+        mock_session_tracker_class,
         mock_task_state,
         mock_copilot_client,
         mock_copilot_session,
@@ -181,23 +185,19 @@ class TestCopilotSolver:
         from saber.inspect_ai.agents.registry.copilot import copilot_solver
 
         # Setup mocks
-        mock_event_capture = Mock()
-        mock_event_capture.attach = Mock()
-        mock_event_capture.detach = Mock()
-        mock_event_capture.reset_turn = Mock()
-        mock_event_capture.wait_for_idle = AsyncMock()
-        mock_turn_data = Mock(has_content=Mock(return_value=False), format_transcript=Mock(return_value=""), events=[], message_groups=[], assistant_messages=[], reasoning_messages=[], tool_calls=[], tool_results=[])
-        mock_event_capture.current_turn = mock_turn_data
-        mock_event_capture_class.return_value = mock_event_capture
+        mock_session_tracker = Mock()
+        mock_session_tracker.on_event = Mock()
+        mock_session_tracker.wait_for_idle = AsyncMock()
+        mock_session_tracker.submitted = True  # End loop immediately
+        mock_session_tracker.submit_answer = None
+        mock_session_tracker.session_id = None
+        mock_session_tracker_class.return_value = mock_session_tracker
 
         mock_client_wrapper_class.return_value = mock_copilot_client
         mock_copilot_client.create_session = AsyncMock(return_value=mock_copilot_session)
         mock_get_mcp_tools.return_value = []
         mock_convert_tools.return_value = []
         mock_create_submit.return_value = Mock(name="submit_answer")
-
-        # Mark as submitted to end the loop
-        mock_task_state.store.get = Mock(side_effect=lambda k: True if k == "submitted" else None)
 
         solver = copilot_solver(
             instruction_prompt="Analyze the system",
@@ -215,18 +215,18 @@ class TestCopilotSolver:
         mock_copilot_client.stop.assert_called_once()
 
     @pytest.mark.asyncio
-    @patch("saber.inspect_ai.agents.registry.copilot.EventCapture")
-    @patch("saber.inspect_ai.agents.registry.copilot.CopilotClientWrapper")
-    @patch("saber.inspect_ai.agents.registry.copilot.get_saber_mcp_tools")
-    @patch("saber.inspect_ai.agents.registry.copilot.convert_mcp_tools_to_copilot")
-    @patch("saber.inspect_ai.agents.registry.copilot.create_submit_tool")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.SessionTracker")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.CopilotClientWrapper")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.get_saber_mcp_tools")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.convert_mcp_tools_to_copilot")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.create_submit_tool")
     async def test_copilot_solver_sends_instruction_prompt_first(
         self,
         mock_create_submit,
         mock_convert_tools,
         mock_get_mcp_tools,
         mock_client_wrapper_class,
-        mock_event_capture_class,
+        mock_session_tracker_class,
         mock_task_state,
         mock_copilot_client,
         mock_copilot_session,
@@ -234,31 +234,27 @@ class TestCopilotSolver:
         """Test that solver sends instruction prompt on first turn."""
         from saber.inspect_ai.agents.registry.copilot import copilot_solver
 
-        # Setup EventCapture mock
-        mock_event_capture = Mock()
-        mock_event_capture.attach = Mock()
-        mock_event_capture.detach = Mock()
-        mock_event_capture.reset_turn = Mock()
-        mock_event_capture.wait_for_idle = AsyncMock()
-        mock_turn_data = Mock(has_content=Mock(return_value=False), format_transcript=Mock(return_value=""), events=[], message_groups=[], assistant_messages=[], reasoning_messages=[], tool_calls=[], tool_results=[])
-        mock_event_capture.current_turn = mock_turn_data
-        mock_event_capture_class.return_value = mock_event_capture
+        # Setup SessionTracker mock - submit after first turn
+        mock_session_tracker = Mock()
+        mock_session_tracker.on_event = Mock()
+        mock_session_tracker.wait_for_idle = AsyncMock()
+        mock_session_tracker.submit_answer = None
+        mock_session_tracker.session_id = None
+
+        # Use a list to track call count
+        turn_count = [0]
+        def submitted_getter():
+            turn_count[0] += 1
+            return turn_count[0] > 1
+        type(mock_session_tracker).submitted = PropertyMock(side_effect=submitted_getter)
+
+        mock_session_tracker_class.return_value = mock_session_tracker
 
         mock_client_wrapper_class.return_value = mock_copilot_client
         mock_copilot_client.create_session = AsyncMock(return_value=mock_copilot_session)
         mock_get_mcp_tools.return_value = []
         mock_convert_tools.return_value = []
         mock_create_submit.return_value = Mock(name="submit_answer")
-
-        # Submit on first turn
-        call_count = [0]
-        def side_effect(k):
-            if k == "submitted":
-                call_count[0] += 1
-                return call_count[0] > 1  # Submit after first iteration
-            return None
-
-        mock_task_state.store.get = Mock(side_effect=side_effect)
 
         solver = copilot_solver(
             instruction_prompt="Analyze the system",
@@ -274,18 +270,18 @@ class TestCopilotSolver:
         assert "Analyze the system" in first_call[0][0].get("prompt", "")
 
     @pytest.mark.asyncio
-    @patch("saber.inspect_ai.agents.registry.copilot.EventCapture")
-    @patch("saber.inspect_ai.agents.registry.copilot.CopilotClientWrapper")
-    @patch("saber.inspect_ai.agents.registry.copilot.get_saber_mcp_tools")
-    @patch("saber.inspect_ai.agents.registry.copilot.convert_mcp_tools_to_copilot")
-    @patch("saber.inspect_ai.agents.registry.copilot.create_submit_tool")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.SessionTracker")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.CopilotClientWrapper")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.get_saber_mcp_tools")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.convert_mcp_tools_to_copilot")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.create_submit_tool")
     async def test_copilot_solver_registers_mcp_tools(
         self,
         mock_create_submit,
         mock_convert_tools,
         mock_get_mcp_tools,
         mock_client_wrapper_class,
-        mock_event_capture_class,
+        mock_session_tracker_class,
         mock_task_state,
         mock_copilot_client,
         mock_copilot_session,
@@ -293,15 +289,14 @@ class TestCopilotSolver:
         """Test that solver registers MCP tools with Copilot session."""
         from saber.inspect_ai.agents.registry.copilot import copilot_solver
 
-        # Setup EventCapture mock
-        mock_event_capture = Mock()
-        mock_event_capture.attach = Mock()
-        mock_event_capture.detach = Mock()
-        mock_event_capture.reset_turn = Mock()
-        mock_event_capture.wait_for_idle = AsyncMock()
-        mock_turn_data = Mock(has_content=Mock(return_value=False), format_transcript=Mock(return_value=""), events=[], message_groups=[], assistant_messages=[], reasoning_messages=[], tool_calls=[], tool_results=[])
-        mock_event_capture.current_turn = mock_turn_data
-        mock_event_capture_class.return_value = mock_event_capture
+        # Setup SessionTracker mock
+        mock_session_tracker = Mock()
+        mock_session_tracker.on_event = Mock()
+        mock_session_tracker.wait_for_idle = AsyncMock()
+        mock_session_tracker.submitted = True  # End loop immediately
+        mock_session_tracker.submit_answer = None
+        mock_session_tracker.session_id = None
+        mock_session_tracker_class.return_value = mock_session_tracker
 
         mock_client_wrapper_class.return_value = mock_copilot_client
         mock_copilot_client.create_session = AsyncMock(return_value=mock_copilot_session)
@@ -336,18 +331,18 @@ class TestCopilotSolver:
         assert len(tools) >= 2  # MCP tool + submit tool
 
     @pytest.mark.asyncio
-    @patch("saber.inspect_ai.agents.registry.copilot.EventCapture")
-    @patch("saber.inspect_ai.agents.registry.copilot.CopilotClientWrapper")
-    @patch("saber.inspect_ai.agents.registry.copilot.get_saber_mcp_tools")
-    @patch("saber.inspect_ai.agents.registry.copilot.convert_mcp_tools_to_copilot")
-    @patch("saber.inspect_ai.agents.registry.copilot.create_submit_tool")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.SessionTracker")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.CopilotClientWrapper")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.get_saber_mcp_tools")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.convert_mcp_tools_to_copilot")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.create_submit_tool")
     async def test_copilot_solver_stops_on_max_turns(
         self,
         mock_create_submit,
         mock_convert_tools,
         mock_get_mcp_tools,
         mock_client_wrapper_class,
-        mock_event_capture_class,
+        mock_session_tracker_class,
         mock_task_state,
         mock_copilot_client,
         mock_copilot_session,
@@ -355,24 +350,20 @@ class TestCopilotSolver:
         """Test that solver stops after max_turns."""
         from saber.inspect_ai.agents.registry.copilot import copilot_solver
 
-        # Setup EventCapture mock
-        mock_event_capture = Mock()
-        mock_event_capture.attach = Mock()
-        mock_event_capture.detach = Mock()
-        mock_event_capture.reset_turn = Mock()
-        mock_event_capture.wait_for_idle = AsyncMock()
-        mock_turn_data = Mock(has_content=Mock(return_value=False), format_transcript=Mock(return_value=""), events=[], message_groups=[], assistant_messages=[], reasoning_messages=[], tool_calls=[], tool_results=[])
-        mock_event_capture.current_turn = mock_turn_data
-        mock_event_capture_class.return_value = mock_event_capture
+        # Setup SessionTracker mock - never submitted so hits max_turns
+        mock_session_tracker = Mock()
+        mock_session_tracker.on_event = Mock()
+        mock_session_tracker.wait_for_idle = AsyncMock()
+        mock_session_tracker.submitted = False  # Never submit - should hit max_turns
+        mock_session_tracker.submit_answer = None
+        mock_session_tracker.session_id = None
+        mock_session_tracker_class.return_value = mock_session_tracker
 
         mock_client_wrapper_class.return_value = mock_copilot_client
         mock_copilot_client.create_session = AsyncMock(return_value=mock_copilot_session)
         mock_get_mcp_tools.return_value = []
         mock_convert_tools.return_value = []
         mock_create_submit.return_value = Mock(name="submit_answer")
-
-        # Never submit - should hit max_turns
-        mock_task_state.store.get = Mock(return_value=False)
 
         solver = copilot_solver(
             instruction_prompt="test",
@@ -388,18 +379,18 @@ class TestCopilotSolver:
         assert mock_copilot_session.send.call_count == 3
 
     @pytest.mark.asyncio
-    @patch("saber.inspect_ai.agents.registry.copilot.EventCapture")
-    @patch("saber.inspect_ai.agents.registry.copilot.CopilotClientWrapper")
-    @patch("saber.inspect_ai.agents.registry.copilot.get_saber_mcp_tools")
-    @patch("saber.inspect_ai.agents.registry.copilot.convert_mcp_tools_to_copilot")
-    @patch("saber.inspect_ai.agents.registry.copilot.create_submit_tool")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.SessionTracker")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.CopilotClientWrapper")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.get_saber_mcp_tools")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.convert_mcp_tools_to_copilot")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.create_submit_tool")
     async def test_copilot_solver_cleans_up_on_error(
         self,
         mock_create_submit,
         mock_convert_tools,
         mock_get_mcp_tools,
         mock_client_wrapper_class,
-        mock_event_capture_class,
+        mock_session_tracker_class,
         mock_task_state,
         mock_copilot_client,
         mock_copilot_session,
@@ -407,15 +398,14 @@ class TestCopilotSolver:
         """Test that solver cleans up client even on error."""
         from saber.inspect_ai.agents.registry.copilot import copilot_solver
 
-        # Setup EventCapture mock
-        mock_event_capture = Mock()
-        mock_event_capture.attach = Mock()
-        mock_event_capture.detach = Mock()
-        mock_event_capture.reset_turn = Mock()
-        mock_event_capture.wait_for_idle = AsyncMock()
-        mock_turn_data = Mock(has_content=Mock(return_value=False), format_transcript=Mock(return_value=""), events=[], message_groups=[], assistant_messages=[], reasoning_messages=[], tool_calls=[], tool_results=[])
-        mock_event_capture.current_turn = mock_turn_data
-        mock_event_capture_class.return_value = mock_event_capture
+        # Setup SessionTracker mock
+        mock_session_tracker = Mock()
+        mock_session_tracker.on_event = Mock()
+        mock_session_tracker.wait_for_idle = AsyncMock()
+        mock_session_tracker.submitted = True  # End loop immediately
+        mock_session_tracker.submit_answer = None
+        mock_session_tracker.session_id = None
+        mock_session_tracker_class.return_value = mock_session_tracker
 
         mock_client_wrapper_class.return_value = mock_copilot_client
         mock_copilot_client.create_session = AsyncMock(side_effect=RuntimeError("Session failed"))
@@ -439,11 +429,11 @@ class TestCopilotSolver:
 class TestCopilotSolverConfiguration:
     """Test cases for copilot_solver configuration options."""
 
-    @patch("saber.inspect_ai.agents.registry.copilot.EventCapture")
-    @patch("saber.inspect_ai.agents.registry.copilot.CopilotClientWrapper")
-    @patch("saber.inspect_ai.agents.registry.copilot.get_saber_mcp_tools")
-    @patch("saber.inspect_ai.agents.registry.copilot.convert_mcp_tools_to_copilot")
-    @patch("saber.inspect_ai.agents.registry.copilot.create_submit_tool")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.SessionTracker")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.CopilotClientWrapper")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.get_saber_mcp_tools")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.convert_mcp_tools_to_copilot")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.create_submit_tool")
     @pytest.mark.asyncio
     async def test_copilot_solver_uses_configured_model(
         self,
@@ -451,20 +441,19 @@ class TestCopilotSolverConfiguration:
         mock_convert_tools,
         mock_get_mcp_tools,
         mock_client_wrapper_class,
-        mock_event_capture_class,
+        mock_session_tracker_class,
     ):
         """Test that solver uses the configured model."""
         from saber.inspect_ai.agents.registry.copilot import copilot_solver
 
-        # Setup EventCapture mock
-        mock_event_capture = Mock()
-        mock_event_capture.attach = Mock()
-        mock_event_capture.detach = Mock()
-        mock_event_capture.reset_turn = Mock()
-        mock_event_capture.wait_for_idle = AsyncMock()
-        mock_turn_data = Mock(has_content=Mock(return_value=False), format_transcript=Mock(return_value=""), events=[], message_groups=[], assistant_messages=[], reasoning_messages=[], tool_calls=[], tool_results=[])
-        mock_event_capture.current_turn = mock_turn_data
-        mock_event_capture_class.return_value = mock_event_capture
+        # Setup SessionTracker mock
+        mock_session_tracker = Mock()
+        mock_session_tracker.on_event = Mock()
+        mock_session_tracker.wait_for_idle = AsyncMock()
+        mock_session_tracker.submitted = True  # End loop immediately
+        mock_session_tracker.submit_answer = None
+        mock_session_tracker.session_id = None
+        mock_session_tracker_class.return_value = mock_session_tracker
 
         mock_client = AsyncMock()
         mock_session = AsyncMock()
@@ -494,11 +483,11 @@ class TestCopilotSolverConfiguration:
         session_config = mock_client.create_session.call_args[0][0]
         assert session_config.get("model") == "claude-sonnet-4"
 
-    @patch("saber.inspect_ai.agents.registry.copilot.EventCapture")
-    @patch("saber.inspect_ai.agents.registry.copilot.CopilotClientWrapper")
-    @patch("saber.inspect_ai.agents.registry.copilot.get_saber_mcp_tools")
-    @patch("saber.inspect_ai.agents.registry.copilot.convert_mcp_tools_to_copilot")
-    @patch("saber.inspect_ai.agents.registry.copilot.create_submit_tool")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.SessionTracker")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.CopilotClientWrapper")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.get_saber_mcp_tools")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.convert_mcp_tools_to_copilot")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.create_submit_tool")
     @pytest.mark.asyncio
     async def test_copilot_solver_with_submit_disabled(
         self,
@@ -506,20 +495,19 @@ class TestCopilotSolverConfiguration:
         mock_convert_tools,
         mock_get_mcp_tools,
         mock_client_wrapper_class,
-        mock_event_capture_class,
+        mock_session_tracker_class,
     ):
         """Test that submit tool is not added when submit=False."""
         from saber.inspect_ai.agents.registry.copilot import copilot_solver
 
-        # Setup EventCapture mock
-        mock_event_capture = Mock()
-        mock_event_capture.attach = Mock()
-        mock_event_capture.detach = Mock()
-        mock_event_capture.reset_turn = Mock()
-        mock_event_capture.wait_for_idle = AsyncMock()
-        mock_turn_data = Mock(has_content=Mock(return_value=False), format_transcript=Mock(return_value=""), events=[], message_groups=[], assistant_messages=[], reasoning_messages=[], tool_calls=[], tool_results=[])
-        mock_event_capture.current_turn = mock_turn_data
-        mock_event_capture_class.return_value = mock_event_capture
+        # Setup SessionTracker mock
+        mock_session_tracker = Mock()
+        mock_session_tracker.on_event = Mock()
+        mock_session_tracker.wait_for_idle = AsyncMock()
+        mock_session_tracker.submitted = True  # End loop immediately
+        mock_session_tracker.submit_answer = None
+        mock_session_tracker.session_id = None
+        mock_session_tracker_class.return_value = mock_session_tracker
 
         mock_client = AsyncMock()
         mock_session = AsyncMock()
@@ -562,11 +550,11 @@ class TestCopilotSolverTranscriptHandling:
         event.data.content = "I will analyze the system"
         return event
 
-    @patch("saber.inspect_ai.agents.registry.copilot.EventCapture")
-    @patch("saber.inspect_ai.agents.registry.copilot.CopilotClientWrapper")
-    @patch("saber.inspect_ai.agents.registry.copilot.get_saber_mcp_tools")
-    @patch("saber.inspect_ai.agents.registry.copilot.convert_mcp_tools_to_copilot")
-    @patch("saber.inspect_ai.agents.registry.copilot.create_submit_tool")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.SessionTracker")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.CopilotClientWrapper")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.get_saber_mcp_tools")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.convert_mcp_tools_to_copilot")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.create_submit_tool")
     @pytest.mark.asyncio
     async def test_copilot_solver_collects_conversation(
         self,
@@ -574,21 +562,20 @@ class TestCopilotSolverTranscriptHandling:
         mock_convert_tools,
         mock_get_mcp_tools,
         mock_client_wrapper_class,
-        mock_event_capture_class,
+        mock_session_tracker_class,
         mock_session_event,
     ):
         """Test that solver collects conversation messages."""
         from saber.inspect_ai.agents.registry.copilot import copilot_solver
 
-        # Setup EventCapture mock
-        mock_event_capture = Mock()
-        mock_event_capture.attach = Mock()
-        mock_event_capture.detach = Mock()
-        mock_event_capture.reset_turn = Mock()
-        mock_event_capture.wait_for_idle = AsyncMock()
-        mock_turn_data = Mock(has_content=Mock(return_value=False), format_transcript=Mock(return_value=""), events=[], message_groups=[], assistant_messages=[], reasoning_messages=[], tool_calls=[], tool_results=[])
-        mock_event_capture.current_turn = mock_turn_data
-        mock_event_capture_class.return_value = mock_event_capture
+        # Setup SessionTracker mock
+        mock_session_tracker = Mock()
+        mock_session_tracker.on_event = Mock()
+        mock_session_tracker.wait_for_idle = AsyncMock()
+        mock_session_tracker.submitted = True  # End loop immediately
+        mock_session_tracker.submit_answer = None
+        mock_session_tracker.session_id = None
+        mock_session_tracker_class.return_value = mock_session_tracker
 
         mock_client = AsyncMock()
         mock_session = AsyncMock()
@@ -628,7 +615,7 @@ class TestCopilotSolverTranscriptHandling:
 class TestCopilotSolverBYOK:
     """Test cases for BYOK (Bring Your Own Key) provider configuration."""
 
-    @patch("saber.inspect_ai.agents.registry.copilot.copilot_solver")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.copilot_solver")
     def test_create_agent_with_azure_provider(self, mock_copilot_solver):
         """Test that Azure BYOK provider configuration is passed through."""
         from saber.inspect_ai.agents.registry.copilot import create_agent
@@ -650,7 +637,7 @@ class TestCopilotSolverBYOK:
         assert call_kwargs.get("provider_api_key") == "test-api-key"
         assert call_kwargs.get("provider_api_version") == "2024-02-15-preview"
 
-    @patch("saber.inspect_ai.agents.registry.copilot.copilot_solver")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.copilot_solver")
     def test_create_agent_with_openai_provider(self, mock_copilot_solver):
         """Test that OpenAI BYOK provider configuration is passed through."""
         from saber.inspect_ai.agents.registry.copilot import create_agent
@@ -670,7 +657,7 @@ class TestCopilotSolverBYOK:
         assert call_kwargs.get("provider_base_url") == "https://api.openai.com/v1"
         assert call_kwargs.get("provider_api_key") == "sk-test-key"
 
-    @patch("saber.inspect_ai.agents.registry.copilot.copilot_solver")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.copilot_solver")
     def test_create_agent_with_anthropic_provider(self, mock_copilot_solver):
         """Test that Anthropic BYOK provider configuration is passed through."""
         from saber.inspect_ai.agents.registry.copilot import create_agent
@@ -691,31 +678,30 @@ class TestCopilotSolverBYOK:
         assert call_kwargs.get("provider_api_key") == "sk-ant-test-key"
 
     @pytest.mark.asyncio
-    @patch("saber.inspect_ai.agents.registry.copilot.EventCapture")
-    @patch("saber.inspect_ai.agents.registry.copilot.create_submit_tool")
-    @patch("saber.inspect_ai.agents.registry.copilot.convert_mcp_tools_to_copilot")
-    @patch("saber.inspect_ai.agents.registry.copilot.get_saber_mcp_tools")
-    @patch("saber.inspect_ai.agents.registry.copilot.CopilotClientWrapper")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.SessionTracker")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.create_submit_tool")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.convert_mcp_tools_to_copilot")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.get_saber_mcp_tools")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.CopilotClientWrapper")
     async def test_copilot_solver_includes_azure_provider_in_session_config(
         self,
         mock_client_wrapper_class,
         mock_get_mcp_tools,
         mock_convert_tools,
         mock_create_submit,
-        mock_event_capture_class,
+        mock_session_tracker_class,
     ):
         """Test that BYOK provider config is included in session creation."""
         from saber.inspect_ai.agents.registry.copilot import copilot_solver
 
-        # Setup EventCapture mock
-        mock_event_capture = Mock()
-        mock_event_capture.attach = Mock()
-        mock_event_capture.detach = Mock()
-        mock_event_capture.reset_turn = Mock()
-        mock_event_capture.wait_for_idle = AsyncMock()
-        mock_turn_data = Mock(has_content=Mock(return_value=False), format_transcript=Mock(return_value=""), events=[], message_groups=[], assistant_messages=[], reasoning_messages=[], tool_calls=[], tool_results=[])
-        mock_event_capture.current_turn = mock_turn_data
-        mock_event_capture_class.return_value = mock_event_capture
+        # Setup SessionTracker mock
+        mock_session_tracker = Mock()
+        mock_session_tracker.on_event = Mock()
+        mock_session_tracker.wait_for_idle = AsyncMock()
+        mock_session_tracker.submitted = True  # End loop immediately
+        mock_session_tracker.submit_answer = None
+        mock_session_tracker.session_id = None
+        mock_session_tracker_class.return_value = mock_session_tracker
 
         # Setup mocks
         mock_client = AsyncMock()
@@ -768,31 +754,30 @@ class TestCopilotSolverBYOK:
         assert session_config["provider"]["azure"]["api_version"] == "2024-02-15-preview"
 
     @pytest.mark.asyncio
-    @patch("saber.inspect_ai.agents.registry.copilot.EventCapture")
-    @patch("saber.inspect_ai.agents.registry.copilot.create_submit_tool")
-    @patch("saber.inspect_ai.agents.registry.copilot.convert_mcp_tools_to_copilot")
-    @patch("saber.inspect_ai.agents.registry.copilot.get_saber_mcp_tools")
-    @patch("saber.inspect_ai.agents.registry.copilot.CopilotClientWrapper")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.SessionTracker")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.create_submit_tool")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.convert_mcp_tools_to_copilot")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.get_saber_mcp_tools")
+    @patch("saber.inspect_ai.agents.registry.copilot.solver.CopilotClientWrapper")
     async def test_copilot_solver_without_byok_has_no_provider(
         self,
         mock_client_wrapper_class,
         mock_get_mcp_tools,
         mock_convert_tools,
         mock_create_submit,
-        mock_event_capture_class,
+        mock_session_tracker_class,
     ):
         """Test that session config has no provider when BYOK is not configured."""
         from saber.inspect_ai.agents.registry.copilot import copilot_solver
 
-        # Setup EventCapture mock
-        mock_event_capture = Mock()
-        mock_event_capture.attach = Mock()
-        mock_event_capture.detach = Mock()
-        mock_event_capture.reset_turn = Mock()
-        mock_event_capture.wait_for_idle = AsyncMock()
-        mock_turn_data = Mock(has_content=Mock(return_value=False), format_transcript=Mock(return_value=""), events=[], message_groups=[], assistant_messages=[], reasoning_messages=[], tool_calls=[], tool_results=[])
-        mock_event_capture.current_turn = mock_turn_data
-        mock_event_capture_class.return_value = mock_event_capture
+        # Setup SessionTracker mock
+        mock_session_tracker = Mock()
+        mock_session_tracker.on_event = Mock()
+        mock_session_tracker.wait_for_idle = AsyncMock()
+        mock_session_tracker.submitted = True  # End loop immediately
+        mock_session_tracker.submit_answer = None
+        mock_session_tracker.session_id = None
+        mock_session_tracker_class.return_value = mock_session_tracker
 
         # Setup mocks
         mock_client = AsyncMock()

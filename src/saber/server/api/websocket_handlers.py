@@ -186,11 +186,9 @@ class PushMessageHandler(BaseWebSocketHandler):
         logger.debug(
             "PushMessageHandler.handle() called",
             extra={
-                "source_episode_id": episode_id,
                 "target_episode_id": target_episode_id,
                 "is_cross_episode": is_cross_episode,
                 "strategy": push_data.strategy,
-                "message_role": push_data.message.get("role") if push_data.message else None,
             },
         )
 
@@ -210,11 +208,6 @@ class PushMessageHandler(BaseWebSocketHandler):
             extra={
                 "target_episode_id": target_episode_id,
                 "new_version": sync_response.current_version.sequence,
-                "sync_mode": (
-                    sync_response.sync_mode.value
-                    if sync_response.sync_mode and hasattr(sync_response.sync_mode, "value")
-                    else sync_response.sync_mode
-                ),
             },
         )
 
@@ -239,41 +232,20 @@ class PushMessageHandler(BaseWebSocketHandler):
         logger.debug(
             "Push ack sent to pusher",
             extra={
-                "source_episode_id": episode_id,
                 "target_episode_id": target_episode_id,
                 "ack_version": ack_data.version,
             },
         )
 
-        # Broadcast state event to target episode ONLY for cross-episode injections.
-        # For same-episode pushes, skip broadcast - the client already knows what
-        # happened (it initiated the push), and broadcasting to self just fills up
-        # the client's event queue with unneeded state events.
-        if state_event and is_cross_episode:
+        # Broadcast state event to target episode (for cross-episode injections)
+        if state_event:
             logger.debug(
-                "Broadcasting state event to target episode (cross-episode)",
-                extra={
-                    "target_episode_id": target_episode_id,
-                    "event_type": state_event.type,
-                    "event_version": state_event.data.version if state_event.data else None,
-                    "event_state": state_event.data.state if state_event.data else None,
-                },
+                "Broadcasting state event to target episode",
+                extra={"target_episode_id": target_episode_id},
             )
             await coordinator.connection_manager.broadcast_to_episode(
                 episode_id=target_episode_id,
                 message=state_event,
-            )
-            logger.debug(
-                "State event broadcast completed",
-                extra={"target_episode_id": target_episode_id},
-            )
-        elif state_event:
-            logger.debug(
-                "Skipping state event broadcast for same-episode push",
-                extra={
-                    "episode_id": episode_id,
-                    "event_type": state_event.type,
-                },
             )
 
     async def _build_push_response(

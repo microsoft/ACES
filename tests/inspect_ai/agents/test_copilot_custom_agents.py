@@ -17,7 +17,7 @@ class TestCopilotSessionConfigCustomAgents:
 
     def test_session_config_without_custom_agents(self):
         """Test that to_dict() works without custom_agents."""
-        from saber.inspect_ai.agents.registry.models import (
+        from saber.inspect_ai.agents.registry.copilot.models import (
             CopilotSessionConfig,
             SystemMessageConfig,
         )
@@ -47,7 +47,7 @@ class TestCopilotSessionConfigCustomAgents:
     def test_session_config_with_custom_agents(self):
         """Test that to_dict() includes custom_agents when set."""
         from saber.inspect_ai.agents.registry.custom_agent import CustomAgentConfig
-        from saber.inspect_ai.agents.registry.models import (
+        from saber.inspect_ai.agents.registry.copilot.models import (
             CopilotSessionConfig,
             SystemMessageConfig,
         )
@@ -79,20 +79,20 @@ class TestCopilotSessionConfigCustomAgents:
 
         result = config.to_dict()
 
-        # SDK expects camelCase 'customAgents'
-        assert "customAgents" in result
-        assert len(result["customAgents"]) == 1
-        assert result["customAgents"][0]["name"] == "test-agent"
-        assert result["customAgents"][0]["displayName"] == "Test Agent"
-        assert result["customAgents"][0]["description"] == "A test agent"
-        assert result["customAgents"][0]["prompt"] == "You are a test agent."
-        assert result["customAgents"][0]["tools"] == ["bash", "view"]
-        assert result["customAgents"][0]["infer"] is True
+        # SDK expects camelCase 'custom_agents'
+        assert "custom_agents" in result
+        assert len(result["custom_agents"]) == 1
+        assert result["custom_agents"][0]["name"] == "test-agent"
+        assert result["custom_agents"][0]["displayName"] == "Test Agent"
+        assert result["custom_agents"][0]["description"] == "A test agent"
+        assert result["custom_agents"][0]["prompt"] == "You are a test agent."
+        assert result["custom_agents"][0]["tools"] == ["bash", "view"]
+        assert result["custom_agents"][0]["infer"] is True
 
     def test_session_config_with_multiple_custom_agents(self):
         """Test that to_dict() handles multiple custom agents."""
         from saber.inspect_ai.agents.registry.custom_agent import CustomAgentConfig
-        from saber.inspect_ai.agents.registry.models import (
+        from saber.inspect_ai.agents.registry.copilot.models import (
             CopilotSessionConfig,
             SystemMessageConfig,
         )
@@ -123,11 +123,11 @@ class TestCopilotSessionConfigCustomAgents:
 
         result = config.to_dict()
 
-        # SDK expects camelCase 'customAgents'
-        assert len(result["customAgents"]) == 2
-        assert result["customAgents"][0]["name"] == "agent-1"
-        assert result["customAgents"][1]["name"] == "agent-2"
-        assert result["customAgents"][1]["tools"] == ["bash"]
+        # SDK expects camelCase 'custom_agents'
+        assert len(result["custom_agents"]) == 2
+        assert result["custom_agents"][0]["name"] == "agent-1"
+        assert result["custom_agents"][1]["name"] == "agent-2"
+        assert result["custom_agents"][1]["tools"] == ["bash"]
 
 
 class TestCopilotSessionConfigCreate:
@@ -135,7 +135,7 @@ class TestCopilotSessionConfigCreate:
 
     def test_create_without_custom_agents(self):
         """Test factory method without custom_agents."""
-        from saber.inspect_ai.agents.registry.models import CopilotSessionConfig
+        from saber.inspect_ai.agents.registry.copilot.models import CopilotSessionConfig
 
         # Create a mock tool
         mock_tool = MagicMock()
@@ -154,7 +154,7 @@ class TestCopilotSessionConfigCreate:
     def test_create_with_custom_agents(self):
         """Test factory method with custom_agents."""
         from saber.inspect_ai.agents.registry.custom_agent import CustomAgentConfig
-        from saber.inspect_ai.agents.registry.models import CopilotSessionConfig
+        from saber.inspect_ai.agents.registry.copilot.models import CopilotSessionConfig
 
         # Create a mock tool
         mock_tool = MagicMock()
@@ -178,9 +178,9 @@ class TestCopilotSessionConfigCreate:
         assert config.custom_agents[0].name == "red-team-agent"
 
         result = config.to_dict()
-        # SDK expects camelCase 'customAgents'
-        assert "customAgents" in result
-        assert result["customAgents"][0]["name"] == "red-team-agent"
+        # SDK expects camelCase 'custom_agents'
+        assert "custom_agents" in result
+        assert result["custom_agents"][0]["name"] == "red-team-agent"
 
 
 class TestAgentTypeSupportsAgentPersona:
