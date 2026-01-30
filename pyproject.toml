@@ -56,6 +56,7 @@ dependencies = [
     "inspect-ai",
     "azure-identity>=1.25.1",
     "anthropic",
+    "watchfiles>=1.1.1",
 ]
 
 [project.optional-dependencies]

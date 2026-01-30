@@ -16,10 +16,12 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
+from inspect_ai.model import ChatMessage
 from inspect_ai.model._model import ModelName, active_model, record_and_check_model_usage
 from inspect_ai.solver import Solver, TaskState
 from inspect_ai.util import sandbox
@@ -41,6 +43,8 @@ from .models import (
     DefaultValue,
 )
 from .session_events import (
+    CopilotSDKEvent,
+    EventsWatcherContext,
     SessionEventContext,
     TokenUsage,
     create_event_callback,
@@ -115,6 +119,9 @@ class SessionTracker:
     # Event context handles: idle_event, session_id, errors, token_usage
     event_context: SessionEventContext = field(default_factory=lambda: SessionEventContext(asyncio.Event()))
 
+    # Watcher context for real-time events.jsonl monitoring
+    watcher_ctx: EventsWatcherContext = field(default_factory=EventsWatcherContext)
+
     # Submission tracking (specific to SABER workflow)
     submitted: bool = False
     submit_answer: str | None = None
@@ -139,7 +146,7 @@ class SessionTracker:
         """Access to token usage accumulator."""
         return self.event_context.token_usage
 
-    def get_event_callback(self) -> Any:
+    def get_event_callback(self) -> Callable[[CopilotSDKEvent | None], None]:
         """Get the event callback for use with session.on().
 
         Returns:
@@ -181,6 +188,109 @@ class SessionTracker:
         self.submitted = True
         self.submit_answer = answer
         logger.info(f"Submission recorded: {answer[:100]}...")
+
+
+# =============================================================================
+# Watcher Helper Functions
+# =============================================================================
+
+# Type alias for message callback
+MessageCallback = Callable[[list[ChatMessage]], Coroutine[Any, Any, None]]
+
+
+def get_events_path(session_id: str, base_path: Path | None = None) -> Path:
+    """Get the path to events.jsonl for a session.
+
+    Args:
+        session_id: The Copilot session ID
+        base_path: Optional base path (defaults to ~/.copilot/session-state)
+
+    Returns:
+        Path to the events.jsonl file
+    """
+    base = base_path or Path.home() / ".copilot" / "session-state"
+    return base / session_id / "events.jsonl"
+
+
+def is_duplicate_message(msg: ChatMessage, existing: list[ChatMessage]) -> bool:
+    """Check if a message is a duplicate of any existing message.
+
+    Uses content-based comparison for deduplication. Only checks
+    recent messages to avoid O(n²) complexity in long conversations.
+
+    Args:
+        msg: The message to check
+        existing: List of existing messages
+
+    Returns:
+        True if the message appears to be a duplicate
+    """
+    if not existing:
+        return False
+
+    # Only check recent messages (last 50) for performance
+    check_window = existing[-50:] if len(existing) > 50 else existing
+
+    msg_content = getattr(msg, "content", None)
+    if msg_content is None:
+        return False
+
+    for ex_msg in check_window:
+        # Must be same type
+        if type(msg) is not type(ex_msg):
+            continue
+
+        ex_content = getattr(ex_msg, "content", None)
+        if ex_content == msg_content:
+            return True
+
+    return False
+
+
+def start_watcher(
+    tracker: SessionTracker,
+    events_base_path: Path | None = None,
+    on_new_messages: MessageCallback | None = None,
+    system_content: str = "",
+    model_name: str = "copilot",
+) -> None:
+    """Start the events file watcher for a session.
+
+    Args:
+        tracker: The session tracker with session_id set
+        events_base_path: Optional custom base path for events files
+        on_new_messages: Callback for new messages
+        system_content: System message content for conversion
+        model_name: Model name for transcript events (default: "copilot")
+    """
+    if not tracker.session_id:
+        logger.warning("Cannot start watcher: session_id not set")
+        return
+
+    if on_new_messages is None:
+        logger.debug("No message callback provided, skipping watcher start")
+        return
+
+    events_path = get_events_path(tracker.session_id, events_base_path)
+
+    tracker.watcher_ctx.start(
+        events_path=events_path,
+        on_new_messages=on_new_messages,
+        system_content=system_content,
+        model_name=model_name,
+    )
+
+    logger.info(f"Started events watcher for session {tracker.session_id}")
+
+
+async def stop_watcher(tracker: SessionTracker) -> None:
+    """Stop the events file watcher.
+
+    Args:
+        tracker: The session tracker
+    """
+    await tracker.watcher_ctx.stop()
+    logger.debug("Stopped events watcher")
 
 
 # =============================================================================
@@ -498,6 +608,22 @@ def copilot_solver(
             transcript_sync = AgentTranscriptSync(state)
             await transcript_sync.initialize()
 
+            # Start watching events.jsonl for real-time message updates
+            if session_tracker.session_id:
+
+                async def on_new_messages(messages: list[ChatMessage]) -> None:
+                    """Add new messages to state (skip duplicates)."""
+                    for msg in messages:
+                        if not is_duplicate_message(msg, state.messages):
+                            state.messages.append(msg)
+
+                start_watcher(
+                    tracker=session_tracker,
+                    on_new_messages=on_new_messages,
+                    system_content=system_content,
+                    model_name=actual_model,
+                )
+
             # Run agent loop
             turn = 0
             consecutive_timeouts = 0
@@ -684,6 +810,8 @@ def copilot_solver(
             logger.error(f"Error in Copilot solver: {e}", exc_info=True)
             raise
         finally:
+            # Stop the events watcher before cleanup
+            await stop_watcher(session_tracker)
             await client.stop()
             logger.info("Copilot client stopped")
 

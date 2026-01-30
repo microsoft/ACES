@@ -12,17 +12,17 @@ Event types handled:
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import asyncio
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Protocol
+from pathlib import Path
+from typing import Any, Literal, Protocol
 
+from inspect_ai.model import ChatMessage
 from inspect_ai.model._model_output import ModelUsage
 
 from .....logging_config import LogCategory, get_saber_logger
-
-if TYPE_CHECKING:
-    import asyncio
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
 
@@ -362,6 +362,275 @@ def create_event_callback(
     return callback
 
 
+# =============================================================================
+# Events Watcher Context
+# =============================================================================
+
+# Type alias for message callback - receives a batch of ChatMessages
+MessageCallback = Callable[[list[ChatMessage]], Coroutine[Any, Any, None]]
+
+
+def _record_events_to_transcript(
+    events: list[Any],  # CopilotEvent - imported inside to avoid circular
+    model_name: str,
+    accumulated_input: list[ChatMessage],
+) -> None:
+    """Record Copilot events to Inspect AI transcript for real-time TUI display.
+
+    This function creates ModelEvent and ToolEvent objects from Copilot SDK events
+    and adds them to the Inspect AI transcript immediately, enabling real-time
+    display in the TUI.
+
+    Args:
+        events: List of new Copilot events to record
+        model_name: Model name for events
+        accumulated_input: Accumulated input messages (will be mutated)
+    """
+    from datetime import datetime, timezone
+
+    from inspect_ai.event._model import ModelEvent
+    from inspect_ai.event._tool import ToolEvent
+    from inspect_ai.log._transcript import transcript
+    from inspect_ai.model import ChatMessageAssistant, ChatMessageTool, ChatMessageUser
+    from inspect_ai.model._chat_message import ToolCall, ToolCallError
+    from inspect_ai.model._generate_config import GenerateConfig
+    from inspect_ai.model._model_output import ChatCompletionChoice, ModelOutput, ModelUsage
+
+    from .events import (
+        AssistantMessageEvent,
+        ToolExecutionCompleteEvent,
+        UserMessageEvent,
+    )
+
+    for event in events:
+        if isinstance(event, UserMessageEvent):
+            # Add user message to accumulated input for next ModelEvent
+            accumulated_input.append(ChatMessageUser(content=event.data.content))
+
+        elif isinstance(event, ToolExecutionCompleteEvent):
+            # Record ToolEvent to transcript
+            content = event.data.result.get("content", "")
+            is_error = not event.data.success
+
+            error_obj = None
+            if is_error:
+                error_obj = ToolCallError(type="unknown", message=content)
+
+            tool_event = ToolEvent(
+                id=event.data.toolCallId,
+                function=event.data.toolName if hasattr(event.data, "toolName") else "unknown",
+                arguments=dict(event.data.arguments)
+                if hasattr(event.data, "arguments") and event.data.arguments
+                else {},
+                result=content,
+                error=error_obj,
+                completed=datetime.now(timezone.utc),
+            )
+            transcript()._event(tool_event)
+
+            # Add tool result to accumulated input
+            accumulated_input.append(
+                ChatMessageTool(
+                    tool_call_id=event.data.toolCallId,
+                    content=content,
+                )
+            )
+
+        elif isinstance(event, AssistantMessageEvent):
+            # Build tool calls list
+            tool_calls: list[ToolCall] | None = None
+            if event.data.toolRequests:
+                tool_calls = [
+                    ToolCall(
+                        id=tr.toolCallId,
+                        function=tr.name,
+                        arguments=dict(tr.arguments),
+                        type="function",
+                    )
+                    for tr in event.data.toolRequests
+                ]
+
+            # Get assistant content
+            assistant_content = event.data.content
+            if not assistant_content and event.data.toolRequests:
+                descriptions = [tr.description for tr in event.data.toolRequests if tr.description]
+                if descriptions:
+                    assistant_content = "; ".join(descriptions)
+
+            # Create assistant message
+            assistant_message = ChatMessageAssistant(
+                content=assistant_content,
+                tool_calls=tool_calls,
+                model=model_name,
+            )
+
+            # Create ModelOutput
+            stop_reason: Literal["stop", "tool_calls"] = "tool_calls" if tool_calls else "stop"
+            output = ModelOutput(
+                model=model_name,
+                choices=[
+                    ChatCompletionChoice(
+                        message=assistant_message,
+                        stop_reason=stop_reason,
+                    )
+                ],
+                usage=ModelUsage(),
+            )
+
+            # Create and record ModelEvent
+            model_event = ModelEvent(
+                model=model_name,
+                role=None,
+                input=list(accumulated_input),  # Copy current input
+                tools=[],
+                tool_choice="auto",
+                config=GenerateConfig(),
+                output=output,
+                completed=datetime.now(timezone.utc),
+            )
+            transcript()._event(model_event)
+
+            # Add assistant message to accumulated input for next turn
+            accumulated_input.append(assistant_message)
+
+            logger.debug(
+                f"Recorded ModelEvent to transcript: input_msgs={len(accumulated_input) - 1}, "
+                f"tool_calls={len(tool_calls) if tool_calls else 0}"
+            )
+
+
+@dataclass
+class EventsWatcherContext:
+    """Context for managing the events.jsonl file watcher.
+
+    Handles lifecycle of the async watcher task and provides
+    callbacks for new messages converted from events.
+
+    The context:
+    - Creates and manages an asyncio.Task for the watcher
+    - Converts CopilotEvents to ChatMessages
+    - Provides clean start/stop lifecycle methods
+
+    Example:
+        ctx = EventsWatcherContext()
+
+        async def on_messages(msgs):
+            state.messages.extend(msgs)
+
+        task = ctx.start(events_path, on_messages)
+        # ... later ...
+        await ctx.stop()
+    """
+
+    watcher_task: asyncio.Task[None] | None = None
+    stop_event: asyncio.Event = field(default_factory=asyncio.Event)
+    _system_content: str = ""
+
+    @property
+    def is_running(self) -> bool:
+        """Check if watcher is currently running."""
+        return self.watcher_task is not None and not self.watcher_task.done()
+
+    def start(
+        self,
+        events_path: Path,
+        on_new_messages: MessageCallback,
+        system_content: str = "",
+        model_name: str = "copilot",
+    ) -> asyncio.Task[None]:
+        """Start watching events.jsonl for changes.
+
+        Args:
+            events_path: Path to events.jsonl
+            on_new_messages: Async callback invoked with new ChatMessages
+            system_content: System message content for conversion
+            model_name: Model name for transcript events (default: "copilot")
+
+        Returns:
+            The watcher task
+        """
+        from .events import (
+            CopilotEvent,
+            events_to_chat_messages,
+        )
+        from .events_watcher import EventsFileWatcher
+
+        self._system_content = system_content
+        self.stop_event.clear()
+
+        # Track all events for proper conversion
+        all_events: list[CopilotEvent] = []
+        last_message_count = 0
+
+        # Track accumulated input messages for ModelEvent creation
+        accumulated_input: list[ChatMessage] = []
+        if system_content:
+            from inspect_ai.model import ChatMessageSystem
+
+            accumulated_input.append(ChatMessageSystem(content=system_content))
+
+        async def on_events(events: list[CopilotEvent]) -> None:
+            """Convert events to messages, record to transcript, and call the callback."""
+            nonlocal last_message_count, accumulated_input
+
+            if not events:
+                return
+
+            # Add new events to our accumulated list
+            all_events.extend(events)
+
+            # Record new events to transcript for real-time TUI display
+            _record_events_to_transcript(
+                events=events,
+                model_name=model_name,
+                accumulated_input=accumulated_input,
+            )
+
+            # Convert ALL events to messages (to maintain proper context)
+            all_messages = events_to_chat_messages(all_events, self._system_content)
+
+            # Only send the NEW messages
+            new_messages = all_messages[last_message_count:]
+            last_message_count = len(all_messages)
+
+            if new_messages:
+                try:
+                    await on_new_messages(new_messages)
+                except Exception as e:
+                    logger.error(f"Message callback error: {e}")
+
+        watcher = EventsFileWatcher(events_path=events_path, on_events=on_events)
+
+        async def run_watcher() -> None:
+            """Run the watcher with proper cleanup."""
+            try:
+                await watcher.start()
+            except asyncio.CancelledError:
+                logger.debug("Watcher task cancelled")
+            except Exception as e:
+                logger.error(f"Watcher task error: {e}")
+            finally:
+                watcher.stop()
+
+        self.watcher_task = asyncio.create_task(run_watcher())
+        return self.watcher_task
+
+    async def stop(self) -> None:
+        """Stop the watcher and wait for cleanup."""
+        if self.watcher_task is None:
+            return
+
+        if not self.watcher_task.done():
+            self.watcher_task.cancel()
+            try:
+                await asyncio.wait_for(self.watcher_task, timeout=2.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+
+        self.watcher_task = None
+        logger.debug("Watcher context stopped")
+
+
 __all__ = [
     "SessionEventType",
     "CopilotSDKEvent",
@@ -375,4 +644,6 @@ __all__ = [
     "AssistantUsageHandler",
     "get_default_dispatcher",
     "create_event_callback",
+    "EventsWatcherContext",
+    "MessageCallback",
 ]
