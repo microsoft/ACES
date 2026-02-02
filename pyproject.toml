@@ -278,6 +278,7 @@ exclude_lines = [
 dev = [
     "pytest>=9.0.1",
     "pytest-asyncio>=1.3.0",
+    "ruff>=0.14.10",
     "types-pyyaml>=6.0.12.20250822",
     "types-requests>=2.32.4.20250913",
 ]

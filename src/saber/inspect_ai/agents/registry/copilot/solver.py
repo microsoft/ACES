@@ -37,7 +37,7 @@ from ..tools import (
     get_mcp_client_from_sandbox,
     record_tool_event,
 )
-from .events import SessionEventLog, events_to_chat_messages, events_to_model_events
+from .events import SessionEventLog, events_to_chat_messages, events_to_model_events, events_to_tool_events
 from .models import (
     CopilotSessionConfig,
     DefaultValue,
@@ -51,6 +51,7 @@ from .session_events import (
 )
 from .tools import (
     Tool,
+    ToolCallRecord,
     ToolCallTracker,
     convert_mcp_tools_to_copilot,
     create_submit_tool,
@@ -278,6 +279,7 @@ def start_watcher(
         on_new_messages=on_new_messages,
         system_content=system_content,
         model_name=model_name,
+        record_transcript=True,
     )
 
     logger.info(f"Started events watcher for session {tracker.session_id}")
@@ -395,7 +397,7 @@ async def setup_tools(
     return all_tools
 
 
-def _record_tool_events(tool_records: list[Any]) -> None:
+def _record_tool_events(tool_records: list[ToolCallRecord]) -> None:
     """Record ToolEvents to the transcript using the shared utility."""
     for tc in tool_records:
         record_tool_event(
@@ -670,20 +672,17 @@ def copilot_solver(
                     timed_out = True
                     consecutive_timeouts += 1
 
-                # Get tool call records from tracker (for recording ToolEvents)
-                tool_records = tool_tracker.get_and_clear()
-
-                # Record ToolEvents from tracker
-                if tool_records:
-                    _record_tool_events(tool_records)
-                    logger.debug(
-                        f"Recorded {len(tool_records)} tool events",
-                        extra={"tool_names": [tc.tool_name for tc in tool_records]},
-                    )
-
                 # Reset timeout counter on success
                 if not timed_out:
                     consecutive_timeouts = 0
+
+                if session_tracker.submitted:
+                    logger.info("Submit detected; destroying Copilot session")  # type: ignore[unreachable]
+                    try:
+                        await session.destroy()
+                    except Exception as e:
+                        logger.warning(f"Error destroying session after submit: {e}")
+                    break
 
                 turn += 1
 
@@ -694,6 +693,7 @@ def copilot_solver(
                 logger.warning(f"Error destroying session: {e}")
 
             # Parse events.jsonl for complete transcript
+            tool_events: list[Any] = []
             if session_tracker.session_id:
                 log = SessionEventLog(session_tracker.session_id)
                 events = log.read_events()
@@ -726,13 +726,22 @@ def copilot_solver(
                 )
                 state.messages.extend(new_messages)
 
-                # Create synthetic ModelEvents for the Transcript tab in Inspect viewer
-                # This allows the conversation to appear in the transcript view
-                events_to_model_events(
-                    events=events,
-                    model_name=actual_model,
-                    system_content=system_content,
-                )
+                tool_events = []
+                if not session_tracker.watcher_ctx.record_transcript:
+                    tool_events = events_to_tool_events(events)
+                    if tool_events:
+                        logger.debug(
+                            "Recorded tool events from events.jsonl",
+                            extra={"tool_event_count": len(tool_events)},
+                        )
+
+                    # Create synthetic ModelEvents for the Transcript tab in Inspect viewer
+                    # This allows the conversation to appear in the transcript view
+                    events_to_model_events(
+                        events=events,
+                        model_name=actual_model,
+                        system_content=system_content,
+                    )
 
                 # Log the message types for debugging
                 msg_types: dict[str, int] = {}
@@ -751,6 +760,22 @@ def copilot_solver(
             else:
                 # Fallback: no events to parse, keep existing messages
                 logger.warning("No session_id available for events.jsonl parsing")
+                tool_records = tool_tracker.get_and_clear()
+                if tool_records:
+                    _record_tool_events(tool_records)
+                    logger.debug(
+                        "Recorded tool events from tracker fallback (no events.jsonl)",
+                        extra={"tool_event_count": len(tool_records)},
+                    )
+
+            if session_tracker.session_id:
+                tool_records = tool_tracker.get_and_clear()
+                if not tool_events and tool_records and not session_tracker.watcher_ctx.record_transcript:
+                    _record_tool_events(tool_records)
+                    logger.debug(
+                        "Recorded tool events from tracker fallback",
+                        extra={"tool_event_count": len(tool_records)},
+                    )
 
             # Set submission answer if available
             if session_tracker.submit_answer:

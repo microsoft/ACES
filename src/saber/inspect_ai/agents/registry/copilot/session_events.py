@@ -17,12 +17,16 @@ from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from inspect_ai.model import ChatMessage
 from inspect_ai.model._model_output import ModelUsage
 
 from .....logging_config import LogCategory, get_saber_logger
+
+if TYPE_CHECKING:
+    from inspect_ai.event._model import ModelEvent
+    from inspect_ai.model._chat_message import ToolCall
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
 
@@ -374,7 +378,9 @@ def _record_events_to_transcript(
     events: list[Any],  # CopilotEvent - imported inside to avoid circular
     model_name: str,
     accumulated_input: list[ChatMessage],
-) -> None:
+    pending_tool_requests: dict[str, ToolCall],
+    pending_model_events: dict[str, ModelEvent],
+) -> bool:
     """Record Copilot events to Inspect AI transcript for real-time TUI display.
 
     This function creates ModelEvent and ToolEvent objects from Copilot SDK events
@@ -386,7 +392,7 @@ def _record_events_to_transcript(
         model_name: Model name for events
         accumulated_input: Accumulated input messages (will be mutated)
     """
-    from datetime import datetime, timezone
+    from datetime import datetime, timedelta, timezone
 
     from inspect_ai.event._model import ModelEvent
     from inspect_ai.event._tool import ToolEvent
@@ -400,7 +406,18 @@ def _record_events_to_transcript(
         AssistantMessageEvent,
         ToolExecutionCompleteEvent,
         UserMessageEvent,
+        _parse_event_timestamp,
     )
+
+    def _tool_call_from_request(request: Any) -> ToolCall:
+        return ToolCall(
+            id=request.toolCallId,
+            function=request.name,
+            arguments=dict(request.arguments),
+            type="function",
+        )
+
+    submit_seen = False
 
     for event in events:
         if isinstance(event, UserMessageEvent):
@@ -416,17 +433,30 @@ def _record_events_to_transcript(
             if is_error:
                 error_obj = ToolCallError(type="unknown", message=content)
 
+            parsed_timestamp = _parse_event_timestamp(event.timestamp) or datetime.now(timezone.utc)
+
+            tool_call = pending_tool_requests.get(event.data.toolCallId)
+            tool_name = tool_call.function if tool_call else "unknown"
+            tool_arguments = tool_call.arguments if tool_call else {}
+
+            if tool_name == "submit":
+                submit_seen = True
+
             tool_event = ToolEvent(
                 id=event.data.toolCallId,
-                function=event.data.toolName if hasattr(event.data, "toolName") else "unknown",
-                arguments=dict(event.data.arguments)
-                if hasattr(event.data, "arguments") and event.data.arguments
-                else {},
+                function=tool_name,
+                arguments=tool_arguments,
                 result=content,
                 error=error_obj,
-                completed=datetime.now(timezone.utc),
+                timestamp=parsed_timestamp,
+                completed=parsed_timestamp,
             )
             transcript()._event(tool_event)
+
+            model_event = pending_model_events.get(event.data.toolCallId)
+            if model_event and model_event.timestamp and model_event.timestamp >= parsed_timestamp:
+                model_event.timestamp = parsed_timestamp - timedelta(milliseconds=1)
+                model_event.completed = model_event.timestamp
 
             # Add tool result to accumulated input
             accumulated_input.append(
@@ -440,15 +470,8 @@ def _record_events_to_transcript(
             # Build tool calls list
             tool_calls: list[ToolCall] | None = None
             if event.data.toolRequests:
-                tool_calls = [
-                    ToolCall(
-                        id=tr.toolCallId,
-                        function=tr.name,
-                        arguments=dict(tr.arguments),
-                        type="function",
-                    )
-                    for tr in event.data.toolRequests
-                ]
+                tool_calls = [_tool_call_from_request(tr) for tr in event.data.toolRequests]
+                pending_tool_requests.update({call.id: call for call in tool_calls})
 
             # Get assistant content
             assistant_content = event.data.content
@@ -478,6 +501,10 @@ def _record_events_to_transcript(
             )
 
             # Create and record ModelEvent
+            parsed_timestamp = _parse_event_timestamp(event.timestamp) or datetime.now(timezone.utc)
+            model_timestamp = parsed_timestamp
+            if tool_calls and model_timestamp:
+                model_timestamp = model_timestamp - timedelta(milliseconds=1)
             model_event = ModelEvent(
                 model=model_name,
                 role=None,
@@ -486,9 +513,14 @@ def _record_events_to_transcript(
                 tool_choice="auto",
                 config=GenerateConfig(),
                 output=output,
-                completed=datetime.now(timezone.utc),
+                timestamp=model_timestamp,
+                completed=model_timestamp,
             )
             transcript()._event(model_event)
+
+            if tool_calls:
+                for tool_call in tool_calls:
+                    pending_model_events[tool_call.id] = model_event
 
             # Add assistant message to accumulated input for next turn
             accumulated_input.append(assistant_message)
@@ -497,6 +529,14 @@ def _record_events_to_transcript(
                 f"Recorded ModelEvent to transcript: input_msgs={len(accumulated_input) - 1}, "
                 f"tool_calls={len(tool_calls) if tool_calls else 0}"
             )
+
+    if pending_model_events:
+        try:
+            transcript()._events.sort(key=lambda e: e.timestamp if e.timestamp else datetime.min)
+        except Exception as e:
+            logger.debug(f"Failed to sort transcript events: {e}")
+
+    return submit_seen
 
 
 @dataclass
@@ -525,6 +565,7 @@ class EventsWatcherContext:
     watcher_task: asyncio.Task[None] | None = None
     stop_event: asyncio.Event = field(default_factory=asyncio.Event)
     _system_content: str = ""
+    record_transcript: bool = False
 
     @property
     def is_running(self) -> bool:
@@ -537,6 +578,7 @@ class EventsWatcherContext:
         on_new_messages: MessageCallback,
         system_content: str = "",
         model_name: str = "copilot",
+        record_transcript: bool = False,
     ) -> asyncio.Task[None]:
         """Start watching events.jsonl for changes.
 
@@ -545,6 +587,7 @@ class EventsWatcherContext:
             on_new_messages: Async callback invoked with new ChatMessages
             system_content: System message content for conversion
             model_name: Model name for transcript events (default: "copilot")
+            record_transcript: Whether to record Model/Tool events during watching
 
         Returns:
             The watcher task
@@ -556,6 +599,7 @@ class EventsWatcherContext:
         from .events_watcher import EventsFileWatcher
 
         self._system_content = system_content
+        self.record_transcript = record_transcript
         self.stop_event.clear()
 
         # Track all events for proper conversion
@@ -569,22 +613,35 @@ class EventsWatcherContext:
 
             accumulated_input.append(ChatMessageSystem(content=system_content))
 
+        pending_tool_requests: dict[str, ToolCall] = {}
+        pending_model_events: dict[str, ModelEvent] = {}
+
+        submit_seen = False
+
         async def on_events(events: list[CopilotEvent]) -> None:
             """Convert events to messages, record to transcript, and call the callback."""
-            nonlocal last_message_count, accumulated_input
+            nonlocal last_message_count, accumulated_input, submit_seen
 
             if not events:
+                return
+
+            if submit_seen:
                 return
 
             # Add new events to our accumulated list
             all_events.extend(events)
 
-            # Record new events to transcript for real-time TUI display
-            _record_events_to_transcript(
-                events=events,
-                model_name=model_name,
-                accumulated_input=accumulated_input,
-            )
+            if record_transcript:
+                # Record new events to transcript for real-time TUI display
+                submit_seen = _record_events_to_transcript(
+                    events=events,
+                    model_name=model_name,
+                    accumulated_input=accumulated_input,
+                    pending_tool_requests=pending_tool_requests,
+                    pending_model_events=pending_model_events,
+                )
+                if submit_seen:
+                    watcher.stop()
 
             # Convert ALL events to messages (to maintain proper context)
             all_messages = events_to_chat_messages(all_events, self._system_content)
