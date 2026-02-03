@@ -9,6 +9,7 @@ Logging category: EXECUTION.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -85,11 +86,10 @@ class ExecutionManager:
         # Executor factory will be created when sandbox manager is available
         self._executor_factory: ExecutorFactory | None = None
 
-        # Episode-specific execution tracking for concurrent commands
-        self._active_executions: dict[str, int] = {}  # episode_id -> count of active executions
+        # Episode-specific semaphores for queuing concurrent commands
+        # Using asyncio.Semaphore to queue excess calls instead of rejecting them
+        self._episode_semaphores: dict[str, asyncio.Semaphore] = {}
         # Increased from 3 to 8 to handle parallel tool calls from modern LLM agents (GPT-5, etc.)
-        # TODO: Implement semaphore queue to queue excess calls instead of rejecting them
-        # See docs/plans/semaphore-queue-implementation.md for full implementation plan
         self._max_concurrent_per_episode = int(os.getenv("SABER_MAX_CONCURRENT_PER_EPISODE", "8"))
 
         # Initialize file copier
@@ -248,7 +248,8 @@ class ExecutionManager:
         """
         Execute the action with the appropriate executor.
 
-        Commands are executed concurrently with episode-based limits.
+        Commands are executed concurrently with episode-based limits using semaphores.
+        Excess calls are queued and will execute when a slot becomes available.
 
         Args:
             action: Action object containing command and parameters
@@ -269,123 +270,142 @@ class ExecutionManager:
             )
             return CommandResult.error_result(error="episode_id is required in execution context")
 
-        # Track concurrent executions per episode
-        current_count = self._active_executions.get(episode_id, 0)
-        if current_count >= self._max_concurrent_per_episode:
-            error_msg = (
-                f"Too many concurrent executions for episode {episode_id} "
-                f"({current_count}/{self._max_concurrent_per_episode})"
-            )
-            logger.warning(
-                "Episode concurrency limit reached",
-                extra={
-                    "event": "episode_concurrency_limit",
-                    "episode_id": episode_id,
-                    "current": current_count,
-                    "limit": self._max_concurrent_per_episode,
-                },
-            )
-            return CommandResult.error_result(error=error_msg)
+        # Get or create semaphore for this episode
+        semaphore = self._get_episode_semaphore(episode_id)
 
-        # Increment active execution count for episode
-        self._active_executions[episode_id] = current_count + 1
+        session_id = raw_context.get("session_id")
+
+        # Acquire semaphore - will queue if limit is reached
         logger.debug(
-            "Episode execution count incremented",
+            "Acquiring episode semaphore",
             extra={
-                "event": "episode_execution_count_incremented",
+                "event": "episode_semaphore_acquiring",
                 "episode_id": episode_id,
-                "active_executions": self._active_executions[episode_id],
+                "tool_name": action.tool_name,
             },
         )
 
-        session_id = raw_context.get("session_id")
-        log_operation_start(
-            logger,
-            "execute_action",
-            episode_id=episode_id,
-            session_id=session_id,
-            tool_name=action.tool_name,
-        )
+        async with semaphore:
+            logger.debug(
+                "Episode semaphore acquired",
+                extra={
+                    "event": "episode_semaphore_acquired",
+                    "episode_id": episode_id,
+                    "tool_name": action.tool_name,
+                },
+            )
 
-        try:
-            # Get executor directly from action's tool name with episode context
-            executor = self.get_executor(action.tool_name, episode_id=episode_id)
+            log_operation_start(
+                logger,
+                "execute_action",
+                episode_id=episode_id,
+                session_id=session_id,
+                tool_name=action.tool_name,
+            )
 
-            # Use action parameters directly - no mapping needed
-            parameters = action.parameters.copy()
-
-            # Convert raw dict context to strongly-typed ExecutionContext
-            execution_context = ExecutionContext.from_dict(raw_context)
-
-            # Convert dict parameters to strongly-typed parameter dataclass
-            # This is the boundary where untyped MCP data becomes typed
             try:
-                params_class = executor.get_parameters_class()
-                typed_params = params_class.from_dict(parameters)
-            except (ValueError, TypeError) as e:
-                logger.warning(
-                    "Parameter conversion failed",
-                    extra={
-                        "event": "parameter_conversion_failed",
-                        "episode_id": episode_id,
-                        "tool_name": action.tool_name,
-                        "error": str(e),
-                    },
-                )
-                return CommandResult.error_result(error=f"Parameter conversion failed: {e}")
+                # Get executor directly from action's tool name with episode context
+                executor = self.get_executor(action.tool_name, episode_id=episode_id)
 
-            # Validate typed parameters
-            validation_result = executor.validate_parameters(typed_params)
-            if not validation_result.valid:
-                logger.warning(
-                    "Executor parameter validation failed",
-                    extra={
-                        "event": "executor_parameter_validation_failed",
-                        "episode_id": episode_id,
-                        "tool_name": action.tool_name,
-                        "errors": validation_result.errors,
-                    },
-                )
-                return CommandResult.error_result(
-                    error=f"Parameter validation failed: {', '.join(validation_result.errors)}"
-                )
+                # Use action parameters directly - no mapping needed
+                parameters = action.parameters.copy()
 
-            # Execute using the appropriate executor with callable interface
-            result = await executor(typed_params, execution_context)
-            log_operation_success(
-                logger,
-                "execute_action",
-                episode_id=episode_id,
-                session_id=session_id,
-                tool_name=action.tool_name,
+                # Convert raw dict context to strongly-typed ExecutionContext
+                execution_context = ExecutionContext.from_dict(raw_context)
+
+                # Convert dict parameters to strongly-typed parameter dataclass
+                # This is the boundary where untyped MCP data becomes typed
+                try:
+                    params_class = executor.get_parameters_class()
+                    typed_params = params_class.from_dict(parameters)
+                except (ValueError, TypeError) as e:
+                    logger.warning(
+                        "Parameter conversion failed",
+                        extra={
+                            "event": "parameter_conversion_failed",
+                            "episode_id": episode_id,
+                            "tool_name": action.tool_name,
+                            "error": str(e),
+                        },
+                    )
+                    return CommandResult.error_result(error=f"Parameter conversion failed: {e}")
+
+                # Validate typed parameters
+                validation_result = executor.validate_parameters(typed_params)
+                if not validation_result.valid:
+                    logger.warning(
+                        "Executor parameter validation failed",
+                        extra={
+                            "event": "executor_parameter_validation_failed",
+                            "episode_id": episode_id,
+                            "tool_name": action.tool_name,
+                            "errors": validation_result.errors,
+                        },
+                    )
+                    return CommandResult.error_result(
+                        error=f"Parameter validation failed: {', '.join(validation_result.errors)}"
+                    )
+
+                # Execute using the appropriate executor with callable interface
+                result = await executor(typed_params, execution_context)
+                log_operation_success(
+                    logger,
+                    "execute_action",
+                    episode_id=episode_id,
+                    session_id=session_id,
+                    tool_name=action.tool_name,
+                )
+                return result
+
+            except Exception as exc:
+                log_operation_failure(
+                    logger,
+                    "execute_action",
+                    exc,
+                    episode_id=episode_id,
+                    session_id=session_id,
+                    tool_name=action.tool_name,
+                )
+                return CommandResult.error_result(error=str(exc))
+
+    def _get_episode_semaphore(self, episode_id: str) -> asyncio.Semaphore:
+        """
+        Get or create a semaphore for the given episode.
+
+        Args:
+            episode_id: Episode identifier
+
+        Returns:
+            asyncio.Semaphore for the episode
+        """
+        if episode_id not in self._episode_semaphores:
+            self._episode_semaphores[episode_id] = asyncio.Semaphore(self._max_concurrent_per_episode)
+            logger.debug(
+                "Created episode semaphore",
+                extra={
+                    "event": "episode_semaphore_created",
+                    "episode_id": episode_id,
+                    "max_concurrent": self._max_concurrent_per_episode,
+                },
             )
-            return result
+        return self._episode_semaphores[episode_id]
 
-        except Exception as exc:
-            log_operation_failure(
-                logger,
-                "execute_action",
-                exc,
-                episode_id=episode_id,
-                session_id=session_id,
-                tool_name=action.tool_name,
+    def cleanup_episode_semaphore(self, episode_id: str) -> None:
+        """
+        Clean up the semaphore for a completed episode.
+
+        Args:
+            episode_id: Episode identifier to clean up
+        """
+        if episode_id in self._episode_semaphores:
+            del self._episode_semaphores[episode_id]
+            logger.debug(
+                "Cleaned up episode semaphore",
+                extra={
+                    "event": "episode_semaphore_cleaned_up",
+                    "episode_id": episode_id,
+                },
             )
-            return CommandResult.error_result(error=str(exc))
-
-        finally:
-            # Decrement active execution count for episode
-            if episode_id and episode_id in self._active_executions:
-                self._active_executions[episode_id] -= 1
-                if self._active_executions[episode_id] <= 0:
-                    del self._active_executions[episode_id]
-                logger.debug(
-                    "Episode execution count decremented",
-                    extra={
-                        "event": "episode_execution_count_decremented",
-                        "episode_id": episode_id,
-                        "active_executions": self._active_executions.get(episode_id, 0),
-                    },
-                )
 
     def get_executor(self, executor_type: str, episode_id: str | None = None) -> CommandExecutor:
         """
@@ -883,17 +903,30 @@ class ExecutionManager:
 
     def get_execution_stats(self) -> ExecutionStats:
         """
-        Get statistics about active executions (now episode-based).
+        Get statistics about active executions (now episode-based with semaphores).
 
         Returns:
             ExecutionStats with execution statistics
         """
-        total_active = sum(self._active_executions.values())
+        # Calculate active executions from semaphore values
+        # Note: We access semaphore._value which is technically internal, but this is
+        # a common pattern in Python asyncio code since Semaphore doesn't expose a
+        # public getter for the current value. This is safe in CPython and has been
+        # stable across Python 3.x versions.
+        episode_execution_counts: dict[str, int] = {}
+        total_active = 0
+        for episode_id, semaphore in self._episode_semaphores.items():
+            # _value is the number of available slots, so active = max - available
+            active_count = self._max_concurrent_per_episode - semaphore._value
+            if active_count > 0:
+                episode_execution_counts[episode_id] = active_count
+                total_active += active_count
+
         return ExecutionStats(
             total_active_executions=total_active,
-            active_episodes=len(self._active_executions),
+            active_episodes=len(episode_execution_counts),
             max_concurrent_per_episode=self._max_concurrent_per_episode,
-            episode_execution_counts=self._active_executions.copy(),
+            episode_execution_counts=episode_execution_counts,
         )
 
     async def cleanup_episode(self, episode_id: str, context: dict[str, Any] | None = None) -> bool:
@@ -980,25 +1013,8 @@ class ExecutionManager:
             )
             cleanup_success = False
 
-        # Clean up episode execution tracking
-        if episode_id in self._active_executions:
-            try:
-                del self._active_executions[episode_id]
-                logger.info(
-                    "Episode execution tracking cleared",
-                    extra={
-                        "event": "episode_execution_tracking_cleared",
-                        "episode_id": episode_id,
-                    },
-                )
-            except Exception as exc:
-                log_operation_failure(
-                    logger,
-                    "cleanup_episode_execution_tracking",
-                    exc,
-                    episode_id=episode_id,
-                )
-                cleanup_success = False
+        # Clean up episode semaphore
+        self.cleanup_episode_semaphore(episode_id)
 
         if cleanup_success:
             log_operation_success(
@@ -1263,11 +1279,9 @@ class ExecutionManager:
                         },
                     )
 
-            # Clean up any active executions for this session
-            session_episodes = [ep_id for ep_id in self._active_executions.keys() if ep_id.startswith(session_id)]
-            for episode_id in session_episodes:
-                if episode_id in self._active_executions:
-                    del self._active_executions[episode_id]
+            # Note: Episode semaphores are cleaned up individually via cleanup_episode()
+            # which is called for each episode before session cleanup. No need for
+            # additional cleanup here since episode_ids are UUIDs unrelated to session_id.
 
             log_operation_success(
                 logger,
