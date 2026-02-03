@@ -436,9 +436,9 @@ class SABERSandboxEnvironment:
 
             if execution_mode == ExecutionMode.ORCHESTRATED_SUB_TASK:
                 # Each sub-task is a separate sample coordinated via OrchestrationCoordinator
-                assert (
-                    type(self)._orchestration_initializer is not None
-                ), "orchestration_initializer must be initialized"
+                assert type(self)._orchestration_initializer is not None, (
+                    "orchestration_initializer must be initialized"
+                )
                 self._handler_state = await type(self)._orchestration_initializer.init_orchestrated_sub_task(
                     metadata=metadata,
                     session_id=self._session_id,
@@ -679,9 +679,9 @@ class SABERSandboxEnvironment:
                     and "orchestration_id" in self._handler_state
                 ):
                     # Old dict-based orchestration (backward compat)
-                    assert (
-                        type(self)._orchestration_initializer is not None
-                    ), "orchestration_initializer must be initialized"
+                    assert type(self)._orchestration_initializer is not None, (
+                        "orchestration_initializer must be initialized"
+                    )
                     await type(self)._orchestration_initializer.cleanup_orchestrated_sub_task(
                         handler_state=self._handler_state,
                         session_id=self._session_id,
@@ -693,9 +693,9 @@ class SABERSandboxEnvironment:
                     and "orchestration_id" in self._handler_state.to_dict()
                 ):
                     # New object-based orchestration
-                    assert (
-                        type(self)._orchestration_initializer is not None
-                    ), "orchestration_initializer must be initialized"
+                    assert type(self)._orchestration_initializer is not None, (
+                        "orchestration_initializer must be initialized"
+                    )
                     await type(self)._orchestration_initializer.cleanup_orchestrated_sub_task(
                         handler_state=self._handler_state,
                         session_id=self._session_id,

@@ -320,7 +320,7 @@ def create_saber_solver(agent_name: str, agent_factory: Callable, role_config: A
         Solver that runs SABER agent with dynamic prompts
     """
 
-    @solver  # type: ignore[misc]
+    @solver
     def saber_agent_solver() -> Solver:
         """SABER agent solver with dynamic prompt injection."""
 

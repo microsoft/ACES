@@ -411,7 +411,7 @@ async def _start_and_load_tasks(
                     for i in range(30):  # Up to 15 seconds
                         await asyncio.sleep(0.5)
                         if is_port_free(rest_port) and is_port_free(mcp_port):
-                            print(f"[SABER] Ports released after {(i+1)*0.5:.1f}s", flush=True)
+                            print(f"[SABER] Ports released after {(i + 1) * 0.5:.1f}s", flush=True)
                             break
                     else:
                         print("[SABER] Warning: Ports may still be in use after 15s", flush=True)

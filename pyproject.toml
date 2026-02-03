@@ -176,21 +176,44 @@ strict_equality = true
 module = "tests.*"
 disallow_untyped_defs = false
 
+# FastAPI decorators don't have complete type stubs
 [[tool.mypy.overrides]]
-module = "src.saber.server.api.session_rest_api"
+module = [
+    "saber.server.api.session_rest_api",
+    "saber.server.api.session_mcp_api",
+    "src.saber.server.api.session_rest_api",
+    "src.saber.server.api.session_mcp_api",
+]
 disallow_untyped_decorators = false
 
+# MCP decorators don't have complete type stubs
 [[tool.mypy.overrides]]
-module = "saber.server.api.session_rest_api"
+module = [
+    "saber.client.mcp_service.*",
+    "src.saber.client.mcp_service.*",
+]
 disallow_untyped_decorators = false
 
+# inspect_ai decorators don't have type stubs
 [[tool.mypy.overrides]]
-module = "saber.client.mcp_service.*"
+module = [
+    "saber.inspect_ai.agents.solver_factory",
+    "saber.inspect_ai.core.saber_scorer",
+    "src.saber.inspect_ai.agents.solver_factory",
+    "src.saber.inspect_ai.core.saber_scorer",
+]
 disallow_untyped_decorators = false
 
+# Click's Path type has a known issue with path_type=Path (types-click bug)
+# See: https://github.com/pallets/click/issues/2558
 [[tool.mypy.overrides]]
-module = "saber.server.api.session_mcp_api"
-warn_unused_ignores = false
+module = [
+    "saber.client.cli",
+    "saber.domain.cli",
+    "src.saber.client.cli",
+    "src.saber.domain.cli",
+]
+disable_error_code = ["type-var"]
 
 [tool.pytest.ini_options]
 minversion = "7.0"

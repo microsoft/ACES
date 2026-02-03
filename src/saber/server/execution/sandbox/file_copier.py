@@ -14,8 +14,9 @@ import tarfile
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
-from docker import client as docker_client
 from docker.errors import APIError, NotFound
+
+from docker import client as docker_client
 from saber.logging_config import LogCategory, get_saber_logger
 
 if TYPE_CHECKING:

@@ -48,14 +48,14 @@ def _create_orchestrator(domains_root: Path | None) -> DomainOrchestrator:
         return DomainOrchestrator(resolved_domains_root, compose_path)
 
 
-@click.group()  # type: ignore[misc]
-@click.option(  # type: ignore[misc]
+@click.group()
+@click.option(
     "--domains-root",
     type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
     help="Path to domains directory (auto-detected if not provided)",
 )
-@click.option("--verbose", "-v", is_flag=True, help="Verbose output")  # type: ignore[misc]
-@click.pass_context  # type: ignore[misc]
+@click.option("--verbose", "-v", is_flag=True, help="Verbose output")
+@click.pass_context
 def cli(ctx: click.Context, domains_root: Path | None, verbose: bool) -> None:
     """SABER Domain Orchestration CLI - Server-Only Architecture.
 
@@ -67,9 +67,9 @@ def cli(ctx: click.Context, domains_root: Path | None, verbose: bool) -> None:
     ctx.obj["verbose"] = verbose
 
 
-@cli.command(name="list")  # type: ignore[misc]
-@click.option("--verbose", "-v", is_flag=True, help="Show detailed domain information")  # type: ignore[misc]
-@click.pass_context  # type: ignore[misc]
+@cli.command(name="list")
+@click.option("--verbose", "-v", is_flag=True, help="Show detailed domain information")
+@click.pass_context
 def list_domains(ctx: click.Context, verbose: bool) -> None:
     """List available domains."""
     try:
@@ -102,21 +102,21 @@ def list_domains(ctx: click.Context, verbose: bool) -> None:
         ctx.exit(1)
 
 
-@cli.command()  # type: ignore[misc]
-@click.argument("domain")  # type: ignore[misc]
-@click.option("--build", is_flag=True, help="Build missing images before starting")  # type: ignore[misc]
-@click.option("--rebuild-all", is_flag=True, help="Remove and rebuild all images before starting")  # type: ignore[misc]
+@cli.command()
+@click.argument("domain")
+@click.option("--build", is_flag=True, help="Build missing images before starting")
+@click.option("--rebuild-all", is_flag=True, help="Remove and rebuild all images before starting")
 @click.option(
     "--rebuild",
     help="Remove and rebuild images with names starting with this prefix before starting (e.g., 'server', 'cookie')",
-)  # type: ignore[misc]
-@click.option("--rest-port", type=int, default=8000, help="REST API port")  # type: ignore[misc]
-@click.option("--mcp-port", type=int, default=8001, help="MCP port")  # type: ignore[misc]
-@click.option("--log-level", default="INFO", help="Logging level")  # type: ignore[misc]
-@click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging (sets log level to DEBUG)")  # type: ignore[misc]
-@click.option("--dry-run", is_flag=True, help="Show what would be done without executing")  # type: ignore[misc]
-@click.option("--profiles", hidden=True, help="DEPRECATED: Profiles are no longer supported")  # type: ignore[misc]
-@click.pass_context  # type: ignore[misc]
+)
+@click.option("--rest-port", type=int, default=8000, help="REST API port")
+@click.option("--mcp-port", type=int, default=8001, help="MCP port")
+@click.option("--log-level", default="INFO", help="Logging level")
+@click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging (sets log level to DEBUG)")
+@click.option("--dry-run", is_flag=True, help="Show what would be done without executing")
+@click.option("--profiles", hidden=True, help="DEPRECATED: Profiles are no longer supported")
+@click.pass_context
 def start(
     ctx: click.Context,
     domain: str,
@@ -197,10 +197,10 @@ def start(
         ctx.exit(1)
 
 
-@cli.command()  # type: ignore[misc]
-@click.argument("domain")  # type: ignore[misc]
-@click.option("--dry-run", is_flag=True, help="Show what would be done without executing")  # type: ignore[misc]
-@click.pass_context  # type: ignore[misc]
+@cli.command()
+@click.argument("domain")
+@click.option("--dry-run", is_flag=True, help="Show what would be done without executing")
+@click.pass_context
 def stop(ctx: click.Context, domain: str, dry_run: bool) -> None:
     """Stop domain services."""
     try:
@@ -215,14 +215,14 @@ def stop(ctx: click.Context, domain: str, dry_run: bool) -> None:
         ctx.exit(1)
 
 
-@cli.command()  # type: ignore[misc]
-@click.argument("domain")  # type: ignore[misc]
-@click.option("--rebuild-all", is_flag=True, help="Remove and rebuild all images")  # type: ignore[misc]
+@cli.command()
+@click.argument("domain")
+@click.option("--rebuild-all", is_flag=True, help="Remove and rebuild all images")
 @click.option(
     "--rebuild", help="Remove and rebuild images with names starting with this prefix (e.g., 'server', 'cookie')"
-)  # type: ignore[misc]
-@click.option("--dry-run", is_flag=True, help="Show what would be done without executing")  # type: ignore[misc]
-@click.pass_context  # type: ignore[misc]
+)
+@click.option("--dry-run", is_flag=True, help="Show what would be done without executing")
+@click.pass_context
 def build(ctx: click.Context, domain: str, rebuild_all: bool, rebuild: str | None, dry_run: bool) -> None:
     """Build domain images.
 
@@ -268,10 +268,10 @@ def build(ctx: click.Context, domain: str, rebuild_all: bool, rebuild: str | Non
         ctx.exit(1)
 
 
-@cli.command()  # type: ignore[misc]
-@click.argument("domain")  # type: ignore[misc]
-@click.option("--verbose", "-v", is_flag=True, help="Verbose validation output")  # type: ignore[misc]
-@click.pass_context  # type: ignore[misc]
+@cli.command()
+@click.argument("domain")
+@click.option("--verbose", "-v", is_flag=True, help="Verbose validation output")
+@click.pass_context
 def validate(ctx: click.Context, domain: str, verbose: bool) -> None:
     """Validate domain configuration.
 
@@ -306,10 +306,10 @@ def validate(ctx: click.Context, domain: str, verbose: bool) -> None:
         ctx.exit(1)
 
 
-@cli.command()  # type: ignore[misc]
-@click.argument("domain", required=False)  # type: ignore[misc]
-@click.option("--watch", is_flag=True, help="Watch for status changes (not implemented yet)")  # type: ignore[misc]
-@click.pass_context  # type: ignore[misc]
+@cli.command()
+@click.argument("domain", required=False)
+@click.option("--watch", is_flag=True, help="Watch for status changes (not implemented yet)")
+@click.pass_context
 def status(ctx: click.Context, domain: str | None, watch: bool) -> None:
     """Show domain status.
 
@@ -399,27 +399,27 @@ def _display_domain_status(domain: str, status_info: dict[str, Any]) -> None:
         click.echo("    (service details unavailable)")
 
 
-@cli.command()  # type: ignore[misc]
-@click.argument("domain")  # type: ignore[misc]
-@click.option("--saber-yaml", type=Path, help="Path to SABER config file (deprecated)")  # type: ignore[misc]
-@click.option("--stop-after", is_flag=True, help="Stop server after test completion (deprecated)")  # type: ignore[misc]
-@click.option("--rest-port", type=int, default=8000, help="REST API port (deprecated)")  # type: ignore[misc]
-@click.option("--mcp-port", type=int, default=8001, help="MCP port (deprecated)")  # type: ignore[misc]
-@click.option("--build", is_flag=True, help="Build missing images before starting (deprecated)")  # type: ignore[misc]
+@cli.command()
+@click.argument("domain")
+@click.option("--saber-yaml", type=Path, help="Path to SABER config file (deprecated)")
+@click.option("--stop-after", is_flag=True, help="Stop server after test completion (deprecated)")
+@click.option("--rest-port", type=int, default=8000, help="REST API port (deprecated)")
+@click.option("--mcp-port", type=int, default=8001, help="MCP port (deprecated)")
+@click.option("--build", is_flag=True, help="Build missing images before starting (deprecated)")
 @click.option(
     "--rebuild-all",
     is_flag=True,
     help="Remove and rebuild all images before starting (deprecated)",
-)  # type: ignore[misc]
+)
 @click.option(
     "--rebuild",
     help="Remove and rebuild images with names starting with this prefix (deprecated)",
-)  # type: ignore[misc]
-@click.option("--log-level", default="INFO", help="Logging level (deprecated)")  # type: ignore[misc]
-@click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging (deprecated)")  # type: ignore[misc]
-@click.option("--no-ui", is_flag=True, help="Disable TUI (deprecated)")  # type: ignore[misc]
-@click.option("--dry-run", is_flag=True, help="Show what would be done (deprecated)")  # type: ignore[misc]
-@click.pass_context  # type: ignore[misc]
+)
+@click.option("--log-level", default="INFO", help="Logging level (deprecated)")
+@click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging (deprecated)")
+@click.option("--no-ui", is_flag=True, help="Disable TUI (deprecated)")
+@click.option("--dry-run", is_flag=True, help="Show what would be done (deprecated)")
+@click.pass_context
 def test(
     ctx: click.Context,
     domain: str,
@@ -531,26 +531,26 @@ def test(
     ctx.exit(1)
 
 
-@cli.command(name="preflight")  # type: ignore[misc]
-@click.argument("domain")  # type: ignore[misc]
+@cli.command(name="preflight")
+@click.argument("domain")
 @click.option(
     "--concurrency",
     "-c",
     type=int,
     default=16,
     help="Number of environments to test in parallel",
-)  # type: ignore[misc]
+)
 @click.option(
     "--timeout",
     "-t",
     type=int,
     default=90,
     help="Health check timeout in seconds per environment",
-)  # type: ignore[misc]
-@click.option("--pattern", "-p", help="Filter compose files by pattern (e.g., 'cmd', 'cookie_0')")  # type: ignore[misc]
-@click.option("--verbose", "-v", is_flag=True, help="Show detailed output")  # type: ignore[misc]
-@click.option("--fail-fast", is_flag=True, help="Stop on first failure")  # type: ignore[misc]
-@click.pass_context  # type: ignore[misc]
+)
+@click.option("--pattern", "-p", help="Filter compose files by pattern (e.g., 'cmd', 'cookie_0')")
+@click.option("--verbose", "-v", is_flag=True, help="Show detailed output")
+@click.option("--fail-fast", is_flag=True, help="Stop on first failure")
+@click.pass_context
 def preflight(
     ctx: click.Context,
     domain: str,
@@ -599,8 +599,8 @@ def preflight(
         ctx.exit(130)
 
 
-@cli.command(name="test-resources")  # type: ignore[misc]
-@click.pass_context  # type: ignore[misc]
+@cli.command(name="test-resources")
+@click.pass_context
 def test_resources(ctx: click.Context) -> None:
     """Test resource resolution (development command)."""
     click.echo("Testing resource resolution...")

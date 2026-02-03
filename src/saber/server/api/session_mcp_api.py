@@ -263,7 +263,7 @@ class SessionMCPAPI:
             raise RuntimeError("MCP server not initialized")
 
         # Register end_episode tool using @decorator syntax
-        @self.mcp_server.tool  # type: ignore[misc]
+        @self.mcp_server.tool
         async def end_episode(
             submission: str = "",
         ) -> str:

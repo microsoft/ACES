@@ -163,31 +163,31 @@ def validate_client_config_against_manifest(
     return validation_result
 
 
-@click.group()  # type: ignore[misc]
-@click.version_option()  # type: ignore[misc]
+@click.group()
+@click.version_option()
 def cli() -> None:
     """SABER Client CLI - Tools for SABER evaluation and log analysis."""
     pass
 
 
-@cli.command("validate-config")  # type: ignore[misc]
-@click.option(  # type: ignore[misc]
+@cli.command("validate-config")
+@click.option(
     "--config",
     type=click.Path(exists=True, path_type=Path),
     required=True,
     help="Path to client configuration file (e.g., domains/cybench/client/saber.yaml)",
 )
-@click.option(  # type: ignore[misc]
+@click.option(
     "--domain",
     type=str,
     help="Domain name (if not provided, will be inferred from config path)",
 )
-@click.option(  # type: ignore[misc]
+@click.option(
     "--domains-root",
     type=click.Path(exists=True, path_type=Path),
     help="Root directory containing domain definitions (default: infer from config path)",
 )
-@click.option(  # type: ignore[misc]
+@click.option(
     "--verbose",
     "-v",
     is_flag=True,
@@ -314,36 +314,36 @@ def validate_config_command(
         sys.exit(1)
 
 
-@cli.group()  # type: ignore[misc]
+@cli.group()
 def inspect() -> None:
     """Inspect-AI integration commands."""
     pass
 
 
-@inspect.command("view")  # type: ignore[misc]
-@click.option(  # type: ignore[misc]
+@inspect.command("view")
+@click.option(
     "--log-dir",
     type=click.Path(exists=True, path_type=Path),
     required=True,
     help="Directory containing inspect-ai evaluation logs",
 )
-@click.option(  # type: ignore[misc]
+@click.option(
     "--host",
     default="127.0.0.1",
     help="Host to bind the web server to (default: 127.0.0.1)",
 )
-@click.option(  # type: ignore[misc]
+@click.option(
     "--port",
     type=int,
     default=7575,
     help="Port to bind the web server to (default: 7575)",
 )
-@click.option(  # type: ignore[misc]
+@click.option(
     "--no-recursive",
     is_flag=True,
     help="Do not recursively scan subdirectories for logs",
 )
-@click.option(  # type: ignore[misc]
+@click.option(
     "--no-browser",
     is_flag=True,
     help="Do not automatically open browser",
@@ -540,30 +540,30 @@ def view_command(
         raise  # Re-raise for debugging as per best practices
 
 
-@inspect.command("eval")  # type: ignore[misc]
-@click.option(  # type: ignore[misc]
+@inspect.command("eval")
+@click.option(
     "--log-file",
     type=click.Path(exists=True, path_type=Path),
     required=True,
     help="Path to inspect-ai .eval log file to analyze",
 )
-@click.option(  # type: ignore[misc]
+@click.option(
     "--format",
     type=click.Choice(["json", "summary", "samples", "full"]),
     default="summary",
     help="Output format: json (raw), summary (header), samples (sample data), full (everything)",
 )
-@click.option(  # type: ignore[misc]
+@click.option(
     "--pretty/--no-pretty",
     default=True,
     help="Pretty print JSON output",
 )
-@click.option(  # type: ignore[misc]
+@click.option(
     "--sample-id",
     type=str,
     help="Show specific sample by ID (only with --format samples)",
 )
-@click.option(  # type: ignore[misc]
+@click.option(
     "--max-samples",
     type=int,
     default=10,
@@ -1031,37 +1031,37 @@ def setup_client_logging(
     return init_logging(config, force=True)
 
 
-@cli.command("run")  # type: ignore[misc]
-@click.option(  # type: ignore[misc]
+@cli.command("run")
+@click.option(
     "--config",
     type=click.Path(path_type=Path),
     help="Path to SABER configuration YAML file (default: auto-detect saber.yaml in current directory)",
 )
-@click.option(  # type: ignore[misc]
+@click.option(
     "--env-file",
     type=click.Path(path_type=Path),
     help="Path to .env file for environment variables (default: auto-detect .env in current directory)",
 )
-@click.option(  # type: ignore[misc]
+@click.option(
     "--domain",
     type=str,
     help="Domain name for validation and logging organization (optional)",
 )
-@click.option(  # type: ignore[misc]
+@click.option(
     "--domains-root",
     type=click.Path(exists=True, path_type=Path),
     help="Root directory containing domain definitions (enables domain-aware validation)",
 )
-@click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging")  # type: ignore[misc]
-@click.option("--no-log-file", is_flag=True, help="Disable file logging (console only)")  # type: ignore[misc]
-@click.option("--no-ui", is_flag=True, help="Disable TUI and use rich console output instead")  # type: ignore[misc]
-@click.option("--validate-config", is_flag=True, help="Validate configuration against domain manifest before running")  # type: ignore[misc]
+@click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging")
+@click.option("--no-log-file", is_flag=True, help="Disable file logging (console only)")
+@click.option("--no-ui", is_flag=True, help="Disable TUI and use rich console output instead")
+@click.option("--validate-config", is_flag=True, help="Validate configuration against domain manifest before running")
 # Direct configuration options (alternative to --config file)
-@click.option("--rest-url", type=str, help="SABER server REST API URL")  # type: ignore[misc]
-@click.option("--mcp-url", type=str, help="SABER server MCP URL")  # type: ignore[misc]
-@click.option("--model", type=str, help="Model specification")  # type: ignore[misc]
-@click.option("--agent-id", type=str, help="Agent ID")  # type: ignore[misc]
-@click.option("--task-ids", type=str, help="Comma-separated task IDs (or '*' for all)")  # type: ignore[misc]
+@click.option("--rest-url", type=str, help="SABER server REST API URL")
+@click.option("--mcp-url", type=str, help="SABER server MCP URL")
+@click.option("--model", type=str, help="Model specification")
+@click.option("--agent-id", type=str, help="Agent ID")
+@click.option("--task-ids", type=str, help="Comma-separated task IDs (or '*' for all)")
 def run_command(
     config: Path | None,
     env_file: Path | None,

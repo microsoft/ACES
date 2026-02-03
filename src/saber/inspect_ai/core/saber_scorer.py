@@ -144,7 +144,7 @@ class TemplateStringLoader(BaseLoader):
 _DEFAULT_VALUE_TO_FLOAT = value_to_float()
 
 
-@metric  # type: ignore[misc]
+@metric
 def saber_score(to_float: ValueToFloat | None = None) -> Metric:
     """
     Overall SABER evaluation score (submission + subtasks).
@@ -166,7 +166,7 @@ def saber_score(to_float: ValueToFloat | None = None) -> Metric:
     return metric_fn
 
 
-@metric  # type: ignore[misc]
+@metric
 def submission_score() -> Metric:
     """
     Average submission score across all samples.
@@ -189,7 +189,7 @@ def submission_score() -> Metric:
     return metric_fn
 
 
-@metric  # type: ignore[misc]
+@metric
 def subtask_score() -> Metric:
     """
     Average subtask score across all samples.
@@ -220,7 +220,7 @@ def subtask_score() -> Metric:
     return metric_fn
 
 
-@metric  # type: ignore[misc]
+@metric
 def per_task_submission_scores() -> Metric:
     """
     Per-task submission score metrics.
@@ -267,7 +267,7 @@ def per_task_submission_scores() -> Metric:
     return metric_fn
 
 
-@metric  # type: ignore[misc]
+@metric
 def per_task_subtask_scores() -> Metric:
     """
     Per-task subtask score metrics.
@@ -317,7 +317,7 @@ def per_task_subtask_scores() -> Metric:
     return metric_fn
 
 
-@metric  # type: ignore[misc]
+@metric
 def subtask_score_metrics() -> Metric:
     """
     Per-subtask average score metrics.
@@ -388,7 +388,7 @@ def subtask_score_metrics() -> Metric:
 # ============================================================================
 
 
-@scorer(  # type: ignore[misc]
+@scorer(
     metrics=[
         saber_score(),  # Total score (submission + subtasks)
         submission_score(),  # Average submission score across all samples
@@ -1064,9 +1064,8 @@ async def _score_all_subtasks(
             },
         )
 
-        # Get scorer function and metadata from registry
+        # Get scorer metadata from registry to determine processing approach
         try:
-            scorer_func = get_subtask_scorer(criteria.strategy)
             scorer_metadata = get_subtask_scorer_metadata(criteria.strategy)
         except KeyError as e:
             raise RuntimeError(f"Unknown subtask strategy: {criteria.strategy}") from e
