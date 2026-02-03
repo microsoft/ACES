@@ -4,19 +4,18 @@ CLIENT-SIDE EVALUATION: Judge prompt generation moved to client side.
 This file now only tests agent prompt generation and template validation.
 """
 
-import pytest
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from saber.server.benchmarks.prompt_generator import (
-    PromptGenerator,
     PromptContext,
     PromptGenerationError,
-    TemplateValidationError,
-    PromptContextError,
+    PromptGenerator,
 )
-from saber.server.benchmarks.task import Task
 from saber.server.benchmarks.subtask import SubTask
+from saber.server.benchmarks.task import Task
 
 
 class TestPromptContext:
@@ -157,3 +156,186 @@ class TestPromptGenerator:
         generator = PromptGenerator(str(temp_prompts_dir))
         assert generator.prompts_dir == temp_prompts_dir
         assert generator.jinja_env is not None
+    def test_init_with_custom_domain_root(self, temp_prompts_dir):
+        """Test PromptGenerator initialization with custom domain_root."""
+        with tempfile.TemporaryDirectory() as domain_root:
+            generator = PromptGenerator(str(temp_prompts_dir), domain_root=domain_root)
+            assert generator.prompts_dir == temp_prompts_dir
+            assert generator.domain_root == Path(domain_root)
+
+    def test_init_default_domain_root(self, temp_prompts_dir):
+        """Test PromptGenerator default domain_root is prompts_dir's grandparent."""
+        generator = PromptGenerator(str(temp_prompts_dir))
+        # prompts_dir is temp_dir/prompts, so domain_root should be temp_dir's parent
+        expected_root = temp_prompts_dir.parent.parent
+        assert generator.domain_root == expected_root
+
+
+class TestResolveFileReferences:
+    """Test file reference resolution in initial_context."""
+
+    @pytest.fixture
+    def temp_domain_structure(self):
+        """Create temporary domain structure with prompts and data directories."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            domain_root = Path(temp_dir)
+
+            # Create config/prompts structure
+            prompts_dir = domain_root / "config" / "prompts"
+            prompts_dir.mkdir(parents=True)
+            (prompts_dir / "basic_prompt.md").write_text("Test {{ initial_context.threat_intel_content }}")
+
+            # Create server/data structure
+            data_dir = domain_root / "server" / "data" / "threat_intel"
+            data_dir.mkdir(parents=True)
+            (data_dir / "advisory.md").write_text("# Threat Advisory\n\nThis is a test advisory.")
+
+            yield {
+                "domain_root": domain_root,
+                "prompts_dir": prompts_dir,
+                "data_dir": data_dir,
+            }
+
+    def test_resolve_file_references_loads_content(self, temp_domain_structure):
+        """Test that _file keys are resolved to _content with file contents."""
+        generator = PromptGenerator(
+            str(temp_domain_structure["prompts_dir"]),
+            domain_root=str(temp_domain_structure["domain_root"]),
+        )
+
+        initial_context = {
+            "threat_intel_file": "server/data/threat_intel/advisory.md",
+            "other_key": "other_value",
+        }
+
+        result = generator._resolve_file_references(initial_context)
+
+        assert "threat_intel_content" in result
+        assert result["threat_intel_content"] == "# Threat Advisory\n\nThis is a test advisory."
+        assert result["threat_intel_file"] == "server/data/threat_intel/advisory.md"
+        assert result["other_key"] == "other_value"
+
+    def test_resolve_file_references_preserves_original(self, temp_domain_structure):
+        """Test that original initial_context is not mutated."""
+        generator = PromptGenerator(
+            str(temp_domain_structure["prompts_dir"]),
+            domain_root=str(temp_domain_structure["domain_root"]),
+        )
+
+        initial_context = {
+            "threat_intel_file": "server/data/threat_intel/advisory.md",
+        }
+        original_keys = set(initial_context.keys())
+
+        generator._resolve_file_references(initial_context)
+
+        assert set(initial_context.keys()) == original_keys
+
+    def test_resolve_file_references_none_context(self, temp_domain_structure):
+        """Test handling None initial_context."""
+        generator = PromptGenerator(
+            str(temp_domain_structure["prompts_dir"]),
+            domain_root=str(temp_domain_structure["domain_root"]),
+        )
+
+        result = generator._resolve_file_references(None)
+        assert result is None
+
+    def test_resolve_file_references_empty_context(self, temp_domain_structure):
+        """Test handling empty initial_context."""
+        generator = PromptGenerator(
+            str(temp_domain_structure["prompts_dir"]),
+            domain_root=str(temp_domain_structure["domain_root"]),
+        )
+
+        result = generator._resolve_file_references({})
+        assert result == {}
+
+    def test_resolve_file_references_no_file_keys(self, temp_domain_structure):
+        """Test that context without _file keys is returned unchanged."""
+        generator = PromptGenerator(
+            str(temp_domain_structure["prompts_dir"]),
+            domain_root=str(temp_domain_structure["domain_root"]),
+        )
+
+        initial_context = {
+            "kusto_endpoint": "http://localhost:8080",
+            "available_tables": ["ContainerLogs", "AADSignInLogs"],
+        }
+
+        result = generator._resolve_file_references(initial_context)
+        assert result == initial_context
+
+    def test_resolve_file_references_missing_file(self, temp_domain_structure):
+        """Test error when referenced file does not exist."""
+        generator = PromptGenerator(
+            str(temp_domain_structure["prompts_dir"]),
+            domain_root=str(temp_domain_structure["domain_root"]),
+        )
+
+        initial_context = {
+            "missing_file": "server/data/nonexistent.md",
+        }
+
+        with pytest.raises(PromptGenerationError) as exc_info:
+            generator._resolve_file_references(initial_context)
+
+        assert "File not found" in str(exc_info.value)
+        assert "missing_file" in str(exc_info.value)
+
+    def test_resolve_file_references_path_traversal_dotdot(self, temp_domain_structure):
+        """Test error when path contains '..' (path traversal attempt)."""
+        generator = PromptGenerator(
+            str(temp_domain_structure["prompts_dir"]),
+            domain_root=str(temp_domain_structure["domain_root"]),
+        )
+
+        initial_context = {
+            "malicious_file": "../../../etc/passwd",
+        }
+
+        with pytest.raises(PromptGenerationError) as exc_info:
+            generator._resolve_file_references(initial_context)
+
+        assert "Unsafe file path" in str(exc_info.value)
+
+    def test_resolve_file_references_absolute_path(self, temp_domain_structure):
+        """Test error when path is absolute."""
+        generator = PromptGenerator(
+            str(temp_domain_structure["prompts_dir"]),
+            domain_root=str(temp_domain_structure["domain_root"]),
+        )
+
+        initial_context = {
+            "absolute_file": "/etc/passwd",
+        }
+
+        with pytest.raises(PromptGenerationError) as exc_info:
+            generator._resolve_file_references(initial_context)
+
+        assert "Unsafe file path" in str(exc_info.value)
+
+    def test_resolve_file_references_multiple_files(self, temp_domain_structure):
+        """Test resolving multiple file references."""
+        # Create second file
+        second_file = temp_domain_structure["data_dir"] / "second.md"
+        second_file.write_text("Second file content")
+
+        generator = PromptGenerator(
+            str(temp_domain_structure["prompts_dir"]),
+            domain_root=str(temp_domain_structure["domain_root"]),
+        )
+
+        initial_context = {
+            "threat_intel_file": "server/data/threat_intel/advisory.md",
+            "secondary_file": "server/data/threat_intel/second.md",
+            "other_key": "value",
+        }
+
+        result = generator._resolve_file_references(initial_context)
+
+        assert "threat_intel_content" in result
+        assert "secondary_content" in result
+        assert result["threat_intel_content"] == "# Threat Advisory\n\nThis is a test advisory."
+        assert result["secondary_content"] == "Second file content"
+        assert result["other_key"] == "value"

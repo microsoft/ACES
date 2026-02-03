@@ -124,7 +124,7 @@ class PromptGenerator:
     Uses Jinja2 templating engine with FileSystemLoader for template management.
     """
 
-    def __init__(self, prompts_dir: str):
+    def __init__(self, prompts_dir: str, domain_root: str | None = None):
         """
         Initialize PromptGenerator with template directory.
 
@@ -132,11 +132,21 @@ class PromptGenerator:
             prompts_dir: Directory containing Jinja2 template files
                         - Agent templates: directly in prompts_dir/
                         - Judge templates: in prompts_dir/judge/ (served as raw files now)
+            domain_root: Optional root directory for the domain, used to resolve file
+                        references in initial_context (e.g., threat_intel_file paths).
+                        If not provided, defaults to prompts_dir parent's parent.
 
         Raises:
             TemplateValidationError: If prompts directory doesn't exist
         """
         self.prompts_dir = Path(prompts_dir)
+
+        # Domain root for resolving file references in initial_context
+        # Default: prompts_dir is typically config/prompts, so domain_root is config's parent
+        if domain_root:
+            self.domain_root = Path(domain_root)
+        else:
+            self.domain_root = self.prompts_dir.parent.parent  # config/prompts -> config -> server
 
         # Fail fast if prompts directory doesn't exist
         if not self.prompts_dir.exists():
@@ -401,6 +411,9 @@ class PromptGenerator:
         # Allowed executors now required (validated above)
         allowed_executors = task.allowed_executors or []
 
+        # Process initial_context to resolve file references
+        processed_initial_context = self._resolve_file_references(task.initial_context)
+
         return PromptContext(
             domain=task.domain,
             task_id=task.task_id,
@@ -412,9 +425,67 @@ class PromptGenerator:
             subtasks=subtasks_data,
             allowed_executors=allowed_executors,
             executor_timeouts=executor_timeouts,  # Add per-executor timeouts
-            initial_context=task.initial_context,  # Include initial_context from task
+            initial_context=processed_initial_context,  # Include processed initial_context
             initial_files=task.initial_files,  # Include initial_files from task
         )
+
+    def _resolve_file_references(self, initial_context: dict[str, Any] | None) -> dict[str, Any] | None:
+        """
+        Resolve file references in initial_context.
+
+        Keys ending with '_file' are treated as file paths relative to the domain root.
+        The file content is loaded and stored with the key name changed to '_content'.
+
+        Example:
+            threat_intel_file: "server/data/threat_intel/advisory.md"
+            ->
+            threat_intel_content: "<file contents>"
+
+        Args:
+            initial_context: Original initial_context from task configuration
+
+        Returns:
+            Processed initial_context with file contents loaded
+        """
+        if not initial_context:
+            return initial_context
+
+        processed = initial_context.copy()
+        file_keys = [k for k in processed.keys() if k.endswith("_file")]
+
+        for file_key in file_keys:
+            file_path = processed[file_key]
+            content_key = file_key.replace("_file", "_content")
+
+            try:
+                # Validate path safety (no path traversal outside domain)
+                if ".." in file_path or file_path.startswith("/"):
+                    raise PromptGenerationError(f"Unsafe file path in initial_context.{file_key}: {file_path}")
+
+                full_path = self.domain_root / file_path
+                if not full_path.exists():
+                    raise PromptGenerationError(f"File not found for initial_context.{file_key}: {full_path}")
+
+                content = full_path.read_text(encoding="utf-8")
+                processed[content_key] = content
+
+                logger.debug(
+                    "File reference resolved",
+                    extra={
+                        "event": "file_reference_resolved",
+                        "file_key": file_key,
+                        "content_key": content_key,
+                        "file_path": str(full_path),
+                        "content_length": len(content),
+                    },
+                )
+
+            except PromptGenerationError:
+                raise
+            except Exception as e:
+                raise PromptGenerationError(f"Failed to load file for initial_context.{file_key}: {e}") from e
+
+        return processed
 
     # -------------------- Private Helpers --------------------
     _INCLUDE_RE = re.compile(r"{%\s*include\s*['\"]([^'\"]+)['\"]\s*%}")
