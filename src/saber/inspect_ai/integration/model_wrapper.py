@@ -690,35 +690,6 @@ class WebSocketTranscriptSyncingModelWrapper:
         return f"WebSocketTranscriptSyncingModelWrapper({self._base_model!r})"
 
 
-# =========================================================================
-# Backward compatibility exports
-# =========================================================================
-
-# Re-export serialization functions for backward compatibility
-from .message_serialization import deserialize_message as _deserialize_message  # noqa: E402
-from .message_serialization import serialize_message as _serialize_message
-
-
-class _MessageSerializationMixin:
-    """Mixin providing message serialization/deserialization utilities.
-
-    DEPRECATED: Use message_serialization module functions directly.
-    Kept for backward compatibility with tests.
-    """
-
-    @staticmethod
-    def _serialize_message(msg: ChatMessage) -> dict:
-        """Convert ChatMessage to JSON-safe dict."""
-        return _serialize_message(msg)
-
-    @staticmethod
-    def _deserialize_message(msg_data: dict) -> ChatMessage:
-        """Convert message dictionary to ChatMessage object."""
-        return _deserialize_message(msg_data)
-
-
 __all__ = [
     "WebSocketTranscriptSyncingModelWrapper",
-    # Backward compatibility
-    "_MessageSerializationMixin",
 ]

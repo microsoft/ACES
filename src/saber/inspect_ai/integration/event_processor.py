@@ -135,8 +135,8 @@ class WebSocketEventProcessor:
 
                 event_type = parsed_message.type
 
-                logger.info(
-                    "[RESTART_DEBUG] WebSocket listener received message",
+                logger.debug(
+                    "WebSocket listener received message",
                     extra={
                         "episode_id": self._episode_id,
                         "event_type": event_type,
@@ -148,8 +148,8 @@ class WebSocketEventProcessor:
                     # Server-initiated notification - queue for generate()
                     await self._event_queue.put(parsed_message)
 
-                    logger.info(
-                        "[RESTART_DEBUG] Received transcript modification event - QUEUED",
+                    logger.debug(
+                        "Received transcript modification event - QUEUED",
                         extra={
                             "episode_id": self._episode_id,
                             "version": (
@@ -167,8 +167,8 @@ class WebSocketEventProcessor:
                     # State machine events - log and queue
                     await self._event_queue.put(parsed_message)
 
-                    logger.info(
-                        "[RESTART_DEBUG] Received state machine event - QUEUED",
+                    logger.debug(
+                        "Received state machine event - QUEUED",
                         extra={
                             "episode_id": self._episode_id,
                             "event_type": event_type,
@@ -187,7 +187,7 @@ class WebSocketEventProcessor:
                         error_type = parsed_message.data.error
                         if error_type.value == "stuck_state":
                             logger.error(
-                                "[RESTART_DEBUG] Episode stuck in state - retry required",
+                                "Episode stuck in state - retry required",
                                 extra={
                                     "episode_id": self._episode_id,
                                     "state": parsed_message.data.state,
@@ -252,8 +252,8 @@ class WebSocketEventProcessor:
         Returns:
             True if state event received, False on timeout
         """
-        logger.info(
-            "[RESTART_DEBUG] wait_for_state_event() called",
+        logger.debug(
+            "wait_for_state_event() called",
             extra={
                 "episode_id": self._episode_id,
                 "event_timeout": self._ws_config.pull.event_timeout,
@@ -263,8 +263,8 @@ class WebSocketEventProcessor:
         try:
             # Loop until we get a state event, discarding other events
             for iteration in range(WebSocketDefaults.MAX_EVENT_DISCARD_ITERATIONS):
-                logger.info(
-                    f"[RESTART_DEBUG] Waiting for event from queue (iteration {iteration + 1})",
+                logger.debug(
+                    f"Waiting for event from queue (iteration {iteration + 1})",
                     extra={
                         "episode_id": self._episode_id,
                         "timeout": self._ws_config.pull.event_timeout,
@@ -278,8 +278,8 @@ class WebSocketEventProcessor:
                 # Check event type
                 event_type = event_data.type if hasattr(event_data, "type") else None
 
-                logger.info(
-                    "[RESTART_DEBUG] Event received from queue",
+                logger.debug(
+                    "Event received from queue",
                     extra={
                         "episode_id": self._episode_id,
                         "event_type": event_type,
@@ -304,8 +304,8 @@ class WebSocketEventProcessor:
                         version = event_data.data.version
                         state = event_data.data.state
 
-                    logger.info(
-                        "[RESTART_DEBUG] Received state event - returning True",
+                    logger.debug(
+                        "Received state event - returning True",
                         extra={
                             "episode_id": self._episode_id,
                             "version": version,
@@ -317,7 +317,7 @@ class WebSocketEventProcessor:
                 else:
                     # Discard non-state events (push_ack, sync_response from prior operations)
                     logger.info(
-                        f"[RESTART_DEBUG] Discarding non-state event: {event_type}",
+                        f"Discarding non-state event: {event_type}",
                         extra={
                             "episode_id": self._episode_id,
                             "event_type": event_type,
@@ -327,7 +327,7 @@ class WebSocketEventProcessor:
 
             # Exhausted iterations
             logger.warning(
-                "[RESTART_DEBUG] Exhausted iterations waiting for state event",
+                "Exhausted iterations waiting for state event",
                 extra={
                     "episode_id": self._episode_id,
                     "max_iterations": WebSocketDefaults.MAX_EVENT_DISCARD_ITERATIONS,
@@ -337,7 +337,7 @@ class WebSocketEventProcessor:
 
         except asyncio.TimeoutError:
             logger.warning(
-                f"[RESTART_DEBUG] Timeout ({self._ws_config.pull.event_timeout}s) waiting for modification event",
+                f"Timeout ({self._ws_config.pull.event_timeout}s) waiting for modification event",
                 extra={"episode_id": self._episode_id},
             )
             return False
@@ -354,8 +354,8 @@ class WebSocketEventProcessor:
         Raises:
             asyncio.CancelledError: If shutdown is signaled during wait
         """
-        logger.info(
-            "[INJECTION_WAIT] wait_for_injection_event() STARTING",
+        logger.debug(
+            "wait_for_injection_event() STARTING",
             extra={
                 "episode_id": self._episode_id,
                 "queue_size": self._event_queue.qsize(),
@@ -368,13 +368,13 @@ class WebSocketEventProcessor:
             # Check if shutdown was signaled
             if self._shutdown_event.is_set():
                 logger.info(
-                    "[INJECTION_WAIT] Shutdown signaled, raising CancelledError",
+                    "Shutdown signaled, raising CancelledError",
                     extra={"episode_id": self._episode_id, "iteration": iteration},
                 )
                 raise asyncio.CancelledError("Event processor shutdown")
 
-            logger.info(
-                f"[INJECTION_WAIT] Loop iteration {iteration}: waiting for event from queue (timeout=1s)",
+            logger.debug(
+                f"Loop iteration {iteration}: waiting for event from queue (timeout=1s)",
                 extra={
                     "episode_id": self._episode_id,
                     "iteration": iteration,
@@ -387,8 +387,8 @@ class WebSocketEventProcessor:
                 event_data: WebSocketMessageOrDict = await asyncio.wait_for(self._event_queue.get(), timeout=1.0)
             except asyncio.TimeoutError:
                 # Check shutdown and continue waiting
-                logger.info(
-                    f"[INJECTION_WAIT] Loop iteration {iteration}: timeout, no event yet, continuing",
+                logger.debug(
+                    f"Loop iteration {iteration}: timeout, no event yet, continuing",
                     extra={"episode_id": self._episode_id, "iteration": iteration},
                 )
                 continue
@@ -396,8 +396,8 @@ class WebSocketEventProcessor:
             # Check event type
             event_type = event_data.type if hasattr(event_data, "type") else None
 
-            logger.info(
-                f"[INJECTION_WAIT] Loop iteration {iteration}: EVENT RECEIVED from queue",
+            logger.debug(
+                f"Loop iteration {iteration}: EVENT RECEIVED from queue",
                 extra={
                     "episode_id": self._episode_id,
                     "iteration": iteration,
@@ -410,8 +410,8 @@ class WebSocketEventProcessor:
             # We're specifically waiting for is_waiting_on_assistant
             # which indicates a user message was injected
             if event_type == WebSocketMessageType.IS_WAITING_ON_ASSISTANT.value:
-                logger.info(
-                    f"[INJECTION_WAIT] Loop iteration {iteration}: INJECTION DETECTED! Returning.",
+                logger.debug(
+                    f"Loop iteration {iteration}: INJECTION DETECTED! Returning.",
                     extra={"episode_id": self._episode_id, "iteration": iteration},
                 )
                 return  # Injection received, done waiting
@@ -419,15 +419,15 @@ class WebSocketEventProcessor:
             # is_waiting_on_user means we (blue) just pushed assistant message
             # - ignore this and keep waiting for injection
             if event_type == WebSocketMessageType.IS_WAITING_ON_USER.value:
-                logger.info(
-                    f"[INJECTION_WAIT] Loop iteration {iteration}: Ignoring is_waiting_on_user (our own push)",
+                logger.debug(
+                    f"Loop iteration {iteration}: Ignoring is_waiting_on_user (our own push)",
                     extra={"episode_id": self._episode_id, "iteration": iteration},
                 )
                 continue
 
             # Other events - log and continue waiting
-            logger.info(
-                f"[INJECTION_WAIT] Loop iteration {iteration}: Ignoring event type: {event_type}",
+            logger.debug(
+                f"Loop iteration {iteration}: Ignoring event type: {event_type}",
                 extra={"episode_id": self._episode_id, "iteration": iteration},
             )
 
@@ -436,16 +436,9 @@ class WebSocketEventProcessor:
 
         Called during cleanup to allow agent loop to exit gracefully.
         """
-        logger.info(
-            "[SHUTDOWN] signal_shutdown() CALLED - setting shutdown event",
-            extra={
-                "episode_id": self._episode_id,
-                "was_already_set": self._shutdown_event.is_set(),
-            },
-        )
         self._shutdown_event.set()
-        logger.info(
-            "[SHUTDOWN] shutdown event SET - wait_for_injection_event should exit on next iteration",
+        logger.debug(
+            "shutdown event SET - wait_for_injection_event should exit on next iteration",
             extra={"episode_id": self._episode_id},
         )
 
@@ -502,16 +495,12 @@ class WebSocketEventProcessor:
         Returns:
             True when event is received (always succeeds or blocks forever)
         """
-        logger.info(
-            "[RESTART_DEBUG] wait_for_state_event_with_retry() started",
-            extra={"episode_id": self._episode_id},
-        )
         max_backoff = 60.0  # Cap backoff at 60 seconds
         attempt = 0
 
         while True:
-            logger.info(
-                f"[RESTART_DEBUG] wait_for_state_event_with_retry attempt {attempt}",
+            logger.debug(
+                f"wait_for_state_event_with_retry attempt {attempt}",
                 extra={
                     "episode_id": self._episode_id,
                     "attempt": attempt,
@@ -525,7 +514,7 @@ class WebSocketEventProcessor:
                     # Exponential backoff: 5, 10, 20, 40, 60, 60, 60...
                     delay = min(5.0 * (2 ** (attempt - 1)), max_backoff)
                     logger.warning(
-                        "[RESTART_DEBUG] Stuck state detected, retrying after delay",
+                        "Stuck state detected, retrying after delay",
                         extra={
                             "episode_id": self._episode_id,
                             "attempt": attempt,
@@ -538,8 +527,8 @@ class WebSocketEventProcessor:
             event_received = await self.wait_for_state_event()
 
             if event_received:
-                logger.info(
-                    "[RESTART_DEBUG] wait_for_state_event_with_retry returning True",
+                logger.debug(
+                    "wait_for_state_event_with_retry returning True",
                     extra={"episode_id": self._episode_id, "attempt": attempt},
                 )
                 return True
@@ -548,7 +537,7 @@ class WebSocketEventProcessor:
             attempt += 1
             delay = min(5.0 * (2 ** (attempt - 1)), max_backoff)
             logger.warning(
-                "[RESTART_DEBUG] Modification event timeout, retrying (sample invalid without sync)",
+                "Modification event timeout, retrying (sample invalid without sync)",
                 extra={
                     "episode_id": self._episode_id,
                     "attempt": attempt,

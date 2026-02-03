@@ -177,6 +177,37 @@ class MetadataKeys(str, Enum):
     ORCHESTRATION_ROLE = "_orchestration_role"
 
 
+class MessageRole(str, Enum):
+    """Chat message role types.
+
+    These roles correspond to standard LLM chat message types used in
+    transcript serialization and deserialization. The string values
+    are compatible with inspect_ai ChatMessage role fields.
+
+    Attributes:
+        SYSTEM: System prompt/instructions message
+        USER: User/human message
+        ASSISTANT: AI assistant response message
+        TOOL: Tool/function result message
+    """
+
+    SYSTEM = "system"
+    """System prompt or instructions message."""
+
+    USER = "user"
+    """User or human input message."""
+
+    ASSISTANT = "assistant"
+    """AI assistant response message."""
+
+    TOOL = "tool"
+    """Tool or function call result message."""
+
+    def __str__(self) -> str:
+        """Return the enum value as string for logging and serialization."""
+        return self.value
+
+
 __all__ = [
     "EvaluationStrategy",
     "SubmissionEvaluationStrategy",
@@ -188,4 +219,5 @@ __all__ = [
     "VALID_STEP_EVAL_STRATEGIES",
     "VALID_EVAL_STRATEGIES",
     "MetadataKeys",
+    "MessageRole",
 ]

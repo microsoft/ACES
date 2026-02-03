@@ -3,6 +3,10 @@
 This module provides utilities for serializing and deserializing Inspect AI
 ChatMessage objects to/from JSON-safe dictionaries for WebSocket transmission.
 
+Uses Pydantic's native model_dump()/model_validate() for complete field preservation,
+including metadata, source, model, and other fields that may be added in future
+versions of inspect_ai.
+
 Logging category: AGENT.
 """
 
@@ -14,14 +18,21 @@ from inspect_ai.model import (
     ChatMessageSystem,
     ChatMessageTool,
     ChatMessageUser,
-    ContentReasoning,
-    ContentText,
 )
-from inspect_ai.tool import ToolCall
 
 from ...logging_config import LogCategory, get_saber_logger
+from ...models.constants import MessageRole
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
+
+
+# Mapping from role string to ChatMessage subclass for deserialization
+_ROLE_TO_MESSAGE_CLASS: dict[str, type[ChatMessage]] = {
+    MessageRole.SYSTEM.value: ChatMessageSystem,
+    MessageRole.USER.value: ChatMessageUser,
+    MessageRole.ASSISTANT.value: ChatMessageAssistant,
+    MessageRole.TOOL.value: ChatMessageTool,
+}
 
 
 def is_websocket_closed(websocket: Any) -> bool:
@@ -58,83 +69,35 @@ def is_websocket_closed(websocket: Any) -> bool:
 
 
 def serialize_message(msg: ChatMessage) -> dict[str, Any]:
-    """Convert ChatMessage to JSON-safe dict.
+    """Convert ChatMessage to JSON-safe dict using Pydantic's native serialization.
+
+    Uses model_dump() to preserve ALL fields including metadata, source, model,
+    id, and any future fields added to ChatMessage types.
 
     Args:
         msg: Inspect AI ChatMessage object
 
     Returns:
-        Dictionary with keys: role, content, tool_calls (optional), etc.
+        Dictionary representation of the message with all fields preserved.
 
     Raises:
         ValueError: If message type is unknown or unsupported
     """
-    result: dict[str, Any] = {}
-
-    # Extract role
-    if isinstance(msg, ChatMessageSystem):
-        result["role"] = "system"
-    elif isinstance(msg, ChatMessageUser):
-        result["role"] = "user"
-    elif isinstance(msg, ChatMessageAssistant):
-        result["role"] = "assistant"
-    elif isinstance(msg, ChatMessageTool):
-        result["role"] = "tool"
-    else:
+    if not isinstance(msg, (ChatMessageSystem, ChatMessageUser, ChatMessageAssistant, ChatMessageTool)):
         raise ValueError(f"Unknown message type: {type(msg)}")
 
-    # Extract content - handle both string and list of Content objects
-    if isinstance(msg.content, str):
-        result["content"] = msg.content
-    elif isinstance(msg.content, list):
-        # Extract text content parts and concatenate
-        text_parts = []
-        reasoning_text = None
-
-        for content_item in msg.content:
-            if isinstance(content_item, ContentText):
-                text_parts.append(content_item.text)
-            elif isinstance(content_item, ContentReasoning):
-                reasoning_text = content_item.reasoning
-
-        result["content"] = "".join(text_parts)
-
-        # Add reasoning if present (for assistant messages)
-        if reasoning_text:
-            result["reasoning"] = reasoning_text
-    else:
-        result["content"] = ""
-
-    # Handle assistant-specific fields
-    if isinstance(msg, ChatMessageAssistant):
-        if msg.tool_calls:
-            result["tool_calls"] = [
-                {
-                    "id": tc.id,
-                    "function": tc.function,
-                    "arguments": tc.arguments,
-                }
-                for tc in msg.tool_calls
-            ]
-
-    # Handle tool message-specific fields
-    if isinstance(msg, ChatMessageTool):
-        if msg.tool_call_id:
-            result["tool_call_id"] = msg.tool_call_id
-        if msg.function:
-            result["name"] = msg.function
-
+    result: dict[str, Any] = msg.model_dump()
     return result
 
 
 def deserialize_message(msg_data: dict[str, Any]) -> ChatMessage:
-    """Convert message dictionary to ChatMessage object.
+    """Convert message dictionary to ChatMessage object using Pydantic's native deserialization.
 
-    Inverse of serialize_message() - converts JSON-safe dict back to
-    Inspect AI ChatMessage objects.
+    Uses model_validate() to restore ALL fields including metadata, source, model,
+    id, and any future fields added to ChatMessage types.
 
     Args:
-        msg_data: Dictionary with keys: role, content, tool_calls (optional), etc.
+        msg_data: Dictionary representation of a ChatMessage (from serialize_message or JSON)
 
     Returns:
         ChatMessage object (ChatMessageUser, ChatMessageAssistant, etc.)
@@ -142,47 +105,17 @@ def deserialize_message(msg_data: dict[str, Any]) -> ChatMessage:
     Raises:
         ValueError: If role is unknown or message structure is invalid
     """
-    role = msg_data.get("role")
-    content = msg_data.get("content", "")
+    role_str = msg_data.get("role")
 
-    if role == "system":
-        return ChatMessageSystem(content=content)
+    if role_str not in _ROLE_TO_MESSAGE_CLASS:
+        raise ValueError(f"Unknown message role: {role_str}")
 
-    elif role == "user":
-        return ChatMessageUser(content=content)
+    message_class = _ROLE_TO_MESSAGE_CLASS[role_str]
 
-    elif role == "assistant":
-        # Assistant messages may have tool calls
-        tool_calls_data = msg_data.get("tool_calls")
-        if tool_calls_data:
-            # Convert tool call dicts to ToolCall objects
-            tool_calls = [
-                ToolCall(
-                    id=tc["id"],
-                    function=tc["function"],
-                    arguments=tc["arguments"],
-                    type="function",
-                )
-                for tc in tool_calls_data
-            ]
-            return ChatMessageAssistant(content=content, tool_calls=tool_calls)
-        else:
-            return ChatMessageAssistant(content=content)
-
-    elif role == "tool":
-        # Tool messages need tool_call_id and function name
-        tool_call_id = msg_data.get("tool_call_id")
-        function_name = msg_data.get("name")
-        if not tool_call_id or not function_name:
-            raise ValueError(f"Tool message missing tool_call_id or name: {msg_data}")
-        return ChatMessageTool(
-            content=content,
-            tool_call_id=tool_call_id,
-            function=function_name,
-        )
-
-    else:
-        raise ValueError(f"Unknown message role: {role}")
+    try:
+        return message_class.model_validate(msg_data)
+    except Exception as e:
+        raise ValueError(f"Failed to deserialize {role_str} message: {e}") from e
 
 
 __all__ = [
