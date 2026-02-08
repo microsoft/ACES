@@ -1,5 +1,13 @@
 """SABER sandbox integration for Inspect AI.
 
+This module contains Inspect AI-specific integration code that builds upon
+the generic harness-agnostic client code in saber.client. It provides sandbox
+environments, tool sources, datasets, and scorers specifically for Inspect AI.
+
+Dependencies:
+- saber.client: Generic client code (SABERRestClient, SABERConfig, models)
+- inspect_ai: The Inspect AI evaluation framework
+
 This module provides integration with SABER (Security Assessment Backend for
 Evaluation and Research) through a custom sandbox environment that delegates
 to SABER's DomainOrchestrator for Docker Compose lifecycle management.
