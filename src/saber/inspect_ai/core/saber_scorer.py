@@ -172,19 +172,27 @@ def submission_score() -> Metric:
     Average submission score across all samples.
 
     This represents how well agents answered the main task question.
+    Only includes samples where submission was actually evaluated (not strategy: none).
 
     Returns:
-        Metric function that computes average submission score
+        Metric function that computes average submission score or empty dict if none
     """
 
-    def metric_fn(scores: list[SampleScore]) -> float:
+    def metric_fn(scores: list[SampleScore]) -> dict[str, float]:
         submission_scores = []
         for sample_score in scores:
             if sample_score.score.metadata:
-                submission_score_value = sample_score.score.metadata.get(MetadataKeys.SUBMISSION_SCORE, 0.0)
-                submission_scores.append(float(submission_score_value))
+                # Only include samples that have submission_score in metadata
+                # (i.e., tasks where submission is actually evaluated, not strategy: none)
+                submission_score_value = sample_score.score.metadata.get(MetadataKeys.SUBMISSION_SCORE)
+                if submission_score_value is not None:
+                    submission_scores.append(float(submission_score_value))
 
-        return sum(submission_scores) / len(submission_scores) if submission_scores else 0.0
+        # Return dict with score if we have any submission scores, empty dict otherwise
+        if submission_scores:
+            return {"submission_score": sum(submission_scores) / len(submission_scores)}
+        else:
+            return {}
 
     return metric_fn
 
@@ -246,7 +254,9 @@ def per_task_submission_scores() -> Metric:
             if not task_id:
                 continue
 
-            # Get submission score
+            # Get submission score - skip if not present (strategy: none)
+            if MetadataKeys.SUBMISSION_SCORE not in sample_score.score.metadata:
+                continue
             submission_score_value = sample_score.score.metadata.get(MetadataKeys.SUBMISSION_SCORE, 0.0)
 
             # Track by task_id
@@ -613,7 +623,14 @@ def saber_scorer() -> Scorer:
 
             # Calculate totals
             total_score = submission_score + total_subtask_score
-            max_possible = submission_criteria.scoring.get("max_score", 1.0)
+
+            # Only include submission max_score if submission is actually being evaluated
+            submission_is_evaluated = submission_criteria.strategy and submission_criteria.strategy != "none"
+            if submission_is_evaluated:
+                max_possible = submission_criteria.scoring.get("max_score", 1.0)
+            else:
+                max_possible = 0.0
+
             if has_scorable_subtasks:
                 # Calculate max possible with weights applied - only for subtasks with strategies
                 weighted_max_possible = sum(
@@ -714,14 +731,17 @@ def saber_scorer() -> Scorer:
 
             # Build metadata - only include subtask data if subtasks_criteria_list exists
             metadata = {
-                MetadataKeys.SUBMISSION_SCORE: normalized_submission_score,
                 "max_possible": max_possible,
                 MetadataKeys.TASK_ID: task_id,
                 "scorer_version": "2.3",
                 "scoring_method": "sum",
-                "raw_submission_score": submission_score,
                 "raw_total_score": total_score,
             }
+
+            # Only include submission score metadata when submission is actually being evaluated
+            if submission_is_evaluated:
+                metadata[MetadataKeys.SUBMISSION_SCORE] = normalized_submission_score
+                metadata["raw_submission_score"] = submission_score
 
             # Only add subtask-related metadata when subtasks are actually being scored
             if has_scorable_subtasks:
