@@ -3,20 +3,19 @@
 Module structure:
 - model_wrapper: Main wrapper class using TranscriptSyncClient
 - tools: MCP tool integration
-- agent_transcript_sync: Manual transcript sync for custom agents
 
-Note: Copilot SDK tool bridge is now in agents/registry/copilot/tools.py
+The transcript sync components (connection, events, sync operations) have been
+moved to saber.client.transcript for harness-agnostic reuse.
 """
 
-from .agent_transcript_sync import AgentTranscriptSync
-from .model_wrapper import WebSocketTranscriptSyncingModelWrapper
+from .model_wrapper import InspectAIMessageSerializer, WebSocketTranscriptSyncingModelWrapper
 from .tools import SABERToolSource, saber_tools
 
 __all__ = [
     # Main wrapper
     "WebSocketTranscriptSyncingModelWrapper",
-    # Manual sync for custom agents
-    "AgentTranscriptSync",
+    # Serializer for Inspect AI messages
+    "InspectAIMessageSerializer",
     # Tools
     "SABERToolSource",
     "saber_tools",

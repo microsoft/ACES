@@ -1,10 +1,13 @@
-"""Transcript sync operations for WebSocket communication.
+"""Generic transcript sync operations for WebSocket communication.
 
 This module provides sync operations including:
 - Push message with unlimited retry
 - Tool result pushing
 - Sync request/response handling
 - Local state tracking
+
+This is the generic, harness-agnostic version that works with any message type
+via the MessageSerializer protocol.
 
 Logging category: AGENT.
 """
@@ -13,12 +16,10 @@ import asyncio
 import json
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 if TYPE_CHECKING:
     from websockets import ClientConnection
-
-from inspect_ai.model import ChatMessage
 
 from ...logging_config import LogCategory, get_saber_logger
 from ...models.rest.websocket_config import WebSocketConfig
@@ -34,13 +35,17 @@ from ...models.rest.websocket_messages import (
 )
 from ...models.transcript import compute_checksum
 from .event_processor import WebSocketEventProcessor
-from .message_serialization import deserialize_message, is_websocket_closed, serialize_message
+from .protocols import MessageSerializer
+from .utils import is_websocket_closed
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
 
+# Generic message type
+M = TypeVar("M")
 
-class TranscriptSyncOperations:
-    """Handles transcript synchronization operations.
+
+class GenericTranscriptSyncOperations(Generic[M]):
+    """Handles transcript synchronization operations for any message type.
 
     Provides:
     - Push message with retry logic
@@ -49,12 +54,16 @@ class TranscriptSyncOperations:
     - Local state (version, checksum, messages) tracking
 
     Works with WebSocketEventProcessor for event handling.
+
+    Type Parameter:
+        M: The harness-specific message type (e.g., ChatMessage for inspect_ai)
     """
 
     def __init__(
         self,
         episode_id: str,
         event_processor: WebSocketEventProcessor,
+        serializer: MessageSerializer[M],
         ws_config: WebSocketConfig | None = None,
     ) -> None:
         """Initialize sync operations.
@@ -62,19 +71,21 @@ class TranscriptSyncOperations:
         Args:
             episode_id: SABER episode ID for logging
             event_processor: Event processor for waiting on responses
+            serializer: MessageSerializer for the harness message type
             ws_config: WebSocket configuration (uses defaults if None)
         """
         self._episode_id = episode_id
         self._events = event_processor
+        self._serializer = serializer
         self._ws_config = ws_config or WebSocketConfig()
 
         # Local version tracking
         self._local_version = 0
         self._local_checksum = compute_checksum([])
-        self._local_messages: list[ChatMessage] = []
+        self._local_messages: list[M] = []
 
         logger.debug(
-            "Created TranscriptSyncOperations",
+            "Created GenericTranscriptSyncOperations",
             extra={
                 "episode_id": episode_id,
                 "push_timeout": self._ws_config.push.confirmation_timeout,
@@ -103,19 +114,19 @@ class TranscriptSyncOperations:
         self._local_checksum = value
 
     @property
-    def local_messages(self) -> list[ChatMessage]:
+    def local_messages(self) -> list[M]:
         """Get current local transcript messages."""
         return self._local_messages
 
     @local_messages.setter
-    def local_messages(self, value: list[ChatMessage]) -> None:
+    def local_messages(self, value: list[M]) -> None:
         """Set local transcript messages."""
         self._local_messages = value
 
     async def push_message_with_retry(
         self,
         websocket: "ClientConnection",
-        msg: ChatMessage,
+        msg: M,
         context: str = "message_push",
         reconnect_callback: Any | None = None,
     ) -> bool:
@@ -127,7 +138,7 @@ class TranscriptSyncOperations:
 
         Args:
             websocket: WebSocket connection to use
-            msg: The ChatMessage to push
+            msg: The message to push
             context: Context string for logging (e.g., "tool_result_push", "output_push")
             reconnect_callback: Optional async callback to reconnect on failure.
                                Signature: async def callback() -> ClientConnection
@@ -152,13 +163,13 @@ class TranscriptSyncOperations:
                     else:
                         raise ConnectionError("WebSocket not connected and no reconnect callback")
 
-                # Send push message
+                # Send push message using serializer
                 await current_websocket.send(
                     json.dumps(
                         {
                             "type": WebSocketMessageType.PUSH_MESSAGE.value,
                             "data": {
-                                "message": serialize_message(msg),
+                                "message": self._serializer.serialize(msg),
                                 "since_version": self._local_version,
                                 "client_checksum": self._local_checksum,
                             },
@@ -169,15 +180,11 @@ class TranscriptSyncOperations:
                 )
 
                 # Wait for push acknowledgment
-                # For agent_manual_push (Copilot), don't preserve state events - it's push-only
-                # and doesn't need to process injections. This avoids queue buildup.
-                preserve_state = context != "agent_manual_push"
                 ack_response = await self._events.wait_for_message_type(
                     expected_type=WebSocketMessageType.PUSH_ACK,
                     timeout=self._ws_config.push.confirmation_timeout,
                     max_iterations=WebSocketDefaults.MAX_ACK_WAIT_ITERATIONS,
                     context=context,
-                    preserve_state_events=preserve_state,
                 )
 
                 if ack_response:
@@ -238,19 +245,19 @@ class TranscriptSyncOperations:
     async def push_tool_results_if_needed(
         self,
         websocket: "ClientConnection",
-        input_messages: list[ChatMessage],
+        input_messages: list[M],
         reconnect_callback: Any | None = None,
     ) -> bool:
-        """Push tool results to server if Inspect AI added them to input.
+        """Push tool results to server if harness added them to input.
 
-        When Inspect AI runs tools, it adds tool result messages to the input
+        When a harness runs tools, it adds tool result messages to the input
         list before calling generate() again. These tool results exist only
         on the client - the server doesn't know about them yet. We need to
         push them to keep the server transcript in sync.
 
         Args:
             websocket: WebSocket connection to use
-            input_messages: The input message list from Inspect AI
+            input_messages: The input message list from the harness
             reconnect_callback: Optional callback for reconnection
 
         Returns:
@@ -263,7 +270,7 @@ class TranscriptSyncOperations:
             return False
 
         # Find messages in input that aren't in our local transcript
-        # These are tool results added by Inspect AI's tool execution loop
+        # These are tool results added by the harness's tool execution loop
         local_len = len(self._local_messages)
         input_len = len(input_messages)
 
@@ -275,13 +282,13 @@ class TranscriptSyncOperations:
         new_messages = input_messages[local_len:]
 
         # Check that these are tool messages (sanity check)
-        tool_messages = [m for m in new_messages if m.role == "tool"]
+        tool_messages = [m for m in new_messages if self._serializer.get_role(m) == "tool"]
         if len(tool_messages) != len(new_messages):
             logger.warning(
                 "New messages in input include non-tool messages, unexpected",
                 extra={
                     "episode_id": self._episode_id,
-                    "new_message_roles": [m.role for m in new_messages],
+                    "new_message_roles": [self._serializer.get_role(m) for m in new_messages],
                 },
             )
 
@@ -308,7 +315,7 @@ class TranscriptSyncOperations:
                     "Failed to push tool result to server after retries - transcript is now inconsistent",
                     extra={
                         "episode_id": self._episode_id,
-                        "message_role": msg.role,
+                        "message_role": self._serializer.get_role(msg),
                     },
                 )
                 all_succeeded = False
@@ -422,7 +429,7 @@ class TranscriptSyncOperations:
 
         return None
 
-    def apply_sync_response(self, sync_data: SyncResponseData) -> list[ChatMessage]:
+    def apply_sync_response(self, sync_data: SyncResponseData) -> list[M]:
         """Apply sync response to local state.
 
         Updates local_messages, local_version, and local_checksum.
@@ -436,8 +443,8 @@ class TranscriptSyncOperations:
         old_version = self._local_version
         old_count = len(self._local_messages)
 
-        logger.info(
-            "apply_sync_response called",
+        logger.debug(
+            "Applying sync response",
             extra={
                 "episode_id": self._episode_id,
                 "sync_mode": sync_data.sync_mode.value,
@@ -453,50 +460,32 @@ class TranscriptSyncOperations:
                 logger.warning("Full sync mode but no full_transcript provided")
                 raise ValueError("Missing full_transcript in FULL sync mode")
 
-            logger.info(
-                "FULL sync mode - replacing entire transcript (RESTART)",
+            logger.debug(
+                "FULL sync - replacing transcript",
                 extra={
                     "episode_id": self._episode_id,
-                    "old_messages": (
-                        [f"{m.role}: {str(m.content)[:50]}..." for m in self._local_messages[-3:]]
-                        if self._local_messages
-                        else []
-                    ),
                     "new_message_count": len(sync_data.full_transcript),
                 },
             )
-            self._local_messages = [deserialize_message(m) for m in sync_data.full_transcript]
-            logger.info(
-                "After FULL sync replacement",
-                extra={
-                    "episode_id": self._episode_id,
-                    "new_messages": (
-                        [f"{m.role}: {str(m.content)[:50]}..." for m in self._local_messages[-3:]]
-                        if self._local_messages
-                        else []
-                    ),
-                    "new_count": len(self._local_messages),
-                },
-            )
+            self._local_messages = [self._serializer.deserialize(m) for m in sync_data.full_transcript]
 
         elif sync_data.sync_mode == SyncMode.DELTA:
             # Delta sync - append new messages
             if sync_data.delta:
-                new_messages = [deserialize_message(m) for m in sync_data.delta]
-                logger.info(
-                    "DELTA sync mode - appending messages",
+                new_messages = [self._serializer.deserialize(m) for m in sync_data.delta]
+                logger.debug(
+                    "DELTA sync - appending messages",
                     extra={
                         "episode_id": self._episode_id,
                         "delta_count": len(new_messages),
-                        "delta_roles": [m.role for m in new_messages],
                     },
                 )
                 self._local_messages.extend(new_messages)
 
         elif sync_data.sync_mode == SyncMode.NO_CHANGE:
             # No changes since requested version - transcript is already up to date
-            logger.info(
-                "NO_CHANGE sync mode - transcript up to date",
+            logger.debug(
+                "NO_CHANGE sync - transcript up to date",
                 extra={
                     "episode_id": self._episode_id,
                     "version": self._local_version,
@@ -507,40 +496,49 @@ class TranscriptSyncOperations:
         self._local_version = sync_data.current_version.sequence
         self._local_checksum = sync_data.current_version.checksum
 
-        # Analyze for orphaned tool_calls
-        tool_calls_info = self._analyze_tool_calls_client(self._local_messages)
-
-        logger.info(
-            "Applied transcript sync complete",
+        logger.debug(
+            "Sync applied",
             extra={
                 "episode_id": self._episode_id,
                 "sync_mode": sync_data.sync_mode.value,
-                "old_version": old_version,
                 "new_version": self._local_version,
-                "old_message_count": old_count,
-                "new_message_count": len(self._local_messages),
-                "last_message_role": self._local_messages[-1].role if self._local_messages else "none",
-                "tool_calls_info": tool_calls_info,
-                "has_orphaned_tool_calls": len(tool_calls_info.get("orphaned_tool_call_ids", [])) > 0,
+                "message_count": len(self._local_messages),
             },
         )
 
         return self._local_messages.copy()
 
-    def _analyze_tool_calls_client(self, messages: list[ChatMessage]) -> dict[str, Any]:
+    def _format_messages_for_log(self, messages: list[M]) -> list[str]:
+        """Format messages for logging output.
+
+        Args:
+            messages: List of messages to format
+
+        Returns:
+            List of formatted message strings (truncated content)
+        """
+        if not messages:
+            return []
+        result = []
+        for m in messages:
+            role = self._serializer.get_role(m)
+            content = str(self._serializer.serialize(m).get("content", ""))[:50]
+            result.append(f"{role}: {content}...")
+        return result
+
+    def _analyze_tool_calls_client(self, messages: list[M]) -> dict[str, Any]:
         """Analyze tool_calls in client-side messages to detect orphaned calls."""
         all_tool_call_ids: list[str] = []
         responded_tool_call_ids: list[str] = []
 
         for msg in messages:
-            if msg.role == "assistant" and hasattr(msg, "tool_calls") and msg.tool_calls:
-                for tc in msg.tool_calls:
-                    if hasattr(tc, "id") and tc.id:
-                        all_tool_call_ids.append(tc.id)
-            elif msg.role == "tool":
-                # Tool messages have tool_call_id
-                if hasattr(msg, "tool_call_id") and msg.tool_call_id:
-                    responded_tool_call_ids.append(msg.tool_call_id)
+            role = self._serializer.get_role(msg)
+            if role == "assistant" and self._serializer.has_tool_calls(msg):
+                all_tool_call_ids.extend(self._serializer.get_tool_call_ids(msg))
+            elif role == "tool":
+                tool_call_id = self._serializer.get_tool_call_id(msg)
+                if tool_call_id:
+                    responded_tool_call_ids.append(tool_call_id)
 
         orphaned = [tc_id for tc_id in all_tool_call_ids if tc_id not in responded_tool_call_ids]
 
@@ -550,7 +548,7 @@ class TranscriptSyncOperations:
             "orphaned_tool_call_ids": orphaned[:5],  # Truncate for logging
         }
 
-    def update_local_state_without_push(self, msg: ChatMessage) -> None:
+    def update_local_state_without_push(self, msg: M) -> None:
         """Update local state when push is disabled.
 
         Used when push.enabled=False to maintain local tracking.
@@ -560,7 +558,7 @@ class TranscriptSyncOperations:
         """
         self._local_messages.append(msg)
         self._local_version += 1
-        self._local_checksum = compute_checksum([serialize_message(m) for m in self._local_messages])
+        self._local_checksum = compute_checksum([self._serializer.serialize(m) for m in self._local_messages])
 
     def clear_state(self) -> None:
         """Clear local state (for cleanup)."""
@@ -569,4 +567,4 @@ class TranscriptSyncOperations:
         self._local_checksum = compute_checksum([])
 
 
-__all__ = ["TranscriptSyncOperations"]
+__all__ = ["GenericTranscriptSyncOperations"]
