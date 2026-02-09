@@ -29,6 +29,7 @@ class APIEndpoints:
     )
     EPISODE_EVALUATION = "/api/v1/session/{session_id}/episodes/{episode_id}/evaluation"
     EPISODE_FILES = "/api/v1/session/{session_id}/episodes/{episode_id}/files"
+    EPISODE_SANDBOX_FILE_READ = "/api/v1/session/{session_id}/episodes/{episode_id}/sandbox/files"
 
     # Evaluation endpoints
     EVALUATION_BY_EPISODE = "/api/v1/session/{session_id}/evaluations/{episode_id}"

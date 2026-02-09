@@ -337,7 +337,7 @@ async def _run_claude_code_agent(
         )
     except ImportError as e:
         raise ImportError(
-            "claude-code-sdk is required for the claude_code agent. " "Install with: pip install claude-code-sdk"
+            "claude-code-sdk is required for the claude_code agent. Install with: pip install claude-code-sdk"
         ) from e
 
     # Build the system prompt

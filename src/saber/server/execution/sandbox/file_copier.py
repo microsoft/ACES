@@ -57,6 +57,25 @@ class FileUploadResult:
     error_message: str | None
 
 
+@dataclass(frozen=True)
+class FileReadResult:
+    """Result of a file read operation from container.
+
+    Attributes:
+        success: Whether the read completed successfully.
+        file_path: The path that was read.
+        content: File contents as string (if successful).
+        bytes_read: Number of bytes read.
+        error_message: Error message if the read failed.
+    """
+
+    success: bool
+    file_path: str
+    content: str
+    bytes_read: int
+    error_message: str | None
+
+
 class SandboxFileCopier:
     """Copies files from server base directory into running containers."""
 
@@ -439,6 +458,195 @@ class SandboxFileCopier:
                 bytes_copied=0,
                 is_directory=True,
                 error_message=str(e),
+            )
+
+    async def read_file_from_container(
+        self,
+        episode_id: str,
+        file_path: str,
+        container_name: str,
+        encoding: str = "utf-8",
+    ) -> FileReadResult:
+        """
+        Read a file from a container.
+
+        Uses Docker SDK's `get_archive` to retrieve the file, then extracts
+        and decodes the content.
+
+        Args:
+            episode_id: The episode ID (for logging).
+            file_path: Absolute path to the file inside the container.
+            container_name: Full container name.
+            encoding: Text encoding for decoding file content.
+
+        Returns:
+            FileReadResult with success status, content, or error message.
+
+        Raises:
+            NotFound: If the container is not found.
+            ValueError: If file path is invalid.
+        """
+        from saber.models.rest.file_read import MAX_FILE_READ_BYTES
+
+        log_extra = {
+            "event": "file_read_start",
+            "episode_id": episode_id,
+            "file_path": file_path,
+            "container_name": container_name,
+            "encoding": encoding,
+        }
+
+        logger.info("File read operation starting", extra=log_extra)
+
+        # Validate file path - reuse existing validation but adapted for read
+        if not file_path or not file_path.strip():
+            raise ValueError("file_path must be a non-empty string")
+
+        container_path = PurePosixPath(file_path)
+
+        if not container_path.is_absolute():
+            raise ValueError(f"Invalid file path '{file_path}': path must be absolute")
+
+        if container_path == PurePosixPath("/"):
+            raise ValueError("Invalid file path '/': cannot read container root")
+
+        if any(part == ".." for part in container_path.parts):
+            raise ValueError(f"Invalid file path '{file_path}': path traversal detected")
+
+        # Get container
+        try:
+            container = await asyncio.to_thread(self.docker_client.containers.get, container_name)
+            logger.debug(
+                "Container found for file read",
+                extra={
+                    "event": "file_read_container_found",
+                    "container_name": container_name,
+                    "container_id": container.id[:12],
+                },
+            )
+        except NotFound as e:
+            logger.error(
+                "Container not found for file read",
+                extra={
+                    "event": "file_read_container_not_found",
+                    "episode_id": episode_id,
+                    "container_name": container_name,
+                    "error": str(e),
+                },
+            )
+            raise NotFound(f"Container '{container_name}' not found. Cannot read file.") from e
+
+        # Read file from container using get_archive
+        try:
+            tar_stream, stat = await asyncio.to_thread(container.get_archive, file_path)
+
+            # Read all chunks from the tar stream
+            tar_data = b"".join(tar_stream)
+
+            # Extract file content from tar archive
+            tar_buffer = io.BytesIO(tar_data)
+            with tarfile.open(fileobj=tar_buffer, mode="r") as tar:
+                members = tar.getmembers()
+                if not members:
+                    return FileReadResult(
+                        success=False,
+                        file_path=file_path,
+                        content="",
+                        bytes_read=0,
+                        error_message="Tar archive is empty",
+                    )
+
+                # Get the first (and should be only) file
+                member = members[0]
+
+                # Check file size limit
+                if member.size > MAX_FILE_READ_BYTES:
+                    return FileReadResult(
+                        success=False,
+                        file_path=file_path,
+                        content="",
+                        bytes_read=0,
+                        error_message=(
+                            f"File size ({member.size} bytes) exceeds maximum allowed ({MAX_FILE_READ_BYTES} bytes)"
+                        ),
+                    )
+
+                # Extract file content
+                file_obj = tar.extractfile(member)
+                if file_obj is None:
+                    return FileReadResult(
+                        success=False,
+                        file_path=file_path,
+                        content="",
+                        bytes_read=0,
+                        error_message="Cannot extract file from tar archive (is it a directory?)",
+                    )
+
+                file_bytes = file_obj.read()
+
+            # Decode content
+            try:
+                content = file_bytes.decode(encoding)
+            except UnicodeDecodeError as e:
+                return FileReadResult(
+                    success=False,
+                    file_path=file_path,
+                    content="",
+                    bytes_read=0,
+                    error_message=f"Failed to decode file with encoding '{encoding}': {e}",
+                )
+
+            logger.info(
+                "File read completed",
+                extra={
+                    "event": "file_read_success",
+                    "episode_id": episode_id,
+                    "file_path": file_path,
+                    "bytes_read": len(file_bytes),
+                },
+            )
+
+            return FileReadResult(
+                success=True,
+                file_path=file_path,
+                content=content,
+                bytes_read=len(file_bytes),
+                error_message=None,
+            )
+
+        except NotFound:
+            logger.warning(
+                "File not found in container",
+                extra={
+                    "event": "file_read_file_not_found",
+                    "episode_id": episode_id,
+                    "file_path": file_path,
+                    "container_name": container_name,
+                },
+            )
+            return FileReadResult(
+                success=False,
+                file_path=file_path,
+                content="",
+                bytes_read=0,
+                error_message=f"File not found: {file_path}",
+            )
+        except Exception as e:
+            logger.error(
+                "File read failed",
+                extra={
+                    "event": "file_read_failed",
+                    "episode_id": episode_id,
+                    "file_path": file_path,
+                    "error": str(e),
+                },
+            )
+            return FileReadResult(
+                success=False,
+                file_path=file_path,
+                content="",
+                bytes_read=0,
+                error_message=f"File read failed: {e}",
             )
 
     def _calculate_directory_size(self, directory: Path) -> int:

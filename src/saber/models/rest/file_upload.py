@@ -50,7 +50,7 @@ class FileUploadRequest(BaseModel, frozen=True):
 
         # Check size limit
         if len(decoded) > MAX_TAR_SIZE_BYTES:
-            raise ValueError(f"tar_data exceeds maximum size of {MAX_TAR_SIZE_BYTES // (1024*1024)} MiB")
+            raise ValueError(f"tar_data exceeds maximum size of {MAX_TAR_SIZE_BYTES // (1024 * 1024)} MiB")
 
         return v
 

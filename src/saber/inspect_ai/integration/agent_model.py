@@ -20,7 +20,7 @@ from ...logging_config import LogCategory, get_saber_logger
 logger = get_saber_logger(LogCategory.AGENT, __name__)
 
 
-@modelapi(name="agent")  # type: ignore[misc]
+@modelapi(name="agent")  # type: ignore[untyped-decorator]
 def agent() -> type[ModelAPI]:
     """Register the agent model API."""
     return AgentModelAPI

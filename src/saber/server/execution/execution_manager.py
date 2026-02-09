@@ -30,7 +30,7 @@ from .base import (
 )
 from .executors.base_executors import CommandExecutor
 from .executors.executor_factory import ExecutorFactory
-from .sandbox.file_copier import FileUploadResult, SandboxFileCopier
+from .sandbox.file_copier import FileReadResult, FileUploadResult, SandboxFileCopier
 from .sandbox.permanent_environment_manager import PermanentEnvironmentManager
 from .sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 
@@ -840,6 +840,90 @@ class ExecutionManager:
                 e,
                 episode_id=episode_id,
                 destination_path=destination_path,
+            )
+            raise
+
+    async def read_file_from_episode(
+        self,
+        episode_id: str,
+        file_path: str,
+        container_name: str | None = None,
+        encoding: str = "utf-8",
+    ) -> FileReadResult:
+        """
+        Read a file from an episode's execution container.
+
+        Args:
+            episode_id: The episode ID.
+            file_path: Absolute path to the file inside the container.
+            container_name: Optional container name override (uses execution container if not provided).
+            encoding: Text encoding for decoding file content.
+
+        Returns:
+            FileReadResult with success status, content, or error message.
+
+        Raises:
+            RuntimeError: If file copier is not initialized or container cannot be determined.
+            ValueError: If file path is invalid.
+            NotFound: If the container is not found.
+        """
+        if not self._file_copier:
+            raise RuntimeError("File copier not initialized")
+
+        # Determine the container name
+        if container_name is None:
+            container_name = self.get_execution_container_name(episode_id)
+            if not container_name:
+                raise RuntimeError(
+                    f"Cannot determine execution container name for episode {episode_id}. "
+                    "Ensure sandbox environment is running and configured properly."
+                )
+
+        log_operation_start(
+            logger,
+            "read_file_from_episode",
+            episode_id=episode_id,
+            file_path=file_path,
+            container_name=container_name,
+            encoding=encoding,
+        )
+
+        try:
+            result = await self._file_copier.read_file_from_container(
+                episode_id=episode_id,
+                file_path=file_path,
+                container_name=container_name,
+                encoding=encoding,
+            )
+
+            if result.success:
+                log_operation_success(
+                    logger,
+                    "read_file_from_episode",
+                    episode_id=episode_id,
+                    file_path=file_path,
+                    bytes_read=result.bytes_read,
+                )
+            else:
+                logger.warning(
+                    "File read returned failure result",
+                    extra={
+                        "event": "read_file_from_episode_failure_result",
+                        "episode_id": episode_id,
+                        "file_path": file_path,
+                        "error_message": result.error_message,
+                    },
+                )
+
+            return result
+
+        except Exception as e:
+            log_operation_failure(
+                logger,
+                "read_file_from_episode",
+                e,
+                episode_id=episode_id,
+                file_path=file_path,
             )
             raise
 

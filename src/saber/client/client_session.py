@@ -1348,6 +1348,118 @@ class ClientSessionManager:
                         f"Failed to get evaluations for session {session_id}: {response.status} - {error_text}"
                     )
 
+    async def read_sandbox_file(
+        self,
+        session_id: str,
+        episode_id: str,
+        file_path: str,
+        container_name: str | None = None,
+        encoding: str = "utf-8",
+    ) -> str:
+        """
+        Read a file from an episode's sandbox container.
+
+        Args:
+            session_id: Session ID
+            episode_id: Episode ID
+            file_path: Absolute path to the file in the container
+            container_name: Optional container name (defaults to execution container)
+            encoding: Text encoding (default: utf-8)
+
+        Returns:
+            File contents as string
+
+        Raises:
+            FileNotFoundError: If the file or episode does not exist
+            Exception: If the read operation fails
+        """
+        logger.debug(
+            "Reading sandbox file",
+            extra={
+                "event": "read_sandbox_file_requested",
+                "session_id": session_id,
+                "episode_id": episode_id,
+                "file_path": file_path,
+                "container_name": container_name,
+                "encoding": encoding,
+            },
+        )
+
+        url = f"{self.base_url}/api/v1/session/{session_id}/episodes/{episode_id}/sandbox/files"
+        params = {"file_path": file_path, "encoding": encoding}
+        if container_name:
+            params["container_name"] = container_name
+
+        async def _do_request() -> tuple[int, Any]:
+            async with aiohttp.ClientSession() as session:
+                timeout = aiohttp.ClientTimeout(total=self.timeout)
+                async with session.get(url, params=params, timeout=timeout) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        return response.status, data
+                    else:
+                        try:
+                            data = await response.json()
+                        except Exception:
+                            data = {"detail": await response.text()}
+                        return response.status, data
+
+        status, result = await self._retry_request("read_sandbox_file", _do_request)
+
+        if status == 200:
+            logger.debug(
+                "Sandbox file read successfully",
+                extra={
+                    "event": "read_sandbox_file_completed",
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                    "file_path": file_path,
+                    "bytes_read": result.get("bytes_read", 0),
+                },
+            )
+            content: str = result["content"]
+            return content
+        elif status == 404:
+            error_detail = result.get("detail", "Not found")
+            logger.warning(
+                "File or resource not found",
+                extra={
+                    "event": "read_sandbox_file_not_found",
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                    "file_path": file_path,
+                    "error": error_detail,
+                },
+            )
+            raise FileNotFoundError(error_detail)
+        elif status == 413:
+            error_detail = result.get("detail", "File size exceeds limit")
+            logger.error(
+                "File too large to read",
+                extra={
+                    "event": "read_sandbox_file_size_exceeded",
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                    "file_path": file_path,
+                    "error": error_detail,
+                },
+            )
+            raise Exception(f"File read failed: {error_detail}")
+        else:
+            error_detail = result.get("detail", "Unknown error")
+            logger.error(
+                "Failed to read sandbox file",
+                extra={
+                    "event": "read_sandbox_file_failed",
+                    "session_id": session_id,
+                    "episode_id": episode_id,
+                    "file_path": file_path,
+                    "status_code": status,
+                    "error": error_detail,
+                },
+            )
+            raise Exception(f"Failed to read file: {error_detail}")
+
     async def get_evaluation_criteria(self, session_id: str, episode_id: str) -> EvaluationCriteriaResponse:
         """
         Get evaluation criteria package for client-side evaluation.

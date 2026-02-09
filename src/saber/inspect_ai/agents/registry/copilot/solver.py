@@ -305,9 +305,7 @@ class CopilotClientWrapper:
 
     def __init__(self, options: dict[str, Any] | None = None) -> None:
         if not COPILOT_SDK_AVAILABLE:
-            raise RuntimeError(
-                "GitHub Copilot SDK is not installed. " "Install it with: pip install github-copilot-sdk"
-            )
+            raise RuntimeError("GitHub Copilot SDK is not installed. Install it with: pip install github-copilot-sdk")
 
         opts = options or {}
         env = opts.get("env", dict(os.environ))
@@ -815,8 +813,7 @@ def copilot_solver(
 
             # Single transcript sync at end
             logger.debug(
-                f"Before transcript sync: {len(state.messages)} messages, "
-                f"sync enabled: {transcript_sync.is_enabled}"
+                f"Before transcript sync: {len(state.messages)} messages, sync enabled: {transcript_sync.is_enabled}"
             )
             sync_result = await transcript_sync.sync_state_messages(state)
             logger.debug(f"Transcript sync result: {sync_result}")

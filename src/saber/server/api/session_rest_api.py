@@ -52,6 +52,7 @@ from ...models.rest.evaluation import (
     TaskEvaluationContext,
     TemplateContentResponse,
 )
+from ...models.rest.file_read import FileReadResponse
 from ...models.rest.websocket_constants import WebSocketCloseCode
 from ..evaluation.exceptions import EvaluationNotFoundError, InvalidEvaluationRequestError, SessionEvaluationError
 
@@ -833,6 +834,114 @@ class SessionRestAPI:
         #             logger, "upload_file_to_episode", exc, session_id=session_id, episode_id=episode_id
         #         )
         #         raise HTTPException(status_code=500, detail=f"Failed to upload file: {exc}") from exc
+
+        @self.app.get(APIEndpoints.EPISODE_SANDBOX_FILE_READ)
+        async def read_sandbox_file_endpoint(
+            session_id: str,
+            episode_id: str,
+            file_path: str,
+            container_name: str | None = None,
+            encoding: str = "utf-8",
+        ) -> FileReadResponse:
+            """Read a file from the episode's sandbox container.
+
+            This endpoint retrieves a file from a Docker container in the episode's
+            sandbox environment and returns its contents as a string.
+
+            Args:
+                session_id: The session identifier.
+                episode_id: The episode identifier.
+                file_path: Absolute path to the file in the container (query param).
+                container_name: Optional container name override (defaults to execution container).
+                encoding: Text encoding for decoding file content (default: utf-8).
+
+            Returns:
+                FileReadResponse with file contents and metadata.
+
+            Raises:
+                404: Episode not found, container not found, or file not found.
+                422: Episode not ready or invalid file path.
+                413: File size exceeds maximum allowed.
+                500: Docker API error or internal failure.
+            """
+            from docker.errors import APIError as DockerAPIError
+            from docker.errors import NotFound as DockerNotFound
+
+            log_operation_start(
+                logger,
+                "read_sandbox_file",
+                session_id=session_id,
+                episode_id=episode_id,
+                file_path=file_path,
+                container_name=container_name,
+                encoding=encoding,
+            )
+
+            try:
+                # Check episode exists
+                episode = self.session_manager.get_episode_by_id(episode_id)
+                if not episode:
+                    raise HTTPException(status_code=404, detail=f"Episode {episode_id} not found")
+
+                # Check episode is ready (has running container)
+                if not episode.is_ready:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Episode {episode_id} is not ready. Current state: {episode.state.value}",
+                    )
+
+                # Call execution manager to read the file
+                result = await self.session_manager.execution_manager.read_file_from_episode(
+                    episode_id=episode_id,
+                    file_path=file_path,
+                    container_name=container_name,
+                    encoding=encoding,
+                )
+
+                # Check if the read failed
+                if not result.success:
+                    # Determine appropriate error code based on error message
+                    error_msg = result.error_message or "File read failed"
+                    if "not found" in error_msg.lower():
+                        raise HTTPException(status_code=404, detail=error_msg)
+                    elif "exceeds" in error_msg.lower() or "size" in error_msg.lower():
+                        raise HTTPException(status_code=413, detail=error_msg)
+                    else:
+                        raise HTTPException(status_code=500, detail=error_msg)
+
+                log_operation_success(
+                    logger,
+                    "read_sandbox_file",
+                    session_id=session_id,
+                    episode_id=episode_id,
+                    file_path=file_path,
+                    bytes_read=result.bytes_read,
+                )
+
+                return FileReadResponse(
+                    message="File read successfully",
+                    session_id=session_id,
+                    episode_id=episode_id,
+                    file_path=result.file_path,
+                    content=result.content,
+                    bytes_read=result.bytes_read,
+                    encoding=encoding,
+                )
+
+            except HTTPException:
+                raise
+            except DockerNotFound as exc:
+                log_operation_failure(logger, "read_sandbox_file", exc, session_id=session_id, episode_id=episode_id)
+                raise HTTPException(status_code=404, detail=f"Container not found: {exc}") from exc
+            except ValueError as exc:
+                log_operation_failure(logger, "read_sandbox_file", exc, session_id=session_id, episode_id=episode_id)
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            except (RuntimeError, DockerAPIError) as exc:
+                log_operation_failure(logger, "read_sandbox_file", exc, session_id=session_id, episode_id=episode_id)
+                raise HTTPException(status_code=500, detail=f"File read failed: {exc}") from exc
+            except Exception as exc:
+                log_operation_failure(logger, "read_sandbox_file", exc, session_id=session_id, episode_id=episode_id)
+                raise HTTPException(status_code=500, detail=f"Failed to read file: {exc}") from exc
 
         @self.app.post(APIEndpoints.EPISODE_TRANSCRIPT)
         async def push_transcript_endpoint(

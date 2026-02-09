@@ -127,9 +127,7 @@ class IncrementalEventParser:
         # Check for file truncation
         file_size = self._events_path.stat().st_size
         if file_size < self._byte_offset:
-            logger.warning(
-                f"File truncation detected: size {file_size} < offset {self._byte_offset}, " "resetting parser"
-            )
+            logger.warning(f"File truncation detected: size {file_size} < offset {self._byte_offset}, resetting parser")
             self.reset()
 
         events: list[CopilotEvent] = []

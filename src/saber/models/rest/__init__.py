@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 # Import REST configuration and endpoints
 from .config import TranscriptSyncConfig
 from .endpoints import APIEndpoints
+from .file_read import MAX_FILE_READ_BYTES, FileReadRequest, FileReadResponse
 from .file_upload import FileUploadRequest, FileUploadResponse
 from .websocket_config import PullConfig, PushConfig, WebSocketConfig
 from .websocket_constants import WebSocketCloseCode, WebSocketDefaults
@@ -96,6 +97,10 @@ __all__ = [
     # File upload models
     "FileUploadRequest",
     "FileUploadResponse",
+    # File read models
+    "FileReadRequest",
+    "FileReadResponse",
+    "MAX_FILE_READ_BYTES",
 ]
 
 
