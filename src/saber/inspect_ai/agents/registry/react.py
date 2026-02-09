@@ -10,7 +10,7 @@ from typing import Any
 
 from inspect_ai.agent import react
 from inspect_ai.agent._agent import AgentState
-from inspect_ai.agent._types import AgentPrompt
+from inspect_ai.agent._types import AgentPrompt, AgentSubmit
 from inspect_ai.model._model import active_model
 
 from ....logging_config import LogCategory, get_saber_logger
@@ -236,7 +236,7 @@ def create_agent(**kwargs: Any) -> Callable[..., Any]:
             ),
             tools=[saber_tools()],
             on_continue=on_continue,
-            submit=submit_enabled,
+            submit=AgentSubmit(answer_only=True) if submit_enabled else False,
             **kwargs,
         )
 
