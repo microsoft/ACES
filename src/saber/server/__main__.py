@@ -41,7 +41,10 @@ Examples:
     parser.add_argument("--start", action="store_true", help="Start the SABER server")
 
     parser.add_argument(
-        "--domain", type=str, required=True, help="Security domain name (e.g., pentest_demo, malware_analysis)"
+        "--domain",
+        type=str,
+        default=os.getenv("SABER_DOMAIN"),
+        help="Security domain name (e.g., pentest_demo, malware_analysis). Can also be set via SABER_DOMAIN env var.",
     )
 
     parser.add_argument(
@@ -419,6 +422,9 @@ def main() -> None:
 
     if not args.start:
         parser.error("Please specify --start to start the server")
+
+    if not args.domain:
+        parser.error("--domain is required (or set SABER_DOMAIN environment variable)")
 
     # Find configuration directory early to set up proper logging
     try:

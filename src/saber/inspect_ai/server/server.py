@@ -45,7 +45,7 @@ class DomainContext:
     """MCP API port number."""
 
     project_slug: str
-    """Docker Compose project slug for cleanup."""
+    """Domain identifier for container labeling and cleanup."""
 
     domains_root: Path
     """Path to domains directory."""
@@ -59,7 +59,6 @@ def _create_orchestrator(domains_root: Path) -> Any:
     """
     try:
         from saber.domain.orchestrator import DomainOrchestrator
-        from saber.domain.resources import resolve_compose_file
     except ImportError as e:
         raise PrerequisiteError(
             "SABER is not installed or cannot be imported.\n\n"
@@ -71,9 +70,7 @@ def _create_orchestrator(domains_root: Path) -> Any:
         ) from e
 
     try:
-        # Use SABER's compose file resolution (same as CLI)
-        with resolve_compose_file() as compose_path:
-            return DomainOrchestrator(domains_root, compose_path)
+        return DomainOrchestrator(domains_root)
     except Exception as e:
         raise PrerequisiteError(
             f"Failed to create SABER DomainOrchestrator for domains_root={domains_root}\n\nError: {e}"
@@ -110,7 +107,8 @@ class DomainController:
     ) -> str | None:
         """Check if a SABER domain is running on the specified ports.
 
-        Uses the DomainOrchestrator to check domain status via docker compose.
+        Uses the DomainOrchestrator to check domain status via server process
+        and container inspection.
 
         Args:
             rest_port: Port to check for REST API
@@ -154,8 +152,9 @@ class DomainController:
         which handles:
         - Domain validation
         - Image building (if needed)
-        - Service startup via docker compose
-        - Health checking with timeout (_wait_for_services)
+        - Server startup as host subprocess
+        - Permanent container startup via docker compose
+        - Health checking with timeout
         - Error log output on failure
 
         Args:
@@ -213,7 +212,7 @@ class DomainController:
         # Construct URLs and context
         rest_url = f"http://localhost:{rest_port}"
         mcp_url = f"http://localhost:{mcp_port}"
-        project_slug = domain  # Docker compose project name
+        project_slug = domain  # Domain identifier for container labeling
 
         context = DomainContext(
             domain=domain,
@@ -241,7 +240,8 @@ class DomainController:
     async def stop(self, domain: str) -> None:
         """Stop a SABER domain asynchronously.
 
-        Calls DomainOrchestrator.stop_domain() which handles proper compose teardown.
+        Calls DomainOrchestrator.stop_domain() which handles server subprocess
+        termination and permanent container cleanup.
 
         Args:
             domain: Domain slug to stop (e.g., "excytin_demo")

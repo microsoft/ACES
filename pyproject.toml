@@ -54,6 +54,7 @@ dependencies = [
     "mcp>=1.23.0",
     # inspect-ai dependency managed via tool.uv.sources for flexible installation
     "inspect-ai",
+    "azure-identity>=1.25.1",
 ]
 
 [project.optional-dependencies]

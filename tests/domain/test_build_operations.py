@@ -65,14 +65,6 @@ images:
 
 
 @pytest.fixture
-def mock_compose_file(tmp_path):
-    """Create a temporary compose file."""
-    compose_file = tmp_path / "docker-compose.yml"
-    compose_file.write_text("services:\n  server:\n    image: test\n")
-    return compose_file
-
-
-@pytest.fixture
 def mock_manifest():
     """Create a mock domain manifest."""
     return {
@@ -112,13 +104,13 @@ class TestDockerRunnerBuildImages:
     @patch('saber.domain.orchestrator.DockerRunner.ensure_base_images')
     def test_build_all_images_rebuild_mode(
         self, mock_ensure_base, mock_exists, mock_subprocess,
-        mock_domains_root, mock_compose_file, mock_manifest
+        mock_domains_root, mock_manifest
     ):
         """Test building all images in rebuild mode."""
         mock_exists.return_value = True  # Images exist
         mock_subprocess.return_value = Mock(returncode=0)
 
-        runner = DockerRunner(mock_compose_file, mock_domains_root)
+        runner = DockerRunner(mock_domains_root)
         runner.build_images(
             "test_domain",
             mock_manifest,
@@ -145,7 +137,7 @@ class TestDockerRunnerBuildImages:
     @patch('saber.domain.orchestrator.DockerRunner.ensure_base_images')
     def test_build_missing_images_only(
         self, mock_ensure_base, mock_ensure_base_exist, mock_exists, mock_subprocess,
-        mock_domains_root, mock_compose_file, mock_manifest
+        mock_domains_root, mock_manifest
     ):
         """Test building only missing images in build mode."""
         # Simulate some images exist, some don't
@@ -157,7 +149,7 @@ class TestDockerRunnerBuildImages:
         mock_exists.side_effect = image_exists_side_effect
         mock_subprocess.return_value = Mock(returncode=0)
 
-        runner = DockerRunner(mock_compose_file, mock_domains_root)
+        runner = DockerRunner(mock_domains_root)
         runner.build_images(
             "test_domain",
             mock_manifest,
@@ -187,13 +179,13 @@ class TestDockerRunnerBuildImages:
     @patch('saber.domain.orchestrator.DockerRunner.ensure_base_images')
     def test_build_with_filter_cookie(
         self, mock_ensure_base, mock_exists, mock_subprocess,
-        mock_domains_root, mock_compose_file, mock_manifest
+        mock_domains_root, mock_manifest
     ):
         """Test building only cookie-prefixed images."""
         mock_exists.return_value = True
         mock_subprocess.return_value = Mock(returncode=0)
 
-        runner = DockerRunner(mock_compose_file, mock_domains_root)
+        runner = DockerRunner(mock_domains_root)
         runner.build_images(
             "test_domain",
             mock_manifest,
@@ -219,13 +211,13 @@ class TestDockerRunnerBuildImages:
     @patch('saber.domain.orchestrator.DockerRunner.ensure_base_images')
     def test_build_with_filter_server(
         self, mock_ensure_base, mock_exists, mock_subprocess,
-        mock_domains_root, mock_compose_file, mock_manifest
+        mock_domains_root, mock_manifest
     ):
-        """Test building only server image (should trigger base rebuild)."""
+        """Test building only server image (should NOT trigger base rebuild - no sandbox)."""
         mock_exists.return_value = True
         mock_subprocess.return_value = Mock(returncode=0)
 
-        runner = DockerRunner(mock_compose_file, mock_domains_root)
+        runner = DockerRunner(mock_domains_root)
         runner.build_images(
             "test_domain",
             mock_manifest,
@@ -235,8 +227,8 @@ class TestDockerRunnerBuildImages:
             rebuild_mode=True
         )
 
-        # Should ensure base images (server matches base image)
-        mock_ensure_base.assert_called_once()
+        # Should NOT ensure base images (server doesn't need sandbox base image)
+        mock_ensure_base.assert_not_called()
 
         # Should only remove server image (1 rmi call)
         rmi_calls = [c for c in mock_subprocess.call_args_list if 'docker' in str(c) and 'rmi' in str(c)]
@@ -250,12 +242,12 @@ class TestDockerRunnerBuildImages:
     @patch('saber.domain.orchestrator.DockerRunner._docker_image_exists')
     def test_build_with_invalid_filter(
         self, mock_exists, mock_subprocess,
-        mock_domains_root, mock_compose_file, mock_manifest
+        mock_domains_root, mock_manifest
     ):
         """Test building with filter that matches no images."""
         mock_exists.return_value = False
 
-        runner = DockerRunner(mock_compose_file, mock_domains_root)
+        runner = DockerRunner(mock_domains_root)
 
         with pytest.raises(DockerError, match="No images found matching filter"):
             runner.build_images(
@@ -272,12 +264,12 @@ class TestDockerRunnerBuildImages:
     @patch('saber.domain.orchestrator.DockerRunner.ensure_base_images')
     def test_build_dry_run(
         self, mock_ensure_base, mock_exists, mock_subprocess,
-        mock_domains_root, mock_compose_file, mock_manifest
+        mock_domains_root, mock_manifest
     ):
         """Test dry run mode doesn't execute any commands."""
         mock_exists.return_value = True
 
-        runner = DockerRunner(mock_compose_file, mock_domains_root)
+        runner = DockerRunner(mock_domains_root)
         runner.build_images(
             "test_domain",
             mock_manifest,
@@ -302,7 +294,7 @@ class TestDomainOrchestratorBuildDomain:
     @patch('saber.domain.orchestrator.DockerRunner.build_images')
     def test_build_domain_default_rebuild_mode(
         self, mock_build_images,
-        mock_domains_root, mock_compose_file
+        mock_domains_root
     ):
         """Test build_domain defaults to rebuild mode."""
         with patch('saber.domain.orchestrator.ManifestLoader') as mock_loader_class:
@@ -311,7 +303,7 @@ class TestDomainOrchestratorBuildDomain:
             mock_loader.load_manifest.return_value = {"images": {}}
             mock_loader_class.return_value = mock_loader
 
-            orchestrator = DomainOrchestrator(mock_domains_root, mock_compose_file)
+            orchestrator = DomainOrchestrator(mock_domains_root)
             orchestrator.build_domain("test_domain")
 
             # Should call build_images with rebuild_mode=True by default
@@ -322,7 +314,7 @@ class TestDomainOrchestratorBuildDomain:
     @patch('saber.domain.orchestrator.DockerRunner.build_images')
     def test_build_domain_with_filter(
         self, mock_build_images,
-        mock_domains_root, mock_compose_file
+        mock_domains_root
     ):
         """Test build_domain with image filter."""
         with patch('saber.domain.orchestrator.ManifestLoader') as mock_loader_class:
@@ -331,7 +323,7 @@ class TestDomainOrchestratorBuildDomain:
             mock_loader.load_manifest.return_value = {"images": {}}
             mock_loader_class.return_value = mock_loader
 
-            orchestrator = DomainOrchestrator(mock_domains_root, mock_compose_file)
+            orchestrator = DomainOrchestrator(mock_domains_root)
             orchestrator.build_domain("test_domain", image_filter="cookie")
 
             # Should pass image_filter
@@ -342,7 +334,7 @@ class TestDomainOrchestratorBuildDomain:
     @patch('saber.domain.orchestrator.DockerRunner.build_images')
     def test_build_domain_build_mode(
         self, mock_build_images,
-        mock_domains_root, mock_compose_file
+        mock_domains_root
     ):
         """Test build_domain with rebuild_mode=False."""
         with patch('saber.domain.orchestrator.ManifestLoader') as mock_loader_class:
@@ -351,7 +343,7 @@ class TestDomainOrchestratorBuildDomain:
             mock_loader.load_manifest.return_value = {"images": {}}
             mock_loader_class.return_value = mock_loader
 
-            orchestrator = DomainOrchestrator(mock_domains_root, mock_compose_file)
+            orchestrator = DomainOrchestrator(mock_domains_root)
             orchestrator.build_domain("test_domain", rebuild_mode=False)
 
             # Should call build_images with rebuild_mode=False
@@ -363,12 +355,12 @@ class TestDomainOrchestratorBuildDomain:
 class TestDomainOrchestratorStartDomain:
     """Tests for DomainOrchestrator.start_domain build/rebuild logic."""
 
-    @patch('saber.domain.orchestrator.DockerRunner.start_services')
+    @patch('saber.domain.orchestrator.DomainOrchestrator._start_server_subprocess')
     @patch('saber.domain.orchestrator.EnvironmentValidator.generate_environment')
     @patch('saber.domain.orchestrator.DockerRunner.build_images')
     def test_start_domain_with_rebuild(
-        self, mock_build_images, mock_gen_env, mock_start_services,
-        mock_domains_root, mock_compose_file
+        self, mock_build_images, mock_gen_env, mock_start_subprocess,
+        mock_domains_root
     ):
         """Test start_domain with rebuild option."""
         mock_gen_env.return_value = {}
@@ -379,7 +371,7 @@ class TestDomainOrchestratorStartDomain:
             mock_loader.load_manifest.return_value = {"images": {}}
             mock_loader_class.return_value = mock_loader
 
-            orchestrator = DomainOrchestrator(mock_domains_root, mock_compose_file)
+            orchestrator = DomainOrchestrator(mock_domains_root)
             orchestrator.start_domain("test_domain", rebuild="")
 
             # Should call build_images with rebuild_mode=True
@@ -388,12 +380,12 @@ class TestDomainOrchestratorStartDomain:
             assert call_kwargs['rebuild_mode'] is True
             assert call_kwargs['image_filter'] is None
 
-    @patch('saber.domain.orchestrator.DockerRunner.start_services')
+    @patch('saber.domain.orchestrator.DomainOrchestrator._start_server_subprocess')
     @patch('saber.domain.orchestrator.EnvironmentValidator.generate_environment')
     @patch('saber.domain.orchestrator.DockerRunner.build_images')
     def test_start_domain_with_build(
-        self, mock_build_images, mock_gen_env, mock_start_services,
-        mock_domains_root, mock_compose_file
+        self, mock_build_images, mock_gen_env, mock_start_subprocess,
+        mock_domains_root
     ):
         """Test start_domain with build option."""
         mock_gen_env.return_value = {}
@@ -404,7 +396,7 @@ class TestDomainOrchestratorStartDomain:
             mock_loader.load_manifest.return_value = {"images": {}}
             mock_loader_class.return_value = mock_loader
 
-            orchestrator = DomainOrchestrator(mock_domains_root, mock_compose_file)
+            orchestrator = DomainOrchestrator(mock_domains_root)
             orchestrator.start_domain("test_domain", build="")
 
             # Should call build_images with rebuild_mode=False
@@ -413,12 +405,12 @@ class TestDomainOrchestratorStartDomain:
             assert call_kwargs['rebuild_mode'] is False
             assert call_kwargs['image_filter'] is None
 
-    @patch('saber.domain.orchestrator.DockerRunner.start_services')
+    @patch('saber.domain.orchestrator.DomainOrchestrator._start_server_subprocess')
     @patch('saber.domain.orchestrator.EnvironmentValidator.generate_environment')
     @patch('saber.domain.orchestrator.DockerRunner.build_images')
     def test_start_domain_with_rebuild_filter(
-        self, mock_build_images, mock_gen_env, mock_start_services,
-        mock_domains_root, mock_compose_file
+        self, mock_build_images, mock_gen_env, mock_start_subprocess,
+        mock_domains_root
     ):
         """Test start_domain with rebuild and filter."""
         mock_gen_env.return_value = {}
@@ -429,7 +421,7 @@ class TestDomainOrchestratorStartDomain:
             mock_loader.load_manifest.return_value = {"images": {}}
             mock_loader_class.return_value = mock_loader
 
-            orchestrator = DomainOrchestrator(mock_domains_root, mock_compose_file)
+            orchestrator = DomainOrchestrator(mock_domains_root)
             orchestrator.start_domain("test_domain", rebuild="cookie")
 
             # Should call build_images with filter
@@ -438,12 +430,12 @@ class TestDomainOrchestratorStartDomain:
             assert call_kwargs['rebuild_mode'] is True
             assert call_kwargs['image_filter'] == "cookie"
 
-    @patch('saber.domain.orchestrator.DockerRunner.start_services')
+    @patch('saber.domain.orchestrator.DomainOrchestrator._start_server_subprocess')
     @patch('saber.domain.orchestrator.EnvironmentValidator.generate_environment')
     @patch('saber.domain.orchestrator.DockerRunner.build_images')
     def test_start_domain_without_build(
-        self, mock_build_images, mock_gen_env, mock_start_services,
-        mock_domains_root, mock_compose_file
+        self, mock_build_images, mock_gen_env, mock_start_subprocess,
+        mock_domains_root
     ):
         """Test start_domain without build or rebuild."""
         mock_gen_env.return_value = {}
@@ -454,7 +446,7 @@ class TestDomainOrchestratorStartDomain:
             mock_loader.load_manifest.return_value = {"images": {}}
             mock_loader_class.return_value = mock_loader
 
-            orchestrator = DomainOrchestrator(mock_domains_root, mock_compose_file)
+            orchestrator = DomainOrchestrator(mock_domains_root)
             orchestrator.start_domain("test_domain")
 
             # Should NOT call build_images
@@ -498,7 +490,7 @@ class TestBaseImageFallback:
     @patch('saber.domain.orchestrator.DockerRunner._load_base_images_config')
     def test_pull_fallback_to_external_saber_on_failure(
         self, mock_load_config, mock_get_external, mock_subprocess,
-        mock_domains_root, mock_compose_file, tmp_path
+        mock_domains_root, tmp_path
     ):
         """Test that pull failure falls back to external/saber build if available."""
         # Setup external/saber path
@@ -528,7 +520,7 @@ class TestBaseImageFallback:
 
         mock_subprocess.side_effect = subprocess_side_effect
 
-        runner = DockerRunner(mock_compose_file, mock_domains_root)
+        runner = DockerRunner(mock_domains_root)
 
         # This should not raise - it should fallback to external/saber build
         runner._pull_base_image_from_registry(
@@ -547,7 +539,7 @@ class TestBaseImageFallback:
     @patch('saber.domain.orchestrator.DockerRunner._get_external_saber_path')
     def test_pull_raises_when_no_fallback_available(
         self, mock_get_external, mock_subprocess,
-        mock_domains_root, mock_compose_file
+        mock_domains_root
     ):
         """Test that pull failure raises error when no external/saber fallback."""
         mock_get_external.return_value = None  # No external/saber available
@@ -555,7 +547,7 @@ class TestBaseImageFallback:
         from subprocess import CalledProcessError
         mock_subprocess.side_effect = CalledProcessError(1, ['docker', 'pull'])
 
-        runner = DockerRunner(mock_compose_file, mock_domains_root)
+        runner = DockerRunner(mock_domains_root)
 
         with pytest.raises(DockerError, match="Failed to pull base image"):
             runner._pull_base_image_from_registry(
@@ -574,13 +566,13 @@ class TestBuildModeVsRebuildMode:
     @patch('saber.domain.orchestrator.DockerRunner._docker_image_exists')
     def test_rebuild_mode_removes_existing_images(
         self, mock_exists, mock_subprocess,
-        mock_domains_root, mock_compose_file, mock_manifest
+        mock_domains_root, mock_manifest
     ):
         """Verify rebuild mode removes existing images before building."""
         mock_exists.return_value = True
         mock_subprocess.return_value = Mock(returncode=0)
 
-        runner = DockerRunner(mock_compose_file, mock_domains_root)
+        runner = DockerRunner(mock_domains_root)
 
         with patch.object(runner, 'ensure_base_images'):
             runner.build_images(
@@ -599,13 +591,13 @@ class TestBuildModeVsRebuildMode:
     @patch('saber.domain.orchestrator.DockerRunner._docker_image_exists')
     def test_build_mode_skips_existing_images(
         self, mock_exists, mock_subprocess,
-        mock_domains_root, mock_compose_file, mock_manifest
+        mock_domains_root, mock_manifest
     ):
         """Verify build mode skips existing images."""
         mock_exists.return_value = True  # All images exist
         mock_subprocess.return_value = Mock(returncode=0)
 
-        runner = DockerRunner(mock_compose_file, mock_domains_root)
+        runner = DockerRunner(mock_domains_root)
         runner.build_images(
             "test_domain",
             mock_manifest,

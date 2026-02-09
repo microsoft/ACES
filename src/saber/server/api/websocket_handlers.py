@@ -245,10 +245,13 @@ class PushMessageHandler(BaseWebSocketHandler):
             },
         )
 
-        # Broadcast state event to target episode (for cross-episode injections)
-        if state_event:
+        # Broadcast state event to target episode ONLY for cross-episode injections.
+        # For same-episode pushes, skip broadcast - the client already knows what
+        # happened (it initiated the push), and broadcasting to self just fills up
+        # the client's event queue with unneeded state events.
+        if state_event and is_cross_episode:
             logger.info(
-                "[RESTART_DEBUG] Broadcasting state event to target episode",
+                "[RESTART_DEBUG] Broadcasting state event to target episode (cross-episode)",
                 extra={
                     "target_episode_id": target_episode_id,
                     "event_type": state_event.type,
@@ -263,6 +266,14 @@ class PushMessageHandler(BaseWebSocketHandler):
             logger.info(
                 "[RESTART_DEBUG] State event broadcast completed",
                 extra={"target_episode_id": target_episode_id},
+            )
+        elif state_event:
+            logger.debug(
+                "[RESTART_DEBUG] Skipping state event broadcast for same-episode push",
+                extra={
+                    "episode_id": episode_id,
+                    "event_type": state_event.type,
+                },
             )
 
     async def _build_push_response(

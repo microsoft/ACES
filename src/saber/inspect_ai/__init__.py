@@ -10,7 +10,8 @@ Dependencies:
 
 This module provides integration with SABER (Security Assessment Backend for
 Evaluation and Research) through a custom sandbox environment that delegates
-to SABER's DomainOrchestrator for Docker Compose lifecycle management.
+to SABER's DomainOrchestrator for domain lifecycle management (server subprocess
+and permanent container orchestration).
 
 NOTE: To see SABER's informational logs during evaluation, set the Inspect AI
 log level to 'info':

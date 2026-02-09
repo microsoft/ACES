@@ -11,7 +11,7 @@ import click
 
 from .exceptions import DomainError
 from .orchestrator import DomainOrchestrator
-from .resources import get_env_example_content, resolve_compose_file, resolve_schema_file
+from .resources import get_env_example_content, resolve_schema_file
 
 
 def _get_domains_root(domains_root: Path | None) -> Path:
@@ -41,11 +41,9 @@ def _get_domains_root(domains_root: Path | None) -> Path:
 
 
 def _create_orchestrator(domains_root: Path | None) -> DomainOrchestrator:
-    """Create orchestrator instance with resource resolution."""
+    """Create orchestrator instance."""
     resolved_domains_root = _get_domains_root(domains_root)
-
-    with resolve_compose_file() as compose_path:
-        return DomainOrchestrator(resolved_domains_root, compose_path)
+    return DomainOrchestrator(resolved_domains_root)
 
 
 @click.group()
@@ -57,10 +55,13 @@ def _create_orchestrator(domains_root: Path | None) -> DomainOrchestrator:
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
 @click.pass_context
 def cli(ctx: click.Context, domains_root: Path | None, verbose: bool) -> None:
-    """SABER Domain Orchestration CLI - Server-Only Architecture.
+    """SABER Domain Orchestration CLI - Host Subprocess Architecture.
 
-    Simple domain management with single server containers.
-    Each domain runs one server with full privileges and Docker socket access.
+    Simple domain management where the server runs as a host subprocess.
+    Sandbox containers are managed by the server via Docker API.
+
+    This architecture eliminates Docker-in-Docker issues and allows
+    direct host path mounts for sandbox containers.
     """
     ctx.ensure_object(dict)
     ctx.obj["domains_root"] = domains_root
@@ -130,17 +131,22 @@ def start(
     dry_run: bool,
     profiles: str | None,
 ) -> None:
-    """Start domain server with automatic environment generation.
+    """Start domain server as a host subprocess.
 
-    This starts a single server container with full privileges and Docker socket access.
-    No profile selection required - server handles all functionality.
+    This starts the SABER server directly on the host machine (not in a container).
+    The server manages sandbox containers via the Docker API.
+
+    Benefits of host subprocess deployment:
+    - Eliminates Docker-in-Docker issues
+    - Allows direct host path mounts for sandbox containers
+    - Simplifies networking between server and managed containers
 
     The CLI automatically:
     - Validates domain configuration
-    - Generates Docker Compose environment variables
+    - Generates environment variables
     - Builds missing images if --build specified
     - Rebuilds images if --rebuild-all or --rebuild specified
-    - Starts server with full sandbox management capabilities
+    - Starts server subprocess with health checking
 
     Examples:
         saber-domain start romulus
@@ -195,20 +201,46 @@ def start(
     except DomainError as e:
         click.echo(f"Error: {e}", err=True)
         ctx.exit(1)
+    except KeyboardInterrupt:
+        click.echo("\n⚠️  Startup cancelled by user. Server and containers have been cleaned up.", err=True)
+        ctx.exit(130)
 
 
 @cli.command()
-@click.argument("domain")
+@click.argument("domain", required=False)
 @click.option("--dry-run", is_flag=True, help="Show what would be done without executing")
 @click.pass_context
-def stop(ctx: click.Context, domain: str, dry_run: bool) -> None:
-    """Stop domain services."""
+def stop(ctx: click.Context, domain: str | None, dry_run: bool) -> None:
+    """Stop domain services.
+
+    If DOMAIN is specified, stops that domain.
+    If DOMAIN is omitted, stops all running SABER domains.
+    """
     try:
         orchestrator = _create_orchestrator(ctx.obj.get("domains_root"))
-        orchestrator.stop_domain(domain, dry_run)
 
-        if not dry_run:
-            click.echo(f"✓ Domain {domain} stopped successfully!")
+        if domain:
+            # Stop specific domain
+            orchestrator.stop_domain(domain, dry_run)
+            if not dry_run:
+                click.echo(f"✓ Domain {domain} stopped successfully!")
+        else:
+            # Stop all running domains
+            running_domains = orchestrator.get_running_domains()
+            if not running_domains:
+                click.echo("No running SABER domains found.")
+                return
+
+            click.echo(f"Stopping {len(running_domains)} running domain(s)...")
+            for domain_name in running_domains:
+                if dry_run:
+                    click.echo(f"  Would stop: {domain_name}")
+                else:
+                    orchestrator.stop_domain(domain_name, dry_run=False)
+                    click.echo(f"  ✓ Stopped {domain_name}")
+
+            if not dry_run:
+                click.echo("✓ All domains stopped successfully!")
 
     except DomainError as e:
         click.echo(f"Error: {e}", err=True)
@@ -606,9 +638,6 @@ def test_resources(ctx: click.Context) -> None:
     click.echo("Testing resource resolution...")
 
     try:
-        with resolve_compose_file() as compose_path:
-            click.echo(f"✓ docker-compose.yml: {compose_path}")
-
         with resolve_schema_file() as schema_path:
             click.echo(f"✓ domain-manifest.schema.json: {schema_path}")
 

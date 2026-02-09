@@ -9,11 +9,14 @@ services:
     container_name: saber-excytin-incident-5
     ports:
       - "3306:3306"
+    volumes:
+      - ./server/data/sql_files/incident_5.sql:/docker-entrypoint-initdb.d/incident_5.sql:ro
+      - ./server/data/csv_files/incident_5:/var/lib/mysql-files
     environment:
       MYSQL_ROOT_PASSWORD: admin
       MYSQL_DATABASE: env_monitor_db
       MYSQL_ROOT_HOST: "%"
-    command: --secure-file-priv=/var/lib/mysql-files --bind-address=0.0.0.0
+    command: --secure-file-priv=/var/lib/mysql-files --bind-address=0.0.0.0 --innodb-redo-log-capacity=2147483648 --innodb-buffer-pool-size=512M
     networks:
       - excytin-database
     restart: unless-stopped
@@ -43,4 +46,5 @@ networks:
       - "saber.network.type=shared"
       - "saber.network.name=excytin-database"
 
-# No persistent volumes needed for incident-5-db (uses container storage)
+# Volume mounts: SQL init files and CSV data are mounted from host
+# These paths are relative to the domain root (domains/excytin_demo/)

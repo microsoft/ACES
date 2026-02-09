@@ -73,7 +73,6 @@ def deserialize_config(config: dict[str, Any]) -> BaseModel:
         domains_root=(Path, ...),
         rest_port=(int, 8000),
         mcp_port=(int, 8001),
-        compose_template_path=(Path | None, None),
         cleanup=(bool, False),  # Default to False - keep server running
         __config__=ConfigDict(frozen=True),
     )

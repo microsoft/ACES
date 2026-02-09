@@ -13,44 +13,6 @@ from .exceptions import ResourceNotFoundError
 
 
 @contextmanager
-def resolve_compose_file(explicit_path: Path | None = None) -> Iterator[Path]:
-    """Resolve docker-compose.yml file path that definitely exists on disk.
-
-    Args:
-        explicit_path: Optional explicit path override for testing/development
-
-    Yields:
-        Path: Absolute path to docker-compose.yml file on disk
-
-    Raises:
-        ResourceNotFoundError: If compose file cannot be found
-    """
-    if explicit_path:
-        resolved = explicit_path.expanduser().resolve()
-        if not resolved.exists():
-            raise ResourceNotFoundError("docker-compose.yml", f"Explicit override not found: {resolved}")
-        yield resolved
-        return
-
-    # Try packaged resource first (primary path for installed SABER)
-    try:
-        resource = files("saber.domain.package_resources").joinpath("docker-compose.yml")
-        with as_file(resource) as packaged_path:
-            if packaged_path.exists():
-                yield packaged_path
-                return
-    except (ImportError, FileNotFoundError, AttributeError):
-        # Package resource not available, try development fallback
-        pass
-
-    # Fail fast - no silent failures
-    raise ResourceNotFoundError(
-        "docker-compose.yml",
-        "Not found in package resources. Ensure SABER is properly installed or provide --compose-file explicitly.",
-    )
-
-
-@contextmanager
 def resolve_schema_file(schema_name: str = "domain-manifest.schema.json") -> Iterator[Path]:
     """Resolve schema file path that definitely exists on disk.
 

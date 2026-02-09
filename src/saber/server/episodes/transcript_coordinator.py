@@ -197,7 +197,8 @@ class TranscriptCoordinator:
 
         for msg in messages:
             if msg.get("role") == "assistant":
-                tool_calls = msg.get("tool_calls", [])
+                # Handle explicit None from LLM (tool_calls: null) and missing key
+                tool_calls = msg.get("tool_calls") or []
                 for tc in tool_calls:
                     if tc.get("id"):
                         all_tool_call_ids.append(tc["id"])

@@ -95,7 +95,6 @@ class SABERSandboxEnvironment:
         domains_root: Path,
         rest_port: int = 8000,
         mcp_port: int = 8001,
-        compose_template_path: Path | None = None,
         mcp_timeout: float = SandboxTimeouts.MCP_CONNECTION_SECONDS,
         rest_base_url: str | None = None,
         mcp_url: str | None = None,
@@ -108,7 +107,6 @@ class SABERSandboxEnvironment:
             domains_root: Path to SABER domains directory
             rest_port: REST API port (default: 8000)
             mcp_port: MCP API port (default: 8001)
-            compose_template_path: Optional custom compose template
             mcp_timeout: Timeout for MCP operations (default: SandboxTimeouts.MCP_CONNECTION_SECONDS)
             rest_base_url: Override REST base URL (default: http://localhost:{rest_port})
             mcp_url: Override MCP URL (default: http://localhost:{mcp_port})
@@ -122,7 +120,6 @@ class SABERSandboxEnvironment:
         self._domains_root = Path(domains_root)
         self._rest_port = rest_port
         self._mcp_port = mcp_port
-        self._compose_template_path = compose_template_path
         self._mcp_timeout = mcp_timeout
         self._enable_debug_logging = enable_debug_logging
 
@@ -353,7 +350,6 @@ class SABERSandboxEnvironment:
             domains_root=config.domains_root,  # type: ignore[attr-defined]
             rest_port=getattr(config, "rest_port", 8000),
             mcp_port=getattr(config, "mcp_port", 8001),
-            compose_template_path=getattr(config, "compose_template_path", None),
         )
 
         # Check if this is a completed sample from eval-retry

@@ -138,25 +138,11 @@ async def wait_for_server_health(
                 print(log_contents, flush=True)
                 print("=" * 60, flush=True)
 
-                # Stop the server container
-                import subprocess
-
-                container_name = f"{domain}-saber-server"
-                print(f"\n[HEALTH CHECK] Stopping server container: {container_name}", flush=True)
-                try:
-                    subprocess.run(
-                        ["docker", "stop", container_name],
-                        capture_output=True,
-                        timeout=30,
-                    )
-                    subprocess.run(
-                        ["docker", "rm", container_name],
-                        capture_output=True,
-                        timeout=10,
-                    )
-                    print("[HEALTH CHECK] ✓ Server container stopped and removed", flush=True)
-                except Exception as e:
-                    print(f"[HEALTH CHECK] Warning: Failed to stop container: {e}", flush=True)
+                # Tell user how to clean up the server
+                print(
+                    f"\n[HEALTH CHECK] To stop the server, run: saber-domain stop {domain}",
+                    flush=True,
+                )
 
                 raise PrerequisiteError(
                     f"Health check stopped by user after {int(elapsed)} seconds.\n\n"

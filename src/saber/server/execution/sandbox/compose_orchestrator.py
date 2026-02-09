@@ -141,10 +141,13 @@ class ComposeOrchestrator:
         temp_execution_service = self._identify_execution_service(Path(processed_compose_path))
 
         # Run docker compose up with the processed compose file and provided environment variables
+        # Use domain root as cwd so relative paths in compose file resolve correctly
+        # Compose path: {domain_root}/server/config/environments/{type}/{name}.compose.yml
+        domain_root = Path(compose_file_path).parent.parent.parent.parent.parent
         command = ["docker", "compose", "-f", processed_compose_path, "-p", self.project_name, "up", "-d"]
 
         try:
-            result = subprocess.run(command, env=env, capture_output=True, text=True, check=True)
+            result = subprocess.run(command, env=env, capture_output=True, text=True, check=True, cwd=domain_root)
 
             # Log successful start and collect initial container logs
             if self.container_logger:
@@ -364,10 +367,12 @@ class ComposeOrchestrator:
         temp_execution_service = self._identify_execution_service(Path(processed_compose_path))
 
         # Run docker compose up
+        # Use domain root as cwd so relative paths in compose file resolve correctly
+        domain_root = Path(compose_file_path).parent.parent.parent.parent.parent
         command = ["docker", "compose", "-f", processed_compose_path, "-p", self.project_name, "up", "-d"]
 
         try:
-            result = subprocess.run(command, env=env, capture_output=True, text=True, check=True)
+            result = subprocess.run(command, env=env, capture_output=True, text=True, check=True, cwd=domain_root)
 
             # Log successful start
             if self.container_logger:
@@ -1623,6 +1628,30 @@ class ComposeOrchestrator:
                         "compose_file": compose_file_path,
                     },
                 )
+
+            # Resolve relative volume paths to absolute paths
+            # Docker Compose resolves relative paths from the compose file directory,
+            # but since we write to a temp file, we need to make them absolute first.
+            # Compose files are at: {domain_root}/server/config/environments/{type}/{name}.compose.yml
+            # Volume paths like "./server/data/..." are relative to domain root, not compose file directory
+            domain_root = Path(compose_file_path).parent.parent.parent.parent.parent.resolve()
+            if "services" in compose_data:
+                for _service_name, service_config in compose_data["services"].items():
+                    if "volumes" in service_config:
+                        resolved_volumes = []
+                        for volume in service_config["volumes"]:
+                            if isinstance(volume, str) and ":" in volume:
+                                # Parse "source:target" or "source:target:mode"
+                                parts = volume.split(":")
+                                source = parts[0]
+                                rest = ":".join(parts[1:])
+                                # Resolve relative paths (but not named volumes)
+                                if source.startswith("./") or source.startswith("../"):
+                                    source = str((domain_root / source).resolve())
+                                resolved_volumes.append(f"{source}:{rest}")
+                            else:
+                                resolved_volumes.append(volume)
+                        service_config["volumes"] = resolved_volumes
 
             # Create temporary file for the modified compose content with resolved variables
             with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as temp_file:

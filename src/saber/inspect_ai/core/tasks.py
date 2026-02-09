@@ -146,7 +146,6 @@ def _get_or_create_portal() -> anyio.abc.BlockingPortal:
 def create_domain_task(
     domain_slug: str,
     domains_root: Path,
-    compose_template_path: Path | None = None,
     default_agent: str = "react",
 ) -> Callable[..., Task]:
     """Create a task factory callable for a SABER domain.
@@ -170,7 +169,6 @@ def create_domain_task(
     Args:
         domain_slug: SABER domain slug (e.g., "cybench")
         domains_root: Path to domains directory (workspace root)
-        compose_template_path: Optional custom compose template
         default_agent: Default agent implementation for this domain (default: "react")
 
     Returns:
@@ -238,7 +236,9 @@ def create_domain_task(
         _initialize_inspect_logging(domain_slug, domains_root, log_level)
 
         # Validate mutually exclusive build options
-        build_options_count = sum([build, rebuild_all, bool(rebuild)])
+        # Note: rebuild is str (filter prefix) or None; rebuild_all is bool for rebuild-all
+        has_rebuild = bool(isinstance(rebuild, str) and rebuild)
+        build_options_count = sum([build, rebuild_all, has_rebuild])
         if build_options_count > 1:
             raise PrerequisiteError(
                 "Cannot specify multiple build options together. Use one of:\n"
@@ -249,7 +249,14 @@ def create_domain_task(
 
         # Convert to orchestrator format (same as CLI)
         build_param = "" if build else None
-        rebuild_param = "" if rebuild_all else rebuild
+
+        # Handle rebuild: string (filter prefix) or None; rebuild_all for rebuild-everything
+        if rebuild_all:
+            rebuild_param = ""  # Empty string = rebuild all
+        elif isinstance(rebuild, str) and rebuild:
+            rebuild_param = rebuild  # Use as filter prefix
+        else:
+            rebuild_param = None
 
         # Use CLI agent override or domain default
         agent_to_use = agent if agent is not None else default_agent
@@ -272,7 +279,6 @@ def create_domain_task(
                 log_level,
                 build_param,
                 rebuild_param,
-                compose_template_path,
                 stop_saber_after,
                 run_preflight,
                 enable_debug_logging,
@@ -297,7 +303,6 @@ async def _start_and_load_tasks(
     log_level: str,
     build: str | None,
     rebuild: str | None,
-    compose_template_path: Path | None,
     stop_saber_after: bool,
     run_preflight: bool,
     enable_debug_logging: bool = False,
@@ -330,7 +335,6 @@ async def _start_and_load_tasks(
         log_level: Logging level
         build: Optional build filter
         rebuild: Optional rebuild filter
-        compose_template_path: Optional compose template
         stop_saber_after: Stop domain after evaluation
         run_preflight: Run preflight check on all compose environments before starting
         enable_debug_logging: Enable detailed episode lifecycle debug logging
@@ -473,7 +477,7 @@ async def _start_and_load_tasks(
                     timeout=180,
                 )
 
-            # Create controller (CLI-based, no compose_template_path needed)
+            # Create controller for host-based server deployment
             controller = DomainController(
                 domains_root=Path(domains_root),
             )
@@ -626,7 +630,6 @@ async def _start_and_load_tasks(
                     "domains_root": domains_root,
                     "rest_port": rest_port,
                     "mcp_port": mcp_port,
-                    "compose_template_path": compose_template_path,
                     "cleanup": stop_saber_after,  # Pass cleanup flag to sandbox
                     "enable_debug_logging": enable_debug_logging,  # Enable detailed lifecycle debug logging
                 },

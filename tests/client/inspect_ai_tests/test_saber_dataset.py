@@ -6,7 +6,7 @@ Tests the dataset conversion functionality for BenchmarkTask types.
 
 import pytest
 
-from saber.client.inspect_ai.saber_dataset import (
+from saber.inspect_ai.core.saber_dataset import (
     _convert_benchmark_task_to_sample,
     _convert_task_to_sample,
     create_saber_dataset,

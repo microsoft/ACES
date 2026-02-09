@@ -229,16 +229,8 @@ class TestCreateOrchestrator:
         # Mock the imports inside _create_orchestrator using sys.modules
         with patch.dict('sys.modules', {
             'saber.domain.orchestrator': Mock(DomainOrchestrator=Mock()),
-            'saber.domain.resources': Mock(resolve_compose_file=Mock()),
         }):
             from saber.domain.orchestrator import DomainOrchestrator
-            from saber.domain.resources import resolve_compose_file
-
-            # Mock the context manager for resolve_compose_file
-            mock_cm = Mock()
-            mock_cm.__enter__ = Mock(return_value=Path("/test/compose.yml"))
-            mock_cm.__exit__ = Mock(return_value=False)
-            resolve_compose_file.return_value = mock_cm
 
             mock_orchestrator = Mock()
             DomainOrchestrator.return_value = mock_orchestrator
@@ -246,7 +238,7 @@ class TestCreateOrchestrator:
             result = _create_orchestrator(Path("/test/domains"))
 
             assert result == mock_orchestrator
-            DomainOrchestrator.assert_called_once_with(Path("/test/domains"), Path("/test/compose.yml"))
+            DomainOrchestrator.assert_called_once_with(Path("/test/domains"))
 
     def test_create_orchestrator_creation_error(self):
         """Test orchestrator creation with other errors."""
@@ -254,15 +246,8 @@ class TestCreateOrchestrator:
 
         with patch.dict('sys.modules', {
             'saber.domain.orchestrator': Mock(DomainOrchestrator=Mock()),
-            'saber.domain.resources': Mock(resolve_compose_file=Mock()),
         }):
             from saber.domain.orchestrator import DomainOrchestrator
-            from saber.domain.resources import resolve_compose_file
-
-            mock_cm = Mock()
-            mock_cm.__enter__ = Mock(return_value=Path("/test/compose.yml"))
-            mock_cm.__exit__ = Mock(return_value=False)
-            resolve_compose_file.return_value = mock_cm
 
             DomainOrchestrator.side_effect = Exception("Configuration error")
 

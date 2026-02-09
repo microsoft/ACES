@@ -3,19 +3,24 @@
 This module provides modular services for domain orchestration:
 - ManifestLoader: Load and validate domain manifests
 - EnvironmentValidator: Validate environment and generate variables
-- DockerRunner: Execute Docker operations
+- DockerRunner: Execute Docker operations (for sandbox/permanent services)
 - DomainOrchestrator: Coordinate the above services
+
+Server deployment runs as a host subprocess (not in a container) to:
+- Eliminate Docker-in-Docker issues
+- Allow direct host path mounts for sandbox containers
+- Simplify networking between server and managed containers
 """
 
 import json
 import os
 import socket
 import subprocess
-import tempfile
+import sys
 import time
 from importlib.resources import files
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 import yaml
 
@@ -242,7 +247,7 @@ class EnvironmentValidator:
         skip_image_check: bool = False,
         skip_port_check: bool = False,
     ) -> dict[str, str]:
-        """Generate and validate environment variables for server-only architecture.
+        """Generate and validate environment variables for host subprocess deployment.
 
         Args:
             domain: Domain name
@@ -250,11 +255,11 @@ class EnvironmentValidator:
             rest_port: REST API port
             mcp_port: MCP protocol port
             log_level: Logging level
-            skip_image_check: Skip Docker image existence check
+            skip_image_check: Skip Docker image existence check (for sandbox images)
             skip_port_check: Skip port availability check (for status checks)
 
         Returns:
-            Dict of environment variables for docker-compose
+            Dict of environment variables for server subprocess
 
         Raises:
             DomainValidationError: If validation fails
@@ -267,24 +272,39 @@ class EnvironmentValidator:
                 if not self._is_port_available(port_num):
                     errors.append(f"Port {port_num} ({port_name}) is already in use")
 
-        # Validate all domain images exist (unless building)
+        # Validate sandbox/permanent service images exist (unless building)
+        # Note: server no longer runs in a container, so we skip server image validation
         if not skip_image_check:
-            # First validate base images
-            self._validate_base_images(errors)
-            # Then validate domain images
-            self._validate_all_images(manifest, errors)
+            # First validate base sandbox image
+            self._validate_base_sandbox_image(errors)
+            # Then validate domain sandbox images (skip server image)
+            self._validate_sandbox_images(manifest, errors)
 
         if errors:
             raise DomainValidationError(domain, errors)
 
-        # Detect repository structure for SABER source code mounting
+        # Detect repository structure
         saber_src_path, env_file_path = self._detect_repo_structure()
 
-        # Generate environment variables (server-only)
+        # Domain-specific paths
+        domain_root = self.domains_root / domain
+        config_dir = domain_root / "server" / "config"
+
+        # Generate environment variables for host subprocess
         return {
+            # Domain identification
+            "SABER_DOMAIN": domain,
+            # Host paths (not container paths)
+            "SABER_CONFIG_DIR": str(config_dir),
+            "SABER_DOMAINS_ROOT": str(self.domains_root),
+            # Server configuration
+            "SABER_HOST": "0.0.0.0",
+            "SABER_PORT": str(rest_port),
+            "SABER_MCP_PORT": str(mcp_port),
+            "SABER_LOG_LEVEL": log_level,
+            # Legacy env vars (for compatibility)
             "DOMAIN": domain,
             "DOMAINS_ROOT": str(self.domains_root),
-            "SERVER_IMAGE": manifest["images"]["server"]["tag"],
             "REST_PORT": str(rest_port),
             "MCP_PORT": str(mcp_port),
             "LOG_LEVEL": log_level,
@@ -303,18 +323,63 @@ class EnvironmentValidator:
         """
         return detect_repo_structure(self.domains_root)
 
+    def _validate_sandbox_images(self, manifest: dict[str, Any], errors: list[str]) -> None:
+        """Validate sandbox/permanent service images exist (not server image)."""
+        images_config = manifest.get("images", {})
+        if not images_config:
+            # No images is fine - server runs on host, may not need sandboxes
+            return
+
+        # Validate all images EXCEPT server (server runs on host now)
+        for image_name, image_config in images_config.items():
+            if image_name == "server":
+                # Skip server image validation - server runs as host subprocess
+                continue
+
+            if not isinstance(image_config, dict):
+                errors.append(f"Image '{image_name}' configuration must be a dictionary")
+                continue
+
+            image_tag = image_config.get("tag")
+            if not image_tag:
+                errors.append(f"Image '{image_name}' missing required 'tag' field")
+                continue
+
+            if not self._docker_image_exists(image_tag):
+                slug = manifest.get("domain", {}).get("slug", "<domain>")
+                errors.append(
+                    f"Docker image '{image_tag}' not found.\n"
+                    f"  Build with inspect eval: uv run inspect eval domains/{slug} --model <model> -T build=true\n"
+                    f"  Or use saber-domain CLI: uv run saber-domain build {slug} --build"
+                )
+
+    def _validate_base_sandbox_image(self, errors: list[str]) -> None:
+        """Validate base sandbox image exists (server image no longer needed)."""
+        try:
+            # Load base images config from package resources
+            base_images_file = files(saber.domain.package_resources) / "base-images.yaml"
+            with base_images_file.open("r") as f:
+                base_images_config = yaml.safe_load(f)
+
+            # Only validate sandbox image, not server (server runs on host)
+            sandbox_config = base_images_config["images"].get("sandbox")
+            if sandbox_config:
+                image_tag = sandbox_config["tag"]
+                if not self._docker_image_exists(image_tag):
+                    errors.append(
+                        f"Base sandbox image '{image_tag}' not found.\n"
+                        "  Build with inspect eval: uv run inspect eval domains/<domain> "
+                        "--model <model> -T build=true\n"
+                        "  Or use saber-domain CLI: uv run saber-domain build <domain> --build"
+                    )
+        except Exception as e:
+            errors.append(f"Failed to validate base sandbox image: {e}")
+
     def _validate_all_images(self, manifest: dict[str, Any], errors: list[str]) -> None:
         """Validate all domain images exist."""
         images_config = manifest.get("images", {})
-        if not images_config:
-            errors.append("No images configuration found in manifest")
-            return
-
-        # Validate server image (required)
-        server_config = images_config.get("server")
-        if not server_config:
-            errors.append("No server image configuration found in manifest")
-            return
+        # Note: images section is optional - domains may have no custom images if they
+        # only use permanent containers with pre-built images
 
         # Validate all images defined in the manifest
         for image_name, image_config in images_config.items():
@@ -377,13 +442,14 @@ class EnvironmentValidator:
 
 
 class DockerRunner:
-    """Service for executing Docker operations."""
+    """Service for executing Docker operations (image building only).
 
-    def __init__(self, compose_file: Path, domains_root: Path):
-        self.compose_file = compose_file.resolve()
+    Note: Server deployment is now via subprocess, not docker-compose.
+    This class only handles image building for sandboxes and permanent services.
+    """
+
+    def __init__(self, domains_root: Path):
         self.domains_root = domains_root
-        if not self.compose_file.exists():
-            raise DockerError(f"Compose file not found: {self.compose_file}", command=None)
 
         # Validate Docker is available
         self._validate_docker()
@@ -439,7 +505,8 @@ class DockerRunner:
         # Ensure base images exist first
         # In rebuild mode: rebuild base images if no filter or filter matches base images
         # In build mode: ensure base images exist (build if missing) when needed
-        needs_base_images = any(name == "server" or "sandbox" in name for name in images_to_build.keys())
+        # Note: Only sandbox base image is needed (server runs on host, not in container)
+        needs_base_images = any("sandbox" in name for name in images_to_build.keys())
 
         if rebuild_mode and (image_filter is None or needs_base_images):
             # Rebuild mode: remove and rebuild base images
@@ -917,104 +984,6 @@ class DockerRunner:
         except Exception as e:
             raise DockerError(f"Failed to load base images configuration: {e}") from e
 
-    def start_services(self, domain: str, env_vars: dict[str, str], dry_run: bool = False) -> None:
-        """Start domain services using docker-compose.
-
-        Args:
-            domain: Domain name
-            env_vars: Environment variables
-            dry_run: If True, show commands without executing
-
-        Raises:
-            DockerError: If start fails
-        """
-        if dry_run:
-            print(f"Would start domain {domain} with environment:")
-            for key, value in sorted(env_vars.items()):
-                print(f"  {key}={value}")
-            print(f"Would run: docker compose -f {self.compose_file} up -d")
-            return
-
-        # Create temporary env file
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
-            for key, value in env_vars.items():
-                f.write(f"{key}={value}\n")
-            env_file = f.name
-
-        try:
-            cmd = [
-                "docker",
-                "compose",
-                "-f",
-                str(self.compose_file),
-                "--env-file",
-                env_file,
-                "--project-name",
-                domain,
-                "up",
-                "-d",
-            ]
-
-            print(f"Starting domain {domain}...", flush=True)
-            subprocess.run(cmd, check=True)
-
-            # Give container a moment to start or fail immediately
-            time.sleep(2)
-
-            # Check if container is still running (detect immediate crashes)
-            container_name = f"{domain}-saber-server"
-            check_result = subprocess.run(
-                ["docker", "inspect", "--format", "{{.State.Status}}", container_name],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-
-            if check_result.returncode == 0:
-                container_status = check_result.stdout.strip()
-                if container_status not in ["running", "starting"]:
-                    # Container crashed immediately - show logs before failing
-                    print(
-                        f"\n❌ Container {container_name} crashed immediately (status: {container_status})", flush=True
-                    )
-                    self._show_failure_diagnostics(domain, env_vars, container_name, "Container crashed during startup")
-                    raise DockerError(
-                        f"Container {container_name} failed to start (status: {container_status})",
-                        command=" ".join(cmd),
-                    )
-
-            print(f"✓ Domain {domain} containers started, checking health...", flush=True)
-
-            # Wait for health checks
-            self._wait_for_services(domain, env_vars)
-
-        except subprocess.CalledProcessError as e:
-            raise DockerError(f"Failed to start domain {domain}", command=" ".join(cmd), exit_code=e.returncode) from e
-        finally:
-            # Clean up temp env file
-            try:
-                os.unlink(env_file)
-            except OSError:
-                pass
-
-    def stop_services(self, domain: str, domains_root: Path, dry_run: bool = False) -> None:
-        """Stop domain services.
-
-        Args:
-            domain: Domain name
-            domains_root: Path to domains directory
-            dry_run: If True, show commands without executing
-
-        Raises:
-            DockerError: If stop fails
-        """
-        if dry_run:
-            print(f"Would stop domain {domain}")
-            return
-
-        # Use centralized cleanup which handles both server and permanent env
-        self._cleanup_domain_containers(domain)
-
     def _validate_docker(self) -> None:
         """Validate Docker and Docker Compose are available."""
         for cmd in [["docker", "--version"], ["docker", "compose", "version"]]:
@@ -1034,251 +1003,334 @@ class DockerRunner:
         except subprocess.CalledProcessError:
             pass
 
-    def _show_failure_diagnostics(
-        self, domain: str, env_vars: dict[str, str], container_name: str, reason: str
+
+class DomainOrchestrator:
+    """Main orchestrator coordinating all domain services.
+
+    Server deployment runs as a host subprocess (not in a container) to:
+    - Eliminate Docker-in-Docker issues
+    - Allow direct host path mounts for sandbox containers
+    - Simplify networking between server and managed containers
+    """
+
+    # Class-level storage for server processes (persists across instances)
+    _running_servers: dict[str, subprocess.Popen] = {}
+
+    def __init__(self, domains_root: Path):
+        self.manifest_loader = ManifestLoader(domains_root)
+        self.environment_validator = EnvironmentValidator(domains_root)
+        self.docker_runner = DockerRunner(domains_root)
+        self._domains_root = domains_root
+
+    def list_domains(self) -> list[str]:
+        """List all available domains."""
+        return self.manifest_loader.list_domains()
+
+    def get_running_domains(self) -> list[str]:
+        """Get list of currently running domains by checking PID files.
+
+        Returns:
+            List of domain names that have running server processes
+        """
+        running = []
+
+        # Scan all domains for PID files
+        for domain in self.list_domains():
+            domain_root = self._domains_root / domain
+            pid_file = domain_root / "server" / "logs" / f"{domain}.pid"
+
+            if pid_file.exists():
+                try:
+                    pid = int(pid_file.read_text().strip())
+                    # Check if process is actually running
+                    os.kill(pid, 0)
+                    running.append(domain)
+                except (ValueError, OSError):
+                    # Invalid PID or process not running - clean up stale file
+                    try:
+                        pid_file.unlink()
+                    except OSError:
+                        pass
+
+        return running
+
+    def validate_domain(self, domain: str) -> dict[str, Any]:
+        """Validate domain configuration and return manifest."""
+        return self.manifest_loader.load_manifest(domain)
+
+    def start_domain(
+        self,
+        domain: str,
+        rest_port: int = 8000,
+        mcp_port: int = 8001,
+        log_level: str = "INFO",
+        build: str | None = None,
+        rebuild: str | None = None,
+        dry_run: bool = False,
     ) -> None:
-        """Show diagnostic information when server fails to start.
+        """Start a domain server as a host subprocess.
+
+        The server runs directly on the host machine, not in a container,
+        which eliminates Docker-in-Docker issues when managing sandbox containers.
+        """
+        # Check if server is already running (before validation to avoid port conflict errors)
+        status = self.get_domain_status(domain)
+        if status.get("running", False) and status.get("health_status") == "healthy":
+            print(f"Server for domain {domain} is already running (PID: {status.get('pid')})")
+            return
+
+        # Load and validate manifest
+        manifest = self.manifest_loader.load_manifest(domain)
+
+        # Build sandbox images if requested (server no longer needs image)
+        if rebuild is not None:
+            image_filter = rebuild if rebuild else None
+            self.docker_runner.build_images(
+                domain,
+                manifest,
+                self.manifest_loader.domains_root,
+                dry_run,
+                image_filter=image_filter,
+                rebuild_mode=True,
+            )
+        elif build is not None:
+            image_filter = build if build else None
+            self.docker_runner.build_images(
+                domain,
+                manifest,
+                self.manifest_loader.domains_root,
+                dry_run,
+                image_filter=image_filter,
+                rebuild_mode=False,
+            )
+
+        # Generate and validate environment for host subprocess
+        env_vars = self.environment_validator.generate_environment(
+            domain,
+            manifest,
+            rest_port,
+            mcp_port,
+            log_level,
+            skip_image_check=(rebuild is not None or build is not None),
+        )
+
+        # Start server as subprocess
+        self._start_server_subprocess(domain, env_vars, dry_run)
+
+    def _start_server_subprocess(self, domain: str, env_vars: dict[str, str], dry_run: bool = False) -> None:
+        """Start SABER server as a host subprocess.
 
         Args:
             domain: Domain name
-            env_vars: Environment variables
-            container_name: Name of the container
-            reason: Brief reason for the failure
+            env_vars: Environment variables for the server
+            dry_run: If True, show commands without executing
         """
-        print("\nRetrieving diagnostic information...\n", flush=True)
+        if dry_run:
+            print(f"Would start server subprocess for domain {domain} with environment:")
+            for key, value in sorted(env_vars.items()):
+                print(f"  {key}={value}")
+            print(f"Would run: {sys.executable} -m saber.server")
+            return
 
-        # Try to get container logs for debugging
+        # Check if already running (in-memory)
+        if domain in DomainOrchestrator._running_servers:
+            proc = DomainOrchestrator._running_servers[domain]
+            if proc.poll() is None:
+                print(f"Server for domain {domain} is already running (PID: {proc.pid})")
+                return
+            # Process has terminated, clean up
+            del DomainOrchestrator._running_servers[domain]
+
+        # Also check PID file for servers started by other processes
+        domain_root = self._domains_root / domain
+        pid_file = domain_root / "server" / "logs" / f"{domain}.pid"
+        if pid_file.exists():
+            try:
+                pid = int(pid_file.read_text().strip())
+                os.kill(pid, 0)  # Check if process exists
+                print(f"Server for domain {domain} is already running (PID: {pid}, started externally)")
+                return
+            except (ValueError, OSError):
+                # Invalid PID or process not running - clean up stale PID file
+                try:
+                    pid_file.unlink()
+                except OSError:
+                    pass
+
+        # Prepare environment (inherit current env and add server-specific vars)
+        server_env = os.environ.copy()
+        server_env.update(env_vars)
+
+        # Load .env file if it exists
+        env_file = env_vars.get("ENV_FILE")
+        if env_file and Path(env_file).exists():
+            self._load_env_file(server_env, Path(env_file))
+
+        # Set up log file for stdout/stderr
+        domain_root = self._domains_root / domain
+        log_dir = domain_root / "server" / "logs" / "server-logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+
+        from datetime import datetime
+
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        log_file_path = log_dir / f"saber-server-{timestamp}.log"
+
+        print(f"Starting server subprocess for domain {domain}...", flush=True)
+        print(f"  Log file: {log_file_path}", flush=True)
+
+        # Track if we started the server (for cleanup on interrupt)
+        server_started = False
+
+        # Set up signal handler for graceful cleanup on Ctrl+C
+        # Only works in main thread (CLI usage); skip for thread pool (inspect_ai)
+        import signal
+        import threading
+
+        in_main_thread = threading.current_thread() is threading.main_thread()
+        original_sigint = None
+
+        if in_main_thread:
+            original_sigint = signal.getsignal(signal.SIGINT)
+
+            def cleanup_on_interrupt(signum: int, frame: Any) -> None:
+                print("\n\n⚠️  Interrupted! Cleaning up...", flush=True)
+                if server_started:
+                    self._stop_server_subprocess(domain)
+                    self._cleanup_sandbox_containers(domain)
+                # Restore original handler and re-raise
+                signal.signal(signal.SIGINT, original_sigint)
+                raise KeyboardInterrupt()
+
+            signal.signal(signal.SIGINT, cleanup_on_interrupt)
+
         try:
-            logs_result = subprocess.run(
-                ["docker", "logs", "--tail", "100", container_name], capture_output=True, text=True, timeout=5
+            # Open log file for subprocess output
+            log_file = open(log_file_path, "w")
+
+            # Start server as subprocess
+            # Note: --domain and --domains-root are passed via SABER_DOMAIN/SABER_DOMAINS_ROOT env vars
+            proc = subprocess.Popen(
+                [sys.executable, "-m", "saber.server", "--start"],
+                env=server_env,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,  # Detach from terminal
             )
-            if logs_result.stdout or logs_result.stderr:
-                print(f"Container logs from {container_name}:", flush=True)
-                print("=" * 80, flush=True)
-                if logs_result.stdout:
-                    print(logs_result.stdout, flush=True)
-                if logs_result.stderr:
-                    print(logs_result.stderr, flush=True)
-                print("=" * 80, flush=True)
-        except Exception as e:
-            print(f"Could not retrieve container logs: {e}", flush=True)
 
-        # Try to find and display the most recent server log file with errors
-        print("\nSearching for server log file errors...\n", flush=True)
-        try:
-            # Path to server logs directory (from domains_root)
-            domains_root = Path(env_vars.get("DOMAINS_ROOT", "."))
-            server_logs_dir = domains_root / domain / "server" / "logs" / "server-logs"
+            server_started = True
 
-            if server_logs_dir.exists():
-                # Find the most recent log file
-                log_files = sorted(
-                    server_logs_dir.glob("saber-server-*.log*"), key=lambda p: p.stat().st_mtime, reverse=True
+            # Store process reference
+            DomainOrchestrator._running_servers[domain] = proc
+
+            # Write PID file for cross-process tracking
+            pid_file = domain_root / "server" / "logs" / f"{domain}.pid"
+            pid_file.write_text(str(proc.pid))
+
+            # Store log file reference for cleanup
+            self._store_log_file(domain, log_file)
+
+            # Give server a moment to start or fail immediately
+            time.sleep(2)
+
+            # Check if process is still running
+            if proc.poll() is not None:
+                # Process terminated - read log file for error details
+                log_file.close()
+                with open(log_file_path) as f:
+                    error_output = f.read()
+                print(f"\n❌ Server process terminated immediately (exit code: {proc.returncode})", flush=True)
+                print("Server output:", flush=True)
+                print("=" * 80, flush=True)
+                print(error_output or "(no output)", flush=True)
+                print("=" * 80, flush=True)
+                del DomainOrchestrator._running_servers[domain]
+                raise DockerError(
+                    f"Server subprocess failed to start (exit code: {proc.returncode})",
+                    command=f"{sys.executable} -m saber.server",
                 )
 
-                if log_files:
-                    latest_log = log_files[0]
-                    print(f"📄 Most recent server log file: {latest_log}", flush=True)
-                    print("=" * 80, flush=True)
+            print(f"✓ Server subprocess started (PID: {proc.pid})", flush=True)
 
-                    # Read the log file and extract error lines
-                    error_lines = []
-                    warning_lines = []
-                    try:
-                        with open(latest_log) as f:
-                            for line in f:
-                                line_lower = line.lower()
-                                if (
-                                    "error" in line_lower
-                                    or "exception" in line_lower
-                                    or "traceback" in line_lower
-                                    or "failed" in line_lower
-                                ):
-                                    error_lines.append(line.rstrip())
-                                elif "warning" in line_lower or "warn" in line_lower:
-                                    warning_lines.append(line.rstrip())
+            # Wait for health check
+            self._wait_for_server_health(domain, env_vars)
 
-                        if error_lines:
-                            print(f"\n🔴 Found {len(error_lines)} error/exception lines:", flush=True)
-                            print("-" * 80, flush=True)
-                            # Show all errors (they're usually not that many)
-                            for line in error_lines:
-                                print(line, flush=True)
-                            print("-" * 80, flush=True)
-                        else:
-                            print("No obvious errors found in log file.", flush=True)
+            # Wait for permanent containers to be healthy
+            self._wait_for_permanent_containers_health(domain)
 
-                        if warning_lines and len(warning_lines) <= 20:
-                            print(f"\n⚠️  Found {len(warning_lines)} warnings:", flush=True)
-                            print("-" * 80, flush=True)
-                            for line in warning_lines:
-                                print(line, flush=True)
-                            print("-" * 80, flush=True)
-                        elif warning_lines:
-                            print(f"\n⚠️  Found {len(warning_lines)} warnings (showing last 20):", flush=True)
-                            print("-" * 80, flush=True)
-                            for line in warning_lines[-20:]:
-                                print(line, flush=True)
-                            print("-" * 80, flush=True)
-
-                    except Exception as e:
-                        print(f"Error reading log file: {e}", flush=True)
-
-                    print("=" * 80, flush=True)
-
-                    # Print clear message about where to find the full log
-                    print("\n💡 For complete details, view the full log file:", flush=True)
-                    print(f"   {latest_log}", flush=True)
-                    print(f"   (Use: cat {latest_log} | less)", flush=True)
-                else:
-                    print(f"No log files found in {server_logs_dir}", flush=True)
-            else:
-                print(f"Server logs directory not found: {server_logs_dir}", flush=True)
-
+        except KeyboardInterrupt:
+            # Re-raise to let CLI handle it
+            raise
         except Exception as e:
-            print(f"Could not access server log files: {e}", flush=True)
+            if not isinstance(e, DockerError):
+                raise DockerError(f"Failed to start server subprocess: {e}") from e
+            raise
+        finally:
+            # Restore original signal handler (only if we set one up)
+            if in_main_thread and original_sigint is not None:
+                signal.signal(signal.SIGINT, original_sigint)
 
-        # Stop all containers since they're unhealthy
-        self._cleanup_domain_containers(domain)
+    def _load_env_file(self, env: dict[str, str], env_file: Path) -> None:
+        """Load environment variables from .env file."""
+        try:
+            with open(env_file) as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        key, _, value = line.partition("=")
+                        key = key.strip()
+                        value = value.strip()
+                        # Remove surrounding quotes if present
+                        if value and value[0] in ('"', "'") and value[-1] == value[0]:
+                            value = value[1:-1]
+                        env[key] = value
+        except Exception:
+            pass  # Best effort - .env file is optional
 
-    def _cleanup_domain_containers(self, domain: str) -> None:
-        """Clean up all containers for a domain, including permanent environment.
+    # Log file storage for cleanup
+    _log_files: dict[str, IO] = {}
 
-        This method ensures both the main server containers and any permanent
-        environment containers are stopped and removed.
+    def _store_log_file(self, domain: str, log_file: IO) -> None:
+        """Store log file reference for later cleanup."""
+        DomainOrchestrator._log_files[domain] = log_file
+
+    def _wait_for_server_health(self, domain: str, env_vars: dict[str, str], timeout: int = 60) -> None:
+        """Wait for server to become healthy via HTTP health check.
 
         Args:
             domain: Domain name
-        """
-        print("\nStopping all domain containers...", flush=True)
-
-        # Stop the main server containers using project name only.
-        # We don't specify the compose file (-f) because:
-        # 1. docker compose down works by project name alone
-        # 2. Specifying the file causes errors due to variable interpolation
-        try:
-            result = subprocess.run(
-                ["docker", "compose", "-p", domain, "down"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            if result.returncode == 0:
-                print("✓ Server containers stopped", flush=True)
-            else:
-                # Log the error but don't fail - the containers might already be stopped
-                print(f"Warning: docker compose down returned: {result.stderr.strip()}", flush=True)
-        except Exception as e:
-            print(f"Warning: Failed to stop server containers: {e}", flush=True)
-
-        # Also stop any permanent environment containers that may have been started
-        # The permanent environment uses project name: {domain}_permanent_environment
-        # Since we don't have the compose file path here, we'll find containers by label
-        permanent_project_name = f"{domain}_permanent_environment"
-        print(f"Stopping permanent environment containers ({permanent_project_name})...", flush=True)
-
-        try:
-            # Find all containers belonging to this compose project
-            find_result = subprocess.run(
-                [
-                    "docker",
-                    "ps",
-                    "-aq",
-                    "--filter",
-                    f"label=com.docker.compose.project={permanent_project_name}",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-
-            container_ids = find_result.stdout.strip().split()
-            if container_ids and container_ids[0]:  # Check if we found any containers
-                print(f"  Found {len(container_ids)} permanent environment container(s)", flush=True)
-
-                # Stop and remove each container
-                for container_id in container_ids:
-                    try:
-                        subprocess.run(
-                            ["docker", "rm", "-f", container_id],
-                            capture_output=True,
-                            timeout=30,
-                        )
-                    except Exception:
-                        pass  # Best effort cleanup
-
-                print("✓ Permanent environment containers stopped", flush=True)
-
-                # Also clean up any networks created by the project
-                try:
-                    network_result = subprocess.run(
-                        [
-                            "docker",
-                            "network",
-                            "ls",
-                            "-q",
-                            "--filter",
-                            f"label=com.docker.compose.project={permanent_project_name}",
-                        ],
-                        capture_output=True,
-                        text=True,
-                        timeout=30,
-                    )
-                    network_ids = network_result.stdout.strip().split()
-                    for network_id in network_ids:
-                        if network_id:
-                            subprocess.run(
-                                ["docker", "network", "rm", network_id],
-                                capture_output=True,
-                                timeout=10,
-                            )
-                except Exception:
-                    pass  # Best effort network cleanup
-            else:
-                print("  (No permanent environment containers found)", flush=True)
-
-        except Exception as e:
-            print(f"Warning: Failed to stop permanent environment containers: {e}", flush=True)
-
-    def _wait_for_services(self, domain: str, env_vars: dict[str, str], timeout: int = 60) -> None:
-        """Wait for services to be healthy.
+            env_vars: Environment variables (for port info)
+            timeout: Maximum time to wait in seconds
 
         Raises:
-            DockerError: If services fail to become healthy within timeout
+            DockerError: If server fails health check
         """
-        # Always check health for server in new architecture (no profiles)
-        rest_port = int(env_vars.get("REST_PORT", "8000"))
-        container_name = f"{domain}-saber-server"
+        rest_port = int(env_vars.get("REST_PORT", env_vars.get("SABER_PORT", "8000")))
         print(f"Waiting for server health check on port {rest_port}...", flush=True)
 
         start_time = time.time()
         attempt = 0
+
         while time.time() - start_time < timeout:
             attempt += 1
 
-            # Check if container is still running before checking port
-            check_result = subprocess.run(
-                ["docker", "inspect", "--format", "{{.State.Status}}", container_name],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-
-            if check_result.returncode == 0:
-                container_status = check_result.stdout.strip()
-                if container_status not in ["running", "starting"]:
-                    # Container crashed during health check
+            # Check if process is still running
+            if domain in DomainOrchestrator._running_servers:
+                proc = DomainOrchestrator._running_servers[domain]
+                if proc.poll() is not None:
                     elapsed = time.time() - start_time
+                    exit_code = proc.returncode
                     print(
-                        f"\n❌ Container crashed during health check after {elapsed:.0f}s (status: {container_status})",
+                        f"\n❌ Server crashed during health check after {elapsed:.0f}s (exit: {exit_code})",
                         flush=True,
                     )
-                    self._show_failure_diagnostics(domain, env_vars, container_name, "Container crashed")
+                    self._show_subprocess_failure_diagnostics(domain)
                     raise DockerError(
-                        f"Container {container_name} crashed during health check (status: {container_status})",
-                        command="docker compose up -d (health check)",
+                        f"Server process crashed during health check (exit code: {proc.returncode})",
+                        command=f"{sys.executable} -m saber.server",
                     )
 
+            # Try to connect to health endpoint
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                     sock.settimeout(2)
@@ -1296,100 +1348,296 @@ class DockerRunner:
 
             time.sleep(2)
 
-        # Health check timeout - show diagnostics
+        # Health check timeout
         elapsed = time.time() - start_time
         print(f"\n❌ Server health check TIMEOUT after {elapsed:.0f}s ({attempt} attempts)", flush=True)
-        self._show_failure_diagnostics(domain, env_vars, container_name, "Health check timeout")
-
-        # Raise error to fail the startup (containers already stopped by _show_failure_diagnostics)
+        self._show_subprocess_failure_diagnostics(domain)
+        self._stop_server_subprocess(domain)
         raise DockerError(
-            f"Server failed to become healthy within {timeout}s.\n"
-            f"All domain containers have been stopped (including permanent environment).\n\n"
+            f"Server failed to become healthy within {timeout}s.\n\n"
             "Common causes:\n"
             "  1. Server crash during startup (check logs above)\n"
             "  2. Missing dependencies or configuration\n"
-            f"  3. Port conflicts or network issues\n\n"
-            f"To debug:\n"
-            f"  1. Check full logs: docker logs {container_name}\n"
-            f"  2. Try manual start: docker compose -p {domain} up\n"
-            f"  3. Check domain configuration in domains/{domain}/",
-            command="docker compose up -d (health check)",
+            "  3. Port conflicts or network issues\n",
+            command=f"{sys.executable} -m saber.server",
         )
 
+    def _show_subprocess_failure_diagnostics(self, domain: str) -> None:
+        """Show diagnostic information when server subprocess fails."""
+        print("\nRetrieving diagnostic information...\n", flush=True)
 
-class DomainOrchestrator:
-    """Main orchestrator coordinating all domain services."""
+        # Try to find and display the most recent server log file
+        domain_root = self._domains_root / domain
+        server_logs_dir = domain_root / "server" / "logs" / "server-logs"
 
-    def __init__(self, domains_root: Path, compose_file: Path):
-        self.manifest_loader = ManifestLoader(domains_root)
-        self.environment_validator = EnvironmentValidator(domains_root)
-        self.docker_runner = DockerRunner(compose_file, domains_root)
-
-    def list_domains(self) -> list[str]:
-        """List all available domains."""
-        return self.manifest_loader.list_domains()
-
-    def validate_domain(self, domain: str) -> dict[str, Any]:
-        """Validate domain configuration and return manifest."""
-        return self.manifest_loader.load_manifest(domain)
-
-    def start_domain(
-        self,
-        domain: str,
-        rest_port: int = 8000,
-        mcp_port: int = 8001,
-        log_level: str = "INFO",
-        build: str | None = None,
-        rebuild: str | None = None,
-        dry_run: bool = False,
-    ) -> None:
-        """Start a domain server with full validation and setup."""
-        # Load and validate manifest
-        manifest = self.manifest_loader.load_manifest(domain)
-
-        # Rebuild server image if requested
-        if rebuild is not None:
-            image_filter = rebuild if rebuild else None
-            self.docker_runner.build_images(
-                domain,
-                manifest,
-                self.manifest_loader.domains_root,
-                dry_run,
-                image_filter=image_filter,
-                rebuild_mode=True,
-            )
-        # Build missing images if requested
-        elif build is not None:
-            image_filter = build if build else None
-            self.docker_runner.build_images(
-                domain,
-                manifest,
-                self.manifest_loader.domains_root,
-                dry_run,
-                image_filter=image_filter,
-                rebuild_mode=False,
+        if server_logs_dir.exists():
+            log_files = sorted(
+                server_logs_dir.glob("saber-server-*.log*"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
             )
 
-        # Generate and validate environment (server-only)
-        env_vars = self.environment_validator.generate_environment(
-            domain,
-            manifest,
-            rest_port,
-            mcp_port,
-            log_level,
-            skip_image_check=(rebuild is not None or build is not None),
-        )
+            if log_files:
+                latest_log = log_files[0]
+                print(f"📄 Server log file: {latest_log}", flush=True)
+                print("=" * 80, flush=True)
 
-        # Start server
-        self.docker_runner.start_services(domain, env_vars, dry_run)
+                try:
+                    with open(latest_log) as f:
+                        # Read last 100 lines
+                        lines = f.readlines()
+                        tail_lines = lines[-100:] if len(lines) > 100 else lines
+                        print("".join(tail_lines), flush=True)
+                except Exception as e:
+                    print(f"Error reading log file: {e}", flush=True)
+
+                print("=" * 80, flush=True)
+
+    def _wait_for_permanent_containers_health(self, domain: str, timeout: int = 120) -> None:
+        """Wait for permanent environment containers to become healthy.
+
+        Args:
+            domain: Domain name
+            timeout: Maximum time to wait in seconds
+
+        Raises:
+            DockerError: If containers fail to become healthy
+        """
+        permanent_project_name = f"{domain}_permanent_environment"
+
+        # Find containers belonging to permanent environment
+        try:
+            find_result = subprocess.run(
+                [
+                    "docker",
+                    "ps",
+                    "-a",
+                    "--filter",
+                    f"label=com.docker.compose.project={permanent_project_name}",
+                    "--format",
+                    "{{.Names}}",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            container_names = [n.strip() for n in find_result.stdout.strip().split("\n") if n.strip()]
+        except Exception:
+            container_names = []
+
+        if not container_names:
+            # No permanent containers to wait for
+            return
+
+        print(f"Waiting for {len(container_names)} permanent container(s) to be healthy...", flush=True)
+
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            all_healthy = True
+            status_summary = []
+
+            for container_name in container_names:
+                try:
+                    # Get container health status
+                    result = subprocess.run(
+                        [
+                            "docker",
+                            "inspect",
+                            "--format",
+                            "{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}",
+                            container_name,
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+                    health_status = result.stdout.strip()
+
+                    if health_status == "healthy":
+                        status_summary.append(f"  ✓ {container_name}: healthy")
+                    elif health_status == "none":
+                        # Container has no healthcheck - consider it ready if running
+                        run_result = subprocess.run(
+                            ["docker", "inspect", "--format", "{{.State.Running}}", container_name],
+                            capture_output=True,
+                            text=True,
+                            timeout=10,
+                        )
+                        if run_result.stdout.strip() == "true":
+                            status_summary.append(f"  ✓ {container_name}: running (no healthcheck)")
+                        else:
+                            status_summary.append(f"  ⏳ {container_name}: not running")
+                            all_healthy = False
+                    else:
+                        status_summary.append(f"  ⏳ {container_name}: {health_status}")
+                        all_healthy = False
+                except Exception as e:
+                    status_summary.append(f"  ❌ {container_name}: error ({e})")
+                    all_healthy = False
+
+            if all_healthy:
+                for line in status_summary:
+                    print(line, flush=True)
+                print("✓ All permanent containers are healthy", flush=True)
+                return
+
+            # Show progress every 10 seconds
+            elapsed = time.time() - start_time
+            if int(elapsed) % 10 == 0 and int(elapsed) > 0:
+                print(f"  Still waiting for containers... ({elapsed:.0f}s elapsed)", flush=True)
+
+            time.sleep(2)
+
+        # Timeout - show final status
+        elapsed = time.time() - start_time
+        print(f"\n⚠️  Permanent container health check timed out after {elapsed:.0f}s", flush=True)
+        for line in status_summary:
+            print(line, flush=True)
+        # Don't fail - just warn, as sometimes healthchecks take longer
+
+    def _stop_server_subprocess(self, domain: str, timeout: int = 10) -> bool:
+        """Stop server subprocess gracefully.
+
+        Args:
+            domain: Domain name
+            timeout: Seconds to wait for graceful shutdown
+
+        Returns:
+            True if stopped successfully, False otherwise
+        """
+        domain_root = self._domains_root / domain
+        pid_file = domain_root / "server" / "logs" / f"{domain}.pid"
+
+        # Try to get process from in-memory tracking first
+        proc = DomainOrchestrator._running_servers.get(domain)
+        pid = None
+
+        if proc is None:
+            # Not in memory - try to read PID file
+            if pid_file.exists():
+                try:
+                    pid = int(pid_file.read_text().strip())
+                except (ValueError, OSError):
+                    pass
+
+        if proc is None and pid is None:
+            # No process tracked
+            if pid_file.exists():
+                pid_file.unlink()
+            return True
+
+        if proc is not None:
+            # Check if already terminated
+            if proc.poll() is not None:
+                del DomainOrchestrator._running_servers[domain]
+                self._close_log_file(domain)
+                if pid_file.exists():
+                    pid_file.unlink()
+                return True
+            pid = proc.pid
+
+        print(f"Stopping server subprocess (PID: {pid})...", flush=True)
+
+        try:
+            import signal
+
+            if pid is None:
+                print("No PID found - server may have already stopped", flush=True)
+                return True
+
+            # Send SIGTERM for graceful shutdown
+            os.kill(pid, signal.SIGTERM)
+
+            # Wait for process to terminate
+            for _ in range(timeout * 10):
+                try:
+                    os.kill(pid, 0)  # Check if process exists
+                    time.sleep(0.1)
+                except OSError:
+                    # Process terminated
+                    break
+            else:
+                # Still running after timeout - force kill
+                print("Server did not stop gracefully, sending SIGKILL...", flush=True)
+                os.kill(pid, signal.SIGKILL)
+                time.sleep(0.5)
+
+            print("✓ Server stopped", flush=True)
+
+            # Cleanup
+            if domain in DomainOrchestrator._running_servers:
+                del DomainOrchestrator._running_servers[domain]
+            self._close_log_file(domain)
+            if pid_file.exists():
+                pid_file.unlink()
+            return True
+
+        except ProcessLookupError:
+            # Process already gone
+            print("✓ Server already stopped", flush=True)
+            if pid_file.exists():
+                pid_file.unlink()
+            return True
+        except Exception as e:
+            print(f"Warning: Failed to stop server subprocess: {e}", flush=True)
+            return False
+
+    def _close_log_file(self, domain: str) -> None:
+        """Close log file if open."""
+        if domain in DomainOrchestrator._log_files:
+            try:
+                DomainOrchestrator._log_files[domain].close()
+            except Exception:
+                pass
+            del DomainOrchestrator._log_files[domain]
 
     def stop_domain(self, domain: str, dry_run: bool = False) -> None:
-        """Stop a domain."""
+        """Stop a domain server subprocess."""
         # Validate domain exists
         self.manifest_loader.load_manifest(domain)
 
-        # Stop services
-        self.docker_runner.stop_services(domain, self.manifest_loader.domains_root, dry_run)
+        if dry_run:
+            print(f"Would stop server subprocess for domain {domain}")
+            return
+
+        # Stop server subprocess
+        self._stop_server_subprocess(domain)
+
+        # Also clean up any sandbox/permanent environment containers
+        self._cleanup_sandbox_containers(domain)
+
+    def _cleanup_sandbox_containers(self, domain: str) -> None:
+        """Clean up sandbox and permanent environment containers for a domain."""
+        # Clean up permanent environment containers if any
+        permanent_project_name = f"{domain}_permanent_environment"
+
+        try:
+            # Find all containers belonging to permanent environment project
+            find_result = subprocess.run(
+                [
+                    "docker",
+                    "ps",
+                    "-aq",
+                    "--filter",
+                    f"label=com.docker.compose.project={permanent_project_name}",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            container_ids = find_result.stdout.strip().split()
+            if container_ids and container_ids[0]:
+                print(f"Stopping {len(container_ids)} permanent environment container(s)...", flush=True)
+                for container_id in container_ids:
+                    try:
+                        subprocess.run(["docker", "rm", "-f", container_id], capture_output=True, timeout=30)
+                    except Exception:
+                        pass
+                print("✓ Permanent environment containers stopped", flush=True)
+
+        except Exception as e:
+            print(f"Warning: Failed to clean up permanent environment containers: {e}", flush=True)
 
     def build_domain(
         self, domain: str, image_filter: str | None = None, dry_run: bool = False, rebuild_mode: bool = True
@@ -1416,86 +1664,85 @@ class DomainOrchestrator:
         )
 
     def get_domain_status(self, domain: str) -> dict[str, Any]:
-        """Get domain status with full health information."""
-        # Load manifest to get environment variables for proper compose context
+        """Get domain status by checking server subprocess and health endpoint."""
+        # Load manifest
         try:
             manifest = self.manifest_loader.load_manifest(domain)
         except Exception as e:
             return {"running": False, "services": [], "error": f"Domain manifest unavailable: {e}"}
 
-        # Generate environment variables (reuse the same logic as start_domain)
+        # Check if subprocess is running (in-memory or via PID file)
+        proc = DomainOrchestrator._running_servers.get(domain)
+        pid = None
+
+        if proc is None:
+            # Not in memory - try to read PID file (started by another process or CLI)
+            domain_root = self._domains_root / domain
+            pid_file = domain_root / "server" / "logs" / f"{domain}.pid"
+            if pid_file.exists():
+                try:
+                    pid = int(pid_file.read_text().strip())
+                    # Check if process is still running
+                    os.kill(pid, 0)
+                except (ValueError, OSError):
+                    # Invalid PID or process not running
+                    pid = None
+
+        if proc is None and pid is None:
+            return {
+                "running": False,
+                "services": [],
+                "health_status": "stopped",
+                "domain": domain,
+                "manifest": manifest,
+            }
+
+        # Check if in-memory process is still alive
+        if proc is not None:
+            if proc.poll() is not None:
+                # Process has terminated
+                del DomainOrchestrator._running_servers[domain]
+                return {
+                    "running": False,
+                    "services": [],
+                    "health_status": "stopped",
+                    "domain": domain,
+                    "manifest": manifest,
+                    "exit_code": proc.returncode,
+                }
+            pid = proc.pid
+
+        # Process is running, check health endpoint
         try:
             env_vars = self.environment_validator.generate_environment(
                 domain, manifest, 8000, 8001, "INFO", skip_image_check=True, skip_port_check=True
             )
-        except Exception as e:
-            return {"running": False, "services": [], "error": f"Environment generation failed: {e}"}
+            rest_port = int(env_vars.get("REST_PORT", env_vars.get("SABER_PORT", "8000")))
+        except Exception:
+            rest_port = 8000
 
-        # Use docker compose ps with proper environment context for authoritative status
-        cmd = [
-            "docker",
-            "compose",
-            "-f",
-            str(self.docker_runner.compose_file),
-            "--project-name",
-            domain,
-            "ps",
-            "--format",
-            "json",
-        ]
-
+        health_status = "unknown"
         try:
-            # Create environment with necessary variables
-            compose_env = os.environ.copy()
-            compose_env.update(env_vars)
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(2)
+                if sock.connect_ex(("localhost", rest_port)) == 0:
+                    health_status = "healthy"
+                else:
+                    health_status = "starting"
+        except Exception:
+            health_status = "starting"
 
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True, env=compose_env)
-            if result.stdout.strip():
-                # Parse JSON output - docker compose ps --format json returns one JSON object per line
-                services = []
-                for line in result.stdout.strip().split("\n"):
-                    if line.strip():
-                        service_info = json.loads(line)
-                        services.append(service_info)
-
-                # Check if any services are running (State == "running")
-                running = any(service.get("State") == "running" for service in services)
-
-                # Extract health information from the first service
-                health_status = "unknown"
-                if services:
-                    # Check health from Status field (e.g., "Up 8 minutes (unhealthy)")
-                    status_text = services[0].get("Status", "")
-                    if "unhealthy" in status_text.lower():
-                        health_status = "unhealthy"
-                    elif "healthy" in status_text.lower():
-                        health_status = "healthy"
-                    elif "up" in status_text.lower() and running:
-                        health_status = "healthy"  # Default to healthy if running and no explicit health info
-
-                return {
-                    "running": running,
-                    "services": services,
-                    "health_status": health_status,
-                    "domain": domain,
-                    "manifest": manifest,
+        return {
+            "running": True,
+            "services": [
+                {
+                    "Name": f"{domain}-saber-server",
+                    "State": "running",
+                    "Status": f"Up (PID: {pid})",
                 }
-            else:
-                return {"running": False, "services": [], "health_status": "stopped", "domain": domain}
-
-        except subprocess.CalledProcessError as e:
-            return {
-                "running": False,
-                "services": [],
-                "error": f"Docker compose ps failed: {e}",
-                "health_status": "error",
-                "domain": domain,
-            }
-        except json.JSONDecodeError as e:
-            return {
-                "running": False,
-                "services": [],
-                "error": f"Failed to parse status: {e}",
-                "health_status": "error",
-                "domain": domain,
-            }
+            ],
+            "health_status": health_status,
+            "domain": domain,
+            "manifest": manifest,
+            "pid": pid,
+        }

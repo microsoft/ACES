@@ -555,10 +555,9 @@ class WebSocketEventProcessor:
     ) -> WebSocketMessageOrDict | None:
         """Wait for a specific WebSocket message type, re-queuing state events.
 
-        IMPORTANT: State events (is_waiting_on_*, transcript_modified) are re-queued
-        rather than discarded, since they may be needed by wait_for_state_event()
-        which runs after this method returns. This prevents race conditions where
-        injections arrive while we're waiting for push_ack.
+        IMPORTANT: State events (is_waiting_on_*, transcript_modified) are collected
+        and re-queued at the END rather than immediately, to prevent infinite loops
+        where we keep reading the same re-queued events.
 
         Args:
             expected_type: The WebSocketMessageType to wait for
@@ -578,25 +577,42 @@ class WebSocketEventProcessor:
             WebSocketMessageType.TRANSCRIPT_ERROR.value,
         }
 
-        for iteration in range(max_iterations):
-            try:
-                response = await asyncio.wait_for(
-                    self._event_queue.get(),
-                    timeout=timeout,
-                )
+        # Collect state events to re-queue at the end (not immediately, to avoid loops)
+        preserved_state_events: list[WebSocketMessageOrDict] = []
+        result: WebSocketMessageOrDict | None = None
 
-                # Handle both Pydantic models and dicts (for test compatibility)
-                response_type = response.type if hasattr(response, "type") else response.get("type")
+        try:
+            for iteration in range(max_iterations):
+                try:
+                    response = await asyncio.wait_for(
+                        self._event_queue.get(),
+                        timeout=timeout,
+                    )
 
-                if response_type == expected_type.value:
-                    return response
-                elif response_type in state_event_types:
-                    # Re-queue state events - they may be needed by wait_for_state_event()
-                    # This prevents race conditions where injections arrive during push_ack wait
-                    try:
-                        self._event_queue.put_nowait(response)
+                    # Handle both Pydantic models and dicts (for test compatibility)
+                    response_type = response.type if hasattr(response, "type") else response.get("type")
+
+                    if response_type == expected_type.value:
+                        result = response
+                        return result
+                    elif response_type in state_event_types:
+                        # Preserve state events to re-queue later (don't immediately re-queue)
+                        preserved_state_events.append(response)
                         logger.debug(
-                            f"Re-queued state event while waiting for {expected_type.value}",
+                            f"Preserving state event while waiting for {expected_type.value}",
+                            extra={
+                                "episode_id": self._episode_id,
+                                "response_type": response_type,
+                                "expected_type": expected_type.value,
+                                "iteration": iteration,
+                                "context": context,
+                                "preserved_count": len(preserved_state_events),
+                            },
+                        )
+                    else:
+                        # Non-state, non-matching event - safe to discard
+                        logger.debug(
+                            f"Discarding non-matching event while waiting for {expected_type.value}",
                             extra={
                                 "episode_id": self._episode_id,
                                 "response_type": response_type,
@@ -605,46 +621,40 @@ class WebSocketEventProcessor:
                                 "context": context,
                             },
                         )
-                    except asyncio.QueueFull:
-                        logger.warning(
-                            "Event queue full, dropping state event",
-                            extra={
-                                "episode_id": self._episode_id,
-                                "response_type": response_type,
-                            },
-                        )
-                else:
-                    # Non-state, non-matching event - safe to discard
-                    logger.debug(
-                        f"Discarding non-matching event while waiting for {expected_type.value}",
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        f"Timeout waiting for {expected_type.value}",
                         extra={
                             "episode_id": self._episode_id,
-                            "response_type": response_type,
-                            "expected_type": expected_type.value,
-                            "iteration": iteration,
+                            "timeout": timeout,
                             "context": context,
                         },
                     )
-            except asyncio.TimeoutError:
-                logger.warning(
-                    f"Timeout waiting for {expected_type.value}",
-                    extra={
-                        "episode_id": self._episode_id,
-                        "timeout": timeout,
-                        "context": context,
-                    },
-                )
-                return None
+                    return None
 
-        logger.warning(
-            f"Max iterations exceeded waiting for {expected_type.value}",
-            extra={
-                "episode_id": self._episode_id,
-                "max_iterations": max_iterations,
-                "context": context,
-            },
-        )
-        return None
+            logger.warning(
+                f"Max iterations exceeded waiting for {expected_type.value}",
+                extra={
+                    "episode_id": self._episode_id,
+                    "max_iterations": max_iterations,
+                    "context": context,
+                },
+            )
+            return None
+        finally:
+            # Re-queue preserved state events so they're not lost
+            for event in preserved_state_events:
+                try:
+                    self._event_queue.put_nowait(event)
+                except asyncio.QueueFull:
+                    event_type = event.type if hasattr(event, "type") else event.get("type")
+                    logger.warning(
+                        "Event queue full, dropping preserved state event",
+                        extra={
+                            "episode_id": self._episode_id,
+                            "response_type": event_type,
+                        },
+                    )
 
     def drain_queue(self) -> None:
         """Drain the event queue to release message references."""

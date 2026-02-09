@@ -3,6 +3,9 @@
 #
 # When running from repo: builds from docker/ directory
 # When installed as package: pulls from ACR registry
+#
+# NOTE: The SABER server now runs as a host subprocess, NOT in a container.
+# Only sandbox base images are needed.
 
 schemaVersion: "1.0.0"
 
@@ -10,14 +13,7 @@ schemaVersion: "1.0.0"
 registry: "acr3ambenw4rfvbc.azurecr.io"
 
 images:
-  server:
-    tag: "saber/server:latest"
-    dockerfile: "docker/Dockerfile.saber_server"
-    registry_image: "saber-server"
-    labels:
-      saber.component: "base-server"
-      saber.type: "base-image"
-
+  # Sandbox base image (REQUIRED for sandbox containers)
   sandbox:
     tag: "saber/sandbox:latest"
     dockerfile: "docker/Dockerfile.saber_sandbox"

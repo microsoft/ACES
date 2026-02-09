@@ -1,3 +1,18 @@
+# DEPRECATED: Server Docker Compose Configuration
+#
+# NOTE: As of 2026-02, the SABER server runs as a HOST SUBPROCESS, not in a container.
+# This file is kept for backwards compatibility and documentation purposes only.
+# The DomainOrchestrator now uses subprocess.Popen to start the server directly.
+#
+# Benefits of host subprocess deployment:
+# - Eliminates Docker-in-Docker issues
+# - Allows direct host path mounts for sandbox containers
+# - Simplifies networking between server and managed containers
+# - Better debugging with native server execution
+#
+# If you need to run the server in a container for some reason, you can still
+# use this compose file manually, but it's not recommended.
+
 services:
   server:
     image: ${SERVER_IMAGE:?SERVER_IMAGE environment variable must be set}

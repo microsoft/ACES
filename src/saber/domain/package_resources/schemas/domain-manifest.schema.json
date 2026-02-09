@@ -43,10 +43,10 @@
     },
     "images": {
       "type": "object",
-      "required": ["server"],
       "properties": {
         "server": {
-          "$ref": "#/definitions/imageConfig"
+          "$ref": "#/definitions/imageConfig",
+          "description": "DEPRECATED: Server now runs as host subprocess, not in container"
         }
       },
       "patternProperties": {

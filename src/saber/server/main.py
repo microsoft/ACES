@@ -58,22 +58,22 @@ def _check_llm_environment() -> None:
 
 
 def _setup_server_logging(domain_name: str, config_dir: Path) -> LoggingConfig:
-    """Set up server logging with timestamped files in server-logs directory."""
+    """Set up server logging with timestamped files in server-logs directory.
+
+    Works with both host subprocess deployment and container deployment.
+    """
 
     # Generate timestamped filename: saber-server-YYYY-MM-DD_HH-MM-SS.log
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     server_log_filename = f"saber-server-{timestamp}.log"
 
-    # Determine server logs directory
+    # Determine server logs directory from config_dir
+    # config_dir is typically: <domains_root>/<domain>/server/config
     config_dir_resolved = config_dir.resolve()
 
-    if str(config_dir_resolved).startswith("/app/config"):
-        # Container environment: /app/config -> /app/logs/server-logs
-        server_logs_dir = Path("/app/logs/server-logs")
-    else:
-        # Local development: find server directory and use logs/server-logs
-        server_dir = config_dir_resolved.parent  # config -> server
-        server_logs_dir = server_dir / "logs" / "server-logs"
+    # Navigate from config -> server -> logs/server-logs
+    server_dir = config_dir_resolved.parent  # config -> server
+    server_logs_dir = server_dir / "logs" / "server-logs"
 
     # Create the server-logs directory if it doesn't exist
     server_logs_dir.mkdir(parents=True, exist_ok=True)
@@ -95,7 +95,13 @@ def _setup_server_logging(domain_name: str, config_dir: Path) -> LoggingConfig:
 
 
 async def main() -> None:
-    """Main function to start the SABER server."""
+    """Main function to start the SABER server.
+
+    The server runs as a host subprocess, not in a container.
+    Required environment variables (set by DomainOrchestrator):
+    - SABER_DOMAIN: Domain name (e.g., "excytin")
+    - SABER_CONFIG_DIR: Path to domain config directory
+    """
 
     # Initialize basic logging first
     init_logging()
@@ -103,11 +109,21 @@ async def main() -> None:
     _load_env_file()
     _check_llm_environment()
 
-    domain_name = os.getenv("SABER_DOMAIN", "pentest_demo").strip() or "pentest_demo"
+    domain_name = os.getenv("SABER_DOMAIN", "").strip()
+    if not domain_name:
+        raise ValueError(
+            "SABER_DOMAIN environment variable must be set.\n"
+            "This is normally set by the DomainOrchestrator when starting the server.\n"
+            "Use: saber-domain start <domain> or inspect eval with SABER sandbox."
+        )
 
-    config_dir_value = os.getenv("SABER_CONFIG_DIR", "/app/config").strip()
+    config_dir_value = os.getenv("SABER_CONFIG_DIR", "").strip()
     if not config_dir_value:
-        raise ValueError("SABER_CONFIG_DIR cannot be empty.")
+        raise ValueError(
+            "SABER_CONFIG_DIR environment variable must be set.\n"
+            "This should point to the domain's server/config directory.\n"
+            "This is normally set by the DomainOrchestrator when starting the server."
+        )
     config_dir = Path(config_dir_value).expanduser()
 
     # Set up server-specific logging with timestamped files
