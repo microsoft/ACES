@@ -1054,6 +1054,59 @@ class DomainOrchestrator:
 
         return running
 
+    @staticmethod
+    def get_all_running_saber_processes() -> list[tuple[int, str]]:
+        """Find all running SABER server processes system-wide.
+
+        Uses pgrep/ps to find any saber.server processes regardless of
+        which domains root they were started from.
+
+        Returns:
+            List of (pid, cmdline) tuples for running SABER server processes
+        """
+        processes = []
+        try:
+            # Use pgrep to find saber.server processes
+            result = subprocess.run(
+                ["pgrep", "-f", "saber.server.*--start"],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                for pid_str in result.stdout.strip().split("\n"):
+                    if pid_str:
+                        try:
+                            pid = int(pid_str)
+                            # Get the command line for this process
+                            cmdline_path = Path(f"/proc/{pid}/cmdline")
+                            if cmdline_path.exists():
+                                cmdline = cmdline_path.read_text().replace("\x00", " ").strip()
+                                processes.append((pid, cmdline))
+                        except (ValueError, OSError):
+                            pass
+        except FileNotFoundError:
+            # pgrep not available, try ps
+            try:
+                result = subprocess.run(
+                    ["ps", "aux"],
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode == 0:
+                    for line in result.stdout.split("\n"):
+                        if "saber.server" in line and "--start" in line:
+                            parts = line.split()
+                            if len(parts) >= 2:
+                                try:
+                                    pid = int(parts[1])
+                                    processes.append((pid, line))
+                                except ValueError:
+                                    pass
+            except FileNotFoundError:
+                pass
+
+        return processes
+
     def validate_domain(self, domain: str) -> dict[str, Any]:
         """Validate domain configuration and return manifest."""
         return self.manifest_loader.load_manifest(domain)

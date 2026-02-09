@@ -173,6 +173,7 @@ class SessionManager:
         manifest: dict[str, Any] | None = None,
         manifest_path: str | None = None,
         time_source: TimeSource | None = None,
+        data_dir: str | None = None,
     ):
         """
         Initialize the SessionManager.
@@ -189,9 +190,11 @@ class SessionManager:
             manifest: Domain manifest dictionary (optional)
             manifest_path: Path to domain manifest file (optional)
             time_source: Time source for getting current time (defaults to UTCTimeSource)
+            data_dir: Path to data directory for evaluation results (defaults to server/data)
         """
         self.domain_name = domain_name
         self.config_dir = config_dir
+        self.data_dir = data_dir or str(Path(config_dir).parent / "data")
         self.host = host
         self.port = port
         self.mcp_host = mcp_host
@@ -251,7 +254,9 @@ class SessionManager:
         self.execution_manager.initialize_permanent_environment_manager(permanent_config)
 
         self.policy_manager = PolicyManager(domain_name)
-        self.evaluation_manager = EvaluationManager()
+        # Pass data_dir to evaluation manager for proper store path
+        evaluation_store_path = Path(self.data_dir) / "evaluations"
+        self.evaluation_manager = EvaluationManager(store=evaluation_store_path)
 
         # Initialize evaluation service for retrieval operations
         self.evaluation_service = SessionEvaluationService(self.evaluation_manager.store)

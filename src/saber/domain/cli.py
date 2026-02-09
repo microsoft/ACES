@@ -216,6 +216,9 @@ def stop(ctx: click.Context, domain: str | None, dry_run: bool) -> None:
     If DOMAIN is specified, stops that domain.
     If DOMAIN is omitted, stops all running SABER domains.
     """
+    import os
+    import signal
+
     try:
         orchestrator = _create_orchestrator(ctx.obj.get("domains_root"))
 
@@ -227,9 +230,28 @@ def stop(ctx: click.Context, domain: str | None, dry_run: bool) -> None:
         else:
             # Stop all running domains
             running_domains = orchestrator.get_running_domains()
+
+            # If no domains found via PID files, check for any SABER processes system-wide
             if not running_domains:
-                click.echo("No running SABER domains found.")
-                return
+                saber_processes = DomainOrchestrator.get_all_running_saber_processes()
+                if saber_processes:
+                    click.echo(f"Found {len(saber_processes)} SABER server process(es) running:")
+                    for pid, cmdline in saber_processes:
+                        click.echo(f"  PID {pid}: {cmdline[:80]}...")
+                    if dry_run:
+                        click.echo("Would stop these processes.")
+                    else:
+                        for pid, _ in saber_processes:
+                            try:
+                                os.kill(pid, signal.SIGTERM)
+                                click.echo(f"  ✓ Stopped PID {pid}")
+                            except OSError as e:
+                                click.echo(f"  ✗ Failed to stop PID {pid}: {e}", err=True)
+                        click.echo("✓ All SABER processes stopped!")
+                    return
+                else:
+                    click.echo("No running SABER domains found.")
+                    return
 
             click.echo(f"Stopping {len(running_domains)} running domain(s)...")
             for domain_name in running_domains:

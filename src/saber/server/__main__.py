@@ -306,6 +306,7 @@ async def start_server(args: argparse.Namespace) -> None:
             mcp_port=args.mcp_port,
             manifest=manifest,
             manifest_path=str(domain_paths["manifest_path"]),
+            data_dir=str(domain_paths["data_dir"]),
         )
 
         logger.info(
