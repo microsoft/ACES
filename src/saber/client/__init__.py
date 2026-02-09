@@ -16,11 +16,29 @@ Programmatic usage:
 
     client = SABERRestClient(server_url="http://localhost:8000")
     # Use client for API calls
+
+Transcript synchronization:
+    from saber.client.transcript import TranscriptSyncClient, MessageSerializer
+
+    # Implement MessageSerializer for your harness
+    async with TranscriptSyncClient(...) as client:
+        messages = await client.sync_transcript()
 """
 
 from ..models import BenchmarkInfo, PolicyInfo, SessionInfo, StepResponse, TaskInfo
 from .api import SABERRestClient
 from .models import SABERConfig
+
+# Import transcript module exports
+from .transcript import (
+    GenericTranscriptSyncOperations,
+    MessageSerializer,
+    SyncResult,
+    TranscriptSyncClient,
+    WebSocketConnectionManager,
+    WebSocketEventProcessor,
+    is_websocket_closed,
+)
 
 __all__ = [
     # Configuration models
@@ -33,4 +51,12 @@ __all__ = [
     "PolicyInfo",
     "BenchmarkInfo",
     "SessionInfo",
+    # Transcript sync
+    "TranscriptSyncClient",
+    "MessageSerializer",
+    "SyncResult",
+    "WebSocketConnectionManager",
+    "WebSocketEventProcessor",
+    "GenericTranscriptSyncOperations",
+    "is_websocket_closed",
 ]

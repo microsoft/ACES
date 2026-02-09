@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from saber.inspect_ai.integration.event_processor import WebSocketEventProcessor
+from saber.client.transcript import WebSocketEventProcessor
 from saber.models.rest.websocket_config import PullConfig, WebSocketConfig
 from saber.models.rest.websocket_messages import (
     PushAckData,

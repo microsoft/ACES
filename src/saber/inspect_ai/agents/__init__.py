@@ -1,13 +1,7 @@
 """SABER core agent registry and agent-related components.
 
 This module provides the core registry of agent implementations available
-across all SABER domains. Domain-specific agents can be defined in each
-domain's client/ folder.
-
-Agent Discovery Order:
-1. Domain-local agents (domains/{domain}/client/{agent}.py)
-2. Core SABER agents (saber.inspect_ai.agents.{agent})
-3. Error if not found
+across all SABER domains.
 
 Core agents are maintained here for reusability across domains.
 """
@@ -35,8 +29,7 @@ class SABERAgentRegistry:
     """Registry for core SABER agent implementations.
 
     This registry maintains reusable agent implementations that can be
-    used across all domains. Domain-specific agents should be placed in
-    the domain's client/ folder.
+    used across all domains.
     """
 
     _agents: dict[str, Callable] = {}

@@ -40,22 +40,22 @@ async def _server_controlled_on_continue(state: AgentState) -> AgentState | bool
     """
     from ...integration.model_wrapper import WebSocketTranscriptSyncingModelWrapper
 
-    logger.info(
-        "[INJECTION_WAIT] _server_controlled_on_continue callback invoked",
+    logger.debug(
+        "Server-controlled on_continue callback invoked",
         extra={"current_message_count": len(state.messages)},
     )
 
     # Get the active model (should be our wrapper)
     model = active_model()
 
-    logger.info(
-        "[INJECTION_WAIT] Active model retrieved",
+    logger.debug(
+        "Active model retrieved",
         extra={"model_type": type(model).__name__ if model else "None"},
     )
 
     if not isinstance(model, WebSocketTranscriptSyncingModelWrapper):
         logger.warning(
-            "[INJECTION_WAIT] Server-controlled continue called but model is not WebSocket wrapper, "
+            "Server-controlled continue called but model is not WebSocket wrapper, "
             "falling back to default behavior (stop if no tool_calls)",
             extra={"model_type": type(model).__name__ if model else "None"},
         )
@@ -68,13 +68,13 @@ async def _server_controlled_on_continue(state: AgentState) -> AgentState | bool
     # Wait for red team to inject a user message (wait indefinitely)
     # The evaluation's task timeout or red team submission will terminate if needed
     try:
-        logger.info(
-            "[INJECTION_WAIT] Calling model.wait_for_injection_and_sync() - waiting indefinitely",
+        logger.debug(
+            "Calling model.wait_for_injection_and_sync() - waiting indefinitely",
         )
         synced_messages = await model.wait_for_injection_and_sync()
 
         logger.info(
-            "[INJECTION_WAIT] Injection received, continuing with synced transcript",
+            "Injection received, continuing with synced transcript",
             extra={
                 "message_count": len(synced_messages),
                 "last_message_role": synced_messages[-1].role if synced_messages else "none",
@@ -91,13 +91,13 @@ async def _server_controlled_on_continue(state: AgentState) -> AgentState | bool
 
     except asyncio.CancelledError:
         logger.info(
-            "[INJECTION_WAIT] Cancelled (shutdown signal), stopping loop gracefully",
+            "Cancelled (shutdown signal), stopping loop gracefully",
         )
         return False
 
     except Exception as e:
         logger.error(
-            "[INJECTION_WAIT] Error in server-controlled continue, stopping loop",
+            "Error in server-controlled continue, stopping loop",
             extra={"error": str(e)},
         )
         return False

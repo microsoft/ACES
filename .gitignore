@@ -60,3 +60,4 @@ bin/
 # Ignore .cache and .local for client startups
 .cache/
 .local/
+worktrees/

@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from saber.inspect_ai.integration.websocket_connection import WebSocketConnectionManager
+from saber.client.transcript import WebSocketConnectionManager
 from saber.models.rest.websocket_config import WebSocketConfig
 
 

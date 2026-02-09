@@ -121,8 +121,7 @@ class TestClientPullFirst:
 
         # Act
         with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
-            with patch.object(wrapper, '_deserialize_message', side_effect=lambda m: m):
-                await wrapper.generate([{"role": "user", "content": "ignored"}])
+            await wrapper.generate([{"role": "user", "content": "ignored"}])
 
         # Assert - should have pulled transcript after state event
         # _local_messages includes the pulled transcript PLUS the assistant response pushed after generate()
@@ -233,8 +232,7 @@ class TestClientPullFirst:
 
         # Act
         with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
-            with patch.object(wrapper, '_deserialize_message', side_effect=lambda m: m):
-                await wrapper.generate(client_input)
+            await wrapper.generate(client_input)
 
         # Assert - base model should receive SERVER transcript, not client input
         mock_base_model.generate.assert_called_once()
@@ -330,8 +328,7 @@ class TestClientPullFirst:
 
         # Act
         with patch.object(wrapper, '_ensure_connected', side_effect=track_ensure_connected):
-            with patch.object(wrapper, '_deserialize_message', side_effect=lambda m: m):
-                await wrapper.generate([{"role": "user", "content": "test"}])
+            await wrapper.generate([{"role": "user", "content": "test"}])
 
         # Assert - ensure_connected must be called on first call
         assert ensure_connected_called == True
@@ -388,8 +385,7 @@ class TestClientPullFirst:
 
         # Act
         with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
-            with patch.object(wrapper, '_deserialize_message', side_effect=lambda m: m):
-                await wrapper.generate([{"role": "user", "content": "test"}])
+            await wrapper.generate([{"role": "user", "content": "test"}])
 
         # Assert - checksum should be stored correctly after pull (before push updates it)
         assert wrapper._local_checksum == "updated"  # Push updated the checksum

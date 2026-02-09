@@ -417,8 +417,8 @@ class TranscriptCoordinator:
         if request.messages_to_push:
             is_duplicate = await self._is_duplicate_push(episode, request.messages_to_push, request.since_version)
             if is_duplicate:
-                logger.info(
-                    "[IDEMPOTENCY] Skipping duplicate push (client retry detected)",
+                logger.debug(
+                    "Skipping duplicate push (client retry detected)",
                     extra={
                         "episode_id": episode.episode_id,
                         "since_version": request.since_version,
@@ -614,8 +614,8 @@ class TranscriptCoordinator:
         existing = episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT, [])
         current_version = episode.context.get(MetadataKeys.TRANSCRIPT_VERSION, 0)
 
-        logger.info(
-            "[RESTART_DEBUG] _push_messages called",
+        logger.debug(
+            "_push_messages called",
             extra={
                 "episode_id": episode.episode_id,
                 "operation": operation,
@@ -651,7 +651,7 @@ class TranscriptCoordinator:
                         overlap = new_ids & existing_ids
                         if overlap:
                             logger.warning(
-                                "[DUPLICATE_GUARD] Blocking assistant message with duplicate tool_call IDs",
+                                "Blocking assistant message with duplicate tool_call IDs",
                                 extra={
                                     "episode_id": episode.episode_id,
                                     "duplicate_tool_call_ids": list(overlap),
@@ -665,8 +665,8 @@ class TranscriptCoordinator:
         # Apply operation to compute new transcript
         if operation == TranscriptPushOperation.APPEND.value:
             updated_messages = existing + messages
-            logger.info(
-                "[RESTART_DEBUG] APPEND operation - extending existing transcript",
+            logger.debug(
+                "APPEND operation - extending existing transcript",
                 extra={
                     "episode_id": episode.episode_id,
                     "result_count": len(updated_messages),
@@ -677,8 +677,8 @@ class TranscriptCoordinator:
             # Reset to initial transcript (system->user) then append new messages
             initial = episode.context.get(MetadataKeys.INITIAL_TRANSCRIPT, [])
             initial_tool_calls_info = self._analyze_tool_calls(initial) if initial else {}
-            logger.info(
-                "[RESTART_DEBUG] RESTART operation - analyzing INITIAL_TRANSCRIPT",
+            logger.debug(
+                "RESTART operation - analyzing INITIAL_TRANSCRIPT",
                 extra={
                     "episode_id": episode.episode_id,
                     "initial_transcript_count": len(initial),
@@ -690,8 +690,8 @@ class TranscriptCoordinator:
                 # Use a copy of initial transcript to avoid mutation
                 updated_messages = list(initial) + messages
                 result_tool_calls_info = self._analyze_tool_calls(updated_messages)
-                logger.info(
-                    "[RESTART_DEBUG] RESTART result transcript",
+                logger.debug(
+                    "RESTART result transcript",
                     extra={
                         "episode_id": episode.episode_id,
                         "result_count": len(updated_messages),
@@ -703,7 +703,7 @@ class TranscriptCoordinator:
             else:
                 # Fallback: if no initial transcript, just use the new messages
                 logger.warning(
-                    "[RESTART_DEBUG] No initial transcript found for restart operation, falling back to append",
+                    "No initial transcript found for restart operation, falling back to append",
                     extra={"episode_id": episode.episode_id},
                 )
                 updated_messages = existing + messages
@@ -711,15 +711,15 @@ class TranscriptCoordinator:
         else:
             # Fallback to append for unknown operations
             logger.warning(
-                f"[RESTART_DEBUG] Unknown operation '{operation}', falling back to append",
+                f"Unknown operation '{operation}', falling back to append",
                 extra={"episode_id": episode.episode_id, "operation": operation},
             )
             updated_messages = existing + messages
 
         new_version = current_version + 1  # Always increment (monotonic)
 
-        logger.info(
-            "[RESTART_DEBUG] Updating episode context with new transcript",
+        logger.debug(
+            "Updating episode context with new transcript",
             extra={
                 "episode_id": episode.episode_id,
                 "new_version": new_version,
@@ -737,8 +737,8 @@ class TranscriptCoordinator:
 
         # Debug: analyze current initial transcript for tool_calls
         initial_tool_calls_info = self._analyze_tool_calls(initial) if initial else {}
-        logger.info(
-            "[RESTART_DEBUG] INITIAL_TRANSCRIPT analysis before capture check",
+        logger.debug(
+            "INITIAL_TRANSCRIPT analysis before capture check",
             extra={
                 "episode_id": episode.episode_id,
                 "initial_message_count": len(initial),
@@ -749,8 +749,8 @@ class TranscriptCoordinator:
 
         if not initial_has_complete_assistant:
             updated_has_complete = self._has_complete_assistant_turn(updated_messages)
-            logger.info(
-                "[RESTART_DEBUG] Checking updated transcript for complete assistant turn",
+            logger.debug(
+                "Checking updated transcript for complete assistant turn",
                 extra={
                     "episode_id": episode.episode_id,
                     "updated_has_complete_assistant": updated_has_complete,
@@ -765,8 +765,8 @@ class TranscriptCoordinator:
                 if capture_point:
                     capture_tool_calls_info = self._analyze_tool_calls(capture_point)
                     await episode.update_context_atomic({MetadataKeys.INITIAL_TRANSCRIPT: capture_point})
-                    logger.info(
-                        "[RESTART_DEBUG] Captured initial transcript with complete assistant turn",
+                    logger.debug(
+                        "Captured initial transcript with complete assistant turn",
                         extra={
                             "episode_id": episode.episode_id,
                             "message_count": len(capture_point),
@@ -776,12 +776,12 @@ class TranscriptCoordinator:
                     )
                 else:
                     logger.warning(
-                        "[RESTART_DEBUG] _find_safe_initial_transcript returned None despite complete turn",
+                        "_find_safe_initial_transcript returned None despite complete turn",
                         extra={"episode_id": episode.episode_id},
                     )
             else:
-                logger.info(
-                    "[RESTART_DEBUG] Skipping INITIAL_TRANSCRIPT capture - no complete assistant turn yet",
+                logger.debug(
+                    "Skipping INITIAL_TRANSCRIPT capture - no complete assistant turn yet",
                     extra={"episode_id": episode.episode_id},
                 )
 

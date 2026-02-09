@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 from ...logging_config import LogCategory, get_saber_logger
 from ...models.rest.websocket_config import WebSocketConfig
 from ...models.rest.websocket_constants import WebSocketDefaults
-from .message_serialization import is_websocket_closed
+from .utils import is_websocket_closed
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
 

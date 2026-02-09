@@ -17,8 +17,8 @@ import pytest
 
 from inspect_ai.model import ChatMessageAssistant, ChatMessageTool, ChatMessageUser
 
-from saber.inspect_ai.integration.event_processor import WebSocketEventProcessor
-from saber.inspect_ai.integration.sync_operations import TranscriptSyncOperations
+from saber.client.transcript import GenericTranscriptSyncOperations, WebSocketEventProcessor
+from saber.inspect_ai.integration.model_wrapper import InspectAIMessageSerializer
 from saber.models.rest.websocket_config import PullConfig, PushConfig, WebSocketConfig
 from saber.models.rest.websocket_messages import (
     PushAckData,
@@ -44,11 +44,18 @@ def event_processor():
 
 
 @pytest.fixture
-def sync_ops(event_processor):
-    """Create sync operations with event processor."""
-    return TranscriptSyncOperations(
+def serializer():
+    """Create an InspectAI message serializer."""
+    return InspectAIMessageSerializer()
+
+
+@pytest.fixture
+def sync_ops(event_processor, serializer):
+    """Create sync operations with event processor and serializer."""
+    return GenericTranscriptSyncOperations(
         episode_id="episode-456",
         event_processor=event_processor,
+        serializer=serializer,
     )
 
 

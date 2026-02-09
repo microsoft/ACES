@@ -183,8 +183,8 @@ class PushMessageHandler(BaseWebSocketHandler):
         target_episode_id = push_data.target_episode_id or episode_id
         is_cross_episode = target_episode_id != episode_id
 
-        logger.info(
-            "[RESTART_DEBUG] PushMessageHandler.handle() called",
+        logger.debug(
+            "PushMessageHandler.handle() called",
             extra={
                 "source_episode_id": episode_id,
                 "target_episode_id": target_episode_id,
@@ -205,8 +205,8 @@ class PushMessageHandler(BaseWebSocketHandler):
 
         sync_response = await coordinator.sync(sync_request)
 
-        logger.info(
-            "[RESTART_DEBUG] Push sync completed",
+        logger.debug(
+            "Push sync completed",
             extra={
                 "target_episode_id": target_episode_id,
                 "new_version": sync_response.current_version.sequence,
@@ -236,8 +236,8 @@ class PushMessageHandler(BaseWebSocketHandler):
         )
         await websocket.send_json(ack_message.model_dump())
 
-        logger.info(
-            "[RESTART_DEBUG] Push ack sent to pusher",
+        logger.debug(
+            "Push ack sent to pusher",
             extra={
                 "source_episode_id": episode_id,
                 "target_episode_id": target_episode_id,
@@ -250,8 +250,8 @@ class PushMessageHandler(BaseWebSocketHandler):
         # happened (it initiated the push), and broadcasting to self just fills up
         # the client's event queue with unneeded state events.
         if state_event and is_cross_episode:
-            logger.info(
-                "[RESTART_DEBUG] Broadcasting state event to target episode (cross-episode)",
+            logger.debug(
+                "Broadcasting state event to target episode (cross-episode)",
                 extra={
                     "target_episode_id": target_episode_id,
                     "event_type": state_event.type,
@@ -263,13 +263,13 @@ class PushMessageHandler(BaseWebSocketHandler):
                 episode_id=target_episode_id,
                 message=state_event,
             )
-            logger.info(
-                "[RESTART_DEBUG] State event broadcast completed",
+            logger.debug(
+                "State event broadcast completed",
                 extra={"target_episode_id": target_episode_id},
             )
         elif state_event:
             logger.debug(
-                "[RESTART_DEBUG] Skipping state event broadcast for same-episode push",
+                "Skipping state event broadcast for same-episode push",
                 extra={
                     "episode_id": episode_id,
                     "event_type": state_event.type,

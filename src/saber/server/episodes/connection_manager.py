@@ -176,19 +176,9 @@ class ConnectionManager:
         """
         msg_type = message.type if hasattr(message, "type") else "unknown"
 
-        logger.info(
-            "[RESTART_DEBUG] broadcast_to_episode called",
-            extra={
-                "episode_id": episode_id,
-                "message_type": msg_type,
-                "has_connections": episode_id in self._active_connections,
-                "connection_count": len(self._active_connections.get(episode_id, set())),
-            },
-        )
-
         if episode_id not in self._active_connections:
-            logger.warning(
-                "[RESTART_DEBUG] No active WebSocket connections for episode",
+            logger.debug(
+                "No active connections for broadcast",
                 extra={"episode_id": episode_id, "message_type": msg_type},
             )
             return
@@ -199,21 +189,10 @@ class ConnectionManager:
         # Send to all connections for this episode
         for connection in self._active_connections[episode_id]:
             try:
-                logger.info(
-                    "[RESTART_DEBUG] Sending message to connection",
-                    extra={
-                        "episode_id": episode_id,
-                        "message_type": msg_type,
-                    },
-                )
                 await connection.send_json(message.model_dump())
-                logger.info(
-                    "[RESTART_DEBUG] Message sent successfully",
-                    extra={"episode_id": episode_id},
-                )
             except Exception as e:
                 logger.warning(
-                    "[RESTART_DEBUG] Failed to send WebSocket message, marking for disconnect",
+                    "Failed to send WebSocket message, marking for disconnect",
                     extra={"episode_id": episode_id, "error": str(e)},
                 )
                 disconnected.append(connection)

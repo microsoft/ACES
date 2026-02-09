@@ -636,49 +636,6 @@ class TestAgentResolution:
     """Test agent resolution and loading."""
 
     @pytest.mark.asyncio
-    async def test_resolve_domain_local_agent(self, tmp_path):
-        """Test resolving agent from domain's client folder."""
-        from saber.inspect_ai.agents.agent_resolver import load_domain_agent
-
-        # Create a domain client directory with a custom agent
-        domain_dir = tmp_path / "test_domain" / "client"
-        domain_dir.mkdir(parents=True)
-
-        agent_file = domain_dir / "custom_agent.py"
-        agent_file.write_text("""
-def create_agent():
-    '''Custom domain agent factory.'''
-    return lambda **kwargs: lambda state: state
-""")
-
-        # Test loading domain-local agent
-        agent_factory = load_domain_agent("test_domain", tmp_path, "custom_agent")
-
-        assert agent_factory is not None
-        assert callable(agent_factory)
-
-    @pytest.mark.asyncio
-    async def test_resolve_domain_local_agent_missing_create_agent(self, tmp_path):
-        """Test domain agent file without create_agent function."""
-        from saber.inspect_ai.agents.agent_resolver import load_domain_agent
-
-        # Create a domain client directory with an invalid agent
-        domain_dir = tmp_path / "test_domain" / "client"
-        domain_dir.mkdir(parents=True)
-
-        agent_file = domain_dir / "invalid_agent.py"
-        agent_file.write_text("""
-# Missing create_agent function
-def some_other_function():
-    pass
-""")
-
-        # Should return None when create_agent is missing
-        agent_factory = load_domain_agent("test_domain", tmp_path, "invalid_agent")
-
-        assert agent_factory is None
-
-    @pytest.mark.asyncio
     async def test_resolve_agent_not_found(self):
         """Test agent resolution when agent doesn't exist."""
         from saber.inspect_ai.agents.agent_resolver import resolve_agent_implementation
@@ -690,6 +647,7 @@ def some_other_function():
         error_msg = str(exc_info.value)
         assert "not found" in error_msg.lower()
         assert "nonexistent_agent" in error_msg
+
 
 
 class TestPreflightExecution:
