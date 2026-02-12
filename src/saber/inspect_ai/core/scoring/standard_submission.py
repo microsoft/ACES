@@ -14,7 +14,7 @@ from jinja2 import Environment
 
 from ....logging_config import LogCategory, get_saber_logger
 from ....models.rest.evaluation import EpisodeSubmissionResponse, SubmissionEvaluationCriteriaResponse
-from .template_utils import TemplateStringLoader
+from .template_utils import TemplateStringLoader, resolve_template_content
 
 logger = get_saber_logger(LogCategory.EVALUATION, __name__)
 
@@ -101,21 +101,26 @@ async def score_submission_llm(
     Returns:
         Tuple of (score, explanation) from LLM judge
     """
-    # Get template content directly from criteria (matching saber_scorer.py interface)
-    system_template = criteria.criteria.get("judge_system_template")
-    user_template = criteria.criteria.get("judge_user_template")
+    # Get template content from criteria (server pre-resolves paths for llm_judge,
+    # but resolve_template_content handles it if they are still file paths)
+    system_template_raw = criteria.criteria.get("judge_system_template")
+    user_template_raw = criteria.criteria.get("judge_user_template")
     model_name = criteria.criteria.get("model")
 
-    if not all([system_template, user_template, model_name]):
+    if not all([system_template_raw, user_template_raw, model_name]):
         raise RuntimeError(
             f"LLM submission evaluation requires judge_system_template, judge_user_template, "
             f"and model in criteria. Got keys: {list(criteria.criteria.keys())}"
         )
 
     # Type narrowing - we've verified these are not None above
-    assert system_template is not None
-    assert user_template is not None
+    assert system_template_raw is not None
+    assert user_template_raw is not None
     assert model_name is not None
+
+    # Resolve templates (handles both pre-resolved content and file paths)
+    system_template = await resolve_template_content(session_manager, system_template_raw)
+    user_template = await resolve_template_content(session_manager, user_template_raw)
 
     logger.debug(
         "Using templates from criteria",

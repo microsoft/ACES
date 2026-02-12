@@ -843,6 +843,65 @@ class ExecutionManager:
             )
             raise
 
+    def _resolve_container_name(self, container_name: str, episode_id: str) -> str:
+        """Resolve a container name using the SABER naming convention.
+
+        SABER sandbox containers follow the naming pattern
+        ``{service}-{episode_id}`` (e.g. ``romulus-sentinel-abc123``).
+        When callers provide just the service/base name, this method
+        constructs the full container name by appending the episode ID.
+
+        Resolution order:
+        1. ``{container_name}-{episode_id}`` (SABER convention)
+        2. ``{container_name}`` as-is (fallback for non-standard names)
+
+        Args:
+            container_name: Base container / service name (e.g. ``romulus-sentinel``)
+            episode_id: Episode identifier used to build the full name
+
+        Returns:
+            The resolved Docker container name
+        """
+        from docker.errors import NotFound as DockerNotFound
+
+        import docker
+
+        # If the name already contains the episode_id, use it directly
+        if episode_id in container_name:
+            return container_name
+
+        # Try the SABER convention: {name}-{episode_id}
+        conventional_name = f"{container_name}-{episode_id}"
+        try:
+            client = docker.from_env()  # type: ignore[attr-defined]
+            client.containers.get(conventional_name)
+            logger.debug(
+                "Resolved container name using SABER convention",
+                extra={
+                    "event": "container_name_resolved",
+                    "requested": container_name,
+                    "resolved": conventional_name,
+                    "episode_id": episode_id,
+                },
+            )
+            return conventional_name
+        except DockerNotFound:
+            # Convention didn't match, return original name
+            # (the caller will get a proper NotFound if this also doesn't exist)
+            logger.debug(
+                "SABER convention name not found, using original",
+                extra={
+                    "event": "container_name_fallback",
+                    "tried": conventional_name,
+                    "fallback": container_name,
+                    "episode_id": episode_id,
+                },
+            )
+            return container_name
+        except Exception:
+            # Docker not available or other error — return original
+            return container_name
+
     async def read_file_from_episode(
         self,
         episode_id: str,
@@ -878,6 +937,9 @@ class ExecutionManager:
                     f"Cannot determine execution container name for episode {episode_id}. "
                     "Ensure sandbox environment is running and configured properly."
                 )
+        else:
+            # Resolve service name → full container name using SABER convention
+            container_name = self._resolve_container_name(container_name, episode_id)
 
         log_operation_start(
             logger,

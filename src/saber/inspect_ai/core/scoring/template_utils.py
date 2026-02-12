@@ -41,6 +41,37 @@ class TemplateStringLoader(BaseLoader):
         raise TemplateError(f"Template not found: {template}")
 
 
+async def resolve_template_content(session_manager: Any, template_value: str) -> str:
+    """Resolve a template value that may be a file path or inline content.
+
+    The SABER server only auto-resolves template file paths for the built-in
+    ``llm_judge`` strategy.  Custom strategies receive the raw YAML value,
+    which is typically a relative file path (e.g. ``judge/state_diff_system.md``).
+
+    This helper detects whether the value is already template content (contains
+    Jinja2 syntax or newlines) or a file path, and fetches the content from the
+    server when needed.
+
+    Args:
+        session_manager: Client session manager with ``get_template_content``
+        template_value: Either inline template content or a server-relative path
+
+    Returns:
+        Resolved template content string
+    """
+    # If it contains Jinja2 syntax or newlines, treat as inline content
+    if "{{" in template_value or "\n" in template_value:
+        return template_value
+
+    # Otherwise treat as a file path and fetch from the server
+    try:
+        content: str = await session_manager.get_template_content(template_value)
+        return content
+    except Exception as exc:
+        logger.warning(f"Could not fetch template '{template_value}': {exc}")
+        return template_value
+
+
 async def fetch_and_render_template(
     session_manager: Any,
     state: Any,
