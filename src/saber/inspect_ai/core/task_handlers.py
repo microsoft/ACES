@@ -9,7 +9,6 @@ Key Design:
 - Polymorphic dispatch via factory function
 
 Concurrency is controlled at the Inspect AI level via --max-samples.
-Default concurrency is 8, configurable via get_default_concurrency().
 
 Logging category: AGENT
 """

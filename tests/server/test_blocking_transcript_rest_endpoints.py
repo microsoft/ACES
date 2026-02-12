@@ -7,6 +7,7 @@ Tests the complete REST API flow for timestamp-based blocking blue team solver.
 import pytest
 from fastapi.testclient import TestClient
 from datetime import datetime
+from unittest.mock import MagicMock
 import time
 
 from saber.models.constants import MetadataKeys
@@ -16,9 +17,9 @@ from saber.server.api.session_rest_api import SessionRestAPI
 
 
 @pytest.fixture
-def mock_session_manager(mocker):
+def mock_session_manager():
     """Create a mock SessionManager for testing."""
-    mock_manager = mocker.MagicMock(spec=SessionManager)
+    mock_manager = MagicMock(spec=SessionManager)
     mock_manager.domain_name = "test_domain"
     return mock_manager
 

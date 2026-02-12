@@ -7,7 +7,7 @@ This module realizes Phase 3 of the SABER sandbox integration, providing lifecyc
 management (task_init, sample_init, sample_cleanup, task_cleanup) with class-level
 domain ownership semantics.
 
-Concurrency is controlled at the Inspect AI level via --max-samples (default: 8).
+Concurrency is controlled at the Inspect AI level via --max-samples.
 """
 
 import inspect
@@ -77,7 +77,7 @@ class SABERSandboxEnvironment:
     Implements Inspect AI sandbox lifecycle hooks to integrate with SABER's domain orchestrator.
     Enforces single ownership per domain, with per-task sessions and per-sample episodes.
 
-    Concurrency is controlled at the Inspect AI level via --max-samples (default: 8).
+    Concurrency is controlled at the Inspect AI level via --max-samples.
     """
 
     # Backward compatibility: expose SandboxRegistry._registry as class attribute
@@ -113,7 +113,7 @@ class SABERSandboxEnvironment:
             enable_debug_logging: Enable detailed episode lifecycle debug logging (default: False)
 
         Note:
-            Concurrency is controlled via Inspect AI's --max-samples flag (default: 8).
+            Concurrency is controlled via Inspect AI's --max-samples flag.
             Use --max-samples to adjust parallel sample execution.
         """
         self._domain_slug = domain_slug
@@ -468,7 +468,7 @@ class SABERSandboxEnvironment:
                 self._handler = get_benchmark_task_handler(benchmark_task)  # type: ignore[unreachable]
 
                 # Initialize episode(s) using handler
-                # Concurrency is controlled by Inspect AI --max-samples (default: 8)
+                # Concurrency is controlled by Inspect AI --max-samples
                 self._handler_state = await self._handler.initialize(
                     benchmark_task=benchmark_task,
                     session_id=self._session_id,

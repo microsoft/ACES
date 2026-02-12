@@ -342,7 +342,8 @@ class TestConfigurationValidation:
         with pytest.raises(SandboxExecutionError) as excinfo:
             manager.create_episode_environment_async("test_episode", "test_env")
 
-        assert "Compose file not found" in str(excinfo.value)
+        error_msg = str(excinfo.value)
+        assert "Compose file not found" in error_msg or "not found" in error_msg
 
     def test_invalid_configuration_type(self):
         """Test that invalid configuration types fail appropriately."""

@@ -757,6 +757,31 @@ class SessionMCPAPI:
                     msg_content = msg.get("content")
                     msg_reasoning = msg.get("reasoning")
 
+                    # Normalize content: some model APIs return content as a list
+                    # of content-part dicts (e.g. [{"type": "text", "text": "..."}])
+                    # rather than a plain string. Flatten to string for Action model.
+                    if isinstance(msg_content, list):
+                        text_parts = []
+                        for part in msg_content:
+                            if isinstance(part, dict):
+                                text = part.get("text")
+                                if text:
+                                    text_parts.append(text)
+                            elif isinstance(part, str):
+                                text_parts.append(part)
+                        msg_content = "\n".join(text_parts) if text_parts else None
+
+                    if isinstance(msg_reasoning, list):
+                        reasoning_parts = []
+                        for part in msg_reasoning:
+                            if isinstance(part, dict):
+                                text = part.get("text")
+                                if text:
+                                    reasoning_parts.append(text)
+                            elif isinstance(part, str):
+                                reasoning_parts.append(part)
+                        msg_reasoning = "\n".join(reasoning_parts) if reasoning_parts else None
+
                     # If this message has content or reasoning, use it
                     if msg_content or msg_reasoning:
                         return msg_content, msg_reasoning

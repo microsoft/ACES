@@ -626,13 +626,14 @@ class EpisodeManager:
         ]
 
         # Update context with transcript metadata
-        # Version starts at 1 to indicate the "init" operation has been applied
-        # (version 0 means no operations, i.e., empty transcript)
+        # Version must equal the message count to maintain the invariant that
+        # all_messages[:version] == messages_at_that_version, which is used by
+        # the transcript sync checksum validation (see transcript_coordinator._sync_owner).
         context[MetadataKeys.CLIENT_TRANSCRIPT] = initial_transcript
         # Store the initial transcript separately for restart operations
         # This preserves the original system->user messages for red team restart
         context[MetadataKeys.INITIAL_TRANSCRIPT] = list(initial_transcript)  # Deep copy
-        context[MetadataKeys.TRANSCRIPT_VERSION] = 1
+        context[MetadataKeys.TRANSCRIPT_VERSION] = len(initial_transcript)
         context[MetadataKeys.TRANSCRIPT_LAST_OPERATION] = TranscriptOperation.INIT.value
         context[MetadataKeys.TRANSCRIPT_CHECKSUM] = compute_checksum(initial_transcript)
 

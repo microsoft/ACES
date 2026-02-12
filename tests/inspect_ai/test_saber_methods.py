@@ -237,10 +237,10 @@ class TestDeserializeBenchmarkTask:
 class TestDefaultConcurrency:
     """Test default_concurrency class method."""
 
-    def test_default_concurrency_returns_default_value(self):
-        """Test that default_concurrency returns the default concurrency value (8)."""
+    def test_default_concurrency_returns_none(self):
+        """Test that default_concurrency returns None (defers to Inspect AI --max-samples)."""
         result = SABERSandboxEnvironment.default_concurrency()
-        assert result == 8
+        assert result is None
 
 
 class TestClearStaleOwnership:

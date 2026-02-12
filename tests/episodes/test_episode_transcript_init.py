@@ -62,9 +62,10 @@ class TestServerSideTranscriptInit:
         assert transcript[1]["content"] == "Solve this CTF challenge"
 
         # Check metadata
-        # Version starts at 1 because the "init" operation has been applied
-        # (version 0 would mean no operations, i.e., empty transcript)
-        assert episode.context.get(MetadataKeys.TRANSCRIPT_VERSION) == 1
+        # Version equals the message count (2: system + user) to maintain the
+        # invariant that all_messages[:version] == messages_at_that_version,
+        # which is required by transcript sync checksum validation.
+        assert episode.context.get(MetadataKeys.TRANSCRIPT_VERSION) == len(transcript)
         assert episode.context.get(MetadataKeys.TRANSCRIPT_LAST_OPERATION) == "init"
 
         # Check checksum
@@ -230,8 +231,8 @@ class TestServerSideTranscriptInit:
 
         assert stored_checksum == computed_checksum
 
-    def test_start_episode_version_zero_on_init(self):
-        """Initial transcript version should be 0."""
+    def test_start_episode_version_equals_message_count_on_init(self):
+        """Initial transcript version should equal the message count."""
         # Arrange
         manager = EpisodeManager()
 
@@ -255,9 +256,11 @@ class TestServerSideTranscriptInit:
             task=task
         )
 
-        # Assert - version is 1 because "init" operation has been applied
+        # Assert - version equals message count so that
+        # all_messages[:version] == messages_at_that_version
         version = episode.context.get(MetadataKeys.TRANSCRIPT_VERSION)
-        assert version == 1
+        transcript = episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT, [])
+        assert version == len(transcript)
 
     def test_start_episode_operation_marked_as_init(self):
         """Last operation should be marked as 'init'."""

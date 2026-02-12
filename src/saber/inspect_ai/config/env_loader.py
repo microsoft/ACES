@@ -80,24 +80,17 @@ def deserialize_config(config: dict[str, Any]) -> BaseModel:
     return SABERConfig(**config)
 
 
-# Default concurrency for SABER sandbox (controls --max-samples default)
-DEFAULT_SABER_CONCURRENCY = 8
-
-
 def get_default_concurrency() -> int | None:
     """Default max_sandboxes for SABER provider.
 
-    Returns a sensible default for concurrent sample execution. This value is
-    used by Inspect AI's --max-samples when not explicitly specified.
+    Returns None to defer concurrency control entirely to Inspect AI's
+    --max-samples flag. When this returns None, Inspect AI does not create
+    a sandbox semaphore, so --max-samples is the single concurrency knob.
 
-    Concurrency is controlled at the Inspect AI level via --max-samples:
-    - Each sample corresponds to one SABER episode
-    - Orchestrated tasks (e.g., blue+red) run as separate samples that coordinate
-    - Higher values allow more parallel evaluations but use more resources
-
-    Users can override with: --max-samples N
+    Each sample corresponds to one SABER episode, so --max-samples directly
+    controls how many episodes run concurrently.
 
     Returns:
-        Default concurrency limit (8) for balanced resource usage
+        None — no sandbox-level concurrency limit; use --max-samples instead
     """
-    return DEFAULT_SABER_CONCURRENCY
+    return None

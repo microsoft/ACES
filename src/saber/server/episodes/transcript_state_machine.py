@@ -216,9 +216,12 @@ class TranscriptStateMachine:
             if role not in ("user", "assistant", "tool", "system"):
                 return False
 
-            # Validate tool_calls if present
+            # Validate tool_calls if present and non-None
+            # Note: Pydantic's model_dump() includes tool_calls=None for assistant
+            # messages without tool calls - this is valid and should not be rejected.
             if role == "assistant" and "tool_calls" in msg:
-                if not isinstance(msg["tool_calls"], list):
+                tool_calls = msg["tool_calls"]
+                if tool_calls is not None and not isinstance(tool_calls, list):
                     return False
 
         return True

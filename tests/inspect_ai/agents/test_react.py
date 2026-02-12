@@ -3,6 +3,7 @@
 import pytest
 from unittest.mock import Mock, patch, ANY
 
+from inspect_ai.agent._types import AgentSubmit
 from saber.inspect_ai.agents.registry.react import create_agent
 
 
@@ -189,7 +190,8 @@ class TestSubmitToolConfiguration:
         agent_factory("instruction", "assistant", "submit", "continue")
 
         call_kwargs = mock_react.call_args.kwargs
-        assert call_kwargs["submit"] is True
+        # submit should be an AgentSubmit instance (truthy) when enabled
+        assert isinstance(call_kwargs["submit"], AgentSubmit)
         assert call_kwargs["prompt"].submit_prompt == "submit"
 
     @patch("saber.inspect_ai.agents.registry.react.react")
@@ -205,7 +207,7 @@ class TestSubmitToolConfiguration:
         agent_factory("instruction", "assistant", "submit", "continue", submit=True)
 
         call_kwargs = mock_react.call_args.kwargs
-        assert call_kwargs["submit"] is True
+        assert isinstance(call_kwargs["submit"], AgentSubmit)
         assert call_kwargs["prompt"].submit_prompt == "submit"
 
     @patch("saber.inspect_ai.agents.registry.react.react")
@@ -238,7 +240,7 @@ class TestSubmitToolConfiguration:
         agent_factory("instruction", "assistant", "submit", "continue", submit=None)
 
         call_kwargs = mock_react.call_args.kwargs
-        assert call_kwargs["submit"] is True
+        assert isinstance(call_kwargs["submit"], AgentSubmit)
         assert call_kwargs["prompt"].submit_prompt == "submit"
 
     @patch("saber.inspect_ai.agents.registry.react.react")
@@ -276,7 +278,7 @@ class TestSubmitToolConfiguration:
         agent_factory("instruction", "assistant", "submit", "my continue prompt", submit=True)
 
         call_kwargs = mock_react.call_args.kwargs
-        assert call_kwargs["submit"] is True
+        assert isinstance(call_kwargs["submit"], AgentSubmit)
         # on_continue should be the string directly
         assert call_kwargs["on_continue"] == "my continue prompt"
         assert isinstance(call_kwargs["on_continue"], str)
